@@ -1,4 +1,4 @@
-import type { BlockInfo } from '@markdowner/renderer';
+import type { BlockInfo } from '@marginalia/renderer';
 import type { CommentRow, CommentStatus } from './db.js';
 
 /**

@@ -8,7 +8,7 @@ export interface MermaidOptions {
 }
 
 /**
- * Convert ```mermaid fenced blocks to `<pre class="mermaid">…</pre>` so the
+ * Convert ```mermaid fenced blocks to `<div class="mermaid">…</div>` so the
  * browser runtime can render them. Records each block in file.data.mermaid.
  *
  * 'svg' mode (server-side render to inline SVG) is planned for the export
@@ -41,8 +41,11 @@ export const remarkMermaid: Plugin<[MermaidOptions], Root> = (options) => {
 
 function renderClientSide(source: string, index: number, mode: 'client' | 'svg'): string {
   const escaped = source.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  // A `<div>` is the idiomatic host for a mermaid diagram — avoids the
+  // default `<pre>` styling (monospace, code-block background, whitespace
+  // preservation) which conflicts with the inline SVG mermaid injects.
   // data-mermaid-mode marks the intended render mode so the export step can
   // find blocks that still need SSR even if the pipeline was asked for 'svg'
   // but has no SSR backend wired up yet.
-  return `<pre class="mermaid" data-block-kind="mermaid" data-mermaid-index="${index}" data-mermaid-mode="${mode}">${escaped}</pre>`;
+  return `<div class="mermaid" data-block-kind="mermaid" data-mermaid-index="${index}" data-mermaid-mode="${mode}">${escaped}</div>`;
 }

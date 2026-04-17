@@ -1,7 +1,14 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-export const BUILT_IN_THEMES = ['default-light', 'default-dark', 'serif-print'] as const;
+export const BUILT_IN_THEMES = [
+  'default',
+  'book',
+  'article',
+  'technical',
+  'beautiful',
+  'serif-print',
+] as const;
 export type BuiltInTheme = (typeof BUILT_IN_THEMES)[number];
 
 export function isBuiltInTheme(name: string): name is BuiltInTheme {
@@ -9,7 +16,7 @@ export function isBuiltInTheme(name: string): name is BuiltInTheme {
 }
 
 /**
- * Locate the @markdowner/themes package on disk and return a resolver for
+ * Locate the @marginalia/themes package on disk and return a resolver for
  * its CSS files. Done lazily so the CLI starts up without any filesystem
  * work until a theme is actually requested.
  */
@@ -26,7 +33,7 @@ export function loadThemeCss(name: string): string {
 
 /**
  * Read a CSS file and inline any local `@import './foo.css'` references.
- * Themes like default-dark.css @import default-light.css — the CLI wants a
+ * Themes like book.css or beautiful.css @import default.css — the CLI wants a
  * single embeddable CSS blob, not HTTP-style imports, so we resolve them
  * at build-CLI-output time.
  */
@@ -49,10 +56,10 @@ function readAndInlineImports(path: string): string {
 function findThemesDir(): string {
   // import.meta.resolve is sync in Bun for workspace packages.
   try {
-    const indexUrl = import.meta.resolve('@markdowner/themes/default-light');
-    // indexUrl points at css/default-light.css; walk up to the package root.
+    const indexUrl = import.meta.resolve('@marginalia/themes/default.css');
+    // indexUrl points at css/default.css; walk up to the package root.
     const path = new URL(indexUrl).pathname;
-    // e.g. /.../packages/themes/css/default-light.css → /.../packages/themes
+    // e.g. /.../packages/themes/css/default.css → /.../packages/themes
     return dirname(dirname(path));
   } catch {
     // Fallback: look relative to this file inside the workspace.
@@ -61,6 +68,6 @@ function findThemesDir(): string {
     // packages/cli/src/themes.ts → packages/themes
     const fromSrc = join(here, '..', '..', '..', 'themes');
     if (existsSync(fromSrc)) return fromSrc;
-    throw new Error('could not locate @markdowner/themes package');
+    throw new Error('could not locate @marginalia/themes package');
   }
 }

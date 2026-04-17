@@ -1,13 +1,15 @@
 import { useState } from 'react';
+import { Button, Flex, Text, TextArea } from '@radix-ui/themes';
 import type { Comment } from '../lib/api.js';
 import { getClientId } from '../lib/identity.js';
+import { ConfirmButton } from './ConfirmButton.js';
 
 interface Props {
   comment: Comment;
   isDocAdmin: boolean;
   onEdit: (id: string, body: string) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
-  onReply?: (parentId: string) => void;
+  onReply?: ((parentId: string) => void) | undefined;
 }
 
 export function CommentItem({ comment, isDocAdmin, onEdit, onDelete, onReply }: Props) {
@@ -18,15 +20,10 @@ export function CommentItem({ comment, isDocAdmin, onEdit, onDelete, onReply }: 
 
   return (
     <div className={`comment ${comment.parent_id ? 'reply' : 'top'}`}>
-      <div className="comment-head">
-        <span className="comment-author">{comment.author.display_name}</span>
-        <span className="subtle comment-ts">{formatTs(comment.created_at)}</span>
-        {comment.status !== 'active' && !comment.parent_id && (
-          <span className={`chip status-${comment.status}`}>
-            {comment.status === 'orphaned' ? 'orphaned' : 'may have moved'}
-          </span>
-        )}
-      </div>
+      <Flex align="baseline" gap="2" mb="1">
+        <Text weight="medium" size="2">{comment.author.display_name}</Text>
+        <Text size="1" color="gray">{formatTs(comment.created_at)}</Text>
+      </Flex>
       {editing ? (
         <EditForm
           initial={draft}
@@ -41,26 +38,28 @@ export function CommentItem({ comment, isDocAdmin, onEdit, onDelete, onReply }: 
           }}
         />
       ) : (
-        <p className="comment-body">{comment.body}</p>
+        <Text as="p" className="comment-body">{comment.body}</Text>
       )}
       {!editing && (
-        <div className="comment-actions">
+        <Flex gap="2" mt="1" align="center">
           {onReply && !comment.parent_id && (
-            <button className="link" onClick={() => onReply(comment.id)}>
+            <Button size="1" variant="ghost" onClick={() => onReply(comment.id)}>
               Reply
-            </button>
+            </Button>
           )}
           {isAuthor && (
-            <button className="link" onClick={() => setEditing(true)}>
+            <Button size="1" variant="ghost" onClick={() => setEditing(true)}>
               Edit
-            </button>
+            </Button>
           )}
           {(isAuthor || isDocAdmin) && (
-            <button className="link danger" onClick={() => onDelete(comment.id)}>
-              Delete
-            </button>
+            <ConfirmButton
+              label="Delete"
+              confirmLabel="Confirm delete"
+              onConfirm={() => onDelete(comment.id)}
+            />
           )}
-        </div>
+        </Flex>
       )}
     </div>
   );
@@ -78,20 +77,19 @@ function EditForm({
   const [value, setValue] = useState(initial);
   return (
     <div className="comment-edit">
-      <textarea
+      <TextArea
+        size="1"
         value={value}
         onChange={(e) => setValue(e.target.value)}
         rows={3}
         autoFocus
       />
-      <div className="comment-actions">
-        <button className="link" onClick={onCancel}>
-          Cancel
-        </button>
-        <button className="primary small" disabled={!value.trim()} onClick={() => onSave(value.trim())}>
+      <Flex gap="2" mt="1">
+        <Button size="1" variant="ghost" onClick={onCancel}>Cancel</Button>
+        <Button size="1" disabled={!value.trim()} onClick={() => onSave(value.trim())}>
           Save
-        </button>
-      </div>
+        </Button>
+      </Flex>
     </div>
   );
 }

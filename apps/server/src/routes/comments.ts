@@ -6,7 +6,6 @@ import type { CommentRow, DocumentRow } from '../db.js';
 import {
   authorize,
   parseCookie,
-  readIdentity,
   SESSION_COOKIE,
   type Identity,
 } from '../auth.js';
@@ -19,6 +18,7 @@ export function commentsRouter(deps: AppDeps): Hono {
   r.post('/:uid/comments', async (c) => createComment(c, deps));
   r.put('/:uid/comments/:cid', async (c) => editComment(c, deps));
   r.delete('/:uid/comments/:cid', async (c) => deleteComment(c, deps));
+  r.post('/:uid/comments/:cid/resolve', async (c) => resolveComment(c, deps));
 
   return r;
 }
@@ -51,11 +51,10 @@ async function createComment(c: Context, deps: AppDeps) {
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
-  const identity = readIdentity(c.req.raw.headers);
-  if (!identity) return c.json({ error: 'identity-required' }, 400);
-
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  const identity: Identity = decision.identity;
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
@@ -79,7 +78,6 @@ async function createComment(c: Context, deps: AppDeps) {
   const now = Date.now();
 
   if (parentId) {
-    // Reply — anchor fields null; inherits parent's anchor at read time.
     db.prepare(
       `INSERT INTO comments
          (id, doc_uid, parent_id, author_client_id, author_display_name,
@@ -115,7 +113,13 @@ async function createComment(c: Context, deps: AppDeps) {
   }
 
   const row = db.prepare('SELECT * FROM comments WHERE id = ?').get(id) as CommentRow;
-  return c.json({ comment: toWire(row) }, 201);
+  const wire = toWire(row);
+  deps.realtime.broadcast(
+    doc.uid,
+    { type: 'comment.created', comment: wire },
+    identity.clientId,
+  );
+  return c.json({ comment: wire }, 201);
 }
 
 // --- edit ------------------------------------------------------------
@@ -125,11 +129,10 @@ async function editComment(c: Context, deps: AppDeps) {
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
-  const identity = readIdentity(c.req.raw.headers);
-  if (!identity) return c.json({ error: 'identity-required' }, 400);
-
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  const identity = decision.identity;
 
   const cid = c.req.param('cid');
   if (!cid) return c.json({ error: 'not-found' }, 404);
@@ -149,7 +152,13 @@ async function editComment(c: Context, deps: AppDeps) {
   db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(text, now, cid);
 
   const updated = db.prepare('SELECT * FROM comments WHERE id = ?').get(cid) as CommentRow;
-  return c.json({ comment: toWire(updated) });
+  const wire = toWire(updated);
+  deps.realtime.broadcast(
+    doc.uid,
+    { type: 'comment.updated', comment: wire },
+    identity.clientId,
+  );
+  return c.json({ comment: wire });
 }
 
 // --- delete ----------------------------------------------------------
@@ -159,11 +168,10 @@ async function deleteComment(c: Context, deps: AppDeps) {
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
-  const identity = readIdentity(c.req.raw.headers);
-  if (!identity) return c.json({ error: 'identity-required' }, 400);
-
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  const identity = decision.identity;
 
   const cid = c.req.param('cid');
   if (!cid) return c.json({ error: 'not-found' }, 404);
@@ -177,7 +185,58 @@ async function deleteComment(c: Context, deps: AppDeps) {
   if (!isAuthor && !isAdmin) return c.json({ error: 'forbidden' }, 403);
 
   db.prepare('UPDATE comments SET deleted_at = ? WHERE id = ?').run(Date.now(), cid);
+  deps.realtime.broadcast(
+    doc.uid,
+    { type: 'comment.deleted', comment_id: cid },
+    identity.clientId,
+  );
   return c.body(null, 204);
+}
+
+// --- resolve / unresolve --------------------------------------------
+
+async function resolveComment(c: Context, deps: AppDeps) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  const identity = decision.identity;
+
+  const cid = c.req.param('cid');
+  if (!cid) return c.json({ error: 'not-found' }, 404);
+  const row = db
+    .prepare('SELECT * FROM comments WHERE id = ? AND doc_uid = ? AND deleted_at IS NULL')
+    .get(cid, doc.uid) as CommentRow | undefined;
+  if (!row) return c.json({ error: 'not-found' }, 404);
+  if (row.parent_id !== null) {
+    return c.json({ error: 'replies-not-resolvable' }, 400);
+  }
+
+  const body = await safeJson(c);
+  const resolved = body?.resolved === true;
+  const now = Date.now();
+  db.prepare(
+    `UPDATE comments
+        SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
+      WHERE id = ?`,
+  ).run(
+    resolved ? now : null,
+    resolved ? identity.displayName : null,
+    now,
+    cid,
+  );
+
+  const updated = db.prepare('SELECT * FROM comments WHERE id = ?').get(cid) as CommentRow;
+  const wire = toWire(updated);
+  deps.realtime.broadcast(
+    doc.uid,
+    { type: 'comment.updated', comment: wire },
+    identity.clientId,
+  );
+  return c.json({ comment: wire });
 }
 
 // --- helpers ---------------------------------------------------------
@@ -191,9 +250,8 @@ function loadDoc(db: Database, uid: string | undefined): DocumentRow | null {
 }
 
 function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
-  const identity: Identity | null = readIdentity(c.req.raw.headers);
   const sessionToken = parseCookie(c.req.raw.headers.get('cookie'), SESSION_COOKIE);
-  return authorize(deps.db, doc, identity, sessionToken);
+  return authorize(deps.db, doc, c.req.raw.headers, sessionToken);
 }
 
 async function safeJson(c: Context): Promise<Record<string, unknown> | null> {
@@ -253,6 +311,8 @@ export function toWire(row: CommentRow): Record<string, unknown> {
     author: { client_id: row.author_client_id, display_name: row.author_display_name },
     body: row.body,
     status: row.status,
+    resolved_at: row.resolved_at,
+    resolved_by_name: row.resolved_by_name,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };

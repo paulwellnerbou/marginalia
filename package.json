@@ -1,24 +1,26 @@
 {
-  "name": "markdowner",
+  "name": "marginalia",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "workspaces": [
-    "packages/*",
-    "apps/*"
-  ],
+  "workspaces": ["packages/*", "apps/*"],
   "scripts": {
     "dev:server": "bun --hot apps/server/src/main.ts",
-    "dev:web": "bun --filter @markdowner/web dev",
-    "dev": "bun --filter @markdowner/server dev & bun --filter @markdowner/web dev",
+    "dev:web": "bun --filter @marginalia/web dev",
+    "dev": "trap 'kill 0' INT TERM EXIT; bun --filter @marginalia/server dev & bun --filter @marginalia/web dev & wait",
+    "build": "bun --filter @marginalia/web build",
+    "start": "bun --bun apps/server/src/main.ts",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test",
+    "test:ci": "bun test apps/server/test/server.test.ts apps/server/test/comments.test.ts packages/renderer/test packages/cli/test",
+    "test:realtime": "bun test apps/server/test/realtime.test.ts",
     "lint": "biome check .",
     "format": "biome format --write ."
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/bun": "latest",
+    "playwright": "^1.59.1",
     "typescript": "^5.6.3"
   }
 }

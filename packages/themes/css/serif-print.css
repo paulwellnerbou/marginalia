@@ -1,13 +1,13 @@
 /*
- * Markdowner — serif-print
+ * Marginalia — serif-print
  *
  * A print-oriented theme with a classic serif body font, tighter column,
  * and more conservative spacing. Intended for exports to PDF.
  */
 
-@import './default-light.css';
+@import './default.css';
 
-.markdowner {
+.marginalia {
   --md-max-width: 64ch;
 
   --md-font-body:
@@ -32,11 +32,11 @@
   --md-color-selection-bg: #ddd;
 }
 
-.markdowner h1 { border-bottom: 0; font-size: 1.9rem; }
-.markdowner h2 { border-bottom: 0; font-size: 1.4rem; }
+.marginalia h1 { border-bottom: 0; font-size: 1.9rem; }
+.marginalia h2 { border-bottom: 0; font-size: 1.4rem; }
 
 /* Drop link color/underline in print; use small-caps convention. */
-.markdowner a {
+.marginalia a {
   color: inherit;
   text-decoration: none;
   border-bottom: 1px solid currentColor;
@@ -44,11 +44,11 @@
 
 /* Print-specific: avoid page breaks inside headings and tables. */
 @media print {
-  .markdowner :is(h1, h2, h3, h4, h5, h6) {
+  .marginalia :is(h1, h2, h3, h4, h5, h6) {
     break-after: avoid;
     page-break-after: avoid;
   }
-  .markdowner table, .markdowner pre, .markdowner blockquote {
+  .marginalia table, .marginalia pre, .marginalia blockquote {
     break-inside: avoid;
     page-break-inside: avoid;
   }

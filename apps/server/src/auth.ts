@@ -1,33 +1,54 @@
 import type { Database } from 'bun:sqlite';
-import type { DocumentRow, SessionRow } from './db.js';
+import type { DocumentRow, InviteRow, SessionRow } from './db.js';
 import { newSessionToken } from './ids.js';
 
-export const CLIENT_HEADER = 'x-markdowner-client';
-export const CLIENT_NAME_HEADER = 'x-markdowner-client-name';
-export const SESSION_COOKIE = 'mdn_session';
+export const CLIENT_HEADER = 'x-marginalia-client';
+export const CLIENT_NAME_HEADER = 'x-marginalia-client-name';
+export const INVITE_HEADER = 'x-marginalia-invite';
+export const SESSION_COOKIE = 'marginalia_session';
 
 export interface Identity {
   clientId: string;
   displayName: string;
 }
 
+export type Role = 'admin' | 'editor' | 'reader';
+
 /**
- * Extract client identity from request headers. Both headers are always
- * provided by the client; we treat them as untrusted identity claims,
- * sufficient only for "you can edit your own comment".
+ * Raw identity headers from the request. clientId is the random per-browser
+ * marker (used for "delete your own comment" checks), displayName is the
+ * name the browser currently shows. The server may override displayName
+ * with the invite's name when one is present — that's the whole point of
+ * invites.
  */
 export function readIdentity(headers: Headers): Identity | null {
   const clientId = headers.get(CLIENT_HEADER);
-  const displayName = headers.get(CLIENT_NAME_HEADER);
-  if (!clientId || !displayName) return null;
+  const rawName = headers.get(CLIENT_NAME_HEADER);
+  if (!clientId || !rawName) return null;
+  const displayName = decodeHeaderValue(rawName);
   if (clientId.length < 8 || clientId.length > 200) return null;
   if (displayName.length < 1 || displayName.length > 80) return null;
   return { clientId, displayName };
 }
 
-/**
- * Hash and verify document passwords with Bun's built-in argon2id.
- */
+function decodeHeaderValue(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/** Fetch the invite referenced by the `x-marginalia-invite` header, if any. */
+export function readInvite(db: Database, headers: Headers, docUid: string): InviteRow | null {
+  const token = headers.get(INVITE_HEADER);
+  if (!token) return null;
+  const row = db
+    .prepare('SELECT * FROM invites WHERE token = ? AND doc_uid = ?')
+    .get(token, docUid) as InviteRow | undefined;
+  return row ?? null;
+}
+
 export async function hashPassword(plain: string): Promise<string> {
   return Bun.password.hash(plain, { algorithm: 'argon2id' });
 }
@@ -36,20 +57,14 @@ export async function verifyPassword(plain: string, hash: string): Promise<boole
   return Bun.password.verify(plain, hash);
 }
 
-/**
- * Create a session bound to a document. Returns the cookie token.
- * Expiry is enforced on every lookup.
- */
-export function createSession(
-  db: Database,
-  docUid: string,
-  ttlMs: number,
-): string {
+export function createSession(db: Database, docUid: string, ttlMs: number): string {
   const token = newSessionToken();
   const expiresAt = Date.now() + ttlMs;
-  db.prepare(
-    'INSERT INTO sessions (token, doc_uid, expires_at) VALUES (?, ?, ?)',
-  ).run(token, docUid, expiresAt);
+  db.prepare('INSERT INTO sessions (token, doc_uid, expires_at) VALUES (?, ?, ?)').run(
+    token,
+    docUid,
+    expiresAt,
+  );
   return token;
 }
 
@@ -75,32 +90,43 @@ export function parseCookie(header: string | null, name: string): string | null 
 }
 
 /**
- * Checks whether a request is authorized to access a given document. Returns
- * a structured decision — the caller decides HTTP behavior.
+ * Can this request access this document, and in what role?
+ *
+ * Order of precedence:
+ * 1. Invite token → carries role + forced display_name.
+ * 2. Password session (if doc is password-protected) + identity → reader or
+ *    editor based on `editable_by_anyone`.
+ * 3. Public doc + identity → reader or editor based on `editable_by_anyone`.
+ *
+ * Returns the resolved identity (display_name overridden by invite when
+ * present) so callers use a single source of truth for authorship.
  */
 export function authorize(
   db: Database,
   doc: DocumentRow,
-  identity: Identity | null,
+  headers: Headers,
   sessionToken: string | null,
 ): AuthDecision {
-  if (doc.password_hash === null) {
-    return { ok: true, role: roleFor(doc, identity) };
-  }
-  if (sessionToken && checkSession(db, sessionToken, doc.uid)) {
-    return { ok: true, role: roleFor(doc, identity) };
-  }
-  return { ok: false, reason: 'password-required' };
-}
+  const invite = readInvite(db, headers, doc.uid);
+  const base = readIdentity(headers);
 
-export type Role = 'admin' | 'editor' | 'reader';
+  if (invite) {
+    const identity = base
+      ? { clientId: base.clientId, displayName: invite.display_name }
+      : null;
+    return { ok: true, role: invite.role, identity, invite };
+  }
 
-function roleFor(doc: DocumentRow, identity: Identity | null): Role {
-  if (identity && identity.clientId === doc.admin_client_id) return 'admin';
-  if (doc.editable_by_anyone === 1) return 'editor';
-  return 'reader';
+  if (doc.password_hash !== null) {
+    if (!sessionToken || !checkSession(db, sessionToken, doc.uid)) {
+      return { ok: false, reason: 'password-or-invite-required' };
+    }
+  }
+
+  const role: Role = doc.editable_by_anyone === 1 ? 'editor' : 'reader';
+  return { ok: true, role, identity: base, invite: null };
 }
 
 export type AuthDecision =
-  | { ok: true; role: Role }
-  | { ok: false; reason: 'password-required' | 'forbidden' };
+  | { ok: true; role: Role; identity: Identity | null; invite: InviteRow | null }
+  | { ok: false; reason: 'password-or-invite-required' | 'forbidden' };

@@ -1,5 +1,5 @@
 {
-  "name": "@markdowner/web",
+  "name": "@marginalia/web",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -15,8 +15,11 @@
     "@codemirror/theme-one-dark": "^6.1.2",
     "@codemirror/view": "^6.36.1",
     "codemirror": "^6.0.1",
-    "@markdowner/renderer": "workspace:*",
-    "@markdowner/themes": "workspace:*",
+    "@marginalia/renderer": "workspace:*",
+    "@marginalia/themes": "workspace:*",
+    "@radix-ui/react-icons": "^1.3.2",
+    "@radix-ui/themes": "^3.2.0",
+    "mermaid": "^11.4.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.1.1"

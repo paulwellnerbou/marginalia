@@ -16,7 +16,7 @@ export interface RenderOptions {
   };
 
   /**
-   * Mermaid handling. 'client' (default) leaves `<pre class="mermaid">`
+   * Mermaid handling. 'client' (default) leaves `<div class="mermaid">`
    * blocks for the browser runtime. 'svg' pre-renders to inline SVG (used
    * by export — not implemented yet; falls back to 'client' for now).
    */

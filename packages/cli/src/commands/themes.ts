@@ -1,8 +1,8 @@
 import { BUILT_IN_THEMES, loadThemeCss } from '../themes.js';
 
 const THEMES_USAGE = `Usage:
-  markdowner themes list
-  markdowner themes show <name>
+  marginalia themes list
+  marginalia themes show <name>
 `;
 
 export async function themesCommand(argv: string[]): Promise<number> {

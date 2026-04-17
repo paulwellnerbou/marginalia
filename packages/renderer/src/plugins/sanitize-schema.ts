@@ -21,8 +21,18 @@ export const sanitizeSchema: Schema = {
   clobber: [],
   attributes: {
     ...baseAttrs,
-    '*': [...(baseAttrs['*'] ?? []), 'className', 'id', 'data*'],
-    a: [...(baseAttrs.a ?? []), 'target', 'rel'],
+    '*': [...(baseAttrs['*'] ?? []), 'className', 'id', 'data*', 'ariaLabel', 'ariaHidden'],
+    // Drop the default schema's restrictive `[['className', 'anchor']]` for
+    // <a> so our heading-anchor class (and any user theme classes) survive.
+    a: [
+      ...(baseAttrs.a ?? []).filter(
+        (entry) => !(Array.isArray(entry) && entry[0] === 'className'),
+      ),
+      'className',
+      'target',
+      'rel',
+      'ariaLabel',
+    ],
     th: [...(baseAttrs.th ?? []), 'align'],
     td: [...(baseAttrs.td ?? []), 'align'],
     pre: [...(baseAttrs.pre ?? []), 'className', 'style', 'data*'],

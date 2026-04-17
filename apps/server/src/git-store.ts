@@ -17,13 +17,13 @@ export class GitStore {
     if (!existsSync(gitDir)) {
       await git.init({ fs, dir: this.repoDir, defaultBranch: 'main' });
       // Seed with an initial empty commit so log() always works.
-      writeFileSync(join(this.repoDir, '.markdowner-root'), 'markdowner repo\n');
-      await git.add({ fs, dir: this.repoDir, filepath: '.markdowner-root' });
+      writeFileSync(join(this.repoDir, '.marginalia-root'), 'marginalia repo\n');
+      await git.add({ fs, dir: this.repoDir, filepath: '.marginalia-root' });
       await git.commit({
         fs,
         dir: this.repoDir,
         message: 'init',
-        author: { name: 'markdowner', email: 'system@markdowner.local' },
+        author: { name: 'marginalia', email: 'system@marginalia.local' },
       });
     }
   }
@@ -51,10 +51,10 @@ export class GitStore {
     const oid = await git.commit({
       fs,
       dir: this.repoDir,
-      message: `${action}: ${uid}\n\nX-Markdowner-Client-ID: ${author.clientId}\n`,
+      message: `${action}: ${uid}\n\nX-Marginalia-Client-ID: ${author.clientId}\n`,
       author: {
         name: author.displayName,
-        email: `${author.clientId}@markdowner.local`,
+        email: `${author.clientId}@marginalia.local`,
       },
     });
     return { oid };

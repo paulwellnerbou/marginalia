@@ -1,11 +1,14 @@
 {
-  "name": "@markdowner/themes",
+  "name": "@marginalia/themes",
   "version": "0.0.0",
   "type": "module",
   "exports": {
-    "./default-light": "./css/default-light.css",
-    "./default-dark": "./css/default-dark.css",
-    "./serif-print": "./css/serif-print.css"
+    "./default.css": "./css/default.css",
+    "./serif-print.css": "./css/serif-print.css",
+    "./book.css": "./css/book.css",
+    "./article.css": "./css/article.css",
+    "./technical.css": "./css/technical.css",
+    "./beautiful.css": "./css/beautiful.css"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

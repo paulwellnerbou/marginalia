@@ -1,15 +1,15 @@
 import { readFileSync, writeFileSync } from 'node:fs';
-import { render, type RenderOptions } from '@markdowner/renderer';
+import { render, type RenderOptions } from '@marginalia/renderer';
 import { parseArgs } from '../args.js';
 import { loadThemeCss } from '../themes.js';
 import { wrapFullHtml } from '../html-wrapper.js';
 
 const RENDER_USAGE = `Usage:
-  markdowner render <file.md> [options]
-  markdowner render --stdin       [options]
+  marginalia render <file.md> [options]
+  marginalia render --stdin       [options]
 
 Options:
-  --theme=<name>      Theme to embed (default: default-light)
+  --theme=<name>      Theme to embed (default: default)
   --out=<file>        Write output to file (default: stdout)
   --fragment          Emit HTML fragment only (no <html>/<head>/<body>)
   --strict-refs       Exit non-zero on broken in-document references
@@ -27,7 +27,7 @@ export async function renderCommand(argv: string[]): Promise<number> {
     return 2;
   }
 
-  const theme = typeof flags.theme === 'string' ? flags.theme : 'default-light';
+  const theme = typeof flags.theme === 'string' ? flags.theme : 'default';
   const out = typeof flags.out === 'string' ? flags.out : undefined;
   const fragment = flags.fragment === true;
   const strictRefs = flags['strict-refs'] === true;

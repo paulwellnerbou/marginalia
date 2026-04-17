@@ -6,7 +6,20 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:3434',
+      // `ws: true` forwards the WebSocket upgrade at /api/documents/:uid/events.
+      // `configure` silences the benign ECONNRESET the proxy logs whenever a
+      // browser navigates away and drops the WS — harmless but noisy.
+      '/api': {
+        target: 'http://localhost:3434',
+        ws: true,
+        configure: (proxy) => {
+          proxy.on('error', (err) => {
+            const code = (err as NodeJS.ErrnoException).code;
+            if (code === 'ECONNRESET' || code === 'EPIPE') return;
+            console.error('[vite proxy]', err);
+          });
+        },
+      },
     },
   },
   build: {

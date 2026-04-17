@@ -11,3 +11,4 @@ var/
 .cache/
 tsconfig.tsbuildinfo
 **/*.tsbuildinfo
+.data/

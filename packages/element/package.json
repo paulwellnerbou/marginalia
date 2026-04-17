@@ -1,5 +1,5 @@
 {
-  "name": "@markdowner/element",
+  "name": "@marginalia/element",
   "version": "0.0.0",
   "type": "module",
   "main": "./src/index.ts",
@@ -11,6 +11,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@markdowner/renderer": "workspace:*"
+    "@marginalia/renderer": "workspace:*"
   }
 }

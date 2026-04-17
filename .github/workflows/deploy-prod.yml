@@ -1,0 +1,48 @@
+name: Deploy to Production
+
+on:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  deploy-prod:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    environment:
+      name: production
+      url: https://${{ vars.DOMAIN }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Deploy to Production
+        run: |
+          ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
+            "DEPLOY_PATH=${{ secrets.DEPLOY_PATH }} \
+             REGISTRY=${{ env.REGISTRY }} \
+             IMAGE_NAME=${{ env.IMAGE_NAME }} \
+             GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }} \
+             GITHUB_ACTOR=${{ github.actor }} \
+             bash -s" < deploy-scripts/deploy-instance.sh prod latest
+
+      - name: Verify deployment
+        run: |
+          echo "Production deployed successfully!"
+          echo "URL: https://${{ vars.DOMAIN }}"
+
+      - name: Create deployment notification
+        run: |
+          echo "::notice::Production deployment completed at $(date)"

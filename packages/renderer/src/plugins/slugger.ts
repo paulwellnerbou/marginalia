@@ -38,17 +38,28 @@ export const remarkSlugger: Plugin<[], Root> = () => {
 };
 
 /**
- * Unicode-aware slug:
- * - Lowercase (where the script has case)
- * - Keep letters/numbers in any script (uses \p{L} / \p{N})
- * - Replace runs of anything else with a single '-'
- * - Trim leading/trailing '-'
- * - If the result is empty (all-punct/emoji heading), fall back to 'section'
+ * Unicode-aware slug modeled on GitHub/GitLab behavior so manually-written
+ * `[…](#…)` links work the way users expect:
+ *
+ * 1. Lowercase (where the script has case)
+ * 2. Strip punctuation (`/`, `&`, `,`, `(`, `)`, `·`, etc.) *without*
+ *    replacing it with a separator — so `UX/UI-Design` → `uxui-design`,
+ *    not `ux-ui-design`.
+ * 3. Collapse whitespace runs to a single `-`.
+ * 4. Preserve existing `-` and `_` from the source.
+ * 5. Collapse multiple `-` and trim leading/trailing `-`.
+ * 6. Fall back to `section` if the heading is all-punct/emoji.
+ *
+ * Unicode letters and digits (Greek, CJK, Cyrillic, umlauts, …) survive
+ * via `\p{L}` / `\p{N}`.
  */
 export function slugify(text: string): string {
   const normalized = text.normalize('NFKC').toLowerCase();
-  const kept = normalized.replace(/[^\p{L}\p{N}]+/gu, '-');
-  const trimmed = kept.replace(/^-+|-+$/g, '');
+  // Keep letters, digits, whitespace, `-`, `_`; drop everything else.
+  const stripped = normalized.replace(/[^\p{L}\p{N}\s_-]+/gu, '');
+  // Replace whitespace with `-`, then collapse multiples, then trim.
+  const hyphened = stripped.replace(/\s+/gu, '-').replace(/-+/g, '-');
+  const trimmed = hyphened.replace(/^-+|-+$/g, '');
   return trimmed || 'section';
 }
 

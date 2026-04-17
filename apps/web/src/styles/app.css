@@ -1,30 +1,39 @@
-:root {
-  --ui-bg: #f8f9fb;
-  --ui-surface: #ffffff;
-  --ui-border: #e4e8ee;
-  --ui-fg: #1c1f23;
-  --ui-fg-muted: #5c6470;
-  --ui-accent: #2465e0;
-  --ui-danger: #c23f3f;
-  --ui-font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+/* App-chrome CSS variables are redirected to Radix Theme tokens so they
+   track the active appearance (light/dark) automatically. */
+:root,
+.radix-themes {
+  --ui-bg: var(--color-background);
+  --ui-surface: var(--color-panel-solid);
+  --ui-border: var(--gray-6);
+  --ui-fg: var(--gray-12);
+  --ui-fg-muted: var(--gray-11);
+  --ui-accent: var(--accent-9);
+  --ui-danger: var(--red-9);
+  --ui-font: var(--default-font-family, ui-sans-serif, system-ui, sans-serif);
 
-  --toc-width: 260px;
-  --comments-width: 300px;
-  --toc-width-collapsed: 36px;
-  --comments-width-collapsed: 36px;
-  --header-height: 44px;
+  --app-bar-height: 48px;
+  --doc-chrome-height: 44px;
 }
 
 html, body, #root {
   height: 100%;
 }
 
+html {
+  /* Let the browser use the right form-control colors without JS. */
+  color-scheme: light;
+}
+html[data-appearance='dark'] { color-scheme: dark; }
+html[data-appearance='auto'] { color-scheme: light dark; }
+
 body {
   margin: 0;
   font-family: var(--ui-font);
-  color: var(--ui-fg);
-  background: var(--ui-bg);
 }
+
+/* The Radix <Theme> root paints the correct background for us. Make sure
+   it fills the viewport. */
+.radix-themes { min-height: 100%; }
 
 button {
   font-family: inherit;
@@ -89,7 +98,8 @@ a { color: var(--ui-accent); }
   font: inherit;
   border: 1px solid var(--ui-border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--ui-surface);
+  color: var(--ui-fg);
 }
 .field textarea {
   font-family: ui-monospace, SFMono-Regular, monospace;
@@ -125,35 +135,65 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .keyvals dd { margin: 0.2rem 0 0 0; }
 .keyvals code {
   font-family: ui-monospace, monospace;
-  background: #f4f6fa;
+  background: var(--gray-3);
+  color: var(--ui-fg);
   padding: 0.3rem 0.5rem;
   border-radius: 4px;
   user-select: all;
+}
+.credential {
+  display: inline-block;
+  font-family: ui-monospace, monospace;
+  font-size: 0.95rem;
+  background: var(--gray-3);
+  color: var(--ui-fg);
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+  user-select: all;
+}
+
+/* ============================================================
+ * App bar (global top)
+ * ============================================================ */
+
+.app-bar {
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--color-panel-solid);
+  height: var(--app-bar-height);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+.app-brand a {
+  color: inherit;
+  text-decoration: none;
+}
+.app-bar-title {
+  color: var(--ui-fg-muted);
+  max-width: 40ch;
 }
 
 /* ============================================================
  * Document three-pane layout
  * ============================================================ */
 
-.doc-layout {
-  display: grid;
-  grid-template-columns: var(--toc-width) 1fr var(--comments-width);
+.doc-page {
+  display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
 }
-.doc-layout .pane.pane-toc.closed { width: var(--toc-width-collapsed); }
-.doc-layout .pane.pane-comments.closed { width: var(--comments-width-collapsed); }
-.doc-layout:has(.pane-toc.closed) {
-  grid-template-columns: var(--toc-width-collapsed) 1fr var(--comments-width);
-}
-.doc-layout:has(.pane-comments.closed) {
-  grid-template-columns: var(--toc-width) 1fr var(--comments-width-collapsed);
-}
-.doc-layout:has(.pane-toc.closed):has(.pane-comments.closed) {
-  grid-template-columns: var(--toc-width-collapsed) 1fr var(--comments-width-collapsed);
+.doc-layout {
+  flex: 1;
+  display: grid;
+  /* grid-template-columns is set inline from component state so TOC and
+     comments panes can be resized interactively. */
+  overflow: hidden;
+  min-height: 0;
 }
 
 .pane {
+  position: relative;
   overflow-y: auto;
   border-right: 1px solid var(--ui-border);
   background: var(--ui-surface);
@@ -166,6 +206,12 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--ui-bg);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+.pane-doc .doc-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .pane-header {
@@ -196,15 +242,28 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .chip:hover { border-color: var(--ui-accent); color: var(--ui-accent); }
 .chip.role { text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.04em; }
 
+/* Role badges (admin/editor/reader) rendered via Radix <Badge> — uppercase
+   presentation is purely cosmetic, not baked into the TS source. */
+.role-badge {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-variant: small-caps;
+  font-weight: 600;
+}
+
 .doc-chrome {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--ui-border);
-  background: var(--ui-surface);
+  background: var(--color-panel-solid);
+  height: var(--doc-chrome-height);
 }
 .doc-chrome-right { display: contents; }
+
+.right-tabs { display: flex; flex-direction: column; height: 100%; }
+.right-tab-panel {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
 
 .width-slider {
   display: flex;
@@ -213,66 +272,233 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .width-slider input[type='range'] { width: 120px; }
 
+.theme-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+.theme-picker select {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--ui-border);
+  border-radius: 4px;
+  background: #fff;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
 .doc-body {
   flex: 1;
   overflow-y: auto;
 }
-.doc-body .markdowner { max-width: var(--md-max-width); }
 
 /* ============================================================
  * TOC
  * ============================================================ */
 
 .toc {
-  padding: 0.5rem 0.8rem 2rem;
+  padding: 0.5rem 0.5rem 2rem;
   font-size: 0.9rem;
 }
-.toc-list { list-style: none; padding-left: 0.8rem; margin: 0; }
-.toc-list .toc-list { padding-left: 0.8rem; }
-.toc li { margin-top: 0.2rem; }
+.toc-list { list-style: none; padding-left: 0; margin: 0; }
+.toc-list .toc-list { padding-left: 1.1rem; }
+.toc-item { margin-top: 0.15rem; }
+.toc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.15rem;
+}
+.toc-toggle { flex-shrink: 0; }
+.toc-toggle-spacer {
+  width: calc(var(--space-5) + 0.15rem);
+  display: inline-block;
+}
 .toc a {
   color: inherit;
   text-decoration: none;
-  display: block;
+  display: inline-block;
   padding: 0.15rem 0;
+  line-height: 1.25;
+  flex: 1;
 }
 .toc a:hover { color: var(--ui-accent); }
-.toc-l1 > a { font-weight: 600; }
-.toc-l1 { margin-top: 0.5rem; }
+.toc-l1 > .toc-row > a { font-weight: 600; }
+.toc-empty { padding: 1rem; }
 
 /* ============================================================
  * Edit layout
  * ============================================================ */
 
-.edit-layout {
+.edit-page {
   display: flex;
   flex-direction: column;
   height: 100vh;
-}
-.edit-header {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--ui-border);
-  background: var(--ui-surface);
 }
 .edit-body {
   flex: 1;
   display: grid;
   grid-template-columns: 1fr 1fr;
   overflow: hidden;
+  min-height: 0;
 }
 .edit-source {
   border-right: 1px solid var(--ui-border);
   overflow: hidden;
-  background: var(--ui-surface);
+  background: var(--color-panel-solid);
 }
 .edit-source .cm-editor { height: 100%; }
 .edit-preview {
   overflow-y: auto;
   background: var(--ui-bg);
   padding: 1.5rem 2rem;
+}
+
+/* ============================================================
+ * Recent-docs cards on the home page
+ * ============================================================ */
+
+/* ============================================================
+ * Upload dialog: drop zone + soft callout
+ * ============================================================ */
+
+/* A tonal callout that holds the display-name input when it's missing. */
+.callout-soft {
+  background: var(--accent-a3);
+  border: 1px solid var(--accent-a6);
+  border-radius: var(--radius-3);
+  padding: 0.75rem 0.9rem;
+}
+
+.drop-zone {
+  position: relative;
+  border-radius: var(--radius-3);
+  transition: box-shadow 120ms ease;
+}
+.drop-zone--over {
+  box-shadow: 0 0 0 2px var(--accent-8);
+}
+.drop-zone-overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--accent-a5);
+  border: 2px dashed var(--accent-9);
+  border-radius: var(--radius-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--accent-11);
+}
+
+.recent-card-title {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  flex: 1;
+  min-width: 0;
+}
+.recent-card-title:hover { text-decoration: underline; }
+
+/* ============================================================
+ * Landing page
+ * ============================================================ */
+
+.landing {
+  min-height: calc(100vh - var(--app-bar-height));
+}
+
+.landing-hero {
+  position: relative;
+  overflow: hidden;
+  /* Subtle radial halo behind the hero. Uses Radix accent alpha tokens so
+     it shifts with the chosen accent color + active appearance. */
+  background:
+    radial-gradient(
+      ellipse 80% 60% at 50% 0%,
+      var(--accent-a4),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 40% 50% at 100% 0%,
+      var(--ruby-a3),
+      transparent 60%
+    );
+  border-bottom: 1px solid var(--gray-a3);
+}
+
+.landing-hero-inner {
+  position: relative;
+  z-index: 1;
+}
+
+.landing-eyebrow {
+  gap: 0.4rem;
+  padding: 0.35rem 0.8rem !important;
+}
+
+.landing-title {
+  /* Tight, confident typography for the hero. Uses Radix's default font
+     with a display-y size + letter-spacing. */
+  font-family: var(--default-font-family);
+  letter-spacing: -0.035em !important;
+  font-weight: 700 !important;
+  line-height: 1.02 !important;
+  font-size: clamp(2.6rem, 7vw, 5rem) !important;
+  background: linear-gradient(
+    180deg,
+    var(--gray-12) 0%,
+    var(--gray-11) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.landing-features {
+  margin-top: -2rem; /* overlap with hero for a cleaner seam */
+  position: relative;
+  z-index: 2;
+}
+
+.feature-card {
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.feature-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-4);
+}
+.feature-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--accent-a3);
+  color: var(--accent-11);
+  flex-shrink: 0;
+}
+
+.landing-recent {
+  background: var(--gray-a2);
+  border-top: 1px solid var(--gray-a4);
+}
+
+.landing-empty {
+  text-align: center;
+}
+
+/* Cards in the recent grid become hover-able: whole card is clickable. */
+.recent-card {
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+  border: 1px solid transparent;
+}
+.recent-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-3);
+  border-color: var(--gray-a5);
 }
 
 .comments-empty { padding: 1rem; text-align: center; }
@@ -293,15 +519,45 @@ button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
   border-top: 1px solid var(--ui-border);
 }
 
-.anchor-quote {
-  margin: 0 0 0.5rem 0;
+/* The anchor quote is a button so the whole thread is keyboard-clickable to
+   jump to the commented location in the document. */
+button.anchor-quote {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  width: 100%;
+  margin: 0 0 0.4rem 0;
   padding: 0.3rem 0.6rem;
+  border: 0;
   border-left: 3px solid var(--ui-accent);
+  border-radius: 0 4px 4px 0;
+  background: var(--gray-3);
   color: var(--ui-fg-muted);
   font-style: italic;
   font-size: 0.85rem;
-  background: #f4f6fa;
-  border-radius: 0 4px 4px 0;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  line-height: 1.4;
+}
+button.anchor-quote:hover {
+  background: var(--gray-4);
+  color: var(--ui-fg);
+}
+.anchor-quote .jump-icon {
+  font-style: normal;
+  font-size: 0.9em;
+  color: var(--ui-accent);
+  flex-shrink: 0;
+  margin-top: 0.05em;
+}
+
+.thread-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.25rem 0;
+  font-size: 0.8rem;
 }
 
 .comment {
@@ -364,7 +620,7 @@ button.primary.small {
   padding: 0.7rem;
   border: 1px solid var(--ui-accent);
   border-radius: 6px;
-  background: #f4f8ff;
+  background: var(--accent-2);
   margin-bottom: 1rem;
 }
 .comment-composer .quote {
@@ -376,12 +632,191 @@ button.primary.small {
 
 .reply-composer { margin-top: 0.4rem; }
 
+.composer-name {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.35rem 0.6rem;
+  margin-bottom: 0.4rem;
+  border: 1px solid var(--ui-border);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.header-name {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--ui-border);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 0.85rem;
+  width: 180px;
+}
+
+.confirm-pair {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+/* ============================================================
+ * Resize handles (drag between panes)
+ * ============================================================ */
+
+.resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+}
+.resize-handle:hover,
+.resize-handle:active {
+  background: var(--ui-accent);
+  opacity: 0.25;
+}
+.resize-handle-left { right: 0; }
+.resize-handle-right { left: 0; }
+
+/* ============================================================
+ * Toasts
+ * ============================================================ */
+
+.toast-stack {
+  position: fixed;
+  bottom: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 100;
+  max-width: min(380px, calc(100vw - 2rem));
+}
+.toast {
+  background: var(--color-panel-solid);
+  color: var(--ui-fg);
+  border: 1px solid var(--ui-border);
+  border-left: 3px solid var(--ui-accent);
+  border-radius: 6px;
+  padding: 0.7rem 0.9rem;
+  box-shadow: var(--shadow-4);
+  font-size: 0.9rem;
+  animation: toast-in 180ms ease-out;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.toast-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.toast-close {
+  background: transparent;
+  border: 0;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--ui-fg-muted);
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+.toast-body { color: var(--ui-fg); }
+.toast .link { margin-top: 0.3rem; }
+
+/* ============================================================
+ * Image lightbox
+ * ============================================================ */
+
+/* Any rendered image or processed mermaid diagram is clickable → zoom-in. */
+.marginalia img,
+.marginalia div.mermaid[data-processed='true'] {
+  cursor: zoom-in;
+}
+
+/* Radix Dialog.Content override for the lightbox — take the full viewport
+   so the image has room to breathe. */
+.lightbox {
+  /* Radix sets width+padding; we want the dialog to be viewport-sized. */
+  width: 100vw !important;
+  max-width: 100vw !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  background: rgba(0, 0, 0, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lightbox-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+
+.lightbox-stage-fit { cursor: zoom-in; }
+.lightbox-stage-native { cursor: zoom-out; }
+
+.lightbox-img.zoom-fit {
+  max-width: 95vw;
+  max-height: 90vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  display: block;
+}
+.lightbox-img.zoom-native {
+  max-width: none;
+  max-height: none;
+  width: auto;
+  height: auto;
+  display: block;
+}
+
+.lightbox-controls {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  z-index: 1;
+}
+.lightbox-caption {
+  color: #ddd !important;
+  max-width: 40ch;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 0.25rem 0.6rem;
+  border-radius: 4px;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .orphans {
-  background: #fffaf0;
-  border: 1px solid #f0d090;
+  background: var(--amber-2);
+  border: 1px solid var(--amber-6);
   border-radius: 6px;
   padding: 0.6rem 0.8rem 0.3rem;
   margin-bottom: 1rem;
+  color: var(--ui-fg);
 }
 .orphans h4 { margin: 0 0 0.3rem 0; }
 .subtle.small { font-size: 0.75rem; margin: 0 0 0.5rem 0; }
@@ -395,6 +830,23 @@ button.primary.small {
   background: #fff6d6;
   border-color: #e0c865;
   color: #6b5a15;
+}
+.chip.status-resolved {
+  background: #d8f0d4;
+  border-color: #7cc370;
+  color: #2d5a25;
+}
+
+.anchor-group.resolved .anchor-quote,
+.anchor-group.resolved .comment-body {
+  opacity: 0.65;
+}
+.resolved-banner {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  margin-bottom: 0.4rem;
+  font-size: 0.8rem;
 }
 
 /* ============================================================

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApp, type App } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
-import { CLIENT_HEADER, CLIENT_NAME_HEADER } from '../src/auth.js';
+import { CLIENT_HEADER, CLIENT_NAME_HEADER, INVITE_HEADER } from '../src/auth.js';
 
 const ALICE = { id: 'aaaaaaaaaaaaaaaaaaaa', name: 'Alice' };
 const BOB = { id: 'bbbbbbbbbbbbbbbbbbbb', name: 'Bob' };
@@ -32,6 +32,8 @@ describe('comments API', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  /** Alice uploads a doc and receives her admin invite token. */
+  let adminToken = '';
   async function newDoc(markdown: string, editableByAnyone = false): Promise<string> {
     const res = await app.hono.fetch(
       new Request('http://test/api/documents', {
@@ -40,8 +42,15 @@ describe('comments API', () => {
         body: JSON.stringify({ markdown, editable_by_anyone: editableByAnyone }),
       }),
     );
-    const j = (await res.json()) as { uid: string };
+    const j = (await res.json()) as { uid: string; admin_invite: { token: string } };
+    adminToken = j.admin_invite.token;
     return j.uid;
+  }
+
+  function asAdmin(c: typeof ALICE = ALICE): Headers {
+    const h = headersFor(c);
+    h.set(INVITE_HEADER, adminToken);
+    return h;
   }
 
   async function firstBlockId(uid: string): Promise<string> {
@@ -160,21 +169,21 @@ describe('comments API', () => {
     const r1 = await addComment(uid, BOB, { block_id: blockId, quote: 'Title' }, 'bob says');
     const cid = (r1.body as { comment: { id: string } }).comment.id;
 
-    // Alice (admin) tries to edit — forbidden.
+    // Alice (admin, via invite) tries to edit — forbidden (can only edit own).
     const editRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
         method: 'PUT',
-        headers: headersFor(ALICE),
+        headers: asAdmin(),
         body: JSON.stringify({ body: 'admin edit' }),
       }),
     );
     expect(editRes.status).toBe(403);
 
-    // Alice deletes — allowed.
+    // Alice deletes as admin — allowed.
     const delRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
         method: 'DELETE',
-        headers: headersFor(ALICE),
+        headers: asAdmin(),
       }),
     );
     expect(delRes.status).toBe(204);
@@ -199,7 +208,7 @@ describe('comments API', () => {
     const put = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}`, {
         method: 'PUT',
-        headers: headersFor(ALICE),
+        headers: asAdmin(),
         body: JSON.stringify({ markdown: '# New Title\n\nThe quick brown fox jumps.\n' }),
       }),
     );
@@ -223,7 +232,7 @@ describe('comments API', () => {
     await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}`, {
         method: 'PUT',
-        headers: headersFor(ALICE),
+        headers: asAdmin(),
         body: JSON.stringify({
           markdown: '# Title\n\nA different sentence now.\n\nBut the brown fox still lives.\n',
         }),
@@ -247,7 +256,7 @@ describe('comments API', () => {
     await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}`, {
         method: 'PUT',
-        headers: headersFor(ALICE),
+        headers: asAdmin(),
         body: JSON.stringify({ markdown: '# Title\n\nSomething completely different.\n' }),
       }),
     );
@@ -276,5 +285,60 @@ describe('comments API', () => {
     const blockId = await firstBlockId(uid);
     const r = await addComment(uid, CAROL, { block_id: blockId, quote: 'Public' }, 'looks good');
     expect(r.status).toBe(201);
+  });
+
+  test('top-level comments can be resolved and unresolved', async () => {
+    const uid = await newDoc('# Title');
+    const blockId = await firstBlockId(uid);
+    const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'question');
+    const cid = (r1.body as { comment: { id: string } }).comment.id;
+
+    const resolveRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${cid}/resolve`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ resolved: true }),
+      }),
+    );
+    expect(resolveRes.status).toBe(200);
+    const resolved = (await resolveRes.json()) as { comment: { resolved_at: number | null; resolved_by_name: string | null } };
+    expect(resolved.comment.resolved_at).toBeGreaterThan(0);
+    expect(resolved.comment.resolved_by_name).toBe('Bob');
+
+    const reopenRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${cid}/resolve`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ resolved: false }),
+      }),
+    );
+    expect(reopenRes.status).toBe(200);
+    const reopened = (await reopenRes.json()) as { comment: { resolved_at: number | null } };
+    expect(reopened.comment.resolved_at).toBeNull();
+  });
+
+  test('resolving a reply is rejected', async () => {
+    const uid = await newDoc('# Title');
+    const blockId = await firstBlockId(uid);
+    const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'top');
+    const topId = (r1.body as { comment: { id: string } }).comment.id;
+
+    const replyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ parent_id: topId, body: 'reply' }),
+      }),
+    );
+    const replyId = ((await replyRes.json()) as { comment: { id: string } }).comment.id;
+
+    const resolveRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${replyId}/resolve`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ resolved: true }),
+      }),
+    );
+    expect(resolveRes.status).toBe(400);
   });
 });

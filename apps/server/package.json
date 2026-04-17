@@ -1,5 +1,5 @@
 {
-  "name": "@markdowner/server",
+  "name": "@marginalia/server",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@markdowner/renderer": "workspace:*",
+    "@marginalia/renderer": "workspace:*",
     "hono": "^4.6.14",
     "isomorphic-git": "^1.27.1"
   }

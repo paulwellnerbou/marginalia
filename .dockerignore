@@ -1,0 +1,13 @@
+.git
+.github
+node_modules
+dist
+coverage
+var
+.env
+.env.*
+.DS_Store
+.specstory
+.claude
+*.log
+**/*.tsbuildinfo

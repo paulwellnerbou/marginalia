@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react';
+import { Badge, Button, Flex, Text, TextArea, TextField } from '@radix-ui/themes';
+import { CheckCircledIcon } from '@radix-ui/react-icons';
 import type { Comment, CommentAnchor } from '../lib/api.js';
 import { CommentItem } from './CommentItem.js';
 
@@ -8,9 +10,19 @@ interface Props {
   pendingAnchor: CommentAnchor | null;
   onCancelPending: () => void;
   isDocAdmin: boolean;
-  onCreate: (payload: { anchor?: CommentAnchor; parent_id?: string; body: string }) => Promise<void>;
+  /** Null if the viewer hasn't set a display name yet — Composer will ask. */
+  displayName: string | null;
+  onCreate: (payload: {
+    anchor?: CommentAnchor;
+    parent_id?: string;
+    body: string;
+    display_name?: string;
+  }) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onResolve: (id: string, resolved: boolean) => Promise<void>;
+  /** Scroll the document pane to a block and flash it. */
+  onScrollToAnchor: (blockId: string) => void;
 }
 
 interface AnchorGroup {
@@ -19,18 +31,34 @@ interface AnchorGroup {
 }
 
 export function CommentsPane(props: Props) {
-  const { comments, pendingAnchor, onCancelPending, isDocAdmin, onCreate, onEdit, onDelete } = props;
+  const {
+    comments,
+    pendingAnchor,
+    onCancelPending,
+    isDocAdmin,
+    displayName,
+    onCreate,
+    onEdit,
+    onDelete,
+    onResolve,
+    onScrollToAnchor,
+  } = props;
 
   const { active, orphans } = useMemo(() => groupByAnchor(comments), [comments]);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [expandedResolved, setExpandedResolved] = useState<Set<string>>(new Set());
 
-  async function submitNew(body: string) {
+  async function submitNew(body: string, name?: string) {
     if (!pendingAnchor) return;
-    await onCreate({ anchor: pendingAnchor, body });
+    const payload: Parameters<typeof onCreate>[0] = { anchor: pendingAnchor, body };
+    if (name !== undefined) payload.display_name = name;
+    await onCreate(payload);
   }
 
-  async function submitReply(parentId: string, body: string) {
-    await onCreate({ parent_id: parentId, body });
+  async function submitReply(parentId: string, body: string, name?: string) {
+    const payload: Parameters<typeof onCreate>[0] = { parent_id: parentId, body };
+    if (name !== undefined) payload.display_name = name;
+    await onCreate(payload);
     setReplyingTo(null);
   }
 
@@ -39,7 +67,12 @@ export function CommentsPane(props: Props) {
       {pendingAnchor && (
         <div className="comment-composer">
           <div className="quote">“{pendingAnchor.quote}”</div>
-          <Composer placeholder="Your comment…" onCancel={onCancelPending} onSubmit={submitNew} />
+          <Composer
+            placeholder="Your comment…"
+            needsName={!displayName}
+            onCancel={onCancelPending}
+            onSubmit={submitNew}
+          />
         </div>
       )}
 
@@ -59,6 +92,18 @@ export function CommentsPane(props: Props) {
               submitReply={submitReply}
               onEdit={onEdit}
               onDelete={onDelete}
+              onResolve={onResolve}
+              onScrollToAnchor={onScrollToAnchor}
+              needsName={!displayName}
+              expanded={expandedResolved.has(g.top.id)}
+              onToggleExpanded={() =>
+                setExpandedResolved((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(g.top.id)) next.delete(g.top.id);
+                  else next.add(g.top.id);
+                  return next;
+                })
+              }
             />
           ))}
         </section>
@@ -80,6 +125,18 @@ export function CommentsPane(props: Props) {
           submitReply={submitReply}
           onEdit={onEdit}
           onDelete={onDelete}
+          onResolve={onResolve}
+          onScrollToAnchor={onScrollToAnchor}
+          needsName={!displayName}
+          expanded={expandedResolved.has(g.top.id)}
+          onToggleExpanded={() =>
+            setExpandedResolved((prev) => {
+              const next = new Set(prev);
+              if (next.has(g.top.id)) next.delete(g.top.id);
+              else next.add(g.top.id);
+              return next;
+            })
+          }
         />
       ))}
     </div>
@@ -94,42 +151,105 @@ function AnchorGroupView({
   submitReply,
   onEdit,
   onDelete,
+  onResolve,
+  onScrollToAnchor,
+  needsName,
+  expanded,
+  onToggleExpanded,
 }: {
   group: AnchorGroup;
   isDocAdmin: boolean;
   replyingTo: string | null;
   setReplyingTo: (v: string | null) => void;
-  submitReply: (parentId: string, body: string) => Promise<void>;
+  submitReply: (parentId: string, body: string, name?: string) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  onResolve: (id: string, resolved: boolean) => Promise<void>;
+  onScrollToAnchor: (blockId: string) => void;
+  needsName: boolean;
+  expanded: boolean;
+  onToggleExpanded: () => void;
 }) {
+  const isResolved = group.top.resolved_at !== null;
+  const showReplies = !isResolved || expanded;
+  const anchorBlockId = group.top.anchor?.block_id ?? null;
+
+  // Clicking the quote or the thread-jump button scrolls the document pane
+  // to the commented block.
+  const jump = anchorBlockId ? () => onScrollToAnchor(anchorBlockId) : undefined;
+
   return (
-    <div className="anchor-group">
+    <div className={`anchor-group ${isResolved ? 'resolved' : ''}`}>
       {group.top.anchor?.quote && (
-        <blockquote className="anchor-quote">“{group.top.anchor.quote}”</blockquote>
+        <button
+          type="button"
+          className="anchor-quote"
+          title="Jump to this location in the document"
+          onClick={jump}
+        >
+          <span className="jump-icon" aria-hidden>↗</span>“{group.top.anchor.quote}”
+        </button>
       )}
+
+      <Flex align="center" gap="2" className="thread-toolbar">
+        {isResolved ? (
+          <>
+            <Badge color="green" variant="soft">
+              <CheckCircledIcon />
+              Resolved{group.top.resolved_by_name ? ` by ${group.top.resolved_by_name}` : ''}
+            </Badge>
+            {group.replies.length > 0 && (
+              <Button size="1" variant="ghost" onClick={onToggleExpanded}>
+                {expanded
+                  ? 'Hide replies'
+                  : `Show ${group.replies.length} repl${group.replies.length === 1 ? 'y' : 'ies'}`}
+              </Button>
+            )}
+            <span className="spacer" />
+            <Button size="1" variant="ghost" onClick={() => onResolve(group.top.id, false)}>
+              Reopen
+            </Button>
+          </>
+        ) : (
+          <>
+            <span className="spacer" />
+            <Button
+              size="1"
+              variant="ghost"
+              color="green"
+              onClick={() => onResolve(group.top.id, true)}
+            >
+              <CheckCircledIcon />
+              Resolve thread
+            </Button>
+          </>
+        )}
+      </Flex>
+
       <CommentItem
         comment={group.top}
         isDocAdmin={isDocAdmin}
         onEdit={onEdit}
         onDelete={onDelete}
-        onReply={(id) => setReplyingTo(id)}
+        onReply={isResolved ? undefined : (id) => setReplyingTo(id)}
       />
-      {group.replies.map((r) => (
-        <CommentItem
-          key={r.id}
-          comment={r}
-          isDocAdmin={isDocAdmin}
-          onEdit={onEdit}
-          onDelete={onDelete}
-        />
-      ))}
-      {replyingTo === group.top.id && (
+      {showReplies &&
+        group.replies.map((r) => (
+          <CommentItem
+            key={r.id}
+            comment={r}
+            isDocAdmin={isDocAdmin}
+            onEdit={onEdit}
+            onDelete={onDelete}
+          />
+        ))}
+      {replyingTo === group.top.id && !isResolved && (
         <div className="reply-composer">
           <Composer
             placeholder="Reply…"
+            needsName={needsName}
             onCancel={() => setReplyingTo(null)}
-            onSubmit={(v) => submitReply(group.top.id, v)}
+            onSubmit={(body, name) => submitReply(group.top.id, body, name)}
           />
         </div>
       )}
@@ -139,46 +259,70 @@ function AnchorGroupView({
 
 function Composer({
   placeholder,
+  needsName,
   onCancel,
   onSubmit,
 }: {
   placeholder: string;
+  needsName: boolean;
   onCancel: () => void;
-  onSubmit: (body: string) => Promise<void> | void;
+  onSubmit: (body: string, name?: string) => Promise<void> | void;
 }) {
   const [value, setValue] = useState('');
+  const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  const ready = value.trim().length > 0 && (!needsName || name.trim().length > 0);
+
   async function send() {
-    const body = value.trim();
-    if (!body) return;
+    if (!ready) return;
     setSubmitting(true);
     try {
-      await onSubmit(body);
+      await onSubmit(value.trim(), needsName ? name.trim() : undefined);
       setValue('');
     } finally {
       setSubmitting(false);
     }
   }
 
+  function handleKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (ready && !submitting) void send();
+    }
+  }
+
   return (
-    <div className="composer">
-      <textarea
+    <Flex direction="column" gap="2" className="composer">
+      {needsName && (
+        <TextField.Root
+          size="1"
+          placeholder="Your display name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          maxLength={80}
+          autoFocus
+        />
+      )}
+      <TextArea
         value={value}
         onChange={(e) => setValue(e.target.value)}
+        onKeyDown={handleKey}
         placeholder={placeholder}
         rows={3}
-        autoFocus
+        size="1"
+        autoFocus={!needsName}
       />
-      <div className="comment-actions">
-        <button className="link" onClick={onCancel} disabled={submitting}>
+      <Flex gap="2" align="center" justify="end">
+        <Text size="1" color="gray" mr="auto">⌘/Ctrl+Enter to post</Text>
+        <Button variant="ghost" size="1" onClick={onCancel} disabled={submitting}>
           Cancel
-        </button>
-        <button className="primary small" onClick={send} disabled={!value.trim() || submitting}>
+        </Button>
+        <Button size="1" onClick={send} disabled={!ready || submitting}>
           {submitting ? 'Posting…' : 'Post'}
-        </button>
-      </div>
-    </div>
+        </Button>
+      </Flex>
+    </Flex>
   );
 }
 

@@ -1,18 +1,18 @@
 # Theming Contract
 
-Markdowner themes are pure CSS. Switching themes swaps one stylesheet; the
-HTML produced by `@markdowner/renderer` does not change.
+Marginalia themes are pure CSS. Switching themes swaps one stylesheet; the
+HTML produced by `@marginalia/renderer` does not change.
 
 ## Root class
 
-Every rendered document is wrapped in `<article class="markdowner">…</article>`
-by the CLI and the viewer. All selectors should be scoped under `.markdowner`
+Every rendered document is wrapped in `<article class="marginalia">…</article>`
+by the CLI and the viewer. All selectors should be scoped under `.marginalia`
 so embedding into a host page doesn't leak styles.
 
 ## Tunable CSS variables
 
 Themes express their configurable values as CSS custom properties on
-`.markdowner`. A theme editor may override any of these at runtime without
+`.marginalia`. A theme editor may override any of these at runtime without
 re-rendering the document.
 
 | Variable | Purpose |
@@ -46,13 +46,13 @@ re-rendering the document.
 The renderer emits semantic HTML. Themes can rely on these class names and
 data attributes:
 
-- `.markdowner` — root article wrapper.
+- `.marginalia` — root article wrapper.
 - `[data-block="<id>"]` — every top-level block. The viewer uses these IDs
   to place comment anchors. Themes should treat `data-block` as invisible.
 - `pre.shiki.language-<lang>` — syntax-highlighted code block.
   Shiki dual-theme colors expose `--shiki-light`, `--shiki-dark`, and
   per-token background/style variables.
-- `pre.mermaid` — a mermaid diagram source block, client-side rendered.
+- `div.mermaid` — a mermaid diagram source block, client-side rendered.
   Carries `data-mermaid-index` and `data-mermaid-mode`.
 - Heading elements (`h1`–`h6`) carry a stable `id` attribute (Unicode-safe
   slug) that the TOC links to.
@@ -60,11 +60,14 @@ data attributes:
 ## Shipping a custom theme
 
 Minimum viable theme: one `.css` file that sets at least the colors and
-base font. Optionally `@import './default-light.css'` first to inherit the
+base font. Optionally `@import './default.css'` first to inherit the
 structural rules, then override only what you need.
 
 Built-in themes in this package:
 
-- `@markdowner/themes/default-light`
-- `@markdowner/themes/default-dark`
-- `@markdowner/themes/serif-print` (intended for PDF export)
+- `@marginalia/themes/default` (light + dark via `[data-appearance]`)
+- `@marginalia/themes/beautiful`
+- `@marginalia/themes/book`
+- `@marginalia/themes/article`
+- `@marginalia/themes/technical`
+- `@marginalia/themes/serif-print` (intended for PDF export)

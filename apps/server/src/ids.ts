@@ -8,9 +8,10 @@ export function newDocumentUid(): string {
   return randomBytes(16).toString('base64url');
 }
 
-/** 32-char recovery token returned once on upload. */
-export function newRecoveryToken(): string {
-  return randomBytes(24).toString('base64url');
+/** URL-safe invite token. 22 chars = 128 bits of entropy. Used as the
+ *  path segment after the doc UID. */
+export function newInviteToken(): string {
+  return randomBytes(16).toString('base64url');
 }
 
 /** Long session cookie token. */

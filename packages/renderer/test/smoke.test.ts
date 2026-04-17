@@ -53,12 +53,25 @@ const x: number = 1;
     expect(result.anchors[2]!.id).toBe('中文标题');
   });
 
-  test('mermaid blocks are preserved as client-side pre elements', async () => {
+  test('slug strips punctuation GitHub-style so manual #refs resolve', async () => {
+    // A real-world-style heading with `·`, `/`, `&`, `,`, `(`, `)`.
+    const md = '### E1 · Konzeption, UX/UI-Design & Prototyping (initial)\n';
+    const r = await render(md);
+    expect(r.anchors[0]!.id).toBe('e1-konzeption-uxui-design-prototyping-initial');
+  });
+
+  test('headings get a hoverable anchor link', async () => {
+    const r = await render('# Hello World\n');
+    expect(r.html).toContain('class="heading-anchor"');
+    expect(r.html).toContain('href="#hello-world"');
+  });
+
+  test('mermaid blocks are preserved as client-renderable containers', async () => {
     const md = '```mermaid\ngraph TD; A-->B;\n```\n';
     const result = await render(md);
     expect(result.mermaid).toHaveLength(1);
     expect(result.mermaid[0]!.source).toBe('graph TD; A-->B;');
-    expect(result.html).toContain('class="mermaid"');
+    expect(result.html).toContain('<div class="mermaid"');
     expect(result.html).toContain('data-mermaid-index="0"');
   });
 

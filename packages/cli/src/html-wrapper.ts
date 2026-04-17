@@ -1,4 +1,4 @@
-import type { RenderResult } from '@markdowner/renderer';
+import type { RenderResult } from '@marginalia/renderer';
 
 export interface WrapOptions {
   /** Fully resolved CSS text to inline in <style> */
@@ -26,7 +26,7 @@ ${opts.css}
 </style>
 </head>
 <body>
-<article class="markdowner">
+<article class="marginalia">
 ${result.html}</article>
 </body>
 </html>

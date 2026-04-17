@@ -1,16 +1,16 @@
 import { renderCommand } from './commands/render.js';
 import { themesCommand } from './commands/themes.js';
 
-const USAGE = `markdowner — Markdown to beautiful themed HTML
+const USAGE = `marginalia — Markdown to beautiful themed HTML
 
 Usage:
-  markdowner render <file.md> [options]
-  markdowner render --stdin [options]
-  markdowner themes list
-  markdowner themes show <name>
+  marginalia render <file.md> [options]
+  marginalia render --stdin [options]
+  marginalia themes list
+  marginalia themes show <name>
 
 Render options:
-  --theme=<name>      Theme to embed (default: default-light)
+  --theme=<name>      Theme to embed (default: default)
   --out=<file>        Write output to file (default: stdout)
   --fragment          Emit HTML fragment only (no <html>/<head>/<body>)
   --strict-refs       Exit non-zero on broken in-document references

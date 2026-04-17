@@ -1,0 +1,263 @@
+/*
+ * Marginalia — Beautiful
+ *
+ * An opinionated editorial theme. Meant to be beautiful out of the box:
+ * book-quality serif body, Fraunces display face for headings, warm ivory
+ * paper, a single deep ink-blue accent, optical details (drop cap, small
+ * caps, ornamental rules, italic blockquotes without bars).
+ *
+ * Load Fraunces from Google Fonts so the design doesn't degrade to a
+ * generic serif on fresh installs. Keep system serifs as the body
+ * stack — they render beautifully on Mac/Windows and stay fast.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;1,9..144,500;1,9..144,700&display=swap');
+@import './default.css';
+
+.marginalia {
+  /* --- Palette (ivory paper, ink, deep blue) ---------------------- */
+  --md-color-fg: #1a1712;
+  --md-color-fg-muted: #736a5c;
+  --md-color-bg: #fbf8f1;
+  --md-color-accent: #1f3864;         /* deep editorial ink-blue */
+  --md-color-accent-muted: #c9d1e0;
+  --md-color-border: #e2dccd;
+  --md-color-code-bg: #f3ede0;
+  --md-color-code-fg: #22201b;
+  --md-color-quote-bar: transparent;
+  --md-color-table-stripe: #f5efe3;
+  --md-color-selection-bg: #f2e4b8;
+
+  /* --- Typography ------------------------------------------------- */
+  --md-font-body:
+    'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua',
+    'Charter', Georgia, serif;
+  --md-font-heading:
+    'Fraunces', 'Iowan Old Style', 'Source Serif Pro', Georgia, serif;
+
+  --md-max-width: 66ch;
+  --md-font-size: 19px;
+  --md-line-height: 1.72;
+
+  --md-heading-weight: 500;               /* Fraunces 500 has a lot of presence */
+  --md-heading-line-height: 1.15;
+  --md-heading-letter-spacing: -0.015em;
+
+  --md-space-block: 1.25em;
+  --md-space-heading-top: 2.4em;
+}
+
+/* --- Page setting ------------------------------------------------- */
+
+.marginalia {
+  padding-top: 3.2rem;
+  padding-bottom: 7rem;
+}
+
+/* --- Headings ----------------------------------------------------- */
+
+.marginalia h1 {
+  font-family: var(--md-font-heading);
+  font-size: 3rem;
+  font-style: italic;
+  font-weight: 500;
+  letter-spacing: -0.035em;
+  text-align: left;
+  margin-bottom: 0.2em;
+  border-bottom: 0;
+}
+
+/* A thin ornamental rule under the h1 instead of the default border. */
+.marginalia > h1:first-child::after {
+  content: '';
+  display: block;
+  width: 6em;
+  height: 1px;
+  background: var(--md-color-fg);
+  margin: 0.9rem 0 0 0;
+  opacity: 0.6;
+}
+
+.marginalia h2 {
+  font-family: var(--md-font-heading);
+  font-size: 1.9rem;
+  font-weight: 500;
+  border-bottom: 0;
+  margin-top: 2.8em;
+}
+
+.marginalia h3 {
+  font-family: var(--md-font-heading);
+  font-size: 1.35rem;
+  font-weight: 600;
+}
+
+.marginalia h4 {
+  font-family: var(--md-font-body);
+  font-weight: 700;
+  font-size: 1.05rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--md-color-fg-muted);
+}
+
+.marginalia h5,
+.marginalia h6 {
+  font-family: var(--md-font-body);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: var(--md-color-fg-muted);
+}
+
+/* --- Body copy ---------------------------------------------------- */
+
+.marginalia p {
+  /* Enable classic small-caps + old-style figures where the face supports it. */
+  font-feature-settings: 'kern', 'liga', 'onum';
+}
+
+/* Drop cap on the first paragraph after the first h1. An understated one —
+   two-line tall, slightly oversized, slight left hang. */
+.marginalia > h1:first-child + p::first-letter {
+  font-family: var(--md-font-heading);
+  font-style: normal;
+  font-weight: 500;
+  initial-letter: 2 1;
+  -webkit-initial-letter: 2 1;
+  float: left;
+  line-height: 0.9;
+  font-size: 3.4em;
+  padding: 0.12em 0.12em 0 0;
+  margin-right: 0.02em;
+  color: var(--md-color-accent);
+}
+
+/* Indent successive paragraphs, book-style — but not after a block element
+   like a heading, list, quote, or figure. */
+.marginalia p + p { text-indent: 1.5em; margin-top: 0; }
+
+/* --- Links -------------------------------------------------------- */
+
+.marginalia a {
+  color: var(--md-color-fg);
+  text-decoration: none;
+  background-image: linear-gradient(
+    to bottom,
+    transparent calc(100% - 1px),
+    var(--md-color-accent) calc(100% - 1px)
+  );
+  background-size: 100% 100%;
+  transition: color 140ms ease, background-size 140ms ease;
+}
+.marginalia a:hover {
+  color: var(--md-color-accent);
+}
+
+/* --- Blockquotes: italic pull-quote, no bar --------------------- */
+
+.marginalia blockquote {
+  border-left: 0;
+  padding: 0.5em 0 0.5em 2.5em;
+  margin: 1.5em 0;
+  font-family: var(--md-font-heading);
+  font-style: italic;
+  font-size: 1.25em;
+  line-height: 1.4;
+  color: var(--md-color-fg);
+  position: relative;
+}
+.marginalia blockquote::before {
+  content: '“';
+  font-family: var(--md-font-heading);
+  position: absolute;
+  left: 0;
+  top: -0.15em;
+  font-size: 3.2em;
+  line-height: 1;
+  font-style: italic;
+  color: var(--md-color-accent);
+  opacity: 0.4;
+}
+
+/* --- Ornamental horizontal rule --------------------------------- */
+
+.marginalia hr {
+  border: 0;
+  text-align: center;
+  margin: 2.8em 0;
+  height: 1em;
+  overflow: visible;
+}
+.marginalia hr::before {
+  content: '§';
+  font-family: var(--md-font-heading);
+  font-style: italic;
+  color: var(--md-color-fg-muted);
+  font-size: 1.5em;
+  letter-spacing: 0.4em;
+}
+
+/* --- Tables ------------------------------------------------------- */
+
+.marginalia table {
+  font-feature-settings: 'kern', 'tnum';
+  font-size: 0.95em;
+}
+.marginalia th {
+  font-family: var(--md-font-body);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.8em;
+  border-bottom: 1px solid var(--md-color-fg);
+  padding-bottom: 0.6em;
+}
+
+/* --- Code --------------------------------------------------------- */
+
+.marginalia :not(pre) > code {
+  font-size: 0.88em;
+  background: transparent;
+  border-bottom: 1px dotted var(--md-color-fg-muted);
+  padding: 0 0.05em;
+  border-radius: 0;
+  color: var(--md-color-fg);
+}
+.marginalia pre {
+  background: var(--md-color-code-bg);
+  border-radius: 4px;
+  border-left: 3px solid var(--md-color-accent);
+}
+
+/* --- Image captions (figure + figcaption) ------------------------ */
+
+.marginalia figcaption {
+  font-family: var(--md-font-heading);
+  font-style: italic;
+  font-size: 0.95em;
+}
+
+/* ------------------------------------------------------------------
+ * DARK VARIANT — warm, low-glare
+ * ------------------------------------------------------------------ */
+
+[data-appearance='dark'] .marginalia {
+  --md-color-fg: #e9e4d4;
+  --md-color-fg-muted: #a59a82;
+  --md-color-bg: transparent;
+  --md-color-accent: #a9c0e8;
+  --md-color-accent-muted: #3a4a68;
+  --md-color-border: #3a352d;
+  --md-color-code-bg: #2a2620;
+  --md-color-code-fg: #f0ecdf;
+  --md-color-table-stripe: #22201b;
+  --md-color-selection-bg: #6a5830;
+}
+[data-appearance='dark'] .marginalia > h1:first-child + p::first-letter {
+  color: var(--md-color-accent);
+}
+[data-appearance='dark'] .marginalia blockquote::before {
+  color: var(--md-color-accent);
+  opacity: 0.5;
+}

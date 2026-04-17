@@ -15,6 +15,7 @@ import { remarkBlockIds } from './plugins/block-ids.js';
 import { remarkMermaid } from './plugins/mermaid.js';
 import { remarkAssetCollector } from './plugins/asset-collector.js';
 import { rehypeShikiHighlight } from './plugins/shiki.js';
+import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
 import { sanitizeSchema } from './plugins/sanitize-schema.js';
 import { preprocessGridTables } from './plugins/grid-tables.js';
 
@@ -58,6 +59,7 @@ export async function render(
     .use(remarkAssetCollector)
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeRaw)
+    .use(rehypeHeadingAnchors)
     .use(rehypeSanitize, sanitizeSchema)
     .use(rehypeShikiHighlight, options.highlight ?? {})
     .use(rehypeStringify, { allowDangerousHtml: false });

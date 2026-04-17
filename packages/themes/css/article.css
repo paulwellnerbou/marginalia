@@ -1,0 +1,52 @@
+/*
+ * Marginalia — Article
+ *
+ * Magazine-style article: large scale, assertive headings, medium column,
+ * warm neutrals. Works for essays, reports, announcements.
+ */
+
+@import './default.css';
+
+.marginalia {
+  --md-max-width: 68ch;
+
+  --md-font-body:
+    'Charter', 'Iowan Old Style', 'Source Serif Pro', Georgia, serif;
+  --md-font-heading:
+    'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+
+  --md-font-size: 18px;
+  --md-line-height: 1.7;
+  --md-heading-weight: 720;
+  --md-heading-line-height: 1.15;
+  --md-heading-letter-spacing: -0.02em;
+
+  --md-color-fg: #1c1812;
+  --md-color-fg-muted: #736a60;
+  --md-color-bg: #fffdf9;
+  --md-color-accent: #b8360a;
+  --md-color-accent-muted: #f5d3c2;
+  --md-color-border: #e8ded0;
+  --md-color-code-bg: #f6efe2;
+  --md-color-quote-bar: var(--md-color-accent);
+  --md-color-table-stripe: #faf4e9;
+}
+
+.marginalia h1 {
+  font-size: 2.75rem;
+  border-bottom: 0;
+  letter-spacing: -0.03em;
+}
+.marginalia h2 {
+  border-bottom: 0;
+  font-size: 1.75rem;
+}
+.marginalia h3 { font-size: 1.3rem; }
+.marginalia blockquote {
+  font-size: 1.15em;
+  font-style: normal;
+  padding-left: 1.2em;
+  border-left-width: 4px;
+  color: var(--md-color-fg);
+}

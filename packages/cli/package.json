@@ -1,14 +1,14 @@
 {
-  "name": "@markdowner/cli",
+  "name": "@marginalia/cli",
   "version": "0.0.0",
   "type": "module",
   "bin": {
-    "markdowner": "./src/bin.ts"
+    "marginalia": "./src/bin.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@markdowner/renderer": "workspace:*"
+    "@marginalia/renderer": "workspace:*"
   }
 }

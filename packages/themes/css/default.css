@@ -1,0 +1,343 @@
+/*
+ * Marginalia — Default
+ *
+ * Balanced neutral theme. Light and dark variants live in the same file;
+ * the dark palette activates when either `[data-appearance="dark"]` is
+ * set on an ancestor (our preferred override) or the user's system is in
+ * dark mode (`prefers-color-scheme: dark`) AND no override to light is
+ * present.
+ *
+ * All themes share the structural CSS that lives here; other themes
+ * import this file and only override CSS custom properties.
+ */
+
+.marginalia {
+  /* --- Tunables (theme editor acts on these) ------------------------ */
+
+  --md-max-width: 72ch;
+
+  --md-font-body:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  --md-font-heading: var(--md-font-body);
+  --md-font-mono:
+    ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo, Consolas,
+    monospace;
+
+  --md-font-size: 17px;
+  --md-line-height: 1.65;
+
+  --md-heading-line-height: 1.25;
+  --md-heading-weight: 650;
+  --md-heading-letter-spacing: -0.01em;
+
+  --md-space-block: 1.2em;
+  --md-space-heading-top: 2em;
+  --md-space-list-item: 0.3em;
+
+  --md-color-fg: #1c1f23;
+  --md-color-fg-muted: #5c6470;
+  --md-color-bg: #ffffff;
+  --md-color-accent: #2465e0;
+  --md-color-accent-muted: #c7daf7;
+  --md-color-border: #e4e8ee;
+  --md-color-code-bg: #f4f6fa;
+  --md-color-code-fg: #202326;
+  --md-color-quote-bar: #c9d1dc;
+  --md-color-table-stripe: #f8f9fb;
+  --md-color-selection-bg: #fff1b8;
+
+  /* --- Root styles -------------------------------------------------- */
+
+  color: var(--md-color-fg);
+  background: var(--md-color-bg);
+  font-family: var(--md-font-body);
+  font-size: var(--md-font-size);
+  line-height: var(--md-line-height);
+  max-width: var(--md-max-width);
+  margin-inline: auto;
+  padding: 2.5rem 1.5rem 6rem;
+  hyphens: auto;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'kern', 'liga', 'calt';
+  word-wrap: break-word;
+}
+
+.marginalia ::selection {
+  background: var(--md-color-selection-bg);
+}
+
+/* Applied by the viewer when a user clicks a comment thread — flashes the
+   anchored block so the user can spot it after the scroll. */
+.marginalia [data-block].anchor-flash {
+  animation: md-anchor-flash 1.6s ease-out;
+}
+@keyframes md-anchor-flash {
+  0% { background: var(--md-color-selection-bg); }
+  100% { background: transparent; }
+}
+
+.marginalia > * + * { margin-top: var(--md-space-block); }
+
+/* --- Headings ----------------------------------------------------- */
+
+.marginalia :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--md-font-heading);
+  font-weight: var(--md-heading-weight);
+  line-height: var(--md-heading-line-height);
+  letter-spacing: var(--md-heading-letter-spacing);
+  margin-top: var(--md-space-heading-top);
+  scroll-margin-top: 2rem;
+  position: relative;
+}
+
+.marginalia > :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+
+.marginalia h1 { font-size: 2.1rem; margin-top: 0; }
+.marginalia h2 { font-size: 1.55rem; }
+.marginalia h3 { font-size: 1.25rem; }
+.marginalia h4 { font-size: 1.05rem; }
+.marginalia h5 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--md-color-fg-muted); }
+.marginalia h6 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--md-color-fg-muted); }
+
+.marginalia h1 { border-bottom: 1px solid var(--md-color-border); padding-bottom: 0.3em; }
+.marginalia h2 { border-bottom: 1px solid var(--md-color-border); padding-bottom: 0.2em; }
+
+.marginalia :is(h1, h2, h3, h4, h5, h6) > a.heading-anchor {
+  position: absolute;
+  left: -0.9em;
+  top: 0;
+  width: 0.8em;
+  color: var(--md-color-fg-muted);
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity 80ms ease-in;
+  font-weight: 400;
+  user-select: none;
+}
+.marginalia :is(h1, h2, h3, h4, h5, h6):hover > a.heading-anchor,
+.marginalia :is(h1, h2, h3, h4, h5, h6) > a.heading-anchor:focus {
+  opacity: 1;
+}
+.marginalia :is(h1, h2, h3, h4, h5, h6) > a.heading-anchor:hover {
+  color: var(--md-color-accent);
+}
+.marginalia :is(h1, h2, h3, h4, h5, h6) a:not(.heading-anchor) {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* --- Paragraphs & inline ----------------------------------------- */
+
+.marginalia p { margin: 0; }
+
+.marginalia a {
+  color: var(--md-color-accent);
+  text-decoration-line: underline;
+  text-decoration-color: var(--md-color-accent-muted);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.marginalia a:hover { text-decoration-color: var(--md-color-accent); }
+
+.marginalia strong { font-weight: 650; }
+.marginalia em { font-style: italic; }
+.marginalia del { text-decoration: line-through; color: var(--md-color-fg-muted); }
+
+/* --- Lists -------------------------------------------------------- */
+
+.marginalia :is(ul, ol) { padding-left: 1.4em; margin: 0; }
+.marginalia li + li { margin-top: var(--md-space-list-item); }
+.marginalia li > :is(ul, ol) { margin-top: var(--md-space-list-item); }
+.marginalia li > p + p { margin-top: 0.6em; }
+.marginalia li::marker { color: var(--md-color-fg-muted); }
+.marginalia li input[type='checkbox'] {
+  margin-right: 0.4em;
+  transform: translateY(-0.05em);
+}
+
+/* --- Blockquote --------------------------------------------------- */
+
+.marginalia blockquote {
+  margin: 0;
+  padding: 0.2em 0 0.2em 1em;
+  border-left: 3px solid var(--md-color-quote-bar);
+  color: var(--md-color-fg-muted);
+  font-style: italic;
+}
+.marginalia blockquote > * + * { margin-top: 0.6em; }
+
+/* --- Code --------------------------------------------------------- */
+
+.marginalia :not(pre) > code {
+  font-family: var(--md-font-mono);
+  font-size: 0.9em;
+  background: var(--md-color-code-bg);
+  color: var(--md-color-code-fg);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.marginalia pre {
+  font-family: var(--md-font-mono);
+  font-size: 0.9em;
+  line-height: 1.55;
+  background: var(--md-color-code-bg);
+  color: var(--md-color-code-fg);
+  padding: 1em 1.2em;
+  border-radius: 8px;
+  overflow-x: auto;
+  tab-size: 2;
+}
+.marginalia pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  white-space: pre;
+  font-size: inherit;
+}
+
+/* Shiki dual-theme: light by default; dark variant flips colors below. */
+.marginalia pre.shiki,
+.marginalia pre.shiki span {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+  font-style: var(--shiki-light-font-style);
+  font-weight: var(--shiki-light-font-weight);
+  text-decoration: var(--shiki-light-text-decoration);
+}
+
+/* --- Tables ------------------------------------------------------- */
+
+.marginalia table {
+  border-collapse: collapse;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.95em;
+}
+.marginalia th,
+.marginalia td {
+  text-align: left;
+  padding: 0.55em 0.8em;
+  border-bottom: 1px solid var(--md-color-border);
+  vertical-align: top;
+}
+.marginalia th {
+  font-weight: 650;
+  border-bottom-width: 2px;
+  border-bottom-color: var(--md-color-fg);
+}
+.marginalia tbody tr:nth-child(even) td { background: var(--md-color-table-stripe); }
+.marginalia :is(th, td)[align='right'] { text-align: right; }
+.marginalia :is(th, td)[align='center'] { text-align: center; }
+
+/* --- Images & figures -------------------------------------------- */
+
+.marginalia img,
+.marginalia svg {
+  max-width: 100%;
+  height: auto;
+}
+.marginalia figure { margin: 0; }
+.marginalia figcaption {
+  font-size: 0.9em;
+  color: var(--md-color-fg-muted);
+  text-align: center;
+  margin-top: 0.4em;
+}
+
+/* --- Horizontal rule --------------------------------------------- */
+
+.marginalia hr {
+  border: 0;
+  border-top: 1px solid var(--md-color-border);
+  margin: 2em 0;
+}
+
+/* --- Mermaid ----------------------------------------------------- */
+
+.marginalia div.mermaid {
+  background: transparent;
+  padding: 1rem 0;
+  color: var(--md-color-fg);
+  text-align: center;
+  overflow-x: auto;
+  font-family: var(--md-font-body);
+}
+.marginalia div.mermaid.mermaid-error {
+  white-space: pre-wrap;
+  text-align: left;
+  font-family: var(--md-font-mono);
+  font-size: 0.85em;
+  color: var(--md-color-code-fg);
+  background: #fff1f1;
+  border: 1px solid #e0b4b4;
+  border-radius: 6px;
+  padding: 0.8rem 1rem;
+}
+.marginalia div.mermaid svg {
+  max-width: none;
+  height: auto;
+}
+
+/* ------------------------------------------------------------------
+ * DARK VARIANT
+ *
+ * Kicks in when `[data-appearance="dark"]` is set on any ancestor
+ * (our manual override), or when system prefers dark AND the user
+ * hasn't explicitly picked light.
+ * ------------------------------------------------------------------ */
+
+[data-appearance='dark'] .marginalia,
+[data-appearance='dark'].marginalia {
+  --md-color-fg: #e4e7eb;
+  --md-color-fg-muted: #9aa3b2;
+  --md-color-bg: transparent;        /* let app chrome bg show through */
+  --md-color-accent: #6ba3ff;
+  --md-color-accent-muted: #2a3e66;
+  --md-color-border: #262a33;
+  --md-color-code-bg: #1b1e26;
+  --md-color-code-fg: #e4e7eb;
+  --md-color-quote-bar: #2e3440;
+  --md-color-table-stripe: #181b22;
+  --md-color-selection-bg: #3b4a6b;
+}
+
+[data-appearance='dark'] .marginalia pre.shiki,
+[data-appearance='dark'] .marginalia pre.shiki span {
+  color: var(--shiki-dark);
+  background-color: var(--shiki-dark-bg);
+  font-style: var(--shiki-dark-font-style);
+  font-weight: var(--shiki-dark-font-weight);
+  text-decoration: var(--shiki-dark-text-decoration);
+}
+
+[data-appearance='dark'] .marginalia div.mermaid.mermaid-error {
+  background: #2a1b1b;
+  border-color: #5a3a3a;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-appearance='auto'] .marginalia {
+    --md-color-fg: #e4e7eb;
+    --md-color-fg-muted: #9aa3b2;
+    --md-color-bg: transparent;
+    --md-color-accent: #6ba3ff;
+    --md-color-accent-muted: #2a3e66;
+    --md-color-border: #262a33;
+    --md-color-code-bg: #1b1e26;
+    --md-color-code-fg: #e4e7eb;
+    --md-color-quote-bar: #2e3440;
+    --md-color-table-stripe: #181b22;
+    --md-color-selection-bg: #3b4a6b;
+  }
+  [data-appearance='auto'] .marginalia pre.shiki,
+  [data-appearance='auto'] .marginalia pre.shiki span {
+    color: var(--shiki-dark);
+    background-color: var(--shiki-dark-bg);
+    font-style: var(--shiki-dark-font-style);
+    font-weight: var(--shiki-dark-font-weight);
+    text-decoration: var(--shiki-dark-text-decoration);
+  }
+}

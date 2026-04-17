@@ -1,4 +1,4 @@
-# Markdowner — Requirements
+# Marginalia — Requirements
 
 A web app for rendering, sharing, and collaboratively commenting on Markdown
 documents. The rendering engine is reusable outside the app.
@@ -37,9 +37,9 @@ See §4.
 
 ### 2.2 CLI
 
-* `markdowner render <file.md> [--theme=<name>] [--out=<file.html>]`
-* `markdowner render --stdin` (reads from stdin, writes to stdout)
-* `markdowner themes list` / `markdowner themes show <name>`
+* `marginalia render <file.md> [--theme=<name>] [--out=<file.html>]`
+* `marginalia render --stdin` (reads from stdin, writes to stdout)
+* `marginalia themes list` / `marginalia themes show <name>`
 * Exit non-zero on broken in-document references (configurable).
 
 ### 2.3 Features required
@@ -188,7 +188,7 @@ Three panes, all resizable; TOC and Comments independently collapsible:
 * All content must render server-side, including mermaid diagrams (→ static
   SVG) and syntax-highlighted code blocks (already static from Shiki).
 * Available from the viewer UI and from the CLI
-  (`markdowner export <file.md> --format=pdf|docx`).
+  (`marginalia export <file.md> --format=pdf|docx`).
 * **[ASSUMED]** PDF via headless Chromium printing the rendered HTML with the
   active theme's print stylesheet; DOCX via a Markdown → DOCX converter
   (e.g. Pandoc invocation, or a native TS library like `docx`). Trade-offs
@@ -213,7 +213,7 @@ Three panes, all resizable; TOC and Comments independently collapsible:
 
 The renderer is reusable in other webapps via three forms (confirmed):
 
-* **Primary**: a **Web Component** (`<markdowner-doc src="…">` or with inline
+* **Primary**: a **Web Component** (`<marginalia-doc src="…">` or with inline
   markdown), using **Shadow DOM** for style isolation. Works in any framework
   or plain HTML. Themes apply via slotted CSS or a `theme=` attribute.
 * **Secondary**: a thin **React wrapper** around the web component, for
@@ -254,21 +254,5 @@ The renderer is reusable in other webapps via three forms (confirmed):
 
 ## 7. Open questions (summary)
 
-Resolved:
-* ~~Embedding form~~ → web component + React wrapper + iframe (§4).
-* ~~Mermaid rendering~~ → client-side default, server-side also supported
-  (required by export, §3.8).
-* ~~Password scope~~ → gates everything: read, edit, comment, history,
-  export (§3.2).
-* ~~Threaded comment replies~~ → yes, one level of replies per anchor (§3.6).
-* ~~Real-time concurrent editing (CRDT)~~ → not in v1, but architected so
-  it can be added later without rewrites (§3.7).
-* ~~Theme scope~~ → admin sets document default; each reader can override
-  locally (localStorage, per document UID) (§3.9).
-* ~~Grid table dialect~~ → Pandoc-style (§2.3 R4).
-* ~~Asset size limits~~ → 10 MB/file, 100 MB/document (§3.5).
-
-Still open:
-
-1. Export: is requiring **Pandoc** as a server-side dependency acceptable for
-   DOCX output, or should DOCX be pure-JS (lower fidelity)? (§3.8)
+* Export: is requiring **Pandoc** as a server-side dependency acceptable for
+  DOCX output, or should DOCX be pure-JS (lower fidelity)? (§3.8)

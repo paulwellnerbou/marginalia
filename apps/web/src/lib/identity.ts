@@ -4,8 +4,8 @@
  * localStorage; the server treats them as untrusted identity claims.
  */
 
-const CLIENT_ID_KEY = 'markdowner.clientId';
-const DISPLAY_NAME_KEY = 'markdowner.displayName';
+const CLIENT_ID_KEY = 'marginalia.clientId';
+const DISPLAY_NAME_KEY = 'marginalia.displayName';
 
 export interface Identity {
   clientId: string;
@@ -31,22 +31,52 @@ export function setDisplayName(name: string): void {
 }
 
 /**
- * Ensure we have both a clientId and a displayName. If displayName isn't
- * set yet, prompts the user for one. Returns null if the user cancels.
+ * Returns the current identity if both clientId and displayName are set.
+ * Callers handle the null case with in-app UI — never a native prompt.
  */
-export function ensureIdentity(): Identity | null {
+export function loadIdentity(): Identity | null {
   const clientId = getClientId();
-  let displayName = getDisplayName();
-  if (!displayName) {
-    const entered = window.prompt(
-      'Choose a display name (shown on your edits and comments):',
-      '',
-    );
-    if (!entered || !entered.trim()) return null;
-    displayName = entered.trim().slice(0, 80);
-    setDisplayName(displayName);
-  }
+  const displayName = getDisplayName();
+  if (!displayName) return null;
   return { clientId, displayName };
+}
+
+/**
+ * Derive a display name from markdown content — used as the fallback when
+ * the upload form's display-name field is left empty.
+ *
+ * Order of precedence:
+ * 1. YAML frontmatter `title:` (first one found)
+ * 2. First non-empty line outside frontmatter, with leading `#` markers
+ *    stripped.
+ * 3. 'Anonymous' if neither is present.
+ */
+export function deriveDisplayName(markdown: string): string {
+  const lines = markdown.split('\n');
+
+  let i = 0;
+  // Skip a leading YAML frontmatter block and capture its title.
+  if (lines[0]?.trim() === '---') {
+    for (i = 1; i < lines.length; i++) {
+      const line = lines[i]!;
+      if (line.trim() === '---') {
+        i++;
+        break;
+      }
+      const m = line.match(/^\s*title\s*:\s*(.+?)\s*$/);
+      if (m) {
+        const raw = m[1]!.replace(/^["']|["']$/g, '').trim();
+        if (raw) return raw.slice(0, 80);
+      }
+    }
+  }
+
+  for (; i < lines.length; i++) {
+    const t = lines[i]!.trim();
+    if (!t) continue;
+    return t.replace(/^#+\s*/, '').slice(0, 80);
+  }
+  return 'Anonymous';
 }
 
 function generateClientId(): string {

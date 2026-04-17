@@ -26,7 +26,7 @@ async function runCli(
   return { code, stdout, stderr };
 }
 
-describe('markdowner CLI', () => {
+describe('marginalia CLI', () => {
   test('renders a file to a full HTML document with theme CSS inlined', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'mdn-cli-'));
     try {
@@ -39,7 +39,7 @@ describe('markdowner CLI', () => {
 
       const html = readFileSync(output, 'utf8');
       expect(html).toContain('<!DOCTYPE html>');
-      expect(html).toContain('<article class="markdowner">');
+      expect(html).toContain('<article class="marginalia">');
       expect(html).toContain('<h1 id="hello"');
       expect(html).toContain('--md-color-fg');
     } finally {
@@ -59,13 +59,13 @@ describe('markdowner CLI', () => {
   test('themes list prints the built-in themes', async () => {
     const r = await runCli(['themes', 'list']);
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain('default-light');
-    expect(r.stdout).toContain('default-dark');
+    expect(r.stdout).toContain('default');
+    expect(r.stdout).toContain('beautiful');
     expect(r.stdout).toContain('serif-print');
   });
 
   test('themes show prints CSS', async () => {
-    const r = await runCli(['themes', 'show', 'default-light']);
+    const r = await runCli(['themes', 'show', 'default']);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain('--md-max-width');
   });
@@ -91,7 +91,7 @@ describe('markdowner CLI', () => {
   test('serif-print theme @import inlining produces a single CSS blob', async () => {
     const r = await runCli(['themes', 'show', 'serif-print']);
     expect(r.code).toBe(0);
-    // serif-print @imports default-light; after inlining there should be no
+    // serif-print @imports default; after inlining there should be no
     // @import left in the output.
     expect(r.stdout).not.toContain('@import');
     // and the imported file's content is present

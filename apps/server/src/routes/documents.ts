@@ -1,11 +1,12 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { render } from '@markdowner/renderer';
+import { render } from '@marginalia/renderer';
 import type { Database } from 'bun:sqlite';
 import type { GitStore } from '../git-store.js';
 import type { ServerConfig } from '../config.js';
-import type { CommentRow, DocumentRow } from '../db.js';
+import type { CommentRow, DocumentRow, InviteRow, InviteRole } from '../db.js';
 import { reanchor } from '../anchoring.js';
+import type { Realtime } from '../realtime.js';
 import {
   authorize,
   createSession,
@@ -14,15 +15,17 @@ import {
   readIdentity,
   SESSION_COOKIE,
   verifyPassword,
+  type Identity,
   type Role,
 } from '../auth.js';
-import { newDocumentUid, newRecoveryToken } from '../ids.js';
+import { newDocumentUid, newInviteToken } from '../ids.js';
 import { randomBytes } from 'node:crypto';
 
 export interface AppDeps {
   db: Database;
   store: GitStore;
   config: ServerConfig;
+  realtime: Realtime;
 }
 
 export function documentsRouter(deps: AppDeps): Hono {
@@ -31,9 +34,13 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.post('/', async (c) => createDocument(c, deps));
   r.get('/:uid', async (c) => getDocument(c, deps));
   r.put('/:uid', async (c) => updateDocument(c, deps));
+  r.patch('/:uid/settings', async (c) => updateSettings(c, deps));
   r.get('/:uid/history', async (c) => getHistory(c, deps));
   r.post('/:uid/auth', async (c) => authenticate(c, deps));
-  r.post('/:uid/admin-recovery', async (c) => recoverAdmin(c, deps));
+
+  r.get('/:uid/invites', async (c) => listInvites(c, deps));
+  r.post('/:uid/invites', async (c) => createInvite(c, deps));
+  r.delete('/:uid/invites/:token', async (c) => deleteInvite(c, deps));
 
   return r;
 }
@@ -54,7 +61,6 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
 
   const uid = newDocumentUid();
   const now = Date.now();
-  const recoveryToken = newRecoveryToken();
 
   let passwordHash: string | null = null;
   let plaintextPassword: string | null = null;
@@ -64,30 +70,38 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
   }
 
   const editable = body.editable_by_anyone === true ? 1 : 0;
-  const theme = typeof body.default_theme === 'string' ? body.default_theme : 'default-light';
+  const theme = typeof body.default_theme === 'string' ? body.default_theme : 'default';
+  const docName =
+    typeof body.name === 'string' && body.name.trim().length > 0
+      ? body.name.trim().slice(0, 200)
+      : null;
 
   await store.write(uid, markdown, identity, 'upload');
 
   db.prepare(
     `INSERT INTO documents
-       (uid, path, admin_client_id, admin_recovery_token, password_hash,
-        editable_by_anyone, default_theme, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    uid,
-    store.docPath(uid),
-    identity.clientId,
-    recoveryToken,
-    passwordHash,
-    editable,
-    theme,
-    now,
-    now,
-  );
+       (uid, path, name, password_hash, editable_by_anyone, default_theme, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(uid, store.docPath(uid), docName, passwordHash, editable, theme, now, now);
+
+  // Every doc gets an admin invite for its creator. The returned URL is the
+  // admin's canonical way to come back to the doc.
+  const adminInvite = createInviteRow(db, {
+    docUid: uid,
+    displayName: identity.displayName,
+    role: 'admin',
+    note: 'Author',
+    createdByName: identity.displayName,
+  });
 
   const response: Record<string, unknown> = {
     uid,
-    admin_recovery_token: recoveryToken,
+    name: docName,
+    admin_invite: {
+      token: adminInvite.token,
+      url: `/d/${uid}/${adminInvite.token}`,
+      display_name: adminInvite.display_name,
+    },
     default_theme: theme,
     editable_by_anyone: editable === 1,
   };
@@ -110,12 +124,14 @@ async function getDocument(c: Context, deps: AppDeps) {
 
   return c.json({
     uid: doc.uid,
+    name: doc.name,
     source,
     rendered,
     editable_by_anyone: doc.editable_by_anyone === 1,
     default_theme: doc.default_theme,
     password_protected: doc.password_hash !== null,
     role: decision.role,
+    display_name: decision.identity?.displayName ?? null,
     created_at: doc.created_at,
     updated_at: doc.updated_at,
   });
@@ -124,29 +140,30 @@ async function getDocument(c: Context, deps: AppDeps) {
 // --- PUT /api/documents/:uid -----------------------------------------
 
 async function updateDocument(c: Context, deps: AppDeps) {
-  const { db, store } = deps;
+  const { db, store, realtime } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
-  const identity = readIdentity(c.req.raw.headers);
-  if (!identity) return c.json({ error: 'identity-required' }, 400);
-
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
-
-  if (!canEdit(decision.role)) {
-    return c.json({ error: 'forbidden' }, 403);
-  }
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   const body = await safeJson(c);
   if (!body || typeof body.markdown !== 'string') {
     return c.json({ error: 'markdown-required' }, 400);
   }
 
-  const { oid } = await store.write(doc.uid, body.markdown, identity, 'update');
+  let previousSource = '';
+  try {
+    previousSource = store.read(doc.uid);
+  } catch {
+    /* new doc */
+  }
+
+  const { oid } = await store.write(doc.uid, body.markdown, decision.identity, 'update');
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
-  // Re-anchor existing top-level comments against the new block map.
   const rendered = await render(body.markdown);
   const topLevel = db
     .prepare(
@@ -154,7 +171,6 @@ async function updateDocument(c: Context, deps: AppDeps) {
          WHERE doc_uid = ? AND parent_id IS NULL AND deleted_at IS NULL`,
     )
     .all(doc.uid) as CommentRow[];
-
   const updateStmt = db.prepare(
     `UPDATE comments
         SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
@@ -167,7 +183,80 @@ async function updateDocument(c: Context, deps: AppDeps) {
     updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
   }
 
+  if (isContentChange(previousSource, body.markdown)) {
+    realtime.broadcast(
+      doc.uid,
+      { type: 'document.updated', oid, author: decision.identity.displayName },
+      decision.identity.clientId,
+    );
+  }
+
   return c.json({ oid });
+}
+
+function isContentChange(before: string, after: string): boolean {
+  return normalizeWhitespace(before) !== normalizeWhitespace(after);
+}
+function normalizeWhitespace(s: string): string {
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+// --- PATCH /api/documents/:uid/settings (admin only) ----------------
+
+async function updateSettings(c: Context, deps: AppDeps) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
+
+  const body = await safeJson(c);
+  if (!body) return c.json({ error: 'invalid-body' }, 400);
+
+  type Bind = string | number | null;
+  const updates: Array<[string, Bind]> = [];
+  let plaintextPassword: string | null = null;
+
+  if (typeof body.editable_by_anyone === 'boolean') {
+    updates.push(['editable_by_anyone', body.editable_by_anyone ? 1 : 0]);
+  }
+  if (typeof body.default_theme === 'string') {
+    updates.push(['default_theme', body.default_theme]);
+  }
+  if (body.name === null) {
+    updates.push(['name', null]);
+  } else if (typeof body.name === 'string') {
+    updates.push(['name', body.name.trim().slice(0, 200) || null]);
+  }
+  if (body.password === null) {
+    updates.push(['password_hash', null]);
+  } else if (body.password === 'rotate') {
+    plaintextPassword = generatePassword();
+    updates.push(['password_hash', await hashPassword(plaintextPassword)]);
+    db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
+  }
+
+  if (updates.length === 0) return c.json({ error: 'no-updates' }, 400);
+
+  const set = updates.map(([k]) => `${k} = ?`).join(', ');
+  const vals: Bind[] = updates.map(([, v]) => v);
+  db.prepare(`UPDATE documents SET ${set}, updated_at = ? WHERE uid = ?`).run(
+    ...vals,
+    Date.now(),
+    doc.uid,
+  );
+
+  const fresh = loadDoc(db, doc.uid)!;
+  const response: Record<string, unknown> = {
+    name: fresh.name,
+    editable_by_anyone: fresh.editable_by_anyone === 1,
+    default_theme: fresh.default_theme,
+    password_protected: fresh.password_hash !== null,
+  };
+  if (plaintextPassword) response.password = plaintextPassword;
+  return c.json(response);
 }
 
 // --- GET /api/documents/:uid/history ---------------------------------
@@ -211,29 +300,114 @@ async function authenticate(c: Context, deps: AppDeps) {
   return c.body(null, 204);
 }
 
-// --- POST /api/documents/:uid/admin-recovery -------------------------
+// --- Invites (admin only) --------------------------------------------
 
-async function recoverAdmin(c: Context, { db }: AppDeps) {
+async function listInvites(c: Context, deps: AppDeps) {
+  const { db } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
-  const identity = readIdentity(c.req.raw.headers);
-  if (!identity) return c.json({ error: 'identity-required' }, 400);
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
+
+  const rows = db
+    .prepare('SELECT * FROM invites WHERE doc_uid = ? ORDER BY created_at ASC')
+    .all(doc.uid) as InviteRow[];
+  return c.json({ invites: rows.map(toInviteWire) });
+}
+
+async function createInvite(c: Context, deps: AppDeps) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
 
   const body = await safeJson(c);
-  if (!body || typeof body.recovery_token !== 'string') {
-    return c.json({ error: 'recovery-token-required' }, 400);
-  }
-  if (doc.admin_recovery_token === null || body.recovery_token !== doc.admin_recovery_token) {
-    return c.json({ error: 'invalid-token' }, 401);
+  if (!body) return c.json({ error: 'invalid-body' }, 400);
+
+  const displayName = asString(body.display_name);
+  const role = asRole(body.role);
+  const note = typeof body.note === 'string' ? body.note.slice(0, 200) : null;
+  if (!displayName || !role) {
+    return c.json({ error: 'display_name-and-role-required' }, 400);
   }
 
-  const newToken = newRecoveryToken();
+  const row = createInviteRow(db, {
+    docUid: doc.uid,
+    displayName,
+    role,
+    note,
+    createdByName: decision.identity.displayName,
+  });
+  return c.json({ invite: toInviteWire(row) }, 201);
+}
+
+async function deleteInvite(c: Context, deps: AppDeps) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
+
+  const token = c.req.param('token');
+  if (!token) return c.json({ error: 'not-found' }, 404);
+
+  // Revoking the last admin invite would lock the doc out of admin
+  // control — refuse.
+  const row = db
+    .prepare('SELECT * FROM invites WHERE token = ? AND doc_uid = ?')
+    .get(token, doc.uid) as InviteRow | undefined;
+  if (!row) return c.json({ error: 'not-found' }, 404);
+  if (row.role === 'admin') {
+    const otherAdmins = db
+      .prepare('SELECT COUNT(*) as n FROM invites WHERE doc_uid = ? AND role = ? AND token != ?')
+      .get(doc.uid, 'admin', token) as { n: number };
+    if (otherAdmins.n === 0) {
+      return c.json({ error: 'last-admin-invite' }, 400);
+    }
+  }
+
+  db.prepare('DELETE FROM invites WHERE token = ?').run(token);
+  return c.body(null, 204);
+}
+
+function createInviteRow(
+  db: Database,
+  opts: {
+    docUid: string;
+    displayName: string;
+    role: InviteRole;
+    note: string | null;
+    createdByName: string;
+  },
+): InviteRow {
+  const token = newInviteToken();
+  const now = Date.now();
   db.prepare(
-    'UPDATE documents SET admin_client_id = ?, admin_recovery_token = ?, updated_at = ? WHERE uid = ?',
-  ).run(identity.clientId, newToken, Date.now(), doc.uid);
+    `INSERT INTO invites
+       (token, doc_uid, display_name, role, note, created_at, created_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(token, opts.docUid, opts.displayName, opts.role, opts.note, now, opts.createdByName);
+  return db.prepare('SELECT * FROM invites WHERE token = ?').get(token) as InviteRow;
+}
 
-  return c.json({ admin_recovery_token: newToken });
+function toInviteWire(row: InviteRow): Record<string, unknown> {
+  return {
+    token: row.token,
+    display_name: row.display_name,
+    role: row.role,
+    note: row.note,
+    created_at: row.created_at,
+    created_by_name: row.created_by_name,
+    url: `/d/${row.doc_uid}/${row.token}`,
+  };
 }
 
 // --- helpers ---------------------------------------------------------
@@ -247,9 +421,8 @@ function loadDoc(db: Database, uid: string | undefined): DocumentRow | null {
 }
 
 function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
-  const identity = readIdentity(c.req.raw.headers);
   const sessionToken = parseCookie(c.req.raw.headers.get('cookie'), SESSION_COOKIE);
-  return authorize(deps.db, doc, identity, sessionToken);
+  return authorize(deps.db, doc, c.req.raw.headers, sessionToken);
 }
 
 function canEdit(role: Role): boolean {
@@ -265,7 +438,14 @@ async function safeJson(c: Context): Promise<Record<string, unknown> | null> {
   }
 }
 
-/** Human-friendly autogenerated password: 4 groups of 4 base32-ish chars. */
+function asString(v: unknown): string | null {
+  return typeof v === 'string' && v.trim().length > 0 ? v.trim().slice(0, 80) : null;
+}
+
+function asRole(v: unknown): InviteRole | null {
+  return v === 'admin' || v === 'editor' || v === 'reader' ? v : null;
+}
+
 function generatePassword(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const bytes = randomBytes(16);

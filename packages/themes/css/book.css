@@ -1,0 +1,46 @@
+/*
+ * Marginalia — Book
+ *
+ * Narrow column, classic book serif, generous line-height. Optimized for
+ * long-form reading. No link underlines except on hover.
+ */
+
+@import './default.css';
+
+.marginalia {
+  --md-max-width: 60ch;
+
+  --md-font-body:
+    'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua',
+    Georgia, 'Times New Roman', serif;
+  --md-font-heading: var(--md-font-body);
+
+  --md-font-size: 18px;
+  --md-line-height: 1.75;
+  --md-heading-weight: 600;
+  --md-heading-line-height: 1.3;
+  --md-heading-letter-spacing: 0;
+
+  --md-space-block: 1.3em;
+  --md-space-heading-top: 2.4em;
+
+  --md-color-fg: #1a1915;
+  --md-color-fg-muted: #6a655a;
+  --md-color-bg: #fbf9f4;
+  --md-color-accent: #3a2c1e;
+  --md-color-accent-muted: #c9b99a;
+  --md-color-border: #d9cfb8;
+  --md-color-code-bg: #f3ecdd;
+  --md-color-quote-bar: #bbae95;
+  --md-color-table-stripe: #f5efe1;
+}
+
+.marginalia h1 { border-bottom: 0; text-align: center; font-size: 2.2rem; }
+.marginalia h2 { border-bottom: 0; font-size: 1.5rem; }
+.marginalia a {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+}
+.marginalia a:hover { border-bottom-style: solid; }
+.marginalia blockquote { font-style: italic; }

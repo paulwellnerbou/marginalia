@@ -1,4 +1,4 @@
-# Markdowner — Implementation Plan
+# Marginalia — Implementation Plan
 
 Companion to `REQUIREMENTS.md`. This plan proposes a tech stack, a repository
 layout, and a phased build order. Everything is a recommendation — flag
@@ -92,9 +92,9 @@ SSR required; the renderer already produces good HTML from the API.
 ### 1.7 Embedding
 
 * Build the renderer's browser-side glue (mermaid loader + copy-to-clipboard
-  + anchor scroll) as a **custom element** (`<markdowner-doc>`) with Shadow
-  DOM and a `theme` attribute. Publish as `@markdowner/element`.
-* Publish a tiny React wrapper `@markdowner/react` that mounts the element.
+  + anchor scroll) as a **custom element** (`<marginalia-doc>`) with Shadow
+  DOM and a `theme` attribute. Publish as `@marginalia/element`.
+* Publish a tiny React wrapper `@marginalia/react` that mounts the element.
 * The app also exposes `/embed/<uid>` for iframe consumers.
 
 ---
@@ -104,14 +104,14 @@ SSR required; the renderer already produces good HTML from the API.
 Single repo, Bun workspaces. Suggested packages:
 
 ```
-markdowner/
+marginalia/
 ├── packages/
 │   ├── renderer/          # pure library: markdown → HTML + metadata
 │   │   ├── src/
 │   │   ├── test/
 │   │   └── package.json
-│   ├── cli/               # `markdowner` CLI; depends on renderer
-│   ├── element/           # <markdowner-doc> web component
+│   ├── cli/               # `marginalia` CLI; depends on renderer
+│   ├── element/           # <marginalia-doc> web component
 │   ├── react/             # React wrapper around the element
 │   └── themes/            # CSS themes + theme JSON schema
 ├── apps/
@@ -186,9 +186,9 @@ Thresholds are tuneable; start with 0.75 for "confident", 0.5 for "low".
 ## 4. Auth, passwords, identity
 
 * **Client ID**: random 128-bit ID generated on first visit, stored in
-  `localStorage` as `markdowner.clientId`. Display name in
-  `markdowner.displayName`.
-* Both are sent on write requests in an `X-Markdowner-Client` header; the
+  `localStorage` as `marginalia.clientId`. Display name in
+  `marginalia.displayName`.
+* Both are sent on write requests in an `X-Marginalia-Client` header; the
   server trusts them for *identity of a non-privileged actor* only (anyone
   can set any client ID — this is fine because we only use it for
   authorship/ownership checks; nothing privileged depends on it beyond
@@ -233,7 +233,7 @@ Each phase is independently demoable. Suggested order — we can reorder.
 
 ### Phase 2 — CLI + default theme (1 day)
 
-* `markdowner render`, `markdowner themes list/show`, stdin/stdout mode.
+* `marginalia render`, `marginalia themes list/show`, stdin/stdout mode.
 * Ship `default-light`, `default-dark`, `serif-print` as plain CSS files.
 * Document the theming contract (CSS variables + class names).
 
@@ -276,7 +276,7 @@ Each phase is independently demoable. Suggested order — we can reorder.
 
 ### Phase 7a — Export: PDF + DOCX (2–3 days)
 
-* CLI: `markdowner export <file.md> --format=pdf|docx --theme=<name>`.
+* CLI: `marginalia export <file.md> --format=pdf|docx --theme=<name>`.
 * Server endpoints: `GET /doc/<uid>/export.pdf`, `…/export.docx`.
 * **PDF**: render HTML with the selected theme + print stylesheet, print via
   headless Chromium (`puppeteer-core` + a pinned Chromium, or Playwright —
@@ -294,7 +294,7 @@ Each phase is independently demoable. Suggested order — we can reorder.
 
 ### Phase 8 — Embedding (1–2 days)
 
-* `<markdowner-doc>` custom element (Shadow DOM, theme attribute).
+* `<marginalia-doc>` custom element (Shadow DOM, theme attribute).
 * React wrapper. `/embed/<uid>` iframe route.
 
 ### Phase 9 — Polish

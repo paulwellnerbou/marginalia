@@ -1,2 +1,2 @@
-// <MarkdownerDoc /> React wrapper — implementation arrives in Phase 8.
+// <MarginaliaDoc /> React wrapper — implementation arrives in Phase 8.
 export {};
