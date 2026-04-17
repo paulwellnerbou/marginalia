@@ -1,0 +1,14 @@
+{
+  "name": "@markdowner/themes",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    "./default-light": "./css/default-light.css",
+    "./default-dark": "./css/default-dark.css",
+    "./serif-print": "./css/serif-print.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "files": ["css"]
+}

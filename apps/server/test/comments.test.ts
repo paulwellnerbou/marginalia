@@ -1,0 +1,280 @@
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createApp, type App } from '../src/app.js';
+import { loadConfig } from '../src/config.js';
+import { CLIENT_HEADER, CLIENT_NAME_HEADER } from '../src/auth.js';
+
+const ALICE = { id: 'aaaaaaaaaaaaaaaaaaaa', name: 'Alice' };
+const BOB = { id: 'bbbbbbbbbbbbbbbbbbbb', name: 'Bob' };
+const CAROL = { id: 'cccccccccccccccccccc', name: 'Carol' };
+
+function headersFor(c: { id: string; name: string }): Headers {
+  return new Headers({
+    'content-type': 'application/json',
+    [CLIENT_HEADER]: c.id,
+    [CLIENT_NAME_HEADER]: c.name,
+  });
+}
+
+describe('comments API', () => {
+  let dir: string;
+  let app: App;
+
+  beforeEach(async () => {
+    dir = mkdtempSync(join(tmpdir(), 'mdn-cm-'));
+    app = await createApp(loadConfig({ dataDir: dir, port: 0 }));
+  });
+
+  afterEach(() => {
+    app.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function newDoc(markdown: string, editableByAnyone = false): Promise<string> {
+    const res = await app.hono.fetch(
+      new Request('http://test/api/documents', {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ markdown, editable_by_anyone: editableByAnyone }),
+      }),
+    );
+    const j = (await res.json()) as { uid: string };
+    return j.uid;
+  }
+
+  async function firstBlockId(uid: string): Promise<string> {
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const j = (await res.json()) as { rendered: { blocks: Array<{ id: string; text: string }> } };
+    return j.rendered.blocks[0]!.id;
+  }
+
+  async function addComment(
+    uid: string,
+    who: typeof ALICE,
+    anchor: { block_id: string; quote: string; prefix?: string; suffix?: string },
+    body: string,
+  ) {
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        method: 'POST',
+        headers: headersFor(who),
+        body: JSON.stringify({ anchor, body }),
+      }),
+    );
+    return { status: res.status, body: await res.json() };
+  }
+
+  async function list(uid: string, who: typeof ALICE) {
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, { headers: headersFor(who) }),
+    );
+    const j = (await res.json()) as { comments: Array<Record<string, unknown>> };
+    return j.comments;
+  }
+
+  test('create, list, and reply', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+
+    const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'Hi');
+    expect(r1.status).toBe(201);
+    const top = (r1.body as { comment: { id: string; parent_id: string | null } }).comment;
+    expect(top.parent_id).toBeNull();
+
+    // Reply by Bob
+    const r2 = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ parent_id: top.id, body: 'Me too' }),
+      }),
+    );
+    expect(r2.status).toBe(201);
+
+    const comments = await list(uid, ALICE);
+    expect(comments).toHaveLength(2);
+    expect(comments[1]!.parent_id).toBe(top.id);
+    expect(comments[1]!.anchor).toBeNull();
+  });
+
+  test('rejects nested replies (only one level)', async () => {
+    const uid = await newDoc('# Title\n');
+    const blockId = await firstBlockId(uid);
+    const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hi');
+    const topId = (r1.body as { comment: { id: string } }).comment.id;
+
+    const r2 = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ parent_id: topId, body: 'reply' }),
+      }),
+    );
+    const replyId = ((await r2.json()) as { comment: { id: string } }).comment.id;
+
+    const r3 = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ parent_id: replyId, body: 'nope' }),
+      }),
+    );
+    expect(r3.status).toBe(400);
+  });
+
+  test('author edits own comment; others cannot', async () => {
+    const uid = await newDoc('# Title\n');
+    const blockId = await firstBlockId(uid);
+    const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hi');
+    const cid = (r1.body as { comment: { id: string } }).comment.id;
+
+    const editByBob = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
+        method: 'PUT',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ body: 'hacked' }),
+      }),
+    );
+    expect(editByBob.status).toBe(403);
+
+    const editByAlice = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
+        method: 'PUT',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ body: 'updated' }),
+      }),
+    );
+    expect(editByAlice.status).toBe(200);
+  });
+
+  test('admin (doc owner) can delete any comment, but not edit others', async () => {
+    const uid = await newDoc('# Title\n');
+    const blockId = await firstBlockId(uid);
+
+    // Bob comments (as a reader — this document was not editable_by_anyone
+    // but comments still go through; admin role only matters for edits).
+    const r1 = await addComment(uid, BOB, { block_id: blockId, quote: 'Title' }, 'bob says');
+    const cid = (r1.body as { comment: { id: string } }).comment.id;
+
+    // Alice (admin) tries to edit — forbidden.
+    const editRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
+        method: 'PUT',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ body: 'admin edit' }),
+      }),
+    );
+    expect(editRes.status).toBe(403);
+
+    // Alice deletes — allowed.
+    const delRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
+        method: 'DELETE',
+        headers: headersFor(ALICE),
+      }),
+    );
+    expect(delRes.status).toBe(204);
+
+    const after = await list(uid, ALICE);
+    expect(after).toHaveLength(0);
+  });
+
+  test('re-anchoring: confident match when surrounding text changes', async () => {
+    const uid = await newDoc('# Title\n\nThe quick brown fox jumps.\n');
+    const block = await (async () => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+      );
+      const j = (await res.json()) as { rendered: { blocks: Array<{ id: string; text: string; kind: string }> } };
+      return j.rendered.blocks.find((b) => b.kind === 'paragraph')!;
+    })();
+
+    await addComment(uid, ALICE, { block_id: block.id, quote: 'brown fox' }, 'fox comment');
+
+    // Edit unrelated block (title); paragraph unchanged.
+    const put = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, {
+        method: 'PUT',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ markdown: '# New Title\n\nThe quick brown fox jumps.\n' }),
+      }),
+    );
+    expect(put.status).toBe(200);
+
+    const comments = await list(uid, ALICE);
+    expect(comments[0]!.status).toBe('active');
+  });
+
+  test('re-anchoring: low-confidence when block changes but quote still elsewhere', async () => {
+    const uid = await newDoc('# Title\n\nThe quick brown fox.\n');
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const j = (await res.json()) as { rendered: { blocks: Array<{ id: string; text: string; kind: string }> } };
+    const para = j.rendered.blocks.find((b) => b.kind === 'paragraph')!;
+
+    await addComment(uid, ALICE, { block_id: para.id, quote: 'brown fox' }, 'c');
+
+    // Replace the paragraph entirely; move "brown fox" into a new block.
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, {
+        method: 'PUT',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({
+          markdown: '# Title\n\nA different sentence now.\n\nBut the brown fox still lives.\n',
+        }),
+      }),
+    );
+
+    const comments = await list(uid, ALICE);
+    expect(comments[0]!.status).toBe('low-confidence');
+  });
+
+  test('re-anchoring: orphaned when quote disappears entirely', async () => {
+    const uid = await newDoc('# Title\n\nThe quick brown fox.\n');
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const j = (await res.json()) as { rendered: { blocks: Array<{ id: string; text: string; kind: string }> } };
+    const para = j.rendered.blocks.find((b) => b.kind === 'paragraph')!;
+
+    await addComment(uid, ALICE, { block_id: para.id, quote: 'brown fox' }, 'c');
+
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, {
+        method: 'PUT',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ markdown: '# Title\n\nSomething completely different.\n' }),
+      }),
+    );
+
+    const comments = await list(uid, ALICE);
+    expect(comments[0]!.status).toBe('orphaned');
+  });
+
+  test('identity required to post', async () => {
+    const uid = await newDoc('# Hi');
+    const blockId = await firstBlockId(uid);
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Hi' }, body: 'x' }),
+      }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  // A small sanity check that Carol (no role on the doc) can still read and
+  // post comments — doc is public, comments are not restricted.
+  test('anyone can post a comment on a public doc', async () => {
+    const uid = await newDoc('# Public');
+    const blockId = await firstBlockId(uid);
+    const r = await addComment(uid, CAROL, { block_id: blockId, quote: 'Public' }, 'looks good');
+    expect(r.status).toBe(201);
+  });
+});

@@ -1,0 +1,24 @@
+{
+  "name": "markdowner",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:server": "bun --hot apps/server/src/main.ts",
+    "dev:web": "bun --filter @markdowner/web dev",
+    "dev": "bun --filter @markdowner/server dev & bun --filter @markdowner/web dev",
+    "typecheck": "bun run --filter '*' typecheck",
+    "test": "bun test",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/bun": "latest",
+    "typescript": "^5.6.3"
+  }
+}

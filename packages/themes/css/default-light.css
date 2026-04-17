@@ -1,0 +1,278 @@
+/*
+ * Markdowner — default-light
+ *
+ * The theming contract: all themes share the same HTML output (produced by
+ * @markdowner/renderer) and style it via a single `.markdowner` root class.
+ * Tunables are CSS custom properties (`--md-*`) so the theme editor can
+ * override them at runtime without touching structure.
+ */
+
+.markdowner {
+  /* --- Tunables (theme editor acts on these) ------------------------ */
+
+  --md-max-width: 72ch;
+
+  --md-font-body:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    Arial, sans-serif;
+  --md-font-heading: var(--md-font-body);
+  --md-font-mono:
+    ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo, Consolas,
+    monospace;
+
+  --md-font-size: 17px;
+  --md-line-height: 1.65;
+
+  --md-heading-line-height: 1.25;
+  --md-heading-weight: 650;
+  --md-heading-letter-spacing: -0.01em;
+
+  --md-space-block: 1.2em;       /* gap between top-level blocks */
+  --md-space-heading-top: 2em;   /* extra space before headings */
+  --md-space-list-item: 0.3em;
+
+  --md-color-fg: #1c1f23;
+  --md-color-fg-muted: #5c6470;
+  --md-color-bg: #ffffff;
+  --md-color-accent: #2465e0;
+  --md-color-accent-muted: #c7daf7;
+  --md-color-border: #e4e8ee;
+  --md-color-code-bg: #f4f6fa;
+  --md-color-code-fg: #202326;
+  --md-color-quote-bar: #c9d1dc;
+  --md-color-table-stripe: #f8f9fb;
+  --md-color-selection-bg: #fff1b8;
+
+  /* --- Root styles -------------------------------------------------- */
+
+  color: var(--md-color-fg);
+  background: var(--md-color-bg);
+  font-family: var(--md-font-body);
+  font-size: var(--md-font-size);
+  line-height: var(--md-line-height);
+  max-width: var(--md-max-width);
+  margin-inline: auto;
+  padding: 2.5rem 1.5rem 6rem;
+  hyphens: auto;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: 'kern', 'liga', 'calt';
+  word-wrap: break-word;
+}
+
+.markdowner ::selection {
+  background: var(--md-color-selection-bg);
+}
+
+/* Vertical rhythm: every direct child block gets top spacing; first one
+   doesn't (keeps top alignment clean). */
+.markdowner > * + * {
+  margin-top: var(--md-space-block);
+}
+
+/* --- Headings ----------------------------------------------------- */
+
+.markdowner :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--md-font-heading);
+  font-weight: var(--md-heading-weight);
+  line-height: var(--md-heading-line-height);
+  letter-spacing: var(--md-heading-letter-spacing);
+  margin-top: var(--md-space-heading-top);
+  scroll-margin-top: 2rem;
+}
+
+.markdowner > :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
+
+.markdowner h1 { font-size: 2.1rem; margin-top: 0; }
+.markdowner h2 { font-size: 1.55rem; }
+.markdowner h3 { font-size: 1.25rem; }
+.markdowner h4 { font-size: 1.05rem; }
+.markdowner h5 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--md-color-fg-muted); }
+.markdowner h6 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--md-color-fg-muted); }
+
+.markdowner h1 { border-bottom: 1px solid var(--md-color-border); padding-bottom: 0.3em; }
+.markdowner h2 { border-bottom: 1px solid var(--md-color-border); padding-bottom: 0.2em; }
+
+/* --- Paragraphs & inline ----------------------------------------- */
+
+.markdowner p {
+  margin: 0;
+}
+
+.markdowner a {
+  color: var(--md-color-accent);
+  text-decoration-line: underline;
+  text-decoration-color: var(--md-color-accent-muted);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.markdowner a:hover {
+  text-decoration-color: var(--md-color-accent);
+}
+
+.markdowner strong { font-weight: 650; }
+.markdowner em { font-style: italic; }
+.markdowner del { text-decoration: line-through; color: var(--md-color-fg-muted); }
+
+/* --- Lists -------------------------------------------------------- */
+
+.markdowner :is(ul, ol) {
+  padding-left: 1.4em;
+  margin: 0;
+}
+
+.markdowner li + li {
+  margin-top: var(--md-space-list-item);
+}
+
+.markdowner li > :is(ul, ol) {
+  margin-top: var(--md-space-list-item);
+}
+
+.markdowner li > p + p {
+  margin-top: 0.6em;
+}
+
+.markdowner li::marker {
+  color: var(--md-color-fg-muted);
+}
+
+/* GFM task lists */
+.markdowner li input[type='checkbox'] {
+  margin-right: 0.4em;
+  transform: translateY(-0.05em);
+}
+
+/* --- Blockquote --------------------------------------------------- */
+
+.markdowner blockquote {
+  margin: 0;
+  padding: 0.2em 0 0.2em 1em;
+  border-left: 3px solid var(--md-color-quote-bar);
+  color: var(--md-color-fg-muted);
+  font-style: italic;
+}
+
+.markdowner blockquote > * + * {
+  margin-top: 0.6em;
+}
+
+/* --- Code --------------------------------------------------------- */
+
+.markdowner :not(pre) > code {
+  font-family: var(--md-font-mono);
+  font-size: 0.9em;
+  background: var(--md-color-code-bg);
+  color: var(--md-color-code-fg);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.markdowner pre {
+  font-family: var(--md-font-mono);
+  font-size: 0.9em;
+  line-height: 1.55;
+  background: var(--md-color-code-bg);
+  color: var(--md-color-code-fg);
+  padding: 1em 1.2em;
+  border-radius: 8px;
+  overflow-x: auto;
+  tab-size: 2;
+}
+
+.markdowner pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  white-space: pre;
+  font-size: inherit;
+}
+
+/* Shiki dual-theme: prefer the light inline style by default.
+   The default-dark.css overrides these vars. */
+.markdowner pre.shiki,
+.markdowner pre.shiki span {
+  color: var(--shiki-light);
+  background-color: var(--shiki-light-bg);
+  font-style: var(--shiki-light-font-style);
+  font-weight: var(--shiki-light-font-weight);
+  text-decoration: var(--shiki-light-text-decoration);
+}
+
+/* --- Tables ------------------------------------------------------- */
+
+.markdowner table {
+  border-collapse: collapse;
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.95em;
+}
+
+.markdowner th,
+.markdowner td {
+  text-align: left;
+  padding: 0.55em 0.8em;
+  border-bottom: 1px solid var(--md-color-border);
+  vertical-align: top;
+}
+
+.markdowner th {
+  font-weight: 650;
+  border-bottom-width: 2px;
+  border-bottom-color: var(--md-color-fg);
+}
+
+.markdowner tbody tr:nth-child(even) td {
+  background: var(--md-color-table-stripe);
+}
+
+.markdowner :is(th, td)[align='right'] { text-align: right; }
+.markdowner :is(th, td)[align='center'] { text-align: center; }
+
+/* --- Images & figures -------------------------------------------- */
+
+.markdowner img,
+.markdowner svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdowner figure {
+  margin: 0;
+}
+
+.markdowner figcaption {
+  font-size: 0.9em;
+  color: var(--md-color-fg-muted);
+  text-align: center;
+  margin-top: 0.4em;
+}
+
+/* --- Horizontal rule --------------------------------------------- */
+
+.markdowner hr {
+  border: 0;
+  border-top: 1px solid var(--md-color-border);
+  margin: 2em 0;
+}
+
+/* --- Mermaid containers ------------------------------------------ */
+
+.markdowner pre.mermaid {
+  background: transparent;
+  padding: 1rem 0;
+  color: var(--md-color-fg);
+  text-align: center;
+  overflow: visible;
+}
+
+/* --- Heading anchor links (if wrapped by the viewer) ------------- */
+
+.markdowner :is(h1, h2, h3, h4, h5, h6) a[href^='#'] {
+  color: inherit;
+  text-decoration: none;
+}
