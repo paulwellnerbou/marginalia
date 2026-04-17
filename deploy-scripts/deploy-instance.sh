@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Deploy a specific instance (dev or prod) to the VPS WITHOUT git checkout
+# Deploy a specific instance (dev or prod) to the target host without git checkout
 # This script is designed to be piped via SSH from CI/CD
 
 INSTANCE=${1:-dev}

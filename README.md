@@ -30,13 +30,12 @@ bun run start
 
 ## Deployment
 
-This repo now ships the same basic deployment shape as `../mywebmail`:
+This repo includes Docker-based deployment automation:
 
 - Docker image built and pushed to GHCR by [build-and-push.yml](.github/workflows/build-and-push.yml)
 - dev auto-deploy via [deploy-dev.yml](.github/workflows/deploy-dev.yml)
 - prod manual deploy via [deploy-prod.yml](.github/workflows/deploy-prod.yml)
-- VPS-side rollout script at [deploy-instance.sh](deploy-scripts/deploy-instance.sh)
-- one-time native Caddy setup at [migrate-caddy-layout.sh](deploy-scripts/migrate-caddy-layout.sh)
+- host-side rollout script at [deploy-instance.sh](deploy-scripts/deploy-instance.sh)
 
 ### Runtime environment
 
@@ -49,34 +48,21 @@ These are the main runtime env vars the container understands:
 
 ### GitHub setup
 
-Configure the same GitHub Actions secrets/vars pattern as `mywebmail`:
+If you use the bundled GitHub Actions deploy workflows, configure:
 
 - Secrets: `VPS_HOST`, `VPS_USER`, `VPS_SSH_PRIVATE_KEY`, `DEPLOY_PATH`
 - Variable: `DOMAIN`
 
-On the VPS, the deploy script looks for:
+On the deployment host, the deploy script looks for:
 
 - `$DEPLOY_PATH/.env.dev`
 - `$DEPLOY_PATH/.env.prod`
 
 Those files can define the runtime env vars above, plus optional deploy-time overrides like:
 
-- `HOST_PORT` — host loopback port used by native Caddy
+- `HOST_PORT` — host port to publish the container on
 - `HOST_BIND_IP` — defaults to `127.0.0.1`
-- `CONTAINER_NETWORK` — optional; not needed for native Caddy
-
-### Native Caddy
-
-With native host Caddy, each app container is published only on loopback:
-
-- Marginalia prod: `127.0.0.1:3434`
-- Marginalia dev: `127.0.0.1:3435`
-- Noctua Mail prod: `127.0.0.1:3654`
-- Noctua Mail dev: `127.0.0.1:3655`
-
-Use [migrate-caddy-layout.sh](deploy-scripts/migrate-caddy-layout.sh) once to write native
-Caddy site files under `/opt/caddy/sites`, copy the root config to `/etc/caddy/Caddyfile`,
-validate it, and reload `caddy.service`.
+- `CONTAINER_NETWORK` — optional Docker network name
 
 ### Local Docker
 
