@@ -10,68 +10,75 @@ interface Props {
  * Hover-trigger on every block that can carry a proposal — top-level
  * blocks (`[data-block]`) and sub-blocks like list items / table cells
  * (`[data-subblock]`). Renders a "Propose edit" button floating at the
- * block's right edge while the pointer is over it. Complements the
+ * block's top-right while the pointer is over it. Complements the
  * SelectionToolbar, which only appears on an active text selection.
  *
- * The button uses `position: fixed` because the document scrolls inside a
- * nested pane, not the viewport. `getBoundingClientRect()` already yields
- * viewport coordinates, so no scroll offsets are added — any hover-anchor
- * drift on scroll is handled by hiding the button while scrolling.
+ * State tracking uses a single `mousemove` listener on `window`:
+ *
+ *   • cursor on the button   → state unchanged (button stays)
+ *   • cursor inside root     → nearest sub/block id becomes the target
+ *   • cursor elsewhere       → state cleared (button hides)
+ *
+ * No mouseover/mouseleave timer dance — the older `mouseleave`+timeout
+ * approach had a narrow window where the hide timer fired before the
+ * button's `mouseenter`, making the button vanish mid-trajectory. The
+ * mousemove approach can't race because every frame's pointer position
+ * fully determines the visible state.
+ *
+ * The button uses `position: fixed` because the document scrolls inside
+ * a nested pane, not the viewport — `getBoundingClientRect()` already
+ * yields viewport coordinates.
  */
 export function BlockActions({ rootRef, onPropose }: Props) {
   const [target, setTarget] = useState<{
     blockId: string;
     rect: DOMRect;
   } | null>(null);
-  const hideTimer = useRef<number | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
 
-    function show(el: HTMLElement) {
-      const blockId = el.dataset.subblock ?? el.dataset.block;
-      if (!blockId) return;
-      if (hideTimer.current !== null) {
-        window.clearTimeout(hideTimer.current);
-        hideTimer.current = null;
+    function update(e: MouseEvent) {
+      const t = e.target instanceof HTMLElement ? e.target : null;
+
+      // 1. Hovering the button (or its children, though there are none)
+      //    keeps the current target visible.
+      if (t && btnRef.current && (t === btnRef.current || btnRef.current.contains(t))) {
+        return;
       }
-      setTarget({ blockId, rect: el.getBoundingClientRect() });
-    }
 
-    function scheduleHide() {
-      if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
-      hideTimer.current = window.setTimeout(() => setTarget(null), 200);
-    }
+      // 2. Outside the document pane entirely → clear.
+      if (!t || !root!.contains(t)) {
+        setTarget((prev) => (prev === null ? prev : null));
+        return;
+      }
 
-    function onOver(e: MouseEvent) {
-      const path = e.target;
-      if (!(path instanceof Node)) return;
-      const block = closestBlock(path);
-      if (block && root!.contains(block)) show(block);
-    }
-
-    function onLeave(e: MouseEvent) {
-      const to = e.relatedTarget;
-      if (to instanceof Node && root!.contains(to)) return;
-      scheduleHide();
+      // 3. Inside root — find nearest proposal-targetable block.
+      const block = closestBlock(t);
+      if (!block) {
+        setTarget((prev) => (prev === null ? prev : null));
+        return;
+      }
+      const blockId = block.dataset.subblock ?? block.dataset.block;
+      if (!blockId) return;
+      setTarget((prev) => {
+        if (prev && prev.blockId === blockId) return prev;
+        return { blockId, rect: block.getBoundingClientRect() };
+      });
     }
 
     function onScroll() {
-      // Positions would drift with the scrolling pane; just hide.
+      // Hide while scrolling — stale rect would put the button in the wrong place.
       setTarget(null);
     }
 
-    root.addEventListener('mouseover', onOver);
-    root.addEventListener('mouseleave', onLeave);
-    // capture=true so we catch scrolls on the nested scroll container
-    // (the document pane), not just window.
+    window.addEventListener('mousemove', update);
     window.addEventListener('scroll', onScroll, true);
     return () => {
-      root.removeEventListener('mouseover', onOver);
-      root.removeEventListener('mouseleave', onLeave);
+      window.removeEventListener('mousemove', update);
       window.removeEventListener('scroll', onScroll, true);
-      if (hideTimer.current !== null) window.clearTimeout(hideTimer.current);
     };
   }, [rootRef]);
 
@@ -90,35 +97,24 @@ export function BlockActions({ rootRef, onPropose }: Props) {
     setTarget(null);
   }
 
-  // position: fixed — viewport-relative, immune to offsetParent / scroll
-  // context mismatches. `getBoundingClientRect()` is already viewport space.
-  //
-  // Sit on the block's right edge, overlapping by ~10px so the cursor
-  // can glide from the block onto the button without ever leaving a hit
-  // target. A gap (previous +6px offset) would fire mouseleave on the
-  // block; if the 200ms hide-timer ran out before mouseenter on the
-  // button arrived, the button vanished mid-trajectory — the bug the
-  // user reported.
+  // position: fixed — viewport-relative.
+  // Sit on the block's top-right corner, overlapping into the block by
+  // ~16px so the cursor can glide from block to button without ever
+  // leaving a hit target.
   const style: React.CSSProperties = {
-    top: target.rect.top - 4,
-    left: target.rect.right - 10,
+    top: Math.max(4, target.rect.top - 4),
+    left: Math.max(4, target.rect.right - 16),
   };
 
   return (
     <button
+      ref={btnRef}
       type="button"
       className="block-actions-btn"
       style={style}
       onClick={propose}
-      onMouseEnter={() => {
-        if (hideTimer.current !== null) {
-          window.clearTimeout(hideTimer.current);
-          hideTimer.current = null;
-        }
-      }}
-      onMouseLeave={() => setTarget(null)}
-      title="Propose an edit to this paragraph"
-      aria-label="Propose an edit to this paragraph"
+      title="Propose an edit to this block"
+      aria-label="Propose an edit to this block"
     >
       ✎ Propose edit
     </button>
@@ -128,8 +124,8 @@ export function BlockActions({ rootRef, onPropose }: Props) {
 function closestBlock(node: Node): HTMLElement | null {
   // Returns the nearest proposal-targetable ancestor — either a top-level
   // block (`data-block`) or a fine-grained sub-block (`data-subblock`
-  // on list items / table cells). Sub-blocks win when both are present
-  // because they're always inside a parent block.
+  // on list items / table cells). Sub-blocks naturally win when both
+  // are present because we walk upward and stop at the first match.
   let n: Node | null = node;
   while (n) {
     if (n instanceof HTMLElement && (n.dataset.subblock || n.dataset.block)) return n;
