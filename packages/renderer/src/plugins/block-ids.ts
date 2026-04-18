@@ -13,12 +13,42 @@ import type { BlockInfo, BlockMap } from '../types.js';
 export const remarkBlockIds: Plugin<[], Root> = () => {
   return (tree, file) => {
     const blocks: BlockMap = [];
+    const stack: Array<{ level: number; text: string }> = [];
+    const sectionCounts = new Map<string, number>();
     for (const node of tree.children) {
       const text = normalize(mdastToString(node));
       if (!text && node.type !== 'thematicBreak') continue;
 
+      if (node.type === 'heading') {
+        while (stack.length && stack[stack.length - 1]!.level >= node.depth) {
+          stack.pop();
+        }
+        stack.push({ level: node.depth, text });
+      }
+
+      const headingPath = stack.map((s) => s.text);
+      // Counters for every ancestor prefix (including the empty root prefix).
+      // sectionIndexPath[k] is this block's position within the section
+      // rooted at headingPath[0..k-1]; sectionIndexPath[last] is the
+      // innermost-section position.
+      const sectionIndexPath: number[] = [];
+      for (let k = 0; k <= headingPath.length; k++) {
+        const prefixKey = headingPath.slice(0, k).join('\u0000');
+        const n = sectionCounts.get(prefixKey) ?? 0;
+        sectionIndexPath.push(n);
+        sectionCounts.set(prefixKey, n + 1);
+      }
+      const sectionIndex = sectionIndexPath[sectionIndexPath.length - 1]!;
+
       const id = hashBlock(node.type, text);
-      const info: BlockInfo = { id, kind: node.type, text };
+      const info: BlockInfo = {
+        id,
+        kind: node.type,
+        text,
+        headingPath,
+        sectionIndex,
+        sectionIndexPath,
+      };
       blocks.push(info);
 
       attachDataAttr(node, id);

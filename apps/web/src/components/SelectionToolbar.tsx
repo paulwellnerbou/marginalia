@@ -40,7 +40,7 @@ export function SelectionToolbar({ rootRef, onAdd }: Props) {
       className="selection-toolbar"
       style={{
         top: rect.top + window.scrollY - 40,
-        left: rect.left + window.scrollX + rect.width / 2,
+        left: Math.max(60, Math.min(window.innerWidth - 60, rect.left + window.scrollX + rect.width / 2)),
       }}
       // mousedown to fire before selectionchange clears it
       onMouseDown={(e) => {

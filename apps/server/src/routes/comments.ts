@@ -3,12 +3,12 @@ import type { Context } from 'hono';
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import type { CommentRow, DocumentRow } from '../db.js';
+import { authorize, canComment, parseCookie, SESSION_COOKIE, type Identity } from '../auth.js';
 import {
-  authorize,
-  parseCookie,
-  SESSION_COOKIE,
-  type Identity,
-} from '../auth.js';
+  consumePendingMentions,
+  listMentionCandidates,
+  storeMentionsForComment,
+} from '../mentions.js';
 import type { AppDeps } from './documents.js';
 
 export function commentsRouter(deps: AppDeps): Hono {
@@ -41,7 +41,11 @@ async function listComments(c: Context, deps: AppDeps) {
     )
     .all(doc.uid) as CommentRow[];
 
-  return c.json({ comments: rows.map(toWire) });
+  return c.json({
+    comments: rows.map(toWire),
+    mention_candidates: listMentionCandidates(db, doc.uid),
+    pending_mentions: consumePendingMentions(db, doc.uid, decision.identity?.displayName ?? null),
+  });
 }
 
 // --- create ----------------------------------------------------------
@@ -54,6 +58,7 @@ async function createComment(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
   const identity: Identity = decision.identity;
 
   const body = await safeJson(c);
@@ -92,9 +97,10 @@ async function createComment(c: Context, deps: AppDeps) {
          (id, doc_uid, parent_id,
           anchor_block_id, anchor_quote, anchor_prefix, anchor_suffix,
           anchor_start_offset, anchor_end_offset,
+          anchor_heading_path, anchor_section_index, anchor_section_index_path,
           author_client_id, author_display_name,
           body, status, created_at, updated_at)
-       VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+       VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
     ).run(
       id,
       doc.uid,
@@ -104,6 +110,9 @@ async function createComment(c: Context, deps: AppDeps) {
       anchor.suffix,
       anchor.startOffset,
       anchor.endOffset,
+      anchor.headingPath ? JSON.stringify(anchor.headingPath) : null,
+      anchor.sectionIndex,
+      anchor.sectionIndexPath ? JSON.stringify(anchor.sectionIndexPath) : null,
       identity.clientId,
       identity.displayName,
       text,
@@ -114,9 +123,18 @@ async function createComment(c: Context, deps: AppDeps) {
 
   const row = db.prepare('SELECT * FROM comments WHERE id = ?').get(id) as CommentRow;
   const wire = toWire(row);
-  deps.realtime.broadcast(
+  const newMentionTargets = storeMentionsForComment(
+    db,
     doc.uid,
-    { type: 'comment.created', comment: wire },
+    row.id,
+    row.body,
+    row.author_display_name,
+  );
+  deps.realtime.broadcast(doc.uid, { type: 'comment.created', comment: wire }, identity.clientId);
+  deps.realtime.broadcastToDisplayNames(
+    doc.uid,
+    newMentionTargets,
+    { type: 'mention.created', comment: wire },
     identity.clientId,
   );
   return c.json({ comment: wire }, 201);
@@ -153,9 +171,18 @@ async function editComment(c: Context, deps: AppDeps) {
 
   const updated = db.prepare('SELECT * FROM comments WHERE id = ?').get(cid) as CommentRow;
   const wire = toWire(updated);
-  deps.realtime.broadcast(
+  const newMentionTargets = storeMentionsForComment(
+    db,
     doc.uid,
-    { type: 'comment.updated', comment: wire },
+    updated.id,
+    updated.body,
+    updated.author_display_name,
+  );
+  deps.realtime.broadcast(doc.uid, { type: 'comment.updated', comment: wire }, identity.clientId);
+  deps.realtime.broadcastToDisplayNames(
+    doc.uid,
+    newMentionTargets,
+    { type: 'mention.created', comment: wire },
     identity.clientId,
   );
   return c.json({ comment: wire });
@@ -185,11 +212,7 @@ async function deleteComment(c: Context, deps: AppDeps) {
   if (!isAuthor && !isAdmin) return c.json({ error: 'forbidden' }, 403);
 
   db.prepare('UPDATE comments SET deleted_at = ? WHERE id = ?').run(Date.now(), cid);
-  deps.realtime.broadcast(
-    doc.uid,
-    { type: 'comment.deleted', comment_id: cid },
-    identity.clientId,
-  );
+  deps.realtime.broadcast(doc.uid, { type: 'comment.deleted', comment_id: cid }, identity.clientId);
   return c.body(null, 204);
 }
 
@@ -214,6 +237,11 @@ async function resolveComment(c: Context, deps: AppDeps) {
   if (row.parent_id !== null) {
     return c.json({ error: 'replies-not-resolvable' }, 400);
   }
+  const isRootAuthor = row.author_client_id === identity.clientId;
+  const isAdmin = decision.role === 'admin';
+  if (!isRootAuthor && !isAdmin) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
 
   const body = await safeJson(c);
   const resolved = body?.resolved === true;
@@ -222,20 +250,11 @@ async function resolveComment(c: Context, deps: AppDeps) {
     `UPDATE comments
         SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
       WHERE id = ?`,
-  ).run(
-    resolved ? now : null,
-    resolved ? identity.displayName : null,
-    now,
-    cid,
-  );
+  ).run(resolved ? now : null, resolved ? identity.displayName : null, now, cid);
 
   const updated = db.prepare('SELECT * FROM comments WHERE id = ?').get(cid) as CommentRow;
   const wire = toWire(updated);
-  deps.realtime.broadcast(
-    doc.uid,
-    { type: 'comment.updated', comment: wire },
-    identity.clientId,
-  );
+  deps.realtime.broadcast(doc.uid, { type: 'comment.updated', comment: wire }, identity.clientId);
   return c.json({ comment: wire });
 }
 
@@ -274,12 +293,21 @@ function asAnchor(v: unknown): {
   suffix: string;
   startOffset: number;
   endOffset: number;
+  headingPath: string[] | null;
+  sectionIndex: number | null;
+  sectionIndexPath: number[] | null;
 } | null {
   if (!v || typeof v !== 'object') return null;
   const a = v as Record<string, unknown>;
   const blockId = asString(a.block_id);
   const quote = typeof a.quote === 'string' ? a.quote : null;
   if (!blockId || quote === null) return null;
+  const headingPath = Array.isArray(a.heading_path)
+    ? a.heading_path.filter((s): s is string => typeof s === 'string')
+    : null;
+  const sectionIndexPath = Array.isArray(a.section_index_path)
+    ? a.section_index_path.filter((n): n is number => typeof n === 'number')
+    : null;
   return {
     blockId,
     quote,
@@ -287,11 +315,34 @@ function asAnchor(v: unknown): {
     suffix: typeof a.suffix === 'string' ? a.suffix : '',
     startOffset: typeof a.start_offset === 'number' ? a.start_offset : 0,
     endOffset: typeof a.end_offset === 'number' ? a.end_offset : quote.length,
+    headingPath,
+    sectionIndex: typeof a.section_index === 'number' ? a.section_index : null,
+    sectionIndexPath,
   };
 }
 
 function newCommentId(): string {
   return randomBytes(12).toString('base64url');
+}
+
+function parseHeadingPath(raw: string | null): string[] | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseIntArray(raw: string | null): number[] | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((n): n is number => typeof n === 'number') : null;
+  } catch {
+    return null;
+  }
 }
 
 export function toWire(row: CommentRow): Record<string, unknown> {
@@ -307,6 +358,9 @@ export function toWire(row: CommentRow): Record<string, unknown> {
           suffix: row.anchor_suffix,
           start_offset: row.anchor_start_offset,
           end_offset: row.anchor_end_offset,
+          heading_path: parseHeadingPath(row.anchor_heading_path),
+          section_index: row.anchor_section_index,
+          section_index_path: parseIntArray(row.anchor_section_index_path),
         },
     author: { client_id: row.author_client_id, display_name: row.author_display_name },
     body: row.body,

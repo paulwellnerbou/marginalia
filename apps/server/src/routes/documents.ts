@@ -1,25 +1,26 @@
+import type { Database } from 'bun:sqlite';
+import { randomBytes } from 'node:crypto';
+import { render } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { render } from '@marginalia/renderer';
-import type { Database } from 'bun:sqlite';
-import type { GitStore } from '../git-store.js';
-import type { ServerConfig } from '../config.js';
-import type { CommentRow, DocumentRow, InviteRow, InviteRole } from '../db.js';
 import { reanchor } from '../anchoring.js';
-import type { Realtime } from '../realtime.js';
 import {
+  type Identity,
+  SESSION_COOKIE,
   authorize,
+  canEdit,
   createSession,
   hashPassword,
   parseCookie,
   readIdentity,
-  SESSION_COOKIE,
   verifyPassword,
-  type Identity,
-  type Role,
 } from '../auth.js';
+import type { ServerConfig } from '../config.js';
+import type { CommentRow, DocumentRow, InviteRole, InviteRow } from '../db.js';
+import { isInviteRole } from '../db.js';
+import type { GitStore } from '../git-store.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
-import { randomBytes } from 'node:crypto';
+import type { Realtime } from '../realtime.js';
 
 export interface AppDeps {
   db: Database;
@@ -32,9 +33,12 @@ export function documentsRouter(deps: AppDeps): Hono {
   const r = new Hono();
 
   r.post('/', async (c) => createDocument(c, deps));
+  r.post('/import', async (c) => importDocument(c, deps));
   r.get('/:uid', async (c) => getDocument(c, deps));
+  r.get('/:uid/export', async (c) => exportDocument(c, deps));
   r.put('/:uid', async (c) => updateDocument(c, deps));
   r.patch('/:uid/settings', async (c) => updateSettings(c, deps));
+  r.delete('/:uid', async (c) => deleteDocument(c, deps));
   r.get('/:uid/history', async (c) => getHistory(c, deps));
   r.post('/:uid/auth', async (c) => authenticate(c, deps));
 
@@ -248,7 +252,8 @@ async function updateSettings(c: Context, deps: AppDeps) {
     doc.uid,
   );
 
-  const fresh = loadDoc(db, doc.uid)!;
+  const fresh = loadDoc(db, doc.uid);
+  if (!fresh) return c.json({ error: 'not-found' }, 404);
   const response: Record<string, unknown> = {
     name: fresh.name,
     editable_by_anyone: fresh.editable_by_anyone === 1,
@@ -257,6 +262,261 @@ async function updateSettings(c: Context, deps: AppDeps) {
   };
   if (plaintextPassword) response.password = plaintextPassword;
   return c.json(response);
+}
+
+// --- DELETE /api/documents/:uid (admin only) -------------------------
+
+async function deleteDocument(c: Context, deps: AppDeps) {
+  const { db, store } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+
+  // Drop everything the server stores about the doc. Order doesn't matter;
+  // nothing references anything else via FK since we don't have FKs
+  // enforced beyond `PRAGMA foreign_keys = ON`, and these tables don't
+  // actually declare foreign-key constraints.
+  db.prepare('DELETE FROM comments WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM comment_mentions WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
+
+  try {
+    await store.deleteDoc(doc.uid, decision.identity);
+  } catch {
+    /* repo file already missing — fine */
+  }
+
+  return c.body(null, 204);
+}
+
+// --- GET /api/documents/:uid/export (portable bundle) ----------------
+
+async function exportDocument(c: Context, deps: AppDeps) {
+  const { db, store } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+
+  const source = store.read(doc.uid);
+  const rendered = await render(source);
+  const comments = db
+    .prepare(
+      `SELECT * FROM comments
+         WHERE doc_uid = ? AND deleted_at IS NULL
+         ORDER BY created_at ASC`,
+    )
+    .all(doc.uid) as CommentRow[];
+
+  const bundle = {
+    version: 2 as const,
+    kind: 'marginalia.document-bundle',
+    exported_at: Date.now(),
+    document: {
+      name: doc.name,
+      source,
+      editable_by_anyone: doc.editable_by_anyone === 1,
+      default_theme: doc.default_theme,
+    },
+    representation: {
+      frontmatter: rendered.frontmatter,
+      anchors: rendered.anchors,
+      toc: rendered.toc,
+      assets: rendered.assets,
+      mermaid: rendered.mermaid,
+      blocks: rendered.blocks,
+      warnings: rendered.warnings,
+    },
+    comments: comments.map((row) => ({
+      id: row.id,
+      parent_id: row.parent_id,
+      anchor_block_id: row.anchor_block_id,
+      anchor_quote: row.anchor_quote,
+      anchor_prefix: row.anchor_prefix,
+      anchor_suffix: row.anchor_suffix,
+      anchor_start_offset: row.anchor_start_offset,
+      anchor_end_offset: row.anchor_end_offset,
+      anchor_heading_path: parseStringArray(row.anchor_heading_path),
+      anchor_section_index: row.anchor_section_index,
+      anchor_section_index_path: parseNumberArray(row.anchor_section_index_path),
+      author_client_id: row.author_client_id,
+      author_display_name: row.author_display_name,
+      body: row.body,
+      status: row.status,
+      resolved_at: row.resolved_at,
+      resolved_by_name: row.resolved_by_name,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    })),
+  };
+
+  const filename = (doc.name ?? doc.uid).replace(/[^\w.-]+/g, '_').slice(0, 80);
+  c.header('Content-Disposition', `attachment; filename="${filename}.marginalia.json"`);
+  return c.json(bundle);
+}
+
+// --- POST /api/documents/import (consume a bundle) -------------------
+
+async function importDocument(c: Context, deps: AppDeps) {
+  const { db, store } = deps;
+  const identity = readIdentity(c.req.raw.headers);
+  if (!identity) return c.json({ error: 'identity-required' }, 400);
+
+  const bundle = (await safeJson(c)) as Record<string, unknown> | null;
+  if (!bundle || bundle.kind !== 'marginalia.document-bundle' || !isBundleVersion(bundle.version)) {
+    return c.json({ error: 'invalid-bundle' }, 400);
+  }
+  const docSpec = bundle.document as Record<string, unknown> | undefined;
+  if (!docSpec || typeof docSpec.source !== 'string') {
+    return c.json({ error: 'invalid-bundle-document' }, 400);
+  }
+
+  const uid = newDocumentUid();
+  const now = Date.now();
+  const name =
+    typeof docSpec.name === 'string' && docSpec.name.trim().length > 0
+      ? docSpec.name.trim().slice(0, 200)
+      : null;
+  const editable = docSpec.editable_by_anyone === true ? 1 : 0;
+  const theme = typeof docSpec.default_theme === 'string' ? docSpec.default_theme : 'default';
+
+  await store.write(uid, docSpec.source, identity, 'upload');
+  db.prepare(
+    `INSERT INTO documents
+       (uid, path, name, password_hash, editable_by_anyone, default_theme, created_at, updated_at)
+     VALUES (?, ?, ?, NULL, ?, ?, ?, ?)`,
+  ).run(uid, store.docPath(uid), name, editable, theme, now, now);
+
+  // Fresh admin invite for the importer — not re-using the one from the
+  // bundle (tokens are tied to specific deployments / user IDs).
+  const adminInvite = createInviteRow(db, {
+    docUid: uid,
+    displayName: identity.displayName,
+    role: 'admin',
+    note: 'Imported',
+    createdByName: identity.displayName,
+  });
+
+  // Best-effort comment import. We keep original authorship (client_id +
+  // display_name) so comments still belong to the original user identities,
+  // but regenerate comment IDs because the `id` column is a global primary
+  // key — the original and the re-import can easily coexist in the same DB.
+  // Parent_ids get remapped through the same translation table.
+  let importedComments = 0;
+  const commentRows = Array.isArray(bundle.comments) ? bundle.comments : [];
+  const idMap = new Map<string, string>();
+  for (const raw of commentRows) {
+    const row = raw as Record<string, unknown>;
+    if (typeof row.id === 'string') {
+      idMap.set(row.id, randomBytes(12).toString('base64url'));
+    }
+  }
+  const insertComment = db.prepare(
+    `INSERT INTO comments
+       (id, doc_uid, parent_id,
+        anchor_block_id, anchor_quote, anchor_prefix, anchor_suffix,
+        anchor_start_offset, anchor_end_offset,
+        anchor_heading_path, anchor_section_index, anchor_section_index_path,
+        author_client_id, author_display_name, body, status,
+        resolved_at, resolved_by_name,
+        created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const raw of commentRows) {
+    const row = raw as Record<string, unknown>;
+    if (
+      typeof row.id !== 'string' ||
+      typeof row.author_client_id !== 'string' ||
+      typeof row.author_display_name !== 'string' ||
+      typeof row.body !== 'string'
+    ) {
+      continue;
+    }
+    const newId = idMap.get(row.id);
+    if (!newId) continue;
+    const parentOldId = typeof row.parent_id === 'string' ? row.parent_id : null;
+    const newParentId = parentOldId ? (idMap.get(parentOldId) ?? null) : null;
+    insertComment.run(
+      newId,
+      uid,
+      newParentId,
+      typeof row.anchor_block_id === 'string' ? row.anchor_block_id : null,
+      typeof row.anchor_quote === 'string' ? row.anchor_quote : null,
+      typeof row.anchor_prefix === 'string' ? row.anchor_prefix : null,
+      typeof row.anchor_suffix === 'string' ? row.anchor_suffix : null,
+      typeof row.anchor_start_offset === 'number' ? row.anchor_start_offset : null,
+      typeof row.anchor_end_offset === 'number' ? row.anchor_end_offset : null,
+      normalizeStringArrayJson(row.anchor_heading_path),
+      typeof row.anchor_section_index === 'number' ? row.anchor_section_index : null,
+      normalizeNumberArrayJson(row.anchor_section_index_path),
+      row.author_client_id,
+      row.author_display_name,
+      row.body,
+      typeof row.status === 'string' ? row.status : 'active',
+      typeof row.resolved_at === 'number' ? row.resolved_at : null,
+      typeof row.resolved_by_name === 'string' ? row.resolved_by_name : null,
+      typeof row.created_at === 'number' ? row.created_at : now,
+      typeof row.updated_at === 'number' ? row.updated_at : now,
+    );
+    importedComments += 1;
+  }
+
+  return c.json(
+    {
+      uid,
+      name,
+      admin_invite: {
+        token: adminInvite.token,
+        url: `/d/${uid}/${adminInvite.token}`,
+        display_name: adminInvite.display_name,
+      },
+      imported_comments: importedComments,
+    },
+    201,
+  );
+}
+
+function isBundleVersion(v: unknown): v is 1 | 2 {
+  return v === 1 || v === 2;
+}
+
+function parseStringArray(raw: string | null): string[] | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((item): item is string => typeof item === 'string') : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseNumberArray(raw: string | null): number[] | null {
+  if (!raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((item): item is number => typeof item === 'number') : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStringArrayJson(v: unknown): string | null {
+  if (typeof v === 'string') return v;
+  if (!Array.isArray(v)) return null;
+  return JSON.stringify(v.filter((item): item is string => typeof item === 'string'));
+}
+
+function normalizeNumberArrayJson(v: unknown): string | null {
+  if (typeof v === 'string') return v;
+  if (!Array.isArray(v)) return null;
+  return JSON.stringify(v.filter((item): item is number => typeof item === 'number'));
 }
 
 // --- GET /api/documents/:uid/history ---------------------------------
@@ -359,19 +619,16 @@ async function deleteInvite(c: Context, deps: AppDeps) {
   const token = c.req.param('token');
   if (!token) return c.json({ error: 'not-found' }, 404);
 
-  // Revoking the last admin invite would lock the doc out of admin
-  // control — refuse.
   const row = db
     .prepare('SELECT * FROM invites WHERE token = ? AND doc_uid = ?')
     .get(token, doc.uid) as InviteRow | undefined;
   if (!row) return c.json({ error: 'not-found' }, 404);
+  // Admin invites aren't revocable — the author keeps their ability to
+  // come back to the doc. If admins ever become shareable between people,
+  // removing that control must go through a dedicated "transfer admin"
+  // flow rather than a plain delete.
   if (row.role === 'admin') {
-    const otherAdmins = db
-      .prepare('SELECT COUNT(*) as n FROM invites WHERE doc_uid = ? AND role = ? AND token != ?')
-      .get(doc.uid, 'admin', token) as { n: number };
-    if (otherAdmins.n === 0) {
-      return c.json({ error: 'last-admin-invite' }, 400);
-    }
+    return c.json({ error: 'admin-invite-not-deletable' }, 403);
   }
 
   db.prepare('DELETE FROM invites WHERE token = ?').run(token);
@@ -425,10 +682,6 @@ function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
   return authorize(deps.db, doc, c.req.raw.headers, sessionToken);
 }
 
-function canEdit(role: Role): boolean {
-  return role === 'admin' || role === 'editor';
-}
-
 async function safeJson(c: Context): Promise<Record<string, unknown> | null> {
   try {
     const v = await c.req.json();
@@ -443,7 +696,7 @@ function asString(v: unknown): string | null {
 }
 
 function asRole(v: unknown): InviteRole | null {
-  return v === 'admin' || v === 'editor' || v === 'reader' ? v : null;
+  return isInviteRole(v) ? v : null;
 }
 
 function generatePassword(): string {
@@ -451,7 +704,9 @@ function generatePassword(): string {
   const bytes = randomBytes(16);
   let out = '';
   for (let i = 0; i < 16; i++) {
-    out += alphabet[bytes[i]! % alphabet.length];
+    const byte = bytes[i];
+    if (byte === undefined) continue;
+    out += alphabet[byte % alphabet.length];
     if (i % 4 === 3 && i < 15) out += '-';
   }
   return out;

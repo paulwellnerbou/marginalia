@@ -28,6 +28,23 @@ bun run build
 bun run start
 ```
 
+## JSON Bundles
+
+Documents can be exported and imported as versioned JSON bundles through the
+server API:
+
+- `GET /api/documents/:uid/export` downloads a `.marginalia.json` bundle
+- `POST /api/documents/import` creates a new document from a previously exported bundle
+
+The bundle includes:
+
+- document metadata and markdown source
+- comment threads
+- renderer metadata (`frontmatter`, TOC, assets, mermaid blocks, block map, warnings)
+
+That makes the export readable by external tools while still round-tripping
+back into Marginalia.
+
 ## Deployment
 
 This repo includes Docker-based deployment automation:

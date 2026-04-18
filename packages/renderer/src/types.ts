@@ -63,6 +63,34 @@ export interface BlockInfo {
   kind: string;
   /** Normalized plain text content — used for comment anchoring */
   text: string;
+  /**
+   * Enclosing heading hierarchy (normalized heading texts, outermost first).
+   * For a heading block the stack includes the heading itself. Empty when
+   * the block precedes any heading.
+   *
+   * Used by comment re-anchoring to disambiguate when the same quoted text
+   * appears in multiple sections.
+   */
+  headingPath: string[];
+  /**
+   * 0-based position of this block among the blocks that share the same
+   * headingPath. Together with headingPath this pins a comment to a specific
+   * section/offset so a verbatim quote elsewhere in the doc won't win.
+   */
+  sectionIndex: number;
+  /**
+   * 0-based position of this block within each ancestor section, from the
+   * document root down to the innermost section. Length is
+   * `headingPath.length + 1`:
+   *   [0] — position among all blocks in the whole doc (root-level ordinal)
+   *   [k] — position within the section rooted at headingPath[0..k-1]
+   *   [last] — same as `sectionIndex`
+   *
+   * Used by re-anchoring as a graceful fallback: if the deepest heading is
+   * renamed or removed, we can still match "n-th block under the nearest
+   * surviving heading".
+   */
+  sectionIndexPath: number[];
 }
 
 /** Ordered list of top-level blocks, by document order. */

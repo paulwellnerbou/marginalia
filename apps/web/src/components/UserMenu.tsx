@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import {
+  Badge,
   Button,
+  Box,
   Code,
   Dialog,
   DropdownMenu,
@@ -10,16 +12,29 @@ import {
   TextField,
 } from '@radix-ui/themes';
 import { PersonIcon } from '@radix-ui/react-icons';
-import { getClientId, getDisplayName, setDisplayName as persistName } from '../lib/identity.js';
+import type { Role } from '../lib/api.js';
+import { getClientId, setDisplayName as persistName, useDisplayName } from '../lib/identity.js';
+import { Copyable } from './Copyable.js';
 
 /**
  * User affordance in the app bar. Always shows a person icon — never an
- * initial. When no display name is set, the button switches to the accent
- * solid variant to prompt the user. Clicking opens a small menu whose
- * single visible action opens a rename dialog (no native prompts).
+ * initial. The menu surfaces the stable browser identity (copyable client
+ * ID), the current role when document-scoped, and a rename dialog for the
+ * user's default display name.
  */
-export function UserMenu({ onChange }: { onChange?: (name: string) => void }) {
-  const [name, setName] = useState<string | null>(() => getDisplayName());
+export function UserMenu({
+  onChange,
+  role,
+  forcedDisplayName,
+}: {
+  onChange?: (name: string) => void;
+  role?: Role | undefined;
+  forcedDisplayName?: string | null | undefined;
+}) {
+  // Reactive: stays in sync when any other part of the app (or another tab)
+  // writes a new display name.
+  const localName = useDisplayName();
+  const name = forcedDisplayName ?? localName;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [draft, setDraft] = useState('');
   // The clientId is this browser's permanent identity. It's what the server
@@ -32,15 +47,14 @@ export function UserMenu({ onChange }: { onChange?: (name: string) => void }) {
   function save(next: string) {
     const trimmed = next.trim().slice(0, 80);
     if (!trimmed) return;
-    persistName(trimmed);
-    setName(trimmed);
+    persistName(trimmed); // fires the DISPLAY_NAME_EVENT → useDisplayName updates
     setDraft(trimmed);
     onChange?.(trimmed);
     setDialogOpen(false);
   }
 
   function openDialog() {
-    setDraft(name ?? '');
+    setDraft(localName ?? '');
     setDialogOpen(true);
   }
 
@@ -48,50 +62,56 @@ export function UserMenu({ onChange }: { onChange?: (name: string) => void }) {
     <>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger>
-          {name ? (
-            <IconButton
-              variant="soft"
-              size="2"
-              aria-label={`User menu for ${name}`}
-            >
-              <PersonIcon />
-            </IconButton>
-          ) : (
-            <IconButton
-              variant="soft"
-              color="indigo"
-              size="2"
-              className="user-menu-unset"
-              aria-label="Set your display name"
-            >
-              <PersonIcon />
-            </IconButton>
-          )}
+          <IconButton
+            variant="soft"
+            size="2"
+            aria-label={`User menu for ${name}`}
+          >
+            <PersonIcon />
+          </IconButton>
         </DropdownMenu.Trigger>
-        <DropdownMenu.Content align="end">
-          {name ? (
-            <DropdownMenu.Label>Signed in as {name}</DropdownMenu.Label>
-          ) : (
-            <DropdownMenu.Label>No display name set</DropdownMenu.Label>
-          )}
-          <Flex px="3" pb="2" direction="column" gap="0">
-            <Text size="1" color="gray">Your persistent user ID</Text>
-            <Code size="1" variant="ghost" title={clientId}>{shortId}…</Code>
+        <DropdownMenu.Content align="end" style={{ minWidth: 320 }}>
+          <Flex px="3" pt="3" pb="2" direction="column" gap="1">
+            <Text size="1" color="gray">Identified as</Text>
+            <Flex align="center" justify="between" gap="3">
+              <Box style={{ minWidth: 0, flex: 1 }}>
+                <Text size="4" weight="bold" style={{ color: 'var(--gray-12)' }} truncate>
+                  {name}
+                </Text>
+              </Box>
+              <Button size="1" variant="soft" onClick={openDialog}>
+                Change
+              </Button>
+            </Flex>
           </Flex>
-          <DropdownMenu.Separator />
-          <DropdownMenu.Item onSelect={openDialog}>
-            {name ? 'Change display name…' : 'Set display name…'}
-          </DropdownMenu.Item>
+          {role && (
+            <Flex px="3" pb="2" direction="column" gap="1">
+              <Text size="1" color="gray">Role</Text>
+              <Badge
+                size="1"
+                color={roleColor(role)}
+                variant="soft"
+                className="role-badge"
+                style={{ width: 'fit-content' }}
+              >
+                {role}
+              </Badge>
+            </Flex>
+          )}
+          <Flex px="3" pb="2" direction="column" gap="1">
+            <Text size="1" color="gray">User ID</Text>
+            <Copyable text={clientId} ariaLabel="Copy user ID" size="1" />
+          </Flex>
         </DropdownMenu.Content>
       </DropdownMenu.Root>
 
       <Dialog.Root open={dialogOpen} onOpenChange={setDialogOpen}>
-        <Dialog.Content size="2" maxWidth="420px">
+        <Dialog.Content size="2" maxWidth="520px">
           <Dialog.Title>Display name</Dialog.Title>
           <Dialog.Description size="2" color="gray" mb="3">
-            Shown on your edits and comments. Changing it relabels existing content — your
-            persistent user ID (<Code size="1">{shortId}…</Code>) stays the same, so your
-            right to edit/delete your own comments is preserved.
+            Shown on your edits and comments. Your persistent user ID (
+            <Code size="1">{shortId}…</Code>) stays the same, so your right to edit or delete
+            your own comments is preserved.
           </Dialog.Description>
           <Flex direction="column" gap="3">
             <TextField.Root
@@ -120,4 +140,18 @@ export function UserMenu({ onChange }: { onChange?: (name: string) => void }) {
       </Dialog.Root>
     </>
   );
+}
+
+function roleColor(role: Role): 'indigo' | 'green' | 'amber' | 'gray' {
+  switch (role) {
+    case 'admin':
+      return 'indigo';
+    case 'editor':
+      return 'green';
+    case 'collaborator':
+    case 'commentor':
+      return 'amber';
+    default:
+      return 'gray';
+  }
 }

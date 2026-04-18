@@ -40,7 +40,9 @@ export function HistoryList({ uid, version }: { uid: string; version: number }) 
         <Flex key={e.oid} direction="column" gap="1" py="2" className="history-entry">
           <Flex align="baseline" gap="2">
             <Text size="2" weight="medium">{describeMessage(e.message)}</Text>
-            <Text size="1" color="gray">{formatTs(e.timestamp)}</Text>
+            <Text size="1" color="gray" title={formatFullTs(e.timestamp)}>
+              {formatTs(e.timestamp)}
+            </Text>
           </Flex>
           <Text size="1" color="gray">
             by {e.author.name} · <Code size="1">{e.oid.slice(0, 7)}</Code>
@@ -68,4 +70,11 @@ function formatTs(ts: number): string {
     d.getDate() === now.getDate();
   if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return d.toLocaleString();
+}
+
+function formatFullTs(ts: number): string {
+  return new Date(ts).toLocaleString([], {
+    dateStyle: 'full',
+    timeStyle: 'medium',
+  });
 }

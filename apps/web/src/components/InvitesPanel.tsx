@@ -13,7 +13,8 @@ import {
   TextField,
   Tooltip,
 } from '@radix-ui/themes';
-import { CopyIcon, TrashIcon } from '@radix-ui/react-icons';
+import { TrashIcon } from '@radix-ui/react-icons';
+import { Copyable } from './Copyable.js';
 import {
   createInvite,
   deleteInvite,
@@ -24,6 +25,20 @@ import {
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { showToast } from '../lib/notifications.js';
+
+function roleColor(role: Role): 'indigo' | 'green' | 'amber' | 'gray' {
+  switch (role) {
+    case 'admin':
+      return 'indigo';
+    case 'editor':
+      return 'green';
+    case 'collaborator':
+    case 'commentor':
+      return 'amber';
+    default:
+      return 'gray';
+  }
+}
 
 export function InvitesPanel({ uid }: { uid: string }) {
   const [invites, setInvites] = useState<Invite[] | null>(null);
@@ -53,7 +68,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
     if (!trimmed) return;
     const identityName = getDisplayName();
     if (!identityName) {
-      setError('Set your display name first (user menu, top-right).');
+      setError('Please set your display name first.');
       return;
     }
     const identity = { clientId: getClientId(), displayName: identityName };
@@ -84,18 +99,6 @@ export function InvitesPanel({ uid }: { uid: string }) {
     }
   }
 
-  async function copyLink(invite: Invite) {
-    const url = window.location.origin + invite.url;
-    try {
-      await navigator.clipboard.writeText(url);
-      showToast(
-        { title: `Invite link for ${invite.display_name} copied`, body: url },
-        4000,
-      );
-    } catch (err) {
-      reportError('InvitesPanel.copy', err);
-    }
-  }
 
   return (
     <Flex direction="column" gap="3">
@@ -105,11 +108,14 @@ export function InvitesPanel({ uid }: { uid: string }) {
         author's admin invite is the canonical way back into the document.
       </Text>
 
-      <Flex gap="2" align="end" wrap="wrap">
+      <Flex gap="2" align="end" wrap="wrap" className="invite-create-form">
         <Box style={{ flex: 1, minWidth: 160 }}>
-          <Text as="div" size="1" color="gray" mb="1">Recipient name</Text>
+          <Text as="label" size="1" color="gray" mb="1" htmlFor="invite-name">
+            Recipient name
+          </Text>
           <TextField.Root
-            size="1"
+            id="invite-name"
+            size="2"
             placeholder="e.g. Alice"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -118,16 +124,20 @@ export function InvitesPanel({ uid }: { uid: string }) {
         </Box>
         <Box>
           <Text as="div" size="1" color="gray" mb="1">Role</Text>
-          <Select.Root value={role} onValueChange={(v) => setRole(v as Role)}>
+          <Select.Root value={role} onValueChange={(v) => setRole(v as Role)} size="2">
             <Select.Trigger variant="soft" />
             <Select.Content position="popper">
               <Select.Item value="reader">Reader (view only)</Select.Item>
-              <Select.Item value="editor">Editor (can edit)</Select.Item>
+              <Select.Item value="commentor">Commentor (view + comment)</Select.Item>
+              <Select.Item value="collaborator">
+                Collaborator (comment + propose edits)
+              </Select.Item>
+              <Select.Item value="editor">Editor (can edit directly)</Select.Item>
               <Select.Item value="admin">Admin (full control)</Select.Item>
             </Select.Content>
           </Select.Root>
         </Box>
-        <Button size="1" disabled={!name.trim() || submitting} onClick={addInvite}>
+        <Button size="2" disabled={!name.trim() || submitting} onClick={addInvite}>
           Create invite
         </Button>
       </Flex>
@@ -160,29 +170,21 @@ export function InvitesPanel({ uid }: { uid: string }) {
               <Box style={{ flex: 1, minWidth: 0 }}>
                 <Flex align="baseline" gap="2">
                   <Text size="2" weight="medium">{inv.display_name}</Text>
-                  <Badge
-                    size="1"
-                    color={inv.role === 'admin' ? 'indigo' : inv.role === 'editor' ? 'green' : 'gray'}
-                    variant="soft"
-                    className="role-badge"
-                  >
+                  <Badge size="1" color={roleColor(inv.role)} variant="soft" className="role-badge">
                     {inv.role}
                   </Badge>
                 </Flex>
-                <Code size="1" style={{ wordBreak: 'break-all' }}>
-                  {window.location.origin + inv.url}
-                </Code>
+                <Box mt="2">
+                  <Copyable text={window.location.origin + inv.url} multiline ariaLabel="Copy invite link" />
+                </Box>
               </Box>
-              <Tooltip content="Copy link">
-                <IconButton size="1" variant="soft" onClick={() => copyLink(inv)}>
-                  <CopyIcon />
-                </IconButton>
-              </Tooltip>
-              <Tooltip content="Revoke invite">
-                <IconButton size="1" variant="soft" color="red" onClick={() => remove(inv.token)}>
-                  <TrashIcon />
-                </IconButton>
-              </Tooltip>
+              {inv.role !== 'admin' && (
+                <Tooltip content="Revoke invite">
+                  <IconButton size="1" variant="soft" color="red" onClick={() => remove(inv.token)}>
+                    <TrashIcon />
+                  </IconButton>
+                </Tooltip>
+              )}
             </Flex>
           ))}
         </Flex>

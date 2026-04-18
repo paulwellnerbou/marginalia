@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { DownloadIcon, GearIcon, LockClosedIcon } from '@radix-ui/react-icons';
 import {
   Button,
   Callout,
@@ -12,15 +12,17 @@ import {
   Text,
   TextField,
 } from '@radix-ui/themes';
-import { GearIcon, LockClosedIcon } from '@radix-ui/react-icons';
+import { useState } from 'react';
 import type { Document } from '../lib/api.js';
 import {
-  updateDocumentSettings,
   type DocumentSettingsResponse,
+  exportDocumentBundle,
+  updateDocumentSettings,
 } from '../lib/api.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
-import { BUILT_IN_THEMES } from '../lib/themes.js';
 import { reportError } from '../lib/log.js';
+import { BUILT_IN_THEMES } from '../lib/themes.js';
+import { Copyable } from './Copyable.js';
 import { InvitesPanel } from './InvitesPanel.js';
 
 export function AdminSettingsDialog({
@@ -36,6 +38,7 @@ export function AdminSettingsDialog({
   const [defaultTheme, setDefaultTheme] = useState(doc.default_theme);
   const [passwordProtected, setPasswordProtected] = useState(doc.password_protected);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [freshPassword, setFreshPassword] = useState<string | null>(null);
 
@@ -86,6 +89,28 @@ export function AdminSettingsDialog({
     }
   }
 
+  async function exportJson() {
+    setExporting(true);
+    setError(null);
+    try {
+      const bundle = await exportDocumentBundle(doc.uid);
+      const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${sanitizeFilename(doc.name ?? doc.uid)}.marginalia.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      reportError('AdminSettings.exportJson', err, { uid: doc.uid });
+      setError(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <Dialog.Root
       open={open}
@@ -95,14 +120,11 @@ export function AdminSettingsDialog({
       }}
     >
       <Dialog.Trigger>
-        {/* Radix Dialog.Trigger doesn't propagate clicks correctly when it
-            wraps a Tooltip, so the Tooltip lives at the callsite in the
-            AppBar instead. Here we pass the IconButton directly. */}
         <IconButton variant="soft" size="2" aria-label="Document settings">
           <GearIcon />
         </IconButton>
       </Dialog.Trigger>
-      <Dialog.Content size="3" maxWidth="640px">
+      <Dialog.Content size="3" maxWidth="780px">
         <Dialog.Title>Document settings</Dialog.Title>
         <Dialog.Description size="2" color="gray" mb="4">
           Access and defaults for this document. You are the admin.
@@ -155,7 +177,8 @@ export function AdminSettingsDialog({
             {passwordProtected && doc.password_protected && (
               <Flex align="center" gap="2" pl="6">
                 <Text size="1" color="gray">
-                  Password is set. Rotate invalidates existing sessions (invites keep working).
+                  Password is set. Rotate invalidates existing sessions; invite links still
+                  determine identity and role after re-authentication.
                 </Text>
                 <Button size="1" variant="soft" onClick={rotate} disabled={saving}>
                   Rotate password
@@ -167,7 +190,10 @@ export function AdminSettingsDialog({
           {freshPassword && (
             <Callout.Root color="amber">
               <Callout.Text>
-                New password (shown once): <Code>{freshPassword}</Code>
+                <Flex direction="column" gap="2">
+                  <span>New password (shown once):</span>
+                  <Copyable text={freshPassword} ariaLabel="Copy password" />
+                </Flex>
               </Callout.Text>
             </Callout.Root>
           )}
@@ -175,7 +201,9 @@ export function AdminSettingsDialog({
           <Separator size="4" />
 
           <Flex direction="column" gap="1">
-            <Text size="2" weight="medium">Default theme</Text>
+            <Text size="2" weight="medium">
+              Default theme
+            </Text>
             <Text size="1" color="gray">
               Applied to anyone opening this document for the first time.
             </Text>
@@ -193,6 +221,24 @@ export function AdminSettingsDialog({
 
           <Separator size="4" />
 
+          <Flex direction="column" gap="2">
+            <Text size="2" weight="medium">
+              JSON export
+            </Text>
+            <Text size="1" color="gray">
+              Downloads a versioned JSON bundle with the markdown source, comments, and renderer
+              metadata for tooling or later import.
+            </Text>
+            <Flex>
+              <Button variant="soft" onClick={exportJson} disabled={exporting}>
+                <DownloadIcon />
+                {exporting ? 'Exporting…' : 'Export JSON bundle'}
+              </Button>
+            </Flex>
+          </Flex>
+
+          <Separator size="4" />
+
           <InvitesPanel uid={doc.uid} />
 
           {error && (
@@ -203,7 +249,9 @@ export function AdminSettingsDialog({
 
           <Flex gap="2" justify="end">
             <Dialog.Close>
-              <Button variant="soft" color="gray">Close</Button>
+              <Button variant="soft" color="gray">
+                Close
+              </Button>
             </Dialog.Close>
             <Button onClick={save} disabled={saving}>
               {saving ? 'Saving…' : 'Save changes'}
@@ -213,4 +261,10 @@ export function AdminSettingsDialog({
       </Dialog.Content>
     </Dialog.Root>
   );
+}
+
+function sanitizeFilename(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return 'document';
+  return trimmed.replace(/[^\w.-]+/g, '_').slice(0, 80) || 'document';
 }

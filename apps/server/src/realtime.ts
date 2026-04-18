@@ -40,6 +40,33 @@ export class Realtime {
     }
   }
 
+  /** Fan out an event to subscribers whose resolved display name matches. */
+  broadcastToDisplayNames(
+    docUid: string,
+    displayNames: string[],
+    event: RealtimeEvent,
+    exceptClientId?: string,
+  ): void {
+    const set = this.channels.get(docUid);
+    if (!set || displayNames.length === 0) return;
+    const targets = new Set(
+      displayNames.map((name) => name.trim().toLowerCase()).filter((name) => name.length > 0),
+    );
+    if (targets.size === 0) return;
+
+    const payload = JSON.stringify(event);
+    for (const sub of set) {
+      if (exceptClientId && sub.clientId === exceptClientId) continue;
+      const key = sub.displayName?.trim().toLowerCase() ?? '';
+      if (!targets.has(key)) continue;
+      try {
+        sub.ws.send(payload);
+      } catch {
+        /* socket may have just closed; cleanup happens on onClose */
+      }
+    }
+  }
+
   /** Diagnostics only. */
   subscriberCount(docUid: string): number {
     return this.channels.get(docUid)?.size ?? 0;
@@ -49,10 +76,12 @@ export class Realtime {
 export interface Subscriber {
   ws: WSContext;
   clientId: string;
+  displayName: string | null;
 }
 
 export type RealtimeEvent =
   | { type: 'comment.created'; comment: Record<string, unknown> }
   | { type: 'comment.updated'; comment: Record<string, unknown> }
+  | { type: 'mention.created'; comment: Record<string, unknown> }
   | { type: 'comment.deleted'; comment_id: string }
   | { type: 'document.updated'; oid: string; author: string };

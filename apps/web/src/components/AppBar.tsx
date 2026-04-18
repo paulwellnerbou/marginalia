@@ -2,12 +2,15 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Flex, IconButton, Separator, Text, Tooltip } from '@radix-ui/themes';
 import { HomeIcon } from '@radix-ui/react-icons';
+import type { Role } from '../lib/api.js';
 import { AppearanceToggle } from './AppearanceToggle.js';
 import { UserMenu } from './UserMenu.js';
 
 interface Props {
   /** Document title shown after the brand, when viewing/editing a doc. */
   docTitle?: string;
+  role?: Role | undefined;
+  forcedDisplayName?: string | null | undefined;
   /** Extra trailing slot for page-specific controls (e.g. Save in EditPage,
    *  admin settings gear in ViewPage). Rendered before the appearance/user. */
   trailing?: ReactNode;
@@ -17,7 +20,7 @@ interface Props {
  * The persistent top bar, present on every page. Anchors the app's home
  * navigation, identity, and global appearance control.
  */
-export function AppBar({ docTitle, trailing }: Props) {
+export function AppBar({ docTitle, role, forcedDisplayName, trailing }: Props) {
   return (
     <Flex align="center" gap="3" px="3" py="2" className="app-bar">
       <Tooltip content="Home">
@@ -39,7 +42,7 @@ export function AppBar({ docTitle, trailing }: Props) {
       <span className="spacer" />
       {trailing}
       <AppearanceToggle />
-      <UserMenu />
+      <UserMenu role={role} forcedDisplayName={forcedDisplayName} />
     </Flex>
   );
 }

@@ -16,8 +16,8 @@ export interface ThemeMeta {
 
 export const BUILT_IN_THEMES: ThemeMeta[] = [
   { id: 'default', label: 'Default', blurb: 'Neutral sans-serif. Follows app light/dark mode.' },
-  { id: 'beautiful', label: 'Beautiful', blurb: 'Editorial serif with drop cap and ornament.' },
-  { id: 'book', label: 'Book', blurb: 'Classic serif, narrow column, long-form reading.' },
+  { id: 'beautiful', label: 'Book', blurb: 'Editorial serif with drop cap and ornament.' },
+  { id: 'book', label: 'Document', blurb: 'Classic serif, narrow column, long-form reading.' },
   { id: 'article', label: 'Article', blurb: 'Magazine-style essay with bold headings.' },
   { id: 'technical', label: 'Technical', blurb: 'Wider column, tight spacing, good for code.' },
   { id: 'serif-print', label: 'Serif (Print)', blurb: 'Print-optimized serif, narrow column.' },

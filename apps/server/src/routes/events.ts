@@ -27,6 +27,7 @@ export function eventsRouter(deps: EventsDeps): Hono {
     deps.upgradeWebSocket((c) => {
       const uid = c.req.param('uid');
       const clientId = c.req.query('client_id') ?? '';
+      const clientName = c.req.query('client_name') ?? null;
       const inviteToken = c.req.query('invite') ?? null;
       const sessionToken = parseCookie(c.req.raw.headers.get('cookie'), SESSION_COOKIE);
       const doc = uid ? loadDoc(deps.db, uid) : null;
@@ -34,6 +35,8 @@ export function eventsRouter(deps: EventsDeps): Hono {
       // the invite token via query param and synthesize a Headers object
       // for the shared authorize() helper.
       const headers = new Headers();
+      if (clientId) headers.set('x-marginalia-client', clientId);
+      if (clientName) headers.set('x-marginalia-client-name', clientName);
       if (inviteToken) headers.set('x-marginalia-invite', inviteToken);
       let unsubscribe: (() => void) | null = null;
 
@@ -50,7 +53,11 @@ export function eventsRouter(deps: EventsDeps): Hono {
             ws.close();
             return;
           }
-          unsubscribe = deps.realtime.subscribe(uid, { ws, clientId });
+          unsubscribe = deps.realtime.subscribe(uid, {
+            ws,
+            clientId,
+            displayName: decision.identity?.displayName ?? null,
+          });
           ws.send(JSON.stringify({ type: 'subscribed', uid }));
         },
         onClose() {

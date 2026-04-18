@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Box, Flex, IconButton, Select, Slider, Tabs, Text, Tooltip } from '@radix-ui/themes';
 import { ChevronLeftIcon, ChevronRightIcon } from '@radix-ui/react-icons';
 import type { CommentAnchor, Document, Comment, DocumentSettingsResponse } from '../lib/api.js';
@@ -10,7 +10,7 @@ import {
   updateComment as apiUpdate,
   ApiError,
 } from '../lib/api.js';
-import { getClientId, getDisplayName, setDisplayName } from '../lib/identity.js';
+import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { ensureNotificationPermission, notify } from '../lib/notifications.js';
@@ -32,6 +32,7 @@ import { HistoryList } from './HistoryList.js';
 import { documentTitle } from '../lib/doc-title.js';
 
 const MAX_WIDTH_KEY = 'marginalia.maxWidth';
+const TEXT_ZOOM_KEY = 'marginalia.textZoom';
 const TOC_WIDTH_KEY = 'marginalia.tocWidth';
 const COMMENTS_WIDTH_KEY = 'marginalia.commentsWidth';
 const COLLAPSED_WIDTH = 36;
@@ -43,7 +44,13 @@ interface Props {
   children?: ReactNode;
 }
 
+interface ThreadFocusTarget {
+  threadId: string;
+  nonce: number;
+}
+
 export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
+  const canComment = doc.role !== 'reader';
   const [tocOpen, setTocOpen] = useState(true);
   const [commentsOpen, setCommentsOpen] = useState(true);
   const [rightTab, setRightTab] = useState<'comments' | 'history'>('comments');
@@ -52,6 +59,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [maxWidth, setMaxWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(MAX_WIDTH_KEY));
     return Number.isFinite(saved) && saved > 0 ? saved : 72;
+  });
+  const [textZoom, setTextZoom] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(TEXT_ZOOM_KEY));
+    return Number.isFinite(saved) && saved >= 80 && saved <= 140 ? saved : 100;
   });
   const [tocWidth, setTocWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(TOC_WIDTH_KEY));
@@ -63,9 +74,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   });
 
   const [comments, setComments] = useState<Comment[]>([]);
+  const [mentionSeedNames, setMentionSeedNames] = useState<string[]>([]);
   const [pendingAnchor, setPendingAnchor] = useState<CommentAnchor | null>(null);
+  const [focusedThread, setFocusedThread] = useState<ThreadFocusTarget | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [displayName, setDisplayNameState] = useState<string | null>(() => getDisplayName());
+  // Reactive: tracks the display name wherever it gets changed — UserMenu,
+  // comment composer, invite load, another tab — without stale local state.
+  const displayName = useDisplayName();
+  const forcedDisplayName = doc.display_name;
+  const effectiveDisplayName = forcedDisplayName ?? displayName;
   const [theme, setTheme] = useState<string>(
     () => getUserThemeOverride(doc.uid) ?? doc.default_theme,
   );
@@ -75,6 +92,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(MAX_WIDTH_KEY, String(maxWidth));
   }, [maxWidth]);
+  useEffect(() => {
+    localStorage.setItem(TEXT_ZOOM_KEY, String(textZoom));
+  }, [textZoom]);
   useEffect(() => {
     localStorage.setItem(TOC_WIDTH_KEY, String(tocWidth));
   }, [tocWidth]);
@@ -86,10 +106,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [theme]);
 
   useEffect(() => {
+    setTheme(getUserThemeOverride(doc.uid) ?? doc.default_theme);
+  }, [doc.uid, doc.default_theme]);
+
+  useEffect(() => {
+    if (!canComment) setPendingAnchor(null);
+  }, [canComment]);
+
+  useEffect(() => {
     let cancelled = false;
     listComments(doc.uid).then(
       (r) => {
-        if (!cancelled) setComments(r.comments);
+        if (cancelled) return;
+        setComments(r.comments);
+        setMentionSeedNames(r.mention_candidates);
+        notifyPendingMentions(r.comments, r.pending_mentions);
       },
       (err) => reportError('DocumentLayout.listComments', err, { uid: doc.uid }),
     );
@@ -105,12 +136,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         case 'comment.created': {
           const c = event.comment as unknown as CommentT;
           setComments((prev) => (prev.some((x) => x.id === c.id) ? prev : [...prev, c]));
-          notify('New comment', `${c.author.display_name}: ${c.body.slice(0, 120)}`);
           break;
         }
         case 'comment.updated': {
           const c = event.comment as unknown as CommentT;
           setComments((prev) => prev.map((x) => (x.id === c.id ? c : x)));
+          break;
+        }
+        case 'mention.created': {
+          const c = event.comment as unknown as CommentT;
+          setComments((prev) => (prev.some((x) => x.id === c.id) ? prev : [...prev, c]));
+          notifyMention(c);
           break;
         }
         case 'comment.deleted': {
@@ -132,13 +168,22 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return () => sub.close();
   }, [doc.uid]);
 
+  const mentionCandidates = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const name of mentionSeedNames) addMentionName(names, name);
+    for (const comment of comments) addMentionName(names, comment.author.display_name);
+    if (doc.display_name) addMentionName(names, doc.display_name);
+    return Array.from(names.values()).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' }),
+    );
+  }, [comments, doc.display_name, mentionSeedNames]);
+
   function resolveIdentity(providedName?: string) {
-    const name = providedName?.trim() || displayName;
+    const name = providedName?.trim() || effectiveDisplayName;
     if (!name) return null;
-    if (name !== displayName) {
-      setDisplayName(name);
-      setDisplayNameState(name);
-    }
+    // setDisplayName fires an in-app event → useDisplayName re-runs, so all
+    // mirror components (AppBar UserMenu, etc.) stay in sync.
+    if (!forcedDisplayName && name !== displayName) setDisplayName(name);
     return { clientId: getClientId(), displayName: name };
   }
 
@@ -155,9 +200,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, []);
 
   const onCreate = useCallback(
-    async (
-      payload: { anchor?: CommentAnchor; parent_id?: string; body: string; display_name?: string },
-    ) => {
+    async (payload: {
+      anchor?: CommentAnchor;
+      parent_id?: string;
+      body: string;
+      display_name?: string;
+    }) => {
+      if (!canComment) {
+        setError('You have read-only access to this document.');
+        return;
+      }
       const identity = resolveIdentity(payload.display_name);
       if (!identity) {
         setError('Please set your display name first.');
@@ -176,7 +228,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName],
+    [canComment, doc.uid, displayName, effectiveDisplayName],
   );
 
   const onResolve = useCallback(
@@ -191,7 +243,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName],
+    [doc.uid, displayName, effectiveDisplayName],
   );
 
   const onEdit = useCallback(
@@ -206,7 +258,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName],
+    [doc.uid, displayName, effectiveDisplayName],
   );
 
   const onDelete = useCallback(
@@ -221,7 +273,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName],
+    [doc.uid, displayName, effectiveDisplayName],
   );
 
   const tocPx = tocOpen ? tocWidth : COLLAPSED_WIDTH;
@@ -231,16 +283,61 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   };
 
   const title = documentTitle(doc);
+  const commentHighlights = useMemo(() => {
+    const fromComments: Array<{
+      threadId?: string;
+      blockId: string;
+      quote: string;
+      startOffset: number;
+      endOffset: number;
+    }> = comments
+      .filter(
+        (comment) =>
+          comment.parent_id === null &&
+          comment.status === 'active' &&
+          comment.anchor !== null &&
+          comment.anchor.quote &&
+          comment.anchor.end_offset > comment.anchor.start_offset,
+      )
+      .map((comment) => ({
+        threadId: comment.id,
+        blockId: comment.anchor!.block_id,
+        quote: comment.anchor!.quote,
+        startOffset: comment.anchor!.start_offset,
+        endOffset: comment.anchor!.end_offset,
+      }));
+
+    if (
+      canComment &&
+      pendingAnchor &&
+      pendingAnchor.quote &&
+      pendingAnchor.end_offset > pendingAnchor.start_offset
+    ) {
+      fromComments.push({
+        blockId: pendingAnchor.block_id,
+        quote: pendingAnchor.quote,
+        startOffset: pendingAnchor.start_offset,
+        endOffset: pendingAnchor.end_offset,
+      });
+    }
+
+    return fromComments;
+  }, [canComment, comments, pendingAnchor]);
+
+  const openCommentThread = useCallback((threadId: string) => {
+    setCommentsOpen(true);
+    setRightTab('comments');
+    setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1 }));
+  }, []);
 
   return (
     <div className="doc-page">
       <AppBar
         docTitle={title}
+        role={doc.role}
+        forcedDisplayName={forcedDisplayName}
         trailing={
           <>
-            {doc.role === 'admin' && onDocSettingsChanged && (
-              <AdminSettingsDialog doc={doc} onChange={onDocSettingsChanged} />
-            )}
             {children}
           </>
         }
@@ -255,7 +352,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </IconButton>
             </Tooltip>
             {tocOpen && (
-              <Text size="1" color="gray" weight="medium">Contents</Text>
+              <Text size="1" color="gray" weight="medium">
+                Contents
+              </Text>
             )}
           </Flex>
           {tocOpen && <Toc nodes={doc.rendered.toc} />}
@@ -266,9 +365,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           {/* Document-specific toolbar lives inside the doc pane so it sits
               only over the document column, not above the side panes. */}
           <Flex align="center" gap="3" px="3" py="2" className="doc-chrome">
-            <span className="spacer" />
             <Flex align="center" gap="2" className="width-slider">
-              <Text size="1" color="gray">Reading width</Text>
+              <Text size="1" color="gray">
+                Reading width
+              </Text>
               <Slider
                 size="1"
                 style={{ width: 160 }}
@@ -278,10 +378,33 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 value={[maxWidth]}
                 onValueChange={(v) => setMaxWidth(v[0] ?? maxWidth)}
               />
-              <Text size="1" color="gray" style={{ minWidth: '4ch' }}>{maxWidth}ch</Text>
+              <Text size="1" color="gray" style={{ minWidth: '4ch' }}>
+                {maxWidth}ch
+              </Text>
+            </Flex>
+            <Flex align="center" gap="2" className="width-slider">
+              <Text size="1" color="gray">
+                Text size
+              </Text>
+              <Slider
+                size="1"
+                style={{ width: 120 }}
+                min={80}
+                max={140}
+                step={1}
+                value={[textZoom]}
+                onValueChange={(v) => setTextZoom(v[0] ?? textZoom)}
+              />
+              <Text size="1" color="gray" style={{ minWidth: '4ch' }}>
+                {textZoom}%
+              </Text>
             </Flex>
             <span className="spacer" />
-            {error && <Text size="1" color="red">{error}</Text>}
+            {error && (
+              <Text size="1" color="red">
+                {error}
+              </Text>
+            )}
             <Flex align="center" gap="2">
               <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
                 Theme
@@ -303,10 +426,20 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 </Select.Content>
               </Select.Root>
             </Flex>
+            {doc.role === 'admin' && onDocSettingsChanged && (
+              <AdminSettingsDialog doc={doc} onChange={onDocSettingsChanged} />
+            )}
           </Flex>
           <div className="doc-body">
-            <RenderedDoc rendered={doc.rendered} elRef={docRef} maxWidthCh={maxWidth} />
-            <SelectionToolbar rootRef={docRef} onAdd={setPendingAnchor} />
+            <RenderedDoc
+              rendered={doc.rendered}
+              elRef={docRef}
+              maxWidthCh={maxWidth}
+              textZoom={textZoom / 100}
+              highlights={commentHighlights}
+              onHighlightClick={openCommentThread}
+            />
+            {canComment && <SelectionToolbar rootRef={docRef} onAdd={setPendingAnchor} />}
           </div>
         </main>
 
@@ -335,10 +468,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               <Tabs.Content value="comments" className="right-tab-panel">
                 <CommentsPane
                   comments={comments}
-                  pendingAnchor={pendingAnchor}
+                  mentionCandidates={mentionCandidates}
+                  canComment={canComment}
+                  pendingAnchor={canComment ? pendingAnchor : null}
+                  focusedThread={focusedThread}
                   onCancelPending={() => setPendingAnchor(null)}
                   isDocAdmin={doc.role === 'admin'}
-                  displayName={displayName}
+                  viewerClientId={getClientId()}
+                  displayName={effectiveDisplayName}
                   onCreate={onCreate}
                   onEdit={onEdit}
                   onDelete={onDelete}
@@ -363,4 +500,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       </div>
     </div>
   );
+}
+
+function notifyPendingMentions(comments: CommentT[], pendingMentionIds: string[]): void {
+  if (pendingMentionIds.length === 0) return;
+  const byId = new Map(comments.map((comment) => [comment.id, comment]));
+  for (const id of pendingMentionIds) {
+    const comment = byId.get(id);
+    if (comment) notifyMention(comment);
+  }
+}
+
+function notifyMention(comment: CommentT): void {
+  notify('Mentioned in a comment', `${comment.author.display_name}: ${comment.body.slice(0, 120)}`);
+}
+
+function addMentionName(map: Map<string, string>, name: string | null | undefined): void {
+  const trimmed = name?.trim();
+  if (!trimmed) return;
+  const key = trimmed.toLowerCase();
+  if (!map.has(key)) map.set(key, trimmed);
 }

@@ -12,6 +12,7 @@ import { reportError } from './log.js';
 export type RealtimeEvent =
   | { type: 'comment.created'; comment: Record<string, unknown> }
   | { type: 'comment.updated'; comment: Record<string, unknown> }
+  | { type: 'mention.created'; comment: Record<string, unknown> }
   | { type: 'comment.deleted'; comment_id: string }
   | { type: 'document.updated'; oid: string; author: string }
   | { type: 'subscribed'; uid: string }

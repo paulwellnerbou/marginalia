@@ -34,15 +34,15 @@
 }
 
 .marginalia h1 {
-  font-size: 2.75rem;
+  font-size: 2.75em;
   border-bottom: 0;
   letter-spacing: -0.03em;
 }
 .marginalia h2 {
   border-bottom: 0;
-  font-size: 1.75rem;
+  font-size: 1.75em;
 }
-.marginalia h3 { font-size: 1.3rem; }
+.marginalia h3 { font-size: 1.3em; }
 .marginalia blockquote {
   font-size: 1.15em;
   font-style: normal;

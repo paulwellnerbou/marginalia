@@ -9,6 +9,18 @@ interface RenderedDocProps {
   elRef?: RefObject<HTMLElement | null>;
   /** Max reading column width, in `ch`. Overrides the theme default. */
   maxWidthCh?: number;
+  /** Multiplier applied to the active theme's base text size. */
+  textZoom?: number;
+  /** Exact text ranges to keep visibly highlighted in the rendered document. */
+  highlights?: ReadonlyArray<{
+    threadId?: string;
+    blockId: string;
+    quote: string;
+    startOffset: number;
+    endOffset: number;
+  }>;
+  /** Open the corresponding comment thread for a clicked highlight. */
+  onHighlightClick?: (threadId: string) => void;
 }
 
 /**
@@ -29,7 +41,14 @@ interface RenderedDocProps {
  * write when the source string actually changed — React leaves the
  * children alone and mermaid's mutations survive parent re-renders.
  */
-export function RenderedDoc({ rendered, elRef, maxWidthCh }: RenderedDocProps) {
+export function RenderedDoc({
+  rendered,
+  elRef,
+  maxWidthCh,
+  textZoom,
+  highlights = [],
+  onHighlightClick,
+}: RenderedDocProps) {
   const internal = useRef<HTMLElement>(null);
   const ref = elRef ?? internal;
   const lastHtml = useRef<string | null>(null);
@@ -45,6 +64,17 @@ export function RenderedDoc({ rendered, elRef, maxWidthCh }: RenderedDocProps) {
     lastHtml.current = rendered.html;
     void renderMermaidIn(el);
   }, [rendered.html, ref]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    clearCommentHighlights(el);
+    if (highlights.length === 0) return;
+
+    applyCommentHighlights(el, highlights);
+    return () => clearCommentHighlights(el);
+  }, [highlights, rendered.html, ref]);
 
   // Anchor-click scroll + image-click lightbox. Both live on a single
   // delegated click handler on the article.
@@ -80,6 +110,14 @@ export function RenderedDoc({ rendered, elRef, maxWidthCh }: RenderedDocProps) {
         }
       }
 
+      const highlight = target.closest<HTMLElement>('mark[data-comment-thread-id]');
+      const threadId = highlight?.dataset.commentThreadId;
+      if (threadId && onHighlightClick) {
+        e.preventDefault();
+        onHighlightClick(threadId);
+        return;
+      }
+
       // Anchor → smooth-scroll to in-doc target.
       const anchor = target.closest('a[href^="#"]');
       if (anchor) {
@@ -95,12 +133,29 @@ export function RenderedDoc({ rendered, elRef, maxWidthCh }: RenderedDocProps) {
       }
     };
     el.addEventListener('click', handler);
-    return () => el.removeEventListener('click', handler);
-  }, [ref]);
+    const keydown = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const target = e.target as HTMLElement | null;
+      const highlight = target?.closest<HTMLElement>('mark[data-comment-thread-id]');
+      const threadId = highlight?.dataset.commentThreadId;
+      if (!threadId || !onHighlightClick) return;
+      e.preventDefault();
+      onHighlightClick(threadId);
+    };
+    el.addEventListener('keydown', keydown);
+    return () => {
+      el.removeEventListener('click', handler);
+      el.removeEventListener('keydown', keydown);
+    };
+  }, [onHighlightClick, ref]);
 
-  const style: React.CSSProperties | undefined = maxWidthCh
-    ? { ['--md-max-width' as string]: `${maxWidthCh}ch` }
-    : undefined;
+  const style: React.CSSProperties | undefined =
+    maxWidthCh || textZoom
+      ? {
+          ...(maxWidthCh ? { ['--md-max-width' as string]: `${maxWidthCh}ch` } : {}),
+          ...(textZoom ? { fontSize: `calc(var(--md-font-size) * ${textZoom})` } : {}),
+        }
+      : undefined;
 
   // No `dangerouslySetInnerHTML` — see comment above.
   return (
@@ -133,4 +188,219 @@ function svgToDataUrl(svg: SVGElement): string {
   }
   const xml = new XMLSerializer().serializeToString(clone);
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`;
+}
+
+function applyCommentHighlights(
+  root: HTMLElement,
+  highlights: ReadonlyArray<{
+    threadId?: string;
+    blockId: string;
+    quote: string;
+    startOffset: number;
+    endOffset: number;
+  }>,
+): void {
+  const rangesByBlock = new Map<
+    string,
+    Array<{ rawStart: number; rawEnd: number; threadIds: string[] }>
+  >();
+
+  for (const highlight of highlights) {
+    if (highlight.endOffset <= highlight.startOffset || !highlight.quote) continue;
+
+    const block = root.querySelector<HTMLElement>(
+      `[data-block="${CSS.escape(highlight.blockId)}"]`,
+    );
+    if (!block) continue;
+
+    const map = buildBlockTextMap(block);
+    const resolved = resolveNormalizedRange(
+      map.normalizedText,
+      highlight.quote,
+      highlight.startOffset,
+      highlight.endOffset,
+    );
+    if (!resolved) continue;
+
+    const rawStart = map.normalizedToRaw[resolved.start];
+    const rawEndChar = map.normalizedToRaw[resolved.end - 1];
+    if (rawStart === undefined || rawEndChar === undefined) continue;
+
+    const blockRanges = rangesByBlock.get(highlight.blockId) ?? [];
+    blockRanges.push({
+      rawStart,
+      rawEnd: rawEndChar + 1,
+      threadIds: highlight.threadId ? [highlight.threadId] : [],
+    });
+    rangesByBlock.set(highlight.blockId, blockRanges);
+  }
+
+  for (const [blockId, ranges] of rangesByBlock) {
+    const block = root.querySelector<HTMLElement>(`[data-block="${CSS.escape(blockId)}"]`);
+    if (!block) continue;
+
+    const merged = mergeRanges(ranges);
+    if (merged.length === 0) continue;
+
+    const textNodes = collectTextNodes(block);
+    for (let i = merged.length - 1; i >= 0; i--) {
+      const range = merged[i]!;
+      wrapRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.threadIds);
+    }
+  }
+}
+
+function clearCommentHighlights(root: HTMLElement): void {
+  const marks = root.querySelectorAll<HTMLElement>('mark[data-comment-highlight="true"]');
+  for (const mark of marks) {
+    const parent = mark.parentNode;
+    if (!parent) continue;
+    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+    parent.removeChild(mark);
+    parent.normalize();
+  }
+}
+
+function resolveNormalizedRange(
+  normalizedText: string,
+  quote: string,
+  startOffset: number,
+  endOffset: number,
+): { start: number; end: number } | null {
+  if (startOffset >= 0 && endOffset <= normalizedText.length) {
+    const exact = normalizedText.slice(startOffset, endOffset);
+    if (exact === quote) {
+      return { start: startOffset, end: endOffset };
+    }
+  }
+
+  const nearStart = Math.max(0, startOffset - 24);
+  const near = normalizedText.indexOf(quote, nearStart);
+  if (near >= 0) {
+    return { start: near, end: near + quote.length };
+  }
+
+  const anywhere = normalizedText.indexOf(quote);
+  if (anywhere >= 0) {
+    return { start: anywhere, end: anywhere + quote.length };
+  }
+
+  return null;
+}
+
+function buildBlockTextMap(block: HTMLElement): {
+  normalizedText: string;
+  normalizedToRaw: number[];
+} {
+  const textNodes = collectTextNodes(block);
+  let rawText = '';
+  for (const entry of textNodes) rawText += entry.node.data;
+
+  let normalizedText = '';
+  const normalizedToRaw: number[] = [];
+  let sawContent = false;
+  let pendingWhitespaceStart = -1;
+
+  for (let i = 0; i < rawText.length; i++) {
+    const char = rawText[i]!;
+    if (/\s/u.test(char)) {
+      if (!sawContent) continue;
+      if (pendingWhitespaceStart < 0) pendingWhitespaceStart = i;
+      continue;
+    }
+
+    if (pendingWhitespaceStart >= 0) {
+      normalizedText += ' ';
+      normalizedToRaw.push(pendingWhitespaceStart);
+      pendingWhitespaceStart = -1;
+    }
+
+    normalizedText += char;
+    normalizedToRaw.push(i);
+    sawContent = true;
+  }
+
+  return { normalizedText, normalizedToRaw };
+}
+
+function collectTextNodes(root: HTMLElement): Array<{ node: Text; start: number; end: number }> {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const textNodes: Array<{ node: Text; start: number; end: number }> = [];
+  let offset = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node as Text;
+    const length = text.data.length;
+    textNodes.push({ node: text, start: offset, end: offset + length });
+    offset += length;
+  }
+  return textNodes;
+}
+
+function mergeRanges(
+  ranges: Array<{ rawStart: number; rawEnd: number; threadIds: string[] }>,
+): Array<{ rawStart: number; rawEnd: number; threadIds: string[] }> {
+  if (ranges.length <= 1) return ranges;
+  const sorted = [...ranges].sort((a, b) => a.rawStart - b.rawStart || a.rawEnd - b.rawEnd);
+  const merged: Array<{ rawStart: number; rawEnd: number; threadIds: string[] }> = [
+    { ...sorted[0]!, threadIds: [...sorted[0]!.threadIds] },
+  ];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i]!;
+    const prev = merged[merged.length - 1]!;
+    if (next.rawStart <= prev.rawEnd) {
+      prev.rawEnd = Math.max(prev.rawEnd, next.rawEnd);
+      prev.threadIds = Array.from(new Set([...prev.threadIds, ...next.threadIds]));
+      continue;
+    }
+    merged.push({ ...next, threadIds: [...next.threadIds] });
+  }
+
+  return merged;
+}
+
+function wrapRangeAcrossTextNodes(
+  textNodes: Array<{ node: Text; start: number; end: number }>,
+  rawStart: number,
+  rawEnd: number,
+  threadIds: string[],
+): void {
+  for (let i = textNodes.length - 1; i >= 0; i--) {
+    const entry = textNodes[i]!;
+    const segmentStart = Math.max(rawStart, entry.start);
+    const segmentEnd = Math.min(rawEnd, entry.end);
+    if (segmentEnd <= segmentStart) continue;
+
+    wrapTextSlice(entry.node, segmentStart - entry.start, segmentEnd - entry.start, threadIds);
+  }
+}
+
+function wrapTextSlice(
+  node: Text,
+  startOffset: number,
+  endOffset: number,
+  threadIds: string[],
+): void {
+  let target = node;
+  if (startOffset > 0) {
+    target = target.splitText(startOffset);
+  }
+  if (endOffset - startOffset < target.data.length) {
+    target.splitText(endOffset - startOffset);
+  }
+
+  const parent = target.parentNode;
+  if (!parent) return;
+
+  const mark = document.createElement('mark');
+  mark.dataset.commentHighlight = 'true';
+  mark.className = 'comment-highlight';
+  if (threadIds.length > 0) {
+    mark.dataset.commentThreadId = threadIds[0]!;
+    mark.tabIndex = 0;
+    mark.setAttribute('role', 'button');
+    mark.setAttribute('aria-label', 'Open comment thread');
+  }
+  parent.insertBefore(mark, target);
+  mark.appendChild(target);
 }
