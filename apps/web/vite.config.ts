@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    strictPort: true,
     proxy: {
       // `ws: true` forwards the WebSocket upgrade at /api/documents/:uid/events.
       // `configure` silences the benign ECONNRESET the proxy logs whenever a

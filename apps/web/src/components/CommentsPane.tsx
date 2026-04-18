@@ -1,6 +1,22 @@
 import { useEffect, useMemo, useState, useRef, forwardRef, useImperativeHandle } from 'react';
-import { Badge, Button, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
-import { CheckCircledIcon, ChevronDownIcon, ChevronRightIcon, PaperPlaneIcon } from '@radix-ui/react-icons';
+import {
+  Badge,
+  Button,
+  DropdownMenu,
+  Flex,
+  IconButton,
+  SegmentedControl,
+  Text,
+  TextArea,
+  TextField,
+} from '@radix-ui/themes';
+import {
+  CheckCircledIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  DotsHorizontalIcon,
+  PaperPlaneIcon,
+} from '@radix-ui/react-icons';
 import type { Comment, CommentAnchor } from '../lib/api.js';
 import { CommentItem } from './CommentItem.js';
 
@@ -38,6 +54,8 @@ interface AnchorGroup {
   replies: Comment[];
 }
 
+type CommentSortMode = 'document' | 'latest';
+
 export function CommentsPane(props: Props) {
   const {
     comments,
@@ -56,18 +74,64 @@ export function CommentsPane(props: Props) {
     onScrollToAnchor,
   } = props;
 
-  const { active, orphans } = useMemo(() => groupByAnchor(comments), [comments]);
+  const [sortMode, setSortMode] = useState<CommentSortMode>('document');
+  const { active, orphans } = useMemo(() => groupByAnchor(comments, sortMode), [comments, sortMode]);
   const [collapsedThreads, setCollapsedThreads] = useState<Set<string>>(new Set());
+  const [collapsedReplies, setCollapsedReplies] = useState<Set<string>>(new Set());
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const lastHandledFocusNonce = useRef<number | null>(null);
+  const threadIds = useMemo(() => [...orphans, ...active].map((group) => group.top.id), [active, orphans]);
+  const totalThreads = threadIds.length;
+  const allCollapsed = totalThreads > 0 && threadIds.every((threadId) => collapsedThreads.has(threadId));
+  const allRepliesCollapsed =
+    totalThreads > 0 && threadIds.every((threadId) => collapsedReplies.has(threadId));
+
+  useEffect(() => {
+    setCollapsedThreads((prev) => {
+      if (prev.size === 0) return prev;
+      const validIds = new Set(threadIds);
+      const next = new Set<string>();
+      for (const threadId of prev) {
+        if (validIds.has(threadId)) next.add(threadId);
+      }
+      return next.size === prev.size ? prev : next;
+    });
+  }, [threadIds]);
+
+  useEffect(() => {
+    setCollapsedReplies((prev) => {
+      const validIds = new Set(threadIds);
+      const next = new Set<string>();
+      for (const threadId of prev) {
+        if (validIds.has(threadId)) next.add(threadId);
+      }
+      for (const threadId of threadIds) {
+        if (!prev.has(threadId)) next.add(threadId);
+      }
+      if (next.size !== prev.size) return next;
+      for (const threadId of next) {
+        if (!prev.has(threadId)) return next;
+      }
+      return prev;
+    });
+  }, [threadIds]);
 
   useEffect(() => {
     if (!focusedThread) return;
     if (lastHandledFocusNonce.current === focusedThread.nonce) return;
 
-    if (collapsedThreads.has(focusedThread.threadId)) {
+    if (
+      collapsedThreads.has(focusedThread.threadId) ||
+      collapsedReplies.has(focusedThread.threadId)
+    ) {
       setCollapsedThreads((prev) => {
+        if (!prev.has(focusedThread.threadId)) return prev;
+        const next = new Set(prev);
+        next.delete(focusedThread.threadId);
+        return next;
+      });
+      setCollapsedReplies((prev) => {
         if (!prev.has(focusedThread.threadId)) return prev;
         const next = new Set(prev);
         next.delete(focusedThread.threadId);
@@ -94,7 +158,7 @@ export function CommentsPane(props: Props) {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
     };
-  }, [active, collapsedThreads, focusedThread, orphans]);
+  }, [active, collapsedReplies, collapsedThreads, focusedThread, orphans]);
 
   async function submitNew(body: string, name?: string) {
     if (!pendingAnchor) return;
@@ -124,6 +188,58 @@ export function CommentsPane(props: Props) {
         </div>
       )}
 
+      {totalThreads > 1 && (
+        <Flex align="center" gap="2" className="comments-pane-toolbar">
+          {/* Two options, expected to be used often → visible segmented
+              toggle with an explicit label, not a Select. Both choices are
+              visible at once; one click to switch. */}
+          <Text as="label" htmlFor="threads-sort" size="1" color="gray">
+            Sort by
+          </Text>
+          <SegmentedControl.Root
+            id="threads-sort"
+            size="1"
+            value={sortMode}
+            onValueChange={(value) => setSortMode(value as CommentSortMode)}
+            aria-label="Sort threads"
+          >
+            <SegmentedControl.Item value="document" title="Appearance in document">
+              Appearance
+            </SegmentedControl.Item>
+            <SegmentedControl.Item value="latest" title="Latest activity first">
+              Latest
+            </SegmentedControl.Item>
+          </SegmentedControl.Root>
+          <span className="spacer" />
+          {/* Collapse-all is the one low-frequency bulk action — tucked into
+              an overflow menu so it's reachable without cluttering the bar.
+              No "Expand all" — if the user wants to read a thread they just
+              click that thread's chevron; collapsing is the only useful
+              bulk direction. */}
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger>
+              <IconButton variant="ghost" size="1" aria-label="More thread actions">
+                <DotsHorizontalIcon />
+              </IconButton>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Content align="end">
+              <DropdownMenu.Item
+                onSelect={() => setCollapsedThreads(new Set(threadIds))}
+                disabled={allCollapsed}
+              >
+                Collapse all threads
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                onSelect={() => setCollapsedReplies(new Set(threadIds))}
+                disabled={allRepliesCollapsed}
+              >
+                Collapse all replies
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Root>
+        </Flex>
+      )}
+
       {orphans.length > 0 && (
         <section className="orphans">
           <h4 className="subtle">Orphaned comments</h4>
@@ -146,8 +262,17 @@ export function CommentsPane(props: Props) {
               needsName={!displayName}
               threadFocused={focusedThreadId === g.top.id}
               collapsed={collapsedThreads.has(g.top.id)}
+              repliesCollapsed={collapsedReplies.has(g.top.id)}
               onToggleCollapsed={() =>
                 setCollapsedThreads((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(g.top.id)) next.delete(g.top.id);
+                  else next.add(g.top.id);
+                  return next;
+                })
+              }
+              onToggleRepliesCollapsed={() =>
+                setCollapsedReplies((prev) => {
                   const next = new Set(prev);
                   if (next.has(g.top.id)) next.delete(g.top.id);
                   else next.add(g.top.id);
@@ -183,8 +308,17 @@ export function CommentsPane(props: Props) {
           needsName={!displayName}
           threadFocused={focusedThreadId === g.top.id}
           collapsed={collapsedThreads.has(g.top.id)}
+          repliesCollapsed={collapsedReplies.has(g.top.id)}
           onToggleCollapsed={() =>
             setCollapsedThreads((prev) => {
+              const next = new Set(prev);
+              if (next.has(g.top.id)) next.delete(g.top.id);
+              else next.add(g.top.id);
+              return next;
+            })
+          }
+          onToggleRepliesCollapsed={() =>
+            setCollapsedReplies((prev) => {
               const next = new Set(prev);
               if (next.has(g.top.id)) next.delete(g.top.id);
               else next.add(g.top.id);
@@ -211,7 +345,9 @@ function AnchorGroupView({
   needsName,
   threadFocused,
   collapsed,
+  repliesCollapsed,
   onToggleCollapsed,
+  onToggleRepliesCollapsed,
 }: {
   group: AnchorGroup;
   isDocAdmin: boolean;
@@ -226,11 +362,15 @@ function AnchorGroupView({
   needsName: boolean;
   threadFocused: boolean;
   collapsed: boolean;
+  repliesCollapsed: boolean;
   onToggleCollapsed: () => void;
+  onToggleRepliesCollapsed: () => void;
 }) {
   const isResolved = group.top.resolved_at !== null;
   const canResolve = isDocAdmin || group.top.author.client_id === viewerClientId;
   const showThread = !collapsed;
+  const showReplies = !repliesCollapsed;
+  const canToggleReplies = group.replies.length > 0 || (canComment && !isResolved);
   const anchorBlockId = group.top.anchor?.block_id ?? null;
 
   const composerRef = useRef<ComposerHandle>(null);
@@ -278,6 +418,19 @@ function AnchorGroupView({
           {showThread ? <ChevronDownIcon /> : <ChevronRightIcon />}
           {showThread ? 'Collapse thread' : 'Expand thread'}
         </Button>
+        {canToggleReplies && (
+          <Button
+            size="1"
+            variant="ghost"
+            color="gray"
+            className="thread-collapse-button"
+            aria-expanded={showReplies}
+            onClick={onToggleRepliesCollapsed}
+          >
+            {showReplies ? <ChevronDownIcon /> : <ChevronRightIcon />}
+            {showReplies ? 'Collapse replies' : 'Expand replies'}
+          </Button>
+        )}
         <Text size="1" color="gray">
           {group.replies.length === 0
             ? 'No replies'
@@ -325,17 +478,18 @@ function AnchorGroupView({
             onDelete={onDelete}
             onQuote={canComment ? handleQuote : undefined}
           />
-          {group.replies.map((r) => (
-            <CommentItem
-              key={r.id}
-              comment={r}
-              isDocAdmin={isDocAdmin}
-              onEdit={onEdit}
-              onDelete={onDelete}
-              onQuote={canComment ? handleQuote : undefined}
-            />
-          ))}
-          {canComment && !isResolved && (
+          {showReplies &&
+            group.replies.map((r) => (
+              <CommentItem
+                key={r.id}
+                comment={r}
+                isDocAdmin={isDocAdmin}
+                onEdit={onEdit}
+                onDelete={onDelete}
+                onQuote={canComment ? handleQuote : undefined}
+              />
+            ))}
+          {showReplies && canComment && !isResolved && (
             <div className="reply-composer">
               <Composer
                 ref={composerRef}
@@ -584,7 +738,10 @@ function normalizeMentionQuery(query: string): string {
   return query.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-function groupByAnchor(comments: Comment[]): { active: AnchorGroup[]; orphans: AnchorGroup[] } {
+function groupByAnchor(
+  comments: Comment[],
+  sortMode: CommentSortMode,
+): { active: AnchorGroup[]; orphans: AnchorGroup[] } {
   const tops = new Map<string, AnchorGroup>();
   const replies: Comment[] = [];
   for (const c of comments) {
@@ -601,7 +758,59 @@ function groupByAnchor(comments: Comment[]): { active: AnchorGroup[]; orphans: A
     if (g.top.status === 'orphaned') orphans.push(g);
     else active.push(g);
   }
-  active.sort((a, b) => a.top.created_at - b.top.created_at);
-  orphans.sort((a, b) => a.top.created_at - b.top.created_at);
+  const sortGroups =
+    sortMode === 'latest' ? compareGroupsByLatestActivityDesc : compareGroupsByDocumentOrder;
+  active.sort(sortGroups);
+  orphans.sort(sortGroups);
   return { active, orphans };
+}
+
+function compareGroupsByLatestActivityDesc(a: AnchorGroup, b: AnchorGroup): number {
+  return latestActivityTs(b) - latestActivityTs(a) || a.top.created_at - b.top.created_at;
+}
+
+function compareGroupsByDocumentOrder(a: AnchorGroup, b: AnchorGroup): number {
+  const pathCmp = compareAnchorPaths(a.top.anchor, b.top.anchor);
+  if (pathCmp !== 0) return pathCmp;
+  const offsetCmp = compareNullableNumber(
+    a.top.anchor?.start_offset ?? null,
+    b.top.anchor?.start_offset ?? null,
+  );
+  if (offsetCmp !== 0) return offsetCmp;
+  return a.top.created_at - b.top.created_at;
+}
+
+function compareAnchorPaths(a: CommentAnchor | null, b: CommentAnchor | null): number {
+  const aPath = normalizeAnchorPath(a);
+  const bPath = normalizeAnchorPath(b);
+  const len = Math.max(aPath.length, bPath.length);
+  for (let i = 0; i < len; i += 1) {
+    const aPart = aPath[i] ?? Number.MAX_SAFE_INTEGER;
+    const bPart = bPath[i] ?? Number.MAX_SAFE_INTEGER;
+    if (aPart !== bPart) return aPart - bPart;
+  }
+  return 0;
+}
+
+function normalizeAnchorPath(anchor: CommentAnchor | null): number[] {
+  if (anchor?.section_index_path && anchor.section_index_path.length > 0) {
+    return anchor.section_index_path;
+  }
+  if (typeof anchor?.section_index === 'number') return [anchor.section_index];
+  return [];
+}
+
+function compareNullableNumber(a: number | null, b: number | null): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  return a - b;
+}
+
+function latestActivityTs(group: AnchorGroup): number {
+  let latest = group.top.created_at;
+  for (const reply of group.replies) {
+    if (reply.created_at > latest) latest = reply.created_at;
+  }
+  return latest;
 }
