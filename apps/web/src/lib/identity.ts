@@ -1,11 +1,107 @@
 /**
  * A user is identified by a `clientId` (random, auto-generated on first
- * visit) and a `displayName` (prompted on first action). Both live in
- * localStorage; the server treats them as untrusted identity claims.
+ * visit) and a `displayName` (generated on first use, user-editable
+ * later). Both live in localStorage; the server treats them as untrusted
+ * identity claims.
  */
+
+import { useEffect, useState } from 'react';
 
 const CLIENT_ID_KEY = 'marginalia.clientId';
 const DISPLAY_NAME_KEY = 'marginalia.displayName';
+const DISPLAY_NAME_EVENT = 'marginalia:display-name-change';
+
+const NAME_ADJECTIVES = [
+  'Amber',
+  'Brisk',
+  'Calm',
+  'Clever',
+  'Cloudy',
+  'Copper',
+  'Coral',
+  'Crimson',
+  'Dapper',
+  'Drift',
+  'Ember',
+  'Fable',
+  'Fern',
+  'Golden',
+  'Harbor',
+  'Hazel',
+  'Indigo',
+  'Ivy',
+  'Juniper',
+  'Kind',
+  'Lively',
+  'Maple',
+  'Meadow',
+  'Merry',
+  'Misty',
+  'Nimble',
+  'Olive',
+  'Opal',
+  'Pine',
+  'Quiet',
+  'River',
+  'Rosy',
+  'Sage',
+  'Silver',
+  'Sky',
+  'Solar',
+  'Spruce',
+  'Starry',
+  'Sunny',
+  'Swift',
+  'Timber',
+  'Velvet',
+  'Willow',
+  'Witty',
+];
+
+const NAME_ANIMALS = [
+  'Badger',
+  'Bear',
+  'Beaver',
+  'Crane',
+  'Crow',
+  'Dolphin',
+  'Falcon',
+  'Finch',
+  'Fox',
+  'Gecko',
+  'Gull',
+  'Hedgehog',
+  'Heron',
+  'Jay',
+  'Koala',
+  'Lark',
+  'Lynx',
+  'Marten',
+  'Moose',
+  'Newt',
+  'Otter',
+  'Owl',
+  'Panda',
+  'Peregrine',
+  'Pika',
+  'Quail',
+  'Raven',
+  'Robin',
+  'Seal',
+  'Sparrow',
+  'Stag',
+  'Swan',
+  'Swift',
+  'Tern',
+  'Tiger',
+  'Toucan',
+  'Trout',
+  'Viper',
+  'Walrus',
+  'Wren',
+  'Yak',
+  'Zebra',
+];
 
 export interface Identity {
   clientId: string;
@@ -22,22 +118,64 @@ export function getClientId(): string {
   return id;
 }
 
-export function getDisplayName(): string | null {
-  return localStorage.getItem(DISPLAY_NAME_KEY);
+export function getDisplayName(): string {
+  const existing = normalizeDisplayName(localStorage.getItem(DISPLAY_NAME_KEY) ?? '');
+  if (existing && !isLegacyDefaultDisplayName(existing)) {
+    if (existing !== localStorage.getItem(DISPLAY_NAME_KEY)) {
+      localStorage.setItem(DISPLAY_NAME_KEY, existing);
+    }
+    return existing;
+  }
+
+  const generated = generateDisplayName(getClientId());
+  localStorage.setItem(DISPLAY_NAME_KEY, generated);
+  return generated;
 }
 
 export function setDisplayName(name: string): void {
-  localStorage.setItem(DISPLAY_NAME_KEY, name);
+  const prev = localStorage.getItem(DISPLAY_NAME_KEY);
+  const next = normalizeDisplayName(name) || generateDisplayName(getClientId());
+  localStorage.setItem(DISPLAY_NAME_KEY, next);
+  // Notify in-app subscribers even when the value didn't change — they
+  // may be re-reading to sync React state.
+  window.dispatchEvent(new CustomEvent(DISPLAY_NAME_EVENT, { detail: next }));
+  // Also bridge the cross-tab `storage` channel manually — StorageEvent
+  // only fires in *other* tabs, never the one that did the write.
+  void prev;
 }
 
 /**
- * Returns the current identity if both clientId and displayName are set.
- * Callers handle the null case with in-app UI — never a native prompt.
+ * Subscribe to changes to the display name made anywhere in the app (same
+ * tab via `setDisplayName` or cross-tab via the native `storage` event).
  */
-export function loadIdentity(): Identity | null {
+export function onDisplayNameChange(fn: (name: string) => void): () => void {
+  const inApp = (e: Event) => fn((e as CustomEvent<string>).detail);
+  const crossTab = (e: StorageEvent) => {
+    if (e.key === DISPLAY_NAME_KEY) fn(getDisplayName());
+  };
+  window.addEventListener(DISPLAY_NAME_EVENT, inApp);
+  window.addEventListener('storage', crossTab);
+  return () => {
+    window.removeEventListener(DISPLAY_NAME_EVENT, inApp);
+    window.removeEventListener('storage', crossTab);
+  };
+}
+
+/** Reactive hook: the current display name, kept in sync with updates
+ *  from anywhere in the app. */
+export function useDisplayName(): string {
+  const [name, setName] = useState<string>(() => getDisplayName());
+  useEffect(() => onDisplayNameChange((next) => setName(next)), []);
+  return name;
+}
+
+/**
+ * Returns the current browser identity. Both fields are created lazily on
+ * first use and then remain stable until the display name is edited.
+ */
+export function loadIdentity(): Identity {
   const clientId = getClientId();
   const displayName = getDisplayName();
-  if (!displayName) return null;
   return { clientId, displayName };
 }
 
@@ -83,4 +221,22 @@ function generateClientId(): string {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function normalizeDisplayName(name: string): string {
+  return name.trim().slice(0, 80);
+}
+
+function isLegacyDefaultDisplayName(name: string): boolean {
+  return name.toLowerCase() === 'agent';
+}
+
+function generateDisplayName(clientId: string): string {
+  const adjective = NAME_ADJECTIVES[indexFromClientId(clientId, 0, NAME_ADJECTIVES.length)];
+  const animal = NAME_ANIMALS[indexFromClientId(clientId, 8, NAME_ANIMALS.length)];
+  return `${adjective} ${animal}`;
+}
+
+function indexFromClientId(clientId: string, start: number, modulo: number): number {
+  return parseInt(clientId.slice(start, start + 8), 16) % modulo;
 }

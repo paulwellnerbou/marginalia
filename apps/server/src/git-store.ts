@@ -1,7 +1,7 @@
 import * as git from 'isomorphic-git';
 import fs from 'node:fs';
 import { join } from 'node:path';
-import { mkdirSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, existsSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 
 /**
  * Thin wrapper around isomorphic-git that stores every document as a file
@@ -58,6 +58,30 @@ export class GitStore {
       },
     });
     return { oid };
+  }
+
+  /**
+   * Permanently remove a document's file and commit the deletion. NOTE:
+   * old commit blobs still hold the previous content in the git object
+   * database (not exposed via any API). If "no trace" needs to extend to
+   * the on-disk blobs too, follow up with a `git gc --prune=now` after
+   * history rewriting — deliberately left out for now.
+   */
+  async deleteDoc(uid: string, author: { displayName: string; clientId: string }): Promise<void> {
+    const absPath = this.absPath(uid);
+    if (existsSync(absPath)) {
+      rmSync(absPath, { force: true });
+    }
+    await git.remove({ fs, dir: this.repoDir, filepath: this.docPath(uid) });
+    await git.commit({
+      fs,
+      dir: this.repoDir,
+      message: `delete: ${uid}\n\nX-Marginalia-Client-ID: ${author.clientId}\n`,
+      author: {
+        name: author.displayName,
+        email: `${author.clientId}@marginalia.local`,
+      },
+    });
   }
 
   async history(uid: string): Promise<HistoryEntry[]> {

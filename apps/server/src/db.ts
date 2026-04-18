@@ -44,6 +44,9 @@ CREATE TABLE IF NOT EXISTS comments (
   anchor_suffix         TEXT,
   anchor_start_offset   INTEGER,
   anchor_end_offset     INTEGER,
+  anchor_heading_path   TEXT,            -- JSON array of enclosing heading texts
+  anchor_section_index  INTEGER,         -- position within the innermost section
+  anchor_section_index_path TEXT,        -- JSON int array; per-level section indices
   author_client_id      TEXT NOT NULL,
   author_display_name   TEXT NOT NULL,
   body                  TEXT NOT NULL,
@@ -57,6 +60,18 @@ CREATE TABLE IF NOT EXISTS comments (
 
 CREATE INDEX IF NOT EXISTS idx_comments_doc ON comments(doc_uid);
 CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id);
+
+CREATE TABLE IF NOT EXISTS comment_mentions (
+  doc_uid               TEXT NOT NULL,
+  comment_id            TEXT NOT NULL,
+  target_display_name   TEXT NOT NULL,
+  created_at            INTEGER NOT NULL,
+  delivered_at          INTEGER,
+  UNIQUE(comment_id, target_display_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_comment_mentions_pending
+  ON comment_mentions(doc_uid, target_display_name, delivered_at);
 
 CREATE TABLE IF NOT EXISTS edit_proposals (
   id                    TEXT PRIMARY KEY,
@@ -90,7 +105,30 @@ export interface DocumentRow {
   updated_at: number;
 }
 
-export type InviteRole = 'admin' | 'editor' | 'reader';
+/**
+ * Per-document role hierarchy (highest → lowest privilege):
+ *
+ *   admin        — full control: edit, comment, invite, rename, delete.
+ *   editor       — edit + comment + read.
+ *   collaborator — comment + propose edits + read.  (Propose-edit is a
+ *                  planned feature; for now collaborator behaves like
+ *                  commentor from the server's point of view.)
+ *   commentor    — comment + read.
+ *   reader       — read only, cannot comment.
+ */
+export type InviteRole = 'admin' | 'editor' | 'collaborator' | 'commentor' | 'reader';
+
+export const INVITE_ROLES: readonly InviteRole[] = [
+  'admin',
+  'editor',
+  'collaborator',
+  'commentor',
+  'reader',
+] as const;
+
+export function isInviteRole(v: unknown): v is InviteRole {
+  return typeof v === 'string' && (INVITE_ROLES as readonly string[]).includes(v);
+}
 
 export interface InviteRow {
   token: string;
@@ -120,6 +158,9 @@ export interface CommentRow {
   anchor_suffix: string | null;
   anchor_start_offset: number | null;
   anchor_end_offset: number | null;
+  anchor_heading_path: string | null;
+  anchor_section_index: number | null;
+  anchor_section_index_path: string | null;
   author_client_id: string;
   author_display_name: string;
   body: string;
@@ -129,6 +170,14 @@ export interface CommentRow {
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
+}
+
+export interface CommentMentionRow {
+  doc_uid: string;
+  comment_id: string;
+  target_display_name: string;
+  created_at: number;
+  delivered_at: number | null;
 }
 
 export type EditProposalStatus = 'pending' | 'accepted' | 'rejected' | 'orphaned';
@@ -159,5 +208,15 @@ export function openDatabase(path: string): Database {
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  ensureColumn(db, 'comments', 'anchor_heading_path', 'TEXT');
+  ensureColumn(db, 'comments', 'anchor_section_index', 'INTEGER');
+  ensureColumn(db, 'comments', 'anchor_section_index_path', 'TEXT');
   return db;
+}
+
+function ensureColumn(db: Database, table: string, column: string, ddl: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  }
 }

@@ -65,6 +65,21 @@ describe('realtime events', () => {
     return h;
   }
 
+  async function createInvite(
+    uid: string,
+    displayName: string,
+    role: 'admin' | 'editor' | 'collaborator' | 'commentor' | 'reader' = 'commentor',
+  ): Promise<string> {
+    const res = await fetch(url(`/api/documents/${uid}/invites`), {
+      method: 'POST',
+      headers: asAdmin(),
+      body: JSON.stringify({ display_name: displayName, role }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { invite: { token: string } };
+    return body.invite.token;
+  }
+
   async function firstBlockId(uid: string): Promise<string> {
     const res = await fetch(url(`/api/documents/${uid}`), { headers: headersFor(ALICE) });
     const j = (await res.json()) as { rendered: { blocks: Array<{ id: string }> } };
@@ -76,9 +91,14 @@ describe('realtime events', () => {
   function openSocket(
     uid: string,
     clientId: string,
+    opts: { clientName?: string; inviteToken?: string } = {},
   ): Promise<{ ws: WebSocket; events: unknown[] }> {
     const events: unknown[] = [];
-    const ws = new WebSocket(`${wsUrl(`/api/documents/${uid}/events`)}?client_id=${clientId}`);
+    const params = new URLSearchParams();
+    params.set('client_id', clientId);
+    if (opts.clientName) params.set('client_name', opts.clientName);
+    if (opts.inviteToken) params.set('invite', opts.inviteToken);
+    const ws = new WebSocket(`${wsUrl(`/api/documents/${uid}/events`)}?${params.toString()}`);
     ws.addEventListener('message', (e) => {
       events.push(JSON.parse(String(e.data)));
     });
@@ -113,10 +133,11 @@ describe('realtime events', () => {
     // Drain the initial 'subscribed' ack
     await waitFor(() => events.find((e) => (e as { type: string }).type === 'subscribed'));
 
-    // Alice posts a comment via HTTP
+    // Alice posts a comment via HTTP (as admin so the role gate lets her
+    // comment on the non-editable public doc).
     const postRes = await fetch(url(`/api/documents/${uid}/comments`), {
       method: 'POST',
-      headers: headersFor(ALICE),
+      headers: asAdmin(),
       body: JSON.stringify({
         anchor: { block_id: blockId, quote: 'Hi' },
         body: 'hello from alice',
@@ -140,10 +161,10 @@ describe('realtime events', () => {
     const { ws, events } = await openSocket(uid, ALICE.id);
     await waitFor(() => events.find((e) => (e as { type: string }).type === 'subscribed'));
 
-    // Alice also posts a comment — should NOT get echoed back
+    // Alice also posts a comment as admin — should NOT get echoed back
     const postRes = await fetch(url(`/api/documents/${uid}/comments`), {
       method: 'POST',
-      headers: headersFor(ALICE),
+      headers: asAdmin(),
       body: JSON.stringify({
         anchor: { block_id: blockId, quote: 'Hi' },
         body: 'self',
@@ -193,6 +214,31 @@ describe('realtime events', () => {
       events.find((e) => (e as { type: string }).type === 'document.updated'),
     )) as { type: string; author: string };
     expect(received.author).toBe('Alice');
+    ws.close();
+  });
+
+  test('mentioned invitee receives mention.created while the doc is open', async () => {
+    const uid = await uploadDoc('# Hi');
+    const blockId = await firstBlockId(uid);
+    const bobInvite = await createInvite(uid, 'Bob', 'commentor');
+
+    const { ws, events } = await openSocket(uid, BOB.id, { inviteToken: bobInvite });
+    await waitFor(() => events.find((e) => (e as { type: string }).type === 'subscribed'));
+
+    const postRes = await fetch(url(`/api/documents/${uid}/comments`), {
+      method: 'POST',
+      headers: asAdmin(),
+      body: JSON.stringify({
+        anchor: { block_id: blockId, quote: 'Hi' },
+        body: 'hello @Bob',
+      }),
+    });
+    expect(postRes.status).toBe(201);
+
+    const received = (await waitFor(() =>
+      events.find((e) => (e as { type: string }).type === 'mention.created'),
+    )) as { type: string; comment: { body: string } };
+    expect(received.comment.body).toBe('hello @Bob');
     ws.close();
   });
 });

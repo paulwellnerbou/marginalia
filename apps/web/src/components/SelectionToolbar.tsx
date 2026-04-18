@@ -80,7 +80,13 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
       className="selection-toolbar"
       style={{
         top: state.rect.top + window.scrollY - 40,
-        left: state.rect.left + window.scrollX + state.rect.width / 2,
+        left: Math.max(
+          60,
+          Math.min(
+            window.innerWidth - 60,
+            state.rect.left + window.scrollX + state.rect.width / 2,
+          ),
+        ),
       }}
     >
       {/* mousedown so the handler fires before selectionchange clears the range */}

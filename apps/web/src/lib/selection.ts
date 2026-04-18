@@ -47,6 +47,7 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
   const suffix = blockText.slice(endOffset, Math.min(blockText.length, endOffset + CONTEXT_LEN));
 
   void rawEnd; // currently unused; kept for future highlight rendering
+  const section = computeSectionContext(root, blockEl);
   return {
     block_id: blockId,
     quote,
@@ -54,13 +55,70 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
     suffix,
     start_offset: startOffset,
     end_offset: endOffset,
+    heading_path: section.headingPath,
+    section_index: section.sectionIndex,
+    section_index_path: section.sectionIndexPath,
   };
+}
+
+/**
+ * Replay the server-side block-ids walk in the DOM: iterate sibling blocks
+ * up to (and including) `target`, maintaining a heading stack and a
+ * per-section-path counter. Returns the path + index for `target`.
+ *
+ * Kept in sync with packages/renderer/src/plugins/block-ids.ts.
+ */
+function computeSectionContext(
+  root: HTMLElement,
+  target: HTMLElement,
+): { headingPath: string[]; sectionIndex: number; sectionIndexPath: number[] } {
+  // Block-IDs plugin only annotates top-level mdast children, which render as
+  // direct descendants of the rendered container. Nested [data-block] would
+  // throw off the stack, so scope to direct children.
+  const blocks = Array.from(root.children).filter(
+    (el): el is HTMLElement => el instanceof HTMLElement && el.hasAttribute('data-block'),
+  );
+  const stack: Array<{ level: number; text: string }> = [];
+  const counts = new Map<string, number>();
+  let result = { headingPath: [] as string[], sectionIndex: 0, sectionIndexPath: [0] };
+  for (const el of blocks) {
+    const text = normalizeWs(el.textContent ?? '');
+    const headingMatch = /^H([1-6])$/.exec(el.tagName);
+    if (headingMatch) {
+      const depth = Number(headingMatch[1]);
+      while (stack.length && stack[stack.length - 1]!.level >= depth) stack.pop();
+      stack.push({ level: depth, text });
+    }
+    const headingPath = stack.map((s) => s.text);
+    const sectionIndexPath: number[] = [];
+    for (let k = 0; k <= headingPath.length; k++) {
+      const key = headingPath.slice(0, k).join('\u0000');
+      const n = counts.get(key) ?? 0;
+      sectionIndexPath.push(n);
+      counts.set(key, n + 1);
+    }
+    const sectionIndex = sectionIndexPath[sectionIndexPath.length - 1]!;
+    if (el === target) {
+      result = { headingPath, sectionIndex, sectionIndexPath };
+      break;
+    }
+  }
+  return result;
 }
 
 export function selectionRect(): DOMRect | null {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
-  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  
+  // Use getClientRects()[0] instead of getBoundingClientRect() so that when a
+  // selection wraps across multiple lines, we only consider the bounding box
+  // of the first line. This prevents the button from jumping to the center
+  // of the full container width.
+  const rects = sel.getRangeAt(0).getClientRects();
+  if (rects.length === 0) return null;
+  const rect = rects[0];
+  if (!rect) return null;
+  
   if (rect.width === 0 && rect.height === 0) return null;
   return rect;
 }

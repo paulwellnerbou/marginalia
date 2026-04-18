@@ -1,5 +1,13 @@
-import { useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import {
+  ChatBubbleIcon,
+  Cross2Icon,
+  FileTextIcon,
+  LockClosedIcon,
+  MagicWandIcon,
+  PaperPlaneIcon,
+  PlusIcon,
+  UploadIcon,
+} from '@radix-ui/react-icons';
 import {
   Badge,
   Box,
@@ -20,26 +28,20 @@ import {
   TextField,
   Tooltip,
 } from '@radix-ui/themes';
-import {
-  ChatBubbleIcon,
-  Cross2Icon,
-  FileTextIcon,
-  LockClosedIcon,
-  MagicWandIcon,
-  PaperPlaneIcon,
-  PlusIcon,
-} from '@radix-ui/react-icons';
+import { useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
+import { Copyable } from '../components/Copyable.js';
+import { ApiError, type DocumentBundle, importDocumentBundle, uploadDocument } from '../lib/api.js';
 import { deriveDisplayName, getClientId, getDisplayName, setDisplayName } from '../lib/identity.js';
-import { uploadDocument, ApiError } from '../lib/api.js';
-import { reportError } from '../lib/log.js';
 import { saveInviteToken } from '../lib/invite.js';
+import { reportError } from '../lib/log.js';
 import {
+  type RecentDoc,
   loadRecentDocs,
   openUrlFor,
   recordVisit,
   removeFromRecent,
-  type RecentDoc,
 } from '../lib/recent-docs.js';
 
 const SAMPLE = `# Welcome
@@ -84,8 +86,8 @@ export function HomePage() {
                 Share it like a link.
               </Heading>
               <Text size="5" color="gray" align="center" style={{ maxWidth: '52ch' }}>
-                Marginalia renders your Markdown with book-quality typography, tracks every
-                save in git, and lets collaborators leave threaded comments on any paragraph.
+                Marginalia renders your Markdown with book-quality typography, tracks every save in
+                git, and lets collaborators leave threaded comments on any paragraph.
               </Text>
               <Flex gap="3" mt="2" wrap="wrap" justify="center">
                 <Button size="4" onClick={() => setUploadOpen(true)}>
@@ -109,15 +111,17 @@ export function HomePage() {
               <FeatureCard
                 icon={<FileTextIcon width="20" height="20" />}
                 title="Properly typeset"
-                body="Seven built-in themes — Beautiful, Book, Article, Technical, and more — all reading the same semantic HTML. Switch with one click."
+                body="Seven built-in themes — Book, Document, Article, Technical, and more — all reading the same semantic HTML. Switch with one click."
               />
               <FeatureCard
                 icon={<ChatBubbleIcon width="20" height="20" />}
+                iconVariant="ruby"
                 title="Conversations that stick"
                 body="Highlight a paragraph and reply in a thread. Comments re-anchor themselves as the document evolves; orphans surface separately."
               />
               <FeatureCard
                 icon={<PaperPlaneIcon width="20" height="20" />}
+                iconVariant="teal"
                 title="Invite-link access"
                 body="Create per-recipient links with a name and a role. The URL is the capability — no accounts, no passwords to remember."
               />
@@ -179,21 +183,32 @@ export function HomePage() {
 
 function FeatureCard({
   icon,
+  iconVariant,
   title,
   body,
 }: {
   icon: React.ReactNode;
+  /** Optional color accent for the icon tile. Default = theme accent (indigo). */
+  iconVariant?: 'ruby' | 'teal';
   title: string;
   body: string;
 }) {
   return (
     <Card size="3" className="feature-card">
       <Flex direction="column" gap="3">
-        <Flex align="center" justify="center" className="feature-icon">
+        <Flex
+          align="center"
+          justify="center"
+          className={`feature-icon${iconVariant ? ` feature-icon--${iconVariant}` : ''}`}
+        >
           {icon}
         </Flex>
-        <Heading size="4" weight="medium">{title}</Heading>
-        <Text size="2" color="gray">{body}</Text>
+        <Heading size="4" weight="medium">
+          {title}
+        </Heading>
+        <Text size="2" color="gray">
+          {body}
+        </Text>
       </Flex>
     </Card>
   );
@@ -231,7 +246,9 @@ function RecentCard({
     <Card size="2" className="recent-card" onClick={onOpen}>
       <Flex justify="between" align="start" gap="2">
         <button type="button" onClick={onOpen} className="recent-card-title">
-          <Heading size="3" weight="medium" truncate>{doc.title}</Heading>
+          <Heading size="3" weight="medium" truncate>
+            {doc.title}
+          </Heading>
         </button>
         <Tooltip content="Remove from recent">
           <IconButton
@@ -268,7 +285,7 @@ function RecentCard({
           </Badge>
         )}
       </Flex>
-      <Text size="1" color="gray" mt="3" as="div">
+      <Text size="1" color="gray" mt="3" as="div" title={formatFullTs(doc.visited_at)}>
         Last opened {formatRelative(doc.visited_at)}
       </Text>
     </Card>
@@ -302,35 +319,78 @@ function UploadDialog({
   const [createdAdminUrl, setCreatedAdminUrl] = useState<string | null>(null);
   const [createdUid, setCreatedUid] = useState<string | null>(null);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
+  const [createdTitle, setCreatedTitle] = useState<string>('Untitled');
+  const jsonInputRef = useRef<HTMLInputElement>(null);
 
   // If the user already set a display name globally we use it silently.
   // Otherwise this dialog offers an inline field to set one right here —
   // no need to send them off to find another control.
-  const [userDisplayName, setUserDisplayNameState] = useState<string | null>(
-    () => getDisplayName(),
+  const [userDisplayName, setUserDisplayNameState] = useState<string | null>(() =>
+    getDisplayName(),
   );
   const derivedTitle = deriveDisplayName(markdown);
   const effectiveDocName = docName.trim() || derivedTitle;
 
   async function handleFile(file: File) {
+    if (isBundleFile(file)) {
+      await importBundleFile(file);
+      return;
+    }
     const text = await file.text();
     setMarkdown(text);
   }
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
+  function loadIdentityForSubmit() {
     const user = (userDisplayName ?? '').trim();
     if (!user) {
       setError(
         'Please set your display name first. It is the name shown on your edits and comments.',
       );
-      return;
+      return null;
     }
-    // Persist the typed name globally so subsequent pages (comments, edits)
-    // pick it up without prompting again.
     setDisplayName(user);
-    const identity = { clientId: getClientId(), displayName: user.slice(0, 80) };
+    return { clientId: getClientId(), displayName: user.slice(0, 80) };
+  }
+
+  async function importBundleFile(file: File) {
+    setError(null);
+    const identity = loadIdentityForSubmit();
+    if (!identity) return;
+
+    setSubmitting(true);
+    try {
+      const raw = await file.text();
+      const bundle = JSON.parse(raw) as DocumentBundle;
+      const res = await importDocumentBundle(bundle, identity);
+      saveInviteToken(res.uid, res.admin_invite.token);
+      const adminUrl = window.location.origin + res.admin_invite.url;
+
+      setCreatedUid(res.uid);
+      setCreatedToken(res.admin_invite.token);
+      setCreatedAdminUrl(adminUrl);
+      setCreatedPassword(null);
+      setCreatedTitle(res.name ?? bundle.document?.name ?? 'Untitled');
+    } catch (err) {
+      reportError('Home.importBundle', err, { fileName: file.name });
+      const reason =
+        err instanceof ApiError
+          ? `${err.code} (${err.status})`
+          : err instanceof SyntaxError
+            ? 'invalid JSON'
+            : err instanceof Error
+              ? err.message
+              : 'unknown error';
+      setError(`Could not import document: ${reason}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    const identity = loadIdentityForSubmit();
+    if (!identity) return;
     setSubmitting(true);
     try {
       const uploadOpts: Parameters<typeof uploadDocument>[0] = {
@@ -346,6 +406,7 @@ function UploadDialog({
       setCreatedUid(res.uid);
       setCreatedToken(res.admin_invite.token);
       setCreatedAdminUrl(adminUrl);
+      setCreatedTitle((res.name ?? effectiveDocName) || 'Untitled');
       if (res.password) setCreatedPassword(res.password);
     } catch (err) {
       reportError('Home.upload', err, { markdownLength: markdown.length });
@@ -371,6 +432,7 @@ function UploadDialog({
     setCreatedAdminUrl(null);
     setCreatedUid(null);
     setCreatedToken(null);
+    setCreatedTitle('Untitled');
   }
 
   function openCreated() {
@@ -378,7 +440,7 @@ function UploadDialog({
     onUploaded({
       uid: createdUid,
       token: createdToken,
-      title: effectiveDocName || 'Untitled',
+      title: createdTitle,
       role: 'admin',
       password_protected: !!createdPassword,
       visited_at: Date.now(),
@@ -386,15 +448,6 @@ function UploadDialog({
     });
     reset();
     onOpenChange(false);
-  }
-
-  async function copyAdminUrl() {
-    if (!createdAdminUrl) return;
-    try {
-      await navigator.clipboard.writeText(createdAdminUrl);
-    } catch {
-      /* ignore */
-    }
   }
 
   return (
@@ -405,28 +458,27 @@ function UploadDialog({
         if (!v) reset();
       }}
     >
-      <Dialog.Content maxWidth="720px">
+      <Dialog.Content maxWidth="860px">
         {createdAdminUrl && createdUid && createdToken ? (
           <>
-            <Dialog.Title>Document created</Dialog.Title>
+            <Dialog.Title>Document ready</Dialog.Title>
             <Dialog.Description size="2" color="gray" mb="4">
-              Bookmark the admin link below — it's the only way back into this document with
-              full control.
+              Bookmark the admin link below — it's the only way back into this document with full
+              control.
             </Dialog.Description>
             <Flex direction="column" gap="3" mb="4">
               <Box>
-                <Text as="div" size="1" color="gray" mb="1">Admin link</Text>
-                <Code size="2" style={{ wordBreak: 'break-all' }}>{createdAdminUrl}</Code>
-                <Flex mt="2">
-                  <Button size="1" variant="soft" onClick={copyAdminUrl}>
-                    Copy admin link
-                  </Button>
-                </Flex>
+                <Text as="div" size="1" color="gray" mb="1">
+                  Admin link
+                </Text>
+                <Copyable text={createdAdminUrl} multiline ariaLabel="Copy admin link" />
               </Box>
               {createdPassword && (
                 <Box>
-                  <Text as="div" size="1" color="gray" mb="1">Password (shown once)</Text>
-                  <Code>{createdPassword}</Code>
+                  <Text as="div" size="1" color="gray" mb="1">
+                    Password (shown once)
+                  </Text>
+                  <Copyable text={createdPassword} ariaLabel="Copy password" />
                 </Box>
               )}
               <Callout.Root size="1" color="blue">
@@ -444,7 +496,8 @@ function UploadDialog({
           <form onSubmit={submit}>
             <Dialog.Title>New document</Dialog.Title>
             <Dialog.Description size="2" color="gray" mb="4">
-              Paste Markdown or upload a <Code>.md</Code> file. It gets its own URL.
+              Paste Markdown, upload a <Code>.md</Code> file, or import a previously exported
+              <Code>.json</Code> bundle. It gets its own URL.
             </Dialog.Description>
 
             <Flex direction="column" gap="3">
@@ -486,7 +539,9 @@ function UploadDialog({
               </Box>
 
               <Box>
-                <Text as="label" size="2" htmlFor="markdown-source">Markdown source</Text>
+                <Text as="label" size="2" htmlFor="markdown-source">
+                  Markdown source
+                </Text>
                 <MarkdownDropZone onFile={handleFile}>
                   <TextArea
                     id="markdown-source"
@@ -503,13 +558,41 @@ function UploadDialog({
               <Flex align="center" gap="2">
                 <input
                   type="file"
-                  accept=".md,.markdown,text/markdown"
+                  accept=".md,.markdown,.mdx,.json,text/markdown,application/json"
                   onChange={(e) => {
                     const f = e.target.files?.[0];
                     if (f) void handleFile(f);
                   }}
                 />
-                <Text size="2" color="gray">…or drop a .md file onto the editor above</Text>
+                <Text size="2" color="gray">
+                  …or drop a markdown / JSON bundle file onto the editor above
+                </Text>
+              </Flex>
+
+              <Flex align="center" gap="2">
+                <input
+                  ref={jsonInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void importBundleFile(f);
+                    e.currentTarget.value = '';
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="soft"
+                  onClick={() => jsonInputRef.current?.click()}
+                  disabled={submitting || !userDisplayName}
+                >
+                  <UploadIcon />
+                  Import JSON bundle
+                </Button>
+                <Text size="2" color="gray">
+                  Restores source, comments, and renderer metadata from an exported bundle.
+                </Text>
               </Flex>
 
               <Separator size="4" />
@@ -543,7 +626,9 @@ function UploadDialog({
 
               <Flex justify="end" gap="2">
                 <Dialog.Close>
-                  <Button variant="soft" color="gray">Cancel</Button>
+                  <Button variant="soft" color="gray">
+                    Cancel
+                  </Button>
                 </Dialog.Close>
                 <Button type="submit" disabled={submitting || !markdown || !userDisplayName}>
                   {submitting ? 'Uploading…' : 'Create document'}
@@ -558,8 +643,8 @@ function UploadDialog({
 }
 
 /**
- * Wraps a child with drag/drop handlers that accept a `.md` / `.markdown`
- * file and call `onFile` with it. Shows a subtle overlay while a file is
+ * Wraps a child with drag/drop handlers that accept a markdown file or a
+ * previously exported JSON bundle and call `onFile` with it. Shows a subtle overlay while a file is
  * being dragged over. Children are untouched by the drop (the drop just
  * fires onFile, doesn't mess with the child's own state).
  */
@@ -573,10 +658,12 @@ function MarkdownDropZone({
   const [over, setOver] = useState(false);
   const depth = useRef(0);
 
-  function isMarkdown(file: File): boolean {
+  function isAcceptedFile(file: File): boolean {
     if (file.type === 'text/markdown') return true;
     const n = file.name.toLowerCase();
-    return n.endsWith('.md') || n.endsWith('.markdown') || n.endsWith('.mdx');
+    return (
+      n.endsWith('.md') || n.endsWith('.markdown') || n.endsWith('.mdx') || n.endsWith('.json')
+    );
   }
 
   return (
@@ -607,17 +694,23 @@ function MarkdownDropZone({
         depth.current = 0;
         setOver(false);
         const file = e.dataTransfer.files?.[0];
-        if (file && isMarkdown(file)) void onFile(file);
+        if (file && isAcceptedFile(file)) void onFile(file);
       }}
     >
       {children}
       {over && (
         <div className="drop-zone-overlay">
-          <Text size="3" weight="medium">Drop your .md file to load it</Text>
+          <Text size="3" weight="medium">
+            Drop markdown or a JSON bundle to load it
+          </Text>
         </div>
       )}
     </div>
   );
+}
+
+function isBundleFile(file: File): boolean {
+  return file.type === 'application/json' || file.name.toLowerCase().endsWith('.json');
 }
 
 function formatRelative(ts: number): string {
@@ -626,4 +719,11 @@ function formatRelative(ts: number): string {
   if (diff < 60 * 60_000) return `${Math.round(diff / 60_000)}m ago`;
   if (diff < 24 * 60 * 60_000) return `${Math.round(diff / (60 * 60_000))}h ago`;
   return new Date(ts).toLocaleDateString();
+}
+
+function formatFullTs(ts: number): string {
+  return new Date(ts).toLocaleString([], {
+    dateStyle: 'full',
+    timeStyle: 'medium',
+  });
 }

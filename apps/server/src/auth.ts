@@ -12,7 +12,15 @@ export interface Identity {
   displayName: string;
 }
 
-export type Role = 'admin' | 'editor' | 'reader';
+export type Role = 'admin' | 'editor' | 'collaborator' | 'commentor' | 'reader';
+
+export function canEdit(role: Role): boolean {
+  return role === 'admin' || role === 'editor';
+}
+
+export function canComment(role: Role): boolean {
+  return role !== 'reader';
+}
 
 /**
  * Raw identity headers from the request. clientId is the random per-browser
@@ -22,13 +30,19 @@ export type Role = 'admin' | 'editor' | 'reader';
  * invites.
  */
 export function readIdentity(headers: Headers): Identity | null {
-  const clientId = headers.get(CLIENT_HEADER);
+  const clientId = readClientId(headers);
   const rawName = headers.get(CLIENT_NAME_HEADER);
   if (!clientId || !rawName) return null;
   const displayName = decodeHeaderValue(rawName);
-  if (clientId.length < 8 || clientId.length > 200) return null;
   if (displayName.length < 1 || displayName.length > 80) return null;
   return { clientId, displayName };
+}
+
+export function readClientId(headers: Headers): string | null {
+  const clientId = headers.get(CLIENT_HEADER);
+  if (!clientId) return null;
+  if (clientId.length < 8 || clientId.length > 200) return null;
+  return clientId;
 }
 
 function decodeHeaderValue(s: string): string {
@@ -108,19 +122,22 @@ export function authorize(
   sessionToken: string | null,
 ): AuthDecision {
   const invite = readInvite(db, headers, doc.uid);
+  const clientId = readClientId(headers);
   const base = readIdentity(headers);
 
-  if (invite) {
-    const identity = base
-      ? { clientId: base.clientId, displayName: invite.display_name }
-      : null;
-    return { ok: true, role: invite.role, identity, invite };
-  }
-
+  // If the document is password-protected, the password is always a gate.
+  // Even an invite (which decides who you are + what you can do) doesn't
+  // bypass the password — you need both the capability (invite URL) and
+  // the secret (password / session cookie). Admin invites are no exception.
   if (doc.password_hash !== null) {
     if (!sessionToken || !checkSession(db, sessionToken, doc.uid)) {
-      return { ok: false, reason: 'password-or-invite-required' };
+      return { ok: false, reason: 'password-required' };
     }
+  }
+
+  if (invite) {
+    const identity = clientId ? { clientId, displayName: invite.display_name } : null;
+    return { ok: true, role: invite.role, identity, invite };
   }
 
   const role: Role = doc.editable_by_anyone === 1 ? 'editor' : 'reader';
@@ -129,4 +146,4 @@ export function authorize(
 
 export type AuthDecision =
   | { ok: true; role: Role; identity: Identity | null; invite: InviteRow | null }
-  | { ok: false; reason: 'password-or-invite-required' | 'forbidden' };
+  | { ok: false; reason: 'password-required' | 'forbidden' };

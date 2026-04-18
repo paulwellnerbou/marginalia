@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Flex } from '@radix-ui/themes';
+import { Flex, IconButton, Tooltip } from '@radix-ui/themes';
+import { CheckIcon, Cross2Icon, TrashIcon } from '@radix-ui/react-icons';
 
 interface Props {
   /** Label shown in the default state (e.g. "Delete"). */
@@ -10,6 +11,8 @@ interface Props {
   size?: '1' | '2' | '3';
   /** Auto-revert to the initial state if no second click arrives in this many ms. */
   timeoutMs?: number;
+  /** Accessible label / tooltip content. */
+  ariaLabel?: string;
   onConfirm: () => void | Promise<void>;
 }
 
@@ -23,6 +26,7 @@ export function ConfirmButton({
   confirmLabel = 'Confirm',
   size = '1',
   timeoutMs = 4000,
+  ariaLabel,
   onConfirm,
 }: Props) {
   const [armed, setArmed] = useState(false);
@@ -38,25 +42,50 @@ export function ConfirmButton({
 
   if (!armed) {
     return (
-      <Button size={size} variant="ghost" color="red" onClick={() => setArmed(true)}>
-        {label}
-      </Button>
+      <Tooltip content={label}>
+        <IconButton
+          size={size}
+          variant="ghost"
+          color="red"
+          aria-label={ariaLabel ?? label}
+          onClick={() => setArmed(true)}
+        >
+          <TrashIcon />
+        </IconButton>
+      </Tooltip>
     );
   }
 
   return (
-    <Flex gap="2" align="center">
-      <Button size={size} variant="ghost" onClick={() => setArmed(false)}>Cancel</Button>
-      <Button
-        size={size}
-        color="red"
-        onClick={() => {
-          setArmed(false);
-          void onConfirm();
-        }}
-      >
-        {confirmLabel}
-      </Button>
+    <Flex gap="2" align="center" className="confirm-pair">
+      <Tooltip content="Cancel delete">
+        <IconButton
+          size={size}
+          variant="soft"
+          color="gray"
+          aria-label="Cancel delete"
+          onClick={() => setArmed(false)}
+        >
+          <Cross2Icon />
+        </IconButton>
+      </Tooltip>
+      <Tooltip content={confirmLabel}>
+        <IconButton
+          size={size}
+          variant="soft"
+          color="red"
+          aria-label={confirmLabel}
+          onClick={() => {
+            setArmed(false);
+            void onConfirm();
+          }}
+        >
+          <CheckIcon />
+        </IconButton>
+      </Tooltip>
+      {/* Keep `label`/`confirmLabel` props for callers, but render icon buttons here. */}
+      <span hidden>{label}</span>
+      <span hidden>{confirmLabel}</span>
     </Flex>
   );
 }

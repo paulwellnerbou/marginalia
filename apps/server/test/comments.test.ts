@@ -32,9 +32,17 @@ describe('comments API', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  /** Alice uploads a doc and receives her admin invite token. */
+  /**
+   * Alice uploads a doc and receives her admin invite token.
+   *
+   * Default `editable_by_anyone: true` so that random testers (Bob, Carol)
+   * can comment without having to carry an explicit invite. The server now
+   * gates comments on role ≥ commentor; a public reader cannot comment.
+   * Tests that specifically want to exercise the public-reader case pass
+   * `editableByAnyone: false` explicitly.
+   */
   let adminToken = '';
-  async function newDoc(markdown: string, editableByAnyone = false): Promise<string> {
+  async function newDoc(markdown: string, editableByAnyone = true): Promise<string> {
     const res = await app.hono.fetch(
       new Request('http://test/api/documents', {
         method: 'POST',
@@ -51,6 +59,23 @@ describe('comments API', () => {
     const h = headersFor(c);
     h.set(INVITE_HEADER, adminToken);
     return h;
+  }
+
+  async function createInvite(
+    uid: string,
+    displayName: string,
+    role: 'admin' | 'editor' | 'collaborator' | 'commentor' | 'reader' = 'commentor',
+  ): Promise<string> {
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/invites`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ display_name: displayName, role }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { invite: { token: string } };
+    return body.invite.token;
   }
 
   async function firstBlockId(uid: string): Promise<string> {
@@ -198,7 +223,9 @@ describe('comments API', () => {
       const res = await app.hono.fetch(
         new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
       );
-      const j = (await res.json()) as { rendered: { blocks: Array<{ id: string; text: string; kind: string }> } };
+      const j = (await res.json()) as {
+        rendered: { blocks: Array<{ id: string; text: string; kind: string }> };
+      };
       return j.rendered.blocks.find((b) => b.kind === 'paragraph')!;
     })();
 
@@ -223,7 +250,9 @@ describe('comments API', () => {
     const res = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
     );
-    const j = (await res.json()) as { rendered: { blocks: Array<{ id: string; text: string; kind: string }> } };
+    const j = (await res.json()) as {
+      rendered: { blocks: Array<{ id: string; text: string; kind: string }> };
+    };
     const para = j.rendered.blocks.find((b) => b.kind === 'paragraph')!;
 
     await addComment(uid, ALICE, { block_id: para.id, quote: 'brown fox' }, 'c');
@@ -248,7 +277,9 @@ describe('comments API', () => {
     const res = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
     );
-    const j = (await res.json()) as { rendered: { blocks: Array<{ id: string; text: string; kind: string }> } };
+    const j = (await res.json()) as {
+      rendered: { blocks: Array<{ id: string; text: string; kind: string }> };
+    };
     const para = j.rendered.blocks.find((b) => b.kind === 'paragraph')!;
 
     await addComment(uid, ALICE, { block_id: para.id, quote: 'brown fox' }, 'c');
@@ -280,14 +311,205 @@ describe('comments API', () => {
 
   // A small sanity check that Carol (no role on the doc) can still read and
   // post comments — doc is public, comments are not restricted.
-  test('anyone can post a comment on a public doc', async () => {
-    const uid = await newDoc('# Public');
+  test('reader on a non-editable public doc cannot post a comment', async () => {
+    const uid = await newDoc('# Public', false);
+    const blockId = await firstBlockId(uid);
+    const r = await addComment(uid, CAROL, { block_id: blockId, quote: 'Public' }, 'hey');
+    expect(r.status).toBe(403);
+  });
+
+  test('editable_by_anyone public doc: anyone posts comments as editor', async () => {
+    const uid = await newDoc('# Public'); // default now: editable_by_anyone=true
     const blockId = await firstBlockId(uid);
     const r = await addComment(uid, CAROL, { block_id: blockId, quote: 'Public' }, 'looks good');
     expect(r.status).toBe(201);
   });
 
-  test('top-level comments can be resolved and unresolved', async () => {
+  test('mentions return pending notifications once and include merged autocomplete names', async () => {
+    const uid = await newDoc('# Title');
+    const bobInvite = await createInvite(uid, 'Bob', 'commentor');
+    const blockId = await firstBlockId(uid);
+
+    const created = await addComment(
+      uid,
+      ALICE,
+      { block_id: blockId, quote: 'Title' },
+      'hello @Bob',
+    );
+    expect(created.status).toBe(201);
+    const cid = (created.body as { comment: { id: string } }).comment.id;
+
+    const first = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        headers: new Headers({
+          [CLIENT_HEADER]: BOB.id,
+          [INVITE_HEADER]: bobInvite,
+        }),
+      }),
+    );
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as {
+      mention_candidates: string[];
+      pending_mentions: string[];
+    };
+    expect(firstBody.mention_candidates).toContain('Alice');
+    expect(firstBody.mention_candidates).toContain('Bob');
+    expect(firstBody.pending_mentions).toEqual([cid]);
+
+    const second = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        headers: new Headers({
+          [CLIENT_HEADER]: BOB.id,
+          [INVITE_HEADER]: bobInvite,
+        }),
+      }),
+    );
+    const secondBody = (await second.json()) as { pending_mentions: string[] };
+    expect(secondBody.pending_mentions).toEqual([]);
+  });
+
+  test('editing a comment only creates a mention notification once per person', async () => {
+    const uid = await newDoc('# Title');
+    const carolInvite = await createInvite(uid, 'Carol', 'commentor');
+    const blockId = await firstBlockId(uid);
+
+    const created = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hello');
+    expect(created.status).toBe(201);
+    const cid = (created.body as { comment: { id: string } }).comment.id;
+
+    const edit = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
+        method: 'PUT',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ body: 'hello @Carol' }),
+      }),
+    );
+    expect(edit.status).toBe(200);
+
+    const first = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        headers: new Headers({
+          [CLIENT_HEADER]: CAROL.id,
+          [INVITE_HEADER]: carolInvite,
+        }),
+      }),
+    );
+    const firstBody = (await first.json()) as { pending_mentions: string[] };
+    expect(firstBody.pending_mentions).toEqual([cid]);
+
+    const editAgain = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
+        method: 'PUT',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ body: 'hello again @Carol' }),
+      }),
+    );
+    expect(editAgain.status).toBe(200);
+
+    const second = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        headers: new Headers({
+          [CLIENT_HEADER]: CAROL.id,
+          [INVITE_HEADER]: carolInvite,
+        }),
+      }),
+    );
+    const secondBody = (await second.json()) as { pending_mentions: string[] };
+    expect(secondBody.pending_mentions).toEqual([]);
+  });
+
+  test('@all mentions every other known person once', async () => {
+    const uid = await newDoc('# Title');
+    const bobInvite = await createInvite(uid, 'Bob', 'commentor');
+    const carolInvite = await createInvite(uid, 'Carol', 'commentor');
+    const blockId = await firstBlockId(uid);
+
+    const created = await addComment(
+      uid,
+      ALICE,
+      { block_id: blockId, quote: 'Title' },
+      'hello @all',
+    );
+    expect(created.status).toBe(201);
+    const cid = (created.body as { comment: { id: string } }).comment.id;
+
+    const bobList = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        headers: new Headers({
+          [CLIENT_HEADER]: BOB.id,
+          [INVITE_HEADER]: bobInvite,
+        }),
+      }),
+    );
+    const bobBody = (await bobList.json()) as { pending_mentions: string[] };
+    expect(bobBody.pending_mentions).toEqual([cid]);
+
+    const carolList = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        headers: new Headers({
+          [CLIENT_HEADER]: CAROL.id,
+          [INVITE_HEADER]: carolInvite,
+        }),
+      }),
+    );
+    const carolBody = (await carolList.json()) as { pending_mentions: string[] };
+    expect(carolBody.pending_mentions).toEqual([cid]);
+  });
+
+  test('root comment author can resolve and unresolve a top-level thread', async () => {
+    const uid = await newDoc('# Title');
+    const blockId = await firstBlockId(uid);
+    const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'question');
+    const cid = (r1.body as { comment: { id: string } }).comment.id;
+
+    const resolveRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${cid}/resolve`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ resolved: true }),
+      }),
+    );
+    expect(resolveRes.status).toBe(200);
+    const resolved = (await resolveRes.json()) as {
+      comment: { resolved_at: number | null; resolved_by_name: string | null };
+    };
+    expect(resolved.comment.resolved_at).toBeGreaterThan(0);
+    expect(resolved.comment.resolved_by_name).toBe('Alice');
+
+    const reopenRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${cid}/resolve`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ resolved: false }),
+      }),
+    );
+    expect(reopenRes.status).toBe(200);
+    const reopened = (await reopenRes.json()) as { comment: { resolved_at: number | null } };
+    expect(reopened.comment.resolved_at).toBeNull();
+  });
+
+  test('admin can resolve a top-level thread they did not author', async () => {
+    const uid = await newDoc('# Title');
+    const blockId = await firstBlockId(uid);
+    const r1 = await addComment(uid, BOB, { block_id: blockId, quote: 'Title' }, 'question');
+    const cid = (r1.body as { comment: { id: string } }).comment.id;
+
+    const resolveRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments/${cid}/resolve`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ resolved: true }),
+      }),
+    );
+    expect(resolveRes.status).toBe(200);
+    const resolved = (await resolveRes.json()) as {
+      comment: { resolved_at: number | null; resolved_by_name: string | null };
+    };
+    expect(resolved.comment.resolved_at).toBeGreaterThan(0);
+    expect(resolved.comment.resolved_by_name).toBe('Alice');
+  });
+
+  test('non-admins cannot resolve someone else’s top-level thread', async () => {
     const uid = await newDoc('# Title');
     const blockId = await firstBlockId(uid);
     const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'question');
@@ -300,21 +522,7 @@ describe('comments API', () => {
         body: JSON.stringify({ resolved: true }),
       }),
     );
-    expect(resolveRes.status).toBe(200);
-    const resolved = (await resolveRes.json()) as { comment: { resolved_at: number | null; resolved_by_name: string | null } };
-    expect(resolved.comment.resolved_at).toBeGreaterThan(0);
-    expect(resolved.comment.resolved_by_name).toBe('Bob');
-
-    const reopenRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${cid}/resolve`, {
-        method: 'POST',
-        headers: headersFor(ALICE),
-        body: JSON.stringify({ resolved: false }),
-      }),
-    );
-    expect(reopenRes.status).toBe(200);
-    const reopened = (await reopenRes.json()) as { comment: { resolved_at: number | null } };
-    expect(reopened.comment.resolved_at).toBeNull();
+    expect(resolveRes.status).toBe(403);
   });
 
   test('resolving a reply is rejected', async () => {

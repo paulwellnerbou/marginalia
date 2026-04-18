@@ -7,10 +7,11 @@ import type { CommentRow, DocumentRow, EditProposalRow } from '../db.js';
 import { reanchor } from '../anchoring.js';
 import {
   authorize,
+  canComment,
+  canEdit,
   parseCookie,
   SESSION_COOKIE,
   type Identity,
-  type Role,
 } from '../auth.js';
 import type { AppDeps } from './documents.js';
 
@@ -57,6 +58,7 @@ async function createProposal(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
   const identity: Identity = decision.identity;
 
   const body = await safeJson(c);
@@ -301,10 +303,6 @@ function loadDoc(db: Database, uid: string | undefined): DocumentRow | null {
 function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
   const sessionToken = parseCookie(c.req.raw.headers.get('cookie'), SESSION_COOKIE);
   return authorize(deps.db, doc, c.req.raw.headers, sessionToken);
-}
-
-function canEdit(role: Role): boolean {
-  return role === 'admin' || role === 'editor';
 }
 
 async function safeJson(c: Context): Promise<Record<string, unknown> | null> {

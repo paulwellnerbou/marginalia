@@ -1,4 +1,4 @@
-import { getClientId, getDisplayName, type Identity } from './identity.js';
+import { type Identity, getClientId, getDisplayName } from './identity.js';
 import { loadInviteToken } from './invite.js';
 
 export interface Anchor {
@@ -20,7 +20,60 @@ export interface RenderedDocument {
   blocks: Array<{ id: string; kind: string; text: string }>;
 }
 
-export type Role = 'admin' | 'editor' | 'reader';
+export interface ExportedDocumentRepresentation {
+  frontmatter: Record<string, unknown>;
+  anchors: Anchor[];
+  toc: TocNode[];
+  assets: Array<{ src: string; line?: number; alt: string | null; kind: 'image' | 'link' }>;
+  mermaid: Array<{ index: number; source: string }>;
+  blocks: Array<{
+    id: string;
+    kind: string;
+    text: string;
+    headingPath: string[];
+    sectionIndex: number;
+    sectionIndexPath: number[];
+  }>;
+  warnings: Array<{ kind: string; message: string; line?: number }>;
+}
+
+export interface ExportedComment {
+  id: string;
+  parent_id: string | null;
+  anchor_block_id: string | null;
+  anchor_quote: string | null;
+  anchor_prefix: string | null;
+  anchor_suffix: string | null;
+  anchor_start_offset: number | null;
+  anchor_end_offset: number | null;
+  anchor_heading_path: string[] | null;
+  anchor_section_index: number | null;
+  anchor_section_index_path: number[] | null;
+  author_client_id: string;
+  author_display_name: string;
+  body: string;
+  status: string;
+  resolved_at: number | null;
+  resolved_by_name: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface DocumentBundle {
+  version: number;
+  kind: 'marginalia.document-bundle';
+  exported_at: number;
+  document: {
+    name: string | null;
+    source: string;
+    editable_by_anyone: boolean;
+    default_theme: string;
+  };
+  representation?: ExportedDocumentRepresentation;
+  comments: ExportedComment[];
+}
+
+export type Role = 'admin' | 'editor' | 'collaborator' | 'commentor' | 'reader';
 
 export interface Document {
   uid: string;
@@ -88,8 +141,9 @@ async function request<T>(
   headers.set('content-type', 'application/json');
 
   const identity = init.identity ?? fallbackIdentity();
-  if (identity) {
-    headers.set('x-marginalia-client', identity.clientId);
+  const clientId = identity?.clientId ?? getClientId();
+  headers.set('x-marginalia-client', clientId);
+  if (identity?.displayName) {
     headers.set('x-marginalia-client-name', encodeHeaderValue(identity.displayName));
   }
 
@@ -122,10 +176,7 @@ function fallbackIdentity(): Identity | null {
 
 // --- documents -------------------------------------------------------
 
-export function uploadDocument(
-  opts: UploadOptions,
-  identity: Identity,
-): Promise<UploadResponse> {
+export function uploadDocument(opts: UploadOptions, identity: Identity): Promise<UploadResponse> {
   return request<UploadResponse>('/api/documents', {
     method: 'POST',
     body: JSON.stringify(opts),
@@ -135,6 +186,13 @@ export function uploadDocument(
 
 export function getDocument(uid: string): Promise<Document> {
   return request<Document>(`/api/documents/${encodeURIComponent(uid)}`, {
+    method: 'GET',
+    docUid: uid,
+  });
+}
+
+export function exportDocumentBundle(uid: string): Promise<DocumentBundle> {
+  return request<DocumentBundle>(`/api/documents/${encodeURIComponent(uid)}/export`, {
     method: 'GET',
     docUid: uid,
   });
@@ -154,10 +212,10 @@ export function updateDocument(
 }
 
 export function getHistory(uid: string): Promise<{ history: HistoryEntry[] }> {
-  return request<{ history: HistoryEntry[] }>(
-    `/api/documents/${encodeURIComponent(uid)}/history`,
-    { method: 'GET', docUid: uid },
-  );
+  return request<{ history: HistoryEntry[] }>(`/api/documents/${encodeURIComponent(uid)}/history`, {
+    method: 'GET',
+    docUid: uid,
+  });
 }
 
 export function authenticate(uid: string, password: string): Promise<void> {
@@ -165,6 +223,17 @@ export function authenticate(uid: string, password: string): Promise<void> {
     method: 'POST',
     body: JSON.stringify({ password }),
     docUid: uid,
+  });
+}
+
+export function importDocumentBundle(
+  bundle: DocumentBundle,
+  identity: Identity,
+): Promise<UploadResponse & { imported_comments: number }> {
+  return request<UploadResponse & { imported_comments: number }>('/api/documents/import', {
+    method: 'POST',
+    body: JSON.stringify(bundle),
+    identity,
   });
 }
 
@@ -190,10 +259,12 @@ export function updateDocumentSettings(
   patch: DocumentSettingsPatch,
   identity: Identity,
 ): Promise<DocumentSettingsResponse> {
-  return request<DocumentSettingsResponse>(
-    `/api/documents/${encodeURIComponent(uid)}/settings`,
-    { method: 'PATCH', body: JSON.stringify(patch), identity, docUid: uid },
-  );
+  return request<DocumentSettingsResponse>(`/api/documents/${encodeURIComponent(uid)}/settings`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+    identity,
+    docUid: uid,
+  });
 }
 
 // --- invites --------------------------------------------------------
@@ -209,10 +280,10 @@ export interface Invite {
 }
 
 export function listInvites(uid: string): Promise<{ invites: Invite[] }> {
-  return request<{ invites: Invite[] }>(
-    `/api/documents/${encodeURIComponent(uid)}/invites`,
-    { method: 'GET', docUid: uid },
-  );
+  return request<{ invites: Invite[] }>(`/api/documents/${encodeURIComponent(uid)}/invites`, {
+    method: 'GET',
+    docUid: uid,
+  });
 }
 
 export function createInvite(
@@ -220,10 +291,12 @@ export function createInvite(
   payload: { display_name: string; role: Role; note?: string | null },
   identity: Identity,
 ): Promise<{ invite: Invite }> {
-  return request<{ invite: Invite }>(
-    `/api/documents/${encodeURIComponent(uid)}/invites`,
-    { method: 'POST', body: JSON.stringify(payload), identity, docUid: uid },
-  );
+  return request<{ invite: Invite }>(`/api/documents/${encodeURIComponent(uid)}/invites`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    identity,
+    docUid: uid,
+  });
 }
 
 export function deleteInvite(uid: string, token: string, identity: Identity): Promise<void> {
@@ -242,6 +315,16 @@ export interface CommentAnchor {
   suffix: string;
   start_offset: number;
   end_offset: number;
+  /** Enclosing heading hierarchy at comment time (normalized heading texts). */
+  heading_path?: string[] | null;
+  /** Position within the innermost section at comment time. */
+  section_index?: number | null;
+  /**
+   * Section index at each enclosing heading level, root → innermost.
+   * Length = heading_path.length + 1. Used as a graceful fallback when the
+   * innermost heading is later renamed/removed.
+   */
+  section_index_path?: number[] | null;
 }
 
 export type CommentStatus = 'active' | 'low-confidence' | 'orphaned';
@@ -259,11 +342,17 @@ export interface Comment {
   updated_at: number;
 }
 
-export function listComments(uid: string): Promise<{ comments: Comment[] }> {
-  return request<{ comments: Comment[] }>(
-    `/api/documents/${encodeURIComponent(uid)}/comments`,
-    { method: 'GET', docUid: uid },
-  );
+export interface ListCommentsResponse {
+  comments: Comment[];
+  mention_candidates: string[];
+  pending_mentions: string[];
+}
+
+export function listComments(uid: string): Promise<ListCommentsResponse> {
+  return request<ListCommentsResponse>(`/api/documents/${encodeURIComponent(uid)}/comments`, {
+    method: 'GET',
+    docUid: uid,
+  });
 }
 
 export function createComment(
@@ -271,10 +360,12 @@ export function createComment(
   payload: { anchor?: CommentAnchor; parent_id?: string; body: string },
   identity: Identity,
 ): Promise<{ comment: Comment }> {
-  return request<{ comment: Comment }>(
-    `/api/documents/${encodeURIComponent(uid)}/comments`,
-    { method: 'POST', body: JSON.stringify(payload), identity, docUid: uid },
-  );
+  return request<{ comment: Comment }>(`/api/documents/${encodeURIComponent(uid)}/comments`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    identity,
+    docUid: uid,
+  });
 }
 
 export function updateComment(

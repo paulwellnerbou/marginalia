@@ -30,6 +30,7 @@ export function EditPage() {
   const [name, setName] = useState<string>(() => getDisplayName() ?? '');
 
   const editorEl = useRef<HTMLDivElement>(null);
+  const previewEl = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
 
   useEffect(() => {
@@ -95,6 +96,52 @@ export function EditPage() {
     return () => clearTimeout(handle);
   }, [source]);
 
+  // Sync scrolling between source and preview
+  useEffect(() => {
+    const scroller = editorEl.current?.querySelector('.cm-scroller');
+    const preview = previewEl.current;
+    if (!scroller || !preview) return;
+
+    let isSyncingLeft = false;
+    let isSyncingRight = false;
+    let timerLeft = 0;
+    let timerRight = 0;
+
+    const onLeftScroll = () => {
+      if (isSyncingRight) return;
+      isSyncingLeft = true;
+      clearTimeout(timerLeft);
+      timerLeft = window.setTimeout(() => { isSyncingLeft = false; }, 50);
+
+      const maxScrollSrc = scroller.scrollHeight - scroller.clientHeight;
+      const maxScrollPreview = preview.scrollHeight - preview.clientHeight;
+      if (maxScrollSrc <= 0) return;
+      preview.scrollTop = (scroller.scrollTop / maxScrollSrc) * maxScrollPreview;
+    };
+
+    const onRightScroll = () => {
+      if (isSyncingLeft) return;
+      isSyncingRight = true;
+      clearTimeout(timerRight);
+      timerRight = window.setTimeout(() => { isSyncingRight = false; }, 50);
+
+      const maxScrollSrc = scroller.scrollHeight - scroller.clientHeight;
+      const maxScrollPreview = preview.scrollHeight - preview.clientHeight;
+      if (maxScrollPreview <= 0) return;
+      scroller.scrollTop = (preview.scrollTop / maxScrollPreview) * maxScrollSrc;
+    };
+
+    scroller.addEventListener('scroll', onLeftScroll, { passive: true });
+    preview.addEventListener('scroll', onRightScroll, { passive: true });
+
+    return () => {
+      scroller.removeEventListener('scroll', onLeftScroll);
+      preview.removeEventListener('scroll', onRightScroll);
+      clearTimeout(timerLeft);
+      clearTimeout(timerRight);
+    };
+  }, [doc, rendered]);
+
   async function handleSave() {
     if (!uid) return;
     const resolved = name.trim();
@@ -149,6 +196,8 @@ export function EditPage() {
     <div className="edit-page">
       <AppBar
         docTitle={`Editing: ${documentTitle(doc)}`}
+        role={doc.role}
+        forcedDisplayName={doc.display_name}
         trailing={
           <>
             <Button variant="soft" color="gray" size="2" asChild>
@@ -180,7 +229,7 @@ export function EditPage() {
       />
       <div className="edit-body">
         <div className="edit-source" ref={editorEl} />
-        <div className="edit-preview">
+        <div className="edit-preview" ref={previewEl}>
           {rendered ? (
             <RenderedDoc rendered={rendered} />
           ) : (

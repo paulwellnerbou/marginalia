@@ -68,6 +68,24 @@
   background: var(--md-color-selection-bg);
 }
 
+.marginalia mark.comment-highlight {
+  background: var(--md-color-selection-bg);
+  color: inherit;
+  padding: 0.05em 0;
+  border-radius: 0.18em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.marginalia mark.comment-highlight[data-comment-thread-id] {
+  cursor: pointer;
+}
+
+.marginalia mark.comment-highlight[data-comment-thread-id]:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
 /* Applied by the viewer when a user clicks a comment thread — flashes the
    anchored block so the user can spot it after the scroll. */
 .marginalia [data-block].anchor-flash {
@@ -94,12 +112,13 @@
 
 .marginalia > :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
 
-.marginalia h1 { font-size: 2.1rem; margin-top: 0; }
-.marginalia h2 { font-size: 1.55rem; }
-.marginalia h3 { font-size: 1.25rem; }
-.marginalia h4 { font-size: 1.05rem; }
-.marginalia h5 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--md-color-fg-muted); }
-.marginalia h6 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--md-color-fg-muted); }
+/* Use `em` so viewer-level text zoom on `.marginalia` scales headings too. */
+.marginalia h1 { font-size: 2.1em; margin-top: 0; }
+.marginalia h2 { font-size: 1.55em; }
+.marginalia h3 { font-size: 1.25em; }
+.marginalia h4 { font-size: 1.05em; }
+.marginalia h5 { font-size: 0.95em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--md-color-fg-muted); }
+.marginalia h6 { font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.06em; color: var(--md-color-fg-muted); }
 
 .marginalia h1 { border-bottom: 1px solid var(--md-color-border); padding-bottom: 0.3em; }
 .marginalia h2 { border-bottom: 1px solid var(--md-color-border); padding-bottom: 0.2em; }

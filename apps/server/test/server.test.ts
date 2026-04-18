@@ -71,6 +71,24 @@ describe('documents API', () => {
     return (await res.json()) as CreateResponse;
   }
 
+  async function authenticateForDoc(
+    uid: string,
+    password: string,
+    client: { id: string; name: string },
+  ): Promise<string> {
+    const authRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/auth`, {
+        method: 'POST',
+        headers: headersFor(client),
+        body: JSON.stringify({ password }),
+      }),
+    );
+    expect(authRes.status).toBe(204);
+    const setCookie = authRes.headers.get('set-cookie') ?? '';
+    expect(setCookie).toContain(SESSION_COOKIE);
+    return setCookie.split(';')[0] ?? '';
+  }
+
   test('upload returns an admin invite URL; admin access via that invite', async () => {
     const created = await upload(CLIENT_A, { markdown: '# Original\n\nBody.' });
     expect(created.uid).toMatch(/^[A-Za-z0-9_-]{22}$/);
@@ -90,50 +108,58 @@ describe('documents API', () => {
     expect(doc.display_name).toBe('Alice');
   });
 
-  test('non-public doc: stranger without invite → 401; with editor invite → editable', async () => {
+  test('password-protected doc: invite AND password are both required', async () => {
     const created = await upload(CLIENT_A, { markdown: '# Hi', password_protected: true });
+    expect(created.password).toBeString();
 
-    // Bob without invite or password → 401
+    // No invite, no password → 401.
     const denied = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}`, { headers: headersFor(CLIENT_B) }),
     );
     expect(denied.status).toBe(401);
 
-    // Alice (admin via invite) creates an editor invite for Bob
+    const aliceCookie = await authenticateForDoc(created.uid, created.password!, CLIENT_A);
+
+    // Alice creates an editor invite for Bob.
     const mkRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}/invites`, {
         method: 'POST',
-        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        headers: withInvite(
+          headersFor(CLIENT_A, { cookie: aliceCookie }),
+          created.admin_invite.token,
+        ),
         body: JSON.stringify({ display_name: 'Bob', role: 'editor' }),
       }),
     );
     expect(mkRes.status).toBe(201);
-    const { invite } = (await mkRes.json()) as {
-      invite: { token: string; role: string; display_name: string; url: string };
-    };
-    expect(invite.role).toBe('editor');
-    expect(invite.url).toBe(`/d/${created.uid}/${invite.token}`);
+    const { invite } = (await mkRes.json()) as { invite: { token: string } };
 
-    // Bob opens the doc via his invite → editor, name forced to Bob
-    const bobView = await app.hono.fetch(
+    // Bob with invite but no password session → still 401 (password required).
+    const inviteOnly = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}`, {
         headers: withInvite(headersFor({ id: CLIENT_B.id, name: 'whatever' }), invite.token),
+      }),
+    );
+    expect(inviteOnly.status).toBe(401);
+
+    const token = await authenticateForDoc(created.uid, created.password!, {
+      id: CLIENT_B.id,
+      name: 'whatever',
+    });
+
+    // Now invite + session cookie → editor role, name forced to Bob.
+    const bobView = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(
+          headersFor({ id: CLIENT_B.id, name: 'whatever' }, { cookie: token }),
+          invite.token,
+        ),
       }),
     );
     expect(bobView.status).toBe(200);
     const bobDoc = (await bobView.json()) as { role: string; display_name: string };
     expect(bobDoc.role).toBe('editor');
     expect(bobDoc.display_name).toBe('Bob');
-
-    // Bob can edit (editor role) — and the git author is "Bob" from the invite.
-    const bobEdit = await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}`, {
-        method: 'PUT',
-        headers: withInvite(headersFor({ id: CLIENT_B.id, name: 'whatever' }), invite.token),
-        body: JSON.stringify({ markdown: '# Hi\n\nBob was here.\n' }),
-      }),
-    );
-    expect(bobEdit.status).toBe(200);
   });
 
   test('reader invite cannot edit', async () => {
@@ -241,7 +267,7 @@ describe('documents API', () => {
     const role = ((await bobView.json()) as { role: string }).role;
     expect(role).toBe('reader');
 
-    // Revoking the last admin invite is refused
+    // Admin invites are not deletable at all.
     const killAdmin = await app.hono.fetch(
       new Request(
         `http://test/api/documents/${created.uid}/invites/${created.admin_invite.token}`,
@@ -251,23 +277,23 @@ describe('documents API', () => {
         },
       ),
     );
-    expect(killAdmin.status).toBe(400);
+    expect(killAdmin.status).toBe(403);
   });
 
-  test('password-protected docs: invite bypasses the password; no-invite needs session', async () => {
+  test('password-protected docs require a password session; invite still controls role', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Secret',
       password_protected: true,
     });
     expect(created.password).toBeString();
 
-    // Invite grants access without password
-    const res = await app.hono.fetch(
+    // Invite alone is not enough.
+    const inviteOnly = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}`, {
         headers: withInvite(headersFor(CLIENT_B), created.admin_invite.token),
       }),
     );
-    expect(res.status).toBe(200);
+    expect(inviteOnly.status).toBe(401);
 
     // No invite, no session → 401
     const denied = await app.hono.fetch(
@@ -275,28 +301,30 @@ describe('documents API', () => {
     );
     expect(denied.status).toBe(401);
 
-    // With the password, /auth grants a session cookie
-    const authRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/auth`, {
-        method: 'POST',
-        headers: headersFor(CLIENT_B),
-        body: JSON.stringify({ password: created.password }),
-      }),
-    );
-    expect(authRes.status).toBe(204);
-    const setCookie = authRes.headers.get('set-cookie');
-    expect(setCookie).toBeString();
-    if (!setCookie) throw new Error('missing set-cookie header');
-    const token = setCookie.split(';')[0]?.split('=')[1];
-    expect(token).toBeString();
-    if (!token) throw new Error('missing session token');
+    const sessionCookie = await authenticateForDoc(created.uid, created.password!, CLIENT_B);
 
+    // With only the password session, Bob is a plain reader.
     const afterAuth = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}`, {
-        headers: headersFor(CLIENT_B, { cookie: `${SESSION_COOKIE}=${token}` }),
+        headers: headersFor(CLIENT_B, { cookie: sessionCookie }),
       }),
     );
     expect(afterAuth.status).toBe(200);
+    expect(((await afterAuth.json()) as { role: string }).role).toBe('reader');
+
+    // With session + invite, the invite controls the effective role/name.
+    const inviteAfterAuth = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(
+          headersFor({ id: CLIENT_B.id, name: 'Whatever' }, { cookie: sessionCookie }),
+          created.admin_invite.token,
+        ),
+      }),
+    );
+    expect(inviteAfterAuth.status).toBe(200);
+    const doc = (await inviteAfterAuth.json()) as { role: string; display_name: string };
+    expect(doc.role).toBe('admin');
+    expect(doc.display_name).toBe('Alice');
   });
 
   test('missing identity header is a 400 on upload', async () => {
@@ -363,6 +391,284 @@ describe('documents API', () => {
     const j2 = (await r2.json()) as { password_protected: boolean; password?: string };
     expect(j2.password_protected).toBe(true);
     expect(j2.password).toBeString();
+  });
+
+  test('DELETE /api/documents/:uid (admin only) removes doc, invites, comments, sessions', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Hi' });
+
+    // Create a comment and a secondary invite so we can assert both are gone.
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    const doc = (await docRes.json()) as { rendered: { blocks: Array<{ id: string }> } };
+    const blockId = doc.rendered.blocks[0]!.id;
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/comments`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Hi' }, body: 'a' }),
+      }),
+    );
+
+    // Non-admin can't delete. Bob is a reader on this public doc (no
+    // invite) → authorize succeeds with role=reader, then the admin check
+    // inside deleteDocument rejects with 403.
+    const denied = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'DELETE',
+        headers: headersFor(CLIENT_B),
+      }),
+    );
+    expect(denied.status).toBe(403);
+
+    const ok = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'DELETE',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(ok.status).toBe(204);
+
+    // Gone from every API surface:
+    for (const path of [`/api/documents/${created.uid}`, `/api/documents/${created.uid}/history`]) {
+      const r = await app.hono.fetch(
+        new Request(`http://test${path}`, {
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        }),
+      );
+      expect(r.status).toBe(404);
+    }
+  });
+
+  test('admin invite cannot be deleted; other invites can', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Hi' });
+
+    // Try to delete the admin invite → 403.
+    const rAdmin = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/invites/${created.admin_invite.token}`,
+        {
+          method: 'DELETE',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        },
+      ),
+    );
+    expect(rAdmin.status).toBe(403);
+    const body = (await rAdmin.json()) as { error: string };
+    expect(body.error).toBe('admin-invite-not-deletable');
+
+    // Create a commentor invite and delete it → 204.
+    const mkRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ display_name: 'Oli', role: 'commentor' }),
+      }),
+    );
+    expect(mkRes.status).toBe(201);
+    const { invite } = (await mkRes.json()) as { invite: { token: string } };
+    const rOli = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites/${invite.token}`, {
+        method: 'DELETE',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(rOli.status).toBe(204);
+  });
+
+  test('role gating: reader cannot comment, commentor can, editor can edit', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Hi' });
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    const block = ((await docRes.json()) as { rendered: { blocks: Array<{ id: string }> } })
+      .rendered.blocks[0]!.id;
+
+    async function mkInvite(role: string) {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/invites`, {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ display_name: role, role }),
+        }),
+      );
+      return ((await res.json()) as { invite: { token: string } }).invite.token;
+    }
+
+    const readerToken = await mkInvite('reader');
+    const commentorToken = await mkInvite('commentor');
+    const editorToken = await mkInvite('editor');
+
+    async function postComment(token: string) {
+      return app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/comments`, {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_B), token),
+          body: JSON.stringify({ anchor: { block_id: block, quote: 'Hi' }, body: 'x' }),
+        }),
+      );
+    }
+
+    expect((await postComment(readerToken)).status).toBe(403);
+    expect((await postComment(commentorToken)).status).toBe(201);
+
+    async function editAs(token: string) {
+      return app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}`, {
+          method: 'PUT',
+          headers: withInvite(headersFor(CLIENT_B), token),
+          body: JSON.stringify({ markdown: '# Edited' }),
+        }),
+      );
+    }
+    expect((await editAs(commentorToken)).status).toBe(403);
+    expect((await editAs(editorToken)).status).toBe(200);
+  });
+
+  test('export + import roundtrip preserves source, name, theme, comments', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Hi\n\nOriginal.\n',
+      name: 'Original Name',
+      default_theme: 'book',
+    });
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    const doc = (await docRes.json()) as {
+      rendered: {
+        blocks: Array<{
+          id: string;
+          headingPath: string[];
+          sectionIndex: number;
+          sectionIndexPath: number[];
+        }>;
+      };
+    };
+    const firstBlock = doc.rendered.blocks[0]!;
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/comments`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: {
+            block_id: firstBlock.id,
+            quote: 'Hi',
+            heading_path: firstBlock.headingPath,
+            section_index: firstBlock.sectionIndex,
+            section_index_path: firstBlock.sectionIndexPath,
+          },
+          body: 'export me',
+        }),
+      }),
+    );
+
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(exportRes.status).toBe(200);
+    const bundle = (await exportRes.json()) as {
+      version: number;
+      kind: string;
+      document: { name: string | null; source: string; default_theme: string };
+      representation: {
+        blocks: Array<{ id: string; text: string }>;
+        anchors: Array<{ id: string; text: string }>;
+      };
+      comments: Array<{
+        body: string;
+        anchor_heading_path: string[] | null;
+        anchor_section_index: number | null;
+        anchor_section_index_path: number[] | null;
+      }>;
+    };
+    expect(bundle.kind).toBe('marginalia.document-bundle');
+    expect(bundle.version).toBe(2);
+    expect(bundle.document.name).toBe('Original Name');
+    expect(bundle.document.source).toContain('Original.');
+    expect(bundle.document.default_theme).toBe('book');
+    expect(bundle.representation.blocks[0]!.text).toBe('Hi');
+    expect(bundle.representation.anchors[0]!.id).toBe('hi');
+    expect(bundle.comments).toHaveLength(1);
+    expect(bundle.comments[0]!.anchor_heading_path).toEqual(firstBlock.headingPath);
+    expect(bundle.comments[0]!.anchor_section_index).toBe(firstBlock.sectionIndex);
+    expect(bundle.comments[0]!.anchor_section_index_path).toEqual(firstBlock.sectionIndexPath);
+
+    // Import: anonymous-ish (Carol) creates a new doc from the bundle.
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: headersFor(CLIENT_C),
+        body: JSON.stringify(bundle),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as {
+      uid: string;
+      admin_invite: { token: string };
+      imported_comments: number;
+    };
+    expect(imported.imported_comments).toBe(1);
+
+    const getRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}`, {
+        headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
+      }),
+    );
+    const dupe = (await getRes.json()) as { source: string; name: string | null };
+    expect(dupe.source).toContain('Original.');
+    expect(dupe.name).toBe('Original Name');
+  });
+
+  test('import accepts legacy v1 bundles without representation', async () => {
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: headersFor(CLIENT_C),
+        body: JSON.stringify({
+          version: 1,
+          kind: 'marginalia.document-bundle',
+          exported_at: Date.now(),
+          document: {
+            name: 'Legacy',
+            source: '# Legacy\n\nStill works.\n',
+            editable_by_anyone: true,
+            default_theme: 'technical',
+          },
+          comments: [],
+        }),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+
+    const imported = (await importRes.json()) as {
+      uid: string;
+      name: string | null;
+      admin_invite: { token: string };
+    };
+    expect(imported.name).toBe('Legacy');
+
+    const getRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}`, {
+        headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
+      }),
+    );
+    expect(getRes.status).toBe(200);
+    const doc = (await getRes.json()) as {
+      source: string;
+      editable_by_anyone: boolean;
+      default_theme: string;
+    };
+    expect(doc.source).toContain('Still works.');
+    expect(doc.editable_by_anyone).toBe(true);
+    expect(doc.default_theme).toBe('technical');
   });
 
   test('serves the built SPA and falls back to index.html for document routes', async () => {

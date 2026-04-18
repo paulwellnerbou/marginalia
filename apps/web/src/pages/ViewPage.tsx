@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Container, Text } from '@radix-ui/themes';
+import { Button, Container, Text } from '@radix-ui/themes';
 import {
   getDocument,
   authenticate,
@@ -15,7 +15,6 @@ import { reportError } from '../lib/log.js';
 import { recordVisit } from '../lib/recent-docs.js';
 import { AppBar } from '../components/AppBar.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
-import { setDisplayName as persistDisplayName } from '../lib/identity.js';
 
 export function ViewPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
@@ -36,9 +35,6 @@ export function ViewPage() {
       try {
         const d = await getDocument(uid);
         if (!cancelled) setDoc(d);
-        // Server forces a display name when the invite carries one; write
-        // that into localStorage so edits/comments use it without asking.
-        if (d.display_name) persistDisplayName(d.display_name);
       } catch (err) {
         if (cancelled) return;
         reportError('ViewPage.load', err, { uid });
@@ -123,5 +119,13 @@ export function ViewPage() {
     );
   }
 
-  return <DocumentLayout doc={doc} onDocSettingsChanged={handleSettingsChanged} />;
+  return (
+    <DocumentLayout doc={doc} onDocSettingsChanged={handleSettingsChanged}>
+      {(doc.role === 'admin' || doc.role === 'editor' || doc.editable_by_anyone) && (
+        <Button variant="soft" asChild>
+          <Link to={`/d/${doc.uid}/edit`}>Edit</Link>
+        </Button>
+      )}
+    </DocumentLayout>
+  );
 }
