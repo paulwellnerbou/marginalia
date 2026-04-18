@@ -94,7 +94,7 @@ function ComposerBody({
         before accepting.
       </Dialog.Description>
 
-      <Flex direction="column" gap="3" className="edit-proposal-composer">
+      <Flex direction="column" gap="3" className="edit-proposal-composer composer">
         <div className="quote">
           “{target.block_text.slice(0, 240)}
           {target.block_text.length > 240 ? '…' : ''}”
@@ -105,7 +105,8 @@ function ComposerBody({
             <Text as="label" size="2" htmlFor="proposal-name">Your display name</Text>
             <TextField.Root
               id="proposal-name"
-              size="2"
+              className="composer-name-field"
+              size="1"
               placeholder="Your display name"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -119,10 +120,11 @@ function ComposerBody({
           <Text as="label" size="2" htmlFor="proposal-text">Edited markdown</Text>
           <TextArea
             id="proposal-text"
+            className="composer-body-field proposal-source-field"
             value={value}
             onChange={(e) => setValue(e.target.value)}
             rows={8}
-            size="2"
+            size="1"
             autoFocus={!needsName}
           />
         </Flex>
@@ -131,11 +133,12 @@ function ComposerBody({
           <Text as="label" size="2" htmlFor="proposal-rationale">Reason (optional)</Text>
           <TextArea
             id="proposal-rationale"
+            className="composer-body-field"
             value={rationale}
             onChange={(e) => setRationale(e.target.value)}
             placeholder="Why should this change be made?"
             rows={3}
-            size="2"
+            size="1"
           />
         </Flex>
       </Flex>

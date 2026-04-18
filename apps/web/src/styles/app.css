@@ -1460,18 +1460,22 @@ button.primary.small {
  * Edit proposals
  * ============================================================ */
 
-.edit-proposal-composer {
-  border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.1));
-  border-radius: 6px;
-  padding: 0.75rem;
-  margin-bottom: 0.75rem;
-  background: var(--ui-bg-soft, rgba(0, 0, 0, 0.02));
-}
+/* The composer lives inside a Dialog; no extra frame needed. The
+   nested .composer .composer-body-field rule applies the same font /
+   padding / border / resize-vertical treatment the comment composer
+   uses, so the two look identical. */
 .edit-proposal-composer .quote {
   font-style: italic;
-  color: var(--ui-fg-subtle, rgba(0, 0, 0, 0.6));
-  font-size: 0.85rem;
-  margin-top: 0.25rem;
+  color: var(--ui-fg-muted);
+  font-size: 0.9em;
+}
+/* Markdown source deserves a monospace face so indentation and fences
+   are readable. Sized slightly larger than the rationale field for the
+   same reason — it's the primary field users type into. */
+.edit-proposal-composer .proposal-source-field :is(textarea, .rt-TextAreaInput) {
+  font-family: var(--md-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 0.875rem;
+  min-height: calc(var(--ui-control-height) * 5);
 }
 
 .proposals-section {
