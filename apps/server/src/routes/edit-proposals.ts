@@ -21,6 +21,7 @@ export function editProposalsRouter(deps: AppDeps): Hono {
 
   r.get('/:uid/edit-proposals', async (c) => listProposals(c, deps));
   r.post('/:uid/edit-proposals', async (c) => createProposal(c, deps));
+  r.patch('/:uid/edit-proposals/:pid', async (c) => editProposal(c, deps));
   r.delete('/:uid/edit-proposals/:pid', async (c) => deleteProposal(c, deps));
   r.post('/:uid/edit-proposals/:pid/accept', async (c) => acceptProposal(c, deps));
   r.post('/:uid/edit-proposals/:pid/reject', async (c) => rejectProposal(c, deps));
@@ -100,6 +101,59 @@ async function createProposal(c: Context, deps: AppDeps) {
     identity.clientId,
   );
   return c.json({ edit_proposal: wire }, 201);
+}
+
+// --- delete ----------------------------------------------------------
+
+// --- edit (rationale only) ------------------------------------------
+
+async function editProposal(c: Context, deps: AppDeps) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+
+  const pid = c.req.param('pid');
+  if (!pid) return c.json({ error: 'not-found' }, 404);
+  const row = db
+    .prepare('SELECT * FROM edit_proposals WHERE id = ? AND doc_uid = ? AND deleted_at IS NULL')
+    .get(pid, doc.uid) as EditProposalRow | undefined;
+  if (!row) return c.json({ error: 'not-found' }, 404);
+  if (row.author_client_id !== decision.identity.clientId) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+
+  const body = await safeJson(c);
+  if (!body) return c.json({ error: 'invalid-body' }, 400);
+
+  // Only the rationale is editable — the proposed_text defines a concrete
+  // patch and shouldn't silently change after reviewers have seen it.
+  const rawRationale = body.rationale;
+  const rationale =
+    rawRationale === null
+      ? null
+      : typeof rawRationale === 'string'
+        ? rawRationale.trim().slice(0, 2000) || null
+        : undefined;
+  if (rationale === undefined) return c.json({ error: 'rationale-required' }, 400);
+
+  const now = Date.now();
+  db.prepare('UPDATE edit_proposals SET rationale = ?, updated_at = ? WHERE id = ?').run(
+    rationale,
+    now,
+    pid,
+  );
+  const updated = db.prepare('SELECT * FROM edit_proposals WHERE id = ?').get(pid) as EditProposalRow;
+  const wire = toWire(updated);
+  deps.realtime.broadcast(
+    doc.uid,
+    { type: 'edit_proposal.updated', edit_proposal: wire },
+    decision.identity.clientId,
+  );
+  return c.json({ edit_proposal: wire });
 }
 
 // --- delete ----------------------------------------------------------

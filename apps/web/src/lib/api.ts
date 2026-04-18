@@ -332,6 +332,7 @@ export type CommentStatus = 'active' | 'low-confidence' | 'orphaned';
 export interface Comment {
   id: string;
   parent_id: string | null;
+  parent_proposal_id: string | null;
   anchor: CommentAnchor | null;
   author: { client_id: string; display_name: string };
   body: string;
@@ -357,7 +358,12 @@ export function listComments(uid: string): Promise<ListCommentsResponse> {
 
 export function createComment(
   uid: string,
-  payload: { anchor?: CommentAnchor; parent_id?: string; body: string },
+  payload: {
+    anchor?: CommentAnchor;
+    parent_id?: string;
+    parent_proposal_id?: string;
+    body: string;
+  },
   identity: Identity,
 ): Promise<{ comment: Comment }> {
   return request<{ comment: Comment }>(`/api/documents/${encodeURIComponent(uid)}/comments`, {
@@ -433,6 +439,18 @@ export function createEditProposal(
   return request<{ edit_proposal: EditProposal }>(
     `/api/documents/${encodeURIComponent(uid)}/edit-proposals`,
     { method: 'POST', body: JSON.stringify(payload), identity, docUid: uid },
+  );
+}
+
+export function updateEditProposal(
+  uid: string,
+  pid: string,
+  patch: { rationale: string | null },
+  identity: Identity,
+): Promise<{ edit_proposal: EditProposal }> {
+  return request<{ edit_proposal: EditProposal }>(
+    `/api/documents/${encodeURIComponent(uid)}/edit-proposals/${encodeURIComponent(pid)}`,
+    { method: 'PATCH', body: JSON.stringify(patch), identity, docUid: uid },
   );
 }
 

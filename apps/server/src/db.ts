@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS comments (
   id                    TEXT PRIMARY KEY,
   doc_uid               TEXT NOT NULL,
   parent_id             TEXT,
+  parent_proposal_id    TEXT,            -- reply to an edit proposal; mutually exclusive with parent_id + anchor
   anchor_block_id       TEXT,
   anchor_quote          TEXT,
   anchor_prefix         TEXT,
@@ -152,6 +153,7 @@ export interface CommentRow {
   id: string;
   doc_uid: string;
   parent_id: string | null;
+  parent_proposal_id: string | null;
   anchor_block_id: string | null;
   anchor_quote: string | null;
   anchor_prefix: string | null;
@@ -211,6 +213,7 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments', 'anchor_heading_path', 'TEXT');
   ensureColumn(db, 'comments', 'anchor_section_index', 'INTEGER');
   ensureColumn(db, 'comments', 'anchor_section_index_path', 'TEXT');
+  ensureColumn(db, 'comments', 'parent_proposal_id', 'TEXT');
   return db;
 }
 

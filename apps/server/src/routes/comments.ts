@@ -70,6 +70,11 @@ async function createComment(c: Context, deps: AppDeps) {
   }
 
   const parentId = asString(body.parent_id);
+  const parentProposalId = asString(body.parent_proposal_id);
+
+  if (parentId && parentProposalId) {
+    return c.json({ error: 'parent-conflict' }, 400);
+  }
 
   if (parentId) {
     const parent = db
@@ -79,10 +84,26 @@ async function createComment(c: Context, deps: AppDeps) {
     if (parent.parent_id !== null) return c.json({ error: 'nested-replies' }, 400);
   }
 
+  if (parentProposalId) {
+    const parent = db
+      .prepare(
+        'SELECT id FROM edit_proposals WHERE id = ? AND doc_uid = ? AND deleted_at IS NULL',
+      )
+      .get(parentProposalId, doc.uid) as { id: string } | undefined;
+    if (!parent) return c.json({ error: 'parent-proposal-not-found' }, 400);
+  }
+
   const id = newCommentId();
   const now = Date.now();
 
-  if (parentId) {
+  if (parentProposalId) {
+    db.prepare(
+      `INSERT INTO comments
+         (id, doc_uid, parent_proposal_id, author_client_id, author_display_name,
+          body, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+    ).run(id, doc.uid, parentProposalId, identity.clientId, identity.displayName, text, now, now);
+  } else if (parentId) {
     db.prepare(
       `INSERT INTO comments
          (id, doc_uid, parent_id, author_client_id, author_display_name,
@@ -346,12 +367,13 @@ function parseIntArray(raw: string | null): number[] | null {
 }
 
 export function toWire(row: CommentRow): Record<string, unknown> {
+  const hasAnchor = row.parent_id === null && row.parent_proposal_id === null;
   return {
     id: row.id,
     parent_id: row.parent_id,
-    anchor: row.parent_id
-      ? null
-      : {
+    parent_proposal_id: row.parent_proposal_id,
+    anchor: hasAnchor
+      ? {
           block_id: row.anchor_block_id,
           quote: row.anchor_quote,
           prefix: row.anchor_prefix,
@@ -361,7 +383,8 @@ export function toWire(row: CommentRow): Record<string, unknown> {
           heading_path: parseHeadingPath(row.anchor_heading_path),
           section_index: row.anchor_section_index,
           section_index_path: parseIntArray(row.anchor_section_index_path),
-        },
+        }
+      : null,
     author: { client_id: row.author_client_id, display_name: row.author_display_name },
     body: row.body,
     status: row.status,

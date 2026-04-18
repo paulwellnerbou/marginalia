@@ -17,6 +17,7 @@ import {
   listEditProposals,
   createEditProposal as apiCreateProposal,
   deleteEditProposal as apiDeleteProposal,
+  updateEditProposal as apiUpdateProposal,
   acceptEditProposal as apiAcceptProposal,
   rejectEditProposal as apiRejectProposal,
   getDocument,
@@ -249,6 +250,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     async (payload: {
       anchor?: CommentAnchor;
       parent_id?: string;
+      parent_proposal_id?: string;
       body: string;
       display_name?: string;
     }) => {
@@ -372,6 +374,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         setProposals((prev) => prev.map((p) => (p.id === id ? res.edit_proposal : p)));
       } catch (err) {
         reportError('DocumentLayout.rejectProposal', err, { id });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName],
+  );
+
+  const onEditProposalRationale = useCallback(
+    async (id: string, rationale: string | null) => {
+      const identity = resolveIdentity();
+      if (!identity) return;
+      try {
+        const res = await apiUpdateProposal(doc.uid, id, { rationale }, identity);
+        setProposals((prev) => prev.map((p) => (p.id === id ? res.edit_proposal : p)));
+      } catch (err) {
+        reportError('DocumentLayout.editProposalRationale', err, { id });
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -651,6 +668,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onAcceptProposal={onAcceptProposal}
                   onRejectProposal={onRejectProposal}
                   onDeleteProposal={onDeleteProposal}
+                  onEditProposalRationale={onEditProposalRationale}
                   onScrollToAnchor={scrollToAnchor}
                 />
               </Tabs.Content>

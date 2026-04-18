@@ -51,6 +51,7 @@ interface Props {
   onCreate: (payload: {
     anchor?: CommentAnchor;
     parent_id?: string;
+    parent_proposal_id?: string;
     body: string;
     display_name?: string;
   }) => Promise<void>;
@@ -65,6 +66,7 @@ interface Props {
   onAcceptProposal: (id: string) => Promise<void>;
   onRejectProposal: (id: string) => Promise<void>;
   onDeleteProposal: (id: string) => Promise<void>;
+  onEditProposalRationale: (id: string, rationale: string | null) => Promise<void>;
   /** Scroll the document pane to a block and flash it. */
   onScrollToAnchor: (blockId: string) => void;
 }
@@ -100,8 +102,26 @@ export function CommentsPane(props: Props) {
     onAcceptProposal,
     onRejectProposal,
     onDeleteProposal,
+    onEditProposalRationale,
     onScrollToAnchor,
   } = props;
+  // Replies pinned to a specific proposal are rendered under that
+  // proposal, not as part of the normal anchored-comment threads.
+  const proposalReplies = useMemo(() => {
+    const by = new Map<string, Comment[]>();
+    for (const c of comments) {
+      if (!c.parent_proposal_id) continue;
+      const list = by.get(c.parent_proposal_id);
+      if (list) list.push(c);
+      else by.set(c.parent_proposal_id, [c]);
+    }
+    for (const list of by.values()) list.sort((a, b) => a.created_at - b.created_at);
+    return by;
+  }, [comments]);
+  const commentsWithoutProposalReplies = useMemo(
+    () => comments.filter((c) => !c.parent_proposal_id),
+    [comments],
+  );
   const { activeProposals, decidedProposals } = useMemo(
     () => groupProposals(proposals),
     [proposals],
@@ -111,7 +131,10 @@ export function CommentsPane(props: Props) {
   const blockRanges = useMemo(() => locateAllBlocks(docSource), [docSource]);
 
   const [sortMode, setSortMode] = useState<CommentSortMode>('document');
-  const { active, orphans } = useMemo(() => groupByAnchor(comments, sortMode), [comments, sortMode]);
+  const { active, orphans } = useMemo(
+    () => groupByAnchor(commentsWithoutProposalReplies, sortMode),
+    [commentsWithoutProposalReplies, sortMode],
+  );
   const [collapsedThreads, setCollapsedThreads] = useState<Set<string>>(new Set());
   const [collapsedReplies, setCollapsedReplies] = useState<Set<string>>(new Set());
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null);
@@ -227,13 +250,19 @@ export function CommentsPane(props: Props) {
             <EditProposalItem
               key={p.id}
               proposal={p}
+              replies={proposalReplies.get(p.id) ?? []}
               docSource={docSource}
               blockRanges={blockRanges}
               canEdit={canEdit}
+              canComment={canComment}
               isDocAdmin={isDocAdmin}
               onAccept={onAcceptProposal}
               onReject={onRejectProposal}
               onDelete={onDeleteProposal}
+              onEditRationale={onEditProposalRationale}
+              onReply={(pid, body) => onCreate({ parent_proposal_id: pid, body })}
+              onEditReply={onEdit}
+              onDeleteReply={onDelete}
               onScrollToAnchor={onScrollToAnchor}
             />
           ))}
@@ -247,13 +276,19 @@ export function CommentsPane(props: Props) {
             <EditProposalItem
               key={p.id}
               proposal={p}
+              replies={proposalReplies.get(p.id) ?? []}
               docSource={docSource}
               blockRanges={blockRanges}
               canEdit={canEdit}
+              canComment={canComment}
               isDocAdmin={isDocAdmin}
               onAccept={onAcceptProposal}
               onReject={onRejectProposal}
               onDelete={onDeleteProposal}
+              onEditRationale={onEditProposalRationale}
+              onReply={(pid, body) => onCreate({ parent_proposal_id: pid, body })}
+              onEditReply={onEdit}
+              onDeleteReply={onDelete}
               onScrollToAnchor={onScrollToAnchor}
             />
           ))}
@@ -503,19 +538,6 @@ function AnchorGroupView({
           {showThread ? <ChevronDownIcon /> : <ChevronRightIcon />}
           {showThread ? 'Collapse thread' : 'Expand thread'}
         </Button>
-        {canToggleReplies && (
-          <Button
-            size="1"
-            variant="ghost"
-            color="gray"
-            className="thread-collapse-button"
-            aria-expanded={showReplies}
-            onClick={onToggleRepliesCollapsed}
-          >
-            {showReplies ? <ChevronDownIcon /> : <ChevronRightIcon />}
-            {showReplies ? 'Collapse replies' : 'Expand replies'}
-          </Button>
-        )}
         <Text size="1" color="gray">
           {group.replies.length === 0
             ? 'No replies'
@@ -563,6 +585,19 @@ function AnchorGroupView({
             onDelete={onDelete}
             onQuote={canComment ? handleQuote : undefined}
           />
+          {canToggleReplies && (
+            <Button
+              size="1"
+              variant="ghost"
+              color="gray"
+              className="thread-collapse-button"
+              aria-expanded={showReplies}
+              onClick={onToggleRepliesCollapsed}
+            >
+              {showReplies ? <ChevronDownIcon /> : <ChevronRightIcon />}
+              {showReplies ? 'Collapse replies' : 'Expand replies'}
+            </Button>
+          )}
           {showReplies &&
             group.replies.map((r) => (
               <CommentItem
