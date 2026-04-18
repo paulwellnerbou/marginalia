@@ -3,6 +3,10 @@ WORKDIR /app
 
 COPY . .
 RUN bun install --frozen-lockfile
+# Build-time env vars injected from CI (e.g. GitHub Actions build-args).
+# VITE_* vars are baked into the frontend bundle by Vite at build time.
+ARG IMPRINT_MD
+ENV VITE_IMPRINT_MD=$IMPRINT_MD
 RUN bun run build
 
 FROM oven/bun:1.3.12-debian AS runner

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Box, Flex, IconButton, Select, Slider, Tabs, Text, Tooltip } from '@radix-ui/themes';
+import { Badge, Box, Button, Flex, IconButton, Select, Slider, Tabs, Text, Tooltip } from '@radix-ui/themes';
 import { ChevronLeftIcon, ChevronRightIcon } from '@radix-ui/react-icons';
 import type {
   CommentAnchor,
@@ -415,6 +415,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   };
 
   const title = documentTitle(doc);
+  const threadCount = useMemo(
+    () => comments.filter((c) => c.parent_id === null).length,
+    [comments],
+  );
   const commentHighlights = useMemo(() => {
     const fromComments: Array<{
       threadId?: string;
@@ -530,6 +534,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               <Text size="1" color="gray" style={{ minWidth: '4ch' }}>
                 {textZoom}%
               </Text>
+              <Button
+                size="1"
+                variant="ghost"
+                onClick={() => setTextZoom(100)}
+                disabled={textZoom === 100}
+              >
+                Reset
+              </Button>
             </Flex>
             <span className="spacer" />
             {error && (
@@ -596,7 +608,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             >
               <Flex align="center" px="2" pt="2" className="pane-header">
                 <Tabs.List size="1">
-                  <Tabs.Trigger value="comments">Comments</Tabs.Trigger>
+                  <Tabs.Trigger value="comments">
+                    <Flex align="center" gap="2">
+                      Threads
+                      {threadCount > 0 && (
+                        <Badge size="1" variant="soft" color="gray" radius="full">
+                          {threadCount}
+                        </Badge>
+                      )}
+                    </Flex>
+                  </Tabs.Trigger>
                   <Tabs.Trigger value="history">History</Tabs.Trigger>
                 </Tabs.List>
                 <span className="spacer" />

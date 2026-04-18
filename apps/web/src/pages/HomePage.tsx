@@ -1,3 +1,4 @@
+import ReactMarkdown from 'react-markdown';
 import {
   ChatBubbleIcon,
   Cross2Icon,
@@ -83,7 +84,7 @@ export function HomePage() {
               <Heading size="9" align="center" className="landing-title">
                 Write beautifully.
                 <br />
-                Share it like a link.
+                Full-featured Markdown documents for collaboration.
               </Heading>
               <Text size="5" color="gray" align="center" style={{ maxWidth: '52ch' }}>
                 Marginalia renders your Markdown with book-quality typography, tracks every save in
@@ -122,8 +123,8 @@ export function HomePage() {
               <FeatureCard
                 icon={<PaperPlaneIcon width="20" height="20" />}
                 iconVariant="teal"
-                title="Invite-link access"
-                body="Create per-recipient links with a name and a role. The URL is the capability — no accounts, no passwords to remember."
+                title="Local-first identities"
+                body="People are managed in this browser. No online accounts, no sign-ups, and no external profile store. Share invite links and collaborate anonymously."
               />
             </Grid>
           </Container>
@@ -165,6 +166,8 @@ export function HomePage() {
             )}
           </Container>
         </section>
+
+        <LandingFooter />
       </div>
 
       <UploadDialog
@@ -178,6 +181,107 @@ export function HomePage() {
         }}
       />
     </>
+  );
+}
+
+const IMPRINT_MD = import.meta.env.VITE_IMPRINT_MD as string | undefined;
+
+function LandingFooter() {
+  return (
+    <footer className="landing-footer">
+      <Container size="4" px="4" py="2">
+        <Flex
+          justify="between"
+          align={{ initial: 'start', sm: 'center' }}
+          gap="3"
+          wrap="wrap"
+          className="landing-footer-row"
+        >
+          <Text size="1" color="gray">
+            Marginalia is local-first and does not use analytics or tracking.
+          </Text>
+          <Flex gap="3" wrap="wrap" className="landing-footer-links">
+            <Dialog.Root>
+              <Dialog.Trigger className="landing-footer-link"><span>Imprint</span></Dialog.Trigger>
+              <Dialog.Content maxWidth="620px">
+                <Dialog.Title>Imprint</Dialog.Title>
+                <Box className="imprint-md">
+                  {IMPRINT_MD ? (
+                    <ReactMarkdown>{IMPRINT_MD}</ReactMarkdown>
+                  ) : (
+                    <Flex direction="column" gap="3">
+                      <Text as="p" size="2">
+                        This instance is self-hosted software. The responsible operator is the
+                        person or organization running this installation.
+                      </Text>
+                      <Text as="p" size="2" color="gray">
+                        Set <Code>VITE_IMPRINT_MD</Code> at build time to show operator details
+                        here. The value is rendered as Markdown.
+                      </Text>
+                    </Flex>
+                  )}
+                </Box>
+              </Dialog.Content>
+            </Dialog.Root>
+
+            <Dialog.Root>
+              <Dialog.Trigger className="landing-footer-link"><span>Privacy</span></Dialog.Trigger>
+              <Dialog.Content maxWidth="680px">
+                <Dialog.Title>Privacy</Dialog.Title>
+                <Dialog.Description size="2" color="gray" mb="4">
+                  Short privacy notice for this app.
+                </Dialog.Description>
+                <Flex direction="column" gap="3">
+                  <Text as="p" size="2">
+                    We do not use third-party analytics, ad trackers, or behavioral profiling.
+                  </Text>
+                  <Text as="p" size="2">
+                    We do not require online user accounts. Display names and recent-document
+                    entries are stored in your browser so collaboration remains local-first.
+                  </Text>
+                  <Text as="p" size="2">
+                    The only data processed on the server is what collaboration needs: document
+                    content, comment threads, invite roles, and optional document passwords when
+                    enabled.
+                  </Text>
+                  <Text as="p" size="2">
+                    Data is retained until removed by an administrator of the corresponding
+                    document or by the operator of this deployment.
+                  </Text>
+                </Flex>
+              </Dialog.Content>
+            </Dialog.Root>
+
+            <Dialog.Root>
+              <Dialog.Trigger className="landing-footer-link"><span>Terms of Service</span></Dialog.Trigger>
+              <Dialog.Content maxWidth="680px">
+                <Dialog.Title>Terms of Service</Dialog.Title>
+                <Dialog.Description size="2" color="gray" mb="4">
+                  Basic terms for using this collaboration app.
+                </Dialog.Description>
+                <Flex direction="column" gap="3">
+                  <Text as="p" size="2">
+                    Use this service only for lawful content and lawful collaboration.
+                  </Text>
+                  <Text as="p" size="2">
+                    Invite links are access capabilities. Keep them private and share them only
+                    with people who should access the document.
+                  </Text>
+                  <Text as="p" size="2">
+                    The service is provided without guaranteed uptime, permanence, or fitness for a
+                    particular purpose unless separately agreed by the operator.
+                  </Text>
+                  <Text as="p" size="2">
+                    You are responsible for the content you upload and for respecting the rights
+                    and privacy of collaborators.
+                  </Text>
+                </Flex>
+              </Dialog.Content>
+            </Dialog.Root>
+          </Flex>
+        </Flex>
+      </Container>
+    </footer>
   );
 }
 

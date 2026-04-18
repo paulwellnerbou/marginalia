@@ -695,6 +695,59 @@ button.primary:disabled {
   text-align: center;
 }
 
+.landing-footer {
+  border-top: 1px solid var(--gray-a5);
+  background:
+    linear-gradient(90deg, var(--accent-a2) 0%, transparent 55%, var(--teal-a2) 100%),
+    var(--color-panel-solid);
+}
+
+.landing-footer-row {
+  min-height: 40px;
+}
+
+.landing-footer-links {
+  align-items: center;
+}
+
+.landing-footer-link {
+  border: 0;
+  background: transparent;
+  color: var(--accent-11);
+  font: inherit;
+  font-size: var(--font-size-1);
+  padding: 0;
+  line-height: 1;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.landing-footer-link:hover {
+  color: var(--teal-11);
+}
+
+.imprint-md p {
+  margin: 0 0 0.6em;
+  font-size: var(--font-size-2);
+}
+.imprint-md p:last-child {
+  margin-bottom: 0;
+}
+.imprint-md h1, .imprint-md h2, .imprint-md h3 {
+  font-size: var(--font-size-3);
+  font-weight: 600;
+  margin: 0.8em 0 0.3em;
+}
+.imprint-md ul, .imprint-md ol {
+  padding-left: 1.4em;
+  margin: 0.4em 0;
+  font-size: var(--font-size-2);
+}
+.imprint-md a {
+  color: var(--accent-11);
+}
+
 /* Cards in the recent grid become hover-able: whole card is clickable. */
 .recent-card {
   cursor: pointer;
@@ -719,6 +772,12 @@ button.primary:disabled {
 .comments-pane {
   padding: 0.8rem 0.9rem 3rem;
   font-size: 0.9rem;
+}
+
+.comments-pane-toolbar {
+  margin: 0 0 0.75rem 0;
+  padding: 0.1rem 0 0.6rem 0;
+  border-bottom: 1px solid var(--ui-border);
 }
 
 .anchor-group + .anchor-group,

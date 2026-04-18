@@ -160,7 +160,9 @@ export function RenderedDoc({
   // No `dangerouslySetInnerHTML` — see comment above.
   return (
     <>
-      <article ref={ref} className="marginalia" style={style} />
+      <div className="marginalia-theme">
+        <article ref={ref} className="marginalia" style={style} />
+      </div>
       <ImageLightbox image={lightbox} onClose={() => setLightbox(null)} />
     </>
   );

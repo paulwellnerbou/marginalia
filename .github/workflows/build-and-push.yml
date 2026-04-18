@@ -102,6 +102,8 @@ jobs:
           push: ${{ steps.push-policy.outputs.should_push == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            IMPRINT_MD=${{ vars.IMPRINT_MD }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
