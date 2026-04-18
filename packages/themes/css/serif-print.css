@@ -54,3 +54,39 @@
     page-break-inside: avoid;
   }
 }
+
+/* ------------------------------------------------------------------
+ * DARK VARIANT — neutral screen preview; print output stays light.
+ * ------------------------------------------------------------------ */
+
+[data-appearance='dark'] .marginalia-theme,
+[data-appearance='dark'] .marginalia {
+  --md-color-fg: #e8e6e1;
+  --md-color-fg-muted: #a1a09c;
+  --md-color-bg: transparent;
+  --md-color-accent: #e8e6e1;
+  --md-color-accent-muted: #6c6c6c;
+  --md-color-border: #4a4a4a;
+  --md-color-code-bg: #242424;
+  --md-color-code-fg: #e8e6e1;
+  --md-color-quote-bar: #7a7a7a;
+  --md-color-table-stripe: #1d1d1d;
+  --md-color-selection-bg: #4a4a4a;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-appearance='auto'] .marginalia-theme,
+  [data-appearance='auto'] .marginalia {
+    --md-color-fg: #e8e6e1;
+    --md-color-fg-muted: #a1a09c;
+    --md-color-bg: transparent;
+    --md-color-accent: #e8e6e1;
+    --md-color-accent-muted: #6c6c6c;
+    --md-color-border: #4a4a4a;
+    --md-color-code-bg: #242424;
+    --md-color-code-fg: #e8e6e1;
+    --md-color-quote-bar: #7a7a7a;
+    --md-color-table-stripe: #1d1d1d;
+    --md-color-selection-bg: #4a4a4a;
+  }
+}

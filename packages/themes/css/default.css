@@ -318,6 +318,7 @@
  * hasn't explicitly picked light.
  * ------------------------------------------------------------------ */
 
+[data-appearance='dark'] .marginalia-theme,
 [data-appearance='dark'] .marginalia,
 [data-appearance='dark'].marginalia {
   --md-color-fg: #e4e7eb;
@@ -348,6 +349,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
+  [data-appearance='auto'] .marginalia-theme,
   [data-appearance='auto'] .marginalia {
     --md-color-fg: #e4e7eb;
     --md-color-fg-muted: #9aa3b2;

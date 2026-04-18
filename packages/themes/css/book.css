@@ -45,3 +45,39 @@
 }
 .marginalia a:hover { border-bottom-style: solid; }
 .marginalia blockquote { font-style: italic; }
+
+/* ------------------------------------------------------------------
+ * DARK VARIANT — warm paper-at-night feel; lets app chrome show through.
+ * ------------------------------------------------------------------ */
+
+[data-appearance='dark'] .marginalia-theme,
+[data-appearance='dark'] .marginalia {
+  --md-color-fg: #ebe4d1;
+  --md-color-fg-muted: #a39a82;
+  --md-color-bg: transparent;
+  --md-color-accent: #d4b98a;
+  --md-color-accent-muted: #4a3d26;
+  --md-color-border: #3a332a;
+  --md-color-code-bg: #26221a;
+  --md-color-code-fg: #ebe4d1;
+  --md-color-quote-bar: #5a4f3a;
+  --md-color-table-stripe: #221e18;
+  --md-color-selection-bg: #5a4a2e;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-appearance='auto'] .marginalia-theme,
+  [data-appearance='auto'] .marginalia {
+    --md-color-fg: #ebe4d1;
+    --md-color-fg-muted: #a39a82;
+    --md-color-bg: transparent;
+    --md-color-accent: #d4b98a;
+    --md-color-accent-muted: #4a3d26;
+    --md-color-border: #3a332a;
+    --md-color-code-bg: #26221a;
+    --md-color-code-fg: #ebe4d1;
+    --md-color-quote-bar: #5a4f3a;
+    --md-color-table-stripe: #221e18;
+    --md-color-selection-bg: #5a4a2e;
+  }
+}

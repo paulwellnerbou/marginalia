@@ -43,7 +43,13 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
         setState(null);
         return;
       }
-      const blockEl = closestBlock(range.commonAncestorContainer);
+      // Triple-click typically sets the selection end at offset 0 of the
+      // *next* node, which makes `commonAncestorContainer` the parent of
+      // the paragraph rather than the paragraph itself. Fall back to the
+      // node where the selection starts — that's always inside the block
+      // the user meant to act on.
+      const blockEl =
+        closestBlock(range.commonAncestorContainer) ?? closestBlock(range.startContainer);
       const blockId = blockEl?.dataset.subblock ?? blockEl?.dataset.block ?? null;
       setState({ rect, blockId });
     };

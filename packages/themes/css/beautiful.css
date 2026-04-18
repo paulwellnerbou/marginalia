@@ -243,6 +243,7 @@
  * DARK VARIANT — warm, low-glare
  * ------------------------------------------------------------------ */
 
+[data-appearance='dark'] .marginalia-theme,
 [data-appearance='dark'] .marginalia {
   --md-color-fg: #e9e4d4;
   --md-color-fg-muted: #a59a82;
@@ -261,4 +262,27 @@
 [data-appearance='dark'] .marginalia blockquote::before {
   color: var(--md-color-accent);
   opacity: 0.5;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-appearance='auto'] .marginalia-theme,
+  [data-appearance='auto'] .marginalia {
+    --md-color-fg: #e9e4d4;
+    --md-color-fg-muted: #a59a82;
+    --md-color-bg: transparent;
+    --md-color-accent: #a9c0e8;
+    --md-color-accent-muted: #3a4a68;
+    --md-color-border: #3a352d;
+    --md-color-code-bg: #2a2620;
+    --md-color-code-fg: #f0ecdf;
+    --md-color-table-stripe: #22201b;
+    --md-color-selection-bg: #6a5830;
+  }
+  [data-appearance='auto'] .marginalia > h1:first-child + p::first-letter {
+    color: var(--md-color-accent);
+  }
+  [data-appearance='auto'] .marginalia blockquote::before {
+    color: var(--md-color-accent);
+    opacity: 0.5;
+  }
 }

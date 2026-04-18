@@ -54,3 +54,39 @@
   background: var(--md-color-table-stripe);
   border-bottom-color: var(--md-color-fg);
 }
+
+/* ------------------------------------------------------------------
+ * DARK VARIANT — cool palette that pairs with code highlighting.
+ * ------------------------------------------------------------------ */
+
+[data-appearance='dark'] .marginalia-theme,
+[data-appearance='dark'] .marginalia {
+  --md-color-fg: #e4e8ef;
+  --md-color-fg-muted: #8c98a9;
+  --md-color-bg: transparent;
+  --md-color-accent: #5aa8e8;
+  --md-color-accent-muted: #1c3652;
+  --md-color-border: #2a303a;
+  --md-color-code-bg: #1a1e26;
+  --md-color-code-fg: #dbe5f0;
+  --md-color-quote-bar: #38424e;
+  --md-color-table-stripe: #181c24;
+  --md-color-selection-bg: #2e4663;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-appearance='auto'] .marginalia-theme,
+  [data-appearance='auto'] .marginalia {
+    --md-color-fg: #e4e8ef;
+    --md-color-fg-muted: #8c98a9;
+    --md-color-bg: transparent;
+    --md-color-accent: #5aa8e8;
+    --md-color-accent-muted: #1c3652;
+    --md-color-border: #2a303a;
+    --md-color-code-bg: #1a1e26;
+    --md-color-code-fg: #dbe5f0;
+    --md-color-quote-bar: #38424e;
+    --md-color-table-stripe: #181c24;
+    --md-color-selection-bg: #2e4663;
+  }
+}
