@@ -983,10 +983,6 @@ button.primary.small {
   letter-spacing: normal;
 }
 
-.composer .composer-body-field :is(textarea, .rt-TextAreaInput) {
-  min-height: calc(var(--ui-control-height) * 3);
-}
-
 .composer {
   position: relative;
 }
@@ -1022,10 +1018,6 @@ button.primary.small {
 
 .comment-edit {
   padding: 0;
-}
-
-.comment-edit .comment-edit-field :is(textarea, .rt-TextAreaInput) {
-  min-height: calc(var(--ui-control-height) * 3);
 }
 
 .comment-edit-actions {

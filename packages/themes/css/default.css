@@ -157,7 +157,7 @@
 
 /* --- Paragraphs & inline ----------------------------------------- */
 
-.marginalia p { margin: 0; }
+.marginalia p { margin: 0 0 0.5em; }
 
 .marginalia a {
   color: var(--md-color-accent);
@@ -175,6 +175,7 @@
 /* --- Lists -------------------------------------------------------- */
 
 .marginalia :is(ul, ol) { padding-left: 1.4em; margin: 0; }
+.marginalia :is(ul, ol) + p { margin-top: 1em; }
 .marginalia li + li { margin-top: var(--md-space-list-item); }
 .marginalia li > :is(ul, ol) { margin-top: var(--md-space-list-item); }
 .marginalia li > p + p { margin-top: 0.6em; }
@@ -242,6 +243,7 @@
   width: 100%;
   font-variant-numeric: tabular-nums;
   font-size: 0.95em;
+  margin-bottom: 2em;
 }
 .marginalia th,
 .marginalia td {

@@ -539,9 +539,10 @@ function AnchorGroupView({
           {showThread ? 'Collapse thread' : 'Expand thread'}
         </Button>
         <Text size="1" color="gray">
-          {group.replies.length === 0
-            ? 'No replies'
-            : `${group.replies.length} repl${group.replies.length === 1 ? 'y' : 'ies'}`}
+          {(() => {
+            const total = group.replies.length + 1;
+            return `${total} comment${total === 1 ? '' : 's'}`;
+          })()}
         </Text>
         <span className="spacer" />
         {isResolved ? (
@@ -585,7 +586,9 @@ function AnchorGroupView({
             onDelete={onDelete}
             onQuote={canComment ? handleQuote : undefined}
           />
-          {canToggleReplies && (
+          {group.replies.length === 0 ? (
+            <Text size="1" color="gray">No replies</Text>
+          ) : (
             <Button
               size="1"
               variant="ghost"
@@ -595,7 +598,7 @@ function AnchorGroupView({
               onClick={onToggleRepliesCollapsed}
             >
               {showReplies ? <ChevronDownIcon /> : <ChevronRightIcon />}
-              {showReplies ? 'Collapse replies' : 'Expand replies'}
+              {showReplies ? 'Collapse replies' : `Expand ${group.replies.length} repl${group.replies.length === 1 ? 'y' : 'ies'}`}
             </Button>
           )}
           {showReplies &&
@@ -609,13 +612,14 @@ function AnchorGroupView({
                 onQuote={canComment ? handleQuote : undefined}
               />
             ))}
-          {showReplies && canComment && !isResolved && (
+          {canComment && !isResolved && (
             <div className="reply-composer">
               <Composer
                 ref={composerRef}
                 mentionCandidates={mentionCandidates}
                 placeholder="Reply…"
                 needsName={needsName}
+                rows={2}
                 onSubmit={(body, name) => submitReply(group.top.id, body, name)}
               />
             </div>
@@ -632,10 +636,11 @@ const Composer = forwardRef<
     mentionCandidates: string[];
     placeholder: string;
     needsName: boolean;
+    rows?: number;
     onCancel?: () => void;
     onSubmit: (body: string, name?: string) => Promise<void> | void;
   }
->(({ mentionCandidates, placeholder, needsName, onCancel, onSubmit }, ref) => {
+>(({ mentionCandidates, placeholder, needsName, rows = 3, onCancel, onSubmit }, ref) => {
   const [value, setValue] = useState('');
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -797,7 +802,7 @@ const Composer = forwardRef<
         onKeyUp={(e) => updateCaret(e.currentTarget)}
         onSelect={(e) => updateCaret(e.currentTarget)}
         placeholder={placeholder}
-        rows={3}
+        rows={rows}
         size="1"
         autoFocus={!needsName}
       />
