@@ -102,15 +102,29 @@ Real paragraph.
     }
   });
 
-  test('resolves individual table cells', async () => {
+  test('resolves individual table cells — ranges exclude leading/trailing pipes', async () => {
     const md = '| h1 | h2 |\n|----|----|\n| a  | b  |\n';
     const rendered = await render(md);
     const ids = [...rendered.html.matchAll(/data-subblock="([^"]+)"/g)].map((m) => m[1]!);
     // 4 cells: 2 headers + 2 body cells.
     expect(ids.length).toBe(4);
     const map = locateAllBlocks(md);
-    for (const id of ids) {
-      expect(map.get(id)).toBeDefined();
-    }
+    const sliced = ids.map((id) => {
+      const r = map.get(id);
+      expect(r).toBeDefined();
+      return md.slice(r!.start, r!.end);
+    });
+    // The user-visible source should be just the cell's inline content —
+    // pipes belong to the table structure, not to the cell.
+    expect(sliced).toEqual(['h1', 'h2', 'a', 'b']);
+  });
+
+  test('replacing a table cell preserves the table structure', () => {
+    const md = '| h1 | h2 |\n|----|----|\n| a  | b  |\n';
+    const map = locateAllBlocks(md);
+    const cellA = [...map.values()].find((r) => r.kind === 'tableCell' && r.text === 'a')!;
+    const rewritten = md.slice(0, cellA.start) + 'AAA' + md.slice(cellA.end);
+    // Pipes and the other cell are untouched.
+    expect(rewritten).toBe('| h1 | h2 |\n|----|----|\n| AAA  | b  |\n');
   });
 });
