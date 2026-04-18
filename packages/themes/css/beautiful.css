@@ -14,6 +14,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;1,9..144,500;1,9..144,700&display=swap');
 @import './default.css';
 
+.marginalia-theme,
 .marginalia {
   /* --- Palette (ivory paper, ink, deep blue) ---------------------- */
   --md-color-fg: #1a1712;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Box, Flex, IconButton, Select, Slider, Tabs, Text, Tooltip } from '@radix-ui/themes';
+import { Box, Button, Flex, IconButton, Select, Slider, Tabs, Text, Tooltip } from '@radix-ui/themes';
 import { ChevronLeftIcon, ChevronRightIcon } from '@radix-ui/react-icons';
 import type { CommentAnchor, Document, Comment, DocumentSettingsResponse } from '../lib/api.js';
 import {
@@ -398,6 +398,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               <Text size="1" color="gray" style={{ minWidth: '4ch' }}>
                 {textZoom}%
               </Text>
+              <Button
+                size="1"
+                variant="ghost"
+                onClick={() => setTextZoom(100)}
+                disabled={textZoom === 100}
+              >
+                Reset
+              </Button>
             </Flex>
             <span className="spacer" />
             {error && (

@@ -11,6 +11,7 @@
  * import this file and only override CSS custom properties.
  */
 
+.marginalia-theme,
 .marginalia {
   /* --- Tunables (theme editor acts on these) ------------------------ */
 
@@ -47,10 +48,17 @@
   --md-color-table-stripe: #f8f9fb;
   --md-color-selection-bg: #fff1b8;
 
+  background: var(--md-color-bg);
+}
+
+.marginalia-theme {
+  min-height: 100%;
+}
+
+.marginalia {
   /* --- Root styles -------------------------------------------------- */
 
   color: var(--md-color-fg);
-  background: var(--md-color-bg);
   font-family: var(--md-font-body);
   font-size: var(--md-font-size);
   line-height: var(--md-line-height);
