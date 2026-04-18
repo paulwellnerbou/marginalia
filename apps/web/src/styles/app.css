@@ -1212,10 +1212,12 @@ button.primary.small {
 
 .lightbox {
   /* Fill the Radix dialog wrapper exactly; the wrapper owns the viewport. */
-  width: 100% !important;
-  max-width: none !important;
-  height: 100% !important;
-  max-height: none !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  max-height: 100vh !important;
+  max-height: 100dvh !important;
   margin: 0 !important;
   padding: 0 !important;
   border-radius: 0 !important;
@@ -1234,7 +1236,7 @@ button.primary.small {
   justify-content: center;
   overflow: auto;
   box-sizing: border-box;
-  padding: 4rem 1.5rem 2rem;
+  padding: clamp(3.5rem, 8vh, 4rem) clamp(0.75rem, 4vw, 1.5rem) clamp(1rem, 4vh, 2rem);
 }
 
 .lightbox-stage-fit {
@@ -1249,6 +1251,9 @@ button.primary.small {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  box-sizing: border-box;
+  max-width: 100%;
+  max-height: 100%;
   padding: 0.9rem;
   border-radius: 16px;
   border: 1px solid var(--gray-a5);
@@ -1293,8 +1298,8 @@ button.primary.small {
 }
 
 .lightbox-media.zoom-fit {
-  max-width: calc(100vw - 3rem);
-  max-height: calc(100vh - 6rem);
+  max-width: min(92vw, 92dvw);
+  max-height: min(92vh, 92dvh);
 }
 
 .lightbox-media.zoom-native {
@@ -1303,8 +1308,8 @@ button.primary.small {
 }
 
 .lightbox-img.zoom-fit {
-  max-width: 100%;
-  max-height: 100%;
+  max-width: min(100%, 92vw, 92dvw);
+  max-height: min(100%, 92vh, 92dvh);
   width: auto;
   height: auto;
   object-fit: contain;
