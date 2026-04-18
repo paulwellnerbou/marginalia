@@ -5,14 +5,14 @@ import remarkFrontmatter from 'remark-frontmatter';
 import { visit } from 'unist-util-visit';
 import { toString as mdastToString } from 'mdast-util-to-string';
 import type { ListItem, Root, RootContent, TableCell } from 'mdast';
+import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
 
 /**
  * Locate a top-level block OR a sub-block (list item / table cell) in
  * markdown source by its content-hash ID.
  *
- * The hash MUST match `hashBlock(kind, normalize(mdastToString(node)))` as
- * computed by the remark-block-ids plugin — keep the two implementations in
- * sync.
+ * Id derivation lives in `block-ids-shared.ts` and is shared with the
+ * `remarkBlockIds` plugin, so the two walks can't drift.
  */
 export interface BlockSourceRange {
   start: number;
@@ -35,7 +35,7 @@ export function locateAllBlocks(markdown: string): Map<string, BlockSourceRange>
 
   // Top-level blocks — match remark-block-ids' top-level walk.
   for (const node of tree.children) {
-    const text = normalize(mdastToString(node));
+    const text = normalizeBlockText(mdastToString(node));
     if (!text && node.type !== 'thematicBreak') continue;
     const pos = (node as RootContent).position;
     if (!pos || pos.start.offset === undefined || pos.end.offset === undefined) continue;
@@ -46,19 +46,23 @@ export function locateAllBlocks(markdown: string): Map<string, BlockSourceRange>
     }
   }
 
-  // Sub-blocks: list items and table cells. Mirrors the secondary walk in
-  // remark-block-ids so `data-subblock` ids round-trip back to source.
+  // Sub-blocks: list items and table cells. The counts map MUST stay in
+  // sync with the plugin's walk (same tree, same visit order) so the
+  // plugin's emitted `data-subblock` ids can be round-tripped back to
+  // their own source range — including duplicate-content siblings, each
+  // of which gets its own `#n` suffix via computeSubBlockId.
+  const subBlockCounts = new Map<string, number>();
   visit(tree, (node) => {
     if (node.type !== 'listItem' && node.type !== 'tableCell') return;
-    const text = normalize(mdastToString(node));
+    const text = normalizeBlockText(mdastToString(node));
     if (!text) return;
     const pos = node.position;
     if (!pos || pos.start.offset === undefined || pos.end.offset === undefined) return;
     const range = narrowedRange(node, pos.start.offset, pos.end.offset);
-    const id = hashBlock(node.type, text);
-    if (!out.has(id)) {
-      out.set(id, { start: range.start, end: range.end, kind: node.type, text });
-    }
+    const id = computeSubBlockId(node.type, text, subBlockCounts);
+    // Unique per occurrence, so no `has` guard — every duplicate gets its
+    // own entry pointing at its own source range.
+    out.set(id, { start: range.start, end: range.end, kind: node.type, text });
   });
 
   return out;
@@ -110,20 +114,4 @@ export function locateBlockSource(
   blockId: string,
 ): BlockSourceRange | null {
   return locateAllBlocks(markdown).get(blockId) ?? null;
-}
-
-function normalize(text: string): string {
-  return text.replace(/\s+/gu, ' ').trim();
-}
-
-function hashBlock(kind: string, text: string): string {
-  const input = `${kind}\u0000${text}`;
-  const PRIME = 0x100000001b3n;
-  const MASK = 0xffffffffffffffffn;
-  let h = 0xcbf29ce484222325n;
-  for (let i = 0; i < input.length; i++) {
-    h ^= BigInt(input.charCodeAt(i));
-    h = (h * PRIME) & MASK;
-  }
-  return h.toString(16).padStart(16, '0');
 }

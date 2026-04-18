@@ -3,6 +3,7 @@ import type { Root, RootContent } from 'mdast';
 import { visit } from 'unist-util-visit';
 import { toString as mdastToString } from 'mdast-util-to-string';
 import type { BlockInfo, BlockMap } from '../types.js';
+import { computeSubBlockId, hashBlock, normalizeBlockText } from '../block-ids-shared.js';
 
 /**
  * Attach a stable content-hash ID to every top-level block, and a secondary
@@ -19,7 +20,7 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
     const stack: Array<{ level: number; text: string }> = [];
     const sectionCounts = new Map<string, number>();
     for (const node of tree.children) {
-      const text = normalize(mdastToString(node));
+      const text = normalizeBlockText(mdastToString(node));
       if (!text && node.type !== 'thematicBreak') continue;
 
       if (node.type === 'heading') {
@@ -58,17 +59,21 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
     }
     (file.data as { blocks?: BlockMap }).blocks = blocks;
 
-    // Sub-block annotation — list items and table cells. We skip empty
-    // text (matches the top-level rule) and deduplicate by id in case
-    // the exact same content appears twice at sub-block level.
-    const seen = new Set<string>();
+    // Sub-block annotation — list items and table cells. Duplicate-content
+    // siblings (two cells reading "Yes", for instance) MUST get distinct
+    // ids, otherwise selections inside a later duplicate walk past the
+    // cell and resolve up to the enclosing table — the "Propose edit"
+    // button then appears at the table's corner and opens the whole
+    // table's source. `computeSubBlockId` tracks occurrence order and
+    // suffixes duplicates `#2`, `#3`, …. The `counts` map is shared
+    // across the whole document so `locateAllBlocks`, walking the same
+    // tree in the same order, produces identical ids.
+    const counts = new Map<string, number>();
     visit(tree, (node) => {
       if (node.type !== 'listItem' && node.type !== 'tableCell') return;
-      const text = normalize(mdastToString(node));
+      const text = normalizeBlockText(mdastToString(node));
       if (!text) return;
-      const id = hashBlock(node.type, text);
-      if (seen.has(id)) return;
-      seen.add(id);
+      const id = computeSubBlockId(node.type, text, counts);
       attachDataAttr(node as RootContent, 'data-subblock', id);
     });
   };
@@ -87,27 +92,3 @@ function attachDataAttr(
   props[attr] = id;
 }
 
-/**
- * Normalize for hashing: collapse whitespace, trim. We deliberately do NOT
- * lowercase here — capitalization changes are meaningful block changes.
- */
-function normalize(text: string): string {
-  return text.replace(/\s+/gu, ' ').trim();
-}
-
-/**
- * Short content hash. 64 bits of FNV-1a is plenty for per-document
- * uniqueness; the IDs are local to one document. BigInt is fine here —
- * block counts are small, not hot-path.
- */
-function hashBlock(kind: string, text: string): string {
-  const input = `${kind}\u0000${text}`;
-  const PRIME = 0x100000001b3n;
-  const MASK = 0xffffffffffffffffn;
-  let h = 0xcbf29ce484222325n;
-  for (let i = 0; i < input.length; i++) {
-    h ^= BigInt(input.charCodeAt(i));
-    h = (h * PRIME) & MASK;
-  }
-  return h.toString(16).padStart(16, '0');
-}

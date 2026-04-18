@@ -127,4 +127,66 @@ Real paragraph.
     // Pipes and the other cell are untouched.
     expect(rewritten).toBe('| h1 | h2 |\n|----|----|\n| AAA  | b  |\n');
   });
+
+  test('duplicate-content table cells each get their own id and source range', async () => {
+    // Two "Yes" cells and two "No" cells — the exact scenario that used to
+    // strip `data-subblock` from every duplicate and bubble proposals up
+    // to the enclosing table.
+    const md = `| Feature | A | B |
+|---------|---|---|
+| Fast    | Yes | No |
+| Safe    | Yes | No |
+`;
+    const rendered = await render(md);
+    const ids = [...rendered.html.matchAll(/data-subblock="([^"]+)"/g)].map((m) => m[1]!);
+    // 3 header cells + 6 body cells = 9 cells. Every one must carry an id.
+    expect(ids.length).toBe(9);
+    // All distinct — duplicate-content siblings no longer collapse.
+    expect(new Set(ids).size).toBe(ids.length);
+
+    const map = locateAllBlocks(md);
+    // Each id resolves to exactly the text of one cell. Pull them in
+    // document order, strip whitespace, and compare against the expected
+    // left-to-right, top-to-bottom sequence.
+    const sliced = ids.map((id) => map.get(id)!).map((r) => md.slice(r.start, r.end).trim());
+    expect(sliced).toEqual(['Feature', 'A', 'B', 'Fast', 'Yes', 'No', 'Safe', 'Yes', 'No']);
+  });
+
+  test('duplicate-content list items each get their own id and source range', async () => {
+    const md = `- todo
+- todo
+- done
+- todo
+`;
+    const rendered = await render(md);
+    const ids = [...rendered.html.matchAll(/data-subblock="([^"]+)"/g)].map((m) => m[1]!);
+    expect(ids.length).toBe(4);
+    expect(new Set(ids).size).toBe(4);
+
+    const map = locateAllBlocks(md);
+    const sliced = ids.map((id) => map.get(id)!).map((r) => md.slice(r.start, r.end));
+    // Each returned range covers the single item the id was emitted from.
+    // (mdast's list-item position includes the trailing newline — trim it.)
+    expect(sliced.map((s) => s.trim())).toEqual(['- todo', '- todo', '- done', '- todo']);
+  });
+
+  test('duplicate cell replacement targets only the chosen cell', () => {
+    const md = `| A | B |
+|---|---|
+| Yes | Yes |
+`;
+    // Two "Yes" cells. Ask for the SECOND id (suffixed `#2`) and replace it;
+    // the first "Yes" must remain untouched.
+    const map = locateAllBlocks(md);
+    const cells = [...map.entries()].filter(([, r]) => r.kind === 'tableCell' && r.text === 'Yes');
+    expect(cells.length).toBe(2);
+    const [firstId, first] = cells[0]!;
+    const [secondId, second] = cells[1]!;
+    expect(firstId).not.toBe(secondId);
+    expect(secondId).toMatch(/#2$/);
+    expect(first.start).toBeLessThan(second.start); // document order
+
+    const rewritten = md.slice(0, second.start) + 'NO' + md.slice(second.end);
+    expect(rewritten).toBe(`| A | B |\n|---|---|\n| Yes | NO |\n`);
+  });
 });
