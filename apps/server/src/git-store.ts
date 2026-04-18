@@ -44,7 +44,7 @@ export class GitStore {
     uid: string,
     content: string,
     author: { displayName: string; clientId: string },
-    action: 'upload' | 'update' | 'restore',
+    action: 'upload' | 'update' | 'restore' | 'accept-proposal',
   ): Promise<{ oid: string }> {
     writeFileSync(this.absPath(uid), content);
     await git.add({ fs, dir: this.repoDir, filepath: this.docPath(uid) });

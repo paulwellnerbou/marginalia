@@ -2,17 +2,26 @@ import { useEffect, useState } from 'react';
 import { captureSelection, selectionRect } from '../lib/selection.js';
 import type { CommentAnchor } from '../lib/api.js';
 
+export interface ProposalTarget {
+  block_id: string;
+  /** Normalized plain text of the whole block, used as the quote snapshot. */
+  block_text: string;
+}
+
 interface Props {
   rootRef: React.RefObject<HTMLElement | null>;
   onAdd: (anchor: CommentAnchor) => void;
+  onPropose?: (target: ProposalTarget) => void;
 }
 
 /**
- * Floating "Add comment" chip that appears next to a text selection made
- * inside the document pane. Click → captures the anchor and calls onAdd.
+ * Floating toolbar next to a text selection inside the document pane.
+ * Click "+ Comment" → captures the exact selection span. Click "Propose
+ * edit" → expands to the enclosing block (paragraph, heading, list item,
+ * table cell, …) so the edit targets a whole source block.
  */
-export function SelectionToolbar({ rootRef, onAdd }: Props) {
-  const [rect, setRect] = useState<DOMRect | null>(null);
+export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
+  const [state, setState] = useState<{ rect: DOMRect; blockId: string | null } | null>(null);
 
   useEffect(() => {
     const handle = () => {
@@ -20,40 +29,74 @@ export function SelectionToolbar({ rootRef, onAdd }: Props) {
       if (!root) return;
       const sel = window.getSelection();
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
-        setRect(null);
+        setState(null);
         return;
       }
-      if (!root.contains(sel.getRangeAt(0).commonAncestorContainer)) {
-        setRect(null);
+      const range = sel.getRangeAt(0);
+      if (!root.contains(range.commonAncestorContainer)) {
+        setState(null);
         return;
       }
-      setRect(selectionRect());
+      const rect = selectionRect();
+      if (!rect) {
+        setState(null);
+        return;
+      }
+      const blockEl = closestBlock(range.commonAncestorContainer);
+      setState({ rect, blockId: blockEl?.dataset.block ?? null });
     };
     document.addEventListener('selectionchange', handle);
     return () => document.removeEventListener('selectionchange', handle);
   }, [rootRef]);
 
-  if (!rect) return null;
+  if (!state) return null;
+
+  function doComment(e: React.MouseEvent) {
+    e.preventDefault();
+    const root = rootRef.current;
+    if (!root) return;
+    const anchor = captureSelection(root);
+    if (anchor) onAdd(anchor);
+    setState(null);
+    window.getSelection()?.removeAllRanges();
+  }
+
+  function doPropose(e: React.MouseEvent) {
+    e.preventDefault();
+    const root = rootRef.current;
+    if (!root || !state || !state.blockId) return;
+    const blockEl = root.querySelector<HTMLElement>(
+      `[data-block="${state.blockId.replace(/"/g, '\\"')}"]`,
+    );
+    if (!blockEl) return;
+    const blockText = (blockEl.textContent ?? '').replace(/\s+/gu, ' ').trim();
+    onPropose?.({ block_id: state.blockId, block_text: blockText });
+    setState(null);
+    window.getSelection()?.removeAllRanges();
+  }
 
   return (
-    <button
+    <div
       className="selection-toolbar"
       style={{
-        top: rect.top + window.scrollY - 40,
-        left: rect.left + window.scrollX + rect.width / 2,
-      }}
-      // mousedown to fire before selectionchange clears it
-      onMouseDown={(e) => {
-        e.preventDefault();
-        const root = rootRef.current;
-        if (!root) return;
-        const anchor = captureSelection(root);
-        if (anchor) onAdd(anchor);
-        setRect(null);
-        window.getSelection()?.removeAllRanges();
+        top: state.rect.top + window.scrollY - 40,
+        left: state.rect.left + window.scrollX + state.rect.width / 2,
       }}
     >
-      + Comment
-    </button>
+      {/* mousedown so the handler fires before selectionchange clears the range */}
+      <button type="button" onMouseDown={doComment}>+ Comment</button>
+      {onPropose && state.blockId && (
+        <button type="button" onMouseDown={doPropose}>Propose edit</button>
+      )}
+    </div>
   );
+}
+
+function closestBlock(node: Node): HTMLElement | null {
+  let n: Node | null = node;
+  while (n) {
+    if (n instanceof HTMLElement && n.dataset.block) return n;
+    n = n.parentNode;
+  }
+  return null;
 }

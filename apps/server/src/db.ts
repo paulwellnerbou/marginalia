@@ -57,6 +57,26 @@ CREATE TABLE IF NOT EXISTS comments (
 
 CREATE INDEX IF NOT EXISTS idx_comments_doc ON comments(doc_uid);
 CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id);
+
+CREATE TABLE IF NOT EXISTS edit_proposals (
+  id                    TEXT PRIMARY KEY,
+  doc_uid               TEXT NOT NULL,
+  anchor_block_id       TEXT,
+  anchor_quote          TEXT,          -- snapshot of the original block text
+  anchor_kind           TEXT,          -- mdast node type of the original block
+  proposed_text         TEXT NOT NULL, -- new markdown source for the block
+  rationale             TEXT,
+  author_client_id      TEXT NOT NULL,
+  author_display_name   TEXT NOT NULL,
+  status                TEXT NOT NULL DEFAULT 'pending',
+  decided_at            INTEGER,
+  decided_by_name       TEXT,
+  created_at            INTEGER NOT NULL,
+  updated_at            INTEGER NOT NULL,
+  deleted_at            INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_proposals_doc ON edit_proposals(doc_uid);
 `;
 
 export interface DocumentRow {
@@ -106,6 +126,26 @@ export interface CommentRow {
   status: CommentStatus;
   resolved_at: number | null;
   resolved_by_name: string | null;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
+}
+
+export type EditProposalStatus = 'pending' | 'accepted' | 'rejected' | 'orphaned';
+
+export interface EditProposalRow {
+  id: string;
+  doc_uid: string;
+  anchor_block_id: string | null;
+  anchor_quote: string | null;
+  anchor_kind: string | null;
+  proposed_text: string;
+  rationale: string | null;
+  author_client_id: string;
+  author_display_name: string;
+  status: EditProposalStatus;
+  decided_at: number | null;
+  decided_by_name: string | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;

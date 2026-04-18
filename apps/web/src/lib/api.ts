@@ -296,6 +296,88 @@ export function deleteComment(uid: string, cid: string, identity: Identity): Pro
   );
 }
 
+// --- edit proposals --------------------------------------------------
+
+export type EditProposalStatus = 'pending' | 'accepted' | 'rejected' | 'orphaned';
+
+export interface EditProposalAnchor {
+  block_id: string | null;
+  quote: string | null;
+  kind: string | null;
+}
+
+export interface EditProposal {
+  id: string;
+  anchor: EditProposalAnchor;
+  proposed_text: string;
+  rationale: string | null;
+  author: { client_id: string; display_name: string };
+  status: EditProposalStatus;
+  decided_at: number | null;
+  decided_by_name: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export function listEditProposals(
+  uid: string,
+): Promise<{ edit_proposals: EditProposal[] }> {
+  return request<{ edit_proposals: EditProposal[] }>(
+    `/api/documents/${encodeURIComponent(uid)}/edit-proposals`,
+    { method: 'GET', docUid: uid },
+  );
+}
+
+export function createEditProposal(
+  uid: string,
+  payload: {
+    anchor_block_id: string;
+    anchor_quote: string;
+    anchor_kind?: string | null;
+    proposed_text: string;
+    rationale?: string | null;
+  },
+  identity: Identity,
+): Promise<{ edit_proposal: EditProposal }> {
+  return request<{ edit_proposal: EditProposal }>(
+    `/api/documents/${encodeURIComponent(uid)}/edit-proposals`,
+    { method: 'POST', body: JSON.stringify(payload), identity, docUid: uid },
+  );
+}
+
+export function deleteEditProposal(
+  uid: string,
+  pid: string,
+  identity: Identity,
+): Promise<void> {
+  return request<void>(
+    `/api/documents/${encodeURIComponent(uid)}/edit-proposals/${encodeURIComponent(pid)}`,
+    { method: 'DELETE', identity, docUid: uid },
+  );
+}
+
+export function acceptEditProposal(
+  uid: string,
+  pid: string,
+  identity: Identity,
+): Promise<{ edit_proposal: EditProposal; oid: string }> {
+  return request<{ edit_proposal: EditProposal; oid: string }>(
+    `/api/documents/${encodeURIComponent(uid)}/edit-proposals/${encodeURIComponent(pid)}/accept`,
+    { method: 'POST', identity, docUid: uid },
+  );
+}
+
+export function rejectEditProposal(
+  uid: string,
+  pid: string,
+  identity: Identity,
+): Promise<{ edit_proposal: EditProposal }> {
+  return request<{ edit_proposal: EditProposal }>(
+    `/api/documents/${encodeURIComponent(uid)}/edit-proposals/${encodeURIComponent(pid)}/reject`,
+    { method: 'POST', identity, docUid: uid },
+  );
+}
+
 export function resolveComment(
   uid: string,
   cid: string,

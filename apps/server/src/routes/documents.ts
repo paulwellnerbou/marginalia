@@ -6,6 +6,7 @@ import type { GitStore } from '../git-store.js';
 import type { ServerConfig } from '../config.js';
 import type { CommentRow, DocumentRow, InviteRow, InviteRole } from '../db.js';
 import { reanchor } from '../anchoring.js';
+import { reanchorProposals } from './edit-proposals.js';
 import type { Realtime } from '../realtime.js';
 import {
   authorize,
@@ -182,6 +183,8 @@ async function updateDocument(c: Context, deps: AppDeps) {
     const upd = reanchor(comment, rendered.blocks);
     updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
   }
+
+  reanchorProposals(db, doc.uid, rendered.blocks.map((b) => b.id), now);
 
   if (isContentChange(previousSource, body.markdown)) {
     realtime.broadcast(
