@@ -102,7 +102,8 @@ describe('grid tables', () => {
     // GFM pipe table — has our data-block attribute
     expect(r.html).toMatch(/<table[^>]*data-block=/);
     expect(r.html).toContain('<table class="grid-table">');
-    expect(r.html).toContain('<td>a</td>');
+    // GFM pipe-table cells now carry data-subblock (proposal targeting).
+    expect(r.html).toMatch(/<td[^>]*data-subblock=[^>]*>a<\/td>/);
     expect(r.html).toContain('<th>Grid</th>');
   });
 });

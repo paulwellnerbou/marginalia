@@ -87,4 +87,30 @@ Real paragraph.
       expect(map.has(info.id)).toBe(true);
     }
   });
+
+  test('resolves individual list items', async () => {
+    const md = '- first item\n- second item\n- third item\n';
+    const rendered = await render(md);
+    // Sub-block ids for list items are emitted as data-subblock="…".
+    const ids = [...rendered.html.matchAll(/data-subblock="([^"]+)"/g)].map((m) => m[1]!);
+    expect(ids.length).toBe(3);
+    const map = locateAllBlocks(md);
+    for (const id of ids) {
+      const range = map.get(id);
+      expect(range).toBeDefined();
+      expect(md.slice(range!.start, range!.end)).toMatch(/^- \w+ item$/);
+    }
+  });
+
+  test('resolves individual table cells', async () => {
+    const md = '| h1 | h2 |\n|----|----|\n| a  | b  |\n';
+    const rendered = await render(md);
+    const ids = [...rendered.html.matchAll(/data-subblock="([^"]+)"/g)].map((m) => m[1]!);
+    // 4 cells: 2 headers + 2 body cells.
+    expect(ids.length).toBe(4);
+    const map = locateAllBlocks(md);
+    for (const id of ids) {
+      expect(map.get(id)).toBeDefined();
+    }
+  });
 });

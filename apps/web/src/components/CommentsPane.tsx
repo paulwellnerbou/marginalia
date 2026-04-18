@@ -211,16 +211,14 @@ export function CommentsPane(props: Props) {
 
   return (
     <div ref={rootRef} className="comments-pane">
-      {pendingProposalTarget && (
-        <EditProposalComposer
-          target={pendingProposalTarget}
-          docSource={docSource}
-          blockRanges={blockRanges}
-          needsName={!displayName}
-          onCancel={onCancelPendingProposal}
-          onSubmit={onCreateProposal}
-        />
-      )}
+      <EditProposalComposer
+        target={pendingProposalTarget}
+        docSource={docSource}
+        blockRanges={blockRanges}
+        needsName={!displayName}
+        onCancel={onCancelPendingProposal}
+        onSubmit={onCreateProposal}
+      />
 
       {activeProposals.length > 0 && (
         <section className="proposals-section">

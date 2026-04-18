@@ -1,14 +1,17 @@
 import type { Plugin } from 'unified';
 import type { Root, RootContent } from 'mdast';
+import { visit } from 'unist-util-visit';
 import { toString as mdastToString } from 'mdast-util-to-string';
 import type { BlockInfo, BlockMap } from '../types.js';
 
 /**
- * Attach a stable content-hash ID to every top-level block.
- *
- * The ID survives edits elsewhere in the document and changes when the block
- * itself changes. Written to the rendered element as `data-block="<id>"` and
- * exposed via file.data.blocks for the comment-anchoring system.
+ * Attach a stable content-hash ID to every top-level block, and a secondary
+ * id to every sub-block that an edit proposal can target individually
+ * (`listItem`, `tableCell`). Top-level ids are written as
+ * `data-block="<id>"` and feed the comment-anchoring system; sub-block ids
+ * are written as `data-subblock="<id>"` and are used by proposal capture
+ * only — they do NOT participate in the exported `blocks` map, so existing
+ * comment behavior is unchanged.
  */
 export const remarkBlockIds: Plugin<[], Root> = () => {
   return (tree, file) => {
@@ -51,19 +54,37 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
       };
       blocks.push(info);
 
-      attachDataAttr(node, id);
+      attachDataAttr(node, 'data-block', id);
     }
     (file.data as { blocks?: BlockMap }).blocks = blocks;
+
+    // Sub-block annotation — list items and table cells. We skip empty
+    // text (matches the top-level rule) and deduplicate by id in case
+    // the exact same content appears twice at sub-block level.
+    const seen = new Set<string>();
+    visit(tree, (node) => {
+      if (node.type !== 'listItem' && node.type !== 'tableCell') return;
+      const text = normalize(mdastToString(node));
+      if (!text) return;
+      const id = hashBlock(node.type, text);
+      if (seen.has(id)) return;
+      seen.add(id);
+      attachDataAttr(node as RootContent, 'data-subblock', id);
+    });
   };
 };
 
-function attachDataAttr(node: RootContent, id: string): void {
+function attachDataAttr(
+  node: RootContent,
+  attr: 'data-block' | 'data-subblock',
+  id: string,
+): void {
   const nodeWithData = node as unknown as {
     data?: { hProperties?: Record<string, unknown> };
   };
   const data = (nodeWithData.data ??= {});
   const props = (data.hProperties ??= {});
-  props['data-block'] = id;
+  props[attr] = id;
 }
 
 /**

@@ -2,11 +2,13 @@ import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import remarkGfm from 'remark-gfm';
 import remarkFrontmatter from 'remark-frontmatter';
+import { visit } from 'unist-util-visit';
 import { toString as mdastToString } from 'mdast-util-to-string';
 import type { Root, RootContent } from 'mdast';
 
 /**
- * Locate a top-level block in markdown source by its content-hash ID.
+ * Locate a top-level block OR a sub-block (list item / table cell) in
+ * markdown source by its content-hash ID.
  *
  * The hash MUST match `hashBlock(kind, normalize(mdastToString(node)))` as
  * computed by the remark-block-ids plugin — keep the two implementations in
@@ -30,6 +32,8 @@ export function locateAllBlocks(markdown: string): Map<string, BlockSourceRange>
     .parse(markdown) as Root;
 
   const out = new Map<string, BlockSourceRange>();
+
+  // Top-level blocks — match remark-block-ids' top-level walk.
   for (const node of tree.children) {
     const text = normalize(mdastToString(node));
     if (!text && node.type !== 'thematicBreak') continue;
@@ -41,6 +45,21 @@ export function locateAllBlocks(markdown: string): Map<string, BlockSourceRange>
       out.set(id, { start: pos.start.offset, end: pos.end.offset, kind: node.type, text });
     }
   }
+
+  // Sub-blocks: list items and table cells. Mirrors the secondary walk in
+  // remark-block-ids so `data-subblock` ids round-trip back to source.
+  visit(tree, (node) => {
+    if (node.type !== 'listItem' && node.type !== 'tableCell') return;
+    const text = normalize(mdastToString(node));
+    if (!text) return;
+    const pos = node.position;
+    if (!pos || pos.start.offset === undefined || pos.end.offset === undefined) return;
+    const id = hashBlock(node.type, text);
+    if (!out.has(id)) {
+      out.set(id, { start: pos.start.offset, end: pos.end.offset, kind: node.type, text });
+    }
+  });
+
   return out;
 }
 

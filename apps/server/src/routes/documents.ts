@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import { render } from '@marginalia/renderer';
+import { locateAllBlocks, render } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
@@ -188,10 +188,12 @@ async function updateDocument(c: Context, deps: AppDeps) {
     updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
   }
 
+  // Include sub-block ids so proposals on list items / table cells don't
+  // get orphaned after every save.
   reanchorProposals(
     db,
     doc.uid,
-    rendered.blocks.map((b) => b.id),
+    [...locateAllBlocks(body.markdown).keys()],
     now,
     realtime,
     decision.identity.clientId,

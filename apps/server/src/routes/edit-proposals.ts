@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import { locateBlockSource, render } from '@marginalia/renderer';
+import { locateAllBlocks, locateBlockSource, render } from '@marginalia/renderer';
 import type { CommentRow, DocumentRow, EditProposalRow } from '../db.js';
 import { reanchor } from '../anchoring.js';
 import {
@@ -243,10 +243,12 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   }
 
   // Re-anchor other pending proposals (their block hash may have shifted).
+  // Include sub-block ids (list items / table cells) so fine-grained
+  // proposals don't get orphaned on every save.
   reanchorProposals(
     db,
     doc.uid,
-    rendered.blocks.map((b) => b.id),
+    [...locateAllBlocks(nextSource).keys()],
     now,
     realtime,
     identity.clientId,

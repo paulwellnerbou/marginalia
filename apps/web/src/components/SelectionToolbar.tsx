@@ -17,11 +17,9 @@ interface Props {
 /**
  * Floating toolbar next to a text selection inside the document pane.
  * "+ Comment" captures the exact selection span. "Propose edit" expands
- * to the enclosing top-level block (paragraph, heading, code block,
- * blockquote, list, table, …). Block ids are attached by the renderer
- * only to top-level mdast nodes, so list items and individual table
- * cells are not separately targetable today — selecting inside them
- * resolves to the enclosing list / table as a whole.
+ * to the nearest proposal-targetable block — a top-level block
+ * (paragraph, heading, code block, blockquote, list, table, …) OR a
+ * sub-block (list item, table cell) when the selection is inside one.
  */
 export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
   const [state, setState] = useState<{ rect: DOMRect; blockId: string | null } | null>(null);
@@ -46,7 +44,8 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
         return;
       }
       const blockEl = closestBlock(range.commonAncestorContainer);
-      setState({ rect, blockId: blockEl?.dataset.block ?? null });
+      const blockId = blockEl?.dataset.subblock ?? blockEl?.dataset.block ?? null;
+      setState({ rect, blockId });
     };
     document.addEventListener('selectionchange', handle);
     return () => document.removeEventListener('selectionchange', handle);
@@ -68,8 +67,9 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
     e.preventDefault();
     const root = rootRef.current;
     if (!root || !state || !state.blockId) return;
+    const escaped = CSS.escape(state.blockId);
     const blockEl = root.querySelector<HTMLElement>(
-      `[data-block="${CSS.escape(state.blockId)}"]`,
+      `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
     );
     if (!blockEl) return;
     const blockText = (blockEl.textContent ?? '').replace(/\s+/gu, ' ').trim();
@@ -102,9 +102,12 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
 }
 
 function closestBlock(node: Node): HTMLElement | null {
+  // Returns the nearest proposal-targetable ancestor — either a top-level
+  // block (`data-block`) or a fine-grained sub-block (`data-subblock`
+  // on list items / table cells).
   let n: Node | null = node;
   while (n) {
-    if (n instanceof HTMLElement && n.dataset.block) return n;
+    if (n instanceof HTMLElement && (n.dataset.subblock || n.dataset.block)) return n;
     n = n.parentNode;
   }
   return null;

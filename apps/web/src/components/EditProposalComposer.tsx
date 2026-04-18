@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
-import { Button, Flex, Text, TextArea, TextField } from '@radix-ui/themes';
+import { Button, Dialog, Flex, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
 interface Props {
-  target: ProposalTarget;
+  /** When non-null, the modal is open and targets this block. */
+  target: ProposalTarget | null;
   /** Full markdown source — used to extract the block's current source text. */
   docSource: string;
   blockRanges: Map<string, BlockSourceRange>;
@@ -17,9 +18,48 @@ interface Props {
   }) => Promise<void> | void;
 }
 
+/**
+ * Dialog-based composer for a new edit proposal. Sizing matches the rest of
+ * the app (Radix size="2", same token set the CommentsPane composer uses)
+ * so the form doesn't feel like a second-class UI.
+ */
 export function EditProposalComposer({
   target, docSource, blockRanges, needsName, onCancel, onSubmit,
 }: Props) {
+  const open = target !== null;
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) onCancel();
+      }}
+    >
+      <Dialog.Content size="3" maxWidth="720px">
+        {target && (
+          <ComposerBody
+            target={target}
+            docSource={docSource}
+            blockRanges={blockRanges}
+            needsName={needsName}
+            onCancel={onCancel}
+            onSubmit={onSubmit}
+          />
+        )}
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
+function ComposerBody({
+  target, docSource, blockRanges, needsName, onCancel, onSubmit,
+}: {
+  target: ProposalTarget;
+  docSource: string;
+  blockRanges: Map<string, BlockSourceRange>;
+  needsName: boolean;
+  onCancel: () => void;
+  onSubmit: Props['onSubmit'];
+}) {
   const originalSource = useMemo(() => {
     const range = blockRanges.get(target.block_id);
     return range ? docSource.slice(range.start, range.end) : '';
@@ -47,51 +87,67 @@ export function EditProposalComposer({
   }
 
   return (
-    <div className="edit-proposal-composer">
-      <Text size="1" color="gray" weight="medium">Propose edit</Text>
-      <div className="quote">“{target.block_text.slice(0, 140)}{target.block_text.length > 140 ? '…' : ''}”</div>
+    <>
+      <Dialog.Title>Propose edit</Dialog.Title>
+      <Dialog.Description size="2" color="gray" mb="3">
+        Edit the markdown source of this block. Editors will review the diff
+        before accepting.
+      </Dialog.Description>
 
-      <Flex direction="column" gap="2" mt="2" className="composer">
+      <Flex direction="column" gap="3" className="edit-proposal-composer">
+        <div className="quote">
+          “{target.block_text.slice(0, 240)}
+          {target.block_text.length > 240 ? '…' : ''}”
+        </div>
+
         {needsName && (
-          <TextField.Root
-            size="1"
-            placeholder="Your display name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={80}
-          />
+          <Flex direction="column" gap="1">
+            <Text as="label" size="2" htmlFor="proposal-name">Your display name</Text>
+            <TextField.Root
+              id="proposal-name"
+              size="2"
+              placeholder="Your display name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={80}
+              autoFocus
+            />
+          </Flex>
         )}
-        <Text size="1" color="gray" as="label" htmlFor="proposal-text">
-          Edited markdown
-        </Text>
-        <TextArea
-          id="proposal-text"
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          rows={6}
-          size="1"
-          autoFocus
-        />
-        <Text size="1" color="gray" as="label" htmlFor="proposal-rationale">
-          Reason (optional)
-        </Text>
-        <TextArea
-          id="proposal-rationale"
-          value={rationale}
-          onChange={(e) => setRationale(e.target.value)}
-          placeholder="Why should this change be made?"
-          rows={2}
-          size="1"
-        />
-        <Flex gap="2" align="center" justify="end">
-          <Button variant="ghost" size="1" onClick={onCancel} disabled={submitting}>
-            Cancel
-          </Button>
-          <Button size="1" onClick={send} disabled={!ready || submitting}>
-            {submitting ? 'Submitting…' : 'Submit proposal'}
-          </Button>
+
+        <Flex direction="column" gap="1">
+          <Text as="label" size="2" htmlFor="proposal-text">Edited markdown</Text>
+          <TextArea
+            id="proposal-text"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            rows={8}
+            size="2"
+            autoFocus={!needsName}
+          />
+        </Flex>
+
+        <Flex direction="column" gap="1">
+          <Text as="label" size="2" htmlFor="proposal-rationale">Reason (optional)</Text>
+          <TextArea
+            id="proposal-rationale"
+            value={rationale}
+            onChange={(e) => setRationale(e.target.value)}
+            placeholder="Why should this change be made?"
+            rows={3}
+            size="2"
+          />
         </Flex>
       </Flex>
-    </div>
+
+      <Flex gap="2" justify="end" mt="4">
+        <Button variant="soft" color="gray" onClick={onCancel} disabled={submitting}>
+          Cancel
+        </Button>
+        <Button onClick={send} disabled={!ready || submitting}>
+          {submitting ? 'Submitting…' : 'Submit proposal'}
+        </Button>
+      </Flex>
+    </>
   );
 }
