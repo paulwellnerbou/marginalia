@@ -1,7 +1,8 @@
 import type { Plugin } from 'unified';
 import type { Root, Element, ElementContent, Properties } from 'hast';
 import { visit } from 'unist-util-visit';
-import { createHighlighter, type Highlighter, type BundledLanguage, bundledLanguages } from 'shiki';
+import { createdBundledHighlighter } from 'shiki/core';
+import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
 import type { Warning } from '../types.js';
 
 export interface ShikiOptions {
@@ -9,21 +10,95 @@ export interface ShikiOptions {
   dark?: string;
 }
 
-let highlighterPromise: Promise<Highlighter> | null = null;
+const SUPPORTED_THEME_LOADERS = {
+  'github-dark': () => import('shiki/dist/themes/github-dark.mjs'),
+  'github-light': () => import('shiki/dist/themes/github-light.mjs'),
+} as const;
 
-async function getHighlighter(light: string, dark: string): Promise<Highlighter> {
-  if (!highlighterPromise) {
-    highlighterPromise = createHighlighter({
-      themes: [light, dark],
-      // Load nothing up-front; we load languages lazily on demand.
+const SUPPORTED_LANGUAGE_LOADERS = {
+  bash: () => import('shiki/dist/langs/bash.mjs'),
+  console: () => import('shiki/dist/langs/console.mjs'),
+  css: () => import('shiki/dist/langs/css.mjs'),
+  diff: () => import('shiki/dist/langs/diff.mjs'),
+  dockerfile: () => import('shiki/dist/langs/dockerfile.mjs'),
+  dotenv: () => import('shiki/dist/langs/dotenv.mjs'),
+  go: () => import('shiki/dist/langs/go.mjs'),
+  graphql: () => import('shiki/dist/langs/graphql.mjs'),
+  html: () => import('shiki/dist/langs/html.mjs'),
+  ini: () => import('shiki/dist/langs/ini.mjs'),
+  javascript: () => import('shiki/dist/langs/javascript.mjs'),
+  json: () => import('shiki/dist/langs/json.mjs'),
+  jsonc: () => import('shiki/dist/langs/jsonc.mjs'),
+  jsx: () => import('shiki/dist/langs/jsx.mjs'),
+  markdown: () => import('shiki/dist/langs/markdown.mjs'),
+  mdx: () => import('shiki/dist/langs/mdx.mjs'),
+  python: () => import('shiki/dist/langs/python.mjs'),
+  rust: () => import('shiki/dist/langs/rust.mjs'),
+  shellsession: () => import('shiki/dist/langs/shellsession.mjs'),
+  sql: () => import('shiki/dist/langs/sql.mjs'),
+  toml: () => import('shiki/dist/langs/toml.mjs'),
+  tsx: () => import('shiki/dist/langs/tsx.mjs'),
+  typescript: () => import('shiki/dist/langs/typescript.mjs'),
+  xml: () => import('shiki/dist/langs/xml.mjs'),
+  yaml: () => import('shiki/dist/langs/yaml.mjs'),
+} as const;
+
+type SupportedTheme = keyof typeof SUPPORTED_THEME_LOADERS;
+type SupportedLanguage = keyof typeof SUPPORTED_LANGUAGE_LOADERS;
+type ShikiHighlighter = Awaited<ReturnType<typeof createBundledHighlighter>>;
+
+const THEME_FALLBACKS = {
+  dark: 'github-dark',
+  light: 'github-light',
+} as const satisfies Record<'dark' | 'light', SupportedTheme>;
+
+const LANGUAGE_ALIASES: Record<string, SupportedLanguage> = {
+  docker: 'dockerfile',
+  gql: 'graphql',
+  js: 'javascript',
+  md: 'markdown',
+  py: 'python',
+  shell: 'bash',
+  shellscript: 'bash',
+  sh: 'bash',
+  ts: 'typescript',
+  yml: 'yaml',
+  zsh: 'bash',
+};
+
+const PLAIN_TEXT_LANGS = new Set(['plain', 'plaintext', 'text', 'txt']);
+
+const createBundledHighlighter = createdBundledHighlighter({
+  langs: SUPPORTED_LANGUAGE_LOADERS,
+  themes: SUPPORTED_THEME_LOADERS,
+  engine: () => createJavaScriptRegexEngine(),
+});
+
+const highlighterPromises = new Map<string, Promise<ShikiHighlighter>>();
+
+async function getHighlighter(light: string, dark: string): Promise<ShikiHighlighter> {
+  const resolvedLight = resolveTheme(light, THEME_FALLBACKS.light);
+  const resolvedDark = resolveTheme(dark, THEME_FALLBACKS.dark);
+  const key = `${resolvedLight}:${resolvedDark}`;
+  let promise = highlighterPromises.get(key);
+  if (!promise) {
+    promise = createBundledHighlighter({
+      themes: [resolvedLight, resolvedDark],
       langs: [],
     });
+    highlighterPromises.set(key, promise);
   }
-  return highlighterPromise;
+  return promise;
 }
 
-function isKnownLang(lang: string): lang is BundledLanguage {
-  return lang in bundledLanguages;
+function resolveTheme(theme: string | undefined, fallback: SupportedTheme): SupportedTheme {
+  if (theme && theme in SUPPORTED_THEME_LOADERS) return theme as SupportedTheme;
+  return fallback;
+}
+
+function resolveLang(lang: string): SupportedLanguage | null {
+  if (lang in SUPPORTED_LANGUAGE_LOADERS) return lang as SupportedLanguage;
+  return LANGUAGE_ALIASES[lang] ?? null;
 }
 
 /**
@@ -32,8 +107,8 @@ function isKnownLang(lang: string): lang is BundledLanguage {
  * each token, keyed to CSS variables so light/dark theming is pure CSS.
  */
 export const rehypeShikiHighlight: Plugin<[ShikiOptions], Root> = (options) => {
-  const light = options.light ?? 'github-light';
-  const dark = options.dark ?? 'github-dark';
+  const light = resolveTheme(options.light, THEME_FALLBACKS.light);
+  const dark = resolveTheme(options.dark, THEME_FALLBACKS.dark);
 
   return async (tree, file) => {
     const warnings: Warning[] = ((file.data as { warnings?: Warning[] })
@@ -48,12 +123,15 @@ export const rehypeShikiHighlight: Plugin<[ShikiOptions], Root> = (options) => {
       );
       if (!code) return;
 
-      const lang = extractLang(code);
-      if (!lang) return; // no language -> leave unhighlighted
-      if (!isKnownLang(lang)) {
+      const rawLang = extractLang(code)?.toLowerCase();
+      if (!rawLang) return; // no language -> leave unhighlighted
+      if (PLAIN_TEXT_LANGS.has(rawLang)) return;
+
+      const lang = resolveLang(rawLang);
+      if (!lang) {
         warnings.push({
           kind: 'unknown-language',
-          message: `unknown code block language "${lang}"`,
+          message: `unknown code block language "${rawLang}"`,
         });
         return;
       }
@@ -69,7 +147,7 @@ export const rehypeShikiHighlight: Plugin<[ShikiOptions], Root> = (options) => {
           themes: { light, dark },
           defaultColor: false,
         });
-        const replacement = htmlStringToPre(html, preserveAttrs, lang);
+        const replacement = htmlStringToPre(html, preserveAttrs, rawLang);
         if (replacement) {
           parent.children[index] = replacement;
         }

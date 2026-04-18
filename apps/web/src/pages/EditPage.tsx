@@ -3,16 +3,45 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { saveInviteToken } from '../lib/invite.js';
 import { Button, Container, Text, TextField } from '@radix-ui/themes';
 import { ChevronLeftIcon } from '@radix-ui/react-icons';
-import { render, type RenderResult } from '@marginalia/renderer';
-import { EditorView, basicSetup } from 'codemirror';
-import { markdown } from '@codemirror/lang-markdown';
-import { EditorState } from '@codemirror/state';
+import type { RenderResult } from '@marginalia/renderer';
+import type { EditorView } from 'codemirror';
 import { getClientId, getDisplayName, setDisplayName } from '../lib/identity.js';
 import { getDocument, updateDocument, ApiError, type Document } from '../lib/api.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { reportError } from '../lib/log.js';
 import { RenderedDoc } from '../components/RenderedDoc.js';
 import { AppBar } from '../components/AppBar.js';
+
+type EditorDeps = {
+  EditorState: typeof import('@codemirror/state').EditorState;
+  EditorView: typeof import('codemirror').EditorView;
+  basicSetup: typeof import('codemirror').basicSetup;
+  markdown: typeof import('@codemirror/lang-markdown').markdown;
+};
+
+let editorDepsPromise: Promise<EditorDeps> | null = null;
+let rendererPromise: Promise<typeof import('@marginalia/renderer')> | null = null;
+
+function loadEditorDeps(): Promise<EditorDeps> {
+  if (!editorDepsPromise) {
+    editorDepsPromise = Promise.all([
+      import('@codemirror/state'),
+      import('codemirror'),
+      import('@codemirror/lang-markdown'),
+    ]).then(([state, view, markdown]) => ({
+      EditorState: state.EditorState,
+      EditorView: view.EditorView,
+      basicSetup: view.basicSetup,
+      markdown: markdown.markdown,
+    }));
+  }
+  return editorDepsPromise;
+}
+
+function loadRenderer(): Promise<typeof import('@marginalia/renderer')> {
+  if (!rendererPromise) rendererPromise = import('@marginalia/renderer');
+  return rendererPromise;
+}
 
 export function EditPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
@@ -32,6 +61,7 @@ export function EditPage() {
   const editorEl = useRef<HTMLDivElement>(null);
   const previewEl = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const previewRequestRef = useRef(0);
 
   useEffect(() => {
     if (!doc) return;
@@ -59,35 +89,50 @@ export function EditPage() {
 
   useEffect(() => {
     if (!editorEl.current || doc === null || viewRef.current) return;
-    const state = EditorState.create({
-      doc: doc.source,
-      extensions: [
-        basicSetup,
-        markdown(),
-        EditorView.updateListener.of((u) => {
-          if (u.docChanged) setSource(u.state.doc.toString());
-        }),
-        EditorView.theme({
-          '&': { height: '100%', fontSize: '14px' },
-          '.cm-scroller': { fontFamily: 'ui-monospace, SFMono-Regular, monospace' },
-        }),
-      ],
-    });
-    viewRef.current = new EditorView({ state, parent: editorEl.current });
+    let disposed = false;
+    void loadEditorDeps().then(
+      ({ EditorState, EditorView, basicSetup, markdown }) => {
+        if (disposed || !editorEl.current || viewRef.current) return;
+        const state = EditorState.create({
+          doc: doc.source,
+          extensions: [
+            basicSetup,
+            markdown(),
+            EditorView.updateListener.of((u) => {
+              if (u.docChanged) setSource(u.state.doc.toString());
+            }),
+            EditorView.theme({
+              '&': { height: '100%', fontSize: '14px' },
+              '.cm-scroller': { fontFamily: 'ui-monospace, SFMono-Regular, monospace' },
+            }),
+          ],
+        });
+        viewRef.current = new EditorView({ state, parent: editorEl.current });
+      },
+      (err) => {
+        reportError('EditPage.editor', err, { uid });
+        if (!disposed) setError('Failed to load editor');
+      },
+    );
     return () => {
+      disposed = true;
       viewRef.current?.destroy();
       viewRef.current = null;
     };
-  }, [doc]);
+  }, [doc, uid]);
 
   useEffect(() => {
+    previewRequestRef.current += 1;
+    const requestId = previewRequestRef.current;
     if (!source) {
       setRendered(null);
       return;
     }
     const handle = setTimeout(async () => {
       try {
+        const { render } = await loadRenderer();
         const r = await render(source);
+        if (previewRequestRef.current !== requestId) return;
         setRendered(r);
       } catch (err) {
         reportError('EditPage.preview', err);
