@@ -4,6 +4,7 @@ import { render } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
+import { reanchorProposals } from './edit-proposals.js';
 import {
   type Identity,
   SESSION_COOKIE,
@@ -186,6 +187,15 @@ async function updateDocument(c: Context, deps: AppDeps) {
     const upd = reanchor(comment, rendered.blocks);
     updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
   }
+
+  reanchorProposals(
+    db,
+    doc.uid,
+    rendered.blocks.map((b) => b.id),
+    now,
+    realtime,
+    decision.identity.clientId,
+  );
 
   if (isContentChange(previousSource, body.markdown)) {
     realtime.broadcast(

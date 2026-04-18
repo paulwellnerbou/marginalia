@@ -1,4 +1,6 @@
 export { render } from './render.js';
+export { locateBlockSource, locateAllBlocks } from './locate-block.js';
+export type { BlockSourceRange } from './locate-block.js';
 export type {
   RenderOptions,
   RenderResult,

@@ -72,6 +72,26 @@ CREATE TABLE IF NOT EXISTS comment_mentions (
 
 CREATE INDEX IF NOT EXISTS idx_comment_mentions_pending
   ON comment_mentions(doc_uid, target_display_name, delivered_at);
+
+CREATE TABLE IF NOT EXISTS edit_proposals (
+  id                    TEXT PRIMARY KEY,
+  doc_uid               TEXT NOT NULL,
+  anchor_block_id       TEXT,
+  anchor_quote          TEXT,          -- snapshot of the original block text
+  anchor_kind           TEXT,          -- mdast node type of the original block
+  proposed_text         TEXT NOT NULL, -- new markdown source for the block
+  rationale             TEXT,
+  author_client_id      TEXT NOT NULL,
+  author_display_name   TEXT NOT NULL,
+  status                TEXT NOT NULL DEFAULT 'pending',
+  decided_at            INTEGER,
+  decided_by_name       TEXT,
+  created_at            INTEGER NOT NULL,
+  updated_at            INTEGER NOT NULL,
+  deleted_at            INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_proposals_doc ON edit_proposals(doc_uid);
 `;
 
 export interface DocumentRow {
@@ -158,6 +178,26 @@ export interface CommentMentionRow {
   target_display_name: string;
   created_at: number;
   delivered_at: number | null;
+}
+
+export type EditProposalStatus = 'pending' | 'accepted' | 'rejected' | 'orphaned';
+
+export interface EditProposalRow {
+  id: string;
+  doc_uid: string;
+  anchor_block_id: string | null;
+  anchor_quote: string | null;
+  anchor_kind: string | null;
+  proposed_text: string;
+  rationale: string | null;
+  author_client_id: string;
+  author_display_name: string;
+  status: EditProposalStatus;
+  decided_at: number | null;
+  decided_by_name: string | null;
+  created_at: number;
+  updated_at: number;
+  deleted_at: number | null;
 }
 
 export function openDatabase(path: string): Database {

@@ -17,8 +17,12 @@ import {
   DotsHorizontalIcon,
   PaperPlaneIcon,
 } from '@radix-ui/react-icons';
-import type { Comment, CommentAnchor } from '../lib/api.js';
+import { locateAllBlocks } from '@marginalia/renderer';
+import type { Comment, CommentAnchor, EditProposal } from '../lib/api.js';
 import { CommentItem } from './CommentItem.js';
+import { EditProposalComposer } from './EditProposalComposer.js';
+import { EditProposalItem } from './EditProposalItem.js';
+import type { ProposalTarget } from './SelectionToolbar.js';
 
 export interface ComposerHandle {
   insertText: (text: string) => void;
@@ -26,12 +30,20 @@ export interface ComposerHandle {
 
 interface Props {
   comments: Comment[];
+  proposals: EditProposal[];
+  /** Live markdown source, used by diff/composer. */
+  docSource: string;
   mentionCandidates: string[];
   canComment: boolean;
   /** New-comment draft captured from selection; non-null → composer is open */
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number } | null;
   onCancelPending: () => void;
+  /** Non-null → proposal composer is open. */
+  pendingProposalTarget: ProposalTarget | null;
+  onCancelPendingProposal: () => void;
+  /** Viewer has edit rights (admin or editor). */
+  canEdit: boolean;
   isDocAdmin: boolean;
   viewerClientId: string;
   /** Null if the viewer hasn't set a display name yet — Composer will ask. */
@@ -45,6 +57,14 @@ interface Props {
   onEdit: (id: string, body: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onResolve: (id: string, resolved: boolean) => Promise<void>;
+  onCreateProposal: (payload: {
+    proposed_text: string;
+    rationale?: string;
+    display_name?: string;
+  }) => Promise<void>;
+  onAcceptProposal: (id: string) => Promise<void>;
+  onRejectProposal: (id: string) => Promise<void>;
+  onDeleteProposal: (id: string) => Promise<void>;
   /** Scroll the document pane to a block and flash it. */
   onScrollToAnchor: (blockId: string) => void;
 }
@@ -59,11 +79,16 @@ type CommentSortMode = 'document' | 'latest';
 export function CommentsPane(props: Props) {
   const {
     comments,
+    proposals,
+    docSource,
     mentionCandidates,
     canComment,
     pendingAnchor,
     focusedThread,
     onCancelPending,
+    pendingProposalTarget,
+    onCancelPendingProposal,
+    canEdit,
     isDocAdmin,
     viewerClientId,
     displayName,
@@ -71,8 +96,19 @@ export function CommentsPane(props: Props) {
     onEdit,
     onDelete,
     onResolve,
+    onCreateProposal,
+    onAcceptProposal,
+    onRejectProposal,
+    onDeleteProposal,
     onScrollToAnchor,
   } = props;
+  const { activeProposals, decidedProposals } = useMemo(
+    () => groupProposals(proposals),
+    [proposals],
+  );
+  // Parse the markdown source once per change and derive per-block source
+  // ranges; proposal items below share the map instead of each one re-parsing.
+  const blockRanges = useMemo(() => locateAllBlocks(docSource), [docSource]);
 
   const [sortMode, setSortMode] = useState<CommentSortMode>('document');
   const { active, orphans } = useMemo(() => groupByAnchor(comments, sortMode), [comments, sortMode]);
@@ -175,6 +211,57 @@ export function CommentsPane(props: Props) {
 
   return (
     <div ref={rootRef} className="comments-pane">
+      {pendingProposalTarget && (
+        <EditProposalComposer
+          target={pendingProposalTarget}
+          docSource={docSource}
+          blockRanges={blockRanges}
+          needsName={!displayName}
+          onCancel={onCancelPendingProposal}
+          onSubmit={onCreateProposal}
+        />
+      )}
+
+      {activeProposals.length > 0 && (
+        <section className="proposals-section">
+          <h4 className="subtle">Proposed changes</h4>
+          {activeProposals.map((p) => (
+            <EditProposalItem
+              key={p.id}
+              proposal={p}
+              docSource={docSource}
+              blockRanges={blockRanges}
+              canEdit={canEdit}
+              isDocAdmin={isDocAdmin}
+              onAccept={onAcceptProposal}
+              onReject={onRejectProposal}
+              onDelete={onDeleteProposal}
+              onScrollToAnchor={onScrollToAnchor}
+            />
+          ))}
+        </section>
+      )}
+
+      {decidedProposals.length > 0 && (
+        <section className="proposals-section decided">
+          <h4 className="subtle">Decided proposals</h4>
+          {decidedProposals.map((p) => (
+            <EditProposalItem
+              key={p.id}
+              proposal={p}
+              docSource={docSource}
+              blockRanges={blockRanges}
+              canEdit={canEdit}
+              isDocAdmin={isDocAdmin}
+              onAccept={onAcceptProposal}
+              onReject={onRejectProposal}
+              onDelete={onDeleteProposal}
+              onScrollToAnchor={onScrollToAnchor}
+            />
+          ))}
+        </section>
+      )}
+
       {canComment && pendingAnchor && (
         <div className="comment-composer">
           <div className="quote">“{pendingAnchor.quote}”</div>
@@ -736,6 +823,21 @@ function getActiveMention(value: string, caret: number): ActiveMention | null {
 
 function normalizeMentionQuery(query: string): string {
   return query.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function groupProposals(proposals: EditProposal[]): {
+  activeProposals: EditProposal[];
+  decidedProposals: EditProposal[];
+} {
+  const activeProposals: EditProposal[] = [];
+  const decidedProposals: EditProposal[] = [];
+  for (const p of proposals) {
+    if (p.status === 'pending') activeProposals.push(p);
+    else decidedProposals.push(p);
+  }
+  activeProposals.sort((a, b) => a.created_at - b.created_at);
+  decidedProposals.sort((a, b) => b.updated_at - a.updated_at);
+  return { activeProposals, decidedProposals };
 }
 
 function groupByAnchor(

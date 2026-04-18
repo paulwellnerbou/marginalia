@@ -1408,18 +1408,121 @@ button.primary.small {
 .selection-toolbar {
   position: fixed;
   transform: translateX(-50%);
-  padding: 0.3rem 0.8rem;
+  display: inline-flex;
+  gap: 0.2rem;
+  padding: 0.2rem;
   background: var(--ui-fg);
-  color: white;
-  border: 0;
   border-radius: 999px;
-  font-size: 0.8rem;
-  font-weight: 600;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   z-index: 10;
   pointer-events: auto;
   white-space: nowrap;
 }
-.selection-toolbar:hover {
+.selection-toolbar button {
+  background: transparent;
+  color: white;
+  border: 0;
+  padding: 0.25rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.selection-toolbar button:hover {
   background: var(--ui-accent);
 }
+
+/* ============================================================
+ * Block hover action — "Propose edit"
+ * ============================================================ */
+
+.block-actions-btn {
+  position: fixed;
+  z-index: 9;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--ui-fg, #222);
+  background: var(--ui-bg, #fff);
+  border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.15));
+  border-radius: 4px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  opacity: 0.9;
+}
+.block-actions-btn:hover {
+  opacity: 1;
+  border-color: var(--ui-accent, #3b82f6);
+  color: var(--ui-accent, #3b82f6);
+}
+
+/* ============================================================
+ * Edit proposals
+ * ============================================================ */
+
+.edit-proposal-composer {
+  border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.1));
+  border-radius: 6px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+  background: var(--ui-bg-soft, rgba(0, 0, 0, 0.02));
+}
+.edit-proposal-composer .quote {
+  font-style: italic;
+  color: var(--ui-fg-subtle, rgba(0, 0, 0, 0.6));
+  font-size: 0.85rem;
+  margin-top: 0.25rem;
+}
+
+.proposals-section {
+  margin-bottom: 1rem;
+}
+.proposals-section.decided {
+  opacity: 0.8;
+}
+
+.anchor-group.proposal {
+  border-left: 3px solid var(--accent-9, #3b82f6);
+  padding-left: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+.anchor-group.proposal-accepted { border-left-color: #16a34a; }
+.anchor-group.proposal-rejected { border-left-color: #dc2626; }
+.anchor-group.proposal-orphaned { border-left-color: #9ca3af; }
+
+.proposal-rationale {
+  margin-top: 0.35rem;
+  color: var(--ui-fg-subtle, rgba(0, 0, 0, 0.75));
+}
+
+/* ============================================================
+ * Diff view (inside DiffDialog)
+ * ============================================================ */
+
+.diff-view {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.1));
+  border-radius: 4px;
+  background: var(--ui-bg, #fff);
+}
+.diff-line {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.05rem 0.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.diff-line .diff-marker {
+  flex: 0 0 1ch;
+  user-select: none;
+  opacity: 0.6;
+}
+.diff-line .diff-text { flex: 1 1 auto; }
+.diff-line.diff-add { background: rgba(22, 163, 74, 0.12); }
+.diff-line.diff-add .diff-marker { color: #16a34a; opacity: 1; }
+.diff-line.diff-remove { background: rgba(220, 38, 38, 0.10); }
+.diff-line.diff-remove .diff-marker { color: #dc2626; opacity: 1; }

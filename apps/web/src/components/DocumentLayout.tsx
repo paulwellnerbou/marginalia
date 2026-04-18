@@ -1,13 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Badge, Box, Button, Flex, IconButton, Select, Slider, Tabs, Text, Tooltip } from '@radix-ui/themes';
 import { ChevronLeftIcon, ChevronRightIcon } from '@radix-ui/react-icons';
-import type { CommentAnchor, Document, Comment, DocumentSettingsResponse } from '../lib/api.js';
+import type {
+  CommentAnchor,
+  Document,
+  Comment,
+  DocumentSettingsResponse,
+  EditProposal,
+} from '../lib/api.js';
 import {
   createComment as apiCreate,
   deleteComment as apiDelete,
   listComments,
   resolveComment as apiResolve,
   updateComment as apiUpdate,
+  listEditProposals,
+  createEditProposal as apiCreateProposal,
+  deleteEditProposal as apiDeleteProposal,
+  acceptEditProposal as apiAcceptProposal,
+  rejectEditProposal as apiRejectProposal,
+  getDocument,
   ApiError,
 } from '../lib/api.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
@@ -23,7 +35,8 @@ import {
 } from '../lib/themes.js';
 import { RenderedDoc } from './RenderedDoc.js';
 import { Toc } from './Toc.js';
-import { SelectionToolbar } from './SelectionToolbar.js';
+import { SelectionToolbar, type ProposalTarget } from './SelectionToolbar.js';
+import { BlockActions } from './BlockActions.js';
 import { CommentsPane } from './CommentsPane.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { AppBar } from './AppBar.js';
@@ -74,10 +87,22 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   });
 
   const [comments, setComments] = useState<Comment[]>([]);
+  const [proposals, setProposals] = useState<EditProposal[]>([]);
   const [mentionSeedNames, setMentionSeedNames] = useState<string[]>([]);
   const [pendingAnchor, setPendingAnchor] = useState<CommentAnchor | null>(null);
+  const [pendingProposalTarget, setPendingProposalTarget] = useState<ProposalTarget | null>(null);
   const [focusedThread, setFocusedThread] = useState<ThreadFocusTarget | null>(null);
+  /** Mirror of `doc.source` and `doc.rendered`, mutated when a proposal is
+   *  accepted (auto-merged) so the displayed doc stays fresh without a reload. */
+  const [liveSource, setLiveSource] = useState<string>(doc.source);
+  const [liveRendered, setLiveRendered] = useState(doc.rendered);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLiveSource(doc.source);
+    setLiveRendered(doc.rendered);
+  }, [doc.uid, doc.source, doc.rendered]);
+
   // Reactive: tracks the display name wherever it gets changed — UserMenu,
   // comment composer, invite load, another tab — without stale local state.
   const displayName = useDisplayName();
@@ -124,6 +149,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       },
       (err) => reportError('DocumentLayout.listComments', err, { uid: doc.uid }),
     );
+    listEditProposals(doc.uid).then(
+      (r) => {
+        if (!cancelled) setProposals(r.edit_proposals);
+      },
+      (err) => reportError('DocumentLayout.listEditProposals', err, { uid: doc.uid }),
+    );
     return () => {
       cancelled = true;
     };
@@ -161,6 +192,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             label: 'Reload',
             onClick: () => window.location.reload(),
           });
+          break;
+        }
+        case 'edit_proposal.created': {
+          const p = event.edit_proposal as unknown as EditProposal;
+          setProposals((prev) => (prev.some((x) => x.id === p.id) ? prev : [...prev, p]));
+          notify('New edit proposal', `${p.author.display_name} proposed a change.`);
+          break;
+        }
+        case 'edit_proposal.updated': {
+          const p = event.edit_proposal as unknown as EditProposal;
+          setProposals((prev) => prev.map((x) => (x.id === p.id ? p : x)));
+          break;
+        }
+        case 'edit_proposal.deleted': {
+          setProposals((prev) => prev.filter((x) => x.id !== event.edit_proposal_id));
           break;
         }
       }
@@ -259,6 +305,92 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [doc.uid, displayName, effectiveDisplayName],
+  );
+
+  const refreshDoc = useCallback(async () => {
+    try {
+      const fresh = await getDocument(doc.uid);
+      setLiveSource(fresh.source);
+      setLiveRendered(fresh.rendered);
+    } catch (err) {
+      reportError('DocumentLayout.refreshDoc', err, { uid: doc.uid });
+    }
+  }, [doc.uid]);
+
+  const onCreateProposal = useCallback(
+    async (payload: { proposed_text: string; rationale?: string; display_name?: string }) => {
+      if (!pendingProposalTarget) return;
+      const identity = resolveIdentity(payload.display_name);
+      if (!identity) {
+        setError('Please set your display name first.');
+        return;
+      }
+      try {
+        const req: Parameters<typeof apiCreateProposal>[1] = {
+          anchor_block_id: pendingProposalTarget.block_id,
+          anchor_quote: pendingProposalTarget.block_text,
+          proposed_text: payload.proposed_text,
+        };
+        if (payload.rationale) req.rationale = payload.rationale;
+        const res = await apiCreateProposal(doc.uid, req, identity);
+        setProposals((prev) => [...prev, res.edit_proposal]);
+        setPendingProposalTarget(null);
+        setError(null);
+      } catch (err) {
+        reportError('DocumentLayout.createProposal', err, { uid: doc.uid });
+        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to propose');
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName, pendingProposalTarget],
+  );
+
+  const onAcceptProposal = useCallback(
+    async (id: string) => {
+      const identity = resolveIdentity();
+      if (!identity) return;
+      try {
+        const res = await apiAcceptProposal(doc.uid, id, identity);
+        setProposals((prev) => prev.map((p) => (p.id === id ? res.edit_proposal : p)));
+        await refreshDoc();
+        setHistoryVersion((v) => v + 1);
+      } catch (err) {
+        reportError('DocumentLayout.acceptProposal', err, { id });
+        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Accept failed');
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName, refreshDoc],
+  );
+
+  const onRejectProposal = useCallback(
+    async (id: string) => {
+      const identity = resolveIdentity();
+      if (!identity) return;
+      try {
+        const res = await apiRejectProposal(doc.uid, id, identity);
+        setProposals((prev) => prev.map((p) => (p.id === id ? res.edit_proposal : p)));
+      } catch (err) {
+        reportError('DocumentLayout.rejectProposal', err, { id });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName],
+  );
+
+  const onDeleteProposal = useCallback(
+    async (id: string) => {
+      const identity = resolveIdentity();
+      if (!identity) return;
+      try {
+        await apiDeleteProposal(doc.uid, id, identity);
+        setProposals((prev) => prev.filter((p) => p.id !== id));
+      } catch (err) {
+        reportError('DocumentLayout.deleteProposal', err, { id });
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName],
   );
 
   const onDelete = useCallback(
@@ -444,14 +576,23 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           </Flex>
           <div className="doc-body">
             <RenderedDoc
-              rendered={doc.rendered}
+              rendered={liveRendered}
               elRef={docRef}
               maxWidthCh={maxWidth}
               textZoom={textZoom / 100}
               highlights={commentHighlights}
               onHighlightClick={openCommentThread}
             />
-            {canComment && <SelectionToolbar rootRef={docRef} onAdd={setPendingAnchor} />}
+            {canComment && (
+              <SelectionToolbar
+                rootRef={docRef}
+                onAdd={setPendingAnchor}
+                onPropose={setPendingProposalTarget}
+              />
+            )}
+            {canComment && (
+              <BlockActions rootRef={docRef} onPropose={setPendingProposalTarget} />
+            )}
           </div>
         </main>
 
@@ -489,11 +630,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               <Tabs.Content value="comments" className="right-tab-panel">
                 <CommentsPane
                   comments={comments}
+                  proposals={proposals}
+                  docSource={liveSource}
                   mentionCandidates={mentionCandidates}
                   canComment={canComment}
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}
                   onCancelPending={() => setPendingAnchor(null)}
+                  pendingProposalTarget={pendingProposalTarget}
+                  onCancelPendingProposal={() => setPendingProposalTarget(null)}
+                  canEdit={doc.role === 'admin' || doc.role === 'editor'}
                   isDocAdmin={doc.role === 'admin'}
                   viewerClientId={getClientId()}
                   displayName={effectiveDisplayName}
@@ -501,6 +647,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onEdit={onEdit}
                   onDelete={onDelete}
                   onResolve={onResolve}
+                  onCreateProposal={onCreateProposal}
+                  onAcceptProposal={onAcceptProposal}
+                  onRejectProposal={onRejectProposal}
+                  onDeleteProposal={onDeleteProposal}
                   onScrollToAnchor={scrollToAnchor}
                 />
               </Tabs.Content>
