@@ -77,6 +77,7 @@ a {
   display: flex;
   justify-content: center;
   padding: 4rem 1rem;
+  position: relative;
 }
 
 .page.loading,
@@ -227,7 +228,8 @@ button.primary:disabled {
   letter-spacing: -0.01em;
 }
 .app-bar-title {
-  color: var(--ui-fg-muted);
+  color: var(--gray-12);
+  font-weight: 500;
   max-width: 40ch;
 }
 
@@ -260,11 +262,17 @@ button.primary:disabled {
   border-right: 0;
   border-left: 1px solid var(--ui-border);
 }
+.pane-toc {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .pane-doc {
   background: var(--ui-bg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
 }
 .pane-doc .doc-body {
   flex: 1;
@@ -278,8 +286,7 @@ button.primary:disabled {
   gap: 0.5rem;
   padding: 0.5rem 0.6rem;
   border-bottom: 1px solid var(--ui-border);
-  position: sticky;
-  top: 0;
+  flex-shrink: 0;
   background: inherit;
   z-index: 1;
 }
@@ -343,6 +350,107 @@ button.primary:disabled {
   min-height: 0;
 }
 
+.doc-search-popover {
+  position: absolute;
+  top: calc(var(--doc-chrome-height));
+  right: 0.25rem;
+  left: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.5rem 1rem 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.doc-search-toolbar {
+  pointer-events: auto;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid var(--ui-border);
+  border-radius: calc(var(--ui-control-radius) + 2px);
+  background: color-mix(in srgb, var(--color-panel-solid) 94%, transparent);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+.doc-search-field {
+  min-width: min(22rem, 45vw);
+}
+
+.doc-search-trigger {
+  flex-shrink: 0;
+}
+
+.doc-search-trigger.active {
+  color: var(--accent-12);
+}
+
+.doc-search-field :is(.rt-TextFieldSlot, .rt-TextFieldInput),
+.toc-search-field :is(.rt-TextFieldSlot, .rt-TextFieldInput) {
+  font-size: var(--ui-control-font-size);
+}
+
+.doc-search-field .rt-TextFieldSlot svg,
+.toc-search-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--gray-11);
+}
+
+.doc-search-count {
+  min-width: 4.75rem;
+  text-align: right;
+}
+
+.doc-search-results-list {
+  align-items: stretch;
+}
+
+.doc-search-result {
+  width: 100%;
+  justify-content: flex-start;
+  height: auto;
+  min-height: 0;
+  white-space: normal;
+  text-align: left;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--gray-a4);
+}
+
+.doc-search-result.active {
+  border-color: var(--accent-a6);
+}
+
+.doc-search-result-heading {
+  font-family: var(--default-font-family);
+}
+
+.doc-search-result-snippet {
+  line-height: 1.45;
+}
+
+.doc-search-result-context {
+  color: var(--ui-fg-muted);
+}
+
+.doc-search-result-hit {
+  background: color-mix(in srgb, var(--yellow-4) 74%, transparent);
+  color: inherit;
+  padding: 0 0.08rem;
+  border-radius: 0.18rem;
+}
+
+.doc-search-highlight {
+  background: color-mix(in srgb, var(--yellow-4) 68%, transparent);
+  color: inherit;
+  padding: 0;
+  border-radius: 0.14rem;
+}
+
+.doc-search-highlight.active {
+  background: color-mix(in srgb, var(--amber-5) 82%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber-8) 30%, transparent);
+}
+
 .width-slider {
   display: flex;
   align-items: center;
@@ -350,21 +458,6 @@ button.primary:disabled {
 }
 .width-slider input[type="range"] {
   width: 120px;
-}
-
-.theme-picker {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.85rem;
-}
-.theme-picker select {
-  padding: 0.25rem 0.5rem;
-  border: 1px solid var(--ui-border);
-  border-radius: 4px;
-  background: #fff;
-  font: inherit;
-  font-size: 0.85rem;
 }
 
 .doc-body {
@@ -377,8 +470,54 @@ button.primary:disabled {
  * ============================================================ */
 
 .toc {
-  padding: 0.5rem 0.5rem 2rem;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem 0.5rem 0;
   font-size: 0.9rem;
+}
+.toc > .toc-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 2rem;
+}
+.toc-search {
+  padding-bottom: 0.5rem;
+}
+.toc-search-field {
+  width: 100%;
+}
+
+.toc-search-slot {
+  color: var(--gray-11);
+}
+
+.toc-search-clear-slot {
+  padding-right: 0.2rem;
+}
+
+.toc-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: var(--gray-11);
+  width: auto;
+  height: auto;
+  padding: 0;
+  cursor: pointer;
+}
+
+.toc-search-clear:hover {
+  color: var(--gray-12);
+}
+
+.toc-search-clear-icon {
+  width: 14px;
+  height: 14px;
 }
 .toc-list {
   list-style: none;
@@ -395,6 +534,7 @@ button.primary:disabled {
   display: flex;
   align-items: baseline;
   gap: 0.15rem;
+  border-radius: 0.45rem;
 }
 .toc-toggle {
   flex-shrink: 0;
@@ -410,9 +550,23 @@ button.primary:disabled {
   padding: 0.15rem 0;
   line-height: 1.25;
   flex: 1;
+  border-radius: 0.35rem;
 }
 .toc a:hover {
   color: var(--ui-accent);
+}
+.toc-row.active > a,
+.toc a.active {
+  font-weight: 700;
+}
+.toc-row.active {
+  color: var(--ui-accent);
+}
+.toc-match {
+  background: color-mix(in srgb, var(--yellow-4) 72%, transparent);
+  color: inherit;
+  padding: 0 0.08rem;
+  border-radius: 0.18rem;
 }
 .toc-l1 > .toc-row > a {
   font-weight: 600;
@@ -634,7 +788,6 @@ button.primary:disabled {
   font-family: var(--default-font-family);
   letter-spacing: -0.035em !important;
   font-weight: 700 !important;
-  line-height: 1.02 !important;
   font-size: clamp(2.6rem, 7vw, 5rem) !important;
   /* Diagonal gradient from accent → ruby → fg. Gives the title a sense of
      warmth without shouting; the final stop uses gray-12 so the end of the
@@ -648,6 +801,14 @@ button.primary:disabled {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+}
+
+.landing-title-sub {
+  display: inline-block;
+  font-size: clamp(1.45rem, 3.8vw, 2.55rem);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
 }
 
 .landing-features {
@@ -788,7 +949,7 @@ button.primary:disabled {
 }
 
 .anchor-group.thread-focused {
-  border-radius: 10px;
+  border-radius: 5px;
   background: color-mix(in srgb, var(--ui-accent) 8%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--ui-accent) 24%, transparent);
   transition: background-color 180ms ease-out, box-shadow 180ms ease-out;

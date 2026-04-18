@@ -1,12 +1,37 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Badge, Box, Button, Flex, IconButton, Select, Slider, Tabs, Text, Tooltip } from '@radix-ui/themes';
-import { ChevronLeftIcon, ChevronRightIcon } from '@radix-ui/react-icons';
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import {
+  Badge,
+  Button,
+  Flex,
+  IconButton,
+  Select,
+  Slider,
+  Tabs,
+  Text,
+  TextField,
+  Tooltip,
+} from '@radix-ui/themes';
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  Cross2Icon,
+  MagnifyingGlassIcon,
+} from '@radix-ui/react-icons';
 import type {
   CommentAnchor,
   Document,
   Comment,
   DocumentSettingsResponse,
   EditProposal,
+  TocNode,
 } from '../lib/api.js';
 import {
   createComment as apiCreate,
@@ -42,6 +67,10 @@ import { CommentsPane } from './CommentsPane.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { AppBar } from './AppBar.js';
 import { AdminSettingsDialog } from './AdminSettingsDialog.js';
+import {
+  DocumentSearchResultsPane,
+  type DocumentSearchResult,
+} from './DocumentSearchResultsPane.js';
 import { HistoryList } from './HistoryList.js';
 import { documentTitle } from '../lib/doc-title.js';
 
@@ -67,8 +96,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const canComment = doc.role !== 'reader';
   const [tocOpen, setTocOpen] = useState(true);
   const [commentsOpen, setCommentsOpen] = useState(true);
-  const [rightTab, setRightTab] = useState<'comments' | 'history'>('comments');
+  const [rightTab, setRightTab] = useState<'comments' | 'history' | 'search'>('comments');
   const [historyVersion, setHistoryVersion] = useState(0);
+  const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
+  const [docSearchOpen, setDocSearchOpen] = useState(false);
+  const [docSearchQuery, setDocSearchQuery] = useState('');
+  const deferredDocSearchQuery = useDeferredValue(docSearchQuery);
+  const [searchResults, setSearchResults] = useState<DocumentSearchResult[]>([]);
+  const [activeSearchTarget, setActiveSearchTarget] = useState<{ id: string; nonce: number } | null>(
+    null,
+  );
 
   const [maxWidth, setMaxWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(MAX_WIDTH_KEY));
@@ -104,6 +141,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     setLiveRendered(doc.rendered);
   }, [doc.uid, doc.source, doc.rendered]);
 
+  useEffect(() => {
+    setDocSearchOpen(false);
+    setDocSearchQuery('');
+    setSearchResults([]);
+    setActiveSearchTarget(null);
+    setActiveHeadingId(null);
+  }, [doc.uid]);
+
   // Reactive: tracks the display name wherever it gets changed — UserMenu,
   // comment composer, invite load, another tab — without stale local state.
   const displayName = useDisplayName();
@@ -114,6 +159,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
 
   const docRef = useRef<HTMLElement>(null);
+  const docBodyRef = useRef<HTMLDivElement>(null);
+  const docSearchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     localStorage.setItem(MAX_WIDTH_KEY, String(maxWidth));
@@ -138,6 +185,90 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     if (!canComment) setPendingAnchor(null);
   }, [canComment]);
+
+  const headingIds = useMemo(() => flattenTocIds(liveRendered.toc), [liveRendered.toc]);
+  const headingIdsKey = useMemo(() => headingIds.join('\u0000'), [headingIds]);
+
+  useEffect(() => {
+    const container = docBodyRef.current;
+    const root = docRef.current;
+    if (!container || !root || headingIds.length === 0) {
+      setActiveHeadingId(null);
+      return;
+    }
+
+    const headings = headingIds
+      .map((id) => root.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`))
+      .filter((heading): heading is HTMLElement => Boolean(heading));
+
+    if (headings.length === 0) {
+      setActiveHeadingId(null);
+      return;
+    }
+
+    let frame = 0;
+    const updateActiveHeading = () => {
+      frame = 0;
+      const containerTop = container.getBoundingClientRect().top;
+      const threshold = containerTop + 96;
+      let current = headings[0]!.id;
+
+      for (const heading of headings) {
+        if (heading.getBoundingClientRect().top <= threshold) {
+          current = heading.id;
+          continue;
+        }
+        break;
+      }
+
+      setActiveHeadingId((prev) => (prev === current ? prev : current));
+    };
+
+    const scheduleUpdate = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(updateActiveHeading);
+    };
+
+    scheduleUpdate();
+    container.addEventListener('scroll', scheduleUpdate, { passive: true });
+    window.addEventListener('resize', scheduleUpdate);
+    return () => {
+      container.removeEventListener('scroll', scheduleUpdate);
+      window.removeEventListener('resize', scheduleUpdate);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [headingIdsKey, liveRendered.html]);
+
+  useEffect(() => {
+    if (!docSearchOpen) return;
+    const input = docSearchInputRef.current;
+    if (!input) return;
+    const frame = window.requestAnimationFrame(() => input.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [docSearchOpen]);
+
+  useEffect(() => {
+    if (!docSearchOpen) return;
+    setCommentsOpen(true);
+  }, [docSearchOpen]);
+
+  useEffect(() => {
+    if (!docSearchOpen || deferredDocSearchQuery.trim()) return;
+    setActiveSearchTarget(null);
+  }, [deferredDocSearchQuery, docSearchOpen]);
+
+  useEffect(() => {
+    if (!docSearchOpen || !deferredDocSearchQuery.trim()) return;
+    if (searchResults.length === 0) {
+      setActiveSearchTarget(null);
+      return;
+    }
+
+    setActiveSearchTarget((prev) => {
+      if (prev && searchResults.some((result) => result.id === prev.id)) return prev;
+      return { id: searchResults[0]!.id, nonce: (prev?.nonce ?? 0) + 1 };
+    });
+  }, [docSearchOpen, deferredDocSearchQuery, searchResults]);
 
   useEffect(() => {
     let cancelled = false;
@@ -483,6 +614,52 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1 }));
   }, []);
 
+  const updateSearchResults = useCallback((results: DocumentSearchResult[]) => {
+    setSearchResults(results);
+  }, []);
+
+  const focusSearchResult = useCallback((id: string) => {
+    setCommentsOpen(true);
+    setRightTab('search');
+    setActiveSearchTarget((prev) => ({ id, nonce: (prev?.nonce ?? 0) + 1 }));
+  }, []);
+
+  const navigateSearchResult = useCallback(
+    (direction: -1 | 1) => {
+      if (searchResults.length === 0) return;
+
+      const currentIndex = activeSearchTarget
+        ? searchResults.findIndex((result) => result.id === activeSearchTarget.id)
+        : -1;
+      const baseIndex = currentIndex >= 0 ? currentIndex : direction > 0 ? -1 : 0;
+      const nextIndex = (baseIndex + direction + searchResults.length) % searchResults.length;
+      const next = searchResults[nextIndex];
+      if (!next) return;
+
+      setActiveSearchTarget((prev) => ({ id: next.id, nonce: (prev?.nonce ?? 0) + 1 }));
+    },
+    [activeSearchTarget, searchResults],
+  );
+
+  const closeDocumentSearch = useCallback(() => {
+    setDocSearchOpen(false);
+    setDocSearchQuery('');
+    setSearchResults([]);
+    setActiveSearchTarget(null);
+    setRightTab((prev) => (prev === 'search' ? 'comments' : prev));
+  }, []);
+
+  const activeSearchIndex = activeSearchTarget
+    ? searchResults.findIndex((result) => result.id === activeSearchTarget.id)
+    : -1;
+  const hasSearchResults = docSearchOpen && searchResults.length > 0;
+
+  useEffect(() => {
+    if (rightTab !== 'search') return;
+    if (hasSearchResults) return;
+    setRightTab('comments');
+  }, [hasSearchResults, rightTab]);
+
   return (
     <div className="doc-page">
       <AppBar
@@ -510,7 +687,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </Text>
             )}
           </Flex>
-          {tocOpen && <Toc nodes={doc.rendered.toc} />}
+          {tocOpen && <Toc nodes={liveRendered.toc} activeId={activeHeadingId} />}
           {tocOpen && <ResizeHandle side="left" width={tocWidth} onResize={setTocWidth} />}
         </aside>
 
@@ -524,14 +701,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </Text>
               <Slider
                 size="1"
-                style={{ width: 160 }}
+                style={{ width: 116 }}
                 min={40}
                 max={120}
                 step={1}
                 value={[maxWidth]}
                 onValueChange={(v) => setMaxWidth(v[0] ?? maxWidth)}
               />
-              <Text size="1" color="gray" style={{ minWidth: '4ch' }}>
+              <Text size="1" color="gray" style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}>
                 {maxWidth}ch
               </Text>
             </Flex>
@@ -541,14 +718,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </Text>
               <Slider
                 size="1"
-                style={{ width: 120 }}
+                style={{ width: 92 }}
                 min={80}
                 max={140}
                 step={1}
                 value={[textZoom]}
                 onValueChange={(v) => setTextZoom(v[0] ?? textZoom)}
               />
-              <Text size="1" color="gray" style={{ minWidth: '4ch' }}>
+              <Text size="1" color="gray" style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}>
                 {textZoom}%
               </Text>
               <Button
@@ -560,18 +737,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 Reset
               </Button>
             </Flex>
-            <span className="spacer" />
-            {error && (
-              <Text size="1" color="red">
-                {error}
-              </Text>
-            )}
             <Flex align="center" gap="2">
               <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
                 Theme
               </Text>
               <Select.Root
                 value={theme}
+                size="1"
                 onValueChange={(next) => {
                   setTheme(next);
                   setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
@@ -587,17 +759,98 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 </Select.Content>
               </Select.Root>
             </Flex>
+            <span className="spacer" />
+            {error && (
+              <Text size="1" color="red">
+                {error}
+              </Text>
+            )}
             {doc.role === 'admin' && onDocSettingsChanged && (
               <AdminSettingsDialog doc={doc} onChange={onDocSettingsChanged} />
             )}
+            <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
+              <IconButton
+                variant="soft"
+                color="indigo"
+                size="2"
+                className={`doc-search-trigger ${docSearchOpen ? 'active' : ''}`}
+                onClick={() => {
+                  if (docSearchOpen) {
+                    closeDocumentSearch();
+                    return;
+                  }
+                  setDocSearchOpen(true);
+                }}
+                aria-label={docSearchOpen ? 'Close document search' : 'Search document'}
+              >
+                <MagnifyingGlassIcon />
+              </IconButton>
+            </Tooltip>
           </Flex>
-          <div className="doc-body">
+          {docSearchOpen && (
+            <div className="doc-search-popover">
+              <Flex align="center" gap="2" className="doc-search-toolbar">
+                <TextField.Root
+                  ref={docSearchInputRef}
+                  size="1"
+                  type="search"
+                  value={docSearchQuery}
+                  onChange={(event) => setDocSearchQuery(event.target.value)}
+                  placeholder="Search this document"
+                  className="doc-search-field"
+                >
+                  <TextField.Slot>
+                    <MagnifyingGlassIcon />
+                  </TextField.Slot>
+                </TextField.Root>
+                <Text size="1" color="gray" className="doc-search-count">
+                  {searchResults.length === 0
+                    ? '0 results'
+                    : `${activeSearchIndex >= 0 ? activeSearchIndex + 1 : 1}/${searchResults.length}`}
+                </Text>
+                <IconButton
+                  size="1"
+                  variant="ghost"
+                  color="gray"
+                  aria-label="Previous search result"
+                  onClick={() => navigateSearchResult(-1)}
+                  disabled={searchResults.length === 0}
+                >
+                  <ChevronLeftIcon />
+                </IconButton>
+                <IconButton
+                  size="1"
+                  variant="ghost"
+                  color="gray"
+                  aria-label="Next search result"
+                  onClick={() => navigateSearchResult(1)}
+                  disabled={searchResults.length === 0}
+                >
+                  <ChevronRightIcon />
+                </IconButton>
+                <IconButton
+                  size="1"
+                  variant="ghost"
+                  color="gray"
+                  aria-label="Close document search"
+                  onClick={closeDocumentSearch}
+                >
+                  <Cross2Icon />
+                </IconButton>
+              </Flex>
+            </div>
+          )}
+          <div className="doc-body" ref={docBodyRef}>
             <RenderedDoc
               rendered={liveRendered}
               elRef={docRef}
               maxWidthCh={maxWidth}
               textZoom={textZoom / 100}
               highlights={commentHighlights}
+              searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}
+              activeSearchResultId={activeSearchTarget?.id ?? null}
+              activeSearchVersion={activeSearchTarget?.nonce ?? 0}
+              onSearchResultsChange={updateSearchResults}
               onHighlightClick={openCommentThread}
             />
             {canComment && (
@@ -620,7 +873,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           {commentsOpen ? (
             <Tabs.Root
               value={rightTab}
-              onValueChange={(v) => setRightTab(v as 'comments' | 'history')}
+              onValueChange={(v) => setRightTab(v as 'comments' | 'history' | 'search')}
               className="right-tabs"
             >
               <Flex align="center" px="2" pt="2" className="pane-header">
@@ -636,6 +889,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     </Flex>
                   </Tabs.Trigger>
                   <Tabs.Trigger value="history">History</Tabs.Trigger>
+                  {hasSearchResults && (
+                    <Tabs.Trigger value="search">
+                      <Flex align="center" gap="2">
+                        Search Results
+                        <Badge size="1" variant="soft" color="gray" radius="full">
+                          {searchResults.length}
+                        </Badge>
+                      </Flex>
+                    </Tabs.Trigger>
+                  )}
                 </Tabs.List>
                 <span className="spacer" />
                 <Tooltip content="Collapse">
@@ -675,6 +938,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               <Tabs.Content value="history" className="right-tab-panel">
                 <HistoryList uid={doc.uid} version={historyVersion} />
               </Tabs.Content>
+              {hasSearchResults && (
+                <Tabs.Content value="search" className="right-tab-panel">
+                  <DocumentSearchResultsPane
+                    query={deferredDocSearchQuery}
+                    results={searchResults}
+                    activeResultId={activeSearchTarget?.id ?? null}
+                    onSelectResult={focusSearchResult}
+                  />
+                </Tabs.Content>
+              )}
             </Tabs.Root>
           ) : (
             <Flex align="center" justify="center" py="2">
@@ -709,4 +982,18 @@ function addMentionName(map: Map<string, string>, name: string | null | undefine
   if (!trimmed) return;
   const key = trimmed.toLowerCase();
   if (!map.has(key)) map.set(key, trimmed);
+}
+
+function flattenTocIds(nodes: readonly TocNode[]): string[] {
+  const ids: string[] = [];
+
+  const visit = (entries: readonly TocNode[]) => {
+    for (const entry of entries) {
+      ids.push(entry.id);
+      visit(entry.children);
+    }
+  };
+
+  visit(nodes);
+  return ids;
 }

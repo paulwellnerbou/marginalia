@@ -3,6 +3,16 @@ import type { RenderResult } from '@marginalia/renderer';
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
 
+export interface DocumentSearchResult {
+  id: string;
+  index: number;
+  text: string;
+  contextBefore: string;
+  contextAfter: string;
+  blockId: string | null;
+  headingId: string | null;
+}
+
 interface RenderedDocProps {
   rendered: Pick<RenderResult, 'html'>;
   /** Optional external ref — lets the parent reach the article DOM node. */
@@ -19,6 +29,14 @@ interface RenderedDocProps {
     startOffset: number;
     endOffset: number;
   }>;
+  /** Plain-text query to highlight inside the rendered document. */
+  searchQuery?: string;
+  /** Result id currently selected by the document search UI. */
+  activeSearchResultId?: string | null;
+  /** Bumped when the selected result should scroll into view again. */
+  activeSearchVersion?: number;
+  /** Called whenever search results are recomputed from the live article DOM. */
+  onSearchResultsChange?: (results: DocumentSearchResult[]) => void;
   /** Open the corresponding comment thread for a clicked highlight. */
   onHighlightClick?: (threadId: string) => void;
 }
@@ -47,6 +65,10 @@ export function RenderedDoc({
   maxWidthCh,
   textZoom,
   highlights = [],
+  searchQuery = '',
+  activeSearchResultId = null,
+  activeSearchVersion = 0,
+  onSearchResultsChange,
   onHighlightClick,
 }: RenderedDocProps) {
   const internal = useRef<HTMLElement>(null);
@@ -75,6 +97,42 @@ export function RenderedDoc({
     applyCommentHighlights(el, highlights);
     return () => clearCommentHighlights(el);
   }, [highlights, rendered.html, ref]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    clearDocumentSearchHighlights(el);
+
+    const trimmedQuery = searchQuery.trim();
+    if (!trimmedQuery) {
+      onSearchResultsChange?.([]);
+      return;
+    }
+
+    const results = applyDocumentSearchHighlights(el, trimmedQuery);
+    onSearchResultsChange?.(results);
+    return () => clearDocumentSearchHighlights(el);
+  }, [highlights, onSearchResultsChange, ref, rendered.html, searchQuery]);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const marks = el.querySelectorAll<HTMLElement>('mark[data-doc-search-highlight="true"]');
+    for (const mark of marks) {
+      mark.classList.toggle('active', mark.dataset.docSearchResultId === activeSearchResultId);
+    }
+
+    if (!activeSearchResultId) return;
+
+    const activeMark = el.querySelector<HTMLElement>(
+      `mark[data-doc-search-highlight="true"][data-doc-search-result-id="${CSS.escape(activeSearchResultId)}"]`,
+    );
+    if (!activeMark) return;
+
+    activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [activeSearchResultId, activeSearchVersion, ref]);
 
   // Anchor-click scroll + image-click lightbox. Both live on a single
   // delegated click handler on the article.
@@ -263,6 +321,72 @@ function clearCommentHighlights(root: HTMLElement): void {
   }
 }
 
+function applyDocumentSearchHighlights(root: HTMLElement, query: string): DocumentSearchResult[] {
+  if (!query) return [];
+
+  const textNodes = collectTextNodes(root);
+  if (textNodes.length === 0) return [];
+
+  let rawText = '';
+  for (const entry of textNodes) rawText += entry.node.data;
+
+  const loweredText = rawText.toLocaleLowerCase();
+  const loweredQuery = query.toLocaleLowerCase();
+  const results: DocumentSearchResult[] = [];
+  const ranges: Array<{ rawStart: number; rawEnd: number; resultId: string }> = [];
+
+  let searchFrom = 0;
+  let index = 0;
+  while (searchFrom <= loweredText.length - loweredQuery.length) {
+    const found = loweredText.indexOf(loweredQuery, searchFrom);
+    if (found < 0) break;
+
+    const resultId = `doc-search-${index}`;
+    const matchText = rawText.slice(found, found + query.length);
+    const startEntry = findTextNodeEntry(textNodes, found);
+    const blockId =
+      startEntry?.node.parentElement?.closest<HTMLElement>('[data-block]')?.dataset.block ?? null;
+    const headingId =
+      startEntry?.node.parentElement?.closest<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]')
+        ?.id ?? null;
+
+    results.push({
+      id: resultId,
+      index,
+      text: matchText,
+      contextBefore: formatContext(rawText.slice(Math.max(0, found - 36), found), true),
+      contextAfter: formatContext(
+        rawText.slice(found + query.length, Math.min(rawText.length, found + query.length + 52)),
+        false,
+      ),
+      blockId,
+      headingId,
+    });
+    ranges.push({ rawStart: found, rawEnd: found + query.length, resultId });
+
+    searchFrom = found + Math.max(query.length, 1);
+    index += 1;
+  }
+
+  for (let i = ranges.length - 1; i >= 0; i--) {
+    const range = ranges[i]!;
+    wrapSearchRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.resultId);
+  }
+
+  return results;
+}
+
+function clearDocumentSearchHighlights(root: HTMLElement): void {
+  const marks = root.querySelectorAll<HTMLElement>('mark[data-doc-search-highlight="true"]');
+  for (const mark of marks) {
+    const parent = mark.parentNode;
+    if (!parent) continue;
+    while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+    parent.removeChild(mark);
+    parent.normalize();
+  }
+}
+
 function resolveNormalizedRange(
   normalizedText: string,
   quote: string,
@@ -338,6 +462,16 @@ function collectTextNodes(root: HTMLElement): Array<{ node: Text; start: number;
   return textNodes;
 }
 
+function findTextNodeEntry(
+  textNodes: Array<{ node: Text; start: number; end: number }>,
+  offset: number,
+): { node: Text; start: number; end: number } | null {
+  for (const entry of textNodes) {
+    if (offset >= entry.start && offset < entry.end) return entry;
+  }
+  return textNodes[textNodes.length - 1] ?? null;
+}
+
 function mergeRanges(
   ranges: Array<{ rawStart: number; rawEnd: number; threadIds: string[] }>,
 ): Array<{ rawStart: number; rawEnd: number; threadIds: string[] }> {
@@ -377,6 +511,22 @@ function wrapRangeAcrossTextNodes(
   }
 }
 
+function wrapSearchRangeAcrossTextNodes(
+  textNodes: Array<{ node: Text; start: number; end: number }>,
+  rawStart: number,
+  rawEnd: number,
+  resultId: string,
+): void {
+  for (let i = textNodes.length - 1; i >= 0; i--) {
+    const entry = textNodes[i]!;
+    const segmentStart = Math.max(rawStart, entry.start);
+    const segmentEnd = Math.min(rawEnd, entry.end);
+    if (segmentEnd <= segmentStart) continue;
+
+    wrapSearchTextSlice(entry.node, segmentStart - entry.start, segmentEnd - entry.start, resultId);
+  }
+}
+
 function wrapTextSlice(
   node: Text,
   startOffset: number,
@@ -405,4 +555,35 @@ function wrapTextSlice(
   }
   parent.insertBefore(mark, target);
   mark.appendChild(target);
+}
+
+function wrapSearchTextSlice(
+  node: Text,
+  startOffset: number,
+  endOffset: number,
+  resultId: string,
+): void {
+  let target = node;
+  if (startOffset > 0) {
+    target = target.splitText(startOffset);
+  }
+  if (endOffset - startOffset < target.data.length) {
+    target.splitText(endOffset - startOffset);
+  }
+
+  const parent = target.parentNode;
+  if (!parent) return;
+
+  const mark = document.createElement('mark');
+  mark.dataset.docSearchHighlight = 'true';
+  mark.dataset.docSearchResultId = resultId;
+  mark.className = 'doc-search-highlight';
+  parent.insertBefore(mark, target);
+  mark.appendChild(target);
+}
+
+function formatContext(text: string, isPrefix: boolean): string {
+  const compact = text.replace(/\s+/gu, ' ').trim();
+  if (!compact) return '';
+  return isPrefix ? `...${compact} ` : ` ${compact}...`;
 }

@@ -82,13 +82,13 @@ export function HomePage() {
                 <MagicWandIcon /> Markdown, set in type
               </Badge>
               <Heading size="9" align="center" className="landing-title">
-                Write beautifully.
+                Collaborate beautifully.
                 <br />
-                Full-featured Markdown documents for collaboration.
+                <span className="landing-title-sub">Full-featured Markdown documents.</span>
               </Heading>
               <Text size="5" color="gray" align="center" style={{ maxWidth: '52ch' }}>
                 Marginalia renders your Markdown with book-quality typography, tracks every save in
-                git, and lets collaborators leave threaded comments on any paragraph.
+                git, and lets collaborators leave comments and change proposals on any paragraph.
               </Text>
               <Flex gap="3" mt="2" wrap="wrap" justify="center">
                 <Button size="4" onClick={() => setUploadOpen(true)}>

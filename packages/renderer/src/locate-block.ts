@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import remarkFrontmatter from 'remark-frontmatter';
 import { visit } from 'unist-util-visit';
 import { toString as mdastToString } from 'mdast-util-to-string';
-import type { Root, RootContent } from 'mdast';
+import type { ListItem, Root, RootContent, TableCell } from 'mdast';
 
 /**
  * Locate a top-level block OR a sub-block (list item / table cell) in
@@ -80,7 +80,7 @@ export function locateAllBlocks(markdown: string): Map<string, BlockSourceRange>
  * the bullet and the bullet is part of what the user edits.
  */
 function narrowedRange(
-  node: { type: string; children?: Array<{ position?: { start: { offset?: number }; end: { offset?: number } } }> },
+  node: ListItem | TableCell,
   start: number,
   end: number,
 ): { start: number; end: number } {
