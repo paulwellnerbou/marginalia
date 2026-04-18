@@ -24,8 +24,8 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
         </Dialog.Description>
 
         <div className="diff-view" role="region" aria-label="Diff">
-          {lines.length === 0 ? (
-            <Text size="1" color="gray">(empty)</Text>
+          {lines.every((l) => l.op === 'equal') ? (
+            <Text size="1" color="gray">(no changes)</Text>
           ) : (
             lines.map((l, idx) => (
               <div key={idx} className={`diff-line diff-${l.op}`}>

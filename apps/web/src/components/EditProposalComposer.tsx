@@ -1,12 +1,13 @@
 import { useMemo, useState } from 'react';
 import { Button, Flex, Text, TextArea, TextField } from '@radix-ui/themes';
-import { locateBlockSource } from '@marginalia/renderer';
+import type { BlockSourceRange } from '@marginalia/renderer';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
 interface Props {
   target: ProposalTarget;
   /** Full markdown source — used to extract the block's current source text. */
   docSource: string;
+  blockRanges: Map<string, BlockSourceRange>;
   needsName: boolean;
   onCancel: () => void;
   onSubmit: (payload: {
@@ -17,12 +18,12 @@ interface Props {
 }
 
 export function EditProposalComposer({
-  target, docSource, needsName, onCancel, onSubmit,
+  target, docSource, blockRanges, needsName, onCancel, onSubmit,
 }: Props) {
   const originalSource = useMemo(() => {
-    const range = locateBlockSource(docSource, target.block_id);
+    const range = blockRanges.get(target.block_id);
     return range ? docSource.slice(range.start, range.end) : '';
-  }, [docSource, target.block_id]);
+  }, [docSource, blockRanges, target.block_id]);
 
   const [value, setValue] = useState(originalSource);
   const [rationale, setRationale] = useState('');

@@ -1378,7 +1378,7 @@ button.primary.small {
  * ============================================================ */
 
 .block-actions-btn {
-  position: absolute;
+  position: fixed;
   z-index: 9;
   padding: 0.15rem 0.55rem;
   font-size: 0.75rem;

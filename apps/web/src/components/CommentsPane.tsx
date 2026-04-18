@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useRef, forwardRef, useImperativeHandle } from 'react';
 import { Badge, Button, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
 import { CheckCircledIcon, ChevronDownIcon, ChevronRightIcon, PaperPlaneIcon } from '@radix-ui/react-icons';
+import { locateAllBlocks } from '@marginalia/renderer';
 import type { Comment, CommentAnchor, EditProposal } from '../lib/api.js';
 import { CommentItem } from './CommentItem.js';
 import { EditProposalComposer } from './EditProposalComposer.js';
@@ -87,6 +88,9 @@ export function CommentsPane(props: Props) {
     () => groupProposals(proposals),
     [proposals],
   );
+  // Parse the markdown source once per change and derive per-block source
+  // ranges; proposal items below share the map instead of each one re-parsing.
+  const blockRanges = useMemo(() => locateAllBlocks(docSource), [docSource]);
 
   const { active, orphans } = useMemo(() => groupByAnchor(comments), [comments]);
   const [collapsedThreads, setCollapsedThreads] = useState<Set<string>>(new Set());
@@ -147,6 +151,7 @@ export function CommentsPane(props: Props) {
         <EditProposalComposer
           target={pendingProposalTarget}
           docSource={docSource}
+          blockRanges={blockRanges}
           needsName={!displayName}
           onCancel={onCancelPendingProposal}
           onSubmit={onCreateProposal}
@@ -161,6 +166,7 @@ export function CommentsPane(props: Props) {
               key={p.id}
               proposal={p}
               docSource={docSource}
+              blockRanges={blockRanges}
               canEdit={canEdit}
               isDocAdmin={isDocAdmin}
               onAccept={onAcceptProposal}
@@ -180,6 +186,7 @@ export function CommentsPane(props: Props) {
               key={p.id}
               proposal={p}
               docSource={docSource}
+              blockRanges={blockRanges}
               canEdit={canEdit}
               isDocAdmin={isDocAdmin}
               onAccept={onAcceptProposal}

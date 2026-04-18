@@ -188,7 +188,14 @@ async function updateDocument(c: Context, deps: AppDeps) {
     updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
   }
 
-  reanchorProposals(db, doc.uid, rendered.blocks.map((b) => b.id), now);
+  reanchorProposals(
+    db,
+    doc.uid,
+    rendered.blocks.map((b) => b.id),
+    now,
+    realtime,
+    decision.identity.clientId,
+  );
 
   if (isContentChange(previousSource, body.markdown)) {
     realtime.broadcast(

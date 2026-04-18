@@ -13,6 +13,7 @@ import {
   SESSION_COOKIE,
   type Identity,
 } from '../auth.js';
+import type { Realtime } from '../realtime.js';
 import type { AppDeps } from './documents.js';
 
 export function editProposalsRouter(deps: AppDeps): Hono {
@@ -122,6 +123,11 @@ async function deleteProposal(c: Context, deps: AppDeps) {
   const isAuthor = row.author_client_id === decision.identity.clientId;
   const isAdmin = decision.role === 'admin';
   if (!isAuthor && !isAdmin) return c.json({ error: 'forbidden' }, 403);
+  // Accepted proposals are part of the audit trail — only admins may remove
+  // them. Authors can delete their own pending/rejected/orphaned proposals.
+  if (row.status === 'accepted' && !isAdmin) {
+    return c.json({ error: 'forbidden-accepted' }, 403);
+  }
 
   db.prepare('UPDATE edit_proposals SET deleted_at = ? WHERE id = ?').run(Date.now(), pid);
   deps.realtime.broadcast(
@@ -237,7 +243,14 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   }
 
   // Re-anchor other pending proposals (their block hash may have shifted).
-  reanchorProposals(db, doc.uid, rendered.blocks.map((b) => b.id), now);
+  reanchorProposals(
+    db,
+    doc.uid,
+    rendered.blocks.map((b) => b.id),
+    now,
+    realtime,
+    identity.clientId,
+  );
 
   // Mark this proposal accepted.
   db.prepare(
@@ -267,14 +280,22 @@ async function acceptProposal(c: Context, deps: AppDeps) {
 
 /**
  * Mark any pending proposal whose anchor block is no longer present as
- * orphaned. Used after any source edit (proposal acceptance or direct save).
+ * orphaned, null out its `anchor_block_id` so clients stop offering
+ * jump-to-anchor against a stale id, and broadcast `edit_proposal.updated`
+ * for each one so UIs update live. Used after any source edit (proposal
+ * acceptance or direct save).
+ *
+ * Returns the orphaned proposal rows (post-update) for callers that need
+ * to do more with them.
  */
 export function reanchorProposals(
   db: Database,
   docUid: string,
   presentBlockIds: string[],
   now: number,
-): void {
+  realtime?: Realtime,
+  exceptClientId?: string,
+): EditProposalRow[] {
   const present = new Set(presentBlockIds);
   const pending = db
     .prepare(
@@ -283,13 +304,29 @@ export function reanchorProposals(
     )
     .all(docUid) as EditProposalRow[];
   const mark = db.prepare(
-    `UPDATE edit_proposals SET status = 'orphaned', updated_at = ? WHERE id = ?`,
+    `UPDATE edit_proposals
+        SET status = 'orphaned', anchor_block_id = NULL, updated_at = ?
+      WHERE id = ?`,
   );
+  const fetch = db.prepare('SELECT * FROM edit_proposals WHERE id = ?');
+  const orphaned: EditProposalRow[] = [];
   for (const p of pending) {
     if (!p.anchor_block_id || !present.has(p.anchor_block_id)) {
       mark.run(now, p.id);
+      const fresh = fetch.get(p.id) as EditProposalRow | undefined;
+      if (fresh) {
+        orphaned.push(fresh);
+        if (realtime) {
+          realtime.broadcast(
+            docUid,
+            { type: 'edit_proposal.updated', edit_proposal: toWire(fresh) },
+            exceptClientId,
+          );
+        }
+      }
     }
   }
+  return orphaned;
 }
 
 function loadDoc(db: Database, uid: string | undefined): DocumentRow | null {

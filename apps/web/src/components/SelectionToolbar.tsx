@@ -16,9 +16,12 @@ interface Props {
 
 /**
  * Floating toolbar next to a text selection inside the document pane.
- * Click "+ Comment" → captures the exact selection span. Click "Propose
- * edit" → expands to the enclosing block (paragraph, heading, list item,
- * table cell, …) so the edit targets a whole source block.
+ * "+ Comment" captures the exact selection span. "Propose edit" expands
+ * to the enclosing top-level block (paragraph, heading, code block,
+ * blockquote, list, table, …). Block ids are attached by the renderer
+ * only to top-level mdast nodes, so list items and individual table
+ * cells are not separately targetable today — selecting inside them
+ * resolves to the enclosing list / table as a whole.
  */
 export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
   const [state, setState] = useState<{ rect: DOMRect; blockId: string | null } | null>(null);
@@ -66,7 +69,7 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
     const root = rootRef.current;
     if (!root || !state || !state.blockId) return;
     const blockEl = root.querySelector<HTMLElement>(
-      `[data-block="${state.blockId.replace(/"/g, '\\"')}"]`,
+      `[data-block="${CSS.escape(state.blockId)}"]`,
     );
     if (!blockEl) return;
     const blockText = (blockEl.textContent ?? '').replace(/\s+/gu, ' ').trim();

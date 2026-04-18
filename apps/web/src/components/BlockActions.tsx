@@ -8,9 +8,14 @@ interface Props {
 
 /**
  * Hover-trigger on every top-level block (`[data-block]`) — renders a
- * "Propose edit" button floating at the block's right edge while the pointer
- * is over it. Complements the SelectionToolbar, which only appears on an
- * active text selection.
+ * "Propose edit" button floating at the block's right edge while the
+ * pointer is over it. Complements the SelectionToolbar, which only
+ * appears on an active text selection.
+ *
+ * The button uses `position: fixed` because the document scrolls inside a
+ * nested pane, not the viewport. `getBoundingClientRect()` already yields
+ * viewport coordinates, so no scroll offsets are added — any hover-anchor
+ * drift on scroll is handled by hiding the button while scrolling.
  */
 export function BlockActions({ rootRef, onPropose }: Props) {
   const [target, setTarget] = useState<{
@@ -52,12 +57,14 @@ export function BlockActions({ rootRef, onPropose }: Props) {
     }
 
     function onScroll() {
-      // Positions will be stale; just hide.
+      // Positions would drift with the scrolling pane; just hide.
       setTarget(null);
     }
 
     root.addEventListener('mouseover', onOver);
     root.addEventListener('mouseleave', onLeave);
+    // capture=true so we catch scrolls on the nested scroll container
+    // (the document pane), not just window.
     window.addEventListener('scroll', onScroll, true);
     return () => {
       root.removeEventListener('mouseover', onOver);
@@ -73,7 +80,7 @@ export function BlockActions({ rootRef, onPropose }: Props) {
     const root = rootRef.current;
     if (!root || !target) return;
     const el = root.querySelector<HTMLElement>(
-      `[data-block="${target.blockId.replace(/"/g, '\\"')}"]`,
+      `[data-block="${CSS.escape(target.blockId)}"]`,
     );
     if (!el) return;
     const blockText = (el.textContent ?? '').replace(/\s+/gu, ' ').trim();
@@ -81,9 +88,11 @@ export function BlockActions({ rootRef, onPropose }: Props) {
     setTarget(null);
   }
 
+  // position: fixed — viewport-relative, immune to offsetParent / scroll
+  // context mismatches. `getBoundingClientRect()` is already viewport space.
   const style: React.CSSProperties = {
-    top: target.rect.top + window.scrollY + 2,
-    left: target.rect.right + window.scrollX + 6,
+    top: target.rect.top + 2,
+    left: target.rect.right + 6,
   };
 
   return (

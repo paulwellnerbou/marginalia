@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Badge, Button, Flex, Text } from '@radix-ui/themes';
-import { locateBlockSource } from '@marginalia/renderer';
+import type { BlockSourceRange } from '@marginalia/renderer';
 import type { EditProposal } from '../lib/api.js';
 import { getClientId } from '../lib/identity.js';
 import { ConfirmButton } from './ConfirmButton.js';
@@ -10,6 +10,9 @@ interface Props {
   proposal: EditProposal;
   /** Current doc source — used by the diff to show the live original. */
   docSource: string;
+  /** Precomputed block-id → source-range map for the current doc source.
+   *  Shared across all proposal items to avoid per-item markdown re-parses. */
+  blockRanges: Map<string, BlockSourceRange>;
   /** Viewer has edit rights (admin or editor). */
   canEdit: boolean;
   isDocAdmin: boolean;
@@ -20,7 +23,7 @@ interface Props {
 }
 
 export function EditProposalItem({
-  proposal, docSource, canEdit, isDocAdmin,
+  proposal, docSource, blockRanges, canEdit, isDocAdmin,
   onAccept, onReject, onDelete, onScrollToAnchor,
 }: Props) {
   const [diffOpen, setDiffOpen] = useState(false);
@@ -29,11 +32,11 @@ export function EditProposalItem({
 
   const originalSource = useMemo(() => {
     if (!proposal.anchor.block_id) return proposal.anchor.quote ?? '';
-    const range = locateBlockSource(docSource, proposal.anchor.block_id);
+    const range = blockRanges.get(proposal.anchor.block_id);
     if (range) return docSource.slice(range.start, range.end);
     // Fall back to the quoted snapshot captured at creation time.
     return proposal.anchor.quote ?? '';
-  }, [docSource, proposal.anchor.block_id, proposal.anchor.quote]);
+  }, [docSource, blockRanges, proposal.anchor.block_id, proposal.anchor.quote]);
 
   const blockId = proposal.anchor.block_id;
   const jump = blockId ? () => onScrollToAnchor(blockId) : undefined;

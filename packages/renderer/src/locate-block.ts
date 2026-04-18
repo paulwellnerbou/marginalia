@@ -19,33 +19,36 @@ export interface BlockSourceRange {
   text: string;
 }
 
-export function locateBlockSource(
-  markdown: string,
-  blockId: string,
-): BlockSourceRange | null {
+/** Build a map of every top-level block's id → source range. Use this when
+ *  resolving many blocks against the same document — callers that resolve a
+ *  single id may use `locateBlockSource` instead. */
+export function locateAllBlocks(markdown: string): Map<string, BlockSourceRange> {
   const tree = unified()
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkFrontmatter, ['yaml'])
     .parse(markdown) as Root;
 
+  const out = new Map<string, BlockSourceRange>();
   for (const node of tree.children) {
     const text = normalize(mdastToString(node));
     if (!text && node.type !== 'thematicBreak') continue;
-    const id = hashBlock(node.type, text);
-    if (id !== blockId) continue;
     const pos = (node as RootContent).position;
-    if (!pos || pos.start.offset === undefined || pos.end.offset === undefined) {
-      return null;
+    if (!pos || pos.start.offset === undefined || pos.end.offset === undefined) continue;
+    const id = hashBlock(node.type, text);
+    // First occurrence wins — same block text hashed identically would shadow.
+    if (!out.has(id)) {
+      out.set(id, { start: pos.start.offset, end: pos.end.offset, kind: node.type, text });
     }
-    return {
-      start: pos.start.offset,
-      end: pos.end.offset,
-      kind: node.type,
-      text,
-    };
   }
-  return null;
+  return out;
+}
+
+export function locateBlockSource(
+  markdown: string,
+  blockId: string,
+): BlockSourceRange | null {
+  return locateAllBlocks(markdown).get(blockId) ?? null;
 }
 
 function normalize(text: string): string {
