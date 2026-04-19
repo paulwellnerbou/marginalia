@@ -32,6 +32,11 @@ export function ViewPage() {
   useEffect(() => {
     if (!uid) return;
     let cancelled = false;
+    // Reset per-load state so a lingering error from the previous uid
+    // doesn't force the error UI over the incoming doc. React Router
+    // reuses this component across /d/:uid route changes.
+    setError(null);
+    setDoc(null);
     (async () => {
       try {
         const d = await getDocument(uid);
@@ -107,13 +112,7 @@ export function ViewPage() {
           <Flex gap="3" mt="3">
             <Link to="/">← Home</Link>
             {uid && (
-              <Button
-                variant="soft"
-                onClick={() => {
-                  setError(null);
-                  setReloadNonce((n) => n + 1);
-                }}
-              >
+              <Button variant="soft" onClick={() => setReloadNonce((n) => n + 1)}>
                 Try again
               </Button>
             )}
