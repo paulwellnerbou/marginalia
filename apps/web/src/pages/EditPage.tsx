@@ -88,12 +88,16 @@ export function EditPage() {
     );
   }, [uid]);
 
-  // Mirror ViewPage: sync localStorage to the server's authoritative name.
+  // Mirror ViewPage: sync localStorage AND the header TextField state to
+  // the server's authoritative name. Without the setName, the TextField
+  // keeps showing whatever getDisplayName() returned at mount and Save
+  // would silently revert the invite-seeded identity.
   useEffect(() => {
     if (!doc?.display_name) return;
     if (getDisplayName() !== doc.display_name) {
       setDisplayName(doc.display_name);
     }
+    setName(doc.display_name);
   }, [doc]);
 
   useEffect(() => {
