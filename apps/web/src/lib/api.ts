@@ -165,6 +165,18 @@ export function notifyAuthCancelled(docUid: string): void {
   window.dispatchEvent(new CustomEvent(AUTH_CANCELLED_EVENT, { detail: { docUid } }));
 }
 
+/**
+ * Is an auth-gate currently open for this doc? The UI reads this on
+ * mount as a durability mechanism — AUTH_REQUIRED is dispatched
+ * synchronously, so a listener that attaches later (e.g. a dialog
+ * mounted after the offending request fired) would miss the event and
+ * the gate would hang. Polling this on mount lets the dialog pick up
+ * any gate that was already armed.
+ */
+export function isAuthPending(docUid: string): boolean {
+  return authGates.has(docUid);
+}
+
 function waitForAuth(docUid: string): Promise<void> {
   const existing = authGates.get(docUid);
   if (existing) return existing;

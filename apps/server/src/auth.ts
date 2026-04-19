@@ -177,10 +177,9 @@ export function authorize(
 }
 
 /**
- * Side-effect: upsert doc_users on every authenticated request; on a
- * name diff, fan out the rename to prior comments + mentions. Anonymous
- * callers (identity null) are skipped so the registry doesn't fill up
- * with read-only clientIds.
+ * Side-effect: upsert doc_users on every authenticated request that has
+ * a non-null identity; on a name diff, fan out the rename to prior
+ * comments + mentions. Anonymous callers (identity null) are skipped.
  */
 function recordAndReturn(db: Database, docUid: string, decision: AuthDecision): AuthDecision {
   if (!decision.ok || !decision.identity) return decision;

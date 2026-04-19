@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Flex, IconButton, Tooltip } from '@radix-ui/themes';
 import { CheckIcon, Cross2Icon, TrashIcon } from '@radix-ui/react-icons';
 
@@ -37,18 +37,25 @@ export function ConfirmButton({
 }: Props) {
   const [armed, setArmed] = useState(false);
   const timer = useRef<number | null>(null);
+  // Notify the parent in the SAME render batch as the state change so
+  // sibling UI gated on `armed` doesn't flash on-screen for a frame
+  // before it hears about it (a useEffect-driven notification runs
+  // after paint).
+  const setArmedAndNotify = useCallback(
+    (next: boolean) => {
+      setArmed(next);
+      onArmedChange?.(next);
+    },
+    [onArmedChange],
+  );
 
   useEffect(() => {
     if (!armed) return;
-    timer.current = window.setTimeout(() => setArmed(false), timeoutMs);
+    timer.current = window.setTimeout(() => setArmedAndNotify(false), timeoutMs);
     return () => {
       if (timer.current !== null) window.clearTimeout(timer.current);
     };
-  }, [armed, timeoutMs]);
-
-  useEffect(() => {
-    onArmedChange?.(armed);
-  }, [armed, onArmedChange]);
+  }, [armed, timeoutMs, setArmedAndNotify]);
 
   if (!armed) {
     const trigger = (
@@ -58,7 +65,7 @@ export function ConfirmButton({
           variant="soft"
           color="red"
           aria-label={ariaLabel ?? label}
-          onClick={() => setArmed(true)}
+          onClick={() => setArmedAndNotify(true)}
         >
           <TrashIcon />
         </IconButton>
@@ -92,7 +99,7 @@ export function ConfirmButton({
           variant="soft"
           color="gray"
           aria-label="Cancel delete"
-          onClick={() => setArmed(false)}
+          onClick={() => setArmedAndNotify(false)}
         >
           <Cross2Icon />
         </IconButton>
@@ -104,7 +111,7 @@ export function ConfirmButton({
           color="red"
           aria-label={confirmLabel}
           onClick={() => {
-            setArmed(false);
+            setArmedAndNotify(false);
             void onConfirm();
           }}
         >

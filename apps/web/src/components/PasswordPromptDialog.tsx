@@ -4,6 +4,7 @@ import {
   ApiError,
   AUTH_REQUIRED_EVENT,
   authenticate,
+  isAuthPending,
   notifyAuthCancelled,
   notifyAuthResolved,
 } from '../lib/api.js';
@@ -31,6 +32,14 @@ export function PasswordPromptDialog({ docUid }: { docUid: string }) {
       setOpen(true);
     }
     window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    // AUTH_REQUIRED is dispatched synchronously, so a gate that armed
+    // before this component mounted would be missed. Recover by
+    // polling the gate state at mount.
+    if (isAuthPending(docUid)) {
+      setError(null);
+      setPassword('');
+      setOpen(true);
+    }
     return () => {
       window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
       // Wake any in-flight auth-gate for this doc so navigating away
