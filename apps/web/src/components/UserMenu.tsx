@@ -17,17 +17,9 @@ import { getClientId, setDisplayName as persistName, useDisplayName } from '../l
 import { Copyable } from './Copyable.js';
 
 /**
- * User affordance in the app bar. Always shows a person icon — never an
- * initial. The menu surfaces the stable browser identity (copyable client
- * ID), the current role when document-scoped, and a rename dialog for the
- * user's default display name.
- *
- * Note: there is no longer a separate "forced name" source. For admin/named
- * invites the server seeds localStorage via the getDocument response
- * (handled by ViewPage/EditPage), so the local name and the server-side
- * identity stay in sync through the normal useDisplayName path. Renaming
- * here writes to localStorage → next request carries the new name → server
- * propagates the change to prior comments and mentions.
+ * App-bar user affordance: stable client ID (copyable), role badge when
+ * doc-scoped, rename dialog. Renaming writes localStorage → useDisplayName
+ * → next request → server fans the rename out to comments/mentions.
  */
 export function UserMenu({
   onChange,

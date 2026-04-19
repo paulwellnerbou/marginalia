@@ -83,8 +83,7 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
 
   await store.write(uid, markdown, identity, 'upload');
 
-  // `editable_by_anyone` is a deprecated column kept for one release. New
-  // rows write 0; the auth path no longer reads it. See ACCESS_CONTROL Step 2.
+  // editable_by_anyone is deprecated; always 0 on new rows, unread by authorize().
   db.prepare(
     `INSERT INTO documents
        (uid, path, name, password_hash, editable_by_anyone, default_theme, created_at, updated_at)
@@ -129,17 +128,9 @@ async function getDocument(c: Context, deps: AppDeps) {
   const source = store.read(doc.uid);
   const rendered = await render(source);
 
-  // `display_name` is the server-RESOLVED name for this visitor — the
-  // current authoritative identity for this doc. For admin + named
-  // invites that's either the invite's seed (first visit) or the
-  // possibly-renamed doc_users row (subsequent visits). For generic
-  // invites and no-invite visitors we return null: there's no name the
-  // server wants to impose, the client uses its own.
-  //
-  // The client uses this to seed / sync localStorage after page load
-  // (see ViewPage, EditPage). On every subsequent request the header
-  // therefore carries the name the server also has recorded, so renames
-  // only fire when the user intentionally edits via UserMenu.
+  // For admin/named invites: the server-resolved current name (invite
+  // seed on first visit, doc_users row after). For generic/no-invite:
+  // null. Client uses this to keep localStorage in sync with the server.
   const forcedDisplayName =
     decision.invite && decision.invite.kind !== 'generic'
       ? decision.identity?.displayName ?? null
@@ -252,9 +243,8 @@ async function updateSettings(c: Context, deps: AppDeps) {
   let plaintextPassword: string | null = null;
   let shouldRefreshSession = false;
 
-  // ACCESS_CONTROL Step 2: editable_by_anyone is no longer settable. Silently
-  // ignore the field for one release so old clients don't 400 on harmless
-  // payloads.
+  // editable_by_anyone is unsettable; tolerated on incoming payloads for
+  // back-compat with old clients.
   if (typeof body.default_theme === 'string') {
     updates.push(['default_theme', body.default_theme]);
   }
@@ -421,9 +411,7 @@ async function importDocument(c: Context, deps: AppDeps) {
       ? docSpec.name.trim().slice(0, 200)
       : null;
   const theme = typeof docSpec.default_theme === 'string' ? docSpec.default_theme : 'default';
-  // The bundle's `editable_by_anyone` flag is intentionally ignored on
-  // import (ACCESS_CONTROL Step 2 retired the toggle). Imported docs land
-  // with the deprecated column at 0; the auth path doesn't read it.
+  // Bundle's editable_by_anyone is ignored; the column is deprecated.
 
   await store.write(uid, docSpec.source, identity, 'upload');
   db.prepare(
@@ -633,16 +621,13 @@ async function createInvite(c: Context, deps: AppDeps) {
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
 
-  // `kind` defaults to 'named' for backwards compat with clients that
-  // pre-date Step 3 — they always sent a display_name, which stays required
-  // in that mode. Generic invites are explicit opt-in.
+  // Default 'named' for back-compat with old clients that always sent a
+  // display_name. Generic is explicit opt-in.
   const rawKind = typeof body.kind === 'string' ? body.kind : 'named';
   if (!isInviteKind(rawKind)) return c.json({ error: 'invalid-kind' }, 400);
   if (rawKind === 'admin') {
-    // Admin invites are minted only by document creation and by the
-    // dedicated rotation endpoint — never through the general create
-    // route, which the admin UI calls. Prevents accidentally creating a
-    // second admin invite that would then refuse to be deleted.
+    // Admin invites come only from upload + /admin/rotate. A second
+    // admin row here would be undeletable (see deleteInvite).
     return c.json({ error: 'admin-invite-not-creatable' }, 400);
   }
 
@@ -704,13 +689,8 @@ async function deleteInvite(c: Context, deps: AppDeps) {
 }
 
 /**
- * ACCESS_CONTROL Step 3: rotate the admin invite. Revokes the current
- * admin token and mints a fresh one — the display_name + role carry over
- * so the admin keeps their identity. Typical use: the admin accidentally
- * shared the admin URL and needs to invalidate it.
- *
- * Response mirrors the upload response's `admin_invite` shape so clients
- * can reuse the same "Admin link ready" UI.
+ * Revoke the current admin token, mint a fresh one, carry display_name +
+ * role over. Response mirrors upload's `admin_invite` shape.
  */
 async function rotateAdminInvite(c: Context, deps: AppDeps) {
   const { db } = deps;
@@ -725,8 +705,7 @@ async function rotateAdminInvite(c: Context, deps: AppDeps) {
   const existing = db
     .prepare(`SELECT * FROM invites WHERE doc_uid = ? AND kind = 'admin' LIMIT 1`)
     .get(doc.uid) as InviteRow | undefined;
-  // Always mint the new row first so we never leave the doc without an
-  // admin invite, even if the DELETE fails for any reason.
+  // Insert-then-delete so the doc is never admin-less between steps.
   const fresh = createInviteRow(db, {
     docUid: doc.uid,
     displayName: existing?.display_name ?? decision.identity.displayName,

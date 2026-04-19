@@ -150,14 +150,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     setActiveHeadingId(null);
   }, [doc.uid]);
 
-  // Reactive: tracks the display name wherever it gets changed — UserMenu,
-  // comment composer, invite load, another tab — without stale local state.
-  //
-  // Invite-scoped names are handled via localStorage seeding in
-  // ViewPage/EditPage (after `getDocument()`), not by overriding the
-  // local name here. That keeps the rename flow fully live: UserMenu
-  // writes to localStorage, useDisplayName re-renders, next request
-  // carries the new name, the server propagates.
+  // Reactive across UserMenu, composer, invite-load seeding, other tabs.
   const displayName = useDisplayName();
   const effectiveDisplayName = displayName;
   const [theme, setTheme] = useState<string>(

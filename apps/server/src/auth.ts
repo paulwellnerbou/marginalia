@@ -118,20 +118,12 @@ export function parseCookie(header: string | null, name: string): string | null 
 /**
  * Can this request access this document, and in what role?
  *
- * Order of precedence:
- * 1. Password gate (if doc is password-protected) — always required.
- * 2. Invite token → carries role + forced display_name.
- * 3. No invite → reader role with whatever identity the headers carry.
+ * Precedence:
+ *   1. Password gate — if doc has a hash, a valid session is mandatory.
+ *   2. Invite token → carries role (+ seeded display_name for admin/named).
+ *   3. No invite → reader, identity comes from headers if present.
  *
- * Returns the resolved identity (display_name overridden by invite when
- * present) so callers use a single source of truth for authorship.
- *
- * NOTE: ACCESS_CONTROL Step 2 retired the `editable_by_anyone` toggle.
- * Granting non-reader rights is now exclusively done via invites — Step 3
- * adds a "generic" invite kind that fills the role of the old toggle for
- * use cases like "anyone with the URL can comment". The column survives
- * on `documents` for one release as legacy data; this function no longer
- * reads it.
+ * Returns one resolved identity so callers don't re-derive authorship.
  */
 export function authorize(
   db: Database,
@@ -143,10 +135,7 @@ export function authorize(
   const clientId = readClientId(headers);
   const base = readIdentity(headers);
 
-  // If the document is password-protected, the password is always a gate.
-  // Even an invite (which decides who you are + what you can do) doesn't
-  // bypass the password — you need both the capability (invite URL) and
-  // the secret (password / session cookie). Admin invites are no exception.
+  // Password gate is unconditional — invites (including admin) never bypass it.
   if (doc.password_hash !== null) {
     if (!sessionToken || !checkSession(db, sessionToken, doc.uid)) {
       return { ok: false, reason: 'password-required' };
@@ -155,27 +144,16 @@ export function authorize(
 
   if (invite) {
     if (invite.kind === 'generic') {
-      // Generic invite: visitor brings their own name. The header-supplied
-      // identity IS the identity — if it's missing, caller must provide
-      // one before any write endpoint will accept the request. Read-only
-      // endpoints (listComments, getDocument) still work without a name
-      // because only the role is needed.
+      // Visitor's own name is the identity. Missing → identity is null,
+      // write endpoints reject; reads don't need a name.
       const identity = clientId && base ? { clientId, displayName: base.displayName } : null;
       return recordAndReturn(db, doc.uid, { ok: true, role: invite.role, identity, invite });
     }
 
-    // admin + named: invite-name-as-seed semantics (ACCESS_CONTROL Step 4,
-    // revised by Step 6 review).
-    //
-    // First visit under this invite (no doc_users row for this clientId
-    // yet) → identity is the INVITE's display_name, regardless of what
-    // the header says. Prevents a browser with a pre-existing local
-    // name from silently inheriting the invite's identity while still
-    // carrying the wrong name into `doc_users`.
-    //
-    // Subsequent visits → header wins, so an intentional rename via the
-    // UserMenu flows through as a detectable change (upsert picks up the
-    // diff, propagateRename rewrites prior comments and @mentions).
+    // admin + named: invite name seeds on first visit (no doc_users row),
+    // header wins thereafter so UserMenu renames propagate via the upsert
+    // diff. Prevents a browser with a stale local name from accidentally
+    // inheriting the invite's identity.
     let resolvedName: string;
     if (clientId) {
       const prior = db
@@ -199,21 +177,10 @@ export function authorize(
 }
 
 /**
- * Side-effect shim: update the per-doc user registry for every
- * authenticated request and propagate rename changes to prior comments /
- * mentions. No-op when identity is null (anonymous readers aren't
- * tracked — we'd pollute the registry with client_ids that never
- * contributed content).
- *
- * For admin/named invites, `authorize()` above enforces the
- * "invite name on first visit" rule, so by the time we get here the
- * identity.displayName is either:
- *   (a) exactly `invite.display_name` on first visit, or
- *   (b) the user's chosen name on subsequent visits.
- *
- * Rename detection is therefore a simple diff: upsertDocUser reports
- * the previous display_name; if it differs from the resolved identity,
- * we propagate the rename across prior comments + mentions.
+ * Side-effect: upsert doc_users on every authenticated request; on a
+ * name diff, fan out the rename to prior comments + mentions. Anonymous
+ * callers (identity null) are skipped so the registry doesn't fill up
+ * with read-only clientIds.
  */
 function recordAndReturn(db: Database, docUid: string, decision: AuthDecision): AuthDecision {
   if (!decision.ok || !decision.identity) return decision;

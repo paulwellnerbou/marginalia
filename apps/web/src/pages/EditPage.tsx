@@ -88,9 +88,7 @@ export function EditPage() {
     );
   }, [uid]);
 
-  // Same localStorage-seeding as ViewPage — keep the header we send in
-  // sync with the server's authoritative name so unintentional renames
-  // don't propagate. See the comment in ViewPage for the rationale.
+  // Mirror ViewPage: sync localStorage to the server's authoritative name.
   useEffect(() => {
     if (!doc?.display_name) return;
     if (getDisplayName() !== doc.display_name) {

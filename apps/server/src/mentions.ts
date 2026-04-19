@@ -6,14 +6,10 @@ interface MentionMatch {
 }
 
 /**
- * Mention autocomplete roster. Sourced from `doc_users` (ACCESS_CONTROL
- * Step 4) so the list reflects the CURRENT display name each visitor
- * uses — renames propagate immediately, and "@Alice" suggestions go
- * away the moment Alice renames herself. Invites and comment-author
- * history no longer contribute: both are already reflected in
- * doc_users (the invite's name is set on first-seen, comment authors
- * are always registered), and surfacing stale historical names would
- * defeat the rename flow.
+ * Mention roster: live `doc_users` names + invited-but-not-yet-visited
+ * recipients (so they're @-mentionable in a welcome comment). Stale
+ * historical comment-author names are NOT surfaced — that would defeat
+ * the rename flow.
  */
 export function listMentionCandidates(db: Database, docUid: string): string[] {
   return listDocUserNames(db, docUid).sort((a, b) =>

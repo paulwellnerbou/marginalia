@@ -11,17 +11,10 @@ import { reportError } from '../lib/log.js';
 import { PasswordField } from './PasswordField.js';
 
 /**
- * Centralized password-re-prompt dialog (ACCESS_CONTROL Step 5).
- *
- * Listens for `marginalia:auth-required` events dispatched by api.ts when
- * any HTTP request for this doc 401s with `password-required`. On submit
- * it re-authenticates and dispatches `marginalia:auth-resolved`; on
- * cancel it dispatches `marginalia:auth-cancelled` so the queued
- * requests reject rather than hang.
- *
- * Mount once per document view. Works both for the initial page-load 401
- * (password-protected doc opened fresh) and mid-session 401s (admin
- * rotated the password after the page was already loaded).
+ * Listens for `marginalia:auth-required` from api.ts (fired on any
+ * `401 password-required`). On submit re-authenticates and fires
+ * `marginalia:auth-resolved`; on cancel fires `marginalia:auth-cancelled`
+ * so queued requests reject instead of hanging. Mount once per doc view.
  */
 export function PasswordPromptDialog({ docUid }: { docUid: string }) {
   const [open, setOpen] = useState(false);

@@ -33,7 +33,7 @@ export function loadRecentDocs(): RecentDoc[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(isRecentDoc);
+    return parsed.flatMap(coerceRecentDoc);
   } catch {
     return [];
   }
@@ -55,13 +55,45 @@ export function removeFromRecent(uid: string): void {
   localStorage.setItem(KEY, JSON.stringify(list));
 }
 
-function isRecentDoc(v: unknown): v is RecentDoc {
-  if (!v || typeof v !== 'object') return false;
+const VALID_ROLES = new Set<RecentDoc['role']>([
+  'admin',
+  'editor',
+  'collaborator',
+  'reader',
+]);
+
+/**
+ * Validate + migrate a stored entry. Returns a one-element array on
+ * success, empty on garbage. Migrates legacy `commentor` rows to
+ * `collaborator` (the role was retired) and coerces a missing/unknown
+ * `role` or `password_protected` to safe defaults rather than letting
+ * stale shapes leak into the UI typed as `RecentDoc`.
+ */
+function coerceRecentDoc(v: unknown): RecentDoc[] {
+  if (!v || typeof v !== 'object') return [];
   const r = v as Record<string, unknown>;
-  return (
-    typeof r.uid === 'string' &&
-    typeof r.title === 'string' &&
-    typeof r.visited_at === 'number' &&
-    typeof r.updated_at === 'number'
-  );
+  if (
+    typeof r.uid !== 'string' ||
+    typeof r.title !== 'string' ||
+    typeof r.visited_at !== 'number' ||
+    typeof r.updated_at !== 'number'
+  ) {
+    return [];
+  }
+  const rawRole = typeof r.role === 'string' ? r.role : 'reader';
+  const role: RecentDoc['role'] = rawRole === 'commentor'
+    ? 'collaborator'
+    : VALID_ROLES.has(rawRole as RecentDoc['role'])
+      ? (rawRole as RecentDoc['role'])
+      : 'reader';
+  const out: RecentDoc = {
+    uid: r.uid,
+    title: r.title,
+    role,
+    password_protected: r.password_protected === true,
+    visited_at: r.visited_at,
+    updated_at: r.updated_at,
+    ...(typeof r.invite_token === 'string' ? { invite_token: r.invite_token } : {}),
+  };
+  return [out];
 }

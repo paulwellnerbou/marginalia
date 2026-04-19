@@ -20,10 +20,7 @@ export function ViewPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
   const [doc, setDoc] = useState<Document | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // When a 401/password-required surfaces (initial load or mid-session),
-  // api.ts stalls the request and dispatches an event; PasswordPromptDialog
-  // handles the UI. The one we need to care about here is RETRYING the
-  // initial load after the user authenticates — handled by `reloadNonce`.
+  // Bumped by the error "Try again" button to re-trigger getDocument.
   const [reloadNonce, setReloadNonce] = useState(0);
 
   // Persist the URL-supplied invite token before loading the doc so the API
@@ -45,9 +42,7 @@ export function ViewPage() {
         if (err instanceof ApiError && err.status === 404) {
           setError('Document not found');
         } else if (err instanceof ApiError && err.status === 401) {
-          // The centralized auth-gate only rejects here if the user
-          // dismissed the password dialog. Treat it as a soft error with
-          // a retry affordance.
+          // Only reaches here if the user dismissed the password dialog.
           setError('Password required to open this document');
         } else {
           setError('Failed to load document');
@@ -73,18 +68,10 @@ export function ViewPage() {
     });
   }, [doc]);
 
-  // ACCESS_CONTROL option 1: named/admin invites seed localStorage. The
-  // server returns the authoritative current name in `doc.display_name`
-  // (either the invite's seed on first visit or the possibly-renamed
-  // doc_users row on subsequent visits). Syncing localStorage to that
-  // keeps the header we send on future requests in lockstep with what
-  // the server already has on file, so renames only fire when the user
-  // intentionally edits via UserMenu.
-  //
-  // Consequence: opening someone else's named invite URL on a browser
-  // with a pre-existing local name will overwrite that local name with
-  // the invite's. That's the trade-off of a single global localStorage
-  // identity — acceptable per spec ("saved in their localstorage").
+  // Sync localStorage to the server's authoritative name so the header
+  // we send matches what the server has, and renames only fire when the
+  // user edits via UserMenu. Trade-off: opening someone else's named
+  // invite overwrites the global local name.
   useEffect(() => {
     if (!doc?.display_name) return;
     if (getDisplayName() !== doc.display_name) {

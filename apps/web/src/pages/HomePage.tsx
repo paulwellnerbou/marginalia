@@ -709,9 +709,8 @@ function UploadDialog({
                     Password-protect (server generates a password, shown once)
                   </Flex>
                 </Text>
-                {/* Editing rights are granted via invite links from the
-                    document's Access control dialog — no upload-time toggle.
-                    See ACCESS_CONTROL Step 2. */}
+                {/* Editing rights are granted via invite links in Access
+                    control; no upload-time toggle. */}
               </Flex>
 
               {error && (

@@ -2,40 +2,18 @@ import type { Database } from 'bun:sqlite';
 import type { Identity } from './auth.js';
 
 /**
- * Per-document user registry (ACCESS_CONTROL Step 4).
- *
- * The registry pins every `(doc_uid, client_id)` pair that has ever
- * authenticated against the document, together with the latest
- * `display_name` the user exposed through the `x-marginalia-client-name`
- * header. Two concerns live here:
- *
- *   1. **Upsert on every request.** `authorize()` calls `upsertDocUser`
- *      after resolving an identity, so even read-only traffic populates
- *      the registry. This is what powers `listMentionCandidates` and
- *      the future name-resolution path.
- *
- *   2. **Rename propagation.** When a user changes their display name,
- *      the upsert detects the diff and rewrites existing
- *      `comments.author_display_name` rows so their authorship label
- *      follows them. Mention targets (stored as bare name strings) are
- *      only rewritten when the OLD name is unambiguous inside this
- *      document — i.e. no other client_id is also using it — so two
- *      people sharing a name can't accidentally relabel each other's
- *      `@mention` rows.
+ * Per-document user registry. Every authenticated request upserts here;
+ * renames (same clientId, different display_name) fan out to existing
+ * comments + mentions. Mention rewrite skips when the old name is also
+ * used by another client_id in this doc — otherwise the rename would
+ * silently steal the other user's @mentions.
  */
 
 export interface UpsertResult {
-  /** Previous display_name for this (doc, client) pair, or null for a
-   *  fresh insert / no-op refresh. Non-null means the caller should run
-   *  `propagateRename`. */
+  /** Non-null ⇒ a rename happened; caller runs `propagateRename`. */
   oldName: string | null;
 }
 
-/**
- * Insert or refresh the doc_users row for this visitor. Returns the
- * previous display_name if it was a rename, so the caller can trigger
- * propagation. No-ops (same name) just bump last_seen_at.
- */
 export function upsertDocUser(
   db: Database,
   docUid: string,
@@ -71,11 +49,7 @@ export function upsertDocUser(
   return { oldName: prev.display_name };
 }
 
-/**
- * Rewrite authorship on prior comments and (conditionally) mention targets
- * after a detected rename. Idempotent: running twice with the same
- * parameters is a no-op.
- */
+/** Rewrite authorship + unambiguous mentions. Idempotent. */
 export function propagateRename(
   db: Database,
   docUid: string,
@@ -91,11 +65,9 @@ export function propagateRename(
       WHERE doc_uid = ? AND author_client_id = ?`,
   ).run(newName, Date.now(), docUid, clientId);
 
-  // Only rewrite mention rows if the OLD name is unique to this user in
-  // this doc. If another client_id is also using oldName, renaming
-  // @oldName would silently steal their @mentions. Leave those rows;
-  // the renamed user is free to @-mention themselves again under the new
-  // name if they want future notifications.
+  // Skip the mention rewrite when another client_id still uses oldName
+  // — otherwise we'd redirect the other user's @mentions to the renamed
+  // user.
   const collision = db
     .prepare(
       `SELECT count(*) AS n FROM doc_users
@@ -112,16 +84,10 @@ export function propagateRename(
 }
 
 /**
- * Display names known on this document. Sourced from:
- *   1. `doc_users` — everyone who has already authenticated against the
- *      doc. This is the live, rename-tracking source.
- *   2. `invites.display_name` — recipients who have been invited but not
- *      yet visited. Without this you couldn't @-mention someone in a
- *      welcome comment before they showed up.
- *
- * doc_users wins on collision (rename tracking): if an invited user has
- * since renamed, their doc_users row carries the current name, and the
- * invite's stale name is dropped.
+ * Known display names: doc_users first (live, rename-tracked), then
+ * invited-but-not-yet-visited recipients so you can @-mention them in a
+ * welcome comment. doc_users entries win on collision, so stale invite
+ * names disappear after a rename.
  */
 export function listDocUserNames(db: Database, docUid: string): string[] {
   const seen = new Set<string>();
@@ -136,8 +102,7 @@ export function listDocUserNames(db: Database, docUid: string): string[] {
     .all(docUid) as Array<{ display_name: string }>;
   for (const row of users) addName(out, seen, row.display_name);
 
-  // Invited-but-not-yet-visited names — filter to kinds that carry a
-  // display_name (admin, named). Generic invites have display_name=NULL.
+  // Generic invites have display_name NULL; admin + named carry one.
   const invited = db
     .prepare(
       `SELECT display_name FROM invites

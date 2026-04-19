@@ -23,8 +23,8 @@ import { InvitesPanel } from './InvitesPanel.js';
  * comment. Separated from DocumentSettingsDialog because admins reach for
  * permissions and naming/theme at very different times.
  *
- * Surface: anyone-can-edit toggle, password protection (set/clear/rotate),
- * fresh-password disclosure, and the per-recipient invite link manager.
+ * Surface: password protection (enable/disable/rotate), fresh-password
+ * disclosure, and the per-recipient invite link manager.
  */
 export function AccessControlDialog({
   doc,
@@ -124,9 +124,8 @@ export function AccessControlDialog({
         </Dialog.Description>
 
         <Flex direction="column" gap="4">
-          {/* The "Allow anyone (with access) to edit the source" toggle was
-              retired in ACCESS_CONTROL Step 2 — granting non-reader rights
-              is now exclusively done via invite links below. */}
+          {/* No anyone-can-edit toggle: non-reader rights come only from
+              invite links below. */}
           <Flex direction="column" gap="2">
             <Text as="label" size="2">
               <Flex align="center" gap="2">
@@ -145,10 +144,7 @@ export function AccessControlDialog({
                   Password is set. Rotate invalidates existing sessions; invite links still
                   determine identity and role after re-authentication.
                 </Text>
-                {/* Rotation is destructive (kicks every authenticated visitor
-                    out and the old password is unrecoverable), so gate the
-                    action behind a confirmation AlertDialog instead of
-                    firing on the first click. */}
+                {/* Destructive + unrecoverable: always confirm. */}
                 <AlertDialog.Root>
                   <AlertDialog.Trigger>
                     <Button size="1" variant="soft" color="amber" disabled={saving}>

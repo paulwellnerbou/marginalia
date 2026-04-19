@@ -8,10 +8,8 @@ CREATE TABLE IF NOT EXISTS documents (
   path                 TEXT NOT NULL,
   name                 TEXT,              -- human-friendly doc name; NULL → derive from content
   password_hash        TEXT,
-  -- DEPRECATED (ACCESS_CONTROL Step 2): no longer read by authorize() or
-  -- written by any new request. Kept on disk for one release to avoid an
-  -- ALTER TABLE on existing data and to let bundles round-trip the field.
-  -- Will be dropped in a follow-up migration.
+  -- DEPRECATED. Unread by authorize(), unwritten by new requests; kept so
+  -- old bundles round-trip. Drop in a later migration.
   editable_by_anyone   INTEGER NOT NULL DEFAULT 0,
   default_theme        TEXT NOT NULL DEFAULT 'default',
   created_at           INTEGER NOT NULL,
@@ -21,10 +19,8 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE TABLE IF NOT EXISTS invites (
   token            TEXT PRIMARY KEY,
   doc_uid          TEXT NOT NULL,
-  -- display_name is NULL for kind='generic' (the visitor brings their own
-  -- name); required for 'named' and 'admin'. The enforcement lives in the
-  -- route layer, not as a CHECK constraint, because SQLite CHECK errors
-  -- don't surface cleanly through bun:sqlite.
+  -- NULL only for kind='generic'. Enforced in the route layer, not as
+  -- CHECK (bun:sqlite doesn't surface CHECK errors cleanly).
   display_name     TEXT,
   role             TEXT NOT NULL,
   kind             TEXT NOT NULL DEFAULT 'named',  -- 'admin' | 'generic' | 'named'
@@ -83,11 +79,10 @@ CREATE TABLE IF NOT EXISTS comment_mentions (
 CREATE INDEX IF NOT EXISTS idx_comment_mentions_pending
   ON comment_mentions(doc_uid, target_display_name, delivered_at);
 
--- ACCESS_CONTROL Step 4: per-document user registry.
--- authorize() upserts into this table on every successful request with an
--- identity. When display_name changes for the same (doc_uid, client_id),
--- the rename is propagated to comments.author_display_name and,
--- conditionally, to comment_mentions.target_display_name.
+-- Per-document user registry. authorize() upserts on every request; a
+-- display_name change for the same (doc_uid, client_id) fans out to
+-- comments.author_display_name and comment_mentions.target_display_name
+-- (the latter only when the old name is unambiguous in this doc).
 CREATE TABLE IF NOT EXISTS doc_users (
   doc_uid        TEXT NOT NULL,
   client_id      TEXT NOT NULL,
@@ -140,10 +135,7 @@ export interface DocumentRow {
  *   collaborator — comment + propose edits + read.
  *   reader       — read only, cannot comment or propose.
  *
- * `commentor` (sic) was a separate role until ACCESS_CONTROL Step 1; it had
- * no behavioral difference from `collaborator` (both passed canComment and
- * the proposal-create gate). Existing rows are migrated to `collaborator`
- * in `openDatabase()`.
+ * Legacy `commentor` rows are migrated to `collaborator` in openDatabase().
  */
 export type InviteRole = 'admin' | 'editor' | 'collaborator' | 'reader';
 
@@ -159,13 +151,9 @@ export function isInviteRole(v: unknown): v is InviteRole {
 }
 
 /**
- * Three kinds of access links (ACCESS_CONTROL §"Access links"):
- *
  *   admin   — always-valid, rotatable, never shared. One per document.
- *   named   — forced display_name + role; visitor is auto-identified as
- *             that name when they follow the link.
- *   generic — a role-scoped link with no forced name; visitor keeps whatever
- *             name they already have (or is prompted to pick one).
+ *   named   — seeds display_name + role on first visit.
+ *   generic — role only; visitor keeps (or picks) their own name.
  */
 export type InviteKind = 'admin' | 'named' | 'generic';
 
@@ -267,24 +255,16 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments', 'anchor_section_index', 'INTEGER');
   ensureColumn(db, 'comments', 'anchor_section_index_path', 'TEXT');
   ensureColumn(db, 'comments', 'parent_proposal_id', 'TEXT');
-  // Role consolidation: `commentor` was indistinguishable from
-  // `collaborator` at the server (same canComment / canPropose behavior),
-  // so the spec folds it into `collaborator`. Idempotent — re-running
-  // matches zero rows once the migration has applied.
+  // Legacy 'commentor' rows → 'collaborator' (same server-side behavior).
   db.exec(`UPDATE invites SET role = 'collaborator' WHERE role = 'commentor'`);
   migrateInvitesKind(db);
   return db;
 }
 
 /**
- * ACCESS_CONTROL Step 3: introduce the `kind` column on `invites`, make
- * `display_name` nullable (needed for `kind='generic'`), and backfill the
- * admin invite rows.
- *
- * SQLite can't drop NOT NULL in place, so we rebuild the table when we
- * detect the old schema. Idempotent: once `kind` exists + display_name is
- * nullable, this is a no-op. Safe to call on empty / fresh databases too
- * (they're created by SCHEMA with the new shape already).
+ * Add `invites.kind`, relax `display_name` to nullable, backfill admin
+ * rows. SQLite can't drop NOT NULL in place, so we rebuild the table
+ * when the old schema is detected. Idempotent; no-op on fresh DBs.
  */
 function migrateInvitesKind(db: Database): void {
   const cols = db.prepare(`PRAGMA table_info(invites)`).all() as Array<{

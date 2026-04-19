@@ -66,11 +66,7 @@ export interface DocumentBundle {
   document: {
     name: string | null;
     source: string;
-    /**
-     * @deprecated ACCESS_CONTROL Step 2 retired this toggle. Old bundles
-     * still carry the field and the importer accepts it for one release;
-     * the value is no longer applied.
-     */
+    /** @deprecated Accepted for back-compat with old bundles; ignored. */
     editable_by_anyone?: boolean;
     default_theme: string;
   };
@@ -136,21 +132,16 @@ function encodeHeaderValue(s: string): string {
 }
 
 /**
- * ACCESS_CONTROL Step 5: shared auth-gate for password-protected docs.
+ * Shared auth-gate for `401 password-required`. Callers are stalled on
+ * a per-docUid Promise, then retried once after the UI re-authenticates.
  *
- * When a request 401s with `error: 'password-required'`, we stall the
- * caller until the host app prompts the user and re-authenticates, then
- * retry the original request ONCE. Concurrent 401s for the same doc
- * coalesce on a single `Promise`, so a page-load storm of requests only
- * triggers one password prompt.
+ * Protocol:
+ *   - gate dispatches `marginalia:auth-required { docUid }`
+ *   - UI dispatches `marginalia:auth-resolved { docUid }` to release
+ *   - UI dispatches `marginalia:auth-cancelled { docUid }` to reject
+ *     all gated callers with a 401 ApiError
  *
- * Contract with the UI layer:
- *   - We dispatch `marginalia:auth-required` with `{ docUid }` when the
- *     gate opens. The UI shows its password dialog.
- *   - The dialog (after a successful `authenticate()` call) dispatches
- *     `marginalia:auth-resolved` with `{ docUid }`.
- *   - If the user cancels, the dialog dispatches `marginalia:auth-cancelled`
- *     with `{ docUid }` — all gated callers reject with a 401 ApiError.
+ * Concurrent 401s for the same doc share one Promise → one prompt.
  */
 const authGates = new Map<string, Promise<void>>();
 
@@ -230,8 +221,7 @@ async function request<T>(
     } catch {
       /* ignore */
     }
-    // Mid-session password rotation / new protection: pause, prompt, retry.
-    // `_retry` guards against infinite loops when the retry itself 401s.
+    // Pause-prompt-retry once; _retry guards against retry loops.
     if (
       res.status === 401 &&
       code === 'password-required' &&
@@ -348,10 +338,9 @@ export function updateDocumentSettings(
 // --- invites --------------------------------------------------------
 
 /**
- * Three kinds of access link (ACCESS_CONTROL §Access links):
- *   - 'admin'   — one per doc, always-valid, rotatable, never shared.
- *   - 'named'   — forced display_name + role; auto-identifies the visitor.
- *   - 'generic' — role-only; visitor keeps their own name.
+ *   - 'admin'   — one per doc, rotatable, never shared.
+ *   - 'named'   — seeds display_name + role on first visit.
+ *   - 'generic' — role only; visitor keeps their own name.
  */
 export type InviteKind = 'admin' | 'named' | 'generic';
 
