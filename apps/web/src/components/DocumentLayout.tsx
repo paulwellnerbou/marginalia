@@ -66,7 +66,8 @@ import { BlockActions } from './BlockActions.js';
 import { CommentsPane } from './CommentsPane.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { AppBar } from './AppBar.js';
-import { AdminSettingsDialog } from './AdminSettingsDialog.js';
+import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
+import { AccessControlDialog } from './AccessControlDialog.js';
 import {
   DocumentSearchResultsPane,
   type DocumentSearchResult,
@@ -151,9 +152,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   // Reactive: tracks the display name wherever it gets changed — UserMenu,
   // comment composer, invite load, another tab — without stale local state.
+  //
+  // Invite-scoped names are handled via localStorage seeding in
+  // ViewPage/EditPage (after `getDocument()`), not by overriding the
+  // local name here. That keeps the rename flow fully live: UserMenu
+  // writes to localStorage, useDisplayName re-renders, next request
+  // carries the new name, the server propagates.
   const displayName = useDisplayName();
-  const forcedDisplayName = doc.display_name;
-  const effectiveDisplayName = forcedDisplayName ?? displayName;
+  const effectiveDisplayName = displayName;
   const [theme, setTheme] = useState<string>(
     () => getUserThemeOverride(doc.uid) ?? doc.default_theme,
   );
@@ -360,8 +366,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     const name = providedName?.trim() || effectiveDisplayName;
     if (!name) return null;
     // setDisplayName fires an in-app event → useDisplayName re-runs, so all
-    // mirror components (AppBar UserMenu, etc.) stay in sync.
-    if (!forcedDisplayName && name !== displayName) setDisplayName(name);
+    // mirror components (AppBar UserMenu, etc.) stay in sync. The server
+    // now treats subsequent-visit header names as authoritative, so
+    // renames always flow through here cleanly.
+    if (name !== displayName) setDisplayName(name);
     return { clientId: getClientId(), displayName: name };
   }
 
@@ -665,7 +673,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       <AppBar
         docTitle={title}
         role={doc.role}
-        forcedDisplayName={forcedDisplayName}
         trailing={
           <>
             {children}
@@ -766,7 +773,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </Text>
             )}
             {doc.role === 'admin' && onDocSettingsChanged && (
-              <AdminSettingsDialog doc={doc} onChange={onDocSettingsChanged} />
+              <>
+                <DocumentSettingsDialog doc={doc} onChange={onDocSettingsChanged} />
+                <AccessControlDialog doc={doc} onChange={onDocSettingsChanged} />
+              </>
             )}
             <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
               <IconButton

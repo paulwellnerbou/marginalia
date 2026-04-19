@@ -12,7 +12,7 @@ const MAX = 50;
 export interface RecentDoc {
   uid: string;
   title: string;
-  role: 'admin' | 'editor' | 'collaborator' | 'commentor' | 'reader';
+  role: 'admin' | 'editor' | 'collaborator' | 'reader';
   password_protected: boolean;
   /** When we last opened it. */
   visited_at: number;

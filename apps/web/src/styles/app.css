@@ -52,6 +52,26 @@ button {
   cursor: pointer;
 }
 
+.password-field-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--gray-10);
+}
+
+.password-field-toggle:hover {
+  color: var(--gray-12);
+}
+
+.password-field-toggle:focus-visible {
+  outline: 2px solid var(--accent-8);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 a {
   color: var(--ui-accent);
 }
@@ -215,17 +235,49 @@ button.primary:disabled {
   z-index: 20;
   backdrop-filter: saturate(1.15);
 }
-.app-brand a {
+.app-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.62rem;
+  position: relative;
   text-decoration: none;
-  /* Gradient text for the brand, matching the app-bar's indigo→teal wash.
-     -webkit-text-fill-color: transparent lets the gradient show through
-     while preserving a solid color fallback for older browsers. */
-  background: linear-gradient(90deg, var(--accent-11) 0%, var(--teal-11) 100%);
+  padding: 0.16rem 0 0.24rem;
+  color: inherit;
+}
+.app-brand-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: translateY(1px);
+}
+.app-brand-icon-svg {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+.app-brand-wordmark {
+  display: inline-block;
+  font-family: var(--default-font-family);
+  font-weight: 700;
+  font-size: 1.4rem;
+  line-height: 1.08;
+  letter-spacing: -0.035em;
+  /* Reuse the home-page title's warmer accent→ruby→ink gradient, but at a
+     calmer scale so the app bar still behaves like navigation chrome. */
+  background: linear-gradient(
+    120deg,
+    var(--accent-11) 0%,
+    var(--ruby-11) 48%,
+    var(--gray-12) 100%
+  );
   -webkit-background-clip: text;
   background-clip: text;
   color: var(--accent-11);
   -webkit-text-fill-color: transparent;
-  letter-spacing: -0.01em;
+}
+.app-brand:focus-visible {
+  outline: 2px solid var(--accent-8);
+  outline-offset: 4px;
+  border-radius: 0.35rem;
 }
 .app-bar-title {
   color: var(--gray-12);
@@ -649,16 +701,17 @@ button.primary:disabled {
   display: block;
 }
 .copyable-multiline .copyable-surface {
-  display: flex;
+  display: inline-flex;
   align-items: flex-start;
-  width: 100%;
+  max-width: 100%;
   box-sizing: border-box;
   padding: 0.35rem 0.35rem 0.35rem 0.5rem;
 }
 .copyable-multiline .copyable-text {
   display: block;
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
+  max-width: 100%;
   white-space: pre-wrap;
   word-break: break-all;
   background: transparent;
@@ -1238,11 +1291,38 @@ button.primary.small {
   min-width: 17rem;
 }
 
+.invite-card {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--radius-2);
+}
+
+.invite-header {
+  width: 100%;
+  align-items: flex-start;
+}
+
+.invite-header-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.invite-header-action {
+  flex: none;
+  display: inline-flex;
+  justify-content: flex-end;
+  align-self: flex-start;
+}
+
 .confirm-pair {
   display: inline-flex;
   gap: 0.4rem;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+.confirm-pair-placeholder {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* ============================================================

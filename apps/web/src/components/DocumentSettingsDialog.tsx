@@ -1,9 +1,7 @@
-import { DownloadIcon, GearIcon, LockClosedIcon } from '@radix-ui/react-icons';
+import { DownloadIcon, GearIcon } from '@radix-ui/react-icons';
 import {
   Button,
   Callout,
-  Checkbox,
-  Code,
   Dialog,
   Flex,
   IconButton,
@@ -22,10 +20,15 @@ import {
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { BUILT_IN_THEMES } from '../lib/themes.js';
-import { Copyable } from './Copyable.js';
-import { InvitesPanel } from './InvitesPanel.js';
 
-export function AdminSettingsDialog({
+/**
+ * "Document Settings" — non-permission concerns. Splits cleanly from
+ * AccessControlDialog so admins can rename/restyle/export without the
+ * mental overhead of a permissions screen.
+ *
+ * Surface: document name, default theme, JSON export.
+ */
+export function DocumentSettingsDialog({
   doc,
   onChange,
 }: {
@@ -34,56 +37,33 @@ export function AdminSettingsDialog({
 }) {
   const [open, setOpen] = useState(false);
   const [docName, setDocName] = useState(doc.name ?? '');
-  const [editableByAnyone, setEditableByAnyone] = useState(doc.editable_by_anyone);
   const [defaultTheme, setDefaultTheme] = useState(doc.default_theme);
-  const [passwordProtected, setPasswordProtected] = useState(doc.password_protected);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [freshPassword, setFreshPassword] = useState<string | null>(null);
 
   async function save() {
     const name = getDisplayName();
     if (!name) {
-      setError('Set your display name first (user menu, top-right).');
+      setError('Please set your display name first.');
       return;
     }
     const identity = { clientId: getClientId(), displayName: name };
     setSaving(true);
     setError(null);
     try {
+      // Only the fields this dialog owns. PATCH-style: omitted fields
+      // stay as-is on the server.
       const patch: Parameters<typeof updateDocumentSettings>[1] = {
-        editable_by_anyone: editableByAnyone,
-        default_theme: defaultTheme,
         name: docName.trim() ? docName.trim() : null,
+        default_theme: defaultTheme,
       };
-      if (!passwordProtected && doc.password_protected) patch.password = null;
-      if (passwordProtected && !doc.password_protected) patch.password = 'rotate';
-
       const result = await updateDocumentSettings(doc.uid, patch, identity);
       onChange(result);
-      if (result.password) setFreshPassword(result.password);
+      setOpen(false);
     } catch (err) {
-      reportError('AdminSettings.save', err);
+      reportError('DocumentSettings.save', err);
       setError(err instanceof Error ? err.message : 'Save failed');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function rotate() {
-    const name = getDisplayName();
-    if (!name) return;
-    const identity = { clientId: getClientId(), displayName: name };
-    setSaving(true);
-    setError(null);
-    try {
-      const result = await updateDocumentSettings(doc.uid, { password: 'rotate' }, identity);
-      onChange(result);
-      if (result.password) setFreshPassword(result.password);
-    } catch (err) {
-      reportError('AdminSettings.rotate', err);
-      setError(err instanceof Error ? err.message : 'Rotate failed');
     } finally {
       setSaving(false);
     }
@@ -104,7 +84,7 @@ export function AdminSettingsDialog({
       a.remove();
       URL.revokeObjectURL(url);
     } catch (err) {
-      reportError('AdminSettings.exportJson', err, { uid: doc.uid });
+      reportError('DocumentSettings.exportJson', err, { uid: doc.uid });
       setError(err instanceof Error ? err.message : 'Export failed');
     } finally {
       setExporting(false);
@@ -112,22 +92,16 @@ export function AdminSettingsDialog({
   }
 
   return (
-    <Dialog.Root
-      open={open}
-      onOpenChange={(v) => {
-        setOpen(v);
-        if (!v) setFreshPassword(null);
-      }}
-    >
+    <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger>
-        <IconButton variant="soft" size="2" aria-label="Document settings">
+        <IconButton variant="soft" size="2" aria-label="Document settings" title="Document settings">
           <GearIcon />
         </IconButton>
       </Dialog.Trigger>
-      <Dialog.Content size="3" maxWidth="780px">
+      <Dialog.Content size="3" maxWidth="640px">
         <Dialog.Title>Document settings</Dialog.Title>
         <Dialog.Description size="2" color="gray" mb="4">
-          Access and defaults for this document. You are the admin.
+          Naming, presentation, and export. Permissions live in Access control.
         </Dialog.Description>
 
         <Flex direction="column" gap="4">
@@ -148,55 +122,6 @@ export function AdminSettingsDialog({
               maxLength={200}
             />
           </Flex>
-
-          <Separator size="4" />
-
-          <Text as="label" size="2">
-            <Flex align="center" gap="2">
-              <Checkbox
-                checked={editableByAnyone}
-                onCheckedChange={(c) => setEditableByAnyone(c === true)}
-              />
-              Allow anyone (with access) to edit the source
-            </Flex>
-          </Text>
-
-          <Separator size="4" />
-
-          <Flex direction="column" gap="2">
-            <Text as="label" size="2">
-              <Flex align="center" gap="2">
-                <Checkbox
-                  checked={passwordProtected}
-                  onCheckedChange={(c) => setPasswordProtected(c === true)}
-                />
-                <LockClosedIcon />
-                Password-protect this document
-              </Flex>
-            </Text>
-            {passwordProtected && doc.password_protected && (
-              <Flex align="center" gap="2" pl="6">
-                <Text size="1" color="gray">
-                  Password is set. Rotate invalidates existing sessions; invite links still
-                  determine identity and role after re-authentication.
-                </Text>
-                <Button size="1" variant="soft" onClick={rotate} disabled={saving}>
-                  Rotate password
-                </Button>
-              </Flex>
-            )}
-          </Flex>
-
-          {freshPassword && (
-            <Callout.Root color="amber">
-              <Callout.Text>
-                <Flex direction="column" gap="2">
-                  <span>New password (shown once):</span>
-                  <Copyable text={freshPassword} ariaLabel="Copy password" />
-                </Flex>
-              </Callout.Text>
-            </Callout.Root>
-          )}
 
           <Separator size="4" />
 
@@ -237,10 +162,6 @@ export function AdminSettingsDialog({
             </Flex>
           </Flex>
 
-          <Separator size="4" />
-
-          <InvitesPanel uid={doc.uid} />
-
           {error && (
             <Callout.Root color="red" size="1">
               <Callout.Text>{error}</Callout.Text>
@@ -250,7 +171,7 @@ export function AdminSettingsDialog({
           <Flex gap="2" justify="end">
             <Dialog.Close>
               <Button variant="soft" color="gray">
-                Close
+                Cancel
               </Button>
             </Dialog.Close>
             <Button onClick={save} disabled={saving}>

@@ -8,6 +8,10 @@ CREATE TABLE IF NOT EXISTS documents (
   path                 TEXT NOT NULL,
   name                 TEXT,              -- human-friendly doc name; NULL → derive from content
   password_hash        TEXT,
+  -- DEPRECATED (ACCESS_CONTROL Step 2): no longer read by authorize() or
+  -- written by any new request. Kept on disk for one release to avoid an
+  -- ALTER TABLE on existing data and to let bundles round-trip the field.
+  -- Will be dropped in a follow-up migration.
   editable_by_anyone   INTEGER NOT NULL DEFAULT 0,
   default_theme        TEXT NOT NULL DEFAULT 'default',
   created_at           INTEGER NOT NULL,
@@ -17,8 +21,13 @@ CREATE TABLE IF NOT EXISTS documents (
 CREATE TABLE IF NOT EXISTS invites (
   token            TEXT PRIMARY KEY,
   doc_uid          TEXT NOT NULL,
-  display_name     TEXT NOT NULL,
+  -- display_name is NULL for kind='generic' (the visitor brings their own
+  -- name); required for 'named' and 'admin'. The enforcement lives in the
+  -- route layer, not as a CHECK constraint, because SQLite CHECK errors
+  -- don't surface cleanly through bun:sqlite.
+  display_name     TEXT,
   role             TEXT NOT NULL,
+  kind             TEXT NOT NULL DEFAULT 'named',  -- 'admin' | 'generic' | 'named'
   note             TEXT,
   created_at       INTEGER NOT NULL,
   created_by_name  TEXT NOT NULL
@@ -74,6 +83,23 @@ CREATE TABLE IF NOT EXISTS comment_mentions (
 CREATE INDEX IF NOT EXISTS idx_comment_mentions_pending
   ON comment_mentions(doc_uid, target_display_name, delivered_at);
 
+-- ACCESS_CONTROL Step 4: per-document user registry.
+-- authorize() upserts into this table on every successful request with an
+-- identity. When display_name changes for the same (doc_uid, client_id),
+-- the rename is propagated to comments.author_display_name and,
+-- conditionally, to comment_mentions.target_display_name.
+CREATE TABLE IF NOT EXISTS doc_users (
+  doc_uid        TEXT NOT NULL,
+  client_id      TEXT NOT NULL,
+  display_name   TEXT NOT NULL,
+  first_seen_at  INTEGER NOT NULL,
+  last_seen_at   INTEGER NOT NULL,
+  PRIMARY KEY (doc_uid, client_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_doc_users_name
+  ON doc_users(doc_uid, display_name);
+
 CREATE TABLE IF NOT EXISTS edit_proposals (
   id                    TEXT PRIMARY KEY,
   doc_uid               TEXT NOT NULL,
@@ -109,21 +135,22 @@ export interface DocumentRow {
 /**
  * Per-document role hierarchy (highest → lowest privilege):
  *
- *   admin        — full control: edit, comment, invite, rename, delete.
- *   editor       — edit + comment + read.
- *   collaborator — comment + propose edits + read.  (Propose-edit is a
- *                  planned feature; for now collaborator behaves like
- *                  commentor from the server's point of view.)
- *   commentor    — comment + read.
- *   reader       — read only, cannot comment.
+ *   admin        — full control: edit, comment, propose, invite, rename, delete.
+ *   editor       — edit + comment + propose + read.
+ *   collaborator — comment + propose edits + read.
+ *   reader       — read only, cannot comment or propose.
+ *
+ * `commentor` (sic) was a separate role until ACCESS_CONTROL Step 1; it had
+ * no behavioral difference from `collaborator` (both passed canComment and
+ * the proposal-create gate). Existing rows are migrated to `collaborator`
+ * in `openDatabase()`.
  */
-export type InviteRole = 'admin' | 'editor' | 'collaborator' | 'commentor' | 'reader';
+export type InviteRole = 'admin' | 'editor' | 'collaborator' | 'reader';
 
 export const INVITE_ROLES: readonly InviteRole[] = [
   'admin',
   'editor',
   'collaborator',
-  'commentor',
   'reader',
 ] as const;
 
@@ -131,11 +158,29 @@ export function isInviteRole(v: unknown): v is InviteRole {
   return typeof v === 'string' && (INVITE_ROLES as readonly string[]).includes(v);
 }
 
+/**
+ * Three kinds of access links (ACCESS_CONTROL §"Access links"):
+ *
+ *   admin   — always-valid, rotatable, never shared. One per document.
+ *   named   — forced display_name + role; visitor is auto-identified as
+ *             that name when they follow the link.
+ *   generic — a role-scoped link with no forced name; visitor keeps whatever
+ *             name they already have (or is prompted to pick one).
+ */
+export type InviteKind = 'admin' | 'named' | 'generic';
+
+export const INVITE_KINDS: readonly InviteKind[] = ['admin', 'named', 'generic'] as const;
+
+export function isInviteKind(v: unknown): v is InviteKind {
+  return typeof v === 'string' && (INVITE_KINDS as readonly string[]).includes(v);
+}
+
 export interface InviteRow {
   token: string;
   doc_uid: string;
-  display_name: string;
+  display_name: string | null;
   role: InviteRole;
+  kind: InviteKind;
   note: string | null;
   created_at: number;
   created_by_name: string;
@@ -182,6 +227,14 @@ export interface CommentMentionRow {
   delivered_at: number | null;
 }
 
+export interface DocUserRow {
+  doc_uid: string;
+  client_id: string;
+  display_name: string;
+  first_seen_at: number;
+  last_seen_at: number;
+}
+
 export type EditProposalStatus = 'pending' | 'accepted' | 'rejected' | 'orphaned';
 
 export interface EditProposalRow {
@@ -214,7 +267,63 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments', 'anchor_section_index', 'INTEGER');
   ensureColumn(db, 'comments', 'anchor_section_index_path', 'TEXT');
   ensureColumn(db, 'comments', 'parent_proposal_id', 'TEXT');
+  // Role consolidation: `commentor` was indistinguishable from
+  // `collaborator` at the server (same canComment / canPropose behavior),
+  // so the spec folds it into `collaborator`. Idempotent — re-running
+  // matches zero rows once the migration has applied.
+  db.exec(`UPDATE invites SET role = 'collaborator' WHERE role = 'commentor'`);
+  migrateInvitesKind(db);
   return db;
+}
+
+/**
+ * ACCESS_CONTROL Step 3: introduce the `kind` column on `invites`, make
+ * `display_name` nullable (needed for `kind='generic'`), and backfill the
+ * admin invite rows.
+ *
+ * SQLite can't drop NOT NULL in place, so we rebuild the table when we
+ * detect the old schema. Idempotent: once `kind` exists + display_name is
+ * nullable, this is a no-op. Safe to call on empty / fresh databases too
+ * (they're created by SCHEMA with the new shape already).
+ */
+function migrateInvitesKind(db: Database): void {
+  const cols = db.prepare(`PRAGMA table_info(invites)`).all() as Array<{
+    name: string;
+    notnull: number;
+  }>;
+  const hasKind = cols.some((c) => c.name === 'kind');
+  const displayNotNull = cols.some((c) => c.name === 'display_name' && c.notnull === 1);
+  if (hasKind && !displayNotNull) return; // already migrated
+
+  db.exec('BEGIN');
+  try {
+    db.exec(`ALTER TABLE invites RENAME TO invites_pre_step3`);
+    db.exec(`
+      CREATE TABLE invites (
+        token            TEXT PRIMARY KEY,
+        doc_uid          TEXT NOT NULL,
+        display_name     TEXT,
+        role             TEXT NOT NULL,
+        kind             TEXT NOT NULL DEFAULT 'named',
+        note             TEXT,
+        created_at       INTEGER NOT NULL,
+        created_by_name  TEXT NOT NULL
+      )
+    `);
+    db.exec(`
+      INSERT INTO invites (token, doc_uid, display_name, role, kind, note, created_at, created_by_name)
+      SELECT token, doc_uid, display_name, role,
+             CASE WHEN role = 'admin' THEN 'admin' ELSE 'named' END,
+             note, created_at, created_by_name
+      FROM invites_pre_step3
+    `);
+    db.exec(`DROP TABLE invites_pre_step3`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_invites_doc ON invites(doc_uid)`);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 }
 
 function ensureColumn(db: Database, table: string, column: string, ddl: string): void {

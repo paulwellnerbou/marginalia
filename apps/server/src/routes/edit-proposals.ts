@@ -7,8 +7,8 @@ import type { CommentRow, DocumentRow, EditProposalRow } from '../db.js';
 import { reanchor } from '../anchoring.js';
 import {
   authorize,
-  canComment,
   canEdit,
+  canPropose,
   parseCookie,
   SESSION_COOKIE,
   type Identity,
@@ -60,7 +60,7 @@ async function createProposal(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
-  if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
+  if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
   const identity: Identity = decision.identity;
 
   const body = await safeJson(c);

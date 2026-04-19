@@ -17,6 +17,7 @@ interface Props {
 
 export function CommentItem({ comment, isDocAdmin, onEdit, onDelete, onQuote }: Props) {
   const [editing, setEditing] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
   const [draft, setDraft] = useState(comment.body);
   const myId = getClientId();
   const isAuthor = comment.author.client_id === myId;
@@ -31,14 +32,14 @@ export function CommentItem({ comment, isDocAdmin, onEdit, onDelete, onQuote }: 
         {!editing && (
           <Flex gap="1" align="center" wrap="wrap" className="comment-actions comment-actions-inline">
             <span className="spacer" />
-            {onQuote && (
+            {!deleteArmed && onQuote && (
               <Tooltip content="Quote">
                 <IconButton size="1" variant="ghost" color="gray" aria-label="Quote" onClick={() => onQuote(comment.body)}>
                   <QuoteIcon />
                 </IconButton>
               </Tooltip>
             )}
-            {isAuthor && (
+            {!deleteArmed && isAuthor && (
               <Tooltip content="Edit">
                 <IconButton size="1" variant="ghost" color="gray" aria-label="Edit" onClick={() => setEditing(true)}>
                   <Pencil2Icon />
@@ -50,6 +51,8 @@ export function CommentItem({ comment, isDocAdmin, onEdit, onDelete, onQuote }: 
                 label="Delete"
                 confirmLabel="Confirm delete"
                 ariaLabel="Delete"
+                reserveWidth={false}
+                onArmedChange={setDeleteArmed}
                 onConfirm={() => onDelete(comment.id)}
               />
             )}

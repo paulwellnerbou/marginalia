@@ -13,6 +13,10 @@ interface Props {
   timeoutMs?: number;
   /** Accessible label / tooltip content. */
   ariaLabel?: string;
+  /** Keep a hidden slot reserved for the future cancel button. */
+  reserveWidth?: boolean;
+  /** Notify parent when the button enters or leaves confirmation mode. */
+  onArmedChange?: (armed: boolean) => void;
   onConfirm: () => void | Promise<void>;
 }
 
@@ -27,6 +31,8 @@ export function ConfirmButton({
   size = '1',
   timeoutMs = 4000,
   ariaLabel,
+  reserveWidth = true,
+  onArmedChange,
   onConfirm,
 }: Props) {
   const [armed, setArmed] = useState(false);
@@ -40,12 +46,16 @@ export function ConfirmButton({
     };
   }, [armed, timeoutMs]);
 
+  useEffect(() => {
+    onArmedChange?.(armed);
+  }, [armed, onArmedChange]);
+
   if (!armed) {
-    return (
+    const trigger = (
       <Tooltip content={label}>
         <IconButton
           size={size}
-          variant="ghost"
+          variant="soft"
           color="red"
           aria-label={ariaLabel ?? label}
           onClick={() => setArmed(true)}
@@ -53,6 +63,24 @@ export function ConfirmButton({
           <TrashIcon />
         </IconButton>
       </Tooltip>
+    );
+
+    if (!reserveWidth) return trigger;
+
+    return (
+      <Flex gap="2" align="center" className="confirm-pair">
+        <IconButton
+          size={size}
+          variant="soft"
+          color="gray"
+          aria-hidden="true"
+          tabIndex={-1}
+          className="confirm-pair-placeholder"
+        >
+          <Cross2Icon />
+        </IconButton>
+        {trigger}
+      </Flex>
     );
   }
 

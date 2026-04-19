@@ -21,20 +21,24 @@ import { Copyable } from './Copyable.js';
  * initial. The menu surfaces the stable browser identity (copyable client
  * ID), the current role when document-scoped, and a rename dialog for the
  * user's default display name.
+ *
+ * Note: there is no longer a separate "forced name" source. For admin/named
+ * invites the server seeds localStorage via the getDocument response
+ * (handled by ViewPage/EditPage), so the local name and the server-side
+ * identity stay in sync through the normal useDisplayName path. Renaming
+ * here writes to localStorage → next request carries the new name → server
+ * propagates the change to prior comments and mentions.
  */
 export function UserMenu({
   onChange,
   role,
-  forcedDisplayName,
 }: {
   onChange?: (name: string) => void;
   role?: Role | undefined;
-  forcedDisplayName?: string | null | undefined;
 }) {
   // Reactive: stays in sync when any other part of the app (or another tab)
   // writes a new display name.
-  const localName = useDisplayName();
-  const name = forcedDisplayName ?? localName;
+  const name = useDisplayName();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [draft, setDraft] = useState('');
   // The clientId is this browser's permanent identity. It's what the server
@@ -54,7 +58,7 @@ export function UserMenu({
   }
 
   function openDialog() {
-    setDraft(localName ?? '');
+    setDraft(name ?? '');
     setDialogOpen(true);
   }
 
@@ -149,7 +153,6 @@ function roleColor(role: Role): 'indigo' | 'green' | 'amber' | 'gray' {
     case 'editor':
       return 'green';
     case 'collaborator':
-    case 'commentor':
       return 'amber';
     default:
       return 'gray';
