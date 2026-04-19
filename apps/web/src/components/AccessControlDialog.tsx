@@ -80,11 +80,14 @@ export function AccessControlDialog({
   }
 
   async function rotate() {
+    setError(null);
     const name = getDisplayName();
-    if (!name) return;
+    if (!name) {
+      setError('Please set your display name first.');
+      return;
+    }
     const identity = { clientId: getClientId(), displayName: name };
     setSaving(true);
-    setError(null);
     try {
       const result = await updateDocumentSettings(doc.uid, { password: 'rotate' }, identity);
       onChange(result);
