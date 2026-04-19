@@ -102,7 +102,8 @@ or the path in `MARGINALIA_DATA_DIR` (see [config.ts](apps/server/src/config.ts)
 
 ```
 var/
-├── db.sqlite          SQLite DB: documents, invites, sessions, comments
+├── db.sqlite          SQLite DB: documents, invites, sessions, doc_users,
+│                       comments, comment_mentions, edit_proposals
 ├── db.sqlite-wal      WAL file (journal mode)
 ├── db.sqlite-shm      Shared-memory index for the WAL
 └── repo/              Git repo holding every document as <uid>.md

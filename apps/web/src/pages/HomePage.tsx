@@ -416,7 +416,6 @@ function UploadDialog({
    */
   const [docName, setDocName] = useState('');
   const [passwordProtected, setPasswordProtected] = useState(false);
-  const [editableByAnyone, setEditableByAnyone] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
@@ -500,7 +499,6 @@ function UploadDialog({
       const uploadOpts: Parameters<typeof uploadDocument>[0] = {
         markdown,
         password_protected: passwordProtected,
-        editable_by_anyone: editableByAnyone,
       };
       if (docName.trim()) uploadOpts.name = docName.trim();
       const res = await uploadDocument(uploadOpts, identity);
@@ -530,7 +528,6 @@ function UploadDialog({
     setMarkdown(SAMPLE);
     setDocName('');
     setPasswordProtected(false);
-    setEditableByAnyone(false);
     setError(null);
     setCreatedPassword(null);
     setCreatedAdminUrl(null);
@@ -587,8 +584,9 @@ function UploadDialog({
               )}
               <Callout.Root size="1" color="blue">
                 <Callout.Text>
-                  Create named invite links (e.g. "Alice — editor", "Oli — reader") from the
-                  document's settings gear once you've opened it.
+                  Mint named or generic access links (e.g. "Alice — editor", "anyone who has the
+                  URL — collaborator") from the document's Access control dialog once you've
+                  opened it.
                 </Callout.Text>
               </Callout.Root>
             </Flex>
@@ -711,15 +709,8 @@ function UploadDialog({
                     Password-protect (server generates a password, shown once)
                   </Flex>
                 </Text>
-                <Text as="label" size="2">
-                  <Flex align="center" gap="2">
-                    <Checkbox
-                      checked={editableByAnyone}
-                      onCheckedChange={(c) => setEditableByAnyone(c === true)}
-                    />
-                    Allow anyone (with access) to edit the source
-                  </Flex>
-                </Text>
+                {/* Editing rights are granted via invite links in Access
+                    control; no upload-time toggle. */}
               </Flex>
 
               {error && (

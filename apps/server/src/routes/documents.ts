@@ -17,8 +17,8 @@ import {
   verifyPassword,
 } from '../auth.js';
 import type { ServerConfig } from '../config.js';
-import type { CommentRow, DocumentRow, InviteRole, InviteRow } from '../db.js';
-import { isInviteRole } from '../db.js';
+import type { CommentRow, DocumentRow, InviteKind, InviteRole, InviteRow } from '../db.js';
+import { isInviteKind, isInviteRole } from '../db.js';
 import type { GitStore } from '../git-store.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
 import type { Realtime } from '../realtime.js';
@@ -45,6 +45,7 @@ export function documentsRouter(deps: AppDeps): Hono {
 
   r.get('/:uid/invites', async (c) => listInvites(c, deps));
   r.post('/:uid/invites', async (c) => createInvite(c, deps));
+  r.post('/:uid/invites/admin/rotate', async (c) => rotateAdminInvite(c, deps));
   r.delete('/:uid/invites/:token', async (c) => deleteInvite(c, deps));
 
   return r;
@@ -74,7 +75,6 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
     passwordHash = await hashPassword(plaintextPassword);
   }
 
-  const editable = body.editable_by_anyone === true ? 1 : 0;
   const theme = typeof body.default_theme === 'string' ? body.default_theme : 'default';
   const docName =
     typeof body.name === 'string' && body.name.trim().length > 0
@@ -83,11 +83,12 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
 
   await store.write(uid, markdown, identity, 'upload');
 
+  // editable_by_anyone is deprecated; always 0 on new rows, unread by authorize().
   db.prepare(
     `INSERT INTO documents
        (uid, path, name, password_hash, editable_by_anyone, default_theme, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(uid, store.docPath(uid), docName, passwordHash, editable, theme, now, now);
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
+  ).run(uid, store.docPath(uid), docName, passwordHash, theme, now, now);
 
   // Every doc gets an admin invite for its creator. The returned URL is the
   // admin's canonical way to come back to the doc.
@@ -95,6 +96,7 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
     docUid: uid,
     displayName: identity.displayName,
     role: 'admin',
+    kind: 'admin',
     note: 'Author',
     createdByName: identity.displayName,
   });
@@ -108,7 +110,6 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
       display_name: adminInvite.display_name,
     },
     default_theme: theme,
-    editable_by_anyone: editable === 1,
   };
   if (plaintextPassword) response.password = plaintextPassword;
   return c.json(response, 201);
@@ -127,16 +128,22 @@ async function getDocument(c: Context, deps: AppDeps) {
   const source = store.read(doc.uid);
   const rendered = await render(source);
 
+  // For admin/named invites: the server-resolved current name (invite
+  // seed on first visit, doc_users row after). For generic/no-invite:
+  // null. Client uses this to keep localStorage in sync with the server.
+  const forcedDisplayName =
+    decision.invite && decision.invite.kind !== 'generic'
+      ? decision.identity?.displayName ?? null
+      : null;
   return c.json({
     uid: doc.uid,
     name: doc.name,
     source,
     rendered,
-    editable_by_anyone: doc.editable_by_anyone === 1,
     default_theme: doc.default_theme,
     password_protected: doc.password_hash !== null,
     role: decision.role,
-    display_name: decision.identity?.displayName ?? null,
+    display_name: forcedDisplayName,
     created_at: doc.created_at,
     updated_at: doc.updated_at,
   });
@@ -220,7 +227,7 @@ function normalizeWhitespace(s: string): string {
 // --- PATCH /api/documents/:uid/settings (admin only) ----------------
 
 async function updateSettings(c: Context, deps: AppDeps) {
-  const { db } = deps;
+  const { db, config } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
@@ -234,10 +241,10 @@ async function updateSettings(c: Context, deps: AppDeps) {
   type Bind = string | number | null;
   const updates: Array<[string, Bind]> = [];
   let plaintextPassword: string | null = null;
+  let shouldRefreshSession = false;
 
-  if (typeof body.editable_by_anyone === 'boolean') {
-    updates.push(['editable_by_anyone', body.editable_by_anyone ? 1 : 0]);
-  }
+  // editable_by_anyone is unsettable; tolerated on incoming payloads for
+  // back-compat with old clients.
   if (typeof body.default_theme === 'string') {
     updates.push(['default_theme', body.default_theme]);
   }
@@ -252,6 +259,7 @@ async function updateSettings(c: Context, deps: AppDeps) {
     plaintextPassword = generatePassword();
     updates.push(['password_hash', await hashPassword(plaintextPassword)]);
     db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
+    shouldRefreshSession = true;
   }
 
   if (updates.length === 0) return c.json({ error: 'no-updates' }, 400);
@@ -268,11 +276,15 @@ async function updateSettings(c: Context, deps: AppDeps) {
   if (!fresh) return c.json({ error: 'not-found' }, 404);
   const response: Record<string, unknown> = {
     name: fresh.name,
-    editable_by_anyone: fresh.editable_by_anyone === 1,
     default_theme: fresh.default_theme,
     password_protected: fresh.password_hash !== null,
   };
   if (plaintextPassword) response.password = plaintextPassword;
+  if (shouldRefreshSession) {
+    // Keep the initiating admin authenticated under the newly-rotated
+    // password while invalidating every previously-issued session.
+    setSessionCookie(c, db, doc.uid, config.sessionTtlMs);
+  }
   return c.json(response);
 }
 
@@ -288,12 +300,13 @@ async function deleteDocument(c: Context, deps: AppDeps) {
   if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
 
-  // Drop everything the server stores about the doc. Order doesn't matter;
-  // nothing references anything else via FK since we don't have FKs
-  // enforced beyond `PRAGMA foreign_keys = ON`, and these tables don't
-  // actually declare foreign-key constraints.
+  // Drop everything the server stores about the doc. Order doesn't matter
+  // (no FKs declared). Must list every per-doc table; orphans here would
+  // leak author history + in-flight proposals after the doc is gone.
   db.prepare('DELETE FROM comments WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM comment_mentions WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM edit_proposals WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM doc_users WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
@@ -334,6 +347,8 @@ async function exportDocument(c: Context, deps: AppDeps) {
     document: {
       name: doc.name,
       source,
+      // editable_by_anyone is preserved in exports for one release so old
+      // tooling can still read bundles. The field is meaningless on import.
       editable_by_anyone: doc.editable_by_anyone === 1,
       default_theme: doc.default_theme,
     },
@@ -396,15 +411,15 @@ async function importDocument(c: Context, deps: AppDeps) {
     typeof docSpec.name === 'string' && docSpec.name.trim().length > 0
       ? docSpec.name.trim().slice(0, 200)
       : null;
-  const editable = docSpec.editable_by_anyone === true ? 1 : 0;
   const theme = typeof docSpec.default_theme === 'string' ? docSpec.default_theme : 'default';
+  // Bundle's editable_by_anyone is ignored; the column is deprecated.
 
   await store.write(uid, docSpec.source, identity, 'upload');
   db.prepare(
     `INSERT INTO documents
        (uid, path, name, password_hash, editable_by_anyone, default_theme, created_at, updated_at)
-     VALUES (?, ?, ?, NULL, ?, ?, ?, ?)`,
-  ).run(uid, store.docPath(uid), name, editable, theme, now, now);
+     VALUES (?, ?, ?, NULL, 0, ?, ?, ?)`,
+  ).run(uid, store.docPath(uid), name, theme, now, now);
 
   // Fresh admin invite for the importer — not re-using the one from the
   // bundle (tokens are tied to specific deployments / user IDs).
@@ -412,6 +427,7 @@ async function importDocument(c: Context, deps: AppDeps) {
     docUid: uid,
     displayName: identity.displayName,
     role: 'admin',
+    kind: 'admin',
     note: 'Imported',
     createdByName: identity.displayName,
   });
@@ -563,13 +579,17 @@ async function authenticate(c: Context, deps: AppDeps) {
   const ok = await verifyPassword(body.password, doc.password_hash);
   if (!ok) return c.json({ error: 'wrong-password' }, 401);
 
-  const token = createSession(db, doc.uid, config.sessionTtlMs);
-  const maxAge = Math.floor(config.sessionTtlMs / 1000);
+  setSessionCookie(c, db, doc.uid, config.sessionTtlMs);
+  return c.body(null, 204);
+}
+
+function setSessionCookie(c: Context, db: Database, docUid: string, ttlMs: number): void {
+  const token = createSession(db, docUid, ttlMs);
+  const maxAge = Math.floor(ttlMs / 1000);
   c.header(
     'Set-Cookie',
     `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
   );
-  return c.body(null, 204);
 }
 
 // --- Invites (admin only) --------------------------------------------
@@ -602,17 +622,39 @@ async function createInvite(c: Context, deps: AppDeps) {
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
 
-  const displayName = asString(body.display_name);
+  // Default 'named' for back-compat with old clients that always sent a
+  // display_name. Generic is explicit opt-in.
+  const rawKind = typeof body.kind === 'string' ? body.kind : 'named';
+  if (!isInviteKind(rawKind)) return c.json({ error: 'invalid-kind' }, 400);
+  if (rawKind === 'admin') {
+    // Admin invites come only from upload + /admin/rotate. A second
+    // admin row here would be undeletable (see deleteInvite).
+    return c.json({ error: 'admin-invite-not-creatable' }, 400);
+  }
+
   const role = asRole(body.role);
+  if (!role) return c.json({ error: 'role-required' }, 400);
+  // Never let the caller grant `admin` through this endpoint either —
+  // defense in depth; asRole is a simple validator, not an authorizer.
+  if (role === 'admin') return c.json({ error: 'admin-role-not-grantable' }, 400);
+
   const note = typeof body.note === 'string' ? body.note.slice(0, 200) : null;
-  if (!displayName || !role) {
-    return c.json({ error: 'display_name-and-role-required' }, 400);
+
+  let displayName: string | null;
+  if (rawKind === 'named') {
+    displayName = asString(body.display_name);
+    if (!displayName) return c.json({ error: 'display_name-required' }, 400);
+  } else {
+    // generic: visitor brings their own name; the invite's display_name
+    // is irrelevant. Silently drop anything the caller sent.
+    displayName = null;
   }
 
   const row = createInviteRow(db, {
     docUid: doc.uid,
     displayName,
     role,
+    kind: rawKind,
     note,
     createdByName: decision.identity.displayName,
   });
@@ -647,12 +689,59 @@ async function deleteInvite(c: Context, deps: AppDeps) {
   return c.body(null, 204);
 }
 
+/**
+ * Revoke the current admin token, mint a fresh one, carry display_name +
+ * role over. Response mirrors upload's `admin_invite` shape.
+ */
+async function rotateAdminInvite(c: Context, deps: AppDeps) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+
+  // `existing` is just a hint for carrying over display_name/note onto
+  // the new row; the DELETE below wipes EVERY admin-kind row, not just
+  // this one. That matters because a legacy DB migrated in from before
+  // kind='admin' was introduced could have multiple admin-kind rows
+  // (the pre-Step-3 POST /invites accepted role='admin' from the admin
+  // UI, and migrateInvitesKind backfills kind from role). If we only
+  // dropped one row here, rotate wouldn't reliably revoke a leaked
+  // admin URL — which is the entire reason the button exists.
+  const existing = db
+    .prepare(`SELECT * FROM invites WHERE doc_uid = ? AND kind = 'admin' LIMIT 1`)
+    .get(doc.uid) as InviteRow | undefined;
+  // Insert-then-delete so the doc is never admin-less between steps.
+  const fresh = createInviteRow(db, {
+    docUid: doc.uid,
+    displayName: existing?.display_name ?? decision.identity.displayName,
+    role: 'admin',
+    kind: 'admin',
+    note: existing?.note ?? 'Author',
+    createdByName: decision.identity.displayName,
+  });
+  db.prepare(
+    `DELETE FROM invites WHERE doc_uid = ? AND kind = 'admin' AND token != ?`,
+  ).run(doc.uid, fresh.token);
+  return c.json({
+    admin_invite: {
+      token: fresh.token,
+      url: `/d/${doc.uid}/${fresh.token}`,
+      display_name: fresh.display_name,
+    },
+  });
+}
+
 function createInviteRow(
   db: Database,
   opts: {
     docUid: string;
-    displayName: string;
+    displayName: string | null;
     role: InviteRole;
+    kind: InviteKind;
     note: string | null;
     createdByName: string;
   },
@@ -661,9 +750,18 @@ function createInviteRow(
   const now = Date.now();
   db.prepare(
     `INSERT INTO invites
-       (token, doc_uid, display_name, role, note, created_at, created_by_name)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(token, opts.docUid, opts.displayName, opts.role, opts.note, now, opts.createdByName);
+       (token, doc_uid, display_name, role, kind, note, created_at, created_by_name)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    token,
+    opts.docUid,
+    opts.displayName,
+    opts.role,
+    opts.kind,
+    opts.note,
+    now,
+    opts.createdByName,
+  );
   return db.prepare('SELECT * FROM invites WHERE token = ?').get(token) as InviteRow;
 }
 
@@ -672,6 +770,7 @@ function toInviteWire(row: InviteRow): Record<string, unknown> {
     token: row.token,
     display_name: row.display_name,
     role: row.role,
+    kind: row.kind,
     note: row.note,
     created_at: row.created_at,
     created_by_name: row.created_by_name,

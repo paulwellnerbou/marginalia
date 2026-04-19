@@ -1,29 +1,18 @@
 import type { Database } from 'bun:sqlite';
-import type { CommentRow, InviteRow } from './db.js';
+import { listDocUserNames } from './users.js';
 
 interface MentionMatch {
   targetDisplayNames: string[];
 }
 
+/**
+ * Mention roster: live `doc_users` names + invited-but-not-yet-visited
+ * recipients (so they're @-mentionable in a welcome comment). Stale
+ * historical comment-author names are NOT surfaced — that would defeat
+ * the rename flow.
+ */
 export function listMentionCandidates(db: Database, docUid: string): string[] {
-  const names = new Map<string, string>();
-
-  const invites = db
-    .prepare('SELECT display_name FROM invites WHERE doc_uid = ? ORDER BY created_at ASC')
-    .all(docUid) as Array<Pick<InviteRow, 'display_name'>>;
-  for (const invite of invites) addName(names, invite.display_name);
-
-  const comments = db
-    .prepare(
-      `SELECT author_display_name
-         FROM comments
-        WHERE doc_uid = ? AND deleted_at IS NULL
-        ORDER BY created_at ASC`,
-    )
-    .all(docUid) as Array<Pick<CommentRow, 'author_display_name'>>;
-  for (const comment of comments) addName(names, comment.author_display_name);
-
-  return Array.from(names.values()).sort((a, b) =>
+  return listDocUserNames(db, docUid).sort((a, b) =>
     a.localeCompare(b, undefined, { sensitivity: 'base' }),
   );
 }
@@ -177,12 +166,6 @@ function isMentionTerminator(ch: string): boolean {
 
 function isWordLike(ch: string): boolean {
   return /[0-9A-Za-z_]/.test(ch);
-}
-
-function addName(map: Map<string, string>, name: string): void {
-  const normalized = normalizeName(name);
-  if (!normalized || map.has(normalized)) return;
-  map.set(normalized, name.trim());
 }
 
 function normalizeName(name: string | null | undefined): string {

@@ -1,7 +1,6 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Flex, IconButton, Separator, Text, Tooltip } from '@radix-ui/themes';
-import { HomeIcon } from '@radix-ui/react-icons';
+import { Flex, Separator, Text } from '@radix-ui/themes';
 import type { Role } from '../lib/api.js';
 import { AppearanceToggle } from './AppearanceToggle.js';
 import { UserMenu } from './UserMenu.js';
@@ -10,7 +9,6 @@ interface Props {
   /** Document title shown after the brand, when viewing/editing a doc. */
   docTitle?: string;
   role?: Role | undefined;
-  forcedDisplayName?: string | null | undefined;
   /** Extra trailing slot for page-specific controls (e.g. Save in EditPage,
    *  admin settings gear in ViewPage). Rendered before the appearance/user. */
   trailing?: ReactNode;
@@ -20,17 +18,49 @@ interface Props {
  * The persistent top bar, present on every page. Anchors the app's home
  * navigation, identity, and global appearance control.
  */
-export function AppBar({ docTitle, role, forcedDisplayName, trailing }: Props) {
+export function AppBar({ docTitle, role, trailing }: Props) {
+  const brandGradientId = useId().replace(/:/g, '');
+
   return (
     <Flex align="center" gap="3" px="3" py="2" className="app-bar">
-      <Tooltip content="Home">
-        <IconButton variant="ghost" size="2" asChild>
-          <Link to="/" aria-label="Home"><HomeIcon /></Link>
-        </IconButton>
-      </Tooltip>
-      <Text weight="bold" size="3" className="app-brand" asChild>
-        <Link to="/">Marginalia</Link>
-      </Text>
+      <Link to="/" aria-label="Marginalia home" className="app-brand">
+        <span className="app-brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" className="app-brand-icon-svg">
+            <defs>
+              <linearGradient id={brandGradientId} x1="1" y1="3" x2="22" y2="20" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="var(--accent-11)" />
+                <stop offset="48%" stopColor="var(--ruby-11)" />
+                <stop offset="100%" stopColor="var(--gray-12)" />
+              </linearGradient>
+            </defs>
+            <path
+              d="M3 10.75L12 3.75L21 10.75"
+              fill="none"
+              stroke={`url(#${brandGradientId})`}
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M5.5 9.9V19.25H18.5V9.9"
+              fill="none"
+              stroke={`url(#${brandGradientId})`}
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M10 19.25V13.75H14V19.25"
+              fill="none"
+              stroke={`url(#${brandGradientId})`}
+              strokeWidth="1.9"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+        <span className="app-brand-wordmark">Marginalia</span>
+      </Link>
       {docTitle && (
         <>
           <Separator orientation="vertical" size="2" />
@@ -42,7 +72,7 @@ export function AppBar({ docTitle, role, forcedDisplayName, trailing }: Props) {
       <span className="spacer" />
       {trailing}
       <AppearanceToggle />
-      <UserMenu role={role} forcedDisplayName={forcedDisplayName} />
+      <UserMenu role={role} />
     </Flex>
   );
 }

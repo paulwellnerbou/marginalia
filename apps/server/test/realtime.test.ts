@@ -68,7 +68,7 @@ describe('realtime events', () => {
   async function createInvite(
     uid: string,
     displayName: string,
-    role: 'admin' | 'editor' | 'collaborator' | 'commentor' | 'reader' = 'commentor',
+    role: 'admin' | 'editor' | 'collaborator' | 'reader' = 'collaborator',
   ): Promise<string> {
     const res = await fetch(url(`/api/documents/${uid}/invites`), {
       method: 'POST',
@@ -220,7 +220,7 @@ describe('realtime events', () => {
   test('mentioned invitee receives mention.created while the doc is open', async () => {
     const uid = await uploadDoc('# Hi');
     const blockId = await firstBlockId(uid);
-    const bobInvite = await createInvite(uid, 'Bob', 'commentor');
+    const bobInvite = await createInvite(uid, 'Bob', 'collaborator');
 
     const { ws, events } = await openSocket(uid, BOB.id, { inviteToken: bobInvite });
     await waitFor(() => events.find((e) => (e as { type: string }).type === 'subscribed'));

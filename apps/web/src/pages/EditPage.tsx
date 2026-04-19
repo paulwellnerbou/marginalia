@@ -11,6 +11,7 @@ import { documentTitle } from '../lib/doc-title.js';
 import { reportError } from '../lib/log.js';
 import { RenderedDoc } from '../components/RenderedDoc.js';
 import { AppBar } from '../components/AppBar.js';
+import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
 
 type EditorDeps = {
   EditorState: typeof import('@codemirror/state').EditorState;
@@ -86,6 +87,18 @@ export function EditPage() {
       },
     );
   }, [uid]);
+
+  // Mirror ViewPage: sync localStorage AND the header TextField state to
+  // the server's authoritative name. Without the setName, the TextField
+  // keeps showing whatever getDisplayName() returned at mount and Save
+  // would silently revert the invite-seeded identity.
+  useEffect(() => {
+    if (!doc?.display_name) return;
+    if (getDisplayName() !== doc.display_name) {
+      setDisplayName(doc.display_name);
+    }
+    setName(doc.display_name);
+  }, [doc]);
 
   useEffect(() => {
     if (!editorEl.current || doc === null || viewRef.current) return;
@@ -219,6 +232,7 @@ export function EditPage() {
     return (
       <>
         <AppBar />
+        {uid && <PasswordPromptDialog docUid={uid} />}
         <Container size="2" py="8">
           <Text color="red">{error}</Text>{' '}
           <Link to="/">← Home</Link>
@@ -230,6 +244,7 @@ export function EditPage() {
     return (
       <>
         <AppBar />
+        {uid && <PasswordPromptDialog docUid={uid} />}
         <Container size="2" py="8">
           <Text color="gray">Loading…</Text>
         </Container>
@@ -239,10 +254,10 @@ export function EditPage() {
 
   return (
     <div className="edit-page">
+      <PasswordPromptDialog docUid={doc.uid} />
       <AppBar
         docTitle={`Editing: ${documentTitle(doc)}`}
         role={doc.role}
-        forcedDisplayName={doc.display_name}
         trailing={
           <>
             <Button variant="soft" color="gray" size="2" asChild>

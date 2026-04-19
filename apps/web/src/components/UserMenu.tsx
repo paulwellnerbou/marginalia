@@ -17,24 +17,20 @@ import { getClientId, setDisplayName as persistName, useDisplayName } from '../l
 import { Copyable } from './Copyable.js';
 
 /**
- * User affordance in the app bar. Always shows a person icon — never an
- * initial. The menu surfaces the stable browser identity (copyable client
- * ID), the current role when document-scoped, and a rename dialog for the
- * user's default display name.
+ * App-bar user affordance: stable client ID (copyable), role badge when
+ * doc-scoped, rename dialog. Renaming writes localStorage → useDisplayName
+ * → next request → server fans the rename out to comments/mentions.
  */
 export function UserMenu({
   onChange,
   role,
-  forcedDisplayName,
 }: {
   onChange?: (name: string) => void;
   role?: Role | undefined;
-  forcedDisplayName?: string | null | undefined;
 }) {
   // Reactive: stays in sync when any other part of the app (or another tab)
   // writes a new display name.
-  const localName = useDisplayName();
-  const name = forcedDisplayName ?? localName;
+  const name = useDisplayName();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [draft, setDraft] = useState('');
   // The clientId is this browser's permanent identity. It's what the server
@@ -54,7 +50,7 @@ export function UserMenu({
   }
 
   function openDialog() {
-    setDraft(localName ?? '');
+    setDraft(name ?? '');
     setDialogOpen(true);
   }
 
@@ -149,7 +145,6 @@ function roleColor(role: Role): 'indigo' | 'green' | 'amber' | 'gray' {
     case 'editor':
       return 'green';
     case 'collaborator':
-    case 'commentor':
       return 'amber';
     default:
       return 'gray';

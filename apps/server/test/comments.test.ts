@@ -10,7 +10,7 @@ const ALICE = { id: 'aaaaaaaaaaaaaaaaaaaa', name: 'Alice' };
 const BOB = { id: 'bbbbbbbbbbbbbbbbbbbb', name: 'Bob' };
 const CAROL = { id: 'cccccccccccccccccccc', name: 'Carol' };
 
-function headersFor(c: { id: string; name: string }): Headers {
+function rawHeadersFor(c: { id: string; name: string }): Headers {
   return new Headers({
     'content-type': 'application/json',
     [CLIENT_HEADER]: c.id,
@@ -33,30 +33,48 @@ describe('comments API', () => {
   });
 
   /**
-   * Alice uploads a doc and receives her admin invite token.
+   * Alice uploads a doc and receives her admin invite token. The default
+   * setup also mints standing collaborator invites for Bob and Carol so
+   * `headersFor(BOB|CAROL)` can act as authenticated commenters without
+   * each test body having to plumb invite tokens around. Tests that need
+   * the genuine "anonymous visitor" behavior use `rawHeadersFor` and the
+   * `addCommentRaw` helper.
    *
-   * Default `editable_by_anyone: true` so that random testers (Bob, Carol)
-   * can comment without having to carry an explicit invite. The server now
-   * gates comments on role ≥ commentor; a public reader cannot comment.
-   * Tests that specifically want to exercise the public-reader case pass
-   * `editableByAnyone: false` explicitly.
+   * After ACCESS_CONTROL Step 2, an unauthenticated visitor is always a
+   * reader (the old `editable_by_anyone` toggle is gone), so non-reader
+   * rights MUST come from an invite.
    */
   let adminToken = '';
-  async function newDoc(markdown: string, editableByAnyone = true): Promise<string> {
+  const inviteByClientId = new Map<string, string>();
+  async function newDoc(markdown: string): Promise<string> {
     const res = await app.hono.fetch(
       new Request('http://test/api/documents', {
         method: 'POST',
-        headers: headersFor(ALICE),
-        body: JSON.stringify({ markdown, editable_by_anyone: editableByAnyone }),
+        headers: rawHeadersFor(ALICE),
+        body: JSON.stringify({ markdown }),
       }),
     );
     const j = (await res.json()) as { uid: string; admin_invite: { token: string } };
     adminToken = j.admin_invite.token;
+    inviteByClientId.clear();
+    inviteByClientId.set(ALICE.id, adminToken);
+    inviteByClientId.set(BOB.id, await createInvite(j.uid, BOB.name, 'collaborator'));
+    inviteByClientId.set(CAROL.id, await createInvite(j.uid, CAROL.name, 'collaborator'));
     return j.uid;
   }
 
+  /** Headers for `who` with their per-doc invite token attached, if any. */
+  function headersFor(c: { id: string; name: string }): Headers {
+    const h = rawHeadersFor(c);
+    const tok = inviteByClientId.get(c.id);
+    if (tok) h.set(INVITE_HEADER, tok);
+    return h;
+  }
+
+  /** Alias kept for readability where the test specifically wants to flag
+   *  "this request is acting as the doc admin". */
   function asAdmin(c: typeof ALICE = ALICE): Headers {
-    const h = headersFor(c);
+    const h = rawHeadersFor(c);
     h.set(INVITE_HEADER, adminToken);
     return h;
   }
@@ -64,7 +82,7 @@ describe('comments API', () => {
   async function createInvite(
     uid: string,
     displayName: string,
-    role: 'admin' | 'editor' | 'collaborator' | 'commentor' | 'reader' = 'commentor',
+    role: 'admin' | 'editor' | 'collaborator' | 'reader' = 'collaborator',
   ): Promise<string> {
     const res = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/invites`, {
@@ -96,6 +114,24 @@ describe('comments API', () => {
       new Request(`http://test/api/documents/${uid}/comments`, {
         method: 'POST',
         headers: headersFor(who),
+        body: JSON.stringify({ anchor, body }),
+      }),
+    );
+    return { status: res.status, body: await res.json() };
+  }
+
+  /** Like addComment but skips invite attachment — for tests that exercise
+   *  the truly-anonymous (reader) authorization path. */
+  async function addCommentRaw(
+    uid: string,
+    who: typeof ALICE,
+    anchor: { block_id: string; quote: string },
+    body: string,
+  ) {
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        method: 'POST',
+        headers: rawHeadersFor(who),
         body: JSON.stringify({ anchor, body }),
       }),
     );
@@ -309,17 +345,20 @@ describe('comments API', () => {
     expect(res.status).toBe(400);
   });
 
-  // A small sanity check that Carol (no role on the doc) can still read and
-  // post comments — doc is public, comments are not restricted.
-  test('reader on a non-editable public doc cannot post a comment', async () => {
-    const uid = await newDoc('# Public', false);
+  // ACCESS_CONTROL Step 2: an anonymous visitor (no invite header) is
+  // always a reader and cannot post. The previous "editable_by_anyone"
+  // toggle that elevated such visitors to editor was retired.
+  test('anonymous visitor (no invite) cannot post a comment', async () => {
+    const uid = await newDoc('# Public');
     const blockId = await firstBlockId(uid);
-    const r = await addComment(uid, CAROL, { block_id: blockId, quote: 'Public' }, 'hey');
+    const r = await addCommentRaw(uid, CAROL, { block_id: blockId, quote: 'Public' }, 'hey');
     expect(r.status).toBe(403);
   });
 
-  test('editable_by_anyone public doc: anyone posts comments as editor', async () => {
-    const uid = await newDoc('# Public'); // default now: editable_by_anyone=true
+  // Default-scaffold counterpart: with a collaborator invite (auto-minted
+  // by newDoc), Carol CAN post. Confirms invite-driven access works.
+  test('collaborator invite lets a non-admin post a comment', async () => {
+    const uid = await newDoc('# Public');
     const blockId = await firstBlockId(uid);
     const r = await addComment(uid, CAROL, { block_id: blockId, quote: 'Public' }, 'looks good');
     expect(r.status).toBe(201);
@@ -327,7 +366,7 @@ describe('comments API', () => {
 
   test('mentions return pending notifications once and include merged autocomplete names', async () => {
     const uid = await newDoc('# Title');
-    const bobInvite = await createInvite(uid, 'Bob', 'commentor');
+    const bobInvite = await createInvite(uid, 'Bob', 'collaborator');
     const blockId = await firstBlockId(uid);
 
     const created = await addComment(
@@ -370,7 +409,7 @@ describe('comments API', () => {
 
   test('editing a comment only creates a mention notification once per person', async () => {
     const uid = await newDoc('# Title');
-    const carolInvite = await createInvite(uid, 'Carol', 'commentor');
+    const carolInvite = await createInvite(uid, 'Carol', 'collaborator');
     const blockId = await firstBlockId(uid);
 
     const created = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hello');
@@ -420,8 +459,8 @@ describe('comments API', () => {
 
   test('@all mentions every other known person once', async () => {
     const uid = await newDoc('# Title');
-    const bobInvite = await createInvite(uid, 'Bob', 'commentor');
-    const carolInvite = await createInvite(uid, 'Carol', 'commentor');
+    const bobInvite = await createInvite(uid, 'Bob', 'collaborator');
+    const carolInvite = await createInvite(uid, 'Carol', 'collaborator');
     const blockId = await firstBlockId(uid);
 
     const created = await addComment(
@@ -525,6 +564,71 @@ describe('comments API', () => {
     expect(resolveRes.status).toBe(403);
   });
 
+  // Role gate matrix for both endpoints touched by ACCESS_CONTROL Step 1:
+  //   POST /comments         (canComment)
+  //   POST /edit-proposals   (canPropose)
+  // collaborator must be allowed by both; reader must be rejected by both.
+  test('collaborator invite: can comment AND can propose; reader cannot', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+
+    // Bob's collaborator invite is auto-minted by `newDoc`; `headersFor(BOB)`
+    // attaches it. Carol gets a fresh reader-role invite explicitly so she
+    // overrides her default collaborator slot for this scenario.
+    const carolReaderInvite = await createInvite(uid, 'Carol', 'reader');
+    inviteByClientId.set(CAROL.id, carolReaderInvite);
+
+    // Bob (collaborator) can comment.
+    const commentRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, body: 'note' }),
+      }),
+    );
+    expect(commentRes.status).toBe(201);
+
+    // Bob (collaborator) can propose an edit.
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/edit-proposals`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor_block_id: blockId,
+          anchor_quote: 'Title',
+          anchor_kind: 'heading',
+          proposed_text: '# Better title',
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+
+    // Carol (reader) cannot comment.
+    const carolComment = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        method: 'POST',
+        headers: headersFor(CAROL),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, body: 'no' }),
+      }),
+    );
+    expect(carolComment.status).toBe(403);
+
+    // Carol (reader) cannot propose.
+    const carolPropose = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/edit-proposals`, {
+        method: 'POST',
+        headers: headersFor(CAROL),
+        body: JSON.stringify({
+          anchor_block_id: blockId,
+          anchor_quote: 'Title',
+          anchor_kind: 'heading',
+          proposed_text: '# Nope',
+        }),
+      }),
+    );
+    expect(carolPropose.status).toBe(403);
+  });
+
   test('resolving a reply is rejected', async () => {
     const uid = await newDoc('# Title');
     const blockId = await firstBlockId(uid);
@@ -548,5 +652,141 @@ describe('comments API', () => {
       }),
     );
     expect(resolveRes.status).toBe(400);
+  });
+
+  // --- ACCESS_CONTROL Step 4: per-document users + rename propagation ---
+
+  /** Wrapper that replays `addComment` but with a rewritten display name
+   *  in the outbound headers. Drives the rename path in authorize(). */
+  async function addCommentAs(
+    uid: string,
+    who: typeof ALICE,
+    newName: string,
+    anchor: { block_id: string; quote: string },
+    body: string,
+  ) {
+    const h = headersFor(who);
+    h.set(CLIENT_NAME_HEADER, newName);
+    return app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        method: 'POST',
+        headers: h,
+        body: JSON.stringify({ anchor, body }),
+      }),
+    );
+  }
+
+  test('rename propagation: old comments authored by the same client_id follow the new display name', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+
+    // Bob posts as "Bob" (matches his auto-minted named invite).
+    const first = await addComment(uid, BOB, { block_id: blockId, quote: 'Title' }, 'first');
+    expect(first.status).toBe(201);
+    const firstId = (first.body as { comment: { id: string } }).comment.id;
+
+    // Bob renames himself: the client sends a new x-marginalia-client-name
+    // header. authorize() detects the diff against doc_users and fires
+    // propagateRename, which UPDATEs author_display_name on all of Bob's
+    // prior comments.
+    const renamed = await addCommentAs(
+      uid,
+      BOB,
+      'Bobby',
+      { block_id: blockId, quote: 'Title' },
+      'second',
+    );
+    expect(renamed.status).toBe(201);
+
+    const listRes = await list(uid, ALICE);
+    const byBob = listRes.filter((c) => {
+      const author = c.author as { client_id: string };
+      return author.client_id === BOB.id;
+    });
+    expect(byBob.map((c) => (c.author as { display_name: string }).display_name)).toEqual([
+      'Bobby',
+      'Bobby',
+    ]);
+    // Original comment id stays; only its author_display_name changed.
+    expect(byBob.find((c) => c.id === firstId)).toBeDefined();
+  });
+
+  test('rename propagation: unambiguous @mentions get rewritten; duplicated ones are left alone', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+
+    // Alice mentions Bob (unambiguous — only one "Bob" in the doc).
+    const c1 = await addComment(
+      uid,
+      ALICE,
+      { block_id: blockId, quote: 'Title' },
+      'hello @Bob',
+    );
+    expect(c1.status).toBe(201);
+
+    // Bob renames to "Bobby". The mention row targeting "Bob" should be
+    // rewritten because no other client_id uses that name.
+    await addCommentAs(uid, BOB, 'Bobby', { block_id: blockId, quote: 'Title' }, 'here');
+
+    // Bob now fetches his pending mentions under his NEW name. If the
+    // mention row wasn't rewritten, his GET would see zero pending
+    // mentions (because target_display_name='Bob' doesn't match 'Bobby').
+    const getRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        headers: (() => {
+          const h = headersFor(BOB);
+          h.set(CLIENT_NAME_HEADER, 'Bobby');
+          return h;
+        })(),
+      }),
+    );
+    expect(getRes.status).toBe(200);
+    const body = (await getRes.json()) as { pending_mentions: string[] };
+    expect(body.pending_mentions.length).toBe(1);
+
+    // Now the "duplicated name" branch: give Carol the name "Bobby" so
+    // two users share it, then rename one. Mention rows for the OLD
+    // name must NOT be rewritten (would steal the other user's mentions).
+    //
+    // Under ACCESS_CONTROL option 1, Carol's FIRST visit uses her named
+    // invite's seed "Carol" (even if her header says "Bobby"), so we
+    // first prime her doc_users row as "Carol" via a regular post, then
+    // rename her to "Bobby" on a subsequent request.
+    await addComment(uid, CAROL, { block_id: blockId, quote: 'Title' }, 'first as carol');
+    await addCommentAs(
+      uid,
+      CAROL,
+      'Bobby',
+      { block_id: blockId, quote: 'Title' },
+      'me too',
+    );
+    // Alice mentions @Bobby — ambiguous now.
+    const c2 = await addComment(
+      uid,
+      ALICE,
+      { block_id: blockId, quote: 'Title' },
+      '@Bobby look',
+    );
+    expect(c2.status).toBe(201);
+
+    // Bob renames back to "Bob" (leaving Carol as the only "Bobby").
+    await addCommentAs(uid, BOB, 'Bob', { block_id: blockId, quote: 'Title' }, 'back');
+
+    // Carol's pending-mentions fetch must still see the ambiguous mention:
+    // we didn't rewrite target_display_name='Bobby' because Bob was not
+    // the sole holder at rename time.
+    const carolRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/comments`, {
+        headers: (() => {
+          const h = headersFor(CAROL);
+          h.set(CLIENT_NAME_HEADER, 'Bobby');
+          return h;
+        })(),
+      }),
+    );
+    const carolBody = (await carolRes.json()) as { pending_mentions: string[] };
+    // Carol should see the @Bobby mention (c2.id).
+    const c2Id = (c2.body as { comment: { id: string } }).comment.id;
+    expect(carolBody.pending_mentions).toContain(c2Id);
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Flex, IconButton, Tooltip } from '@radix-ui/themes';
 import { CheckIcon, Cross2Icon, TrashIcon } from '@radix-ui/react-icons';
 
@@ -13,6 +13,10 @@ interface Props {
   timeoutMs?: number;
   /** Accessible label / tooltip content. */
   ariaLabel?: string;
+  /** Keep a hidden slot reserved for the future cancel button. */
+  reserveWidth?: boolean;
+  /** Notify parent when the button enters or leaves confirmation mode. */
+  onArmedChange?: (armed: boolean) => void;
   onConfirm: () => void | Promise<void>;
 }
 
@@ -27,32 +31,63 @@ export function ConfirmButton({
   size = '1',
   timeoutMs = 4000,
   ariaLabel,
+  reserveWidth = true,
+  onArmedChange,
   onConfirm,
 }: Props) {
   const [armed, setArmed] = useState(false);
   const timer = useRef<number | null>(null);
+  // Notify the parent in the SAME render batch as the state change so
+  // sibling UI gated on `armed` doesn't flash on-screen for a frame
+  // before it hears about it (a useEffect-driven notification runs
+  // after paint).
+  const setArmedAndNotify = useCallback(
+    (next: boolean) => {
+      setArmed(next);
+      onArmedChange?.(next);
+    },
+    [onArmedChange],
+  );
 
   useEffect(() => {
     if (!armed) return;
-    timer.current = window.setTimeout(() => setArmed(false), timeoutMs);
+    timer.current = window.setTimeout(() => setArmedAndNotify(false), timeoutMs);
     return () => {
       if (timer.current !== null) window.clearTimeout(timer.current);
     };
-  }, [armed, timeoutMs]);
+  }, [armed, timeoutMs, setArmedAndNotify]);
 
   if (!armed) {
-    return (
+    const trigger = (
       <Tooltip content={label}>
         <IconButton
           size={size}
-          variant="ghost"
+          variant="soft"
           color="red"
           aria-label={ariaLabel ?? label}
-          onClick={() => setArmed(true)}
+          onClick={() => setArmedAndNotify(true)}
         >
           <TrashIcon />
         </IconButton>
       </Tooltip>
+    );
+
+    if (!reserveWidth) return trigger;
+
+    return (
+      <Flex gap="2" align="center" className="confirm-pair">
+        <IconButton
+          size={size}
+          variant="soft"
+          color="gray"
+          aria-hidden="true"
+          tabIndex={-1}
+          className="confirm-pair-placeholder"
+        >
+          <Cross2Icon />
+        </IconButton>
+        {trigger}
+      </Flex>
     );
   }
 
@@ -64,7 +99,7 @@ export function ConfirmButton({
           variant="soft"
           color="gray"
           aria-label="Cancel delete"
-          onClick={() => setArmed(false)}
+          onClick={() => setArmedAndNotify(false)}
         >
           <Cross2Icon />
         </IconButton>
@@ -76,7 +111,7 @@ export function ConfirmButton({
           color="red"
           aria-label={confirmLabel}
           onClick={() => {
-            setArmed(false);
+            setArmedAndNotify(false);
             void onConfirm();
           }}
         >

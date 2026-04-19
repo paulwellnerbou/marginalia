@@ -66,14 +66,15 @@ export interface DocumentBundle {
   document: {
     name: string | null;
     source: string;
-    editable_by_anyone: boolean;
+    /** @deprecated Accepted for back-compat with old bundles; ignored. */
+    editable_by_anyone?: boolean;
     default_theme: string;
   };
   representation?: ExportedDocumentRepresentation;
   comments: ExportedComment[];
 }
 
-export type Role = 'admin' | 'editor' | 'collaborator' | 'commentor' | 'reader';
+export type Role = 'admin' | 'editor' | 'collaborator' | 'reader';
 
 export interface Document {
   uid: string;
@@ -81,7 +82,6 @@ export interface Document {
   name: string | null;
   source: string;
   rendered: RenderedDocument;
-  editable_by_anyone: boolean;
   default_theme: string;
   password_protected: boolean;
   role: Role;
@@ -104,7 +104,6 @@ export interface UploadOptions {
    *  falls back to deriving a title from the rendered content. */
   name?: string;
   password_protected?: boolean;
-  editable_by_anyone?: boolean;
   default_theme?: string;
 }
 
@@ -113,7 +112,6 @@ export interface UploadResponse {
   name: string | null;
   admin_invite: { token: string; url: string; display_name: string };
   default_theme: string;
-  editable_by_anyone: boolean;
   password?: string;
 }
 
@@ -133,9 +131,83 @@ function encodeHeaderValue(s: string): string {
   return encodeURIComponent(s);
 }
 
+/**
+ * Shared auth-gate for `401 password-required`. Callers are stalled on
+ * a per-docUid Promise, then retried once after the UI re-authenticates.
+ *
+ * Protocol:
+ *   - gate dispatches `marginalia:auth-required { docUid }`
+ *   - UI dispatches `marginalia:auth-resolved { docUid }` to release
+ *   - UI dispatches `marginalia:auth-cancelled { docUid }` to reject
+ *     all gated callers with a 401 ApiError
+ *
+ * Concurrent 401s for the same doc share one Promise → one prompt.
+ */
+const authGates = new Map<string, Promise<void>>();
+
+export const AUTH_REQUIRED_EVENT = 'marginalia:auth-required';
+export const AUTH_RESOLVED_EVENT = 'marginalia:auth-resolved';
+export const AUTH_CANCELLED_EVENT = 'marginalia:auth-cancelled';
+
+const AUTH_REQUIRED = AUTH_REQUIRED_EVENT;
+const AUTH_RESOLVED = AUTH_RESOLVED_EVENT;
+const AUTH_CANCELLED = AUTH_CANCELLED_EVENT;
+
+/** UI helper: fire this after a successful `authenticate(docUid, pw)` call
+ *  so any queued requests waiting on `waitForAuth` wake up and retry. */
+export function notifyAuthResolved(docUid: string): void {
+  window.dispatchEvent(new CustomEvent(AUTH_RESOLVED_EVENT, { detail: { docUid } }));
+}
+
+/** UI helper: fire this when the user dismisses the password prompt so
+ *  waiters reject with a 401 ApiError instead of hanging forever. */
+export function notifyAuthCancelled(docUid: string): void {
+  window.dispatchEvent(new CustomEvent(AUTH_CANCELLED_EVENT, { detail: { docUid } }));
+}
+
+/**
+ * Is an auth-gate currently open for this doc? The UI reads this on
+ * mount as a durability mechanism — AUTH_REQUIRED is dispatched
+ * synchronously, so a listener that attaches later (e.g. a dialog
+ * mounted after the offending request fired) would miss the event and
+ * the gate would hang. Polling this on mount lets the dialog pick up
+ * any gate that was already armed.
+ */
+export function isAuthPending(docUid: string): boolean {
+  return authGates.has(docUid);
+}
+
+function waitForAuth(docUid: string): Promise<void> {
+  const existing = authGates.get(docUid);
+  if (existing) return existing;
+
+  const gate = new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener(AUTH_RESOLVED, onResolved as EventListener);
+      window.removeEventListener(AUTH_CANCELLED, onCancelled as EventListener);
+      authGates.delete(docUid);
+    };
+    const onResolved = (e: CustomEvent<{ docUid: string }>) => {
+      if (e.detail?.docUid !== docUid) return;
+      cleanup();
+      resolve();
+    };
+    const onCancelled = (e: CustomEvent<{ docUid: string }>) => {
+      if (e.detail?.docUid !== docUid) return;
+      cleanup();
+      reject(new ApiError(401, 'password-required'));
+    };
+    window.addEventListener(AUTH_RESOLVED, onResolved as EventListener);
+    window.addEventListener(AUTH_CANCELLED, onCancelled as EventListener);
+    window.dispatchEvent(new CustomEvent(AUTH_REQUIRED, { detail: { docUid } }));
+  });
+  authGates.set(docUid, gate);
+  return gate;
+}
+
 async function request<T>(
   path: string,
-  init: RequestInit & { identity?: Identity | null; docUid?: string } = {},
+  init: RequestInit & { identity?: Identity | null; docUid?: string; _retry?: boolean } = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set('content-type', 'application/json');
@@ -160,6 +232,16 @@ async function request<T>(
       if (body.error) code = body.error;
     } catch {
       /* ignore */
+    }
+    // Pause-prompt-retry once; _retry guards against retry loops.
+    if (
+      res.status === 401 &&
+      code === 'password-required' &&
+      init.docUid &&
+      !init._retry
+    ) {
+      await waitForAuth(init.docUid);
+      return request(path, { ...init, _retry: true });
     }
     throw new ApiError(res.status, code);
   }
@@ -242,13 +324,11 @@ export function importDocumentBundle(
 export interface DocumentSettingsPatch {
   /** Rename the document. `null` clears it (→ derive from content). */
   name?: string | null;
-  editable_by_anyone?: boolean;
   default_theme?: string;
   password?: null | 'rotate';
 }
 export interface DocumentSettingsResponse {
   name: string | null;
-  editable_by_anyone: boolean;
   default_theme: string;
   password_protected: boolean;
   password?: string;
@@ -269,10 +349,19 @@ export function updateDocumentSettings(
 
 // --- invites --------------------------------------------------------
 
+/**
+ *   - 'admin'   — one per doc, rotatable, never shared.
+ *   - 'named'   — seeds display_name + role on first visit.
+ *   - 'generic' — role only; visitor keeps their own name.
+ */
+export type InviteKind = 'admin' | 'named' | 'generic';
+
 export interface Invite {
   token: string;
-  display_name: string;
+  /** Null for `kind='generic'` (the visitor brings their own name). */
+  display_name: string | null;
   role: Role;
+  kind: InviteKind;
   note: string | null;
   created_at: number;
   created_by_name: string;
@@ -286,9 +375,20 @@ export function listInvites(uid: string): Promise<{ invites: Invite[] }> {
   });
 }
 
+/**
+ * Create an invite. `kind` defaults to 'named' on the server for
+ * back-compat with pre-Step-3 clients; pass 'generic' to mint a
+ * no-forced-name link.
+ */
 export function createInvite(
   uid: string,
-  payload: { display_name: string; role: Role; note?: string | null },
+  payload: {
+    kind?: InviteKind;
+    /** Required for kind='named'; ignored for kind='generic'. */
+    display_name?: string;
+    role: Role;
+    note?: string | null;
+  },
   identity: Identity,
 ): Promise<{ invite: Invite }> {
   return request<{ invite: Invite }>(`/api/documents/${encodeURIComponent(uid)}/invites`, {
@@ -304,6 +404,21 @@ export function deleteInvite(uid: string, token: string, identity: Identity): Pr
     `/api/documents/${encodeURIComponent(uid)}/invites/${encodeURIComponent(token)}`,
     { method: 'DELETE', identity, docUid: uid },
   );
+}
+
+/**
+ * Rotate the admin invite: revokes the existing token and issues a fresh
+ * one. Useful if the admin URL leaked. Keeps the same display_name + note.
+ */
+export function rotateAdminInvite(
+  uid: string,
+  identity: Identity,
+): Promise<{ admin_invite: { token: string; url: string; display_name: string } }> {
+  return request(`/api/documents/${encodeURIComponent(uid)}/invites/admin/rotate`, {
+    method: 'POST',
+    identity,
+    docUid: uid,
+  });
 }
 
 // --- comments --------------------------------------------------------
