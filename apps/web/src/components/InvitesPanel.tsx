@@ -199,8 +199,12 @@ export function InvitesPanel({ uid }: { uid: string }) {
   }
 
   async function remove(token: string) {
+    setError(null);
     const identityName = getDisplayName();
-    if (!identityName) return;
+    if (!identityName) {
+      setError('Please set your display name first.');
+      return;
+    }
     const identity = { clientId: getClientId(), displayName: identityName };
     try {
       await deleteInvite(uid, token, identity);
@@ -212,8 +216,12 @@ export function InvitesPanel({ uid }: { uid: string }) {
   }
 
   async function rotateAdmin() {
+    setError(null);
     const identityName = getDisplayName();
-    if (!identityName) return;
+    if (!identityName) {
+      setError('Please set your display name first.');
+      return;
+    }
     const identity = { clientId: getClientId(), displayName: identityName };
     try {
       const { admin_invite } = await rotateAdminInvite(uid, identity);

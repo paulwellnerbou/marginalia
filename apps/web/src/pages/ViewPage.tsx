@@ -97,6 +97,7 @@ export function ViewPage() {
     if (!doc) return;
     setDoc({
       ...doc,
+      name: s.name,
       default_theme: s.default_theme,
       password_protected: s.password_protected,
     });
