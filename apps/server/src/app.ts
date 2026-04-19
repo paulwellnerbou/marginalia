@@ -1,4 +1,5 @@
 import { extname, isAbsolute, join, normalize, relative } from 'node:path';
+import type { Database } from 'bun:sqlite';
 import type { ServerWebSocket } from 'bun';
 import { Hono } from 'hono';
 import { createBunWebSocket } from 'hono/bun';
@@ -14,6 +15,8 @@ import { eventsRouter } from './routes/events.js';
 export interface App {
   hono: Hono;
   websocket: ReturnType<typeof createBunWebSocket<ServerWebSocket>>['websocket'];
+  /** Exposed for tests that need to assert direct DB state. */
+  db: Database;
   close(): void;
 }
 
@@ -40,6 +43,7 @@ export async function createApp(config: ServerConfig): Promise<App> {
   return {
     hono,
     websocket,
+    db,
     close() {
       db.close();
     },

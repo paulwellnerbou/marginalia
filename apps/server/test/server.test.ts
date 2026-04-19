@@ -448,10 +448,11 @@ describe('documents API', () => {
     expect(disabled.password_protected).toBe(false);
   });
 
-  test('DELETE /api/documents/:uid (admin only) removes doc, invites, comments, sessions', async () => {
+  test('DELETE /api/documents/:uid (admin only) removes doc + all per-doc tables', async () => {
     const created = await upload(CLIENT_A, { markdown: '# Hi' });
 
-    // Create a comment and a secondary invite so we can assert both are gone.
+    // Populate every per-doc table we care about so the delete has
+    // something to wipe. Authorizing as admin also inserts a doc_users row.
     const docRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}`, {
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
@@ -466,6 +467,28 @@ describe('documents API', () => {
         body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Hi' }, body: 'a' }),
       }),
     );
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/edit-proposals`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor_block_id: blockId,
+          anchor_quote: 'Hi',
+          anchor_kind: 'heading',
+          proposed_text: '# Hello',
+        }),
+      }),
+    );
+
+    // Sanity — the rows we expect to be wiped actually exist.
+    const countBefore = (table: string): number =>
+      (app.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE doc_uid = ?`).get(created.uid) as {
+        n: number;
+      }).n;
+    expect(countBefore('doc_users')).toBeGreaterThan(0);
+    expect(countBefore('edit_proposals')).toBeGreaterThan(0);
+    expect(countBefore('comments')).toBeGreaterThan(0);
+    expect(countBefore('invites')).toBeGreaterThan(0);
 
     // Non-admin can't delete. Bob is a reader on this public doc (no
     // invite) → authorize succeeds with role=reader, then the admin check
@@ -494,6 +517,18 @@ describe('documents API', () => {
         }),
       );
       expect(r.status).toBe(404);
+    }
+
+    // And gone from every per-doc table — no orphaned rows.
+    for (const table of [
+      'comments',
+      'comment_mentions',
+      'edit_proposals',
+      'doc_users',
+      'invites',
+      'sessions',
+    ]) {
+      expect(countBefore(table)).toBe(0);
     }
   });
 

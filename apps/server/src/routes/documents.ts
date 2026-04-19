@@ -300,12 +300,13 @@ async function deleteDocument(c: Context, deps: AppDeps) {
   if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
 
-  // Drop everything the server stores about the doc. Order doesn't matter;
-  // nothing references anything else via FK since we don't have FKs
-  // enforced beyond `PRAGMA foreign_keys = ON`, and these tables don't
-  // actually declare foreign-key constraints.
+  // Drop everything the server stores about the doc. Order doesn't matter
+  // (no FKs declared). Must list every per-doc table; orphans here would
+  // leak author history + in-flight proposals after the doc is gone.
   db.prepare('DELETE FROM comments WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM comment_mentions WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM edit_proposals WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM doc_users WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
