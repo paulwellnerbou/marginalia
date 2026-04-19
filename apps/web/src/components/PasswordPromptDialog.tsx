@@ -31,7 +31,14 @@ export function PasswordPromptDialog({ docUid }: { docUid: string }) {
       setOpen(true);
     }
     window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
-    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    return () => {
+      window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+      // Wake any in-flight auth-gate for this doc so navigating away
+      // (or switching docUid) rejects the queued requests instead of
+      // leaving them hanging on a dialog that no longer exists.
+      // Harmless when no gate is pending — the event has no listener.
+      notifyAuthCancelled(docUid);
+    };
   }, [docUid]);
 
   async function handleSubmit(e: React.FormEvent) {
