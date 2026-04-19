@@ -59,7 +59,7 @@ const VALID_ROLES = new Set<RecentDoc['role']>(['admin', 'editor', 'collaborator
 
 /**
  * Validate a stored entry. Returns a one-element array on success,
- * empty on garbage.
+ * empty on garbage. Invalid or legacy shapes are dropped.
  */
 function coerceRecentDoc(v: unknown): RecentDoc[] {
   if (!v || typeof v !== 'object') return [];
