@@ -35,7 +35,16 @@ import { reportError } from '../lib/log.js';
  * one shows an UpdateIcon and auto-reverts after 4s if the admin clicks
  * somewhere else without confirming.
  */
-function RotateAdminButton({ onConfirm }: { onConfirm: () => void | Promise<void> }) {
+function RotateAdminButton({
+  onConfirm,
+  disabled,
+}: {
+  onConfirm: () => void | Promise<void>;
+  /** Disables arming AND confirming — used to lock the control while a
+   *  previous rotation is still in flight (see the caller's `rotating`
+   *  state) so double-clicks can't overlap requests. */
+  disabled?: boolean;
+}) {
   const [armed, setArmed] = useState(false);
   const timer = useRef<number | null>(null);
   useEffect(() => {
@@ -45,6 +54,11 @@ function RotateAdminButton({ onConfirm }: { onConfirm: () => void | Promise<void
       if (timer.current !== null) window.clearTimeout(timer.current);
     };
   }, [armed]);
+  // If the parent locks us mid-arm, collapse back to the idle state so
+  // the stale "confirm" pair doesn't linger.
+  useEffect(() => {
+    if (disabled && armed) setArmed(false);
+  }, [disabled, armed]);
 
   if (!armed) {
     return (
@@ -65,6 +79,7 @@ function RotateAdminButton({ onConfirm }: { onConfirm: () => void | Promise<void
             variant="soft"
             color="amber"
             aria-label="Rotate admin link"
+            disabled={disabled}
             onClick={() => setArmed(true)}
           >
             <UpdateIcon />
@@ -92,6 +107,7 @@ function RotateAdminButton({ onConfirm }: { onConfirm: () => void | Promise<void
           variant="soft"
           color="amber"
           aria-label="Confirm rotate admin link"
+          disabled={disabled}
           onClick={() => {
             setArmed(false);
             void onConfirm();
@@ -150,6 +166,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
   const [name, setName] = useState('');
   const [role, setRole] = useState<Role>('reader');
   const [submitting, setSubmitting] = useState(false);
+  const [rotating, setRotating] = useState(false);
 
   async function refresh() {
     try {
@@ -216,6 +233,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
   }
 
   async function rotateAdmin() {
+    if (rotating) return; // guard against concurrent rotations
     setError(null);
     const identityName = getDisplayName();
     if (!identityName) {
@@ -223,6 +241,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
       return;
     }
     const identity = { clientId: getClientId(), displayName: identityName };
+    setRotating(true);
     try {
       const { admin_invite } = await rotateAdminInvite(uid, identity);
       // Critical: persist the NEW admin token before any further API call.
@@ -234,6 +253,8 @@ export function InvitesPanel({ uid }: { uid: string }) {
     } catch (err) {
       reportError('InvitesPanel.rotateAdmin', err);
       setError(err instanceof Error ? err.message : 'Could not rotate admin link');
+    } finally {
+      setRotating(false);
     }
   }
 
@@ -353,7 +374,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
                     // Admin link: rotation, not deletion. Two-step confirm (inline
                     // below) so a stray click doesn't orphan the admin's active
                     // URL before they've had a chance to copy the new one.
-                    <RotateAdminButton onConfirm={rotateAdmin} />
+                    <RotateAdminButton onConfirm={rotateAdmin} disabled={rotating} />
                   ) : (
                     <ConfirmButton label="Revoke invite" onConfirm={() => remove(inv.token)} />
                   )}
