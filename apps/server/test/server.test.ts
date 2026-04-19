@@ -949,6 +949,64 @@ describe('documents API', () => {
     expect(denied.status).toBe(403);
   });
 
+  test("admin rotation wipes EVERY kind='admin' row — covers legacy multi-admin DBs", async () => {
+    // Pre-Step-3 deployments could mint multiple role='admin' invites
+    // through the generic create endpoint; migrateInvitesKind then
+    // backfills them all to kind='admin'. Simulate that state by
+    // inserting a second admin row directly and assert rotation nukes
+    // both, not just one.
+    const created = await upload(CLIENT_A, { markdown: '# Hi' });
+    const smuggledToken = 'smuggled-legacy-admin-token';
+    app.db
+      .prepare(
+        `INSERT INTO invites (token, doc_uid, display_name, role, kind, note, created_at, created_by_name)
+         VALUES (?, ?, ?, 'admin', 'admin', NULL, ?, ?)`,
+      )
+      .run(smuggledToken, created.uid, 'Alice', Date.now(), 'Alice');
+
+    // Both admin rows should work pre-rotation.
+    const preA = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(preA.status).toBe(200);
+    const preB = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), smuggledToken),
+      }),
+    );
+    expect(preB.status).toBe(200);
+
+    // Rotate via the original admin token.
+    const rot = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites/admin/rotate`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(rot.status).toBe(200);
+    const { admin_invite } = (await rot.json()) as {
+      admin_invite: { token: string };
+    };
+
+    // BOTH old admin rows are gone — only the fresh one remains.
+    const rows = app.db
+      .prepare(`SELECT token FROM invites WHERE doc_uid = ? AND kind = 'admin'`)
+      .all(created.uid) as Array<{ token: string }>;
+    expect(rows.map((r) => r.token)).toEqual([admin_invite.token]);
+
+    // The smuggled legacy token no longer grants admin.
+    const settingsWithSmuggled = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/settings`, {
+        method: 'PATCH',
+        headers: withInvite(headersFor(CLIENT_A), smuggledToken),
+        body: JSON.stringify({ default_theme: 'book' }),
+      }),
+    );
+    expect(settingsWithSmuggled.status).toBe(403);
+  });
+
   test('password rotation invalidates old cookies but re-authenticates the initiating admin', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Secret',

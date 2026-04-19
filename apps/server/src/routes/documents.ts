@@ -703,6 +703,14 @@ async function rotateAdminInvite(c: Context, deps: AppDeps) {
   if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
 
+  // `existing` is just a hint for carrying over display_name/note onto
+  // the new row; the DELETE below wipes EVERY admin-kind row, not just
+  // this one. That matters because a legacy DB migrated in from before
+  // kind='admin' was introduced could have multiple admin-kind rows
+  // (the pre-Step-3 POST /invites accepted role='admin' from the admin
+  // UI, and migrateInvitesKind backfills kind from role). If we only
+  // dropped one row here, rotate wouldn't reliably revoke a leaked
+  // admin URL — which is the entire reason the button exists.
   const existing = db
     .prepare(`SELECT * FROM invites WHERE doc_uid = ? AND kind = 'admin' LIMIT 1`)
     .get(doc.uid) as InviteRow | undefined;
@@ -715,9 +723,9 @@ async function rotateAdminInvite(c: Context, deps: AppDeps) {
     note: existing?.note ?? 'Author',
     createdByName: decision.identity.displayName,
   });
-  if (existing) {
-    db.prepare('DELETE FROM invites WHERE token = ?').run(existing.token);
-  }
+  db.prepare(
+    `DELETE FROM invites WHERE doc_uid = ? AND kind = 'admin' AND token != ?`,
+  ).run(doc.uid, fresh.token);
   return c.json({
     admin_invite: {
       token: fresh.token,
