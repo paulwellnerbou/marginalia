@@ -6,6 +6,11 @@ import rehypeStringify from 'rehype-stringify';
 import type { Root as HastRoot } from 'hast';
 
 import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
+import {
+  MARGINALIA_BLOCK_MARKER_PREFIX,
+  MARGINALIA_SUBBLOCK_MARKER_PREFIX,
+  type SubBlockEntry,
+} from './asciidoc-markers.js';
 import { sanitizeSchema } from './plugins/sanitize-schema.js';
 import { rehypeShikiHighlight } from './plugins/shiki.js';
 import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
@@ -30,13 +35,6 @@ interface AdocRenderData {
   assets?: AssetRef[];
   mermaid?: MermaidBlock[];
   warnings?: Warning[];
-}
-
-/** IDs for list-item sub-blocks emitted by the AST walk, indexed by
- *  their `__marginalia-subblock-<N>` marker. Shared with the hast pass
- *  so both walks agree on which `<li>` gets which `data-subblock`. */
-export interface SubBlockEntry {
-  id: string;
 }
 
 /**
@@ -425,8 +423,9 @@ function extractFrontmatter(doc: AsciidoctorAbstractBlock): Record<string, unkno
   return out;
 }
 
-// Re-exported for the block-ids plugin — keeps the marker prefixes in one place.
-export const MARGINALIA_BLOCK_MARKER_PREFIX = '__marginalia-block-';
-export const MARGINALIA_SUBBLOCK_MARKER_PREFIX = '__marginalia-subblock-';
+// Marker-prefix constants + SubBlockEntry live in `./asciidoc-markers.ts`
+// so the block-ids plugin can import them without creating a circular
+// dependency on this file. We use them above; external callers should
+// import directly from `./asciidoc-markers.js`.
 
 export type { HastRoot };

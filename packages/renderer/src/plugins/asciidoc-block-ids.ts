@@ -6,7 +6,7 @@ import {
   MARGINALIA_BLOCK_MARKER_PREFIX,
   MARGINALIA_SUBBLOCK_MARKER_PREFIX,
   type SubBlockEntry,
-} from '../render-asciidoc.js';
+} from '../asciidoc-markers.js';
 
 export interface AsciidocBlockIdsOptions {
   blocks: BlockMap;
