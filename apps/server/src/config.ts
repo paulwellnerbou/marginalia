@@ -41,9 +41,7 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     overrides.webDir ??
     process.env.MARGINALIA_WEB_DIR ??
     fileURLToPath(new URL('../../web/dist', import.meta.url));
-  const blobStorage =
-    overrides.blobStorage ??
-    (process.env.MARGINALIA_BLOB_STORAGE === 's3' ? 's3' : 'fs');
+  const blobStorage = overrides.blobStorage ?? parseBlobStorageEnv();
   const s3 = overrides.s3 ?? (blobStorage === 's3' ? loadS3ConfigFromEnv() : undefined);
   return {
     port: overrides.port ?? Number(process.env.PORT ?? 3434),
@@ -57,6 +55,24 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     blobStorage,
     ...(s3 ? { s3 } : {}),
   };
+}
+
+/**
+ * Parse `MARGINALIA_BLOB_STORAGE`. Unset / empty → `fs` (the default).
+ * `fs` / `s3` accepted case-insensitively with surrounding whitespace
+ * tolerated — common shell/env-file mishaps (`S3`, `s3\n`, `fs `)
+ * shouldn't silently land a production deploy on the wrong backend.
+ * Anything else throws at startup so the misconfiguration is obvious.
+ */
+function parseBlobStorageEnv(): 'fs' | 's3' {
+  const raw = process.env.MARGINALIA_BLOB_STORAGE;
+  if (raw === undefined) return 'fs';
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === '' || normalized === 'fs') return 'fs';
+  if (normalized === 's3') return 's3';
+  throw new Error(
+    `MARGINALIA_BLOB_STORAGE must be "fs" or "s3" (got: ${JSON.stringify(raw)}).`,
+  );
 }
 
 /**
