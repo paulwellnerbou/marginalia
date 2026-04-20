@@ -10,10 +10,12 @@ import type { DocumentFormat } from './db.js';
  * (`<uid>.md` or `<uid>.adoc`). Every write is a commit authored by the
  * display name (+ client ID in the trailer).
  *
- * Methods below take `path` (the relative filename already stored in
- * `documents.path`) rather than re-deriving it from uid + format on
- * every call — the row's `path` column is authoritative and saves us
- * from having to pass two arguments everywhere.
+ * `read()`, `history()`, `readAt()`, `deleteDoc()` take a relative `path`
+ * — typically the value already stored in `documents.path`, so callers
+ * don't have to re-derive it. `write()` is the outlier: it still takes
+ * `uid` + `format` and derives the filename via `docPath()` itself,
+ * since an upload is the moment the `path` column gets populated in the
+ * first place. The class has both APIs on purpose.
  */
 export class GitStore {
   constructor(private readonly repoDir: string) {}

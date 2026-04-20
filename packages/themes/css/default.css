@@ -16,8 +16,14 @@
  * `<div class="paragraph">` / `<div class="listingblock">` / `<div
  * class="sect1">` etc., which the base rules below (targeting semantic
  * tags only) would leave with no vertical rhythm or callout styling.
- * This import adds the compat rules; no-ops on markdown docs since its
- * selectors key off asciidoctor-specific class names.
+ *
+ * Most selectors in this import key off asciidoctor-specific class
+ * names so they're no-ops on markdown output, but a handful are
+ * deliberately generic: `kbd`, `.title`, and the `.menuseq` / `.keyseq`
+ * / `.button` UI-macro classes will also match a markdown doc that
+ * contains inline HTML with those tags/classes (which the sanitizer
+ * preserves). The styling is sensible in both worlds — kbd-as-keycap
+ * reads correctly wherever it appears — so that overlap is intentional.
  */
 @import './asciidoc-compat.css';
 

@@ -206,9 +206,16 @@ export function RenderedDoc({
             // behaviour matches native anchor clicks. `pushState` rather
             // than `replaceState` because the browser would also push a
             // history entry on a default anchor click.
-            if (window.location.hash !== `#${id}`) {
-              const next = new URL(window.location.href);
-              next.hash = id;
+            //
+            // Build `next.hash` from the decoded id first and compare
+            // against `window.location.hash` AFTER both have gone
+            // through URL's percent-encoding — otherwise an id with
+            // reserved chars (colons, spaces, umlauts) would compare
+            // decoded-vs-encoded and push a redundant entry on every
+            // re-click of the same anchor.
+            const next = new URL(window.location.href);
+            next.hash = id;
+            if (window.location.hash !== next.hash) {
               window.history.pushState(null, '', next);
             }
           }
