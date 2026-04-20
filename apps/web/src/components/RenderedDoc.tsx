@@ -39,6 +39,12 @@ interface RenderedDocProps {
   onSearchResultsChange?: (results: DocumentSearchResult[]) => void;
   /** Open the corresponding comment thread for a clicked highlight. */
   onHighlightClick?: (threadId: string) => void;
+  /**
+   * Supplied by editors: called when a user drops or picks a file on a
+   * missing-asset placeholder. When absent, placeholders render read-only
+   * (no file picker, no drop target) for readers.
+   */
+  onMissingAssetUpload?: ((refName: string, file: File) => void | Promise<void>) | undefined;
 }
 
 /**
@@ -70,14 +76,24 @@ export function RenderedDoc({
   activeSearchVersion = 0,
   onSearchResultsChange,
   onHighlightClick,
+  onMissingAssetUpload,
 }: RenderedDocProps) {
   const internal = useRef<HTMLElement>(null);
   const ref = elRef ?? internal;
   const lastHtml = useRef<string | null>(null);
   const [lightbox, setLightbox] = useState<LightboxImage | null>(null);
+  // Stash the upload callback in a ref so the placeholder post-process
+  // can call the latest version without re-running when it changes —
+  // the DOM-mutation effect only cares about whether uploads are enabled.
+  const uploadCbRef = useRef<typeof onMissingAssetUpload>(onMissingAssetUpload);
+  useEffect(() => {
+    uploadCbRef.current = onMissingAssetUpload;
+  }, [onMissingAssetUpload]);
+  const canUploadMissing = Boolean(onMissingAssetUpload);
 
   // Apply `rendered.html` to the article's innerHTML exactly once per
-  // unique html value, then run mermaid. React does not own these children.
+  // unique html value, then run mermaid + replace missing-asset markers
+  // with placeholder cards. React does not own these children.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -85,7 +101,8 @@ export function RenderedDoc({
     el.innerHTML = rendered.html;
     lastHtml.current = rendered.html;
     void renderMermaidIn(el);
-  }, [rendered.html, ref]);
+    replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
+  }, [rendered.html, ref, canUploadMissing]);
 
   useEffect(() => {
     const el = ref.current;
@@ -256,6 +273,73 @@ export function RenderedDoc({
       <ImageLightbox image={lightbox} onClose={() => setLightbox(null)} />
     </>
   );
+}
+
+/**
+ * Swap `<img data-missing-asset="name">` markers produced by
+ * `rewriteAssetReferences` for a placeholder card. Editors (with an
+ * upload callback) get a dropzone + file picker; readers get a muted
+ * "not available" note.
+ */
+function replaceMissingAssetMarkers(
+  root: HTMLElement,
+  canUpload: boolean,
+  cbRef: { current?: ((refName: string, file: File) => void | Promise<void>) | undefined },
+): void {
+  const markers = root.querySelectorAll<HTMLImageElement>('img[data-missing-asset]');
+  for (const img of Array.from(markers)) {
+    const refName = img.dataset.missingAsset ?? '';
+    if (!refName) continue;
+    const placeholder = document.createElement('div');
+    placeholder.className = `missing-asset ${canUpload ? 'missing-asset--editable' : 'missing-asset--readonly'}`;
+    placeholder.dataset.missingAssetRef = refName;
+
+    const label = document.createElement('div');
+    label.className = 'missing-asset__label';
+    label.textContent = canUpload
+      ? `Missing image: ${refName} — drop a file or click to upload`
+      : `Image unavailable: ${refName}`;
+    placeholder.appendChild(label);
+
+    if (img.alt && img.alt.trim()) {
+      const alt = document.createElement('div');
+      alt.className = 'missing-asset__alt';
+      alt.textContent = img.alt;
+      placeholder.appendChild(alt);
+    }
+
+    if (canUpload) {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.className = 'missing-asset__input';
+      input.setAttribute('aria-label', `Upload ${refName}`);
+      input.addEventListener('change', () => {
+        const file = input.files?.[0];
+        if (file) cbRef.current?.(refName, file);
+      });
+      placeholder.appendChild(input);
+
+      placeholder.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        placeholder.classList.add('missing-asset--over');
+      });
+      placeholder.addEventListener('dragleave', () => {
+        placeholder.classList.remove('missing-asset--over');
+      });
+      placeholder.addEventListener('drop', (e) => {
+        e.preventDefault();
+        placeholder.classList.remove('missing-asset--over');
+        const file = e.dataTransfer?.files?.[0];
+        if (file) cbRef.current?.(refName, file);
+      });
+      placeholder.addEventListener('click', (e) => {
+        if (e.target === input) return;
+        input.click();
+      });
+    }
+
+    img.replaceWith(placeholder);
+  }
 }
 
 /**

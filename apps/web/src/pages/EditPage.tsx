@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { saveInviteToken } from '../lib/invite.js';
 import { Button, Container, Text, TextField } from '@radix-ui/themes';
@@ -6,10 +6,19 @@ import { ChevronLeftIcon } from '@radix-ui/react-icons';
 import type { RenderResult } from '@marginalia/renderer';
 import type { EditorView } from 'codemirror';
 import { getClientId, getDisplayName, setDisplayName } from '../lib/identity.js';
-import { getDocument, updateDocument, ApiError, type Document } from '../lib/api.js';
+import {
+  getDocument,
+  updateDocument,
+  ApiError,
+  type Document,
+  type AttachedAsset,
+  uploadAsset,
+  deleteAttachedAsset,
+} from '../lib/api.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { reportError } from '../lib/log.js';
 import { RenderedDoc } from '../components/RenderedDoc.js';
+import { AssetsPanel } from '../components/AssetsPanel.js';
 import { AppBar } from '../components/AppBar.js';
 import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
 
@@ -22,6 +31,30 @@ type EditorDeps = {
 
 let editorDepsPromise: Promise<EditorDeps> | null = null;
 let rendererPromise: Promise<typeof import('@marginalia/renderer')> | null = null;
+
+/**
+ * The source references an asset via `![alt](filename)` (markdown) or
+ * `image::filename[]` (asciidoc). Used to decide which attached assets
+ * are "orphans" and to populate the preview's attached-asset set.
+ */
+function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'): Set<string> {
+  const out = new Set<string>();
+  // Markdown: ![alt](src), ignore reference-style. Keep it narrow —
+  // we'd rather miss an edge case than offer a false "match" on
+  // external URLs or linkified text.
+  const mdRe = /!\[[^\]]*\]\(([^)\s"']+)/g;
+  // AsciiDoc: image::src[]  /  image:src[] (inline) / include::src[]
+  const adocRe = /(?:^|\s)(?:image::|image:|include::)([^\s\[]+)/g;
+  const re = format === 'asciidoc' ? adocRe : mdRe;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    const raw = m[1];
+    if (!raw) continue;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith('/') || raw.startsWith('#')) continue;
+    out.add(raw);
+  }
+  return out;
+}
 
 function loadEditorDeps(): Promise<EditorDeps> {
   if (!editorDepsPromise) {
@@ -58,11 +91,27 @@ export function EditPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState<string>(() => getDisplayName() ?? '');
+  const [attached, setAttached] = useState<AttachedAsset[]>([]);
 
   const editorEl = useRef<HTMLDivElement>(null);
   const previewEl = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const previewRequestRef = useRef(0);
+
+  const canEdit = useMemo(() => {
+    if (!doc) return false;
+    return doc.role === 'admin' || doc.role === 'editor';
+  }, [doc]);
+
+  const attachedRefs = useMemo(
+    () => new Set(attached.map((a) => a.ref_name)),
+    [attached],
+  );
+
+  const referencedRefs = useMemo(
+    () => collectReferencedRefs(source, doc?.format ?? 'markdown'),
+    [source, doc?.format],
+  );
 
   useEffect(() => {
     if (!doc) return;
@@ -79,6 +128,7 @@ export function EditPage() {
       (d) => {
         setDoc(d);
         setSource(d.source);
+        setAttached(d.attached_assets ?? []);
       },
       (err) => {
         reportError('EditPage.load', err, { uid });
@@ -137,14 +187,22 @@ export function EditPage() {
   useEffect(() => {
     previewRequestRef.current += 1;
     const requestId = previewRequestRef.current;
-    if (!source) {
+    if (!source || !uid) {
       setRendered(null);
       return;
     }
     const handle = setTimeout(async () => {
       try {
-        const { render } = await loadRenderer();
+        const { render, rewriteAssetReferences } = await loadRenderer();
         const r = await render(source);
+        // Apply the same server-side asset rewrite to the preview HTML so
+        // dropzones / missing-asset placeholders match what the viewer
+        // will see after save. Without this, the editor's preview would
+        // show broken `<img>` icons for every attached image.
+        r.html = await rewriteAssetReferences(r.html, {
+          docUid: uid,
+          attached: attachedRefs,
+        });
         if (previewRequestRef.current !== requestId) return;
         setRendered(r);
       } catch (err) {
@@ -152,7 +210,7 @@ export function EditPage() {
       }
     }, 200);
     return () => clearTimeout(handle);
-  }, [source]);
+  }, [source, uid, attachedRefs]);
 
   // Sync scrolling between source and preview
   useEffect(() => {
@@ -200,6 +258,90 @@ export function EditPage() {
     };
   }, [doc, rendered]);
 
+  const uploadAndAttach = useCallback(
+    async (refName: string, file: File) => {
+      if (!uid) return;
+      const resolvedName = (name || getDisplayName() || '').trim();
+      if (!resolvedName) {
+        setError('Enter a display name before uploading.');
+        return;
+      }
+      try {
+        const { asset } = await uploadAsset(
+          uid,
+          refName,
+          file,
+          { clientId: getClientId(), displayName: resolvedName },
+        );
+        // Upsert: replace any existing row for the same refName.
+        setAttached((prev) => {
+          const next = prev.filter((a) => a.ref_name !== refName);
+          next.push(asset);
+          return next;
+        });
+      } catch (err) {
+        reportError('EditPage.uploadAsset', err, { uid, refName });
+        if (err instanceof ApiError) setError(`Upload failed: ${err.status} ${err.code}`);
+        else setError('Upload failed');
+      }
+    },
+    [uid, name],
+  );
+
+  const handleDeleteAsset = useCallback(
+    async (refName: string) => {
+      if (!uid) return;
+      const resolvedName = (name || getDisplayName() || '').trim() || 'unknown';
+      try {
+        await deleteAttachedAsset(uid, refName, {
+          clientId: getClientId(),
+          displayName: resolvedName,
+        });
+        setAttached((prev) => prev.filter((a) => a.ref_name !== refName));
+      } catch (err) {
+        reportError('EditPage.deleteAsset', err, { uid, refName });
+        if (err instanceof ApiError) setError(`Delete failed: ${err.status} ${err.code}`);
+      }
+    },
+    [uid, name],
+  );
+
+  // Editor-pane paste: if the clipboard has an image, upload it under a
+  // generated ref name and insert the markdown reference at the cursor.
+  // Deliberately scoped to the editor DOM, not the window, so pasting
+  // into the display-name field etc. is unaffected.
+  useEffect(() => {
+    const root = editorEl.current;
+    if (!root || !canEdit || !uid) return;
+    const handler = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of Array.from(items)) {
+        if (item.kind !== 'file') continue;
+        const file = item.getAsFile();
+        if (!file || !file.type.startsWith('image/')) continue;
+        e.preventDefault();
+        const ext = file.type.split('/')[1]?.split(/[;+]/)[0] || 'png';
+        const refName = `pasted-${Date.now()}.${ext}`;
+        const insertion = doc?.format === 'asciidoc'
+          ? `\nimage::${refName}[]\n`
+          : `\n![](${refName})\n`;
+        const view = viewRef.current;
+        if (view) {
+          const { from, to } = view.state.selection.main;
+          view.dispatch({
+            changes: { from, to, insert: insertion },
+            selection: { anchor: from + insertion.length },
+          });
+        }
+        void uploadAndAttach(refName, file);
+        break;
+      }
+    };
+    root.addEventListener('paste', handler as EventListener);
+    return () => root.removeEventListener('paste', handler as EventListener);
+  }, [canEdit, uid, uploadAndAttach, doc?.format]);
+
   async function handleSave() {
     if (!uid) return;
     const resolved = name.trim();
@@ -223,10 +365,9 @@ export function EditPage() {
     }
   }
 
-  const canSave = useMemo(() => {
-    if (!doc) return false;
-    return doc.role === 'admin' || doc.role === 'editor';
-  }, [doc]);
+  // Kept as a named alias for the existing disabled-gate below; canEdit
+  // already computes the same thing above.
+  const canSave = canEdit;
 
   if (error && !doc) {
     return (
@@ -287,15 +428,29 @@ export function EditPage() {
           </>
         }
       />
-      <div className="edit-body">
+      <div className={`edit-body${canEdit ? ' edit-body--with-assets' : ''}`}>
         <div className="edit-source" ref={editorEl} />
         <div className="edit-preview" ref={previewEl}>
           {rendered ? (
-            <RenderedDoc rendered={rendered} />
+            <RenderedDoc
+              rendered={rendered}
+              onMissingAssetUpload={canEdit ? uploadAndAttach : undefined}
+            />
           ) : (
             <Text color="gray" size="2" as="p" mx="4" mt="4">Preview…</Text>
           )}
         </div>
+        {canEdit && (
+          <AssetsPanel
+            docUid={doc.uid}
+            assets={attached}
+            referencedRefs={referencedRefs}
+            canEdit={canEdit}
+            onReplace={uploadAndAttach}
+            onDelete={handleDeleteAsset}
+            onAdd={(file, refName) => uploadAndAttach(refName, file)}
+          />
+        )}
       </div>
     </div>
   );

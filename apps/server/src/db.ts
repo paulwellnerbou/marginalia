@@ -118,6 +118,34 @@ CREATE TABLE IF NOT EXISTS edit_proposals (
 );
 
 CREATE INDEX IF NOT EXISTS idx_proposals_doc ON edit_proposals(doc_uid);
+
+-- Content-addressed blob metadata. One row per unique sha256; reused
+-- across documents via document_assets. Rows aren't deleted when the
+-- last reference goes away — a separate gc pass is responsible for that
+-- (not yet implemented).
+CREATE TABLE IF NOT EXISTS assets (
+  id          TEXT PRIMARY KEY,       -- hex sha256 of the bytes
+  mime        TEXT NOT NULL,
+  size        INTEGER NOT NULL,
+  created_at  INTEGER NOT NULL
+);
+
+-- Per-document attachment. ref_name is the string used to reference
+-- the asset in source (e.g. "diagram.png", "intro.adoc"); the renderer
+-- rewrites img src to the proxy URL when a row exists here. kind
+-- mirrors the source usage ('image' | 'include' | 'attachment'); the
+-- upload endpoint infers it from the mime type and the caller's hint.
+CREATE TABLE IF NOT EXISTS document_assets (
+  doc_uid     TEXT NOT NULL,
+  ref_name    TEXT NOT NULL,
+  asset_id    TEXT NOT NULL,
+  kind        TEXT NOT NULL DEFAULT 'image',
+  created_at  INTEGER NOT NULL,
+  created_by  TEXT NOT NULL,
+  PRIMARY KEY (doc_uid, ref_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_assets_asset ON document_assets(asset_id);
 `;
 
 /** Document source flavours persisted in `documents.format`. */
@@ -235,6 +263,30 @@ export interface DocUserRow {
   display_name: string;
   first_seen_at: number;
   last_seen_at: number;
+}
+
+export type AssetKind = 'image' | 'include' | 'attachment';
+
+export const ASSET_KINDS: readonly AssetKind[] = ['image', 'include', 'attachment'] as const;
+
+export function isAssetKind(v: unknown): v is AssetKind {
+  return typeof v === 'string' && (ASSET_KINDS as readonly string[]).includes(v);
+}
+
+export interface AssetRow {
+  id: string;
+  mime: string;
+  size: number;
+  created_at: number;
+}
+
+export interface DocumentAssetRow {
+  doc_uid: string;
+  ref_name: string;
+  asset_id: string;
+  kind: AssetKind;
+  created_at: number;
+  created_by: string;
 }
 
 export type EditProposalStatus = 'pending' | 'accepted' | 'rejected' | 'orphaned';

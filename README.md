@@ -28,6 +28,65 @@ bun run build
 bun run start
 ```
 
+## Document assets
+
+Documents reference images and (planned) include files by a name that
+appears in the source — `![cat](cat.png)` in markdown, `image::cat.png[]`
+in AsciiDoc. Those names resolve against a per-document *asset store*.
+
+- Uploads happen through the editor: drop or paste an image into the
+  editor pane, or click the dropzone that replaces a missing-image
+  reference. The file is bound to the exact name used in source.
+- Viewers request assets through `/api/documents/:uid/assets/:refName`,
+  which goes through the same authorization check as the document
+  itself — a user without access to the document cannot fetch its
+  assets, even with a direct URL.
+- Blobs are content-addressed (sha256). The same bytes uploaded under
+  two different names — or to two different documents — are stored
+  once. Detaching the last reference garbage-collects the blob.
+
+Asset endpoints (all gated by per-document authz; writes require
+`editor`+):
+
+- `GET    /api/documents/:uid/assets` — list attached assets
+- `POST   /api/documents/:uid/assets` — multipart upload (`file`,
+  `ref_name`, optional `kind`)
+- `GET    /api/documents/:uid/assets/:refName` — fetch bytes (with
+  ETag + long `Cache-Control: private`)
+- `DELETE /api/documents/:uid/assets/:refName` — detach (and GC the
+  blob if nothing else references it)
+
+Upload size defaults to 16 MiB; override with `maxAssetBytes` in
+[config.ts](apps/server/src/config.ts).
+
+### Blob storage backend
+
+Two backends; same interface, one config switch.
+
+**Filesystem** (default, zero-config). Blobs land under
+`MARGINALIA_DATA_DIR/blobs/<sha[0:2]>/<sha>`. Good for self-hosting,
+Docker volumes, and local development.
+
+**S3-compatible** (any of AWS S3, Cloudflare R2, MinIO, Backblaze B2,
+DigitalOcean Spaces…). Enable with `MARGINALIA_BLOB_STORAGE=s3` plus:
+
+```sh
+MARGINALIA_BLOB_STORAGE=s3
+MARGINALIA_S3_BUCKET=marginalia-blobs
+MARGINALIA_S3_ACCESS_KEY_ID=...
+MARGINALIA_S3_SECRET_ACCESS_KEY=...
+# Optional — AWS S3 picks the right endpoint from the region if omitted.
+MARGINALIA_S3_ENDPOINT=http://localhost:9000       # e.g. MinIO
+MARGINALIA_S3_REGION=auto
+MARGINALIA_S3_PREFIX=prod/blobs/                   # key prefix inside the bucket
+MARGINALIA_S3_VIRTUAL_HOSTED=1                     # if your endpoint needs it
+```
+
+Credentials must be readable at startup; the server fails loudly if any
+required S3 var is missing. All reads still go through the per-document
+proxy — never share bucket credentials or pre-signed URLs with end
+users.
+
 ## JSON Bundles
 
 Documents can be exported and imported as versioned JSON bundles through the
@@ -62,6 +121,8 @@ These are the main runtime env vars the container understands:
 - `MARGINALIA_DATA_DIR` — persistent data directory. Default: `/app/.data/`
 - `MARGINALIA_WEB_DIR` — built SPA directory. Default: `/app/apps/web/dist`
 - `APP_ENV_LABEL` — optional label appended to the browser title, e.g. `DEV`
+- `MARGINALIA_BLOB_STORAGE` — `fs` (default) or `s3`. See
+  [Blob storage backend](#blob-storage-backend) for the S3 env vars.
 
 ### GitHub setup
 
@@ -103,10 +164,13 @@ or the path in `MARGINALIA_DATA_DIR` (see [config.ts](apps/server/src/config.ts)
 ```
 var/
 ├── db.sqlite          SQLite DB: documents, invites, sessions, doc_users,
-│                       comments, comment_mentions, edit_proposals
+│                       comments, comment_mentions, edit_proposals,
+│                       assets, document_assets
 ├── db.sqlite-wal      WAL file (journal mode)
 ├── db.sqlite-shm      Shared-memory index for the WAL
-└── repo/              Git repo holding every document as <uid>.md
+├── repo/              Git repo holding every document as <uid>.md
+└── blobs/             Content-addressed asset binaries (FS backend only;
+                        absent when MARGINALIA_BLOB_STORAGE=s3)
 ```
 
 ### Clear everything
@@ -129,6 +193,9 @@ rm -f apps/server/var/db.sqlite apps/server/var/db.sqlite-wal apps/server/var/db
 
 Note that the git repo references documents by uid; dropping the DB
 orphans the `.md` files (they're no longer accessible via any URL).
+The `blobs/` directory is similarly orphaned — those files are
+addressable only through the `assets` / `document_assets` tables, so
+once the DB is gone they're dead weight and safe to remove.
 
 ### Reset **client** state (invite tokens, display name, recent docs, theme)
 

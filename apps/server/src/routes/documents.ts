@@ -4,6 +4,7 @@ import {
   locateAllBlocks,
   locateAllBlocksAsciidoc,
   renderDocument,
+  rewriteAssetReferences,
 } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -20,7 +21,9 @@ import {
   readIdentity,
   verifyPassword,
 } from '../auth.js';
+import type { BlobStore } from '../blob-store.js';
 import type { ServerConfig } from '../config.js';
+import { gcAssetIfOrphan, listAttached } from './assets.js';
 import type {
   CommentRow,
   DocumentFormat,
@@ -37,6 +40,7 @@ import type { Realtime } from '../realtime.js';
 export interface AppDeps {
   db: Database;
   store: GitStore;
+  blobs: BlobStore;
   config: ServerConfig;
   realtime: Realtime;
 }
@@ -142,6 +146,11 @@ async function getDocument(c: Context, deps: AppDeps) {
 
   const source = store.read(doc.path);
   const rendered = await renderDocument(source, doc.format);
+  const attached = listAttached(db, doc.uid);
+  rendered.html = await rewriteAssetReferences(rendered.html, {
+    docUid: doc.uid,
+    attached: new Set(attached.map((a) => a.ref_name)),
+  });
 
   // For admin/named invites: the server-resolved current name (invite
   // seed on first visit, doc_users row after). For generic/no-invite:
@@ -155,6 +164,7 @@ async function getDocument(c: Context, deps: AppDeps) {
     name: doc.name,
     source,
     rendered,
+    attached_assets: attached,
     format: doc.format,
     default_theme: doc.default_theme,
     password_protected: doc.password_hash !== null,
@@ -308,7 +318,7 @@ async function updateSettings(c: Context, deps: AppDeps) {
 // --- DELETE /api/documents/:uid (admin only) -------------------------
 
 async function deleteDocument(c: Context, deps: AppDeps) {
-  const { db, store } = deps;
+  const { db, store, blobs } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
@@ -316,6 +326,14 @@ async function deleteDocument(c: Context, deps: AppDeps) {
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+
+  // Capture the asset ids about to be detached so we can GC the blobs
+  // afterwards if no other doc still references them.
+  const attachedAssetIds = (
+    db
+      .prepare('SELECT DISTINCT asset_id FROM document_assets WHERE doc_uid = ?')
+      .all(doc.uid) as Array<{ asset_id: string }>
+  ).map((r) => r.asset_id);
 
   // Drop everything the server stores about the doc. Order doesn't matter
   // (no FKs declared). Must list every per-doc table; orphans here would
@@ -326,7 +344,12 @@ async function deleteDocument(c: Context, deps: AppDeps) {
   db.prepare('DELETE FROM doc_users WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM document_assets WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
+
+  for (const id of attachedAssetIds) {
+    await gcAssetIfOrphan(db, blobs, id);
+  }
 
   try {
     await store.deleteDoc(doc.path, doc.uid, decision.identity);

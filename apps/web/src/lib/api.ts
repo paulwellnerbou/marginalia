@@ -84,12 +84,26 @@ export interface DocumentBundle {
 
 export type Role = 'admin' | 'editor' | 'collaborator' | 'reader';
 
+export type AssetKind = 'image' | 'include' | 'attachment';
+
+export interface AttachedAsset {
+  ref_name: string;
+  asset_id: string;
+  kind: AssetKind;
+  mime: string;
+  size: number;
+  created_at: number;
+  created_by: string;
+}
+
 export interface Document {
   uid: string;
   /** Human-friendly document name. Null → derive from rendered content. */
   name: string | null;
   source: string;
   rendered: RenderedDocument;
+  /** Every asset currently attached to this doc (empty array if none). */
+  attached_assets: AttachedAsset[];
   format: DocumentFormat;
   default_theme: string;
   password_protected: boolean;
@@ -330,6 +344,81 @@ export function importDocumentBundle(
     body: JSON.stringify(bundle),
     identity,
   });
+}
+
+// --- assets ----------------------------------------------------------
+
+export function listAttachedAssets(uid: string): Promise<{ assets: AttachedAsset[] }> {
+  return request<{ assets: AttachedAsset[] }>(
+    `/api/documents/${encodeURIComponent(uid)}/assets`,
+    { method: 'GET', docUid: uid },
+  );
+}
+
+export async function uploadAsset(
+  uid: string,
+  refName: string,
+  file: File | Blob,
+  identity: Identity,
+  kind?: AssetKind,
+): Promise<{ asset: AttachedAsset }> {
+  // Multipart bodies don't go through `request()`: that helper forces a
+  // JSON content-type and reads the body once. We still send the usual
+  // identity + invite headers so authz matches.
+  const headers = new Headers();
+  headers.set('x-marginalia-client', identity.clientId);
+  if (identity.displayName) {
+    headers.set('x-marginalia-client-name', encodeHeaderValue(identity.displayName));
+  }
+  const token = loadInviteToken(uid);
+  if (token) headers.set('x-marginalia-invite', token);
+
+  const form = new FormData();
+  form.append('file', file, fileName(refName, file));
+  form.append('ref_name', refName);
+  if (kind) form.append('kind', kind);
+
+  const res = await fetch(`/api/documents/${encodeURIComponent(uid)}/assets`, {
+    method: 'POST',
+    headers,
+    body: form,
+    credentials: 'include',
+  });
+  if (!res.ok) {
+    let code = 'unknown';
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body.error) code = body.error;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(res.status, code);
+  }
+  return (await res.json()) as { asset: AttachedAsset };
+}
+
+export function deleteAttachedAsset(
+  uid: string,
+  refName: string,
+  identity: Identity,
+): Promise<void> {
+  return request<void>(
+    `/api/documents/${encodeURIComponent(uid)}/assets/${encodeRefPath(refName)}`,
+    { method: 'DELETE', identity, docUid: uid },
+  );
+}
+
+export function assetProxyUrl(uid: string, refName: string): string {
+  return `/api/documents/${encodeURIComponent(uid)}/assets/${encodeRefPath(refName)}`;
+}
+
+function encodeRefPath(refName: string): string {
+  return refName.split('/').map(encodeURIComponent).join('/');
+}
+
+function fileName(refName: string, file: File | Blob): string {
+  if (file instanceof File && file.name) return file.name;
+  return refName.split('/').pop() ?? 'upload.bin';
 }
 
 // --- settings --------------------------------------------------------

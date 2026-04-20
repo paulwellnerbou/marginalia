@@ -31,6 +31,13 @@ ENV MARGINALIA_DATA_DIR=/app/.data/
 ENV MARGINALIA_WEB_DIR=/app/apps/web/dist
 ENV APP_ENV_LABEL=
 
+# SQLite, the git repo, and the asset blob store all live under
+# MARGINALIA_DATA_DIR. Declaring it as a volume means an ad-hoc
+# `docker run` without `-v` still gets durable storage (anonymous
+# volume) instead of silently writing to the container's writable
+# layer. Production deploys bind-mount over this.
+VOLUME ["/app/.data"]
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD /bin/sh -lc 'bun --bun -e "fetch(\"http://localhost:\" + (process.env.PORT || \"3434\") + \"/health\").then((res) => process.exit(res.ok ? 0 : 1)).catch(() => process.exit(1))"'
 
