@@ -1,14 +1,18 @@
 import { useId, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Flex, Separator, Text } from '@radix-ui/themes';
-import type { Role } from '../lib/api.js';
+import type { DocumentFormat, Role } from '../lib/api.js';
 import { AppearanceToggle } from './AppearanceToggle.js';
+import { FormatBadge } from './FormatBadge.js';
 import { UserMenu } from './UserMenu.js';
 
 interface Props {
   /** Document title shown after the brand, when viewing/editing a doc. */
   docTitle?: string;
   role?: Role | undefined;
+  /** Source flavour of the currently-open doc. Drives the MARKDOWN /
+   *  ASCIIDOC badge next to the title — omitted on the home page. */
+  format?: DocumentFormat;
   /** Extra trailing slot for page-specific controls (e.g. Save in EditPage,
    *  admin settings gear in ViewPage). Rendered before the appearance/user. */
   trailing?: ReactNode;
@@ -18,7 +22,7 @@ interface Props {
  * The persistent top bar, present on every page. Anchors the app's home
  * navigation, identity, and global appearance control.
  */
-export function AppBar({ docTitle, role, trailing }: Props) {
+export function AppBar({ docTitle, role, format, trailing }: Props) {
   const brandGradientId = useId().replace(/:/g, '');
 
   return (
@@ -67,6 +71,7 @@ export function AppBar({ docTitle, role, trailing }: Props) {
           <Text size="2" className="app-bar-title" truncate>
             {docTitle}
           </Text>
+          {format && <FormatBadge format={format} />}
         </>
       )}
       <span className="spacer" />

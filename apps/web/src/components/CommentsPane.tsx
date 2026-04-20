@@ -17,8 +17,8 @@ import {
   DotsHorizontalIcon,
   PaperPlaneIcon,
 } from '@radix-ui/react-icons';
-import { locateAllBlocks } from '@marginalia/renderer';
-import type { Comment, CommentAnchor, EditProposal } from '../lib/api.js';
+import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
+import type { Comment, CommentAnchor, DocumentFormat, EditProposal } from '../lib/api.js';
 import { CommentItem } from './CommentItem.js';
 import { EditProposalComposer } from './EditProposalComposer.js';
 import { EditProposalItem } from './EditProposalItem.js';
@@ -31,8 +31,10 @@ export interface ComposerHandle {
 interface Props {
   comments: Comment[];
   proposals: EditProposal[];
-  /** Live markdown source, used by diff/composer. */
+  /** Live document source, used by diff/composer. */
   docSource: string;
+  /** Source flavour — picks the right block locator (mdast vs asciidoctor). */
+  docFormat: DocumentFormat;
   mentionCandidates: string[];
   canComment: boolean;
   /** New-comment draft captured from selection; non-null → composer is open */
@@ -83,6 +85,7 @@ export function CommentsPane(props: Props) {
     comments,
     proposals,
     docSource,
+    docFormat,
     mentionCandidates,
     canComment,
     pendingAnchor,
@@ -126,9 +129,15 @@ export function CommentsPane(props: Props) {
     () => groupProposals(proposals),
     [proposals],
   );
-  // Parse the markdown source once per change and derive per-block source
-  // ranges; proposal items below share the map instead of each one re-parsing.
-  const blockRanges = useMemo(() => locateAllBlocks(docSource), [docSource]);
+  // Parse the source once per change and derive per-block source ranges.
+  // Proposal items below share the map instead of each one re-parsing;
+  // the dispatch keys off doc format so asciidoc blocks populate the
+  // composer with their original source instead of an empty textarea.
+  const blockRanges = useMemo(
+    () =>
+      docFormat === 'asciidoc' ? locateAllBlocksAsciidoc(docSource) : locateAllBlocks(docSource),
+    [docFormat, docSource],
+  );
 
   const [sortMode, setSortMode] = useState<CommentSortMode>('document');
   const { active, orphans } = useMemo(
@@ -234,15 +243,6 @@ export function CommentsPane(props: Props) {
 
   return (
     <div ref={rootRef} className="comments-pane">
-      <EditProposalComposer
-        target={pendingProposalTarget}
-        docSource={docSource}
-        blockRanges={blockRanges}
-        needsName={!displayName}
-        onCancel={onCancelPendingProposal}
-        onSubmit={onCreateProposal}
-      />
-
       {activeProposals.length > 0 && (
         <section className="proposals-section">
           <h4 className="subtle">Proposed changes</h4>

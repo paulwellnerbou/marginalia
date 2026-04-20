@@ -1,0 +1,328 @@
+/*
+ * Marginalia — AsciiDoc compatibility layer
+ *
+ * Asciidoctor wraps every block in a format-specific `<div>` with a
+ * class like `.paragraph` / `.listingblock` / `.admonitionblock` and
+ * groups sections in `.sect1 > .sectionbody`. The base theme only
+ * targets semantic HTML (`h2`, `p`, `pre`, `ul`, …), so without this
+ * file AsciiDoc renders with missing vertical rhythm, double list
+ * margins, unstyled admonitions, and a lost first-heading top margin.
+ *
+ * Imported from default.css, so every built-in theme inherits it for
+ * free (themes only override custom properties and never re-declare
+ * layout rules).
+ */
+
+/* --- Structural wrappers ----------------------------------------- */
+
+/*
+ * Section containers carry no visual chrome — they're pure structural
+ * divs. We still want them in the vertical rhythm so a sub-section
+ * sits at the same distance from its sibling as any other top-level
+ * block would.
+ */
+.marginalia :is(.sect1, .sect2, .sect3, .sect4, .sect5, .sectionbody, #preamble) {
+  display: block;
+}
+
+/*
+ * Block rhythm — mirror `> * + *` for asciidoctor's nested wrappers.
+ * The top-level `.marginalia > * + *` rule fires once on the outer
+ * `.sect1` / `#preamble`; these rules propagate the same gap down
+ * inside the section body so paragraphs, code blocks, lists, and
+ * admonitions don't collapse into each other.
+ */
+.marginalia :is(.sectionbody, #preamble, .openblock > .content) > * + * {
+  margin-top: var(--md-space-block);
+}
+
+.marginalia :is(.sectionbody, #preamble) > :first-child {
+  margin-top: 0;
+}
+
+/*
+ * Defense-in-depth: every asciidoctor block wrapper that has a
+ * preceding sibling gets `margin-top` directly on itself. Needed
+ * because admonitions / examples / sidebars carry a visible
+ * background — without a reliable margin they visually merge into
+ * one another, which the `> * + *` rules above miss whenever the
+ * wrapping element isn't `.sectionbody` / `#preamble` / `.openblock`
+ * (e.g. inside `.content` of another block, or when the doc has no
+ * sections at all).
+ */
+.marginalia
+  * + :is(.paragraph, .listingblock, .literalblock, .ulist, .olist, .dlist,
+          .imageblock, .videoblock, .audioblock, .admonitionblock,
+          .quoteblock, .verseblock, .exampleblock, .sidebarblock,
+          .openblock) {
+  margin-top: var(--md-space-block);
+}
+
+/*
+ * The preamble wrapper comes before the first section and asciidoctor
+ * gives it `#preamble`. Keep it flush at the top so the doc doesn't
+ * start with double spacing.
+ */
+.marginalia > #preamble { margin-top: 0; }
+
+/* --- Paragraphs, lists, description lists ------------------------ */
+
+/*
+ * `.paragraph` is `<div class="paragraph"><p>…</p></div>`. The outer
+ * div already drives rhythm (rule above); the inner <p> shouldn't
+ * contribute its own bottom margin.
+ */
+.marginalia .paragraph > p { margin: 0; }
+
+/*
+ * Asciidoctor wraps every list item's prose in a `<p>` even for simple
+ * lists (`<li><p>Item</p></li>`). Without a reset, `.marginalia p`
+ * gives each item an extra 0.5em gap that markdown lists never have.
+ */
+.marginalia :is(.ulist, .olist) li > p { margin: 0; }
+.marginalia :is(.ulist, .olist) li > p + :is(p, ul, ol) { margin-top: 0.4em; }
+.marginalia :is(.ulist, .olist) > :is(ul, ol) { margin: 0; }
+
+.marginalia .dlist dl { margin: 0; }
+.marginalia .dlist dt { font-weight: 650; margin-top: 0.6em; }
+.marginalia .dlist dt:first-child { margin-top: 0; }
+.marginalia .dlist dd { margin: 0 0 0 1.4em; }
+.marginalia .dlist dd > p { margin: 0; }
+
+/* --- Code listings & literal blocks ------------------------------ */
+
+/*
+ * `.listingblock > .content > <pre>` — the inner wrapper adds nothing
+ * visually; collapse its margins so the `<pre>` keeps its own padding
+ * from `.marginalia pre`.
+ */
+.marginalia :is(.listingblock, .literalblock) > .content { margin: 0; }
+
+/* --- Images, videos, audio --------------------------------------- */
+
+.marginalia :is(.imageblock, .videoblock, .audioblock) {
+  text-align: center;
+}
+.marginalia :is(.imageblock, .videoblock) :is(img, video) {
+  max-width: 100%;
+  height: auto;
+}
+.marginalia .imageblock .title {
+  text-align: center;
+  margin-top: 0.4em;
+}
+
+/* --- Block titles (captions above any block) -------------------- */
+
+.marginalia .title {
+  font-size: 0.9em;
+  font-style: italic;
+  color: var(--md-color-fg-muted);
+  margin: 0 0 0.3em;
+}
+.marginalia :is(.sidebarblock, .exampleblock) > .title {
+  font-style: normal;
+  font-weight: 650;
+  color: var(--md-color-fg);
+  margin-bottom: 0.5em;
+}
+
+/* --- Admonitions: NOTE / TIP / IMPORTANT / WARNING / CAUTION ---- */
+
+/*
+ * Asciidoctor emits admonitions as a two-cell `<table>` (label + body).
+ * We flatten that table into a stacked callout so it reads like a
+ * single box without requiring asciidoctor's icon pack.
+ */
+.marginalia .admonitionblock {
+  padding: 0.75em 1em;
+  background: var(--md-color-block-bg, color-mix(in srgb, var(--md-color-fg) 5%, transparent));
+  border-left: 3px solid var(--md-color-fg-muted);
+  border-radius: 4px;
+}
+.marginalia .admonitionblock > table,
+.marginalia .admonitionblock tbody,
+.marginalia .admonitionblock > table > tbody > tr {
+  display: block;
+  width: 100%;
+  border: 0;
+  background: none;
+}
+.marginalia .admonitionblock td {
+  display: block;
+  padding: 0;
+  background: none;
+  border: 0;
+}
+.marginalia .admonitionblock td.icon {
+  margin-bottom: 0.3em;
+  font-size: 0.8em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--md-color-fg-muted);
+}
+.marginalia .admonitionblock td.icon .title { font-style: normal; color: inherit; margin: 0; }
+.marginalia .admonitionblock td.content > :first-child { margin-top: 0; }
+.marginalia .admonitionblock td.content > :last-child { margin-bottom: 0; }
+
+/* Semantic colors per admonition type — use the theme's accent where
+ * it's appropriate, fall back to built-in hues otherwise. */
+.marginalia .admonitionblock.note { border-left-color: var(--md-color-accent, #2d6cdf); }
+.marginalia .admonitionblock.tip { border-left-color: #2ea44f; }
+.marginalia .admonitionblock.important { border-left-color: #cc0000; }
+.marginalia .admonitionblock.warning { border-left-color: #d38c00; }
+.marginalia .admonitionblock.caution { border-left-color: #d16e00; }
+
+/* --- Quotes, sidebars, examples, open blocks -------------------- */
+
+.marginalia .quoteblock {
+  margin-left: 0;
+}
+.marginalia .quoteblock blockquote { margin: 0; }
+.marginalia .quoteblock .attribution {
+  margin-top: 0.4em;
+  font-size: 0.9em;
+  color: var(--md-color-fg-muted);
+}
+
+.marginalia :is(.sidebarblock, .exampleblock) {
+  padding: 1em 1.2em;
+  background: var(--md-color-block-bg, color-mix(in srgb, var(--md-color-fg) 4%, transparent));
+  border-radius: 6px;
+}
+.marginalia :is(.sidebarblock, .exampleblock) > .content > :first-child { margin-top: 0; }
+.marginalia :is(.sidebarblock, .exampleblock) > .content > :last-child { margin-bottom: 0; }
+
+.marginalia .verseblock pre {
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+  font-style: italic;
+  white-space: pre-wrap;
+}
+.marginalia .verseblock .attribution {
+  margin-top: 0.4em;
+  font-size: 0.9em;
+  color: var(--md-color-fg-muted);
+}
+
+/* --- Tables ------------------------------------------------------ */
+
+/*
+ * Asciidoctor tables use `<table class="tableblock">` with each cell's
+ * prose inside a `<p class="tableblock">`. Strip that inner paragraph's
+ * default margins so cells read like markdown GFM cells.
+ */
+.marginalia table.tableblock { width: auto; margin: 0 auto; }
+.marginalia table.tableblock p.tableblock { margin: 0; }
+.marginalia table.tableblock.frame-all { border: 1px solid var(--md-color-border); }
+
+/* --- TOC --------------------------------------------------------- */
+
+/*
+ * Asciidoctor emits `:toc:` as
+ *   <div id="toc" class="toc">
+ *     <div id="toctitle">Table of Contents</div>
+ *     <ul class="sectlevel1">…</ul>
+ *   </div>
+ *
+ * Render the title with h2-equivalent weight/size so it reads as a
+ * proper section header, and tighten list spacing so the TOC doesn't
+ * inherit regular-paragraph line-height.
+ */
+.marginalia #toc.toc,
+.marginalia .toc {
+  margin-top: var(--md-space-block);
+}
+.marginalia #toctitle,
+.marginalia .toctitle {
+  font-family: var(--md-font-heading);
+  font-size: 1.55em;
+  font-weight: var(--md-heading-weight);
+  line-height: var(--md-heading-line-height);
+  letter-spacing: var(--md-heading-letter-spacing);
+  color: var(--md-color-fg);
+  margin: 0 0 0.5em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--md-color-border);
+}
+.marginalia .toc ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+.marginalia .toc ul ul {
+  padding-left: 1.2em;
+}
+.marginalia .toc li {
+  margin: 0.15em 0;
+}
+.marginalia .toc li a {
+  color: var(--md-color-fg);
+  text-decoration: none;
+}
+.marginalia .toc li a:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--md-color-accent);
+}
+
+/* --- UI-element macros (kbd / btn / menu) ----------------------- */
+
+/*
+ * Inline UI-element macros, enabled by `:experimental:` in the
+ * renderer. Styled here so docs that document keyboard shortcuts,
+ * buttons, or menu paths don't look like raw text.
+ */
+.marginalia kbd {
+  display: inline-block;
+  min-width: 0.9em;
+  padding: 0 0.4em;
+  font-family: var(--md-font-mono);
+  font-size: 0.85em;
+  line-height: 1.6;
+  color: var(--md-color-fg);
+  background: var(--md-color-code-bg);
+  border: 1px solid var(--md-color-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.marginalia .keyseq {
+  white-space: nowrap;
+}
+.marginalia .keyseq kbd + kbd {
+  margin-left: 0.1em;
+}
+.marginalia .menuseq {
+  font-style: normal;
+  font-weight: 600;
+}
+.marginalia .menuseq .caret {
+  padding: 0 0.2em;
+  color: var(--md-color-fg-muted);
+  font-weight: 400;
+}
+.marginalia .menuseq .menu,
+.marginalia .menuseq .submenu,
+.marginalia .menuseq .menuitem {
+  font-weight: 600;
+}
+.marginalia .button {
+  display: inline-block;
+  padding: 0.08em 0.45em;
+  font-size: 0.9em;
+  font-weight: 600;
+  background: var(--md-color-code-bg);
+  border: 1px solid var(--md-color-border);
+  border-radius: 4px;
+}
+
+/* --- Inline / miscellaneous -------------------------------------- */
+
+/*
+ * Asciidoctor cross-references and external links carry `.xref` /
+ * `.ulink` classes. Leave them to the base `.marginalia a` rule; no
+ * overrides needed.
+ */

@@ -6,6 +6,8 @@
  * "new since X" indicators later.
  */
 
+import type { DocumentFormat } from './api.js';
+
 const KEY = 'marginalia.recentDocs';
 const MAX = 50;
 
@@ -14,6 +16,9 @@ export interface RecentDoc {
   title: string;
   role: 'admin' | 'editor' | 'collaborator' | 'reader';
   password_protected: boolean;
+  /** Source flavour of the doc. Legacy entries (pre-AsciiDoc support)
+   *  default to 'markdown' on read. */
+  format: DocumentFormat;
   /** When we last opened it. */
   visited_at: number;
   /** When the doc was last updated on the server (as reported by GET). */
@@ -56,10 +61,13 @@ export function removeFromRecent(uid: string): void {
 }
 
 const VALID_ROLES = new Set<RecentDoc['role']>(['admin', 'editor', 'collaborator', 'reader']);
+const VALID_FORMATS = new Set<DocumentFormat>(['markdown', 'asciidoc']);
 
 /**
  * Validate a stored entry. Returns a one-element array on success,
- * empty on garbage. Invalid or legacy shapes are dropped.
+ * empty on garbage. Invalid or legacy shapes are dropped (except for
+ * missing `format`, which defaults to markdown so pre-AsciiDoc
+ * entries keep working).
  */
 function coerceRecentDoc(v: unknown): RecentDoc[] {
   if (!v || typeof v !== 'object') return [];
@@ -75,11 +83,15 @@ function coerceRecentDoc(v: unknown): RecentDoc[] {
   ) {
     return [];
   }
+  const format: DocumentFormat = VALID_FORMATS.has(r.format as DocumentFormat)
+    ? (r.format as DocumentFormat)
+    : 'markdown';
   const out: RecentDoc = {
     uid: r.uid,
     title: r.title,
     role: r.role as RecentDoc['role'],
     password_protected: r.password_protected,
+    format,
     visited_at: r.visited_at,
     updated_at: r.updated_at,
     ...(typeof r.invite_token === 'string' ? { invite_token: r.invite_token } : {}),

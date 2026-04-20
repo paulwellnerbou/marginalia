@@ -59,6 +59,12 @@ export interface ExportedComment {
   updated_at: number;
 }
 
+export type DocumentFormat = 'markdown' | 'asciidoc';
+
+export function isDocumentFormat(v: unknown): v is DocumentFormat {
+  return v === 'markdown' || v === 'asciidoc';
+}
+
 export interface DocumentBundle {
   version: number;
   kind: 'marginalia.document-bundle';
@@ -66,6 +72,8 @@ export interface DocumentBundle {
   document: {
     name: string | null;
     source: string;
+    /** Bundle v3+ carries format; older bundles default to markdown on import. */
+    format?: DocumentFormat;
     /** @deprecated Accepted for back-compat with old bundles; ignored. */
     editable_by_anyone?: boolean;
     default_theme: string;
@@ -82,6 +90,7 @@ export interface Document {
   name: string | null;
   source: string;
   rendered: RenderedDocument;
+  format: DocumentFormat;
   default_theme: string;
   password_protected: boolean;
   role: Role;
@@ -99,7 +108,10 @@ export interface HistoryEntry {
 }
 
 export interface UploadOptions {
-  markdown: string;
+  /** Raw source text. */
+  source: string;
+  /** Source flavour. Defaults server-side to 'markdown'. */
+  format?: DocumentFormat;
   /** Optional document name. Omit/empty → server stores null and the UI
    *  falls back to deriving a title from the rendered content. */
   name?: string;
@@ -112,6 +124,7 @@ export interface UploadResponse {
   name: string | null;
   admin_invite: { token: string; url: string; display_name: string };
   default_theme: string;
+  format: DocumentFormat;
   password?: string;
 }
 
@@ -282,12 +295,12 @@ export function exportDocumentBundle(uid: string): Promise<DocumentBundle> {
 
 export function updateDocument(
   uid: string,
-  markdown: string,
+  source: string,
   identity: Identity,
 ): Promise<{ oid: string }> {
   return request<{ oid: string }>(`/api/documents/${encodeURIComponent(uid)}`, {
     method: 'PUT',
-    body: JSON.stringify({ markdown }),
+    body: JSON.stringify({ source }),
     identity,
     docUid: uid,
   });

@@ -2,7 +2,12 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import { locateAllBlocks, locateBlockSource, render } from '@marginalia/renderer';
+import {
+  locateAllBlocks,
+  locateAllBlocksAsciidoc,
+  locateBlockSource,
+  renderDocument,
+} from '@marginalia/renderer';
 import type { CommentRow, DocumentRow, EditProposalRow } from '../db.js';
 import { reanchor } from '../anchoring.js';
 import {
@@ -251,8 +256,11 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   if (row.status !== 'pending') return c.json({ error: 'not-pending' }, 400);
   if (!row.anchor_block_id) return c.json({ error: 'proposal-orphaned' }, 409);
 
-  const source = store.read(doc.uid);
-  const range = locateBlockSource(source, row.anchor_block_id);
+  const source = store.read(doc.path);
+  const range =
+    doc.format === 'asciidoc'
+      ? locateAllBlocksAsciidoc(source).get(row.anchor_block_id) ?? null
+      : locateBlockSource(source, row.anchor_block_id);
   if (!range) {
     // Block no longer present — mark orphaned so the UI reflects reality.
     const now = Date.now();
@@ -271,12 +279,12 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   const nextSource =
     source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
 
-  const { oid } = await store.write(doc.uid, nextSource, identity, 'accept-proposal');
+  const { oid } = await store.write(doc.uid, doc.format, nextSource, identity, 'accept-proposal');
   const now = Date.now();
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
   // Re-anchor comments against the new document.
-  const rendered = await render(nextSource);
+  const rendered = await renderDocument(nextSource, doc.format);
   const topLevelComments = db
     .prepare(
       `SELECT * FROM comments
@@ -299,14 +307,11 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   // Re-anchor other pending proposals (their block hash may have shifted).
   // Include sub-block ids (list items / table cells) so fine-grained
   // proposals don't get orphaned on every save.
-  reanchorProposals(
-    db,
-    doc.uid,
-    [...locateAllBlocks(nextSource).keys()],
-    now,
-    realtime,
-    identity.clientId,
-  );
+  const knownIds =
+    doc.format === 'asciidoc'
+      ? [...locateAllBlocksAsciidoc(nextSource).keys()]
+      : [...locateAllBlocks(nextSource).keys()];
+  reanchorProposals(db, doc.uid, knownIds, now, realtime, identity.clientId);
 
   // Mark this proposal accepted.
   db.prepare(

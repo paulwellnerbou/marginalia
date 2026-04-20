@@ -789,6 +789,42 @@ button.primary:disabled {
   color: var(--accent-11);
 }
 
+/*
+ * Visible pick-or-drop zone used in the upload dialog. Clicking it opens
+ * the OS file picker via a hidden <input>; dragging a file over it shows
+ * the --over state. Replaces the browser-default "Choose file" input,
+ * which was easy to miss.
+ */
+.file-drop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6em;
+  padding: 1em 1.2em;
+  border: 2px dashed var(--gray-7);
+  border-radius: var(--radius-3);
+  background: var(--gray-a2);
+  color: var(--gray-11);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+  text-align: center;
+}
+.file-drop:hover,
+.file-drop:focus-visible {
+  border-color: var(--accent-9);
+  color: var(--accent-11);
+  background: var(--accent-a2);
+  outline: none;
+}
+.file-drop--over {
+  border-color: var(--accent-9);
+  background: var(--accent-a4);
+  color: var(--accent-11);
+}
+.file-drop svg {
+  flex-shrink: 0;
+}
+
 .recent-card-title {
   background: transparent;
   border: 0;

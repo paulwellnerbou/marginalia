@@ -67,6 +67,7 @@ export function ViewPage() {
       title: documentTitle(doc),
       role: doc.role,
       password_protected: doc.password_protected,
+      format: doc.format,
       visited_at: Date.now(),
       updated_at: doc.updated_at,
       ...(stored ? { invite_token: stored } : {}),

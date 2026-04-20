@@ -176,16 +176,30 @@ export function RenderedDoc({
         return;
       }
 
-      // Anchor → smooth-scroll to in-doc target.
+      // Anchor → smooth-scroll to in-doc target AND sync the address bar.
+      // Default `<a href="#id">` behaviour updates both, but we preventDefault
+      // to override the browser's instant jump with a smooth scroll inside
+      // our nested scroll container. Without a matching history.pushState
+      // the hash silently disappears — permalink sharing, back/forward, and
+      // refresh all break. We add it back manually here.
       const anchor = target.closest('a[href^="#"]');
       if (anchor) {
         const href = anchor.getAttribute('href');
         if (href && href.length > 1) {
-          const id = href.slice(1);
+          const id = decodeURIComponent(href.slice(1));
           const targetEl = el.querySelector(`[id="${CSS.escape(id)}"]`);
           if (targetEl) {
             e.preventDefault();
             targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            // Keep the URL in sync so copy-link / refresh / back-button
+            // behaviour matches native anchor clicks. `pushState` rather
+            // than `replaceState` because the browser would also push a
+            // history entry on a default anchor click.
+            if (window.location.hash !== `#${id}`) {
+              const next = new URL(window.location.href);
+              next.hash = id;
+              window.history.pushState(null, '', next);
+            }
           }
         }
       }

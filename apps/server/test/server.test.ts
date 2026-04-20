@@ -680,7 +680,7 @@ describe('documents API', () => {
       }>;
     };
     expect(bundle.kind).toBe('marginalia.document-bundle');
-    expect(bundle.version).toBe(2);
+    expect(bundle.version).toBe(3);
     expect(bundle.document.name).toBe('Original Name');
     expect(bundle.document.source).toContain('Original.');
     expect(bundle.document.default_theme).toBe('book');
@@ -1078,5 +1078,102 @@ describe('documents API', () => {
     expect(spaRes.status).toBe(200);
     expect(spaRes.headers.get('content-type')).toContain('text/html');
     expect(await spaRes.text()).toContain('<div id="root"></div>');
+  });
+
+  test('uploads and round-trips an AsciiDoc document', async () => {
+    const src = `= Adoc Title\n:author: Paul\n\nAn asciidoc paragraph.\n\n== Section\n\nMore text.\n`;
+    const created = await upload(CLIENT_A, { source: src, format: 'asciidoc' });
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      format: string;
+      source: string;
+      rendered: { html: string; frontmatter: Record<string, unknown>; blocks: Array<{ id: string }> };
+    };
+    expect(body.format).toBe('asciidoc');
+    expect(body.source).toBe(src);
+    expect(body.rendered.html).toContain('<h2');
+    expect(body.rendered.html).toContain('Section');
+    expect(body.rendered.frontmatter.title).toBe('Adoc Title');
+    expect(body.rendered.blocks.length).toBeGreaterThan(0);
+  });
+
+  test('legacy upload with `markdown` field still lands as a markdown document', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Hi' });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    const body = (await res.json()) as { format: string; source: string };
+    expect(body.format).toBe('markdown');
+    expect(body.source).toBe('# Hi');
+  });
+
+  test('PUT with `source` updates an AsciiDoc doc, reanchoring comments', async () => {
+    const created = await upload(CLIENT_A, {
+      source: '= T\n\nFirst para.\n\nSecond para.\n',
+      format: 'asciidoc',
+    });
+    const put = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ source: '= T\n\nFirst para.\n\nSecond para changed.\n' }),
+      }),
+    );
+    expect(put.status).toBe(200);
+    const putBody = (await put.json()) as { oid: string };
+    expect(typeof putBody.oid).toBe('string');
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    const body = (await res.json()) as { source: string; format: string };
+    expect(body.source).toContain('Second para changed');
+    expect(body.format).toBe('asciidoc');
+  });
+
+  test('export + import of an AsciiDoc bundle preserves format', async () => {
+    const created = await upload(CLIENT_A, {
+      source: '= Bundle Test\n\nHello there.\n',
+      format: 'asciidoc',
+    });
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    const bundle = (await exportRes.json()) as {
+      version: number;
+      document: { format?: string; source: string };
+    };
+    expect(bundle.version).toBe(3);
+    expect(bundle.document.format).toBe('asciidoc');
+
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: headersFor(CLIENT_C),
+        body: JSON.stringify(bundle),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as CreateResponse;
+    const getRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}`, {
+        headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
+      }),
+    );
+    const got = (await getRes.json()) as { format: string; source: string };
+    expect(got.format).toBe('asciidoc');
+    expect(got.source).toBe('= Bundle Test\n\nHello there.\n');
   });
 });
