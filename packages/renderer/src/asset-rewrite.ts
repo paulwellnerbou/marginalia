@@ -89,8 +89,8 @@ function getStringProp(node: Element, name: string): string | null {
  */
 function isAbsoluteUrl(src: string): boolean {
   if (src.startsWith('#')) return true;
+  // Covers both site-root (`/foo`) and protocol-relative (`//host/foo`).
   if (src.startsWith('/')) return true;
-  if (src.startsWith('//')) return true;
   if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return true;
   return false;
 }
