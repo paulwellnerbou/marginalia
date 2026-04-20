@@ -52,9 +52,10 @@ export async function rewriteAssetReferences(
         // URL delimiters, empty segments) can't be uploaded or fetched
         // through the proxy. Leaving them unchanged is friendlier than
         // tagging them `data-missing-asset` and showing an editor a
-        // dropzone whose upload would always 400.
-        if (!isAddressableRefName(src)) return;
-        const refName = src;
+        // dropzone whose upload would always 400. Trim first so the
+        // client-side lookup key matches the server's canonical form.
+        const refName = normalizeRefName(src);
+        if (!refName) return;
         const props = { ...(node.properties ?? {}) };
         if (opts.attached.has(refName)) {
           props.src = `${prefix}${encodeRefSegment(refName)}`;
@@ -96,17 +97,23 @@ function isAbsoluteUrl(src: string): boolean {
 }
 
 /**
- * Mirror of the server's `normalizeRefName()` in routes/assets.ts. Kept
- * as a standalone function (not a shared import) because the renderer
- * package can't depend on the server package. Any change to one must
- * be mirrored in the other — covered by tests on both sides.
+ * Mirror of the server's `normalizeRefName()` in routes/assets.ts —
+ * returns the canonical ref name, or null if the input wouldn't round-trip
+ * through the proxy. Kept as a standalone function (not a shared import)
+ * because the renderer package can't depend on the server package. Any
+ * change to one must be mirrored in the other — covered by tests on both
+ * sides.
  */
-function isAddressableRefName(src: string): boolean {
-  if (!src || src.length > 200) return false;
-  if (src.includes('\\') || src.includes('?') || src.includes('#')) return false;
-  return !src
-    .split('/')
-    .some((seg) => seg === '' || seg === '.' || seg === '..');
+function normalizeRefName(src: string): string | null {
+  const trimmed = src.trim();
+  if (!trimmed || trimmed.length > 200) return null;
+  if (trimmed.includes('\\') || trimmed.includes('?') || trimmed.includes('#')) {
+    return null;
+  }
+  if (trimmed.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')) {
+    return null;
+  }
+  return trimmed;
 }
 
 /**

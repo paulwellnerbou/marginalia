@@ -384,7 +384,11 @@ function inferKind(mime: string, refName: string): AssetKind {
   return 'attachment';
 }
 
-/** Very small mime fallback — only used when the browser didn't send one. */
+/**
+ * Authoritative server-side Content-Type derivation from the ref_name's
+ * file extension. Used for every uploaded asset — the client-supplied
+ * `file.type` is deliberately ignored (see the call site for why).
+ */
 function inferMime(refName: string): string {
   const ext = refName.toLowerCase().split('.').pop() ?? '';
   switch (ext) {
