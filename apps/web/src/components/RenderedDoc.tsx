@@ -350,11 +350,16 @@ function buildMissingAssetPlaceholder(
   canUpload: boolean,
   cbRef: UploadCbRef,
 ): HTMLElement {
-  const placeholder = document.createElement('div');
+  // Use phrasing-content elements (span) rather than flow content
+  // (div). Markdown renders `![alt](foo.png)` as `<p><img></p>`, and a
+  // <div> inside a <p> is not valid HTML — browsers auto-close the
+  // paragraph and reparent the div, which disrupts layout. <span>s
+  // with `display: flex` via CSS work inside <p> and outside.
+  const placeholder = document.createElement('span');
   placeholder.className = `missing-asset ${canUpload ? 'missing-asset--editable' : 'missing-asset--readonly'}`;
   placeholder.dataset.missingAssetRef = refName;
 
-  const label = document.createElement('div');
+  const label = document.createElement('span');
   label.className = 'missing-asset__label';
   label.textContent = canUpload
     ? `Missing image: ${refName} — drop a file or click to upload`
@@ -362,7 +367,7 @@ function buildMissingAssetPlaceholder(
   placeholder.appendChild(label);
 
   if (altText) {
-    const alt = document.createElement('div');
+    const alt = document.createElement('span');
     alt.className = 'missing-asset__alt';
     alt.textContent = altText;
     placeholder.appendChild(alt);
