@@ -85,6 +85,13 @@ DOCKER_ARGS=(
 # come from the companion MARGINALIA_S3_* vars in the same file.
 # Forwarded explicitly here (rather than --env-file) so the script
 # still enumerates every knob it passes through.
+#
+# IMPORTANT: use `-e NAME` (no value) rather than `-e NAME=VALUE` so
+# credentials aren't embedded in the docker argv — otherwise the
+# MARGINALIA_S3_SECRET_ACCESS_KEY shows up in `ps aux` on the host
+# (and often in CI logs that echo commands). Docker reads the value
+# from the parent shell's environment; the earlier `set -a; source
+# $ENV_FILE` already exported these.
 for var in MARGINALIA_BLOB_STORAGE \
            MARGINALIA_S3_BUCKET \
            MARGINALIA_S3_ACCESS_KEY_ID \
@@ -94,7 +101,7 @@ for var in MARGINALIA_BLOB_STORAGE \
            MARGINALIA_S3_PREFIX \
            MARGINALIA_S3_VIRTUAL_HOSTED; do
   if [[ -n "${!var:-}" ]]; then
-    DOCKER_ARGS+=(-e "$var=${!var}")
+    DOCKER_ARGS+=(-e "$var")
   fi
 done
 
