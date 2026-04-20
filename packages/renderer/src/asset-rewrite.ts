@@ -84,9 +84,12 @@ function getStringProp(node: Element, name: string): string | null {
 }
 
 /**
- * A ref is "absolute" (leave alone) if it has a scheme, a protocol-relative
- * prefix, starts from the site root, is a fragment, or is a data/mailto/tel
- * URL. Everything else is treated as a document-local asset reference.
+ * A ref is "absolute" (leave alone) when it's clearly not a
+ * document-local filename:
+ *   - fragment (`#id`)
+ *   - root- or protocol-relative path (`/foo`, `//host/foo`)
+ *   - anything starting with a URL scheme (`http:`, `data:`, `mailto:`,
+ *     `tel:`, or any other scheme matching the RFC 3986 production)
  */
 function isAbsoluteUrl(src: string): boolean {
   if (src.startsWith('#')) return true;
@@ -110,6 +113,10 @@ function normalizeRefName(src: string): string | null {
   if (trimmed.includes('\\') || trimmed.includes('?') || trimmed.includes('#')) {
     return null;
   }
+  // `:` matches the URL-scheme regex in isAbsoluteUrl — mirror the
+  // server-side reject so the rewriter never tries to proxy a ref
+  // the server would refuse to accept.
+  if (trimmed.includes(':')) return null;
   if (trimmed.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')) {
     return null;
   }

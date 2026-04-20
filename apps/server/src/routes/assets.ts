@@ -357,6 +357,12 @@ function normalizeRefName(raw: string): string | null {
   // un-fetchable afterwards).
   if (trimmed.startsWith('/') || trimmed.includes('\\')) return null;
   if (trimmed.includes('?') || trimmed.includes('#')) return null;
+  // `:` in a source `<img src>` is always interpreted as a URL scheme
+  // by the renderer's isAbsoluteUrl() check (`^[a-z][a-z0-9+.-]*:`),
+  // so such a ref would never be rewritten to the proxy URL even if
+  // attached. Reject here so accepted ref_names are always
+  // round-trippable.
+  if (trimmed.includes(':')) return null;
   // Reject empty segments too ("images//a.png", trailing slash). Proxies
   // and browsers routinely collapse `//`, so the stored key would not be
   // round-trippable through `/assets/:refName`.
