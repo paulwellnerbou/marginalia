@@ -46,6 +46,7 @@ import {
   acceptEditProposal as apiAcceptProposal,
   rejectEditProposal as apiRejectProposal,
   getDocument,
+  uploadAsset,
   ApiError,
 } from '../lib/api.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
@@ -466,6 +467,31 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     }
   }, [doc.uid]);
 
+  const canEdit = doc.role === 'admin' || doc.role === 'editor';
+
+  // Editors can fill missing-asset placeholders directly in view mode
+  // without navigating to the editor. Upload, then re-fetch so the
+  // server-rewritten HTML points the <img> at the new proxy URL.
+  const onMissingAssetUpload = useCallback(
+    async (refName: string, file: File) => {
+      const identity = resolveIdentity();
+      if (!identity) {
+        setError('Please set your display name first.');
+        return;
+      }
+      try {
+        await uploadAsset(doc.uid, refName, file, identity);
+        await refreshDoc();
+      } catch (err) {
+        reportError('DocumentLayout.uploadAsset', err, { uid: doc.uid, refName });
+        if (err instanceof ApiError) setError(`Upload failed: ${err.status} ${err.code}`);
+        else setError('Upload failed');
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName, effectiveDisplayName, refreshDoc],
+  );
+
   const onCreateProposal = useCallback(
     async (payload: { proposed_text: string; rationale?: string; display_name?: string }) => {
       if (!pendingProposalTarget) return;
@@ -871,6 +897,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               activeSearchVersion={activeSearchTarget?.nonce ?? 0}
               onSearchResultsChange={updateSearchResults}
               onHighlightClick={openCommentThread}
+              onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
             />
             {canComment && (
               <SelectionToolbar

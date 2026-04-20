@@ -13,3 +13,10 @@ const server = Bun.serve({
 console.log(`marginalia server listening on http://localhost:${server.port}`);
 console.log(`  data dir: ${config.dataDir}`);
 console.log(`  web dir: ${config.webDir}`);
+console.log(
+  `  blobs: ${config.blobStorage}${
+    config.blobStorage === 's3' && config.s3
+      ? ` (${config.s3.endpoint ?? 'aws'}/${config.s3.bucket})`
+      : ` (${config.blobDir})`
+  }`,
+);

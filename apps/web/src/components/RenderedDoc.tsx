@@ -39,6 +39,12 @@ interface RenderedDocProps {
   onSearchResultsChange?: (results: DocumentSearchResult[]) => void;
   /** Open the corresponding comment thread for a clicked highlight. */
   onHighlightClick?: (threadId: string) => void;
+  /**
+   * Supplied by editors: called when a user drops or picks a file on a
+   * missing-asset placeholder. When absent, placeholders render read-only
+   * (no file picker, no drop target) for readers.
+   */
+  onMissingAssetUpload?: ((refName: string, file: File) => void | Promise<void>) | undefined;
 }
 
 /**
@@ -70,14 +76,24 @@ export function RenderedDoc({
   activeSearchVersion = 0,
   onSearchResultsChange,
   onHighlightClick,
+  onMissingAssetUpload,
 }: RenderedDocProps) {
   const internal = useRef<HTMLElement>(null);
   const ref = elRef ?? internal;
   const lastHtml = useRef<string | null>(null);
   const [lightbox, setLightbox] = useState<LightboxImage | null>(null);
+  // Stash the upload callback in a ref so the placeholder post-process
+  // can call the latest version without re-running when it changes —
+  // the DOM-mutation effect only cares about whether uploads are enabled.
+  const uploadCbRef = useRef<typeof onMissingAssetUpload>(onMissingAssetUpload);
+  useEffect(() => {
+    uploadCbRef.current = onMissingAssetUpload;
+  }, [onMissingAssetUpload]);
+  const canUploadMissing = Boolean(onMissingAssetUpload);
 
   // Apply `rendered.html` to the article's innerHTML exactly once per
-  // unique html value, then run mermaid. React does not own these children.
+  // unique html value, then run mermaid + replace missing-asset markers
+  // with placeholder cards. React does not own these children.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -85,7 +101,20 @@ export function RenderedDoc({
     el.innerHTML = rendered.html;
     lastHtml.current = rendered.html;
     void renderMermaidIn(el);
-  }, [rendered.html, ref]);
+    replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
+  }, [rendered.html, ref, canUploadMissing]);
+
+  // If canUploadMissing flips while `rendered.html` stays the same
+  // (e.g. invite upgraded mid-session so the user gains editor role),
+  // the placeholders that were already rendered by the innerHTML
+  // effect are stuck in the previous mode. This effect walks the
+  // existing `.missing-asset` cards and rebuilds each in place —
+  // without re-setting innerHTML, so mermaid-rendered SVG survives.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    refreshMissingAssetPlaceholders(el, canUploadMissing, uploadCbRef);
+  }, [canUploadMissing, ref]);
 
   useEffect(() => {
     const el = ref.current;
@@ -256,6 +285,139 @@ export function RenderedDoc({
       <ImageLightbox image={lightbox} onClose={() => setLightbox(null)} />
     </>
   );
+}
+
+function isImageFile(file: File): boolean {
+  // Browsers set the MIME type from the filename extension when reading
+  // a drag/dropped file, so this catches both file-picker and drop
+  // paths. An empty `type` (rare: unknown extension) is treated as
+  // non-image — safer to reject than to upload bytes that will be
+  // served with an incorrect Content-Type.
+  return file.type.startsWith('image/');
+}
+
+type UploadCbRef = {
+  current?: ((refName: string, file: File) => void | Promise<void>) | undefined;
+};
+
+/**
+ * Swap `<img data-missing-asset="name">` markers produced by
+ * `rewriteAssetReferences` for a placeholder card. Editors (with an
+ * upload callback) get a dropzone + file picker; readers get a muted
+ * "not available" note.
+ */
+function replaceMissingAssetMarkers(
+  root: HTMLElement,
+  canUpload: boolean,
+  cbRef: UploadCbRef,
+): void {
+  const markers = root.querySelectorAll<HTMLImageElement>('img[data-missing-asset]');
+  for (const img of Array.from(markers)) {
+    const refName = img.dataset.missingAsset ?? '';
+    if (!refName) continue;
+    const altText = img.alt && img.alt.trim() ? img.alt : null;
+    img.replaceWith(buildMissingAssetPlaceholder(refName, altText, canUpload, cbRef));
+  }
+}
+
+/**
+ * Rebuild every existing `.missing-asset` card in place. Called when
+ * `canUploadMissing` flips (role change / invite upgrade) while
+ * `rendered.html` stays the same — the innerHTML effect short-circuits
+ * in that case, leaving stale placeholders in the previous mode.
+ * Uses `replaceWith` so mermaid-rendered SVG elsewhere in the article
+ * is untouched.
+ */
+function refreshMissingAssetPlaceholders(
+  root: HTMLElement,
+  canUpload: boolean,
+  cbRef: UploadCbRef,
+): void {
+  const existing = root.querySelectorAll<HTMLElement>(
+    '.missing-asset[data-missing-asset-ref]',
+  );
+  for (const old of Array.from(existing)) {
+    const refName = old.dataset.missingAssetRef ?? '';
+    if (!refName) continue;
+    const alt = old.querySelector<HTMLElement>('.missing-asset__alt')?.textContent ?? null;
+    old.replaceWith(buildMissingAssetPlaceholder(refName, alt, canUpload, cbRef));
+  }
+}
+
+function buildMissingAssetPlaceholder(
+  refName: string,
+  altText: string | null,
+  canUpload: boolean,
+  cbRef: UploadCbRef,
+): HTMLElement {
+  // Use phrasing-content elements (span) rather than flow content
+  // (div). Markdown renders `![alt](foo.png)` as `<p><img></p>`, and a
+  // <div> inside a <p> is not valid HTML — browsers auto-close the
+  // paragraph and reparent the div, which disrupts layout. <span>s
+  // with `display: flex` via CSS work inside <p> and outside.
+  const placeholder = document.createElement('span');
+  placeholder.className = `missing-asset ${canUpload ? 'missing-asset--editable' : 'missing-asset--readonly'}`;
+  placeholder.dataset.missingAssetRef = refName;
+
+  const label = document.createElement('span');
+  label.className = 'missing-asset__label';
+  label.textContent = canUpload
+    ? `Missing image: ${refName} — drop a file or click to upload`
+    : `Image unavailable: ${refName}`;
+  placeholder.appendChild(label);
+
+  if (altText) {
+    const alt = document.createElement('span');
+    alt.className = 'missing-asset__alt';
+    alt.textContent = altText;
+    placeholder.appendChild(alt);
+  }
+
+  if (!canUpload) return placeholder;
+
+  const input = document.createElement('input');
+  input.type = 'file';
+  // Placeholder is attached to an `<img>` marker, so only image bytes
+  // make sense here. Without this filter, dropping a PDF onto a
+  // `cat.png` slot would store the bytes but serve them as image/png
+  // (mime is derived from the ref name) → a permanently broken image.
+  input.accept = 'image/*';
+  input.className = 'missing-asset__input';
+  input.setAttribute('aria-label', `Upload ${refName}`);
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (file && isImageFile(file)) cbRef.current?.(refName, file);
+    // Clear the value so picking the same file again still fires
+    // `change` — needed for retry-after-error UX. Matches the reset
+    // already done in AssetsPanel's ReplaceButton.
+    input.value = '';
+  });
+  placeholder.appendChild(input);
+
+  placeholder.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    placeholder.classList.add('missing-asset--over');
+  });
+  placeholder.addEventListener('dragleave', () => {
+    placeholder.classList.remove('missing-asset--over');
+  });
+  placeholder.addEventListener('drop', (e) => {
+    e.preventDefault();
+    placeholder.classList.remove('missing-asset--over');
+    const file = e.dataTransfer?.files?.[0];
+    if (file && isImageFile(file)) cbRef.current?.(refName, file);
+  });
+  // Pointer users click the card; keyboard + assistive-tech users
+  // reach the native <input type="file"> directly (it's already
+  // focusable and announced as "Choose file, Upload <refName>" via
+  // its aria-label). Giving the container its own role="button" +
+  // tabindex would create two tab stops for a single logical
+  // control — confusing to screen readers.
+  placeholder.addEventListener('click', (e) => {
+    if (e.target === input) return;
+    input.click();
+  });
+  return placeholder;
 }
 
 /**

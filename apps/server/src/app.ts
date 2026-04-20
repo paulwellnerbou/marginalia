@@ -3,10 +3,12 @@ import type { Database } from 'bun:sqlite';
 import type { ServerWebSocket } from 'bun';
 import { Hono } from 'hono';
 import { createBunWebSocket } from 'hono/bun';
+import { createBlobStore } from './blob-store.js';
 import type { ServerConfig } from './config.js';
 import { openDatabase } from './db.js';
 import { GitStore } from './git-store.js';
 import { Realtime } from './realtime.js';
+import { assetsRouter } from './routes/assets.js';
 import { commentsRouter } from './routes/comments.js';
 import { documentsRouter } from './routes/documents.js';
 import { editProposalsRouter } from './routes/edit-proposals.js';
@@ -24,14 +26,16 @@ export async function createApp(config: ServerConfig): Promise<App> {
   const db = openDatabase(config.dbPath);
   const store = new GitStore(config.repoDir);
   await store.init();
+  const blobs = createBlobStore(config);
   const realtime = new Realtime();
 
   const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
 
   const hono = new Hono();
   hono.get('/health', (c) => c.json({ ok: true }));
-  const deps = { db, store, config, realtime };
+  const deps = { db, store, blobs, config, realtime };
   hono.route('/api/documents', documentsRouter(deps));
+  hono.route('/api/documents', assetsRouter({ db, blobs, config }));
   hono.route('/api/documents', commentsRouter(deps));
   hono.route('/api/documents', editProposalsRouter(deps));
   hono.route('/api/documents', eventsRouter({ db, realtime, upgradeWebSocket }));

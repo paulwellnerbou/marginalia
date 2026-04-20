@@ -79,6 +79,32 @@ DOCKER_ARGS=(
   -e APP_ENV_LABEL="$APP_ENV_LABEL_VALUE"
 )
 
+# Blob storage: fs (default) keeps binaries in the mounted /app/.data
+# volume at .data/blobs. Setting MARGINALIA_BLOB_STORAGE=s3 in the
+# .env.$INSTANCE file switches to an S3-compatible bucket; credentials
+# come from the companion MARGINALIA_S3_* vars in the same file.
+# Forwarded explicitly here (rather than --env-file) so the script
+# still enumerates every knob it passes through.
+#
+# IMPORTANT: use `-e NAME` (no value) rather than `-e NAME=VALUE` so
+# credentials aren't embedded in the docker argv — otherwise the
+# MARGINALIA_S3_SECRET_ACCESS_KEY shows up in `ps aux` on the host
+# (and often in CI logs that echo commands). Docker reads the value
+# from the parent shell's environment; the earlier `set -a; source
+# $ENV_FILE` already exported these.
+for var in MARGINALIA_BLOB_STORAGE \
+           MARGINALIA_S3_BUCKET \
+           MARGINALIA_S3_ACCESS_KEY_ID \
+           MARGINALIA_S3_SECRET_ACCESS_KEY \
+           MARGINALIA_S3_ENDPOINT \
+           MARGINALIA_S3_REGION \
+           MARGINALIA_S3_PREFIX \
+           MARGINALIA_S3_VIRTUAL_HOSTED; do
+  if [[ -n "${!var:-}" ]]; then
+    DOCKER_ARGS+=(-e "$var")
+  fi
+done
+
 if [[ -n "$CONTAINER_NETWORK" ]]; then
   DOCKER_ARGS+=(--network "$CONTAINER_NETWORK")
 fi

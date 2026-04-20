@@ -84,12 +84,26 @@ export interface DocumentBundle {
 
 export type Role = 'admin' | 'editor' | 'collaborator' | 'reader';
 
+export type AssetKind = 'image' | 'include' | 'attachment';
+
+export interface AttachedAsset {
+  ref_name: string;
+  asset_id: string;
+  kind: AssetKind;
+  mime: string;
+  size: number;
+  created_at: number;
+  created_by: string;
+}
+
 export interface Document {
   uid: string;
   /** Human-friendly document name. Null → derive from rendered content. */
   name: string | null;
   source: string;
   rendered: RenderedDocument;
+  /** Every asset currently attached to this doc (empty array if none). */
+  attached_assets: AttachedAsset[];
   format: DocumentFormat;
   default_theme: string;
   password_protected: boolean;
@@ -223,7 +237,13 @@ async function request<T>(
   init: RequestInit & { identity?: Identity | null; docUid?: string; _retry?: boolean } = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  headers.set('content-type', 'application/json');
+  // Don't set a content-type for FormData — the browser fills in
+  // `multipart/form-data; boundary=...` on its own, and forcing a
+  // content-type here would break the boundary. Only set JSON when
+  // the caller didn't supply a body of another shape.
+  if (!(init.body instanceof FormData) && !headers.has('content-type')) {
+    headers.set('content-type', 'application/json');
+  }
 
   const identity = init.identity ?? fallbackIdentity();
   const clientId = identity?.clientId ?? getClientId();
@@ -330,6 +350,61 @@ export function importDocumentBundle(
     body: JSON.stringify(bundle),
     identity,
   });
+}
+
+// --- assets ----------------------------------------------------------
+
+export function listAttachedAssets(uid: string): Promise<{ assets: AttachedAsset[] }> {
+  return request<{ assets: AttachedAsset[] }>(
+    `/api/documents/${encodeURIComponent(uid)}/assets`,
+    { method: 'GET', docUid: uid },
+  );
+}
+
+export function uploadAsset(
+  uid: string,
+  refName: string,
+  file: File | Blob,
+  identity: Identity,
+  kind?: AssetKind,
+): Promise<{ asset: AttachedAsset }> {
+  const form = new FormData();
+  form.append('file', file, fileName(refName, file));
+  form.append('ref_name', refName);
+  if (kind) form.append('kind', kind);
+  // Route through `request()` (which now handles FormData bodies) so
+  // the shared 401/password-required wait+retry gate applies —
+  // otherwise an upload against a password-protected doc with an
+  // expired session would just fail silently instead of triggering
+  // the password prompt.
+  return request<{ asset: AttachedAsset }>(
+    `/api/documents/${encodeURIComponent(uid)}/assets`,
+    { method: 'POST', body: form, identity, docUid: uid },
+  );
+}
+
+export function deleteAttachedAsset(
+  uid: string,
+  refName: string,
+  identity: Identity,
+): Promise<void> {
+  return request<void>(
+    `/api/documents/${encodeURIComponent(uid)}/assets/${encodeRefPath(refName)}`,
+    { method: 'DELETE', identity, docUid: uid },
+  );
+}
+
+export function assetProxyUrl(uid: string, refName: string): string {
+  return `/api/documents/${encodeURIComponent(uid)}/assets/${encodeRefPath(refName)}`;
+}
+
+function encodeRefPath(refName: string): string {
+  return refName.split('/').map(encodeURIComponent).join('/');
+}
+
+function fileName(refName: string, file: File | Blob): string {
+  if (file instanceof File && file.name) return file.name;
+  return refName.split('/').pop() ?? 'upload.bin';
 }
 
 // --- settings --------------------------------------------------------
