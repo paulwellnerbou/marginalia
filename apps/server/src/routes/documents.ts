@@ -1,6 +1,10 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import { locateAllBlocks, render } from '@marginalia/renderer';
+import {
+  locateAllBlocks,
+  locateAllBlocksAsciidoc,
+  renderDocument,
+} from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
@@ -17,8 +21,15 @@ import {
   verifyPassword,
 } from '../auth.js';
 import type { ServerConfig } from '../config.js';
-import type { CommentRow, DocumentRow, InviteKind, InviteRole, InviteRow } from '../db.js';
-import { isInviteKind, isInviteRole } from '../db.js';
+import type {
+  CommentRow,
+  DocumentFormat,
+  DocumentRow,
+  InviteKind,
+  InviteRole,
+  InviteRow,
+} from '../db.js';
+import { isDocumentFormat, isInviteKind, isInviteRole } from '../db.js';
 import type { GitStore } from '../git-store.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
 import type { Realtime } from '../realtime.js';
@@ -60,10 +71,13 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
 
-  const markdown = body.markdown;
-  if (typeof markdown !== 'string' || markdown.length === 0) {
-    return c.json({ error: 'markdown-required' }, 400);
+  // Accept `source` as the format-neutral field name, and keep `markdown`
+  // working for old clients still using that key.
+  const sourceRaw = typeof body.source === 'string' ? body.source : body.markdown;
+  if (typeof sourceRaw !== 'string' || sourceRaw.length === 0) {
+    return c.json({ error: 'source-required' }, 400);
   }
+  const format: DocumentFormat = isDocumentFormat(body.format) ? body.format : 'markdown';
 
   const uid = newDocumentUid();
   const now = Date.now();
@@ -81,14 +95,14 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
       ? body.name.trim().slice(0, 200)
       : null;
 
-  await store.write(uid, markdown, identity, 'upload');
+  const { path } = await store.write(uid, format, sourceRaw, identity, 'upload');
 
   // editable_by_anyone is deprecated; always 0 on new rows, unread by authorize().
   db.prepare(
     `INSERT INTO documents
-       (uid, path, name, password_hash, editable_by_anyone, default_theme, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
-  ).run(uid, store.docPath(uid), docName, passwordHash, theme, now, now);
+       (uid, path, name, password_hash, editable_by_anyone, default_theme, format, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`,
+  ).run(uid, path, docName, passwordHash, theme, format, now, now);
 
   // Every doc gets an admin invite for its creator. The returned URL is the
   // admin's canonical way to come back to the doc.
@@ -110,6 +124,7 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
       display_name: adminInvite.display_name,
     },
     default_theme: theme,
+    format,
   };
   if (plaintextPassword) response.password = plaintextPassword;
   return c.json(response, 201);
@@ -125,8 +140,8 @@ async function getDocument(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
-  const source = store.read(doc.uid);
-  const rendered = await render(source);
+  const source = store.read(doc.path);
+  const rendered = await renderDocument(source, doc.format);
 
   // For admin/named invites: the server-resolved current name (invite
   // seed on first visit, doc_users row after). For generic/no-invite:
@@ -140,6 +155,7 @@ async function getDocument(c: Context, deps: AppDeps) {
     name: doc.name,
     source,
     rendered,
+    format: doc.format,
     default_theme: doc.default_theme,
     password_protected: doc.password_hash !== null,
     role: decision.role,
@@ -162,21 +178,23 @@ async function updateDocument(c: Context, deps: AppDeps) {
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   const body = await safeJson(c);
-  if (!body || typeof body.markdown !== 'string') {
-    return c.json({ error: 'markdown-required' }, 400);
+  // Accept `source` going forward but keep `markdown` for legacy callers.
+  const nextSource = typeof body?.source === 'string' ? body.source : body?.markdown;
+  if (typeof nextSource !== 'string') {
+    return c.json({ error: 'source-required' }, 400);
   }
 
   let previousSource = '';
   try {
-    previousSource = store.read(doc.uid);
+    previousSource = store.read(doc.path);
   } catch {
     /* new doc */
   }
 
-  const { oid } = await store.write(doc.uid, body.markdown, decision.identity, 'update');
+  const { oid } = await store.write(doc.uid, doc.format, nextSource, decision.identity, 'update');
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
-  const rendered = await render(body.markdown);
+  const rendered = await renderDocument(nextSource, doc.format);
   const topLevel = db
     .prepare(
       `SELECT * FROM comments
@@ -196,17 +214,16 @@ async function updateDocument(c: Context, deps: AppDeps) {
   }
 
   // Include sub-block ids so proposals on list items / table cells don't
-  // get orphaned after every save.
-  reanchorProposals(
-    db,
-    doc.uid,
-    [...locateAllBlocks(body.markdown).keys()],
-    now,
-    realtime,
-    decision.identity.clientId,
-  );
+  // get orphaned after every save. Markdown uses the mdast-based locator;
+  // asciidoc hands off to its own pipeline, and its locator also emits
+  // sub-block ids for supported nested structures (e.g. list items).
+  const knownIds =
+    doc.format === 'asciidoc'
+      ? [...locateAllBlocksAsciidoc(nextSource).keys()]
+      : [...locateAllBlocks(nextSource).keys()];
+  reanchorProposals(db, doc.uid, knownIds, now, realtime, decision.identity.clientId);
 
-  if (isContentChange(previousSource, body.markdown)) {
+  if (isContentChange(previousSource, nextSource)) {
     realtime.broadcast(
       doc.uid,
       { type: 'document.updated', oid, author: decision.identity.displayName },
@@ -312,7 +329,7 @@ async function deleteDocument(c: Context, deps: AppDeps) {
   db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
 
   try {
-    await store.deleteDoc(doc.uid, decision.identity);
+    await store.deleteDoc(doc.path, doc.uid, decision.identity);
   } catch {
     /* repo file already missing — fine */
   }
@@ -330,8 +347,8 @@ async function exportDocument(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
-  const source = store.read(doc.uid);
-  const rendered = await render(source);
+  const source = store.read(doc.path);
+  const rendered = await renderDocument(source, doc.format);
   const comments = db
     .prepare(
       `SELECT * FROM comments
@@ -341,12 +358,13 @@ async function exportDocument(c: Context, deps: AppDeps) {
     .all(doc.uid) as CommentRow[];
 
   const bundle = {
-    version: 2 as const,
+    version: 3 as const,
     kind: 'marginalia.document-bundle',
     exported_at: Date.now(),
     document: {
       name: doc.name,
       source,
+      format: doc.format,
       // editable_by_anyone is preserved in exports for one release so old
       // tooling can still read bundles. The field is meaningless on import.
       editable_by_anyone: doc.editable_by_anyone === 1,
@@ -412,14 +430,15 @@ async function importDocument(c: Context, deps: AppDeps) {
       ? docSpec.name.trim().slice(0, 200)
       : null;
   const theme = typeof docSpec.default_theme === 'string' ? docSpec.default_theme : 'default';
+  const format: DocumentFormat = isDocumentFormat(docSpec.format) ? docSpec.format : 'markdown';
   // Bundle's editable_by_anyone is ignored; the column is deprecated.
 
-  await store.write(uid, docSpec.source, identity, 'upload');
+  const { path } = await store.write(uid, format, docSpec.source, identity, 'upload');
   db.prepare(
     `INSERT INTO documents
-       (uid, path, name, password_hash, editable_by_anyone, default_theme, created_at, updated_at)
-     VALUES (?, ?, ?, NULL, 0, ?, ?, ?)`,
-  ).run(uid, store.docPath(uid), name, theme, now, now);
+       (uid, path, name, password_hash, editable_by_anyone, default_theme, format, created_at, updated_at)
+     VALUES (?, ?, ?, NULL, 0, ?, ?, ?, ?)`,
+  ).run(uid, path, name, theme, format, now, now);
 
   // Fresh admin invite for the importer — not re-using the one from the
   // bundle (tokens are tied to specific deployments / user IDs).
@@ -511,8 +530,8 @@ async function importDocument(c: Context, deps: AppDeps) {
   );
 }
 
-function isBundleVersion(v: unknown): v is 1 | 2 {
-  return v === 1 || v === 2;
+function isBundleVersion(v: unknown): v is 1 | 2 | 3 {
+  return v === 1 || v === 2 || v === 3;
 }
 
 function parseStringArray(raw: string | null): string[] | null {
@@ -557,7 +576,7 @@ async function getHistory(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
-  const history = await store.history(doc.uid);
+  const history = await store.history(doc.path);
   return c.json({ history });
 }
 

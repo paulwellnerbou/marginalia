@@ -2,11 +2,20 @@ import * as git from 'isomorphic-git';
 import fs from 'node:fs';
 import { join } from 'node:path';
 import { mkdirSync, existsSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import type { DocumentFormat } from './db.js';
 
 /**
  * Thin wrapper around isomorphic-git that stores every document as a file
- * at the repo root with name `<uid>.md`. Every write is a commit authored
- * by the display name (+ client ID in the trailer).
+ * at the repo root with a name derived from uid + format
+ * (`<uid>.md` or `<uid>.adoc`). Every write is a commit authored by the
+ * display name (+ client ID in the trailer).
+ *
+ * `read()`, `history()`, `readAt()`, `deleteDoc()` take a relative `path`
+ * — typically the value already stored in `documents.path`, so callers
+ * don't have to re-derive it. `write()` is the outlier: it still takes
+ * `uid` + `format` and derives the filename via `docPath()` itself,
+ * since an upload is the moment the `path` column gets populated in the
+ * first place. The class has both APIs on purpose.
  */
 export class GitStore {
   constructor(private readonly repoDir: string) {}
@@ -28,26 +37,28 @@ export class GitStore {
     }
   }
 
-  docPath(uid: string): string {
-    return `${uid}.md`;
+  docPath(uid: string, format: DocumentFormat = 'markdown'): string {
+    return format === 'asciidoc' ? `${uid}.adoc` : `${uid}.md`;
   }
 
-  absPath(uid: string): string {
-    return join(this.repoDir, this.docPath(uid));
+  absPath(path: string): string {
+    return join(this.repoDir, path);
   }
 
-  read(uid: string): string {
-    return readFileSync(this.absPath(uid), 'utf8');
+  read(path: string): string {
+    return readFileSync(this.absPath(path), 'utf8');
   }
 
   async write(
     uid: string,
+    format: DocumentFormat,
     content: string,
     author: { displayName: string; clientId: string },
     action: 'upload' | 'update' | 'restore' | 'accept-proposal',
-  ): Promise<{ oid: string }> {
-    writeFileSync(this.absPath(uid), content);
-    await git.add({ fs, dir: this.repoDir, filepath: this.docPath(uid) });
+  ): Promise<{ oid: string; path: string }> {
+    const path = this.docPath(uid, format);
+    writeFileSync(this.absPath(path), content);
+    await git.add({ fs, dir: this.repoDir, filepath: path });
     const oid = await git.commit({
       fs,
       dir: this.repoDir,
@@ -57,7 +68,7 @@ export class GitStore {
         email: `${author.clientId}@marginalia.local`,
       },
     });
-    return { oid };
+    return { oid, path };
   }
 
   /**
@@ -67,12 +78,16 @@ export class GitStore {
    * the on-disk blobs too, follow up with a `git gc --prune=now` after
    * history rewriting — deliberately left out for now.
    */
-  async deleteDoc(uid: string, author: { displayName: string; clientId: string }): Promise<void> {
-    const absPath = this.absPath(uid);
+  async deleteDoc(
+    path: string,
+    uid: string,
+    author: { displayName: string; clientId: string },
+  ): Promise<void> {
+    const absPath = this.absPath(path);
     if (existsSync(absPath)) {
       rmSync(absPath, { force: true });
     }
-    await git.remove({ fs, dir: this.repoDir, filepath: this.docPath(uid) });
+    await git.remove({ fs, dir: this.repoDir, filepath: path });
     await git.commit({
       fs,
       dir: this.repoDir,
@@ -84,11 +99,11 @@ export class GitStore {
     });
   }
 
-  async history(uid: string): Promise<HistoryEntry[]> {
+  async history(path: string): Promise<HistoryEntry[]> {
     const entries = await git.log({
       fs,
       dir: this.repoDir,
-      filepath: this.docPath(uid),
+      filepath: path,
       force: true, // include even if file was deleted in later commits
     });
     return entries.map((e) => ({
@@ -102,12 +117,12 @@ export class GitStore {
     }));
   }
 
-  async readAt(uid: string, oid: string): Promise<string> {
+  async readAt(path: string, oid: string): Promise<string> {
     const { blob } = await git.readBlob({
       fs,
       dir: this.repoDir,
       oid,
-      filepath: this.docPath(uid),
+      filepath: path,
     });
     return new TextDecoder().decode(blob);
   }

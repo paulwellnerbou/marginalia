@@ -11,6 +11,22 @@
  * import this file and only override CSS custom properties.
  */
 
+/*
+ * AsciiDoc wrappers: asciidoctor ships content inside
+ * `<div class="paragraph">` / `<div class="listingblock">` / `<div
+ * class="sect1">` etc., which the base rules below (targeting semantic
+ * tags only) would leave with no vertical rhythm or callout styling.
+ *
+ * Most selectors in this import key off asciidoctor-specific class
+ * names so they're no-ops on markdown output, but a handful are
+ * deliberately generic: `kbd`, `.title`, and the `.menuseq` / `.keyseq`
+ * / `.button` UI-macro classes will also match a markdown doc that
+ * contains inline HTML with those tags/classes (which the sanitizer
+ * preserves). The styling is sensible in both worlds — kbd-as-keycap
+ * reads correctly wherever it appears — so that overlap is intentional.
+ */
+@import './asciidoc-compat.css';
+
 .marginalia-theme,
 .marginalia {
   /* --- Tunables (theme editor acts on these) ------------------------ */
@@ -226,14 +242,29 @@
   font-size: inherit;
 }
 
-/* Shiki dual-theme: light by default; dark variant flips colors below. */
+/* Shiki dual-theme: light by default; dark variant flips colors below.
+ * `--shiki-*-bg` is NOT emitted by the current Shiki bundle (it only
+ * ships `--shiki-light` / `--shiki-dark` on each token span), so the
+ * background-color here would compute to transparent without a
+ * fallback — reading as "no distinct code block" when the code sits
+ * inside an .exampleblock / .sidebarblock / .admonitionblock that
+ * already has its own subtle background. The fallback routes through
+ * the theme's regular code background so the block stays recognizable. */
 .marginalia pre.shiki,
 .marginalia pre.shiki span {
   color: var(--shiki-light);
-  background-color: var(--shiki-light-bg);
+  background-color: var(--shiki-light-bg, var(--md-color-code-bg));
   font-style: var(--shiki-light-font-style);
   font-weight: var(--shiki-light-font-weight);
   text-decoration: var(--shiki-light-text-decoration);
+}
+/* Tokens inherit the pre's background; avoid stacking it on each span. */
+.marginalia pre.shiki code,
+.marginalia pre.shiki span {
+  background-color: transparent;
+}
+.marginalia pre.shiki {
+  background-color: var(--shiki-light-bg, var(--md-color-code-bg));
 }
 
 /* --- Tables ------------------------------------------------------- */
@@ -337,10 +368,17 @@
 [data-appearance='dark'] .marginalia pre.shiki,
 [data-appearance='dark'] .marginalia pre.shiki span {
   color: var(--shiki-dark);
-  background-color: var(--shiki-dark-bg);
+  background-color: var(--shiki-dark-bg, var(--md-color-code-bg));
   font-style: var(--shiki-dark-font-style);
   font-weight: var(--shiki-dark-font-weight);
   text-decoration: var(--shiki-dark-text-decoration);
+}
+[data-appearance='dark'] .marginalia pre.shiki code,
+[data-appearance='dark'] .marginalia pre.shiki span {
+  background-color: transparent;
+}
+[data-appearance='dark'] .marginalia pre.shiki {
+  background-color: var(--shiki-dark-bg, var(--md-color-code-bg));
 }
 
 [data-appearance='dark'] .marginalia div.mermaid.mermaid-error {
@@ -366,7 +404,7 @@
   [data-appearance='auto'] .marginalia pre.shiki,
   [data-appearance='auto'] .marginalia pre.shiki span {
     color: var(--shiki-dark);
-    background-color: var(--shiki-dark-bg);
+    background-color: var(--shiki-dark-bg, var(--md-color-code-bg));
     font-style: var(--shiki-dark-font-style);
     font-weight: var(--shiki-dark-font-weight);
     text-decoration: var(--shiki-dark-text-decoration);

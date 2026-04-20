@@ -176,16 +176,48 @@ export function RenderedDoc({
         return;
       }
 
-      // Anchor → smooth-scroll to in-doc target.
+      // Anchor → smooth-scroll to in-doc target AND sync the address bar.
+      // Default `<a href="#id">` behaviour updates both, but we preventDefault
+      // to override the browser's instant jump with a smooth scroll inside
+      // our nested scroll container. Without a matching history.pushState
+      // the hash silently disappears — permalink sharing, back/forward, and
+      // refresh all break. We add it back manually here.
       const anchor = target.closest('a[href^="#"]');
       if (anchor) {
         const href = anchor.getAttribute('href');
         if (href && href.length > 1) {
-          const id = href.slice(1);
+          const rawId = href.slice(1);
+          // Malformed percent-encoding in the href would make
+          // decodeURIComponent throw a URIError here and abort the whole
+          // click handler — other handlers (image lightbox, comments)
+          // would stop firing until the user clicks a well-formed link.
+          // Fall back to the raw id so querySelector still gets a shot.
+          let id = rawId;
+          try {
+            id = decodeURIComponent(rawId);
+          } catch {
+            id = rawId;
+          }
           const targetEl = el.querySelector(`[id="${CSS.escape(id)}"]`);
           if (targetEl) {
             e.preventDefault();
             targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            // Keep the URL in sync so copy-link / refresh / back-button
+            // behaviour matches native anchor clicks. `pushState` rather
+            // than `replaceState` because the browser would also push a
+            // history entry on a default anchor click.
+            //
+            // Build `next.hash` from the decoded id first and compare
+            // against `window.location.hash` AFTER both have gone
+            // through URL's percent-encoding — otherwise an id with
+            // reserved chars (colons, spaces, umlauts) would compare
+            // decoded-vs-encoded and push a redundant entry on every
+            // re-click of the same anchor.
+            const next = new URL(window.location.href);
+            next.hash = id;
+            if (window.location.hash !== next.hash) {
+              window.history.pushState(null, '', next);
+            }
           }
         }
       }

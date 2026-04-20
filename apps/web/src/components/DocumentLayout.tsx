@@ -59,11 +59,13 @@ import {
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
+import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import { RenderedDoc } from './RenderedDoc.js';
 import { Toc } from './Toc.js';
 import { SelectionToolbar, type ProposalTarget } from './SelectionToolbar.js';
 import { BlockActions } from './BlockActions.js';
 import { CommentsPane } from './CommentsPane.js';
+import { EditProposalComposer } from './EditProposalComposer.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { AppBar } from './AppBar.js';
 import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
@@ -136,6 +138,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [liveSource, setLiveSource] = useState<string>(doc.source);
   const [liveRendered, setLiveRendered] = useState(doc.rendered);
   const [error, setError] = useState<string | null>(null);
+
+  /*
+   * Per-block source ranges for the live document. Shared by the
+   * EditProposalComposer (extracts the clicked block's source into
+   * the textarea) and the CommentsPane (same map, passed down to its
+   * EditProposalItems). Recomputed only when the source or format
+   * changes, so editors don't pay the parse cost on unrelated re-renders.
+   */
+  const blockRanges = useMemo(
+    () =>
+      doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(liveSource) : locateAllBlocks(liveSource),
+    [doc.format, liveSource],
+  );
 
   useEffect(() => {
     setLiveSource(doc.source);
@@ -666,6 +681,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       <AppBar
         docTitle={title}
         role={doc.role}
+        format={doc.format}
         trailing={
           <>
             {children}
@@ -915,6 +931,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   comments={comments}
                   proposals={proposals}
                   docSource={liveSource}
+                  blockRanges={blockRanges}
                   mentionCandidates={mentionCandidates}
                   canComment={canComment}
                   pendingAnchor={canComment ? pendingAnchor : null}
@@ -963,6 +980,23 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           )}
         </aside>
       </div>
+
+      {/*
+        Proposal composer lives here (outside the right sidebar) so it
+        stays mounted — and therefore openable — even when the user has
+        the Threads/History pane collapsed. Radix Dialog portals the
+        actual overlay to the body, so its DOM position here doesn't
+        affect rendering.
+      */}
+      <EditProposalComposer
+        target={pendingProposalTarget}
+        docSource={liveSource}
+        docFormat={doc.format}
+        blockRanges={blockRanges}
+        needsName={!displayName}
+        onCancel={() => setPendingProposalTarget(null)}
+        onSubmit={onCreateProposal}
+      />
     </div>
   );
 }

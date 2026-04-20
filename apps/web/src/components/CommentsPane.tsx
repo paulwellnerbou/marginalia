@@ -17,10 +17,9 @@ import {
   DotsHorizontalIcon,
   PaperPlaneIcon,
 } from '@radix-ui/react-icons';
-import { locateAllBlocks } from '@marginalia/renderer';
+import type { BlockSourceRange } from '@marginalia/renderer';
 import type { Comment, CommentAnchor, EditProposal } from '../lib/api.js';
 import { CommentItem } from './CommentItem.js';
-import { EditProposalComposer } from './EditProposalComposer.js';
 import { EditProposalItem } from './EditProposalItem.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
@@ -31,8 +30,14 @@ export interface ComposerHandle {
 interface Props {
   comments: Comment[];
   proposals: EditProposal[];
-  /** Live markdown source, used by diff/composer. */
+  /** Live document source, used by diff/composer. */
   docSource: string;
+  /**
+   * Per-block source ranges, memoized in DocumentLayout and passed in so
+   * this pane and the proposal composer share one parse of the source
+   * instead of each re-parsing on every render.
+   */
+  blockRanges: Map<string, BlockSourceRange>;
   mentionCandidates: string[];
   canComment: boolean;
   /** New-comment draft captured from selection; non-null → composer is open */
@@ -83,6 +88,7 @@ export function CommentsPane(props: Props) {
     comments,
     proposals,
     docSource,
+    blockRanges,
     mentionCandidates,
     canComment,
     pendingAnchor,
@@ -126,10 +132,6 @@ export function CommentsPane(props: Props) {
     () => groupProposals(proposals),
     [proposals],
   );
-  // Parse the markdown source once per change and derive per-block source
-  // ranges; proposal items below share the map instead of each one re-parsing.
-  const blockRanges = useMemo(() => locateAllBlocks(docSource), [docSource]);
-
   const [sortMode, setSortMode] = useState<CommentSortMode>('document');
   const { active, orphans } = useMemo(
     () => groupByAnchor(commentsWithoutProposalReplies, sortMode),
@@ -234,15 +236,6 @@ export function CommentsPane(props: Props) {
 
   return (
     <div ref={rootRef} className="comments-pane">
-      <EditProposalComposer
-        target={pendingProposalTarget}
-        docSource={docSource}
-        blockRanges={blockRanges}
-        needsName={!displayName}
-        onCancel={onCancelPendingProposal}
-        onSubmit={onCreateProposal}
-      />
-
       {activeProposals.length > 0 && (
         <section className="proposals-section">
           <h4 className="subtle">Proposed changes</h4>

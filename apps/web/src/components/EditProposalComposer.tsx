@@ -1,13 +1,16 @@
 import { useMemo, useState } from 'react';
 import { Button, Dialog, Flex, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { BlockSourceRange } from '@marginalia/renderer';
+import type { DocumentFormat } from '../lib/api.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
 interface Props {
   /** When non-null, the modal is open and targets this block. */
   target: ProposalTarget | null;
-  /** Full markdown source — used to extract the block's current source text. */
+  /** Full document source — used to extract the block's current source text. */
   docSource: string;
+  /** Source flavour, so the composer's labels match (Markdown vs AsciiDoc). */
+  docFormat: DocumentFormat;
   blockRanges: Map<string, BlockSourceRange>;
   needsName: boolean;
   onCancel: () => void;
@@ -24,7 +27,7 @@ interface Props {
  * so the form doesn't feel like a second-class UI.
  */
 export function EditProposalComposer({
-  target, docSource, blockRanges, needsName, onCancel, onSubmit,
+  target, docSource, docFormat, blockRanges, needsName, onCancel, onSubmit,
 }: Props) {
   const open = target !== null;
   return (
@@ -39,6 +42,7 @@ export function EditProposalComposer({
           <ComposerBody
             target={target}
             docSource={docSource}
+            docFormat={docFormat}
             blockRanges={blockRanges}
             needsName={needsName}
             onCancel={onCancel}
@@ -51,10 +55,11 @@ export function EditProposalComposer({
 }
 
 function ComposerBody({
-  target, docSource, blockRanges, needsName, onCancel, onSubmit,
+  target, docSource, docFormat, blockRanges, needsName, onCancel, onSubmit,
 }: {
   target: ProposalTarget;
   docSource: string;
+  docFormat: DocumentFormat;
   blockRanges: Map<string, BlockSourceRange>;
   needsName: boolean;
   onCancel: () => void;
@@ -86,11 +91,13 @@ function ComposerBody({
     }
   }
 
+  const formatLabel = docFormat === 'asciidoc' ? 'AsciiDoc' : 'Markdown';
+
   return (
     <>
       <Dialog.Title>Propose edit</Dialog.Title>
       <Dialog.Description size="2" color="gray" mb="3">
-        Edit the markdown source of this block. Editors will review the diff
+        Edit the {formatLabel} source of this block. Editors will review the diff
         before accepting.
       </Dialog.Description>
 
@@ -117,7 +124,7 @@ function ComposerBody({
         )}
 
         <Flex direction="column" gap="1">
-          <Text as="label" size="2" htmlFor="proposal-text">Edited markdown</Text>
+          <Text as="label" size="2" htmlFor="proposal-text">Edited {formatLabel}</Text>
           <TextArea
             id="proposal-text"
             className="composer-body-field proposal-source-field"

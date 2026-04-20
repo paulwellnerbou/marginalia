@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS documents (
   -- old bundles round-trip. Drop in a later migration.
   editable_by_anyone   INTEGER NOT NULL DEFAULT 0,
   default_theme        TEXT NOT NULL DEFAULT 'default',
+  -- 'markdown' | 'asciidoc'. Legacy rows without a format are treated
+  -- as markdown by the route layer (their path column already ends
+  -- in ".md").
+  format               TEXT NOT NULL DEFAULT 'markdown',
   created_at           INTEGER NOT NULL,
   updated_at           INTEGER NOT NULL
 );
@@ -116,6 +120,15 @@ CREATE TABLE IF NOT EXISTS edit_proposals (
 CREATE INDEX IF NOT EXISTS idx_proposals_doc ON edit_proposals(doc_uid);
 `;
 
+/** Document source flavours persisted in `documents.format`. */
+export type DocumentFormat = 'markdown' | 'asciidoc';
+
+export const DOCUMENT_FORMATS: readonly DocumentFormat[] = ['markdown', 'asciidoc'] as const;
+
+export function isDocumentFormat(v: unknown): v is DocumentFormat {
+  return typeof v === 'string' && (DOCUMENT_FORMATS as readonly string[]).includes(v);
+}
+
 export interface DocumentRow {
   uid: string;
   path: string;
@@ -123,6 +136,7 @@ export interface DocumentRow {
   password_hash: string | null;
   editable_by_anyone: number;
   default_theme: string;
+  format: DocumentFormat;
   created_at: number;
   updated_at: number;
 }
@@ -255,6 +269,7 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments', 'anchor_section_index', 'INTEGER');
   ensureColumn(db, 'comments', 'anchor_section_index_path', 'TEXT');
   ensureColumn(db, 'comments', 'parent_proposal_id', 'TEXT');
+  ensureColumn(db, 'documents', 'format', "TEXT NOT NULL DEFAULT 'markdown'");
   // Legacy 'commentor' rows → 'collaborator' (same server-side behavior).
   db.exec(`UPDATE invites SET role = 'collaborator' WHERE role = 'commentor'`);
   migrateInvitesKind(db);
