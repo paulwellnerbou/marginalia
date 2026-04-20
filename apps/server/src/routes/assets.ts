@@ -308,11 +308,16 @@ function authorizeDoc(c: Context, db: Database, doc: DocumentRow) {
 function normalizeRefName(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed || trimmed.length > 200) return null;
-  // Reject path traversal. Clients reference assets the same way they
-  // appeared in the source document (`diagram.png`, `images/foo.png`);
-  // any leading `/` or embedded `..` is either confused or hostile.
-  if (trimmed.startsWith('/') || trimmed.startsWith('\\')) return null;
-  if (trimmed.split(/[\\/]+/).some((seg) => seg === '..' || seg === '.')) return null;
+  // Reject path traversal + URL-reserved delimiters. Clients reference
+  // assets the same way they appeared in the source document
+  // ("diagram.png", "images/foo.png"). Leading slashes, backslashes,
+  // and dot segments are either confused or hostile; `?` / `#` cannot
+  // round-trip through `/assets/:refName` (the browser would treat
+  // them as query/fragment, so the accepted name would become
+  // un-fetchable afterwards).
+  if (trimmed.startsWith('/') || trimmed.includes('\\')) return null;
+  if (trimmed.includes('?') || trimmed.includes('#')) return null;
+  if (trimmed.split('/').some((seg) => seg === '..' || seg === '.')) return null;
   return trimmed;
 }
 

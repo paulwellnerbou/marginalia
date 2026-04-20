@@ -365,4 +365,21 @@ describe('assets API', () => {
     );
     expect(res.status).toBe(400);
   });
+
+  test('refuses ref_names with URL-reserved chars (cannot round-trip)', async () => {
+    const doc = await upload();
+    for (const bad of ['cat?.png', 'cat#.png', 'img\\path.png']) {
+      const form = new FormData();
+      form.append('file', new Blob([new Uint8Array([1])], { type: 'image/png' }), 'x.png');
+      form.append('ref_name', bad);
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}/assets`, {
+          method: 'POST',
+          headers: multipartHeaders(ALICE, doc.admin_invite.token),
+          body: form,
+        }),
+      );
+      expect(res.status).toBe(400);
+    }
+  });
 });

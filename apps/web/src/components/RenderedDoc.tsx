@@ -104,6 +104,18 @@ export function RenderedDoc({
     replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
   }, [rendered.html, ref, canUploadMissing]);
 
+  // If canUploadMissing flips while `rendered.html` stays the same
+  // (e.g. invite upgraded mid-session so the user gains editor role),
+  // the placeholders that were already rendered by the innerHTML
+  // effect are stuck in the previous mode. This effect walks the
+  // existing `.missing-asset` cards and rebuilds each in place —
+  // without re-setting innerHTML, so mermaid-rendered SVG survives.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    refreshMissingAssetPlaceholders(el, canUploadMissing, uploadCbRef);
+  }, [canUploadMissing, ref]);
+
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -275,6 +287,10 @@ export function RenderedDoc({
   );
 }
 
+type UploadCbRef = {
+  current?: ((refName: string, file: File) => void | Promise<void>) | undefined;
+};
+
 /**
  * Swap `<img data-missing-asset="name">` markers produced by
  * `rewriteAssetReferences` for a placeholder card. Editors (with an
@@ -284,62 +300,95 @@ export function RenderedDoc({
 function replaceMissingAssetMarkers(
   root: HTMLElement,
   canUpload: boolean,
-  cbRef: { current?: ((refName: string, file: File) => void | Promise<void>) | undefined },
+  cbRef: UploadCbRef,
 ): void {
   const markers = root.querySelectorAll<HTMLImageElement>('img[data-missing-asset]');
   for (const img of Array.from(markers)) {
     const refName = img.dataset.missingAsset ?? '';
     if (!refName) continue;
-    const placeholder = document.createElement('div');
-    placeholder.className = `missing-asset ${canUpload ? 'missing-asset--editable' : 'missing-asset--readonly'}`;
-    placeholder.dataset.missingAssetRef = refName;
-
-    const label = document.createElement('div');
-    label.className = 'missing-asset__label';
-    label.textContent = canUpload
-      ? `Missing image: ${refName} — drop a file or click to upload`
-      : `Image unavailable: ${refName}`;
-    placeholder.appendChild(label);
-
-    if (img.alt && img.alt.trim()) {
-      const alt = document.createElement('div');
-      alt.className = 'missing-asset__alt';
-      alt.textContent = img.alt;
-      placeholder.appendChild(alt);
-    }
-
-    if (canUpload) {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.className = 'missing-asset__input';
-      input.setAttribute('aria-label', `Upload ${refName}`);
-      input.addEventListener('change', () => {
-        const file = input.files?.[0];
-        if (file) cbRef.current?.(refName, file);
-      });
-      placeholder.appendChild(input);
-
-      placeholder.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        placeholder.classList.add('missing-asset--over');
-      });
-      placeholder.addEventListener('dragleave', () => {
-        placeholder.classList.remove('missing-asset--over');
-      });
-      placeholder.addEventListener('drop', (e) => {
-        e.preventDefault();
-        placeholder.classList.remove('missing-asset--over');
-        const file = e.dataTransfer?.files?.[0];
-        if (file) cbRef.current?.(refName, file);
-      });
-      placeholder.addEventListener('click', (e) => {
-        if (e.target === input) return;
-        input.click();
-      });
-    }
-
-    img.replaceWith(placeholder);
+    const altText = img.alt && img.alt.trim() ? img.alt : null;
+    img.replaceWith(buildMissingAssetPlaceholder(refName, altText, canUpload, cbRef));
   }
+}
+
+/**
+ * Rebuild every existing `.missing-asset` card in place. Called when
+ * `canUploadMissing` flips (role change / invite upgrade) while
+ * `rendered.html` stays the same — the innerHTML effect short-circuits
+ * in that case, leaving stale placeholders in the previous mode.
+ * Uses `replaceWith` so mermaid-rendered SVG elsewhere in the article
+ * is untouched.
+ */
+function refreshMissingAssetPlaceholders(
+  root: HTMLElement,
+  canUpload: boolean,
+  cbRef: UploadCbRef,
+): void {
+  const existing = root.querySelectorAll<HTMLElement>(
+    '.missing-asset[data-missing-asset-ref]',
+  );
+  for (const old of Array.from(existing)) {
+    const refName = old.dataset.missingAssetRef ?? '';
+    if (!refName) continue;
+    const alt = old.querySelector<HTMLElement>('.missing-asset__alt')?.textContent ?? null;
+    old.replaceWith(buildMissingAssetPlaceholder(refName, alt, canUpload, cbRef));
+  }
+}
+
+function buildMissingAssetPlaceholder(
+  refName: string,
+  altText: string | null,
+  canUpload: boolean,
+  cbRef: UploadCbRef,
+): HTMLElement {
+  const placeholder = document.createElement('div');
+  placeholder.className = `missing-asset ${canUpload ? 'missing-asset--editable' : 'missing-asset--readonly'}`;
+  placeholder.dataset.missingAssetRef = refName;
+
+  const label = document.createElement('div');
+  label.className = 'missing-asset__label';
+  label.textContent = canUpload
+    ? `Missing image: ${refName} — drop a file or click to upload`
+    : `Image unavailable: ${refName}`;
+  placeholder.appendChild(label);
+
+  if (altText) {
+    const alt = document.createElement('div');
+    alt.className = 'missing-asset__alt';
+    alt.textContent = altText;
+    placeholder.appendChild(alt);
+  }
+
+  if (!canUpload) return placeholder;
+
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.className = 'missing-asset__input';
+  input.setAttribute('aria-label', `Upload ${refName}`);
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (file) cbRef.current?.(refName, file);
+  });
+  placeholder.appendChild(input);
+
+  placeholder.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    placeholder.classList.add('missing-asset--over');
+  });
+  placeholder.addEventListener('dragleave', () => {
+    placeholder.classList.remove('missing-asset--over');
+  });
+  placeholder.addEventListener('drop', (e) => {
+    e.preventDefault();
+    placeholder.classList.remove('missing-asset--over');
+    const file = e.dataTransfer?.files?.[0];
+    if (file) cbRef.current?.(refName, file);
+  });
+  placeholder.addEventListener('click', (e) => {
+    if (e.target === input) return;
+    input.click();
+  });
+  return placeholder;
 }
 
 /**
