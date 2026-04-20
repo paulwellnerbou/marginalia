@@ -48,11 +48,12 @@ export async function rewriteAssetReferences(
         const src = getStringProp(node, 'src');
         if (!src || isAbsoluteUrl(src)) return;
         // Must mirror the server's normalizeRefName() in routes/assets.ts:
-        // dot-segment paths (`./foo.png`, `../escape.png`) cannot be
-        // uploaded or fetched through the proxy. Leaving them unchanged
-        // is friendlier than tagging them `data-missing-asset` and
-        // showing an editor a dropzone whose upload would always 400.
-        if (hasDotSegment(src)) return;
+        // refs that the server would reject (dot segments, backslashes,
+        // URL delimiters, empty segments) can't be uploaded or fetched
+        // through the proxy. Leaving them unchanged is friendlier than
+        // tagging them `data-missing-asset` and showing an editor a
+        // dropzone whose upload would always 400.
+        if (!isAddressableRefName(src)) return;
         const refName = src;
         const props = { ...(node.properties ?? {}) };
         if (opts.attached.has(refName)) {
@@ -94,8 +95,18 @@ function isAbsoluteUrl(src: string): boolean {
   return false;
 }
 
-function hasDotSegment(src: string): boolean {
-  return src.split(/[\\/]+/).some((seg) => seg === '.' || seg === '..');
+/**
+ * Mirror of the server's `normalizeRefName()` in routes/assets.ts. Kept
+ * as a standalone function (not a shared import) because the renderer
+ * package can't depend on the server package. Any change to one must
+ * be mirrored in the other — covered by tests on both sides.
+ */
+function isAddressableRefName(src: string): boolean {
+  if (!src || src.length > 200) return false;
+  if (src.includes('\\') || src.includes('?') || src.includes('#')) return false;
+  return !src
+    .split('/')
+    .some((seg) => seg === '' || seg === '.' || seg === '..');
 }
 
 /**

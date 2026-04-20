@@ -287,6 +287,15 @@ export function RenderedDoc({
   );
 }
 
+function isImageFile(file: File): boolean {
+  // Browsers set the MIME type from the filename extension when reading
+  // a drag/dropped file, so this catches both file-picker and drop
+  // paths. An empty `type` (rare: unknown extension) is treated as
+  // non-image — safer to reject than to upload bytes that will be
+  // served with an incorrect Content-Type.
+  return file.type.startsWith('image/');
+}
+
 type UploadCbRef = {
   current?: ((refName: string, file: File) => void | Promise<void>) | undefined;
 };
@@ -363,11 +372,16 @@ function buildMissingAssetPlaceholder(
 
   const input = document.createElement('input');
   input.type = 'file';
+  // Placeholder is attached to an `<img>` marker, so only image bytes
+  // make sense here. Without this filter, dropping a PDF onto a
+  // `cat.png` slot would store the bytes but serve them as image/png
+  // (mime is derived from the ref name) → a permanently broken image.
+  input.accept = 'image/*';
   input.className = 'missing-asset__input';
   input.setAttribute('aria-label', `Upload ${refName}`);
   input.addEventListener('change', () => {
     const file = input.files?.[0];
-    if (file) cbRef.current?.(refName, file);
+    if (file && isImageFile(file)) cbRef.current?.(refName, file);
     // Clear the value so picking the same file again still fires
     // `change` — needed for retry-after-error UX. Matches the reset
     // already done in AssetsPanel's ReplaceButton.
@@ -386,7 +400,7 @@ function buildMissingAssetPlaceholder(
     e.preventDefault();
     placeholder.classList.remove('missing-asset--over');
     const file = e.dataTransfer?.files?.[0];
-    if (file) cbRef.current?.(refName, file);
+    if (file && isImageFile(file)) cbRef.current?.(refName, file);
   });
   placeholder.addEventListener('click', (e) => {
     if (e.target === input) return;
