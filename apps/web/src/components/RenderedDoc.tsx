@@ -368,6 +368,10 @@ function buildMissingAssetPlaceholder(
   input.addEventListener('change', () => {
     const file = input.files?.[0];
     if (file) cbRef.current?.(refName, file);
+    // Clear the value so picking the same file again still fires
+    // `change` — needed for retry-after-error UX. Matches the reset
+    // already done in AssetsPanel's ReplaceButton.
+    input.value = '';
   });
   placeholder.appendChild(input);
 

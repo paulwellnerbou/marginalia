@@ -380,6 +380,91 @@ describe('assets API', () => {
         }),
       );
       expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('ref_name-invalid');
     }
+  });
+
+  test('refuses ref_names with empty path segments (proxies collapse //)', async () => {
+    const doc = await upload();
+    for (const bad of ['images//a.png', 'trailing/']) {
+      const form = new FormData();
+      form.append('file', new Blob([new Uint8Array([1])], { type: 'image/png' }), 'x.png');
+      form.append('ref_name', bad);
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}/assets`, {
+          method: 'POST',
+          headers: multipartHeaders(ALICE, doc.admin_invite.token),
+          body: form,
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('ref_name-invalid');
+    }
+  });
+
+  test('missing ref_name returns ref_name-required, not ref_name-invalid', async () => {
+    const doc = await upload();
+    const form = new FormData();
+    form.append('file', new Blob([new Uint8Array([1])], { type: 'image/png' }), 'x.png');
+    // no ref_name field
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets`, {
+        method: 'POST',
+        headers: multipartHeaders(ALICE, doc.admin_invite.token),
+        body: form,
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('ref_name-required');
+  });
+
+  test('If-None-Match honors weak validators and comma-separated lists', async () => {
+    const doc = await upload();
+    await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', new Uint8Array([42]));
+
+    const first = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+        method: 'GET',
+        headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    const etag = first.headers.get('etag');
+    expect(etag).toBeTruthy();
+
+    // Weak ETag: W/"..." should still match the strong server tag.
+    const weak = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+        method: 'GET',
+        headers: headers(ALICE, {
+          [INVITE_HEADER]: doc.admin_invite.token,
+          'If-None-Match': `W/${etag}`,
+        }),
+      }),
+    );
+    expect(weak.status).toBe(304);
+
+    // Comma-separated list with our ETag included → 304.
+    const list = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+        method: 'GET',
+        headers: headers(ALICE, {
+          [INVITE_HEADER]: doc.admin_invite.token,
+          'If-None-Match': `"other-tag", ${etag}, "third"`,
+        }),
+      }),
+    );
+    expect(list.status).toBe(304);
+
+    // Wildcard: matches any existing resource.
+    const wildcard = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+        method: 'GET',
+        headers: headers(ALICE, {
+          [INVITE_HEADER]: doc.admin_invite.token,
+          'If-None-Match': '*',
+        }),
+      }),
+    );
+    expect(wildcard.status).toBe(304);
   });
 });

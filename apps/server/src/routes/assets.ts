@@ -56,8 +56,11 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
   if (!(file instanceof File)) return c.json({ error: 'file-required' }, 400);
 
   const refNameRaw = form.get('ref_name');
-  const refName = typeof refNameRaw === 'string' ? normalizeRefName(refNameRaw) : null;
-  if (!refName) return c.json({ error: 'ref_name-required' }, 400);
+  if (typeof refNameRaw !== 'string') {
+    return c.json({ error: 'ref_name-required' }, 400);
+  }
+  const refName = normalizeRefName(refNameRaw);
+  if (!refName) return c.json({ error: 'ref_name-invalid' }, 400);
 
   if (file.size > config.maxAssetBytes) {
     return c.json({ error: 'file-too-large', limit: config.maxAssetBytes }, 413);
@@ -160,7 +163,7 @@ async function fetchAsset(c: Context, { db, blobs }: AssetsDeps) {
     'X-Content-Type-Options': 'nosniff',
   };
   const ifNoneMatch = c.req.header('if-none-match');
-  if (ifNoneMatch === etag) {
+  if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, etag)) {
     return c.body(null, 304, commonHeaders);
   }
 
@@ -187,6 +190,24 @@ async function fetchAsset(c: Context, { db, blobs }: AssetsDeps) {
     headers['Content-Disposition'] = 'attachment';
   }
   return new Response(bytes as BodyInit, { status: 200, headers });
+}
+
+/**
+ * RFC 9110 §13.1.2: If-None-Match is `*` or a comma-separated list of
+ * entity-tags; each may be weak (`W/"…"`). For a conditional GET the
+ * weak comparison applies, so we strip the `W/` prefix before matching
+ * and treat the ETags as equal if the opaque values match. A single
+ * `*` matches any existing resource. Plain equality missed browsers
+ * that send `W/"…"` or proxies that concatenate ETags.
+ */
+function matchesIfNoneMatch(header: string, etag: string): boolean {
+  const trimmed = header.trim();
+  if (trimmed === '*') return true;
+  for (const raw of trimmed.split(',')) {
+    const candidate = raw.trim().replace(/^W\//, '');
+    if (candidate === etag) return true;
+  }
+  return false;
 }
 
 const INLINE_SAFE_MIMES: ReadonlySet<string> = new Set([
@@ -317,7 +338,12 @@ function normalizeRefName(raw: string): string | null {
   // un-fetchable afterwards).
   if (trimmed.startsWith('/') || trimmed.includes('\\')) return null;
   if (trimmed.includes('?') || trimmed.includes('#')) return null;
-  if (trimmed.split('/').some((seg) => seg === '..' || seg === '.')) return null;
+  // Reject empty segments too ("images//a.png", trailing slash). Proxies
+  // and browsers routinely collapse `//`, so the stored key would not be
+  // round-trippable through `/assets/:refName`.
+  if (trimmed.split('/').some((seg) => seg === '' || seg === '..' || seg === '.')) {
+    return null;
+  }
   return trimmed;
 }
 
