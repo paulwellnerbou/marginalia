@@ -200,8 +200,12 @@ export function EditPage() {
     }
     const handle = setTimeout(async () => {
       try {
-        const { render, rewriteAssetReferences } = await loadRenderer();
-        const r = await render(source);
+        const { renderDocument, rewriteAssetReferences } = await loadRenderer();
+        // Route through renderDocument so asciidoc docs get the
+        // asciidoc pipeline — `render()` is markdown-only and would
+        // produce broken HTML for `image::foo[]` etc. Defaults to
+        // markdown while the doc is still loading.
+        const r = await renderDocument(source, doc?.format ?? 'markdown');
         // Apply the same server-side asset rewrite to the preview HTML so
         // dropzones / missing-asset placeholders match what the viewer
         // will see after save. Without this, the editor's preview would
@@ -217,7 +221,7 @@ export function EditPage() {
       }
     }, 200);
     return () => clearTimeout(handle);
-  }, [source, uid, attachedRefs]);
+  }, [source, uid, attachedRefs, doc?.format]);
 
   // Sync scrolling between source and preview
   useEffect(() => {

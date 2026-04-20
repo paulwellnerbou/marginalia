@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
-import { mkdir, unlink } from 'node:fs/promises';
+import { mkdir, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { S3Client, type S3Options } from 'bun';
 
@@ -44,7 +44,23 @@ export class FsBlobStore implements BlobStore {
     const path = this.pathFor(key);
     if (await Bun.file(path).exists()) return key;
     await mkdir(join(this.root, key.slice(0, 2)), { recursive: true });
-    await Bun.write(path, bytes);
+    // Atomic write: stage to a sibling temp file, then rename into
+    // place. `Bun.write` truncates-then-fills, so without this a
+    // concurrent reader (or a second writer racing the exists() check
+    // with the same bytes) could see a 0-byte or partial file during
+    // the fill window. rename() is atomic on the same filesystem:
+    // readers always see either the old inode or the fully-written
+    // new one, never a half-written blob.
+    const tmpPath = `${path}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      await Bun.write(tmpPath, bytes);
+      await rename(tmpPath, path);
+    } catch (err) {
+      await unlink(tmpPath).catch(() => {
+        /* best effort — leave the temp file for a later sweeper */
+      });
+      throw err;
+    }
     return key;
   }
 
