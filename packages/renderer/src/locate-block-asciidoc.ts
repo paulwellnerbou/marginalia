@@ -74,13 +74,14 @@ function recordSubBlockRange(
 }
 
 /**
- * Best-effort: return the source range covering a single list item. We
- * use `getLineNumber()` for the start; for the end we scan forward
- * until we hit the start of the NEXT sibling (same parent list) or the
- * first line that's not a continuation (doesn't start with the same
- * marker at the same indent). A looser heuristic is fine here — edit
- * proposals only target leaf list items, and asciidoctor's own source
- * map for items is line-accurate at the start.
+ * Best-effort: return the source range for a single list item. We use
+ * `getLineNumber()` for the start and, for now, end at the start of
+ * the following source line. This is intentionally conservative:
+ * multi-line list items are not fully covered yet because asciidoctor's
+ * AST does not expose a reliable end position for item continuations.
+ * A looser heuristic is fine here — edit proposals only target leaf
+ * list items, and asciidoctor's own source map for items is
+ * line-accurate at the start.
  */
 function listItemSourceRange(
   item: Any,

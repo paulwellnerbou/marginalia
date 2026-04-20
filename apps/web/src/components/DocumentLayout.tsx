@@ -931,7 +931,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   comments={comments}
                   proposals={proposals}
                   docSource={liveSource}
-                  docFormat={doc.format}
+                  blockRanges={blockRanges}
                   mentionCandidates={mentionCandidates}
                   canComment={canComment}
                   pendingAnchor={canComment ? pendingAnchor : null}

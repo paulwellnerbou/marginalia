@@ -17,10 +17,9 @@ import {
   DotsHorizontalIcon,
   PaperPlaneIcon,
 } from '@radix-ui/react-icons';
-import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
-import type { Comment, CommentAnchor, DocumentFormat, EditProposal } from '../lib/api.js';
+import type { BlockSourceRange } from '@marginalia/renderer';
+import type { Comment, CommentAnchor, EditProposal } from '../lib/api.js';
 import { CommentItem } from './CommentItem.js';
-import { EditProposalComposer } from './EditProposalComposer.js';
 import { EditProposalItem } from './EditProposalItem.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
@@ -33,8 +32,12 @@ interface Props {
   proposals: EditProposal[];
   /** Live document source, used by diff/composer. */
   docSource: string;
-  /** Source flavour — picks the right block locator (mdast vs asciidoctor). */
-  docFormat: DocumentFormat;
+  /**
+   * Per-block source ranges, memoized in DocumentLayout and passed in so
+   * this pane and the proposal composer share one parse of the source
+   * instead of each re-parsing on every render.
+   */
+  blockRanges: Map<string, BlockSourceRange>;
   mentionCandidates: string[];
   canComment: boolean;
   /** New-comment draft captured from selection; non-null → composer is open */
@@ -85,7 +88,7 @@ export function CommentsPane(props: Props) {
     comments,
     proposals,
     docSource,
-    docFormat,
+    blockRanges,
     mentionCandidates,
     canComment,
     pendingAnchor,
@@ -129,16 +132,6 @@ export function CommentsPane(props: Props) {
     () => groupProposals(proposals),
     [proposals],
   );
-  // Parse the source once per change and derive per-block source ranges.
-  // Proposal items below share the map instead of each one re-parsing;
-  // the dispatch keys off doc format so asciidoc blocks populate the
-  // composer with their original source instead of an empty textarea.
-  const blockRanges = useMemo(
-    () =>
-      docFormat === 'asciidoc' ? locateAllBlocksAsciidoc(docSource) : locateAllBlocks(docSource),
-    [docFormat, docSource],
-  );
-
   const [sortMode, setSortMode] = useState<CommentSortMode>('document');
   const { active, orphans } = useMemo(
     () => groupByAnchor(commentsWithoutProposalReplies, sortMode),

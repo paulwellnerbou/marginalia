@@ -215,8 +215,8 @@ async function updateDocument(c: Context, deps: AppDeps) {
 
   // Include sub-block ids so proposals on list items / table cells don't
   // get orphaned after every save. Markdown uses the mdast-based locator;
-  // asciidoc hands off to its own pipeline which only emits top-level ids
-  // (sub-block anchoring on asciidoc is a later pass).
+  // asciidoc hands off to its own pipeline, and its locator also emits
+  // sub-block ids for supported nested structures (e.g. list items).
   const knownIds =
     doc.format === 'asciidoc'
       ? [...locateAllBlocksAsciidoc(nextSource).keys()]

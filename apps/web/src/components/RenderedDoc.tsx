@@ -186,7 +186,18 @@ export function RenderedDoc({
       if (anchor) {
         const href = anchor.getAttribute('href');
         if (href && href.length > 1) {
-          const id = decodeURIComponent(href.slice(1));
+          const rawId = href.slice(1);
+          // Malformed percent-encoding in the href would make
+          // decodeURIComponent throw a URIError here and abort the whole
+          // click handler — other handlers (image lightbox, comments)
+          // would stop firing until the user clicks a well-formed link.
+          // Fall back to the raw id so querySelector still gets a shot.
+          let id = rawId;
+          try {
+            id = decodeURIComponent(rawId);
+          } catch {
+            id = rawId;
+          }
           const targetEl = el.querySelector(`[id="${CSS.escape(id)}"]`);
           if (targetEl) {
             e.preventDefault();
