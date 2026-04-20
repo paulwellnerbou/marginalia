@@ -33,9 +33,14 @@ let editorDepsPromise: Promise<EditorDeps> | null = null;
 let rendererPromise: Promise<typeof import('@marginalia/renderer')> | null = null;
 
 /**
- * The source references an asset via `![alt](filename)` (markdown) or
- * `image::filename[]` (asciidoc). Used to decide which attached assets
- * are "orphans" and to populate the preview's attached-asset set.
+ * Scan the source for local asset references — `![alt](filename)` in
+ * markdown, `image::filename[]` / `image:…[]` / `include::…[]` in
+ * asciidoc. The returned set feeds the AssetsPanel's orphan check: an
+ * attached asset whose ref_name isn't in this set is flagged as
+ * unreferenced (safe to delete).
+ *
+ * Not used by the preview rewrite — that path takes the authoritative
+ * attached-asset set from the server's `attached_assets` payload.
  */
 function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'): Set<string> {
   const out = new Set<string>();
