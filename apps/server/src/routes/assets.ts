@@ -66,11 +66,6 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
     return c.json({ error: 'file-too-large', limit: config.maxAssetBytes }, 413);
   }
 
-  const kindHint = form.get('kind');
-  const kind: AssetKind = isAssetKind(kindHint)
-    ? kindHint
-    : inferKind(file.type, refName);
-
   const bytes = new Uint8Array(await file.arrayBuffer());
   const assetId = await blobs.put(bytes);
   // Derive the served Content-Type from the ref_name extension only —
@@ -81,6 +76,12 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
   // every later attachment of the same bytes under a different
   // extension.
   const mime = inferMime(refName);
+  // Kind inference uses the server-derived mime (+ ref_name), not the
+  // client-supplied file.type. Clipboard paste sometimes delivers an
+  // empty file.type, which would misclassify an obvious image as
+  // `attachment`. Client can still force a kind via the form field.
+  const kindHint = form.get('kind');
+  const kind: AssetKind = isAssetKind(kindHint) ? kindHint : inferKind(mime, refName);
   const now = Date.now();
 
   // Wrap the metadata writes in a single transaction. Without this, a

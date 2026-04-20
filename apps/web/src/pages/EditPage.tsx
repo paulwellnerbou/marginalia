@@ -35,9 +35,11 @@ let rendererPromise: Promise<typeof import('@marginalia/renderer')> | null = nul
 /**
  * Scan the source for local asset references — `![alt](filename)` in
  * markdown, `image::filename[]` / `image:…[]` / `include::…[]` in
- * asciidoc. The returned set feeds the AssetsPanel's orphan check: an
+ * asciidoc. The returned set feeds the AssetsPanel's orphan hint: an
  * attached asset whose ref_name isn't in this set is flagged as
- * unreferenced (safe to delete).
+ * likely unreferenced by this heuristic scan. Deliberately narrow —
+ * raw HTML `<img src>` and other forms aren't detected, so the flag
+ * is a "probably safe to remove" hint, not a guarantee.
  *
  * Not used by the preview rewrite — that path takes the authoritative
  * attached-asset set from the server's `attached_assets` payload.

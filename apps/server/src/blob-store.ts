@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
+import { mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { S3Client, type S3Options } from 'bun';
 
@@ -24,7 +25,15 @@ export interface BlobStore {
   delete(key: string): Promise<void>;
 }
 
-/** Shelf layout: `<root>/<sha[0:2]>/<sha>` — one level of sharding. */
+/**
+ * Shelf layout: `<root>/<sha[0:2]>/<sha>` — one level of sharding.
+ *
+ * Uses async I/O via `Bun.file` + `node:fs/promises` on the request
+ * path. Bun is single-threaded, so sync readFile/writeFile on a
+ * 16 MiB blob would block the event loop and stall every concurrent
+ * request for the duration of the read. `mkdirSync` in the
+ * constructor is fine — it runs once at server start, not per request.
+ */
 export class FsBlobStore implements BlobStore {
   constructor(private readonly root: string) {
     mkdirSync(root, { recursive: true });
@@ -33,24 +42,26 @@ export class FsBlobStore implements BlobStore {
   async put(bytes: Uint8Array): Promise<string> {
     const key = sha256Hex(bytes);
     const path = this.pathFor(key);
-    if (!existsSync(path)) {
-      mkdirSync(join(this.root, key.slice(0, 2)), { recursive: true });
-      writeFileSync(path, bytes);
-    }
+    if (await Bun.file(path).exists()) return key;
+    await mkdir(join(this.root, key.slice(0, 2)), { recursive: true });
+    await Bun.write(path, bytes);
     return key;
   }
 
   async get(key: string): Promise<Uint8Array> {
-    return new Uint8Array(readFileSync(this.pathFor(key)));
+    return new Uint8Array(await Bun.file(this.pathFor(key)).arrayBuffer());
   }
 
   async has(key: string): Promise<boolean> {
-    return existsSync(this.pathFor(key));
+    return Bun.file(this.pathFor(key)).exists();
   }
 
   async delete(key: string): Promise<void> {
-    const path = this.pathFor(key);
-    if (existsSync(path)) rmSync(path, { force: true });
+    // `force: true` swallows ENOENT — matches the old rmSync behaviour
+    // where deleting a missing key was a no-op.
+    await unlink(this.pathFor(key)).catch((err) => {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    });
   }
 
   private pathFor(key: string): string {
