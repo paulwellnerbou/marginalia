@@ -311,6 +311,21 @@ ____
     expect(quoteWindow.trimEnd().endsWith('____')).toBe(true);
   });
 
+  test('open blocks (`--` delimiter) span opener to closer, not just one line', async () => {
+    const src = `[open]\n--\nFirst.\n\nSecond.\n--\n`;
+    const r = await renderAsciidoc(src);
+    const locs = locateAllBlocksAsciidoc(src);
+    const open = r.blocks.find((b) => b.kind === 'open');
+    expect(open).toBeTruthy();
+    const range = locs.get(open!.id);
+    expect(range).toBeTruthy();
+    const window = src.slice(range!.start, range!.end);
+    expect(window.startsWith('--')).toBe(true);
+    expect(window).toContain('First.');
+    expect(window).toContain('Second.');
+    expect(window.trimEnd().endsWith('--')).toBe(true);
+  });
+
   test('list item sub-block ids round-trip back to their source line', async () => {
     const src = `* alpha\n* bravo\n`;
     const r = await renderAsciidoc(src);

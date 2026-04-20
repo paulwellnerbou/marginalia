@@ -39,6 +39,7 @@ import {
   type DocumentBundle,
   type DocumentFormat,
   importDocumentBundle,
+  isDocumentFormat,
   uploadDocument,
 } from '../lib/api.js';
 import { deriveDisplayName, getClientId, getDisplayName, setDisplayName } from '../lib/identity.js';
@@ -435,6 +436,11 @@ function UploadDialog({
   const [createdUid, setCreatedUid] = useState<string | null>(null);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [createdTitle, setCreatedTitle] = useState<string>('Untitled');
+  // Snapshot of the created doc's format, taken at upload/import time so
+  // `openCreated()` writes the correct value into recent-docs even for
+  // paths where the dialog's `format` state is stale (e.g. JSON bundle
+  // import doesn't touch `format` — the bundle itself carries it).
+  const [createdFormat, setCreatedFormat] = useState<DocumentFormat>('markdown');
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
   // If the user already set a display name globally we use it silently.
@@ -491,6 +497,16 @@ function UploadDialog({
       setCreatedAdminUrl(adminUrl);
       setCreatedPassword(null);
       setCreatedTitle(res.name ?? bundle.document?.name ?? 'Untitled');
+      // The import response carries the server's format; fall back to
+      // the bundle's own field when talking to older servers that don't
+      // echo it back.
+      setCreatedFormat(
+        isDocumentFormat(res.format)
+          ? res.format
+          : isDocumentFormat(bundle.document?.format)
+            ? bundle.document.format
+            : 'markdown',
+      );
     } catch (err) {
       reportError('Home.importBundle', err, { fileName: file.name });
       const reason =
@@ -528,6 +544,7 @@ function UploadDialog({
       setCreatedToken(res.admin_invite.token);
       setCreatedAdminUrl(adminUrl);
       setCreatedTitle((res.name ?? effectiveDocName) || 'Untitled');
+      setCreatedFormat(res.format ?? format);
       if (res.password) setCreatedPassword(res.password);
     } catch (err) {
       reportError('Home.upload', err, { sourceLength: source.length, format });
@@ -554,6 +571,7 @@ function UploadDialog({
     setCreatedUid(null);
     setCreatedToken(null);
     setCreatedTitle('Untitled');
+    setCreatedFormat('markdown');
   }
 
   function openCreated() {
@@ -564,7 +582,7 @@ function UploadDialog({
       title: createdTitle,
       role: 'admin',
       password_protected: !!createdPassword,
-      format,
+      format: createdFormat,
       visited_at: Date.now(),
       updated_at: Date.now(),
     });

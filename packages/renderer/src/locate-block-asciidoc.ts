@@ -259,13 +259,21 @@ function sourceRange(
     return { start: startOffset, end: endOffset };
   }
 
-  // Compound delimited block (admonition / example / sidebar / quote /
-  // openblock / verse): asciidoctor reports zero own-lines and points at
-  // the delimiter. Scan forward for a line matching the same delimiter.
+  // Compound delimited block: asciidoctor reports zero own-lines and
+  // points at the delimiter. Scan forward for a line matching the same
+  // delimiter. Supported:
+  //   `====`  — example / admonition (block form)
+  //   `****`  — sidebar
+  //   `____`  — quote / verse
+  //   `----`  — listing (only reaches here if the block had no source
+  //             lines, which is rare but possible)
+  //   `....`  — literal
+  //   `++++`  — passthrough
+  //   `--`    — open block (the only two-char delimiter)
   const openingLine = readLine(source, idx, startLine);
-  const delimMatch = /^([=\-*._+])\1{3,}$/.exec(openingLine.trim());
-  if (delimMatch) {
-    const delim = openingLine.trim();
+  const delim = openingLine.trim();
+  const isDelimiter = delim === '--' || /^([=\-*._+])\1{3,}$/.test(delim);
+  if (isDelimiter) {
     for (let i = startLine + 1; i <= idx.starts.length; i++) {
       const candidate = readLine(source, idx, i).trim();
       if (candidate === delim) {

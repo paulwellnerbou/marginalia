@@ -119,11 +119,16 @@ type Visitor = (
 ) => void;
 
 function walk(tree: Root, visitor: Visitor): void {
+  // Document-order traversal so mermaid indices / `file.data.mermaid`
+  // entries match the block order the user sees — same semantics as
+  // `remarkMermaid` for the markdown pipeline. Replacements are
+  // in-place (parent.children[idx] = …), so they don't shift sibling
+  // indices; forward iteration is safe.
   const visit = (node: ElementContent | Root, parent: Element | Root | null, idx: number | undefined) => {
     visitor(node, parent, idx);
     const children = (node as { children?: ElementContent[] }).children;
     if (!children) return;
-    for (let i = children.length - 1; i >= 0; i--) {
+    for (let i = 0; i < children.length; i++) {
       const child = children[i]!;
       visit(child, node as Element | Root, i);
     }
