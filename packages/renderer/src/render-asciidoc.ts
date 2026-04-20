@@ -191,7 +191,7 @@ function recordSubBlock(item: AsciidoctorAbstractBlock, state: SubBlockState): v
   // derivation identical across formats, simplifying debugging.
   const id = computeSubBlockId('listItem', text, state.counts);
   state.entries.push({ id });
-  const markerRole = `__marginalia-subblock-${state.counter}`;
+  const markerRole = `${MARGINALIA_SUBBLOCK_MARKER_PREFIX}${state.counter}`;
   state.counter += 1;
   addRole(item, markerRole);
 }
@@ -290,7 +290,7 @@ function recordBlock(
   };
   state.blocks.push(info);
 
-  const markerRole = `__marginalia-block-${state.counter}`;
+  const markerRole = `${MARGINALIA_BLOCK_MARKER_PREFIX}${state.counter}`;
   state.counter += 1;
   addRole(block, markerRole);
 }

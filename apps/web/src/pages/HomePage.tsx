@@ -769,6 +769,27 @@ function UploadDialog({
 }
 
 /**
+ * Extension/MIME check shared by the two drop zones. The browser's
+ * `accept` attribute only gates the native file picker — it doesn't
+ * help with drag-and-drop, where any file the user drops reaches the
+ * onDrop handler. Keep the filter in one place so MarkdownDropZone
+ * (wrapping the textarea) and FileDropZone (the visible panel) can't
+ * drift and end up accepting different file types.
+ */
+function isAcceptedUploadFile(file: File): boolean {
+  if (file.type === 'text/markdown') return true;
+  const n = file.name.toLowerCase();
+  return (
+    n.endsWith('.md') ||
+    n.endsWith('.markdown') ||
+    n.endsWith('.mdx') ||
+    n.endsWith('.adoc') ||
+    n.endsWith('.asciidoc') ||
+    n.endsWith('.json')
+  );
+}
+
+/**
  * Wraps a child with drag/drop handlers that accept a markdown file or a
  * previously exported JSON bundle and call `onFile` with it. Shows a subtle overlay while a file is
  * being dragged over. Children are untouched by the drop (the drop just
@@ -783,19 +804,6 @@ function MarkdownDropZone({
 }) {
   const [over, setOver] = useState(false);
   const depth = useRef(0);
-
-  function isAcceptedFile(file: File): boolean {
-    if (file.type === 'text/markdown') return true;
-    const n = file.name.toLowerCase();
-    return (
-      n.endsWith('.md') ||
-      n.endsWith('.markdown') ||
-      n.endsWith('.mdx') ||
-      n.endsWith('.adoc') ||
-      n.endsWith('.asciidoc') ||
-      n.endsWith('.json')
-    );
-  }
 
   return (
     <div
@@ -825,7 +833,7 @@ function MarkdownDropZone({
         depth.current = 0;
         setOver(false);
         const file = e.dataTransfer.files?.[0];
-        if (file && isAcceptedFile(file)) void onFile(file);
+        if (file && isAcceptedUploadFile(file)) void onFile(file);
       }}
     >
       {children}
@@ -900,7 +908,11 @@ function FileDropZone({
         depth.current = 0;
         setOver(false);
         const file = e.dataTransfer.files?.[0];
-        if (file) void onFile(file);
+        // `accept=` on the hidden input gates the OS picker, but
+        // drag-and-drop bypasses it entirely. Apply the same filter
+        // MarkdownDropZone uses so binary / unsupported files don't
+        // reach onFile.
+        if (file && isAcceptedUploadFile(file)) void onFile(file);
       }}
     >
       <input
