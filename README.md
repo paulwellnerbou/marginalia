@@ -51,8 +51,10 @@ Asset endpoints (all gated by per-document authz; writes require
 - `GET    /api/documents/:uid/assets` — list attached assets
 - `POST   /api/documents/:uid/assets` — multipart upload (`file`,
   `ref_name`, optional `kind`)
-- `GET    /api/documents/:uid/assets/:refName` — fetch bytes (with
-  ETag + long `Cache-Control: private`)
+- `GET    /api/documents/:uid/assets/:refName` — fetch bytes (ETag +
+  `Cache-Control: private, max-age=0, must-revalidate` so access is
+  re-checked on every hit; non-image mimes are served as
+  `Content-Disposition: attachment`)
 - `DELETE /api/documents/:uid/assets/:refName` — detach (and GC the
   blob if nothing else references it)
 

@@ -70,9 +70,20 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   const assetId = await blobs.put(bytes);
-  const mime = file.type || inferMime(refName);
+  // Derive the served Content-Type from the ref_name extension only —
+  // never from `file.type`. Stored on the per-document junction row
+  // rather than on the globally-shared `assets` row: blobs are
+  // content-addressed, so writing mime to `assets` would let the first
+  // uploader of a given sha256 control how the bytes are served to
+  // every later attachment of the same bytes under a different
+  // extension.
+  const mime = inferMime(refName);
   const now = Date.now();
 
+  // `assets.mime` is legacy — the authoritative Content-Type now lives
+  // on the per-document junction row. We still populate it on insert
+  // because the column is NOT NULL and the data is harmless to keep.
+  // A future migration can drop the column once nothing reads it.
   db.prepare(
     `INSERT OR IGNORE INTO assets (id, mime, size, created_at)
      VALUES (?, ?, ?, ?)`,
@@ -88,14 +99,16 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
     .get(doc.uid, refName) as { asset_id: string } | undefined;
 
   db.prepare(
-    `INSERT INTO document_assets (doc_uid, ref_name, asset_id, kind, created_at, created_by)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO document_assets
+       (doc_uid, ref_name, asset_id, kind, mime, created_at, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(doc_uid, ref_name) DO UPDATE SET
        asset_id = excluded.asset_id,
        kind = excluded.kind,
+       mime = excluded.mime,
        created_at = excluded.created_at,
        created_by = excluded.created_by`,
-  ).run(doc.uid, refName, assetId, kind, now, decision.identity.displayName);
+  ).run(doc.uid, refName, assetId, kind, mime, now, decision.identity.displayName);
 
   if (prior && prior.asset_id !== assetId) {
     await gcAssetIfOrphan(db, blobs, prior.asset_id);
@@ -117,7 +130,7 @@ async function fetchAsset(c: Context, { db, blobs }: AssetsDeps) {
 
   const row = db
     .prepare(
-      `SELECT da.ref_name, da.asset_id, da.kind, a.mime, a.size
+      `SELECT da.ref_name, da.asset_id, da.kind, da.mime, a.size
          FROM document_assets da
          JOIN assets a ON a.id = da.asset_id
          WHERE da.doc_uid = ? AND da.ref_name = ?`,
@@ -135,13 +148,20 @@ async function fetchAsset(c: Context, { db, blobs }: AssetsDeps) {
   // access is still valid — content is sha256-addressed so the ETag
   // only changes when the bytes change.
   const cacheControl = 'private, max-age=0, must-revalidate';
-  const ifNoneMatch = c.req.header('if-none-match');
   const etag = `"${row.asset_id}"`;
+  // `nosniff` stops the browser from guessing a more permissive type
+  // (e.g. executing `application/octet-stream` as JavaScript because
+  // the bytes start with `<script>`). Combined with attachment
+  // disposition for non-image mimes, this closes the usual
+  // user-upload-served-same-origin XSS paths.
+  const commonHeaders: Record<string, string> = {
+    ETag: etag,
+    'Cache-Control': cacheControl,
+    'X-Content-Type-Options': 'nosniff',
+  };
+  const ifNoneMatch = c.req.header('if-none-match');
   if (ifNoneMatch === etag) {
-    return c.body(null, 304, {
-      ETag: etag,
-      'Cache-Control': cacheControl,
-    });
+    return c.body(null, 304, commonHeaders);
   }
 
   let bytes: Uint8Array;
@@ -154,16 +174,31 @@ async function fetchAsset(c: Context, { db, blobs }: AssetsDeps) {
   // Response accepts Uint8Array directly; no need to unwrap to ArrayBuffer
   // (and `bytes.buffer` might be SharedArrayBuffer, which Response doesn't
   // take). The body encoder will copy the view's byte range.
-  return new Response(bytes as BodyInit, {
-    status: 200,
-    headers: {
-      'Content-Type': row.mime,
-      'Content-Length': String(row.size),
-      ETag: etag,
-      'Cache-Control': cacheControl,
-    },
-  });
+  const headers: Record<string, string> = {
+    ...commonHeaders,
+    'Content-Type': row.mime,
+    'Content-Length': String(row.size),
+  };
+  // Only raster image types get rendered inline. SVG is deliberately
+  // excluded (can embed scripts that execute when opened standalone),
+  // as is anything non-image. Attachment disposition means a direct
+  // visit to the asset URL downloads rather than executes.
+  if (!INLINE_SAFE_MIMES.has(row.mime)) {
+    headers['Content-Disposition'] = 'attachment';
+  }
+  return new Response(bytes as BodyInit, { status: 200, headers });
 }
+
+const INLINE_SAFE_MIMES: ReadonlySet<string> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'image/bmp',
+  'image/x-icon',
+  'image/vnd.microsoft.icon',
+]);
 
 async function deleteAsset(c: Context, { db, blobs }: AssetsDeps) {
   const doc = loadDoc(db, c.req.param('uid'));
@@ -171,6 +206,11 @@ async function deleteAsset(c: Context, { db, blobs }: AssetsDeps) {
 
   const decision = authorizeDoc(c, db, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  // Match the rest of the write path: identity is required before we
+  // touch any table. Generic invites that don't supply a header-backed
+  // name can't delete — same gate as updateDocument + uploadAsset, so
+  // audit logs stay attributable.
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   const refName = decodeRefName(c.req.param('refName'));
@@ -203,8 +243,8 @@ export async function gcAssetIfOrphan(
   assetId: string,
 ): Promise<void> {
   const row = db
-    .prepare('SELECT 1 FROM document_assets WHERE asset_id = ? LIMIT 1')
-    .get(assetId) as { 1: number } | undefined;
+    .prepare('SELECT 1 AS present FROM document_assets WHERE asset_id = ? LIMIT 1')
+    .get(assetId) as { present: number } | undefined;
   if (row) return;
   db.prepare('DELETE FROM assets WHERE id = ?').run(assetId);
   try {
@@ -228,8 +268,8 @@ export interface AttachedAsset {
 export function listAttached(db: Database, docUid: string): AttachedAsset[] {
   return db
     .prepare(
-      `SELECT da.ref_name, da.asset_id, da.kind, da.created_at, da.created_by,
-              a.mime, a.size
+      `SELECT da.ref_name, da.asset_id, da.kind, da.mime, da.created_at,
+              da.created_by, a.size
          FROM document_assets da
          JOIN assets a ON a.id = da.asset_id
          WHERE da.doc_uid = ?
@@ -242,8 +282,8 @@ function loadAttached(db: Database, docUid: string, refName: string): AttachedAs
   return (
     (db
       .prepare(
-        `SELECT da.ref_name, da.asset_id, da.kind, da.created_at, da.created_by,
-                a.mime, a.size
+        `SELECT da.ref_name, da.asset_id, da.kind, da.mime, da.created_at,
+                da.created_by, a.size
            FROM document_assets da
            JOIN assets a ON a.id = da.asset_id
            WHERE da.doc_uid = ? AND da.ref_name = ?`,

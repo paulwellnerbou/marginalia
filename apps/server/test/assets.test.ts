@@ -262,6 +262,79 @@ describe('assets API', () => {
     ).toBe(0);
   });
 
+  test('stored mime is derived from ref_name, ignoring the client-sent type', async () => {
+    const doc = await upload();
+    // Lie about the content: client says text/html, server must ignore it
+    // and use the .png extension from ref_name → image/png.
+    const up = await putAsset(
+      doc.uid,
+      doc.admin_invite.token,
+      'cat.png',
+      new Uint8Array([1, 2, 3]),
+      'text/html',
+    );
+    expect(up.status).toBe(201);
+    const body = (await up.json()) as { asset: { mime: string } };
+    expect(body.asset.mime).toBe('image/png');
+  });
+
+  test('GET sends X-Content-Type-Options: nosniff', async () => {
+    const doc = await upload();
+    await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', new Uint8Array([1]));
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+        method: 'GET',
+        headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  test('GET images stay inline; unknown/non-image mimes get attachment disposition', async () => {
+    const doc = await upload();
+    await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', new Uint8Array([1]));
+    // Unknown extension → application/octet-stream → must force download.
+    await putAsset(
+      doc.uid,
+      doc.admin_invite.token,
+      'data.bin',
+      new Uint8Array([1]),
+      'application/octet-stream',
+    );
+
+    const img = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+        method: 'GET',
+        headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    expect(img.headers.get('content-disposition')).toBeNull();
+
+    const bin = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/data.bin`, {
+        method: 'GET',
+        headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    expect(bin.headers.get('content-disposition')).toBe('attachment');
+  });
+
+  test('DELETE requires an identity (matches upload + updateDocument)', async () => {
+    const doc = await upload();
+    await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', new Uint8Array([1]));
+    // An invite alone isn't enough — the request must carry identity
+    // headers too. Send only the invite token, no CLIENT_HEADER.
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+        method: 'DELETE',
+        headers: new Headers({ [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toBe('identity-required');
+  });
+
   test('GET sends Cache-Control: must-revalidate so revoked access is re-checked', async () => {
     const doc = await upload();
     await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', new Uint8Array([1, 2]));

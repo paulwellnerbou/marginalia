@@ -141,6 +141,14 @@ CREATE TABLE IF NOT EXISTS document_assets (
   ref_name    TEXT NOT NULL,
   asset_id    TEXT NOT NULL,
   kind        TEXT NOT NULL DEFAULT 'image',
+  -- Content-Type served to browsers when this specific attachment is
+  -- fetched. Derived server-side from the ref_name extension on upload
+  -- (never from client-supplied file.type). Per-junction so two docs
+  -- referencing the same bytes under different extensions each get
+  -- their own Content-Type -- avoids a shared mime column in the
+  -- assets table where the first uploader would otherwise control the
+  -- type for every later attachment of the same sha256.
+  mime        TEXT NOT NULL DEFAULT 'application/octet-stream',
   created_at  INTEGER NOT NULL,
   created_by  TEXT NOT NULL,
   PRIMARY KEY (doc_uid, ref_name)
@@ -286,6 +294,7 @@ export interface DocumentAssetRow {
   ref_name: string;
   asset_id: string;
   kind: AssetKind;
+  mime: string;
   created_at: number;
   created_by: string;
 }
@@ -323,6 +332,12 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments', 'anchor_section_index_path', 'TEXT');
   ensureColumn(db, 'comments', 'parent_proposal_id', 'TEXT');
   ensureColumn(db, 'documents', 'format', "TEXT NOT NULL DEFAULT 'markdown'");
+  ensureColumn(
+    db,
+    'document_assets',
+    'mime',
+    "TEXT NOT NULL DEFAULT 'application/octet-stream'",
+  );
   // Legacy 'commentor' rows → 'collaborator' (same server-side behavior).
   db.exec(`UPDATE invites SET role = 'collaborator' WHERE role = 'commentor'`);
   migrateInvitesKind(db);
