@@ -83,35 +83,44 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
   const mime = inferMime(refName);
   const now = Date.now();
 
-  // `assets.mime` is legacy — the authoritative Content-Type now lives
-  // on the per-document junction row. We still populate it on insert
-  // because the column is NOT NULL and the data is harmless to keep.
-  // A future migration can drop the column once nothing reads it.
-  db.prepare(
-    `INSERT OR IGNORE INTO assets (id, mime, size, created_at)
-     VALUES (?, ?, ?, ?)`,
-  ).run(assetId, mime, file.size, now);
+  // Wrap the metadata writes in a single transaction. Without this, a
+  // concurrent gcAssetIfOrphan() running between the `assets` insert
+  // and the junction upsert could observe "assets row exists, no
+  // references yet" and GC the asset_id before the junction row lands,
+  // leaving the upsert pointing at a deleted `assets` row. The `assets`
+  // mime column is legacy — the authoritative Content-Type lives on the
+  // per-document junction row; we still populate the NOT NULL column
+  // until a later migration drops it.
+  //
+  // Capture the narrowed identity name outside the transaction closure;
+  // TypeScript drops the non-null narrowing inside the callback body.
+  const createdBy = decision.identity.displayName;
+  const prior = db.transaction(() => {
+    db.prepare(
+      `INSERT OR IGNORE INTO assets (id, mime, size, created_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run(assetId, mime, file.size, now);
 
-  // Capture the prior asset_id (if any) so we can GC the old blob after
-  // the row flips to the new one. A second upload with the same ref_name
-  // replaces the attachment in place.
-  const prior = db
-    .prepare(
-      'SELECT asset_id FROM document_assets WHERE doc_uid = ? AND ref_name = ?',
-    )
-    .get(doc.uid, refName) as { asset_id: string } | undefined;
+    const existing = db
+      .prepare(
+        'SELECT asset_id FROM document_assets WHERE doc_uid = ? AND ref_name = ?',
+      )
+      .get(doc.uid, refName) as { asset_id: string } | undefined;
 
-  db.prepare(
-    `INSERT INTO document_assets
-       (doc_uid, ref_name, asset_id, kind, mime, created_at, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(doc_uid, ref_name) DO UPDATE SET
-       asset_id = excluded.asset_id,
-       kind = excluded.kind,
-       mime = excluded.mime,
-       created_at = excluded.created_at,
-       created_by = excluded.created_by`,
-  ).run(doc.uid, refName, assetId, kind, mime, now, decision.identity.displayName);
+    db.prepare(
+      `INSERT INTO document_assets
+         (doc_uid, ref_name, asset_id, kind, mime, created_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(doc_uid, ref_name) DO UPDATE SET
+         asset_id = excluded.asset_id,
+         kind = excluded.kind,
+         mime = excluded.mime,
+         created_at = excluded.created_at,
+         created_by = excluded.created_by`,
+    ).run(doc.uid, refName, assetId, kind, mime, now, createdBy);
+
+    return existing;
+  })();
 
   if (prior && prior.asset_id !== assetId) {
     await gcAssetIfOrphan(db, blobs, prior.asset_id);
@@ -263,11 +272,20 @@ export async function gcAssetIfOrphan(
   blobs: BlobStore,
   assetId: string,
 ): Promise<void> {
-  const row = db
-    .prepare('SELECT 1 AS present FROM document_assets WHERE asset_id = ? LIMIT 1')
-    .get(assetId) as { present: number } | undefined;
-  if (row) return;
-  db.prepare('DELETE FROM assets WHERE id = ?').run(assetId);
+  // Atomic check-then-delete: a single statement whose `NOT EXISTS`
+  // predicate is evaluated against the same snapshot as the DELETE.
+  // A concurrent upload that INSERTs into document_assets between
+  // the old check+delete pair would slip through (and lose its
+  // `assets` row); folding both into one SQL statement closes that
+  // window without needing an explicit transaction.
+  const res = db
+    .prepare(
+      `DELETE FROM assets
+         WHERE id = ?
+           AND NOT EXISTS (SELECT 1 FROM document_assets WHERE asset_id = ?)`,
+    )
+    .run(assetId, assetId);
+  if (res.changes === 0) return;
   try {
     await blobs.delete(assetId);
   } catch {

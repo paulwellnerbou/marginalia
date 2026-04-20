@@ -237,7 +237,13 @@ async function request<T>(
   init: RequestInit & { identity?: Identity | null; docUid?: string; _retry?: boolean } = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
-  headers.set('content-type', 'application/json');
+  // Don't set a content-type for FormData — the browser fills in
+  // `multipart/form-data; boundary=...` on its own, and forcing a
+  // content-type here would break the boundary. Only set JSON when
+  // the caller didn't supply a body of another shape.
+  if (!(init.body instanceof FormData) && !headers.has('content-type')) {
+    headers.set('content-type', 'application/json');
+  }
 
   const identity = init.identity ?? fallbackIdentity();
   const clientId = identity?.clientId ?? getClientId();
@@ -355,46 +361,26 @@ export function listAttachedAssets(uid: string): Promise<{ assets: AttachedAsset
   );
 }
 
-export async function uploadAsset(
+export function uploadAsset(
   uid: string,
   refName: string,
   file: File | Blob,
   identity: Identity,
   kind?: AssetKind,
 ): Promise<{ asset: AttachedAsset }> {
-  // Multipart bodies don't go through `request()`: that helper forces a
-  // JSON content-type and reads the body once. We still send the usual
-  // identity + invite headers so authz matches.
-  const headers = new Headers();
-  headers.set('x-marginalia-client', identity.clientId);
-  if (identity.displayName) {
-    headers.set('x-marginalia-client-name', encodeHeaderValue(identity.displayName));
-  }
-  const token = loadInviteToken(uid);
-  if (token) headers.set('x-marginalia-invite', token);
-
   const form = new FormData();
   form.append('file', file, fileName(refName, file));
   form.append('ref_name', refName);
   if (kind) form.append('kind', kind);
-
-  const res = await fetch(`/api/documents/${encodeURIComponent(uid)}/assets`, {
-    method: 'POST',
-    headers,
-    body: form,
-    credentials: 'include',
-  });
-  if (!res.ok) {
-    let code = 'unknown';
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (body.error) code = body.error;
-    } catch {
-      /* ignore */
-    }
-    throw new ApiError(res.status, code);
-  }
-  return (await res.json()) as { asset: AttachedAsset };
+  // Route through `request()` (which now handles FormData bodies) so
+  // the shared 401/password-required wait+retry gate applies —
+  // otherwise an upload against a password-protected doc with an
+  // expired session would just fail silently instead of triggering
+  // the password prompt.
+  return request<{ asset: AttachedAsset }>(
+    `/api/documents/${encodeURIComponent(uid)}/assets`,
+    { method: 'POST', body: form, identity, docUid: uid },
+  );
 }
 
 export function deleteAttachedAsset(

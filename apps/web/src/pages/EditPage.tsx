@@ -291,7 +291,11 @@ export function EditPage() {
   const handleDeleteAsset = useCallback(
     async (refName: string) => {
       if (!uid) return;
-      const resolvedName = (name || getDisplayName() || '').trim() || 'unknown';
+      const resolvedName = (name || getDisplayName() || '').trim();
+      if (!resolvedName) {
+        setError('Enter a display name before deleting assets.');
+        return;
+      }
       try {
         await deleteAttachedAsset(uid, refName, {
           clientId: getClientId(),
