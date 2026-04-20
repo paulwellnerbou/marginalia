@@ -51,4 +51,15 @@ describe('rewriteAssetReferences', () => {
     });
     expect(out).toContain('src="/api/documents/DOC/assets/images/diagram.png"');
   });
+
+  test('leaves dot-segment paths alone (server rejects them; no dropzone UX)', async () => {
+    const { html } = await render('![](../escape.png)\n![](./here.png)\n');
+    const out = await rewriteAssetReferences(html, {
+      docUid: 'DOC',
+      attached: new Set(),
+    });
+    expect(out).toContain('src="../escape.png"');
+    expect(out).toContain('src="./here.png"');
+    expect(out).not.toContain('data-missing-asset');
+  });
 });

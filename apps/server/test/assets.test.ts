@@ -262,6 +262,22 @@ describe('assets API', () => {
     ).toBe(0);
   });
 
+  test('GET sends Cache-Control: must-revalidate so revoked access is re-checked', async () => {
+    const doc = await upload();
+    await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', new Uint8Array([1, 2]));
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+        method: 'GET',
+        headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const cc = res.headers.get('cache-control') ?? '';
+    expect(cc).toContain('must-revalidate');
+    expect(cc).toContain('max-age=0');
+    expect(cc).toContain('private');
+  });
+
   test('refuses path traversal in ref_name', async () => {
     const doc = await upload();
     const form = new FormData();

@@ -127,12 +127,20 @@ async function fetchAsset(c: Context, { db, blobs }: AssetsDeps) {
     | undefined;
   if (!row) return c.json({ error: 'not-found' }, 404);
 
+  // `max-age=0, must-revalidate` forces the browser to re-issue a
+  // conditional request on every access. authz runs before we answer
+  // 304, so a user whose invite was revoked (or whose session expired
+  // for a password-protected doc) can't keep viewing a cached asset.
+  // The ETag still lets the server skip re-streaming the bytes when
+  // access is still valid — content is sha256-addressed so the ETag
+  // only changes when the bytes change.
+  const cacheControl = 'private, max-age=0, must-revalidate';
   const ifNoneMatch = c.req.header('if-none-match');
   const etag = `"${row.asset_id}"`;
   if (ifNoneMatch === etag) {
     return c.body(null, 304, {
       ETag: etag,
-      'Cache-Control': 'private, max-age=31536000',
+      'Cache-Control': cacheControl,
     });
   }
 
@@ -152,7 +160,7 @@ async function fetchAsset(c: Context, { db, blobs }: AssetsDeps) {
       'Content-Type': row.mime,
       'Content-Length': String(row.size),
       ETag: etag,
-      'Cache-Control': 'private, max-age=31536000',
+      'Cache-Control': cacheControl,
     },
   });
 }

@@ -47,6 +47,12 @@ export async function rewriteAssetReferences(
         if (node.tagName !== 'img') return;
         const src = getStringProp(node, 'src');
         if (!src || isAbsoluteUrl(src)) return;
+        // Must mirror the server's normalizeRefName() in routes/assets.ts:
+        // dot-segment paths (`./foo.png`, `../escape.png`) cannot be
+        // uploaded or fetched through the proxy. Leaving them unchanged
+        // is friendlier than tagging them `data-missing-asset` and
+        // showing an editor a dropzone whose upload would always 400.
+        if (hasDotSegment(src)) return;
         const refName = src;
         const props = { ...(node.properties ?? {}) };
         if (opts.attached.has(refName)) {
@@ -83,6 +89,10 @@ function isAbsoluteUrl(src: string): boolean {
   if (src.startsWith('//')) return true;
   if (/^[a-z][a-z0-9+.-]*:/i.test(src)) return true;
   return false;
+}
+
+function hasDotSegment(src: string): boolean {
+  return src.split(/[\\/]+/).some((seg) => seg === '.' || seg === '..');
 }
 
 /**

@@ -120,9 +120,10 @@ CREATE TABLE IF NOT EXISTS edit_proposals (
 CREATE INDEX IF NOT EXISTS idx_proposals_doc ON edit_proposals(doc_uid);
 
 -- Content-addressed blob metadata. One row per unique sha256; reused
--- across documents via document_assets. Rows aren't deleted when the
--- last reference goes away — a separate gc pass is responsible for that
--- (not yet implemented).
+-- across documents via document_assets. Rows are GC'd inline (see
+-- gcAssetIfOrphan in routes/assets.ts) when the last document_assets
+-- reference is detached — by explicit delete, replace-upload with
+-- different bytes, or document deletion cascade.
 CREATE TABLE IF NOT EXISTS assets (
   id          TEXT PRIMARY KEY,       -- hex sha256 of the bytes
   mime        TEXT NOT NULL,
