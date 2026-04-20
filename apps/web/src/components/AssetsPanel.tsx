@@ -31,8 +31,19 @@ export function AssetsPanel({
 
   function handleAdd(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const ref = file.name;
+    if (!file) {
+      e.target.value = '';
+      return;
+    }
+    // Trim to match the server's normalizeRefName(). Otherwise a
+    // filename with surrounding whitespace round-trips to a different
+    // stored name than the one we pushed into local state, producing
+    // duplicate React keys after the server reply lands.
+    const ref = file.name.trim();
+    if (!ref) {
+      e.target.value = '';
+      return;
+    }
     onAdd(file, ref);
     e.target.value = '';
   }
@@ -72,7 +83,11 @@ export function AssetsPanel({
               </div>
               {canEdit && (
                 <>
-                  <ReplaceButton refName={asset.ref_name} onReplace={onReplace} />
+                  <ReplaceButton
+                    refName={asset.ref_name}
+                    kind={asset.kind}
+                    onReplace={onReplace}
+                  />
                   <IconButton
                     variant="ghost"
                     color="gray"
@@ -111,21 +126,30 @@ export function AssetsPanel({
 
 function ReplaceButton({
   refName,
+  kind,
   onReplace,
 }: {
   refName: string;
+  kind: AttachedAsset['kind'];
   onReplace: (refName: string, file: File) => void;
 }) {
   const ref = useRef<HTMLInputElement>(null);
+  // Server derives the served Content-Type from ref_name, so replacing
+  // e.g. `cat.png` with a PDF would store the bytes but serve them as
+  // image/png → a permanently broken image. Gate the picker by asset
+  // kind; the runtime check covers drops through the underlying input
+  // that `accept` can't enforce on its own.
+  const accept = kind === 'image' ? 'image/*' : undefined;
   return (
     <label style={{ display: 'inline-flex' }}>
       <input
         ref={ref}
         type="file"
         style={{ display: 'none' }}
+        {...(accept ? { accept } : {})}
         onChange={(e) => {
           const file = e.target.files?.[0];
-          if (file) onReplace(refName, file);
+          if (file && isKindCompatible(file, kind)) onReplace(refName, file);
           e.target.value = '';
         }}
       />
@@ -139,6 +163,15 @@ function ReplaceButton({
       </button>
     </label>
   );
+}
+
+function isKindCompatible(file: File, kind: AttachedAsset['kind']): boolean {
+  if (kind !== 'image') return true;
+  // Drag-drop / clipboard files occasionally carry an empty `type`;
+  // treat that as non-image so a broken replacement isn't accepted
+  // silently. Legitimate image picks always populate `type` from the
+  // file extension.
+  return file.type.startsWith('image/');
 }
 
 function formatBytes(n: number): string {

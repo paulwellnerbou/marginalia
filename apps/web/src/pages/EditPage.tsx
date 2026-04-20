@@ -284,9 +284,11 @@ export function EditPage() {
           file,
           { clientId: getClientId(), displayName: resolvedName },
         );
-        // Upsert: replace any existing row for the same refName.
+        // Upsert keyed on the server-returned canonical ref_name. Using
+        // the caller-supplied `refName` could leave a duplicate if the
+        // server normalized it (e.g. trimmed surrounding whitespace).
         setAttached((prev) => {
-          const next = prev.filter((a) => a.ref_name !== refName);
+          const next = prev.filter((a) => a.ref_name !== asset.ref_name);
           next.push(asset);
           return next;
         });
@@ -316,6 +318,7 @@ export function EditPage() {
       } catch (err) {
         reportError('EditPage.deleteAsset', err, { uid, refName });
         if (err instanceof ApiError) setError(`Delete failed: ${err.status} ${err.code}`);
+        else setError('Delete failed');
       }
     },
     [uid, name],
