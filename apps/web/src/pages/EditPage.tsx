@@ -466,7 +466,7 @@ export function EditPage() {
             canEdit={canEdit}
             onReplace={uploadAndAttach}
             onDelete={handleDeleteAsset}
-            onAdd={(file, refName) => uploadAndAttach(refName, file)}
+            onAdd={uploadAndAttach}
           />
         )}
       </div>

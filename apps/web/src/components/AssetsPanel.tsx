@@ -10,7 +10,9 @@ interface AssetsPanelProps {
   referencedRefs: ReadonlySet<string>;
   onReplace: (refName: string, file: File) => void;
   onDelete: (refName: string) => void;
-  onAdd: (file: File, refName: string) => void;
+  // Callers match the (refName, file) shape used by the other write
+  // callbacks so the panel can wire them up without adapters.
+  onAdd: (refName: string, file: File) => void;
   canEdit: boolean;
 }
 
@@ -44,7 +46,7 @@ export function AssetsPanel({
       e.target.value = '';
       return;
     }
-    onAdd(file, ref);
+    onAdd(ref, file);
     e.target.value = '';
   }
 

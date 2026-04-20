@@ -407,25 +407,14 @@ function buildMissingAssetPlaceholder(
     const file = e.dataTransfer?.files?.[0];
     if (file && isImageFile(file)) cbRef.current?.(refName, file);
   });
+  // Pointer users click the card; keyboard + assistive-tech users
+  // reach the native <input type="file"> directly (it's already
+  // focusable and announced as "Choose file, Upload <refName>" via
+  // its aria-label). Giving the container its own role="button" +
+  // tabindex would create two tab stops for a single logical
+  // control — confusing to screen readers.
   placeholder.addEventListener('click', (e) => {
     if (e.target === input) return;
-    input.click();
-  });
-  // Keyboard affordance: focusable, named by the label, activatable
-  // with Enter/Space. Without this, keyboard + screen-reader users
-  // can't trigger the upload, only mouse users.
-  placeholder.setAttribute('role', 'button');
-  placeholder.setAttribute('tabindex', '0');
-  placeholder.setAttribute(
-    'aria-label',
-    `Upload missing image ${refName}. Drop a file or press Enter to browse.`,
-  );
-  placeholder.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    // Ignore key presses that originated inside the file input itself
-    // (native file pickers route Enter/Space through the button).
-    if (e.target === input) return;
-    e.preventDefault();
     input.click();
   });
   return placeholder;
