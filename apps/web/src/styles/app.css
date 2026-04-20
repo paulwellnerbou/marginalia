@@ -689,9 +689,14 @@ button.primary:disabled {
   cursor: pointer;
   transition: border-color 120ms ease, background 120ms ease;
 }
-.missing-asset--editable:hover {
+.missing-asset--editable:hover,
+.missing-asset--editable:focus-visible {
   border-color: var(--accent-9);
   background: var(--accent-a2);
+}
+.missing-asset--editable:focus-visible {
+  outline: 2px solid var(--accent-9);
+  outline-offset: 2px;
 }
 .missing-asset--over {
   border-color: var(--accent-9);

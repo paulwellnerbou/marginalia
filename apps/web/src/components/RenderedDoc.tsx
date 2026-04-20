@@ -406,6 +406,23 @@ function buildMissingAssetPlaceholder(
     if (e.target === input) return;
     input.click();
   });
+  // Keyboard affordance: focusable, named by the label, activatable
+  // with Enter/Space. Without this, keyboard + screen-reader users
+  // can't trigger the upload, only mouse users.
+  placeholder.setAttribute('role', 'button');
+  placeholder.setAttribute('tabindex', '0');
+  placeholder.setAttribute(
+    'aria-label',
+    `Upload missing image ${refName}. Drop a file or press Enter to browse.`,
+  );
+  placeholder.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    // Ignore key presses that originated inside the file input itself
+    // (native file pickers route Enter/Space through the button).
+    if (e.target === input) return;
+    e.preventDefault();
+    input.click();
+  });
   return placeholder;
 }
 
