@@ -61,6 +61,9 @@ export async function rewriteAssetReferences(
           props['data-asset-ref'] = refName;
         } else {
           props['data-missing-asset'] = refName;
+          // Prevent the browser from trying to fetch the unresolved
+          // relative URL before the UI swaps in a placeholder/dropzone.
+          props.src = 'data:,';
         }
         node.properties = props;
       });
