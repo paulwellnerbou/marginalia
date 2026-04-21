@@ -42,6 +42,7 @@ interface Props {
   onDeleteReply: (commentId: string) => Promise<void> | void;
   onScrollToAnchor: (blockId: string) => void;
   threadFocused: boolean;
+  threadFlashPhase?: 'a' | 'b' | null;
   collapsed: boolean;
   needsName: boolean;
   onToggleCollapsed: () => void;
@@ -51,7 +52,7 @@ export function EditProposalItem({
   uid,
   proposal, replies, docSource, blockRanges, canEdit, canComment, mentionCandidates, isDocAdmin,
   onAccept, onReject, onDelete, onEditRationale, onReply, onEditReply, onDeleteReply,
-  onScrollToAnchor, threadFocused, collapsed, needsName,
+  onScrollToAnchor, threadFocused, threadFlashPhase, collapsed, needsName,
   onToggleCollapsed,
 }: Props) {
   const [diffOpen, setDiffOpen] = useState(false);
@@ -75,7 +76,7 @@ export function EditProposalItem({
 
   const headerBadges = (
     <Flex gap="1" align="center" wrap="wrap">
-      <Badge color="blue" variant="soft">Proposed change</Badge>
+      <Badge variant="soft">Proposed change</Badge>
       {proposal.status === 'accepted' && (
         <Badge color="green" variant="soft">
           Accepted{proposal.decided_by_name ? ` by ${proposal.decided_by_name}` : ''}
@@ -218,6 +219,7 @@ export function EditProposalItem({
         toolbarActions={toolbarActions}
         headerBadge={headerBadges}
         focused={threadFocused}
+        flashPhase={threadFlashPhase}
         collapsed={collapsed}
         className={`proposal proposal-${proposal.status}`}
         onToggleCollapsed={onToggleCollapsed}

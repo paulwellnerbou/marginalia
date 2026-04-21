@@ -1,5 +1,6 @@
 import { Badge } from '@radix-ui/themes';
 import type { DocumentFormat } from '../lib/api.js';
+import { appFormatColor } from '../styles/theme.js';
 
 /**
  * Tiny badge that surfaces a document's source flavour — `MARKDOWN` or
@@ -8,10 +9,9 @@ import type { DocumentFormat } from '../lib/api.js';
  * writing in.
  */
 export function FormatBadge({ format }: { format: DocumentFormat }) {
-  const color = format === 'asciidoc' ? 'purple' : 'blue';
   const label = format === 'asciidoc' ? 'ASCIIDOC' : 'MARKDOWN';
   return (
-    <Badge variant="soft" color={color} size="1" className="format-badge">
+    <Badge variant="soft" color={appFormatColor(format)} size="1" className="format-badge">
       {label}
     </Badge>
   );

@@ -1,14 +1,8 @@
-/* App-chrome CSS variables are redirected to Radix Theme tokens so they
-   track the active appearance (light/dark) automatically. */
+/* Layout + control sizing tokens. Color and palette decisions live in
+   styles/theme.css so we can retune the app without chasing values across
+   the whole stylesheet. */
 :root,
 .radix-themes {
-  --ui-bg: var(--color-background);
-  --ui-surface: var(--color-panel-solid);
-  --ui-border: var(--gray-6);
-  --ui-fg: var(--gray-12);
-  --ui-fg-muted: var(--gray-11);
-  --ui-accent: var(--accent-9);
-  --ui-danger: var(--red-9);
   --ui-font: var(--default-font-family, ui-sans-serif, system-ui, sans-serif);
   --ui-control-height: 36px;
   --ui-control-radius: 8px;
@@ -227,13 +221,7 @@ button.primary:disabled {
 
 .app-bar {
   border-bottom: 1px solid var(--gray-a5);
-  /* Cool horizontal wash staying inside a calm blue-green family — no
-     warning-color connotations for a document review tool. Indigo on the
-     left fades through the panel tint into a teal tail on the right. Both
-     stops are Radix alpha tokens so the bar keeps its character in dark
-     appearance without turning muddy. */
-  background: linear-gradient(90deg, var(--accent-a3) 0%, transparent 45%, var(--teal-a3) 100%),
-    var(--color-panel-solid);
+  background: var(--ui-app-bar-bg);
   height: var(--app-bar-height);
   position: sticky;
   top: 0;
@@ -264,18 +252,17 @@ button.primary:disabled {
   font-family: var(--default-font-family);
   font-weight: 700;
   font-size: 1.4rem;
-  line-height: 1.08;
+  line-height: 1.14;
+  padding-bottom: 0.05em;
   letter-spacing: -0.035em;
-  /* Reuse the home-page title's warmer accent→ruby→ink gradient, but at a
-     calmer scale so the app bar still behaves like navigation chrome. */
-  background: linear-gradient(120deg, var(--accent-11) 0%, var(--ruby-11) 48%, var(--gray-12) 100%);
+  background: var(--ui-title-gradient);
   -webkit-background-clip: text;
   background-clip: text;
-  color: var(--accent-11);
+  color: var(--ui-accent-strong);
   -webkit-text-fill-color: transparent;
 }
 .app-brand:focus-visible {
-  outline: 2px solid var(--accent-8);
+  outline: 2px solid var(--ui-accent-focus);
   outline-offset: 4px;
   border-radius: 0.35rem;
 }
@@ -392,10 +379,7 @@ button.primary:disabled {
 
 .doc-chrome {
   border-bottom: 1px solid var(--gray-a5);
-  /* Very subtle tint — weaker than .app-bar so the two bars are visually
-     distinguishable but part of the same family. */
-  background: linear-gradient(90deg, var(--accent-a2) 0%, transparent 60%, var(--teal-a2) 100%),
-    var(--color-panel-solid);
+  background: var(--ui-doc-chrome-bg);
   height: var(--doc-chrome-height);
 }
 .doc-chrome-right {
@@ -639,20 +623,33 @@ button.primary:disabled {
   color: inherit;
   text-decoration: none;
   display: inline-block;
-  padding: 0.15rem 0;
+  padding: 0.28rem 0.5rem 0.28rem 0.3rem;
+  margin-left: -0.18rem;
+  margin-right: 0.4rem;
   line-height: 1.25;
   flex: 1;
   border-radius: 0.35rem;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
 }
-.toc a:hover {
-  color: var(--ui-accent);
+.toc a:hover,
+.toc a:focus-visible {
+  color: var(--ui-toc-active);
+  background: var(--ui-toc-hover-bg);
+  transform: translateX(1px);
 }
 .toc-row.active > a,
 .toc a.active {
   font-weight: 700;
+  color: var(--ui-toc-active);
+  background: var(--ui-toc-active-bg);
+  box-shadow: inset 0 0 0 1px var(--ui-toc-active-border);
 }
 .toc-row.active {
-  color: var(--ui-accent);
+  color: var(--ui-toc-active);
 }
 .toc-match {
   background: color-mix(in srgb, var(--yellow-4) 72%, transparent);
@@ -1032,12 +1029,7 @@ button.primary:disabled {
 .landing-hero {
   position: relative;
   overflow: hidden;
-  /* Layered radial halos: a central accent wash, a warm ruby bloom on the
-     right, and a cool teal bloom on the left. All alpha tokens, so in dark
-     mode they turn into quiet luminous patches instead of flat color. */
-  background: radial-gradient(ellipse 80% 60% at 50% 0%, var(--accent-a5), transparent 70%),
-    radial-gradient(ellipse 45% 55% at 100% 10%, var(--ruby-a4), transparent 65%),
-    radial-gradient(ellipse 40% 50% at 0% 20%, var(--teal-a3), transparent 60%);
+  background: var(--ui-hero-bg);
   border-bottom: 1px solid var(--gray-a3);
 }
 
@@ -1101,10 +1093,7 @@ button.primary:disabled {
   letter-spacing: -0.035em !important;
   font-weight: 700 !important;
   font-size: clamp(2.6rem, 7vw, 5rem) !important;
-  /* Diagonal gradient from accent → ruby → fg. Gives the title a sense of
-     warmth without shouting; the final stop uses gray-12 so the end of the
-     heading stays grounded and readable in both appearances. */
-  background: linear-gradient(120deg, var(--accent-11) 0%, var(--ruby-11) 45%, var(--gray-12) 100%);
+  background: var(--ui-title-gradient);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -1154,17 +1143,17 @@ button.primary:disabled {
   box-shadow: inset 0 0 0 1px var(--accent-a5);
 }
 /* Per-card color variants so the feature strip reads as a little triad
-   instead of three identical indigo tiles. All variants are alpha-based
+   instead of three identical accent tiles. All variants are alpha-based
    so they hold up in both appearances. */
 .feature-icon--ruby {
-  background: var(--ruby-a3);
-  color: var(--ruby-11);
-  box-shadow: inset 0 0 0 1px var(--ruby-a5);
+  background: var(--ui-feature-secondary-bg);
+  color: var(--ui-feature-secondary-fg);
+  box-shadow: inset 0 0 0 1px var(--ui-feature-secondary-border);
 }
-.feature-icon--teal {
-  background: var(--teal-a3);
-  color: var(--teal-11);
-  box-shadow: inset 0 0 0 1px var(--teal-a5);
+.feature-icon--gray {
+  background: var(--ui-feature-tertiary-bg);
+  color: var(--ui-feature-tertiary-fg);
+  box-shadow: inset 0 0 0 1px var(--ui-feature-tertiary-border);
 }
 
 .landing-recent {
@@ -1178,8 +1167,7 @@ button.primary:disabled {
 
 .landing-footer {
   border-top: 1px solid var(--gray-a5);
-  background: linear-gradient(90deg, var(--accent-a2) 0%, transparent 55%, var(--teal-a2) 100%),
-    var(--color-panel-solid);
+  background: var(--ui-footer-bg);
 }
 
 .landing-footer-row {
@@ -1204,7 +1192,7 @@ button.primary:disabled {
 }
 
 .landing-footer-link:hover {
-  color: var(--teal-11);
+  color: var(--ui-accent-muted-strong);
 }
 
 .imprint-md p {
@@ -1296,6 +1284,32 @@ button.primary:disabled {
   opacity: 1;
   transition-duration: 110ms;
   transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.anchor-group.thread-flashing-a::before,
+.anchor-group.thread-flashing-b::before {
+  animation: thread-focus-flash 760ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes thread-focus-flash {
+  0% {
+    opacity: 0;
+  }
+  16% {
+    opacity: 1;
+  }
+  34% {
+    opacity: 0.2;
+  }
+  56% {
+    opacity: 1;
+  }
+  76% {
+    opacity: 0.25;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 
 /* The anchor quote is a button so the whole thread is keyboard-clickable to
@@ -2052,8 +2066,8 @@ button.primary.small {
 }
 .block-actions-btn:hover {
   opacity: 1;
-  border-color: var(--ui-accent, #3b82f6);
-  color: var(--ui-accent, #3b82f6);
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
 }
 
 /* ============================================================
@@ -2075,7 +2089,7 @@ button.primary.small {
 
 .proposal-rationale {
   margin-top: 0.35rem;
-  color: var(--ui-fg-subtle, rgba(0, 0, 0, 0.75));
+  color: inherit;
 }
 
 .proposal-review-actions {

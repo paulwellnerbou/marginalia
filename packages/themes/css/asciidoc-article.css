@@ -37,13 +37,16 @@
   --md-color-code-bg: #f7f7f8;
   --md-color-code-fg: #111111;
   --md-color-quote-bar: #dddddd;
+  --md-color-quote-fg: rgb(0 0 0 / 85%);
+  --md-color-quote-mark: #7a2518;
+  --md-color-table-fg: rgb(0 0 0 / 80%);
+  --md-color-table-head-bg: #f7f8f7;
   --md-color-table-stripe: #f8f8f7;
   --md-color-selection-bg: #dfe8f6;
   --md-color-block-bg: #f8f8f7;
 }
 
 .marginalia {
-  padding: 0 0 2rem;
   color: var(--md-color-fg);
   line-height: var(--md-line-height);
   -moz-osx-font-smoothing: grayscale;
@@ -245,13 +248,13 @@
 }
 
 .marginalia table :is(thead, tfoot) {
-  background: #f7f8f7;
+  background: var(--md-color-table-head-bg);
 }
 
 .marginalia table :is(th, td) {
   padding: 0.5625em 0.625em;
   font-size: inherit;
-  color: rgb(0 0 0 / 80%);
+  color: var(--md-color-table-fg);
   text-align: left;
   vertical-align: top;
   border-bottom: 0;
@@ -269,7 +272,7 @@
   margin: 0 0 1.25em;
   padding: 0.5625em 1.25em 0 1.1875em;
   border-left: 1px solid var(--md-color-quote-bar);
-  color: rgb(0 0 0 / 85%);
+  color: var(--md-color-quote-fg);
   font-style: normal;
 }
 
@@ -280,7 +283,7 @@
 
 .marginalia .quoteblock blockquote,
 .marginalia .quoteblock p {
-  color: rgb(0 0 0 / 85%);
+  color: var(--md-color-quote-fg);
   font-size: inherit;
   line-height: 1.75;
   word-spacing: 0.1em;
@@ -301,7 +304,7 @@
   font-weight: bold;
   line-height: 0.6em;
   margin-left: -0.6em;
-  color: #7a2518;
+  color: var(--md-color-quote-mark);
   text-shadow: 0 1px 2px rgb(0 0 0 / 10%);
 }
 
@@ -526,6 +529,10 @@
   --md-color-code-bg: #24211f;
   --md-color-code-fg: #ede7df;
   --md-color-quote-bar: #5a534d;
+  --md-color-quote-fg: #ddd8d0;
+  --md-color-quote-mark: #d98473;
+  --md-color-table-fg: #ddd8d0;
+  --md-color-table-head-bg: #211d1b;
   --md-color-table-stripe: #262220;
   --md-color-selection-bg: #3f4e69;
   --md-color-block-bg: #1f1b19;
@@ -553,10 +560,6 @@
 [data-appearance="dark"] .marginalia table {
   background: transparent;
   border-color: #4a443e;
-}
-
-[data-appearance="dark"] .marginalia table :is(thead, tfoot) {
-  background: #211d1b;
 }
 
 [data-appearance="dark"] .marginalia .admonitionblock td.content {
@@ -588,6 +591,10 @@
     --md-color-code-bg: #24211f;
     --md-color-code-fg: #ede7df;
     --md-color-quote-bar: #5a534d;
+    --md-color-quote-fg: #ddd8d0;
+    --md-color-quote-mark: #d98473;
+    --md-color-table-fg: #ddd8d0;
+    --md-color-table-head-bg: #211d1b;
     --md-color-table-stripe: #262220;
     --md-color-selection-bg: #3f4e69;
     --md-color-block-bg: #1f1b19;
@@ -615,10 +622,6 @@
   [data-appearance="auto"] .marginalia table {
     background: transparent;
     border-color: #4a443e;
-  }
-
-  [data-appearance="auto"] .marginalia table :is(thead, tfoot) {
-    background: #211d1b;
   }
 
   [data-appearance="auto"] .marginalia .admonitionblock td.content {

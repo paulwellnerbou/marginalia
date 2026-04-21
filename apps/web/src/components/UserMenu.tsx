@@ -14,6 +14,7 @@ import {
 import { PersonIcon } from '@radix-ui/react-icons';
 import type { Role } from '../lib/api.js';
 import { getClientId, setDisplayName as persistName, useDisplayName } from '../lib/identity.js';
+import { appRoleColor } from '../styles/theme.js';
 import { Copyable } from './Copyable.js';
 
 /**
@@ -100,7 +101,7 @@ export function UserMenu({
               <Text size="1" color="gray">Role</Text>
               <Badge
                 size="1"
-                color={roleColor(role)}
+                color={appRoleColor(role)}
                 variant="soft"
                 className="role-badge"
                 style={{ width: 'fit-content' }}
@@ -151,17 +152,4 @@ export function UserMenu({
       </Dialog.Root>
     </>
   );
-}
-
-function roleColor(role: Role): 'indigo' | 'green' | 'amber' | 'gray' {
-  switch (role) {
-    case 'admin':
-      return 'indigo';
-    case 'editor':
-      return 'green';
-    case 'collaborator':
-      return 'amber';
-    default:
-      return 'gray';
-  }
 }
