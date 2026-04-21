@@ -1,6 +1,12 @@
 FROM oven/bun:1.3.12-debian AS builder
 WORKDIR /app
 
+# Skip the Chromium auto-download triggered by Playwright's postinstall —
+# we don't render PDFs during `bun run build`, and carrying the ~170 MB
+# browser through to the runner stage via `COPY --from=builder` would
+# either bloat the runner or get overwritten by the explicit install
+# below anyway.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 COPY . .
 RUN bun install --frozen-lockfile
 # Build-time env vars injected from CI (e.g. GitHub Actions build-args).
@@ -17,10 +23,88 @@ ENV NODE_ENV=production
 # Fixed UID/GID keeps the deploy script's host volume ownership predictable.
 RUN groupadd -g 999 marginalia && useradd -u 999 -g marginalia -s /bin/bash marginalia
 
-COPY --from=builder /app /app
+# Vendor the single mermaid file we consume (~3 MB) out of the
+# builder's `node_modules` into a fixed path. At runtime, the PDF
+# exporter reads this file as text and inlines it into the export
+# Chromium page (see apps/server/src/export/html-envelope.ts). Every
+# other file in the mermaid package — 72 MB of ESM code-split chunks,
+# source maps, and unminified bundles — plus mermaid's entire
+# transitive-dep graph (cytoscape, dagre, d3, langium, katex, …
+# ~50 MB more) are only used when mermaid is loaded as a JS module,
+# which we don't do in Node: Chromium loads the self-contained UMD
+# from this vendored file. By moving the file out first and then
+# doing a production install WITHOUT mermaid as a direct dep, none
+# of that tree enters the runtime image.
+# Bun hoists packages into `node_modules/.bun/<name>@<version>/…` and
+# creates stable version-independent symlinks at each workspace's
+# `node_modules/<name>`. We copy through the server's symlink so the
+# COPY path doesn't bake in a mermaid version — bumping mermaid in
+# package.json doesn't require a Dockerfile edit.
+COPY --from=builder /app/apps/server/node_modules/mermaid/dist/mermaid.min.js \
+     /app/apps/server/vendor/mermaid.min.js
+
+# Copy the source tree from the builder minus its `node_modules`.
+# Full workspace tree is retained so `bun install --frozen-lockfile`
+# can validate against the lockfile; production install below skips
+# all dev deps.
+COPY --from=builder /app/package.json /app/bun.lock ./
+COPY --from=builder /app/apps ./apps
+COPY --from=builder /app/packages ./packages
 COPY deploy-scripts/container-entrypoint.sh /app/entrypoint.sh
 
-RUN chmod +x /app/entrypoint.sh && mkdir -p /app/.data && chown -R marginalia:marginalia /app
+# Re-install, production-only, without mermaid (which we vendored
+# above). Using `--trust` with an empty list is fine; the key is
+# that the post-install `rm` drops the whole mermaid package and
+# bun's orphan sweep can't put it back because we also strip it
+# from `node_modules/.bun/`. `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`
+# keeps Chromium out of node_modules — the explicit install into
+# /ms-playwright in the next `RUN` block writes it exactly once.
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+RUN bun install --frozen-lockfile --production \
+  && rm -rf /app/node_modules/mermaid \
+            /app/node_modules/.bun/mermaid@* \
+            /app/node_modules/.bun/@mermaid-js* \
+            /app/node_modules/.bun/cytoscape* \
+            /app/node_modules/.bun/dagre* \
+            /app/node_modules/.bun/d3* \
+            /app/node_modules/.bun/langium@* \
+            /app/node_modules/.bun/elkjs@* \
+            /app/node_modules/.bun/katex@*
+
+# ---------------------------------------------------------------------
+# PDF export: Chromium + system deps for Playwright.
+#
+# `bunx playwright install-deps chromium` installs the OS packages
+# Chromium needs (libnss3, libatk1.0-0, libxkbcommon0, fonts, …) —
+# apt-based, must run as root. `bunx playwright install chromium`
+# downloads the actual browser binary into PLAYWRIGHT_BROWSERS_PATH.
+# Both run BEFORE `USER marginalia`, into a shared path that we then
+# chown along with /app so the non-root runtime user can launch it.
+#
+# Without these steps the server starts fine but the PDF endpoint
+# returns 500 `export-engine-missing` (see apps/server/src/export/pdf.ts).
+# The ~250 MB image-size hit is unavoidable for PDF fidelity.
+# ---------------------------------------------------------------------
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# Install ONLY the headless-shell binary, not the full Chrome for
+# Testing. As of Playwright 1.49+ these are separate downloads:
+#   - `chromium`              → full Chrome (~500 MB) + headless-shell
+#   - `chromium-headless-shell` → just the shell (~300 MB)
+# We never render in headed mode, so full Chrome is dead weight.
+#
+# The `install-deps chromium-headless-shell` step still needs to
+# resolve apt package lists, so it stays separate from the clean-up.
+# Chown in the SAME `RUN` as the download: a later `chown -R` would
+# rewrite every touched file into its own layer and double the
+# Chromium bytes in the image.
+RUN bunx playwright install-deps chromium-headless-shell \
+  && bunx playwright install chromium-headless-shell \
+  && chown -R marginalia:marginalia /ms-playwright \
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+RUN chmod +x /app/entrypoint.sh \
+  && mkdir -p /app/.data \
+  && chown -R marginalia:marginalia /app
 
 USER marginalia
 

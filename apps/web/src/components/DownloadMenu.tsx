@@ -3,21 +3,22 @@ import { DropdownMenu, IconButton } from '@radix-ui/themes';
 import { useState } from 'react';
 import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer';
 import type { Document } from '../lib/api.js';
-import { downloadDocumentDocx } from '../lib/api.js';
+import { ApiError, downloadDocumentDocx, downloadDocumentPdf } from '../lib/api.js';
 import { reportError } from '../lib/log.js';
 import { showToast } from '../lib/notifications.js';
 
 /**
  * Download affordance in the document toolbar. Opens a small menu with
- * "source" (the raw markdown or AsciiDoc) and "DOCX" (server-side
- * themed Word export).
+ * "source" (the raw markdown or AsciiDoc), "DOCX" (server-side themed
+ * Word export), and "PDF" (server-side themed PDF export via headless
+ * Chromium).
  *
  * The JSON bundle export stays in the admin-only Document Settings
  * dialog; it's a tooling/re-import feature, not a day-to-day download.
  *
  * Filename derivation mirrors the server: explicit `doc.name` first,
  * otherwise the document's own title (frontmatter `title:` or first
- * H1 / `= Header`), otherwise the opaque uid. Keeps the two download
+ * H1 / `= Header`), otherwise the opaque uid. Keeps all three download
  * paths producing the same filenames.
  */
 export function DownloadMenu({
@@ -28,10 +29,10 @@ export function DownloadMenu({
   doc: Document;
   /** Live source — may differ from doc.source after an applied edit proposal. */
   source: string;
-  /** Currently-selected viewer theme, baked into the DOCX export. */
+  /** Currently-selected viewer theme, baked into the DOCX / PDF exports. */
   theme: string;
 }) {
-  const [busy, setBusy] = useState<null | 'source' | 'docx'>(null);
+  const [busy, setBusy] = useState<null | 'source' | 'docx' | 'pdf'>(null);
 
   const sourceExt = doc.format === 'asciidoc' ? 'adoc' : 'md';
   const sourceLabel = doc.format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source';
@@ -82,6 +83,45 @@ export function DownloadMenu({
     }
   }
 
+  async function downloadPdf(): Promise<void> {
+    setBusy('pdf');
+    try {
+      const { blob, filename } = await downloadDocumentPdf(doc.uid, theme);
+      downloadBlob(blob, filename);
+    } catch (err) {
+      reportError('DownloadMenu.pdf', err, { uid: doc.uid });
+      // PDF-specific error codes from the server let us give a more
+      // useful toast than "try again". See apps/server/src/export/pdf.ts
+      // for the full list.
+      if (err instanceof ApiError) {
+        if (err.code === 'export-engine-missing') {
+          showToast({
+            title: 'PDF export unavailable',
+            body: 'The server is missing its PDF engine. Contact the operator.',
+          });
+          return;
+        }
+        if (err.code === 'export-busy') {
+          showToast({
+            title: 'PDF export busy',
+            body: 'Another export is in progress. Try again in a moment.',
+          });
+          return;
+        }
+        if (err.code === 'export-timeout') {
+          showToast({
+            title: 'PDF export timed out',
+            body: 'The document took too long to render. Try a simpler theme or split the document.',
+          });
+          return;
+        }
+      }
+      showToast({ title: 'PDF export failed', body: 'Try again in a moment.' });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <DropdownMenu.Root>
       {/* Radix Tooltip wraps would break the DropdownMenu.Trigger, so
@@ -103,6 +143,9 @@ export function DownloadMenu({
         </DropdownMenu.Item>
         <DropdownMenu.Item onSelect={downloadDocx} disabled={busy !== null}>
           Word document (.docx)
+        </DropdownMenu.Item>
+        <DropdownMenu.Item onSelect={downloadPdf} disabled={busy !== null}>
+          PDF document (.pdf)
         </DropdownMenu.Item>
       </DropdownMenu.Content>
     </DropdownMenu.Root>

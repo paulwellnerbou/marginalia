@@ -1,0 +1,133 @@
+/*
+ * Marginalia — shared print stylesheet.
+ *
+ * Appended after the selected theme CSS by the PDF exporter. Defines:
+ *   - the page box (size + margins),
+ *   - page-break rules that keep headings, tables, code blocks, and
+ *     mermaid diagrams legible,
+ *   - visibility toggles that hide interactive / editor-only UI that
+ *     leaks through the sanitized renderer output.
+ *
+ * Lives in the themes package (not the server) so themes can override
+ * anything they want — a per-theme stylesheet loaded afterward wins on
+ * specificity. `serif-print.css` already ships its own heading / table
+ * page-break rules; those continue to work.
+ */
+
+@page {
+  size: A4;
+  margin: 20mm 18mm 22mm 18mm;
+}
+
+/* Any themes that assume an on-screen dark mode still need a light
+ * export. Force the inherited foreground / background to the light
+ * values at print time so dark-mode previews don't produce
+ * unreadable PDFs. */
+@media print {
+  :root,
+  [data-appearance='dark'],
+  [data-appearance='auto'] {
+    color-scheme: light;
+  }
+
+  html, body {
+    background: #fff !important;
+  }
+
+  .marginalia,
+  .marginalia-theme {
+    /* Neutralise the dark-mode variable overrides — same values as the
+     * light defaults in default.css. Kept in sync by tests that render
+     * a sample doc and assert the printed colors. */
+    --md-color-fg: #111;
+    --md-color-bg: transparent;
+  }
+
+  /* ---- Page-break rules ---------------------------------------- */
+
+  /* Headings should stick to the following paragraph. */
+  .marginalia :is(h1, h2, h3, h4, h5, h6) {
+    break-after: avoid-page;
+    page-break-after: avoid;
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+  }
+
+  /* Keep block-level content together when it fits on a page. */
+  .marginalia pre,
+  .marginalia blockquote,
+  .marginalia table,
+  .marginalia div.mermaid,
+  .marginalia figure {
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+  }
+
+  /* Widow/orphan control for prose. */
+  .marginalia p,
+  .marginalia li {
+    orphans: 3;
+    widows: 3;
+  }
+
+  /* Large images shouldn't split across pages. */
+  .marginalia img {
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* ---- Interactive UI suppression ------------------------------ */
+
+  /* Heading anchor sigils (`<a class="heading-anchor">` injected by
+   * the renderer's rehype plugin) are UI chrome, not content. Hidden
+   * on print so we don't end up with "#" tails on every heading. */
+  .marginalia .heading-anchor,
+  .marginalia a.heading-anchor {
+    display: none !important;
+  }
+
+  /* TOC-marker pill (see packages/renderer/src/plugins/toc-marker.ts).
+   * The marker is meaningful in the viewer; in a PDF it's noise. */
+  .marginalia .marginalia-toc-marker {
+    display: none !important;
+  }
+
+  /* Anything the editor or comment UI might have leaked into the
+   * document tree — belt-and-braces, the renderer sanitiser drops
+   * most of this already. */
+  .marginalia .block-actions,
+  .marginalia .comment-gutter,
+  .marginalia [data-editor-only='true'] {
+    display: none !important;
+  }
+
+  /* ---- Link treatment ------------------------------------------ */
+
+  /* Keep hyperlinks visually distinct but don't inherit any on-screen
+   * hover/focus affordances. Themes can override. */
+  .marginalia a[href] {
+    text-decoration: underline;
+    color: inherit;
+  }
+
+  /* Strip the `(URL)` append trick some UAs add by default for print
+   * — the link text is enough; the PDF keeps the real href clickable. */
+  .marginalia a[href]::after {
+    content: none !important;
+  }
+
+  /* ---- Mermaid ------------------------------------------------- */
+
+  /* When a mermaid block fails to render (parse error or the runtime
+   * didn't load), show the raw source instead of an empty box. */
+  .marginalia div.mermaid:not([data-processed='true']) {
+    white-space: pre-wrap;
+    font-family: var(--md-font-mono, ui-monospace, monospace);
+    font-size: 0.9em;
+    padding: 0.5em 0.75em;
+    border: 1px dashed var(--md-color-border, #bbb);
+    background: var(--md-color-code-bg, #f5f5f5);
+  }
+}

@@ -45,6 +45,14 @@ import type { HistoryEntry as GitHistoryEntry, GitStore } from '../git-store.js'
 import { newDocumentUid, newInviteToken } from '../ids.js';
 import type { Realtime } from '../realtime.js';
 import { listDocUserNameMap, upsertDocUser } from '../users.js';
+import {
+  ExportBusyError,
+  ExportEngineMissingError,
+  ExportTimeoutError,
+  exportPdf,
+} from '../export/pdf.js';
+import { inlineImageAssets } from '../export/html-envelope.js';
+import { loadPrintCss, loadThemeCss } from '../export/theme-css.js';
 
 export interface AppDeps {
   db: Database;
@@ -62,6 +70,7 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.get('/:uid', async (c) => getDocument(c, deps));
   r.get('/:uid/export', async (c) => exportDocument(c, deps));
   r.get('/:uid/export.docx', async (c) => exportDocumentAsDocx(c, deps));
+  r.get('/:uid/export.pdf', async (c) => exportDocumentAsPdf(c, deps));
   r.put('/:uid', async (c) => updateDocument(c, deps));
   r.patch('/:uid/settings', async (c) => updateSettings(c, deps));
   r.delete('/:uid', async (c) => deleteDocument(c, deps));
@@ -535,6 +544,97 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
   // SharedArrayBuffer backing in principle) while Hono insists on
   // `Uint8Array<ArrayBuffer>`. Runtime is identical — Bun's Buffer
   // is always ArrayBuffer-backed.
+  return c.body(buf as unknown as Uint8Array<ArrayBuffer>);
+}
+
+// --- GET /api/documents/:uid/export.pdf ------------------------------
+
+/**
+ * PDF export. Renders the document's source to HTML via the shared
+ * renderer, wraps it in a self-contained HTML envelope with the
+ * selected theme + print stylesheet, and prints via headless
+ * Chromium (Playwright). See `apps/server/src/export/pdf.ts` and
+ * [PROPOSAL_PDF_EXPORT.md](../../../../PROPOSAL_PDF_EXPORT.md) for
+ * the full design.
+ *
+ * Mirrors the DOCX route's auth, theme-resolution, title-extraction,
+ * and filename-derivation behavior so the two downloads produce
+ * identical filenames for the same document.
+ */
+async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
+  const { db, store, blobs } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+
+  const identity = readIdentity(c.req.raw.headers);
+  const themeParam = c.req.query('theme');
+  const theme =
+    typeof themeParam === 'string' && themeParam.length > 0
+      ? themeParam
+      : (doc.default_theme ?? 'default');
+
+  const source = store.read(doc.path);
+  // Matches DOCX: explicit `doc.name` beats the extracted title.
+  const derivedTitle = doc.name ?? extractDocumentTitle(source, doc.format);
+
+  // Render the document with the same format-agnostic entry the
+  // viewer uses; mermaid stays in 'client' mode so the export page
+  // can run the real mermaid runtime (see export/html-envelope.ts).
+  const rendered = await renderDocument(source, doc.format, { mermaid: 'client' });
+
+  // Build the attached-asset map once and reuse for image inlining.
+  // Absolute URLs never reach the inliner — they're left alone so
+  // Chromium fetches them over HTTP if reachable, or falls back to
+  // alt text if not. Mirrors the DOCX resolver's scope.
+  const attached = new Map<string, { assetId: string; mime: string }>();
+  for (const a of listAttached(db, doc.uid)) {
+    attached.set(a.ref_name, { assetId: a.asset_id, mime: a.mime });
+  }
+  const bodyHtml = await inlineImageAssets(rendered.html, attached, blobs);
+
+  const [themeCss, printCss] = await Promise.all([loadThemeCss(theme), loadPrintCss()]);
+
+  let buf: Uint8Array;
+  try {
+    buf = await exportPdf({
+      body: bodyHtml,
+      themeCss,
+      printCss,
+      meta: {
+        title: derivedTitle ?? null,
+        author: identity?.displayName ?? null,
+        appearance: 'light',
+      },
+      hasMermaid: rendered.mermaid.length > 0,
+    });
+  } catch (err) {
+    if (err instanceof ExportEngineMissingError) {
+      return c.json(
+        {
+          error: err.code,
+          hint: 'Run `bunx playwright install chromium` on the server, then retry.',
+        },
+        500,
+      );
+    }
+    if (err instanceof ExportBusyError) {
+      c.header('Retry-After', '2');
+      return c.json({ error: err.code }, 503);
+    }
+    if (err instanceof ExportTimeoutError) {
+      return c.json({ error: err.code, elapsed_ms: err.elapsedMs }, 504);
+    }
+    throw err;
+  }
+
+  const filename = sanitizeDocumentFilename(derivedTitle, doc.uid);
+  c.header('Content-Type', 'application/pdf');
+  c.header('Content-Disposition', `attachment; filename="${filename}.pdf"`);
+  c.header('Cache-Control', 'private, no-store');
+  c.header('X-Content-Type-Options', 'nosniff');
   return c.body(buf as unknown as Uint8Array<ArrayBuffer>);
 }
 

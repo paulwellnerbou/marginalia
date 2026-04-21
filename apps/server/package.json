@@ -9,8 +9,11 @@
   },
   "dependencies": {
     "@marginalia/renderer": "workspace:*",
+    "@marginalia/themes": "workspace:*",
     "hono": "^4.6.14",
-    "isomorphic-git": "^1.27.1"
+    "isomorphic-git": "^1.27.1",
+    "mermaid": "^11.4.1",
+    "playwright": "^1.59.1"
   },
   "devDependencies": {
     "jszip": "^3.10.1"

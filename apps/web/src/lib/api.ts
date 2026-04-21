@@ -387,6 +387,31 @@ export async function downloadDocumentDocx(
   return { blob, filename };
 }
 
+/**
+ * Fetches a PDF export of the document and returns the bytes plus a
+ * server-suggested filename. Mirrors `downloadDocumentDocx` — same
+ * theme/filename semantics on both ends of the wire.
+ *
+ * Errors surfaced by the server (`export-engine-missing`,
+ * `export-busy`, `export-timeout`) come through `requestBinary` as
+ * non-2xx responses and are handled by the caller's try/catch.
+ */
+export async function downloadDocumentPdf(
+  uid: string,
+  theme?: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const params = theme ? `?theme=${encodeURIComponent(theme)}` : '';
+  const res = await requestBinary(
+    `/api/documents/${encodeURIComponent(uid)}/export.pdf${params}`,
+    { method: 'GET', docUid: uid },
+  );
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  const match = cd.match(/filename="([^"]+)"/);
+  const filename = match?.[1] ?? `${uid}.pdf`;
+  return { blob, filename };
+}
+
 export function updateDocument(
   uid: string,
   source: string,
