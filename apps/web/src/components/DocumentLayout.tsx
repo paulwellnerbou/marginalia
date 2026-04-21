@@ -86,6 +86,7 @@ import {
 } from './DocumentSearchResultsPane.js';
 import { HistoryList } from './HistoryList.js';
 import { documentTitle } from '../lib/doc-title.js';
+import { APP_ACCENT_COLOR } from '../styles/theme.js';
 
 const MAX_WIDTH_KEY = 'marginalia.maxWidth';
 const TEXT_ZOOM_KEY = 'marginalia.textZoom';
@@ -947,7 +948,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
               <IconButton
                 variant="soft"
-                color="indigo"
+                color={APP_ACCENT_COLOR}
                 size="2"
                 className={`doc-search-trigger ${docSearchOpen ? 'active' : ''}`}
                 onClick={() => {
@@ -987,7 +988,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   <IconButton
                     size="1"
                     variant={docSearchCaseSensitive ? 'soft' : 'ghost'}
-                    color={docSearchCaseSensitive ? 'indigo' : 'gray'}
+                    color={docSearchCaseSensitive ? APP_ACCENT_COLOR : 'gray'}
                     className={`doc-search-option ${docSearchCaseSensitive ? 'active' : ''}`}
                     aria-label={
                       docSearchCaseSensitive
@@ -1011,7 +1012,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   <IconButton
                     size="1"
                     variant={docSearchWholeWords ? 'soft' : 'ghost'}
-                    color={docSearchWholeWords ? 'indigo' : 'gray'}
+                    color={docSearchWholeWords ? APP_ACCENT_COLOR : 'gray'}
                     className={`doc-search-option ${docSearchWholeWords ? 'active' : ''}`}
                     aria-label={
                       docSearchWholeWords ? 'Disable whole-word search' : 'Enable whole-word search'

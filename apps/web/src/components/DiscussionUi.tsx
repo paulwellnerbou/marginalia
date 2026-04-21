@@ -11,6 +11,7 @@ interface DiscussionThreadProps {
   toolbarActions?: ReactNode | undefined;
   headerBadge?: ReactNode | undefined;
   focused: boolean;
+  flashPhase?: 'a' | 'b' | null | undefined;
   collapsed: boolean;
   className?: string | undefined;
   onToggleCollapsed: () => void;
@@ -23,11 +24,6 @@ interface DiscussionEntryProps {
   createdAt: number;
   surface: ReactNode;
   actions?: ReactNode | undefined;
-  /** Optional pill/badge rendered under the comment surface (e.g.
-   * "edited", status indicators). The component already destructures
-   * this prop and conditionally renders it; the interface just needed
-   * to declare it to satisfy the typechecker. No call site passes it
-   * yet. */
   badge?: ReactNode | undefined;
   className?: string | undefined;
 }
@@ -41,6 +37,7 @@ export function DiscussionThread({
   toolbarActions,
   headerBadge,
   focused,
+  flashPhase,
   collapsed,
   className,
   onToggleCollapsed,
@@ -48,7 +45,12 @@ export function DiscussionThread({
 }: DiscussionThreadProps) {
   return (
     <div
-      className={joinClasses('anchor-group', focused ? 'thread-focused' : null, className)}
+      className={joinClasses(
+        'anchor-group',
+        focused ? 'thread-focused' : null,
+        flashPhase ? `thread-flashing-${flashPhase}` : null,
+        className,
+      )}
       data-comment-thread-id={threadId}
     >
       {headerBadge ? <div className="anchor-header-badge">{headerBadge}</div> : null}

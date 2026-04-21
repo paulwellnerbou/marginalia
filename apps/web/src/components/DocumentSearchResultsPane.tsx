@@ -1,4 +1,5 @@
 import { Box, Button, Flex, Text } from '@radix-ui/themes';
+import { APP_ACCENT_COLOR } from '../styles/theme.js';
 
 export interface DocumentSearchResult {
   id: string;
@@ -54,7 +55,7 @@ export function DocumentSearchResultsPane({
             key={result.id}
             type="button"
             variant={active ? 'soft' : 'ghost'}
-            color={active ? 'blue' : 'gray'}
+            color={active ? APP_ACCENT_COLOR : 'gray'}
             className={`doc-search-result ${active ? 'active' : ''}`}
             onClick={() => onSelectResult(result.id)}
           >

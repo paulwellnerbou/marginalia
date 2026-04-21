@@ -22,12 +22,12 @@ import {
   listInvites,
   rotateAdminInvite,
   type Invite,
-  type InviteKind,
   type Role,
 } from '../lib/api.js';
 import { getClientId, getDisplayName, useDisplayName } from '../lib/identity.js';
 import { saveInviteToken } from '../lib/invite.js';
 import { reportError } from '../lib/log.js';
+import { appInviteKindColor, appRoleColor } from '../styles/theme.js';
 
 /**
  * Two-step inline confirm for the admin-rotate action. Kept local because
@@ -120,19 +120,6 @@ function RotateAdminButton({
   );
 }
 
-function roleColor(role: Role): 'indigo' | 'green' | 'amber' | 'gray' {
-  switch (role) {
-    case 'admin':
-      return 'indigo';
-    case 'editor':
-      return 'green';
-    case 'collaborator':
-      return 'amber';
-    default:
-      return 'gray';
-  }
-}
-
 function roleLabel(role: Role): string {
   switch (role) {
     case 'admin':
@@ -143,19 +130,6 @@ function roleLabel(role: Role): string {
       return 'Collaborator';
     case 'reader':
       return 'Reader';
-  }
-}
-
-/** Kind is shown as a secondary badge so admins can tell at a glance whether
- *  an invite forces the visitor's name ("Named") or not ("Generic"). */
-function kindColor(kind: InviteKind): 'indigo' | 'cyan' | 'gray' {
-  switch (kind) {
-    case 'admin':
-      return 'indigo';
-    case 'named':
-      return 'cyan';
-    case 'generic':
-      return 'gray';
   }
 }
 
@@ -362,10 +336,10 @@ export function InvitesPanel({ uid }: { uid: string }) {
                   <Text size="2" weight="medium">
                     {inv.display_name ?? <span style={{ fontStyle: 'italic' }}>Any visitor</span>}
                   </Text>
-                  <Badge size="1" color={roleColor(inv.role)} variant="soft" className="role-badge">
+                  <Badge size="1" color={appRoleColor(inv.role)} variant="soft" className="role-badge">
                     {inv.role}
                   </Badge>
-                  <Badge size="1" color={kindColor(inv.kind)} variant="surface">
+                  <Badge size="1" color={appInviteKindColor(inv.kind)} variant="surface">
                     {inv.kind}
                   </Badge>
                 </Flex>

@@ -56,6 +56,7 @@ import {
   recordVisit,
   removeFromRecent,
 } from '../lib/recent-docs.js';
+import { appRoleColor } from '../styles/theme.js';
 
 const SAMPLE = `# Welcome
 
@@ -119,7 +120,7 @@ export function HomePage() {
               <span>View on GitHub</span>
             </a>
             <Flex direction="column" align="center" gap="5" py="9" className="landing-hero-inner">
-              <Badge color="indigo" variant="soft" size="2" className="landing-eyebrow">
+              <Badge variant="soft" size="2" className="landing-eyebrow">
                 <MagicWandIcon /> Markdown, set in type
               </Badge>
               <Heading size="9" align="center" className="landing-title">
@@ -163,7 +164,7 @@ export function HomePage() {
               />
               <FeatureCard
                 icon={<PaperPlaneIcon width="20" height="20" />}
-                iconVariant="teal"
+                iconVariant="gray"
                 title="Local-first identities"
                 body="People are managed in browser and by invite links. No online accounts, no sign-ups, and no external profile store. Share invite links and collaborate anonymously."
               />
@@ -351,8 +352,8 @@ function FeatureCard({
   body,
 }: {
   icon: React.ReactNode;
-  /** Optional color accent for the icon tile. Default = theme accent (indigo). */
-  iconVariant?: 'ruby' | 'teal';
+  /** Optional color accent for the icon tile. Default = theme accent. */
+  iconVariant?: 'ruby' | 'gray';
   title: string;
   body: string;
 }) {
@@ -432,7 +433,7 @@ function RecentCard({
         <FormatBadge format={doc.format} />
         <Badge
           variant="soft"
-          color={doc.role === 'admin' ? 'indigo' : doc.role === 'editor' ? 'green' : 'gray'}
+          color={appRoleColor(doc.role)}
           size="1"
           className="role-badge"
         >

@@ -104,6 +104,12 @@ type ThreadListItem =
     };
 
 type CommentSortMode = 'document' | 'latest';
+type ThreadFlashState = {
+  threadId: string;
+  phase: 'a' | 'b';
+};
+const THREAD_FOCUS_FLASH_MS = 760;
+const THREAD_FOCUS_HIGHLIGHT_MS = 1800;
 
 export function CommentsPane(props: Props) {
   const {
@@ -190,6 +196,7 @@ export function CommentsPane(props: Props) {
   );
   const collapsedThreads = threadCollapseState.collapsed;
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null);
+  const [flashingThread, setFlashingThread] = useState<ThreadFlashState | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const lastHandledFocusNonce = useRef<number | null>(null);
   const threadIds = useMemo(
@@ -226,14 +233,22 @@ export function CommentsPane(props: Props) {
 
     lastHandledFocusNonce.current = focusedThread.nonce;
     setFocusedThreadId(focusedThread.threadId);
+    const flashPhase = focusedThread.nonce % 2 === 0 ? 'b' : 'a';
+    setFlashingThread({ threadId: focusedThread.threadId, phase: flashPhase });
     const frame = window.requestAnimationFrame(() => {
       threadEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
+    const flashTimeout = window.setTimeout(() => {
+      setFlashingThread((current) =>
+        current?.threadId === focusedThread.threadId && current.phase === flashPhase ? null : current,
+      );
+    }, THREAD_FOCUS_FLASH_MS);
     const timeout = window.setTimeout(() => {
       setFocusedThreadId((current) => (current === focusedThread.threadId ? null : current));
-    }, 1800);
+    }, THREAD_FOCUS_HIGHLIGHT_MS);
     return () => {
       window.cancelAnimationFrame(frame);
+      window.clearTimeout(flashTimeout);
       window.clearTimeout(timeout);
     };
   }, [collapsedThreads, focusedThread, focusedThreadExists]);
@@ -271,6 +286,7 @@ export function CommentsPane(props: Props) {
       canComment,
       needsName: !displayName,
       threadFocused: focusedThreadId === thread.id,
+      threadFlashPhase: flashingThread?.threadId === thread.id ? flashingThread.phase : null,
       collapsed: collapsedThreads.has(thread.id),
       onToggleCollapsed: () => toggleCollapsed(thread.id),
     };
@@ -428,6 +444,7 @@ function AnchorGroupView({
   onScrollToAnchor,
   needsName,
   threadFocused,
+  threadFlashPhase,
   collapsed,
   onToggleCollapsed,
 }: {
@@ -443,6 +460,7 @@ function AnchorGroupView({
   onScrollToAnchor: (blockId: string) => void;
   needsName: boolean;
   threadFocused: boolean;
+  threadFlashPhase?: 'a' | 'b' | null;
   collapsed: boolean;
   onToggleCollapsed: () => void;
 }) {
@@ -495,6 +513,7 @@ function AnchorGroupView({
       summary={`${group.replies.length + 1} comment${group.replies.length === 0 ? '' : 's'}`}
       toolbarActions={toolbarActions}
       focused={threadFocused}
+      flashPhase={threadFlashPhase}
       collapsed={collapsed}
       className={isResolved ? 'resolved' : undefined}
       onToggleCollapsed={onToggleCollapsed}

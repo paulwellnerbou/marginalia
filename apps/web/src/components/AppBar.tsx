@@ -34,8 +34,8 @@ export function AppBar({ docTitle, role, format, trailing, showUserName }: Props
           <svg viewBox="0 0 24 24" className="app-brand-icon-svg">
             <defs>
               <linearGradient id={brandGradientId} x1="1" y1="3" x2="22" y2="20" gradientUnits="userSpaceOnUse">
-                <stop offset="0%" stopColor="var(--accent-11)" />
-                <stop offset="48%" stopColor="var(--ruby-11)" />
+                <stop offset="0%" stopColor="var(--ui-accent-strong)" />
+                <stop offset="48%" stopColor="var(--ui-accent-muted-strong)" />
                 <stop offset="100%" stopColor="var(--gray-12)" />
               </linearGradient>
             </defs>

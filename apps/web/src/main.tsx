@@ -10,8 +10,10 @@ import { AppearanceProvider, useAppearance } from './lib/appearance.js';
 // document theme CSS wins when selectors collide.
 import '@radix-ui/themes/styles.css';
 import '@marginalia/themes/default.css';
+import './styles/theme.css';
 import './styles/app.css';
 import { installGlobalErrorLogging } from './lib/log.js';
+import { APP_THEME } from './styles/theme.js';
 
 installGlobalErrorLogging();
 
@@ -39,7 +41,13 @@ function RouteLoading() {
 function App() {
   const { resolved } = useAppearance();
   return (
-    <Theme accentColor="indigo" grayColor="slate" radius="medium" scaling="100%" appearance={resolved}>
+    <Theme
+      accentColor={APP_THEME.accentColor}
+      grayColor={APP_THEME.grayColor}
+      radius={APP_THEME.radius}
+      scaling={APP_THEME.scaling}
+      appearance={resolved}
+    >
       <BrowserRouter>
         <Suspense fallback={<RouteLoading />}>
           <Routes>

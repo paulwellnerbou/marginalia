@@ -1,0 +1,60 @@
+:root,
+.radix-themes {
+  --ui-bg: var(--color-background);
+  --ui-surface: var(--color-panel-solid);
+  --ui-border: var(--gray-6);
+  --ui-fg: var(--gray-12);
+  --ui-fg-muted: var(--gray-11);
+  --ui-accent: var(--accent-9);
+  --ui-accent-strong: var(--accent-11);
+  --ui-accent-focus: var(--accent-8);
+  --ui-danger: var(--red-9);
+
+  /* Blue-grey companion tones derived from the active accent and the app's
+     slate gray scale. These keep decorative chrome related to the accent
+     without introducing a second unrelated color family. */
+  --ui-accent-muted-strong: color-mix(in srgb, var(--accent-11) 58%, var(--gray-12));
+  --ui-accent-muted-soft: color-mix(in srgb, var(--accent-a4) 42%, var(--gray-a5));
+  --ui-accent-muted-softer: color-mix(in srgb, var(--accent-a3) 36%, var(--gray-a4));
+  --ui-accent-muted-faint: color-mix(in srgb, var(--accent-a2) 34%, var(--gray-a3));
+  --ui-toc-active: var(--ui-accent);
+  --ui-toc-hover-bg: color-mix(in srgb, var(--accent-a3) 52%, transparent);
+  --ui-toc-active-bg: color-mix(in srgb, var(--accent-a4) 62%, transparent);
+  --ui-toc-active-border: color-mix(in srgb, var(--accent-a7) 38%, transparent);
+  --ui-app-bar-tail: var(--ui-accent-muted-softer);
+
+  --ui-app-bar-bg:
+    linear-gradient(90deg, var(--accent-a3) 0%, transparent 45%, var(--ui-app-bar-tail) 100%),
+    var(--color-panel-solid);
+  --ui-doc-chrome-bg:
+    linear-gradient(90deg, var(--accent-a2) 0%, transparent 60%, var(--ui-accent-muted-faint) 100%),
+    var(--color-panel-solid);
+  --ui-title-gradient:
+    linear-gradient(120deg, var(--ui-accent-strong) 0%, var(--ui-accent-muted-strong) 48%, var(--gray-12) 100%);
+  --ui-hero-bg:
+    radial-gradient(ellipse 80% 60% at 50% 0%, var(--accent-a5), transparent 70%),
+    radial-gradient(ellipse 45% 55% at 100% 10%, var(--ui-accent-muted-soft), transparent 65%),
+    radial-gradient(ellipse 40% 50% at 0% 20%, var(--ui-accent-muted-faint), transparent 60%);
+  --ui-footer-bg:
+    linear-gradient(90deg, var(--accent-a2) 0%, transparent 55%, var(--ui-accent-muted-faint) 100%),
+    var(--color-panel-solid);
+
+  --ui-feature-secondary-bg: var(--ruby-a3);
+  --ui-feature-secondary-fg: var(--ruby-11);
+  --ui-feature-secondary-border: var(--ruby-a5);
+  --ui-feature-tertiary-bg: var(--gray-a3);
+  --ui-feature-tertiary-fg: var(--gray-11);
+  --ui-feature-tertiary-border: var(--gray-a5);
+}
+
+.radix-themes:where(.light, .light-theme) {
+  /* In light mode, the plain blue accent is a little too saturated for the
+     active TOC entry. Bias it toward slate for a darker, calmer blue-grey. */
+  --ui-toc-active: color-mix(in srgb, var(--accent-11) 78%, var(--gray-12));
+  --ui-toc-hover-bg: color-mix(in srgb, var(--accent-a3) 36%, var(--gray-a2));
+  --ui-toc-active-bg: color-mix(in srgb, var(--accent-a4) 44%, var(--gray-a2));
+  --ui-toc-active-border: color-mix(in srgb, var(--accent-a7) 26%, var(--gray-a5));
+  /* The app bar's right edge needs a slightly stronger tail than the generic
+     accent wash so the gradient reads intentionally across the full width. */
+  --ui-app-bar-tail: color-mix(in srgb, var(--accent-a6) 54%, var(--gray-a6));
+}
