@@ -308,6 +308,11 @@ describe('exportDocx — Table of Contents (M3b)', () => {
     const { documentXml } = await inspectDocx(buf);
     expect(documentXml).toContain('fldChar');
     expect(documentXml).not.toContain('>Contents<');
+    // The TOC field's SDT alias was previously defaulting to
+    // "Table of Contents" when `tocLabel` was empty — that value
+    // could surface in screen readers / navigation panes even though
+    // the user asked for no heading. Verify it doesn't appear.
+    expect(documentXml).not.toContain('Table of Contents');
   });
 
   test('"Contents" label uses the dedicated TocHeading style, not Heading1', async () => {

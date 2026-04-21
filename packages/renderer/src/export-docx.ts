@@ -325,8 +325,14 @@ function buildTocBlocks(label: string, _tokens: ThemeTokens): FileChild[] {
   // `beginDirty: true` marks the TOC field dirty so Word prompts to
   // auto-populate on first open (otherwise the user sees an empty
   // placeholder until they press F9).
+  //
+  // The first argument to `TableOfContents` is the SDT alias — an
+  // internal accessibility/navigation tag on the content control,
+  // not visible body text. We pass a neutral identifier so that
+  // when the caller opts out of the user-visible heading (`tocLabel:
+  // ''`) we don't end up advertising "Table of Contents" anywhere.
   out.push(
-    new TableOfContents(label || 'Table of Contents', {
+    new TableOfContents(label || 'marginalia-toc', {
       hyperlink: true,
       headingStyleRange: '1-6',
       beginDirty: true,

@@ -790,6 +790,38 @@ describe('documents API', () => {
     expect(res.headers.get('content-disposition')).toContain(`filename="${created.uid}.docx"`);
   });
 
+  test('GET /:uid/export.docx falls back to uid when the title sanitizes to empty', async () => {
+    // A title made up entirely of characters the filename sanitizer
+    // strips (e.g. emoji / punctuation) would previously have yielded
+    // `filename=".docx"`. Now we fall back to the uid.
+    const created = await upload(CLIENT_A, {
+      markdown: '# 🎉✨\n\nBody.\n',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.docx`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const cd = res.headers.get('content-disposition') ?? '';
+    expect(cd).not.toMatch(/filename="\.docx"/);
+    expect(cd).toContain(`filename="${created.uid}.docx"`);
+  });
+
+  test('GET /:uid/export.docx sets X-Content-Type-Options: nosniff', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Doc\n\nBody.\n',
+      name: 'Some doc',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.docx`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
   test('GET /:uid/export.docx rejects unknown UID with 404', async () => {
     const res = await app.hono.fetch(
       new Request('http://test/api/documents/does-not-exist/export.docx', {

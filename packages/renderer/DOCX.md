@@ -1,15 +1,16 @@
 # DOCX Export
 
-`exportDocx(source, options)` renders a Markdowner document to a Word
-`.docx` styled to match a viewer theme — fonts, heading hierarchy,
-spacing, tables, blockquotes and code blocks all carry over. The
-implementation lives in [`src/export-docx.ts`](./src/export-docx.ts).
+`exportDocx(source, options)` renders a Marginalia document (Markdown
+or AsciiDoc) to a Word `.docx` styled to match a viewer theme —
+fonts, heading hierarchy, spacing, tables, blockquotes and code
+blocks all carry over. The implementation lives in
+[`src/export-docx.ts`](./src/export-docx.ts).
 
 ## Request flow
 
 ```
-apps/web  ──► "Export DOCX" button in DocumentSettingsDialog
-              │
+apps/web  ──► "Word document" item in the toolbar DownloadMenu
+              │ (download icon next to the gear, available to readers)
 apps/server ─► GET /api/documents/:uid/export.docx
               │ loads document + theme tokens + attached assets
               ▼

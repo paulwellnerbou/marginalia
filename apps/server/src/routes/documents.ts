@@ -497,16 +497,38 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
     },
   });
 
-  const filename = (derivedTitle ?? doc.uid).replace(/[^\w.-]+/g, '_').slice(0, 80);
+  const filename = buildDocxFilename(derivedTitle, doc.uid);
   c.header(
     'Content-Type',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   );
   c.header('Content-Disposition', `attachment; filename="${filename}.docx"`);
   c.header('Cache-Control', 'private, no-store');
+  // `nosniff` matches the asset route: stops the browser from
+  // guessing a more permissive content type based on the bytes,
+  // which closes a class of user-upload XSS paths even though Word
+  // ignores it. Defense in depth.
+  c.header('X-Content-Type-Options', 'nosniff');
   // Hono doesn't have a first-class Buffer helper; return a Uint8Array
   // so the underlying Response pipeline sends exact bytes.
   return c.body(new Uint8Array(buf));
+}
+
+/**
+ * Safe filename from a derived title, falling back to the uid.
+ *
+ * `replace(/[^\w.-]+/g, '_')` lets through ASCII word chars, dots and
+ * hyphens and collapses everything else (emoji, punctuation, whitespace)
+ * into underscores. Titles like "🎉" would collapse to "_" — not empty,
+ * but uninformative. Titles that sanitize to *only* underscores / dots /
+ * hyphens (edge case: a title of all zero-width punctuation) get the
+ * uid treatment so we never emit `filename=".docx"`.
+ */
+function buildDocxFilename(title: string | null, uid: string): string {
+  const source = title ?? uid;
+  const sanitized = source.replace(/[^\w.-]+/g, '_').slice(0, 80);
+  const trimmed = sanitized.replace(/^[._-]+|[._-]+$/g, '');
+  return trimmed || uid;
 }
 
 // --- POST /api/documents/import (consume a bundle) -------------------
