@@ -717,6 +717,168 @@ describe('documents API', () => {
     expect(dupe.name).toBe('Original Name');
   });
 
+  test('GET /:uid/export.docx returns a themed Word document (binary)', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Export me\n\nA paragraph with **bold** text.\n',
+      name: 'DOCX fixture',
+      default_theme: 'beautiful',
+    });
+
+    // No explicit theme query → route uses doc.default_theme.
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.docx`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    expect(res.headers.get('content-disposition')).toMatch(
+      /filename="DOCX_fixture\.docx"/,
+    );
+    const buf = Buffer.from(await res.arrayBuffer());
+    // ZIP magic (docx is a zip).
+    expect(buf[0]).toBe(0x50);
+    expect(buf[1]).toBe(0x4b);
+    expect(buf[2]).toBe(0x03);
+    expect(buf[3]).toBe(0x04);
+    expect(buf.length).toBeGreaterThan(500);
+
+    // Explicit ?theme=... overrides the default and still works.
+    const res2 = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/export.docx?theme=technical`,
+        { headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token) },
+      ),
+    );
+    expect(res2.status).toBe(200);
+    const buf2 = Buffer.from(await res2.arrayBuffer());
+    // Different tokens → different bytes (sanity check).
+    expect(buf.equals(buf2)).toBe(false);
+  });
+
+  test('GET /:uid/export.docx filename derives from the document title when name is unset', async () => {
+    // No explicit `name` on upload → server should fall back to the
+    // H1 as the filename (not the opaque uid).
+    const created = await upload(CLIENT_A, {
+      markdown: '---\ntitle: My Great Doc\n---\n\n# A Body Heading\n\nBody.\n',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.docx`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    // Frontmatter title beats the H1 — matches extractDocumentTitle's
+    // priority. Non-filename chars get sanitized to `_`.
+    expect(res.headers.get('content-disposition')).toMatch(
+      /filename="My_Great_Doc\.docx"/,
+    );
+  });
+
+  test('GET /:uid/export.docx falls back to uid when no title is derivable', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: 'Just a paragraph, no heading, no frontmatter.\n',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.docx`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toContain(`filename="${created.uid}.docx"`);
+  });
+
+  test('GET /:uid/export.docx falls back to uid when the title sanitizes to empty', async () => {
+    // A title made up entirely of characters the filename sanitizer
+    // strips (e.g. emoji / punctuation) would previously have yielded
+    // `filename=".docx"`. Now we fall back to the uid.
+    const created = await upload(CLIENT_A, {
+      markdown: '# 🎉✨\n\nBody.\n',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.docx`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const cd = res.headers.get('content-disposition') ?? '';
+    expect(cd).not.toMatch(/filename="\.docx"/);
+    expect(cd).toContain(`filename="${created.uid}.docx"`);
+  });
+
+  test('GET /:uid/export.docx sets X-Content-Type-Options: nosniff', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Doc\n\nBody.\n',
+      name: 'Some doc',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.docx`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  });
+
+  test('GET /:uid/export.docx rejects unknown UID with 404', async () => {
+    const res = await app.hono.fetch(
+      new Request('http://test/api/documents/does-not-exist/export.docx', {
+        headers: headersFor(CLIENT_A),
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test('GET /:uid/export.docx embeds attached image assets', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Doc\n\n![logo](logo.png)\n',
+      name: 'With logo',
+    });
+
+    // Upload a tiny 1x1 PNG as `logo.png` on this document.
+    const PNG_BYTES = Uint8Array.from(
+      atob(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
+      ),
+      (c) => c.charCodeAt(0),
+    );
+    const form = new FormData();
+    form.append('file', new Blob([PNG_BYTES], { type: 'image/png' }), 'logo.png');
+    form.append('ref_name', 'logo.png');
+    const uploadRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/assets`, {
+        method: 'POST',
+        headers: withInvite(
+          new Headers({
+            [CLIENT_HEADER]: CLIENT_A.id,
+            [CLIENT_NAME_HEADER]: CLIENT_A.name,
+          }),
+          created.admin_invite.token,
+        ),
+        body: form,
+      }),
+    );
+    expect(uploadRes.status).toBe(201);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.docx`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const buf = Buffer.from(await res.arrayBuffer());
+    // Unzip and check that at least one media entry landed inside the
+    // DOCX — signals the asset resolver successfully fed bytes through.
+    const { default: JSZip } = await import('jszip');
+    const zip = await JSZip.loadAsync(buf);
+    const media = Object.entries(zip.files)
+      .filter(([p, e]) => p.startsWith('word/media/') && !e.dir)
+      .map(([p]) => p);
+    expect(media.length).toBe(1);
+  });
+
   test('import accepts legacy v1 bundles without representation', async () => {
     const importRes = await app.hono.fetch(
       new Request('http://test/api/documents/import', {

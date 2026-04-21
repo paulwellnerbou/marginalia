@@ -92,6 +92,63 @@
   background: var(--md-color-selection-bg);
 }
 
+/* `[TOC]` / `[[_TOC_]]` markers (see `remarkTocMarker`) are
+ * placeholders the DOCX exporter uses to decide where the Word TOC
+ * field lands. In the viewer we render a small editorial badge so
+ * the author can SEE the marker's position — otherwise it's easy to
+ * forget whether you ever typed `[TOC]` in the source.
+ *
+ * The sidebar TOC remains the accessible navigation; this badge is
+ * purely visual (aria-hidden on the element). All colours come from
+ * theme tokens so it adapts automatically to dark / editorial /
+ * technical / print palettes.
+ *
+ * Implementation note: the element emitted by the plugin is an empty
+ * `<div>`, so the label ("Table of contents") and the `§` ornament
+ * are CSS-generated content on the ::before/::after pseudo-elements.
+ * That keeps the HTML minimal, but the label string is hard-coded in
+ * CSS — a future i18n pass will need an explicit injection point
+ * (a data-attribute the CSS reads with `attr()`, a CSS custom
+ * property the host app sets per-document, or server/client-rendered
+ * text inside the `<div>`).
+ */
+.marginalia .marginalia-toc-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5em;
+  margin: 2em auto;
+  padding: 0.25em 0.9em;
+  /* `max-content` makes the pill hug its label instead of stretching
+   * full-width, and `max-width: 100%` guards against pathological
+   * overflow on narrow columns. */
+  width: max-content;
+  max-width: 100%;
+  border: 1px solid var(--md-color-border);
+  border-radius: 999px;
+  color: var(--md-color-fg-muted);
+  font-family: var(--md-font-heading);
+  font-size: 0.72em;
+  font-style: italic;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  /* CSS-injected content isn't user-editable; block selection so the
+   * author doesn't accidentally copy the label into their document. */
+  user-select: none;
+}
+.marginalia .marginalia-toc-marker::before {
+  content: '§';
+  font-family: var(--md-font-heading);
+  font-style: italic;
+  font-weight: 600;
+  font-size: 1.15em;
+  letter-spacing: 0;
+  color: var(--md-color-accent);
+}
+.marginalia .marginalia-toc-marker::after {
+  content: 'Table of contents';
+}
+
 .marginalia mark.comment-highlight {
   background: var(--md-color-selection-bg);
   color: inherit;

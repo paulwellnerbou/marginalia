@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "type": "module",
   "exports": {
+    "./tokens": "./src/tokens.ts",
     "./default.css": "./css/default.css",
     "./asciidoc-compat.css": "./css/asciidoc-compat.css",
     "./serif-print.css": "./css/serif-print.css",
@@ -14,5 +15,5 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
-  "files": ["css"]
+  "files": ["css", "src"]
 }

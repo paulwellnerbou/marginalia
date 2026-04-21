@@ -1,10 +1,13 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import {
+  exportDocx,
+  extractDocumentTitle,
   locateAllBlocks,
   locateAllBlocksAsciidoc,
   renderDocument,
   rewriteAssetReferences,
+  sanitizeDocumentFilename,
 } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -52,6 +55,7 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.post('/import', async (c) => importDocument(c, deps));
   r.get('/:uid', async (c) => getDocument(c, deps));
   r.get('/:uid/export', async (c) => exportDocument(c, deps));
+  r.get('/:uid/export.docx', async (c) => exportDocumentAsDocx(c, deps));
   r.put('/:uid', async (c) => updateDocument(c, deps));
   r.patch('/:uid/settings', async (c) => updateSettings(c, deps));
   r.delete('/:uid', async (c) => deleteDocument(c, deps));
@@ -428,6 +432,93 @@ async function exportDocument(c: Context, deps: AppDeps) {
   const filename = (doc.name ?? doc.uid).replace(/[^\w.-]+/g, '_').slice(0, 80);
   c.header('Content-Disposition', `attachment; filename="${filename}.marginalia.json"`);
   return c.json(bundle);
+}
+
+// --- GET /api/documents/:uid/export.docx -----------------------------
+
+/**
+ * DOCX export. Produces a themed Word document from the stored source.
+ *
+ * Theme resolution: `?theme=<id>` wins; otherwise we fall back to the
+ * document's `default_theme`. Unknown ids fall back to 'default' inside
+ * the exporter (matches the web viewer's behavior).
+ *
+ * Title/author: the document name and the caller's display name are
+ * forwarded to DOCX core properties so Word's File > Info surfaces
+ * sensible metadata. These are best-effort — if the name is missing
+ * we omit the field entirely.
+ */
+async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
+  const { db, store, blobs } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+
+  const identity = readIdentity(c.req.raw.headers);
+  const themeParam = c.req.query('theme');
+  const theme = typeof themeParam === 'string' && themeParam.length > 0
+    ? themeParam
+    : (doc.default_theme ?? 'default');
+
+  // Build an asset-resolver scoped to this document so markdown `<img>`
+  // srcs that match an attached ref land as real embedded images in the
+  // DOCX. Absolute http(s) URLs are not followed — the server only
+  // serves bytes it owns. data: URLs don't reach this resolver; the
+  // exporter decodes those inline.
+  const attached = new Map<string, { assetId: string; mime: string }>();
+  for (const a of listAttached(db, doc.uid)) {
+    attached.set(a.ref_name, { assetId: a.asset_id, mime: a.mime });
+  }
+
+  const source = store.read(doc.path);
+  // Title resolution for both the DOCX core properties and the
+  // download filename: explicit `doc.name` wins; else the document's
+  // own title (frontmatter `title:` or first H1 / `= Header`); else
+  // the opaque uid. Matches what a human would expect the file to be
+  // called when they open it.
+  const derivedTitle = doc.name ?? extractDocumentTitle(source, doc.format);
+  const buf = await exportDocx(source, {
+    theme,
+    format: doc.format,
+    ...(derivedTitle ? { title: derivedTitle } : {}),
+    ...(identity?.displayName ? { author: identity.displayName } : {}),
+    resolveAsset: async (src) => {
+      const hit = attached.get(src);
+      if (!hit) return null;
+      try {
+        const bytes = await blobs.get(hit.assetId);
+        return { bytes, mime: hit.mime };
+      } catch {
+        // Blob missing on disk (rare — shouldn't happen without a GC
+        // bug). Swallow so the export still succeeds with a placeholder.
+        return null;
+      }
+    },
+  });
+
+  const filename = sanitizeDocumentFilename(derivedTitle, doc.uid);
+  c.header(
+    'Content-Type',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  );
+  c.header('Content-Disposition', `attachment; filename="${filename}.docx"`);
+  c.header('Cache-Control', 'private, no-store');
+  // `nosniff` matches the asset route: stops the browser from
+  // guessing a more permissive content type based on the bytes,
+  // which closes a class of user-upload XSS paths even though Word
+  // ignores it. Defense in depth.
+  c.header('X-Content-Type-Options', 'nosniff');
+  // `buf` is already a Buffer (a Uint8Array view over the underlying
+  // ArrayBuffer). Passing it through avoids the allocate-and-copy
+  // cost of wrapping in a fresh `new Uint8Array(buf)` on every
+  // export. The cast bridges a type-only mismatch: Node's Buffer
+  // types as `Uint8Array<ArrayBufferLike>` (to allow a
+  // SharedArrayBuffer backing in principle) while Hono insists on
+  // `Uint8Array<ArrayBuffer>`. Runtime is identical — Bun's Buffer
+  // is always ArrayBuffer-backed.
+  return c.body(buf as unknown as Uint8Array<ArrayBuffer>);
 }
 
 // --- POST /api/documents/import (consume a bundle) -------------------

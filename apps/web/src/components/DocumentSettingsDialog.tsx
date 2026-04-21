@@ -26,7 +26,9 @@ import { BUILT_IN_THEMES } from '../lib/themes.js';
  * AccessControlDialog so admins can rename/restyle/export without the
  * mental overhead of a permissions screen.
  *
- * Surface: document name, default theme, JSON export.
+ * Surface: document name, default theme, JSON bundle export. The
+ * everyday "download the source or a DOCX" lives in `DownloadMenu`
+ * next to the gear, since it's not admin-only.
  */
 export function DocumentSettingsDialog({
   doc,
@@ -82,7 +84,10 @@ export function DocumentSettingsDialog({
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      // Defer the revoke a tick: a synchronous revoke right after
+      // `click()` can cancel the download in Safari/WebKit. See
+      // DownloadMenu's `downloadBlob` for the longer write-up.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (err) {
       reportError('DocumentSettings.exportJson', err, { uid: doc.uid });
       setError(err instanceof Error ? err.message : 'Export failed');
@@ -148,11 +153,12 @@ export function DocumentSettingsDialog({
 
           <Flex direction="column" gap="2">
             <Text size="2" weight="medium">
-              JSON export
+              JSON bundle
             </Text>
             <Text size="1" color="gray">
-              Downloads a versioned JSON bundle with the markdown source, comments, and renderer
-              metadata for tooling or later import.
+              Versioned bundle with the source, comments, and renderer metadata for tooling or
+              later import. For day-to-day source or DOCX downloads, use the download icon
+              next to this gear instead.
             </Text>
             <Flex>
               <Button variant="soft" onClick={exportJson} disabled={exporting}>

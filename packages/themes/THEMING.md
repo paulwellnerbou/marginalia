@@ -71,3 +71,14 @@ Built-in themes in this package:
 - `@marginalia/themes/article`
 - `@marginalia/themes/technical`
 - `@marginalia/themes/serif-print` (intended for PDF export)
+
+## Non-CSS consumers
+
+Some output paths can't run CSS — the DOCX exporter is the current
+example. They read a structured mirror of these custom properties from
+`@marginalia/themes/tokens` (see [`src/tokens.ts`](./src/tokens.ts)).
+CSS remains the source of truth; tokens are hand-authored to match and
+a spot-check test keeps the two aligned. If you add or retune a
+variable here, update the corresponding token so DOCX exports keep
+pace. See [`../renderer/DOCX.md`](../renderer/DOCX.md) for how tokens
+map to Word styles.

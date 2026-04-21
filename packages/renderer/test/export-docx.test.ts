@@ -1,0 +1,1150 @@
+import { describe, expect, test } from 'bun:test';
+import JSZip from 'jszip';
+import { exportDocx } from '../src/index.js';
+
+// 1x1 transparent PNG. Enough to exercise the probe + embed path
+// without pulling a binary fixture into the repo.
+const PNG_1x1_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=';
+const PNG_1x1_BYTES = Uint8Array.from(atob(PNG_1x1_BASE64), (c) => c.charCodeAt(0));
+const PNG_1x1_DATA_URL = `data:image/png;base64,${PNG_1x1_BASE64}`;
+
+/**
+ * Unzip a DOCX buffer and return a handful of inner files as text.
+ * DOCX is a ZIP; its interesting XML lives at known paths. We read
+ * `document.xml` (body content), `document.xml.rels` (external
+ * hyperlink URLs), and the `word/media/` directory listing so tests
+ * can assert on real decompressed content instead of raw zip bytes.
+ */
+async function inspectDocx(buf: Buffer): Promise<{
+  documentXml: string;
+  relsXml: string;
+  mediaFiles: string[];
+}> {
+  const zip = await JSZip.loadAsync(buf);
+  const documentXml = (await zip.file('word/document.xml')?.async('string')) ?? '';
+  const relsXml =
+    (await zip.file('word/_rels/document.xml.rels')?.async('string')) ?? '';
+  // JSZip lists both directories and files under `zip.files`; skip
+  // directory entries so we count actual images, not the `word/media/`
+  // folder marker itself.
+  const mediaFiles = Object.entries(zip.files)
+    .filter(([path, entry]) => path.startsWith('word/media/') && !entry.dir)
+    .map(([path]) => path);
+  return { documentXml, relsXml, mediaFiles };
+}
+
+// A DOCX is a ZIP with a `[Content_Types].xml` entry and a
+// `word/document.xml` that holds the body. We sniff the bytes rather
+// than re-parse the zip: the ZIP local-file header magic is `PK\x03\x04`
+// (0x50 0x4B 0x03 0x04) and the XML entries appear inline, lightly
+// compressed — checking for the text inside the buffer is unreliable
+// across zip implementations, so we only assert on structural bytes.
+const ZIP_MAGIC = Uint8Array.from([0x50, 0x4b, 0x03, 0x04]);
+
+function hasZipMagic(buf: Buffer): boolean {
+  if (buf.length < ZIP_MAGIC.length) return false;
+  for (let i = 0; i < ZIP_MAGIC.length; i++) if (buf[i] !== ZIP_MAGIC[i]) return false;
+  return true;
+}
+
+describe('exportDocx', () => {
+  test('produces a valid DOCX (ZIP) for a basic markdown doc', async () => {
+    const buf = await exportDocx(`# Hello
+
+This is a **test** paragraph with a [link](https://example.com) and some \`code\`.
+
+## Features
+
+- bullet one
+- bullet two
+  - nested
+
+| Col A | Col B |
+|-------|-------|
+| one   | two   |
+
+> A blockquote.
+
+\`\`\`ts
+const x: number = 1;
+\`\`\`
+`);
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(1000); // non-trivial doc
+    expect(hasZipMagic(buf)).toBe(true);
+  });
+
+  test('accepts a theme and produces output', async () => {
+    const buf = await exportDocx('# Title\n\nHello.', { theme: 'beautiful' });
+    expect(hasZipMagic(buf)).toBe(true);
+  });
+
+  test('unknown theme falls back to default', async () => {
+    const buf = await exportDocx('# Title\n\nHello.', { theme: 'nonexistent' });
+    expect(hasZipMagic(buf)).toBe(true);
+  });
+
+  test('empty input still yields a valid DOCX', async () => {
+    const buf = await exportDocx('');
+    expect(hasZipMagic(buf)).toBe(true);
+  });
+
+  test('core properties populated from options', async () => {
+    const buf = await exportDocx('# Doc', {
+      title: 'Test title',
+      author: 'Alice',
+    });
+    expect(hasZipMagic(buf)).toBe(true);
+    // Core-properties file lives at docProps/core.xml inside the zip.
+    // A simple byte search is unreliable for compressed data, but zip
+    // local-file-header filenames appear in plain ASCII near the front.
+    const asText = buf.toString('latin1');
+    expect(asText).toContain('core.xml');
+  });
+
+  test('theme swap yields meaningfully different bytes', async () => {
+    // Different tokens → different styles.xml → different bytes. Not a
+    // strict guarantee, but a sanity check that tokens flow through.
+    const md = '# Heading\n\nBody.\n';
+    const [a, b] = await Promise.all([
+      exportDocx(md, { theme: 'default' }),
+      exportDocx(md, { theme: 'beautiful' }),
+    ]);
+    expect(a.equals(b)).toBe(false);
+  });
+});
+
+describe('exportDocx — images (M4a)', () => {
+  test('embeds a data-URL image inline without a resolver', async () => {
+    const md = `# Doc\n\nBefore ![alt text](${PNG_1x1_DATA_URL}) after.\n`;
+    const buf = await exportDocx(md);
+    const { mediaFiles, documentXml } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBe(1);
+    // docx names media by content hash; just sanity-check extension.
+    expect(mediaFiles[0]).toMatch(/\.(png|jpg|jpeg|gif|bmp)$/);
+    // docx emits a `<w:drawing>` / `<a:blip r:embed="..."/>` for each
+    // image. Confirming a drawing element is the most robust signal.
+    expect(documentXml).toContain('<w:drawing>');
+  });
+
+  test('resolveAsset feeds bytes for relative refs', async () => {
+    const seen: string[] = [];
+    const md = '# Doc\n\n![logo](logo.png)\n';
+    const buf = await exportDocx(md, {
+      resolveAsset: async (src) => {
+        seen.push(src);
+        return { bytes: PNG_1x1_BYTES, mime: 'image/png' };
+      },
+    });
+    expect(seen).toEqual(['logo.png']);
+    const { mediaFiles } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBe(1);
+  });
+
+  test('null resolver → graceful placeholder, still valid DOCX', async () => {
+    const md = '# Doc\n\n![missing](not-attached.png)\n';
+    const buf = await exportDocx(md, {
+      resolveAsset: async () => null,
+    });
+    expect(hasZipMagic(buf)).toBe(true);
+    const { mediaFiles, documentXml } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBe(0);
+    // Placeholder text should reach document.xml.
+    expect(documentXml).toContain('[image: missing]');
+  });
+
+  test('unsupported mime (svg) falls back to placeholder', async () => {
+    const md = '# Doc\n\n![logo](logo.svg)\n';
+    const buf = await exportDocx(md, {
+      resolveAsset: async () => ({
+        bytes: new TextEncoder().encode('<svg/>'),
+        mime: 'image/svg+xml',
+      }),
+    });
+    const { mediaFiles } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBe(0);
+  });
+
+  test('images are shared across instances in a single export', async () => {
+    // The same src referenced twice should resolve once.
+    let calls = 0;
+    const md = '# Doc\n\n![a](shared.png)\n\n![b](shared.png)\n';
+    await exportDocx(md, {
+      resolveAsset: async () => {
+        calls++;
+        return { bytes: PNG_1x1_BYTES, mime: 'image/png' };
+      },
+    });
+    expect(calls).toBe(1);
+  });
+
+  test('resolver that throws leaves the export intact', async () => {
+    const md = '# Doc\n\n![broken](broken.png)\n\nStill readable.\n';
+    const buf = await exportDocx(md, {
+      resolveAsset: async () => {
+        throw new Error('fake I/O failure');
+      },
+    });
+    const { mediaFiles, documentXml } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBe(0);
+    expect(documentXml).toContain('Still readable.');
+  });
+});
+
+describe('exportDocx — bookmarks and internal links (M3a)', () => {
+  test('headings emit bookmarks with their slug id', async () => {
+    const md = '# First Section\n\n## Subsection Two\n\nBody.\n';
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    // `<w:bookmarkStart w:id=".." w:name="first-section"/>` appears
+    // around the heading runs.
+    expect(documentXml).toMatch(/<w:bookmarkStart[^>]*w:name="first-section"/);
+    expect(documentXml).toMatch(/<w:bookmarkStart[^>]*w:name="subsection-two"/);
+  });
+
+  test('internal hash-link resolves to a bookmark via w:anchor', async () => {
+    const md = [
+      '# Outline',
+      '',
+      '- [Jump to section](#my-section)',
+      '',
+      '## My Section',
+      '',
+      'Here.',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml, relsXml } = await inspectDocx(buf);
+    // Internal hyperlinks use w:anchor, not r:id → rels.
+    expect(documentXml).toMatch(/<w:hyperlink[^>]*w:anchor="my-section"/);
+    // And there's no external-link relationship for this href.
+    expect(relsXml).not.toContain('#my-section');
+  });
+
+  test('external link produces an external hyperlink relationship', async () => {
+    const md = '[example](https://example.com/x)\n';
+    const buf = await exportDocx(md);
+    const { relsXml } = await inspectDocx(buf);
+    expect(relsXml).toContain('https://example.com/x');
+    expect(relsXml).toContain('TargetMode="External"');
+  });
+
+  test('heading-anchor sigil links from the renderer are stripped', async () => {
+    // `rehypeHeadingAnchors` injects `<a class="heading-anchor" href="#id">#</a>`
+    // inside each heading. Those are UI chrome — they must not end up
+    // as clickable content in the DOCX.
+    const md = '# A Heading\n\nBody.\n';
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    // The heading text appears once…
+    const matches = documentXml.match(/A Heading/g) ?? [];
+    expect(matches.length).toBe(1);
+    // …and the sigil '#' is not emitted as a hyperlink.
+    expect(documentXml).not.toMatch(/<w:hyperlink[^>]*w:anchor="a-heading"/);
+  });
+});
+
+describe('exportDocx — Table of Contents (M3b)', () => {
+  test('auto mode emits TOC when doc has ≥ 2 headings', async () => {
+    const md = [
+      '# Top',
+      '',
+      '## A',
+      '',
+      'Body A.',
+      '',
+      '## B',
+      '',
+      'Body B.',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    // Word TOC field: `<w:fldChar>` + instrText containing the TOC
+    // field code `TOC \o "1-6"` or similar. Checking for the field
+    // instruction text is the most robust signal.
+    expect(documentXml).toContain('TOC');
+    expect(documentXml).toContain('fldChar');
+    // And the user-visible "Contents" label above it.
+    expect(documentXml).toContain('Contents');
+  });
+
+  test('auto mode skips TOC when doc has ≤ 1 heading', async () => {
+    const buf = await exportDocx('# Only one heading\n\nBody.\n');
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).not.toContain('Contents');
+    expect(documentXml).not.toContain('fldChar');
+  });
+
+  test('includeToc: false suppresses TOC even with many headings', async () => {
+    const md = '# A\n\n## B\n\n## C\n\n## D\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).not.toContain('fldChar');
+  });
+
+  test('includeToc: true forces TOC on a single-heading doc', async () => {
+    const buf = await exportDocx('# Sole heading\n\nBody.\n', {
+      includeToc: true,
+    });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('fldChar');
+  });
+
+  test('tocLabel overrides the default "Contents" title', async () => {
+    const buf = await exportDocx('# A\n\n## B\n\n## C\n', {
+      includeToc: true,
+      tocLabel: 'Inhalt',
+    });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('Inhalt');
+    expect(documentXml).not.toContain('>Contents<');
+  });
+
+  test('empty tocLabel suppresses the TOC heading but keeps the field', async () => {
+    const buf = await exportDocx('# A\n\n## B\n', {
+      includeToc: true,
+      tocLabel: '',
+    });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('fldChar');
+    expect(documentXml).not.toContain('>Contents<');
+    // The TOC field's SDT alias was previously defaulting to
+    // "Table of Contents" when `tocLabel` was empty — that value
+    // could surface in screen readers / navigation panes even though
+    // the user asked for no heading. Verify it doesn't appear.
+    expect(documentXml).not.toContain('Table of Contents');
+  });
+
+  test('"Contents" label uses the dedicated TocHeading style, not Heading1', async () => {
+    const md = '# Doc Title\n\n## A\n\n## B\n';
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    // Find the paragraph that contains "Contents" and check its style.
+    const contentsPara = documentXml.match(
+      /<w:p\b[^>]*>(?:(?!<\/w:p>)[\s\S])*Contents(?:(?!<\/w:p>)[\s\S])*<\/w:p>/,
+    );
+    expect(contentsPara).not.toBeNull();
+    expect(contentsPara![0]).toContain('<w:pStyle w:val="TocHeading"');
+    expect(contentsPara![0]).not.toContain('<w:pStyle w:val="Heading1"');
+  });
+
+  test('TOC appears AFTER the first heading, not before it', async () => {
+    const md = '# Document Title\n\n## Chapter A\n\n## Chapter B\n';
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    const titleIdx = documentXml.indexOf('Document Title');
+    const contentsIdx = documentXml.indexOf('Contents');
+    const chapterAIdx = documentXml.indexOf('Chapter A');
+    expect(titleIdx).toBeGreaterThan(-1);
+    expect(contentsIdx).toBeGreaterThan(-1);
+    expect(chapterAIdx).toBeGreaterThan(-1);
+    // Order must be: title → Contents → chapter A
+    expect(titleIdx).toBeLessThan(contentsIdx);
+    expect(contentsIdx).toBeLessThan(chapterAIdx);
+  });
+
+  test('TOC falls back to the top when the doc has no leading heading', async () => {
+    // A doc that opens with a paragraph (not a heading) still needs
+    // its TOC somewhere visible — the top is the natural place.
+    const md = [
+      'Intro paragraph before any heading.',
+      '',
+      '## A',
+      '',
+      '## B',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    const introIdx = documentXml.indexOf('Intro paragraph');
+    const contentsIdx = documentXml.indexOf('Contents');
+    expect(contentsIdx).toBeLessThan(introIdx);
+  });
+});
+
+describe('exportDocx — [TOC] / [[_TOC_]] markers', () => {
+  test('[TOC] marker places the TOC at the marker position', async () => {
+    const md = [
+      '# Document Title',
+      '',
+      'Intro before the TOC.',
+      '',
+      '[TOC]',
+      '',
+      '## Chapter A',
+      '',
+      'Body A.',
+      '',
+      '## Chapter B',
+      '',
+      'Body B.',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    const titleIdx = documentXml.indexOf('Document Title');
+    const introIdx = documentXml.indexOf('Intro before');
+    const contentsIdx = documentXml.indexOf('Contents');
+    const chapterAIdx = documentXml.indexOf('Chapter A');
+    // Title → Intro → Contents (from marker) → Chapter A.
+    expect(titleIdx).toBeLessThan(introIdx);
+    expect(introIdx).toBeLessThan(contentsIdx);
+    expect(contentsIdx).toBeLessThan(chapterAIdx);
+    // The marker element itself is stripped from the DOCX body.
+    expect(documentXml).not.toContain('marginalia-toc-marker');
+  });
+
+  test('[[_TOC_]] marker is also honoured', async () => {
+    const md = [
+      '# Title',
+      '',
+      '[[_TOC_]]',
+      '',
+      '## A',
+      '',
+      '## B',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    // TOC field lands in the body (not just the heading).
+    expect(documentXml).toContain('fldChar');
+    // The `[[_TOC_]]` literal must not survive.
+    expect(documentXml).not.toContain('[[_TOC_]]');
+    expect(documentXml).not.toContain('[[TOC]]');
+  });
+
+  test('explicit marker wins over the "after-leading-heading" heuristic', async () => {
+    // Without the marker, the TOC would go right after the title.
+    // With the marker, it goes where the author put it.
+    const md = [
+      '# Title',
+      '',
+      '## A',
+      '',
+      'Some content between.',
+      '',
+      '[TOC]',
+      '',
+      '## B',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    const titleIdx = documentXml.indexOf('Title');
+    const chapterAIdx = documentXml.indexOf('>A<');
+    const contentsIdx = documentXml.indexOf('Contents');
+    const chapterBIdx = documentXml.indexOf('>B<');
+    expect(titleIdx).toBeLessThan(chapterAIdx);
+    // Critical: Contents comes AFTER Chapter A (the marker position),
+    // not immediately after the title.
+    expect(chapterAIdx).toBeLessThan(contentsIdx);
+    expect(contentsIdx).toBeLessThan(chapterBIdx);
+  });
+
+  test('only the FIRST marker becomes a TOC; later markers are silently dropped', async () => {
+    const md = [
+      '# Title',
+      '',
+      '[TOC]',
+      '',
+      '## A',
+      '',
+      '[[_TOC_]]',
+      '',
+      '## B',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    // A single Word TOC field uses three `<w:fldChar>` elements
+    // (begin + separate + end). Two TOCs would give us six. One
+    // TOC → three.
+    const fldCharMatches = documentXml.match(/<w:fldChar/g) ?? [];
+    expect(fldCharMatches.length).toBe(3);
+    // No stray "Contents" from a second emission.
+    const contentsMatches = documentXml.match(/>Contents</g) ?? [];
+    expect(contentsMatches.length).toBe(1);
+  });
+
+  test('includeToc: false suppresses the TOC even when a marker is present', async () => {
+    const md = '# Title\n\n[TOC]\n\n## A\n\n## B\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).not.toContain('fldChar');
+    expect(documentXml).not.toContain('Contents');
+    // The marker div itself should not leak into the body.
+    expect(documentXml).not.toContain('marginalia-toc-marker');
+  });
+
+  test('marker forces TOC even for a single-heading doc', async () => {
+    // Normally auto-mode would skip a doc with only one heading,
+    // but an explicit marker signals "I want a TOC here, really".
+    const md = '# Sole heading\n\n[TOC]\n\nBody text.\n';
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('fldChar');
+  });
+});
+
+describe('exportDocx — run-level size overrides (follow-up)', () => {
+  test('heading paragraph runs have no w:sz override (style-only sizing)', async () => {
+    // Previously a catch-all in runOptions set size on every run, so
+    // the document title rendered as "Heading1 + 12pt" in Word's
+    // style inspector. With the override removed, the heading's
+    // run-properties block inside the paragraph should have no
+    // `<w:sz>`; the Heading1 style provides the size.
+    const md = '# A Heading\n\nBody paragraph.\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+
+    // Narrow to the paragraph styled Heading1.
+    const headingPara = documentXml.match(
+      /<w:p\b[^>]*>(?:(?!<\/w:p>)[\s\S])*<w:pStyle w:val="Heading1"[\s\S]*?<\/w:p>/,
+    );
+    expect(headingPara).not.toBeNull();
+    // `<w:sz>` inside `<w:rPr>` of the heading's runs would be a
+    // run-level size override. Assert there is none.
+    const runSizeInsideHeading = headingPara![0].match(/<w:rPr>[\s\S]*?<w:sz\b/);
+    expect(runSizeInsideHeading).toBeNull();
+  });
+
+  test('body paragraph runs also have no w:sz override', async () => {
+    const md = 'Plain body text with **bold** and *italic* runs.\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // Extract all run-property blocks inside the body paragraph and
+    // check none carries a size override.
+    const bodyPara = documentXml.match(
+      /<w:p\b[^>]*>(?:(?!<\/w:p>)[\s\S])*Plain body(?:(?!<\/w:p>)[\s\S])*<\/w:p>/,
+    );
+    expect(bodyPara).not.toBeNull();
+    expect(bodyPara![0]).not.toMatch(/<w:rPr>[\s\S]*?<w:sz\b/);
+  });
+
+  test('inline code keeps its size override (intentional 0.9× body size)', async () => {
+    // Inline `<code>` runs size down slightly because the
+    // surrounding paragraph is Normal, not CodeBlock — so the
+    // override is needed. Confirm we still emit it.
+    const md = 'A paragraph with `inline code` inside.\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The run carrying "inline code" should have a w:sz element.
+    const codeRun = documentXml.match(
+      /<w:r>[^<]*<w:rPr>[\s\S]*?<\/w:rPr>[^<]*<w:t[^>]*>inline code<\/w:t>[^<]*<\/w:r>/,
+    );
+    expect(codeRun).not.toBeNull();
+    expect(codeRun![0]).toMatch(/<w:sz\b/);
+  });
+
+  test('code block runs do NOT carry a size override (CodeBlock style owns it)', async () => {
+    // splitCodeLines previously passed `code: true` into runOptions,
+    // which forced a run-level size/font override on every Shiki
+    // span even though the `CodeBlock` paragraph style already
+    // sets both. Regression guard: assert no `<w:sz>` inside
+    // paragraph runs styled CodeBlock.
+    const md = '```js\nconst x = 1;\n```\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    const codePara = documentXml.match(
+      /<w:p\b[^>]*>(?:(?!<\/w:p>)[\s\S])*<w:pStyle w:val="CodeBlock"[\s\S]*?<\/w:p>/,
+    );
+    expect(codePara).not.toBeNull();
+    // No `<w:sz>` in any run-properties block inside the code
+    // paragraph. Shiki colors should still be there — those go via
+    // `<w:color>`, not `<w:sz>`.
+    expect(codePara![0]).not.toMatch(/<w:rPr>[\s\S]*?<w:sz\b/);
+  });
+});
+
+describe('exportDocx — image placeholder labels (follow-up)', () => {
+  test('missing alt + data: URL does NOT leak the URL into the placeholder', async () => {
+    // `![](data:image/svg+xml,<svg/>)` — SVG falls back because we
+    // don't support it, and there's no alt text. Previously the
+    // placeholder would dump the full data URL into the body. Now
+    // it should say "embedded image".
+    const dataUrl = 'data:image/svg+xml;base64,' + 'A'.repeat(500);
+    const md = `![](${dataUrl})\n`;
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('embedded image');
+    expect(documentXml).not.toContain('A'.repeat(80)); // URL body isn't dumped
+    expect(documentXml).not.toContain('data:image');
+  });
+
+  test('missing alt + http URL falls back to the filename', async () => {
+    const md = '![](https://cdn.example.com/path/to/Logo_v2.png)\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('[image: Logo_v2.png]');
+    expect(documentXml).not.toContain('https://cdn.example.com');
+  });
+
+  test('missing alt + relative path falls back to the basename', async () => {
+    // The client didn't attach this ref → resolveAsset returns null
+    // → placeholder. Should use the ref as-is since it's short.
+    const md = '![](diagrams/flow.png)\n';
+    const buf = await exportDocx(md, { includeToc: false, resolveAsset: async () => null });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('[image: flow.png]');
+  });
+
+  test('alt text is still preferred over src-derived labels', async () => {
+    const md = '![Company logo](https://cdn.example.com/logo.png)\n';
+    const buf = await exportDocx(md, { includeToc: false, resolveAsset: async () => null });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('[image: Company logo]');
+    expect(documentXml).not.toContain('logo.png');
+  });
+});
+
+describe('exportDocx — base font size calibration', () => {
+  async function loadStyles(buf: Buffer): Promise<string> {
+    const zip = await JSZip.loadAsync(buf);
+    return (await zip.file('word/styles.xml')?.async('string')) ?? '';
+  }
+
+  test('default theme: Normal is 12pt (24 half-points)', async () => {
+    const buf = await exportDocx('Body.', { theme: 'default', includeToc: false });
+    const stylesXml = await loadStyles(buf);
+    // The document default run size sits inside <w:docDefaults><w:rPrDefault>.
+    const defaultRunSize = stylesXml.match(
+      /<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:sz\s+w:val="(\d+)"/,
+    );
+    expect(defaultRunSize).not.toBeNull();
+    // 12pt = 24 half-points.
+    expect(defaultRunSize![1]).toBe('24');
+  });
+
+  test('technical theme is denser (10pt) and beautiful is larger (13pt)', async () => {
+    const [tech, beautiful] = await Promise.all([
+      exportDocx('Body.', { theme: 'technical', includeToc: false }).then(loadStyles),
+      exportDocx('Body.', { theme: 'beautiful', includeToc: false }).then(loadStyles),
+    ]);
+    expect(tech).toMatch(
+      /<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:sz\s+w:val="20"/,
+    );
+    expect(beautiful).toMatch(
+      /<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:sz\s+w:val="26"/,
+    );
+  });
+});
+
+describe('exportDocx — footnotes (M3c)', () => {
+  async function loadFootnotes(buf: Buffer): Promise<string> {
+    const zip = await JSZip.loadAsync(buf);
+    return (await zip.file('word/footnotes.xml')?.async('string')) ?? '';
+  }
+
+  test('GFM footnote refs become FootnoteReferenceRun', async () => {
+    const md = [
+      'Hello[^one] world[^two].',
+      '',
+      '[^one]: First footnote.',
+      '[^two]: Second footnote.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // Inline: two footnote references.
+    const refs = documentXml.match(/<w:footnoteReference[^/]*\/>/g) ?? [];
+    expect(refs.length).toBe(2);
+    // The inline visible "1" / "2" numerals from GFM's anchor should
+    // NOT appear — Word auto-numbers from the reference itself.
+    // (We use a boundary check to avoid false positives from
+    // chance-occurring digits elsewhere in the styles.xml escape.)
+    expect(documentXml).not.toContain('>1<');
+    expect(documentXml).not.toContain('>2<');
+  });
+
+  test('footnote bodies land in word/footnotes.xml, not inline', async () => {
+    const md = [
+      'Alpha[^a].',
+      '',
+      '[^a]: Body text here.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    const footnotesXml = await loadFootnotes(buf);
+
+    // The "Footnotes" section heading GFM adds (h2.sr-only) must not
+    // appear inline — we lifted it out.
+    expect(documentXml).not.toContain('>Footnotes<');
+    // Nor the footnote body as regular paragraph content.
+    expect(documentXml).not.toContain('Body text here.');
+
+    // Body goes to footnotes.xml instead.
+    expect(footnotesXml).toContain('Body text here.');
+  });
+
+  test('back-reference arrow (↩) is dropped from footnote bodies', async () => {
+    const md = 'Ref[^x].\n\n[^x]: Note.\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const footnotesXml = await loadFootnotes(buf);
+    // GFM emits `↩` (U+21A9) as the backref arrow inside the `<li>`.
+    expect(footnotesXml).not.toContain('↩');
+    expect(footnotesXml).not.toContain('\u21a9');
+  });
+
+  test('inline formatting inside a footnote survives to footnotes.xml', async () => {
+    const md = 'See[^q].\n\n[^q]: Body with *italic* and **bold** runs.\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const footnotesXml = await loadFootnotes(buf);
+    // Italic: `<w:i/>` or `<w:i w:val="true"/>`. Bold: `<w:b/>`.
+    expect(footnotesXml).toMatch(/<w:i\b/);
+    expect(footnotesXml).toMatch(/<w:b\b/);
+    expect(footnotesXml).toContain('italic');
+    expect(footnotesXml).toContain('bold');
+  });
+
+  test('doc without footnotes still exports cleanly', async () => {
+    const buf = await exportDocx('# Doc\n\nNo footnotes here.\n', {
+      includeToc: false,
+    });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).not.toContain('<w:footnoteReference');
+  });
+
+  test('multi-block footnote bodies are preserved, not silently dropped', async () => {
+    // GFM footnote with a paragraph, a list, and a code block in one
+    // body. Previous implementation only kept the first paragraph.
+    const md = [
+      'See[^multi] below.',
+      '',
+      '[^multi]: Opening paragraph.',
+      '',
+      '    - bullet one',
+      '    - bullet two',
+      '',
+      '    ```',
+      '    code line',
+      '    ```',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const footnotesXml = await loadFootnotes(buf);
+    expect(footnotesXml).toContain('Opening paragraph.');
+    expect(footnotesXml).toContain('bullet one');
+    expect(footnotesXml).toContain('bullet two');
+    expect(footnotesXml).toContain('code line');
+  });
+
+  test('footnote whose body references another footnote resolves that ref', async () => {
+    // Regression: previously the second pass in `extractFootnotes`
+    // ran with an empty `ctx.footnoteIds`, so cross-refs between
+    // footnotes rendered as plain internal links instead of real
+    // `FootnoteReferenceRun`s.
+    const md = [
+      'Intro[^a] and[^b].',
+      '',
+      '[^a]: First note — see also[^b].',
+      '[^b]: Second note.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const footnotesXml = await loadFootnotes(buf);
+    // The first footnote's body should contain a footnoteReference
+    // pointing at footnote 2 (the cross-ref), not just plain text.
+    expect(footnotesXml).toMatch(/<w:footnoteReference\b/);
+  });
+
+  test('direct text inside a footnote <li> is preserved', async () => {
+    // GFM normally wraps footnote bodies in `<p>`, but if a <li>
+    // somehow ends up with a bare text child (we use raw HTML here
+    // to construct the shape) the exporter must not silently drop
+    // the text. Regression guard: the walker previously skipped
+    // non-element children unconditionally.
+    const md = [
+      'Anchor text.',
+      '',
+      '<section data-footnotes class="footnotes"><ol>',
+      '<li id="user-content-fn-stray">Bare text child</li>',
+      '</ol></section>',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const footnotesXml = await loadFootnotes(buf);
+    expect(footnotesXml).toContain('Bare text child');
+  });
+});
+
+describe('exportDocx — language / RTL (M5)', () => {
+  async function loadStyles(buf: Buffer): Promise<string> {
+    const zip = await JSZip.loadAsync(buf);
+    return (await zip.file('word/styles.xml')?.async('string')) ?? '';
+  }
+
+  test('options.language tags the default run with a BCP-47 language', async () => {
+    const buf = await exportDocx('Hallo Welt.\n', { language: 'de-DE' });
+    const stylesXml = await loadStyles(buf);
+    // Run-level language uses `<w:lang w:val="de-DE" ...>`.
+    expect(stylesXml).toMatch(/<w:lang[^>]*w:val="de-DE"/);
+  });
+
+  test('Arabic frontmatter lang triggers RTL paragraph direction', async () => {
+    const md = '---\nlang: ar\n---\n\nمرحبا بالعالم\n';
+    const buf = await exportDocx(md);
+    const stylesXml = await loadStyles(buf);
+    // `<w:bidi/>` on the default paragraph properties means RTL.
+    expect(stylesXml).toMatch(/<w:bidi\b/);
+    expect(stylesXml).toMatch(/<w:lang[^>]*w:val="ar"/);
+  });
+
+  test('non-RTL lang does not add bidi', async () => {
+    const md = '---\nlang: en\n---\n\nHello.\n';
+    const buf = await exportDocx(md);
+    const stylesXml = await loadStyles(buf);
+    expect(stylesXml).not.toMatch(/<w:bidi\b/);
+  });
+
+  test('explicit language option beats frontmatter', async () => {
+    const md = '---\nlang: en\n---\n\nShalom.\n';
+    const buf = await exportDocx(md, { language: 'he' });
+    const stylesXml = await loadStyles(buf);
+    expect(stylesXml).toMatch(/<w:lang[^>]*w:val="he"/);
+    expect(stylesXml).toMatch(/<w:bidi\b/);
+  });
+
+  test('frontmatter `language:` alias is also recognised', async () => {
+    const md = '---\nlanguage: fa\n---\n\nبدرود\n';
+    const buf = await exportDocx(md);
+    const stylesXml = await loadStyles(buf);
+    expect(stylesXml).toMatch(/<w:lang[^>]*w:val="fa"/);
+    expect(stylesXml).toMatch(/<w:bidi\b/);
+  });
+
+  test('no language at all → no explicit lang or bidi', async () => {
+    const buf = await exportDocx('Just a doc.\n');
+    const stylesXml = await loadStyles(buf);
+    expect(stylesXml).not.toMatch(/<w:bidi\b/);
+  });
+});
+
+describe('exportDocx — blockquote nesting', () => {
+  test('blockquote with a nested list preserves the bullets', async () => {
+    // Regression: the previous `case 'blockquote'` flattened every
+    // child via `collectInline`, so an inner `<ul>` lost its
+    // numbering and items became a single plain-text run.
+    const md = [
+      '> Intro paragraph.',
+      '>',
+      '> - item one',
+      '> - item two',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The intro paragraph carries Blockquote styling.
+    expect(documentXml).toMatch(/<w:pStyle w:val="Blockquote"/);
+    // List items keep their numbering properties — NOT flattened.
+    const numPrInBlockquote = documentXml.match(/<w:numPr\b/g) ?? [];
+    expect(numPrInBlockquote.length).toBe(2);
+    expect(documentXml).toContain('item one');
+    expect(documentXml).toContain('item two');
+  });
+
+  test('blockquote with a nested code block keeps CodeBlock styling', async () => {
+    const md = [
+      '> Quoted prose.',
+      '>',
+      '> ```js',
+      '> const x = 1;',
+      '> ```',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The prose paragraph is styled Blockquote.
+    expect(documentXml).toMatch(/<w:pStyle w:val="Blockquote"[\s\S]*?Quoted prose\./);
+    // The code block keeps its own CodeBlock style (NOT Blockquote).
+    expect(documentXml).toMatch(/<w:pStyle w:val="CodeBlock"/);
+    // Shiki splits the code into per-token runs, so `const x = 1;`
+    // won't appear contiguously. Assert on the individual tokens
+    // — `const` and `1` are enough to confirm the code survived.
+    expect(documentXml).toContain('const');
+    expect(documentXml).toContain('1');
+  });
+
+  test('blockquote with multiple paragraphs keeps each as its own Blockquote paragraph', async () => {
+    const md = ['> First paragraph.', '>', '> Second paragraph.'].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // Both paragraphs carry Blockquote styling — and they're
+    // distinct paragraphs, not a merged run.
+    const bqMatches = documentXml.match(/<w:pStyle w:val="Blockquote"/g) ?? [];
+    expect(bqMatches.length).toBe(2);
+    expect(documentXml).toContain('First paragraph.');
+    expect(documentXml).toContain('Second paragraph.');
+  });
+
+  test('footnote blockquote with a list keeps both intact', async () => {
+    const md = [
+      'See[^a].',
+      '',
+      '[^a]: > A quoted preamble.',
+      '    >',
+      '    > - first bullet',
+      '    > - second bullet',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const zip = await JSZip.loadAsync(buf);
+    const footnotesXml =
+      (await zip.file('word/footnotes.xml')?.async('string')) ?? '';
+    expect(footnotesXml).toContain('A quoted preamble.');
+    expect(footnotesXml).toContain('first bullet');
+    expect(footnotesXml).toContain('second bullet');
+  });
+});
+
+describe('exportDocx — list items', () => {
+  test('multi-paragraph list items preserve paragraph boundaries', async () => {
+    // Loose-list markdown: each item's second paragraph should NOT
+    // carry its own bullet, but it MUST stay a distinct paragraph —
+    // the previous flattening merged the two paragraphs' text
+    // into one long run.
+    const md = [
+      '- First paragraph of item one.',
+      '',
+      '  Second paragraph of item one.',
+      '',
+      '- Item two.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+
+    // Both halves of item one appear — and they are separate
+    // paragraphs (there's a closing `</w:p>` between them).
+    const firstIdx = documentXml.indexOf('First paragraph of item one.');
+    const secondIdx = documentXml.indexOf('Second paragraph of item one.');
+    const itemTwoIdx = documentXml.indexOf('Item two.');
+    expect(firstIdx).toBeGreaterThan(-1);
+    expect(secondIdx).toBeGreaterThan(-1);
+    expect(itemTwoIdx).toBeGreaterThan(-1);
+    expect(firstIdx).toBeLessThan(secondIdx);
+    expect(secondIdx).toBeLessThan(itemTwoIdx);
+    // There's at least one `</w:p>` between the two halves — proves
+    // they're distinct paragraphs, not merged runs.
+    const between = documentXml.slice(firstIdx, secondIdx);
+    expect(between).toContain('</w:p>');
+
+    // Bullet count: exactly two numPr entries (one per list item),
+    // NOT three. If the continuation paragraph picked up a bullet,
+    // we'd see three.
+    const numPrMatches = documentXml.match(/<w:numPr\b/g) ?? [];
+    expect(numPrMatches.length).toBe(2);
+  });
+
+  test('list item with a nested list preserves the nesting', async () => {
+    // Regression: the rewrite must keep nested lists working and
+    // place them at the correct depth (level + 1).
+    const md = [
+      '- outer one',
+      '  - nested a',
+      '  - nested b',
+      '- outer two',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('outer one');
+    expect(documentXml).toContain('nested a');
+    expect(documentXml).toContain('nested b');
+    expect(documentXml).toContain('outer two');
+    // Four list items → four numbered paragraphs.
+    const numPrMatches = documentXml.match(/<w:numPr\b/g) ?? [];
+    expect(numPrMatches.length).toBe(4);
+  });
+});
+
+describe('exportDocx — grid tables', () => {
+  test('grid-table cell content survives to document.xml', async () => {
+    // Pandoc-style grid table. `preprocessGridTables` converts it to
+    // an HTML `<table>` by rendering each cell's markdown via
+    // `renderCellForDocx`. A no-op renderCell (the old bug) would
+    // leave every cell empty in the export.
+    const md = [
+      '+---------+---------+',
+      '| Head A  | Head B  |',
+      '+=========+=========+',
+      '| cell-a1 | cell-b1 |',
+      '+---------+---------+',
+      '| cell-a2 | cell-b2 |',
+      '+---------+---------+',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // Every header and body cell makes it into the rendered DOCX.
+    expect(documentXml).toContain('Head A');
+    expect(documentXml).toContain('Head B');
+    expect(documentXml).toContain('cell-a1');
+    expect(documentXml).toContain('cell-b1');
+    expect(documentXml).toContain('cell-a2');
+    expect(documentXml).toContain('cell-b2');
+  });
+
+  test('grid-table cells with inline formatting render bold / italic runs', async () => {
+    const md = [
+      '+-----------+------------+',
+      '| **bold**  | *italic*   |',
+      '+===========+============+',
+      '| plain     | `code`     |',
+      '+-----------+------------+',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('bold');
+    expect(documentXml).toContain('italic');
+    expect(documentXml).toMatch(/<w:b\b/); // bold run property
+    expect(documentXml).toMatch(/<w:i\b/); // italic run property
+  });
+});
+
+describe('exportDocx — tables (Copilot review follow-ups)', () => {
+  function countRowShadings(documentXml: string): {
+    headerShaded: number;
+    bodyShaded: number;
+  } {
+    // `<w:tr>` opens a row; within each row, the first cell's shading
+    // is the one we care about for stripe parity. Header rows are
+    // flagged by `<w:tblHeader/>` inside `<w:trPr>`.
+    const rows = documentXml.split('<w:tr>').slice(1);
+    let headerShaded = 0;
+    let bodyShaded = 0;
+    for (const chunk of rows) {
+      const tr = chunk.split('</w:tr>')[0] ?? '';
+      const isHeader = tr.includes('<w:tblHeader');
+      const firstCell = tr.split('<w:tc>')[1]?.split('</w:tc>')[0] ?? '';
+      const hasShade = /<w:shd[^>]*w:fill="[0-9a-f]{6}"/i.test(firstCell);
+      if (isHeader && hasShade) headerShaded++;
+      else if (!isHeader && hasShade) bodyShaded++;
+    }
+    return { headerShaded, bodyShaded };
+  }
+
+  test('zebra parity counts body rows only (C6)', async () => {
+    // 1 header row + 3 body rows. With header-counted parity (the
+    // bug), `rows.length % 2 === 1` at body row 0 (second row
+    // overall) would shade row 0, which should actually be unshaded.
+    const md = [
+      '| H1 | H2 |',
+      '|----|----|',
+      '| A  | 1  |', // body row 0 — should NOT be shaded
+      '| B  | 2  |', // body row 1 — SHOULD be shaded
+      '| C  | 3  |', // body row 2 — should NOT be shaded
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    const { headerShaded, bodyShaded } = countRowShadings(documentXml);
+    expect(headerShaded).toBe(1); // header always shaded
+    expect(bodyShaded).toBe(1); // only the second body row striped
+  });
+
+  test('header cells carry a heavier bottom border when token enabled (C7)', async () => {
+    const md = [
+      '| Col A | Col B |',
+      '|-------|-------|',
+      '| a     | b     |',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The header cell's bottom border is 2pt (size=16 in eighths of
+    // a point), colored with the theme's fg. Match on `w:sz="16"`
+    // inside a `<w:tcBorders>` / `<w:bottom ...>` element.
+    expect(documentXml).toMatch(/<w:bottom[^/]*w:sz="16"/);
+  });
+});
+
+describe('exportDocx — page size & margins', () => {
+  // Millimeter-to-twip conversion doesn't land on the exact tabulated
+  // sheet size by a twip or two; assert within a small tolerance.
+  // Letter is defined directly in twips so it lands exact.
+  const A4 = { width: 11906, height: 16838 };
+  const A5 = { width: 8390, height: 11906 };
+  const LETTER = { width: 12240, height: 15840 };
+
+  function readPageSize(documentXml: string): { width: number; height: number } {
+    // `<w:pgSz w:w="…" w:h="…" .../>` in section properties.
+    const m = documentXml.match(/<w:pgSz[^/]*w:w="(\d+)"[^/]*w:h="(\d+)"/);
+    return m && m[1] && m[2]
+      ? { width: Number.parseInt(m[1], 10), height: Number.parseInt(m[2], 10) }
+      : { width: 0, height: 0 };
+  }
+
+  function expectSize(
+    actual: { width: number; height: number },
+    target: { width: number; height: number },
+  ): void {
+    expect(Math.abs(actual.width - target.width)).toBeLessThanOrEqual(3);
+    expect(Math.abs(actual.height - target.height)).toBeLessThanOrEqual(3);
+  }
+
+  test('default theme exports on A4 (sanity)', async () => {
+    const buf = await exportDocx('# Doc', { theme: 'default' });
+    const { documentXml } = await inspectDocx(buf);
+    expectSize(readPageSize(documentXml), A4);
+  });
+
+  test('book theme also exports on A4 (was A5 — changed per feedback)', async () => {
+    const buf = await exportDocx('# Doc', { theme: 'book' });
+    const { documentXml } = await inspectDocx(buf);
+    expectSize(readPageSize(documentXml), A4);
+  });
+
+  test('pageSize option overrides the theme default', async () => {
+    const buf = await exportDocx('# Doc', { theme: 'book', pageSize: 'A5' });
+    const { documentXml } = await inspectDocx(buf);
+    expectSize(readPageSize(documentXml), A5);
+  });
+
+  test('pageSize: Letter overrides any theme', async () => {
+    const buf = await exportDocx('# Doc', { theme: 'default', pageSize: 'Letter' });
+    const { documentXml } = await inspectDocx(buf);
+    expectSize(readPageSize(documentXml), LETTER);
+  });
+});
+
+describe('exportDocx — hyperlink underlines', () => {
+  test('internal links carry a single underline', async () => {
+    const md = [
+      '[Go to section](#my-section)',
+      '',
+      '## My Section',
+      '',
+      'Body.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The hyperlink runs should include `<w:u w:val="single" .../>`.
+    // Narrow to the region inside a `<w:hyperlink w:anchor="…">` so
+    // we don't accidentally match an unrelated underline elsewhere.
+    const hyperlinkRegion = documentXml.match(
+      /<w:hyperlink[^>]*w:anchor="my-section"[\s\S]*?<\/w:hyperlink>/,
+    );
+    expect(hyperlinkRegion).not.toBeNull();
+    expect(hyperlinkRegion![0]).toMatch(/<w:u\b[^/]*w:val="single"/);
+  });
+
+  test('external links carry a single underline', async () => {
+    const md = '[Example](https://example.com/x)';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // External hyperlinks don't carry w:anchor; they reference a
+    // relationship via r:id. The run inside should still be underlined.
+    const hyperlinkRegion = documentXml.match(
+      /<w:hyperlink[^>]*r:id="[^"]+"[\s\S]*?<\/w:hyperlink>/,
+    );
+    expect(hyperlinkRegion).not.toBeNull();
+    expect(hyperlinkRegion![0]).toMatch(/<w:u\b[^/]*w:val="single"/);
+  });
+});
+
+describe('exportDocx — mermaid fallback (M4b stopgap)', () => {
+  test('mermaid code blocks render as labeled code', async () => {
+    const md = [
+      '# Diagrams',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  A --> B',
+      '```',
+      '',
+      'After.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The label and source text both appear.
+    expect(documentXml).toContain('mermaid diagram');
+    expect(documentXml).toContain('graph TD');
+    expect(documentXml).toContain('A --&gt; B');
+    // Body content after the diagram continues to flow normally.
+    expect(documentXml).toContain('After.');
+  });
+});
