@@ -1,8 +1,9 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 export const BUILT_IN_THEMES = [
   'default',
+  'handbook',
   'book',
   'article',
   'technical',
@@ -24,9 +25,7 @@ export function loadThemeCss(name: string): string {
   const themesDir = findThemesDir();
   const cssPath = join(themesDir, 'css', `${name}.css`);
   if (!existsSync(cssPath)) {
-    throw new Error(
-      `theme not found: "${name}". Available: ${BUILT_IN_THEMES.join(', ')}`,
-    );
+    throw new Error(`theme not found: "${name}". Available: ${BUILT_IN_THEMES.join(', ')}`);
   }
   return readAndInlineImports(cssPath);
 }
@@ -46,9 +45,8 @@ function readAndInlineImports(path: string): string {
     seen.add(p);
     const dir = dirname(p);
     const css = readFileSync(p, 'utf8');
-    return css.replace(
-      /@import\s+['"](\.\.?\/[^'"]+)['"]\s*;/g,
-      (_match, rel: string) => inline(join(dir, rel)),
+    return css.replace(/@import\s+['"](\.\.?\/[^'"]+)['"]\s*;/g, (_match, rel: string) =>
+      inline(join(dir, rel)),
     );
   }
 }
