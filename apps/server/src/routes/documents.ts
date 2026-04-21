@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import {
   exportDocx,
+  extractDocumentTitle,
   locateAllBlocks,
   locateAllBlocksAsciidoc,
   renderDocument,
@@ -471,10 +472,16 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
   }
 
   const source = store.read(doc.path);
+  // Title resolution for both the DOCX core properties and the
+  // download filename: explicit `doc.name` wins; else the document's
+  // own title (frontmatter `title:` or first H1 / `= Header`); else
+  // the opaque uid. Matches what a human would expect the file to be
+  // called when they open it.
+  const derivedTitle = doc.name ?? extractDocumentTitle(source, doc.format);
   const buf = await exportDocx(source, {
     theme,
     format: doc.format,
-    ...(doc.name ? { title: doc.name } : {}),
+    ...(derivedTitle ? { title: derivedTitle } : {}),
     ...(identity?.displayName ? { author: identity.displayName } : {}),
     resolveAsset: async (src) => {
       const hit = attached.get(src);
@@ -490,7 +497,7 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
     },
   });
 
-  const filename = (doc.name ?? doc.uid).replace(/[^\w.-]+/g, '_').slice(0, 80);
+  const filename = (derivedTitle ?? doc.uid).replace(/[^\w.-]+/g, '_').slice(0, 80);
   c.header(
     'Content-Type',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

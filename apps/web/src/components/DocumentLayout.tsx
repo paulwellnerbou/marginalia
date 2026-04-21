@@ -70,6 +70,7 @@ import { EditProposalComposer } from './EditProposalComposer.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { AppBar } from './AppBar.js';
 import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
+import { DownloadMenu } from './DownloadMenu.js';
 import { AccessControlDialog } from './AccessControlDialog.js';
 import {
   DocumentSearchResultsPane,
@@ -807,6 +808,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 {error}
               </Text>
             )}
+            {/* Download is available to any reader — unlike settings /
+                access control which are admin-only. Sits next to the
+                gear so the whole toolbar cluster reads as a single set
+                of per-document actions. */}
+            <DownloadMenu doc={doc} source={liveSource} theme={theme} />
             {doc.role === 'admin' && onDocSettingsChanged && (
               <>
                 <DocumentSettingsDialog doc={doc} onChange={onDocSettingsChanged} />

@@ -758,6 +758,38 @@ describe('documents API', () => {
     expect(buf.equals(buf2)).toBe(false);
   });
 
+  test('GET /:uid/export.docx filename derives from the document title when name is unset', async () => {
+    // No explicit `name` on upload → server should fall back to the
+    // H1 as the filename (not the opaque uid).
+    const created = await upload(CLIENT_A, {
+      markdown: '---\ntitle: My Great Doc\n---\n\n# A Body Heading\n\nBody.\n',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.docx`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    // Frontmatter title beats the H1 — matches extractDocumentTitle's
+    // priority. Non-filename chars get sanitized to `_`.
+    expect(res.headers.get('content-disposition')).toMatch(
+      /filename="My_Great_Doc\.docx"/,
+    );
+  });
+
+  test('GET /:uid/export.docx falls back to uid when no title is derivable', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: 'Just a paragraph, no heading, no frontmatter.\n',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.docx`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-disposition')).toContain(`filename="${created.uid}.docx"`);
+  });
+
   test('GET /:uid/export.docx rejects unknown UID with 404', async () => {
     const res = await app.hono.fetch(
       new Request('http://test/api/documents/does-not-exist/export.docx', {
