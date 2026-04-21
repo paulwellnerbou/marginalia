@@ -66,6 +66,7 @@ structural rules, then override only what you need.
 Built-in themes in this package:
 
 - `@marginalia/themes/default` (light + dark via `[data-appearance]`)
+- `@marginalia/themes/handbook`
 - `@marginalia/themes/beautiful`
 - `@marginalia/themes/book`
 - `@marginalia/themes/article`

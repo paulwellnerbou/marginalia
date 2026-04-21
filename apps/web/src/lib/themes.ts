@@ -16,6 +16,11 @@ export interface ThemeMeta {
 
 export const BUILT_IN_THEMES: ThemeMeta[] = [
   { id: 'default', label: 'Default', blurb: 'Neutral sans-serif. Follows app light/dark mode.' },
+  {
+    id: 'handbook',
+    label: 'Handbook',
+    blurb: 'Structured sans-serif reading theme for documentation and training material.',
+  },
   { id: 'beautiful', label: 'Book', blurb: 'Editorial serif with drop cap and ornament.' },
   { id: 'book', label: 'Document', blurb: 'Classic serif, narrow column, long-form reading.' },
   { id: 'article', label: 'Article', blurb: 'Magazine-style essay with bold headings.' },
@@ -27,6 +32,7 @@ export const BUILT_IN_THEMES: ThemeMeta[] = [
 // between them at runtime without issuing a fresh network request.
 const themeImports: Record<string, () => Promise<unknown>> = {
   default: () => import('@marginalia/themes/default.css?url'),
+  handbook: () => import('@marginalia/themes/handbook.css?url'),
   book: () => import('@marginalia/themes/book.css?url'),
   article: () => import('@marginalia/themes/article.css?url'),
   technical: () => import('@marginalia/themes/technical.css?url'),
@@ -38,12 +44,13 @@ const THEME_LINK_ATTR = 'data-marginalia-theme';
 let active: string | null = null;
 
 export async function applyTheme(id: string): Promise<void> {
-  if (!themeImports[id]) {
+  const loadTheme = themeImports[id];
+  if (!loadTheme) {
     console.warn('[marginalia:theme] unknown theme', id);
     return;
   }
   if (active === id) return;
-  const mod = (await themeImports[id]!()) as { default: string };
+  const mod = (await loadTheme()) as { default: string };
   const href = mod.default;
 
   const existing = document.querySelectorAll<HTMLLinkElement>(`link[${THEME_LINK_ATTR}]`);
@@ -51,7 +58,9 @@ export async function applyTheme(id: string): Promise<void> {
   link.rel = 'stylesheet';
   link.href = href;
   link.setAttribute(THEME_LINK_ATTR, id);
-  link.onload = () => existing.forEach((el) => el.remove());
+  link.onload = () => {
+    for (const el of existing) el.remove();
+  };
   document.head.appendChild(link);
   active = id;
 }

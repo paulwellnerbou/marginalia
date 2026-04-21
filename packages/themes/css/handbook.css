@@ -1,0 +1,198 @@
+/*
+ * Marginalia — Handbook
+ *
+ * A practical reading theme inspired by the older tesolva academy docs:
+ * humanist sans-serif typography, restrained page width, structured
+ * sectioning, and slightly stronger callout treatment for instructional
+ * material. Book-like in rhythm, but unmistakably documentation rather
+ * than novel/editorial prose.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,400;0,600;0,700;0,800;1,400;1,600&display=swap");
+@import "./default.css";
+
+.marginalia-theme,
+.marginalia {
+  --md-max-width: 67ch;
+
+  --md-font-body: "Open Sans", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --md-font-heading: var(--md-font-body);
+  --md-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+
+  --md-font-size: 17px;
+  --md-line-height: 1.72;
+  --md-heading-weight: 780;
+  --md-heading-line-height: 1.18;
+  --md-heading-letter-spacing: -0.02em;
+
+  --md-space-block: 1.15em;
+  --md-space-heading-top: 2.3em;
+  --md-space-list-item: 0.24em;
+
+  --md-color-fg: #19202a;
+  --md-color-fg-muted: #617081;
+  --md-color-bg: #fbfcf9;
+  --md-color-accent: #1c6a72;
+  --md-color-accent-muted: #c8e0dd;
+  --md-color-border: #d9e2e1;
+  --md-color-code-bg: #f3f7f7;
+  --md-color-code-fg: #17212b;
+  --md-color-quote-bar: #97b8b5;
+  --md-color-table-stripe: #f6f8f7;
+  --md-color-selection-bg: #d9ece8;
+  --md-color-block-bg: #f5f8f7;
+}
+
+.marginalia {
+  padding-top: 2.75rem;
+  padding-bottom: 5.5rem;
+}
+
+.marginalia h1 {
+  font-size: 2.35em;
+  font-weight: 800;
+  border-bottom: 0;
+  margin-bottom: 0.35em;
+}
+
+.marginalia h2 {
+  font-size: 1.55em;
+  border-bottom: 0;
+  padding-top: 0.45em;
+  border-top: 1px solid var(--md-color-border);
+}
+
+.marginalia h3 {
+  font-size: 1.22em;
+}
+
+.marginalia h4,
+.marginalia h5,
+.marginalia h6 {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--md-color-fg-muted);
+}
+
+.marginalia p,
+.marginalia li,
+.marginalia td {
+  hanging-punctuation: first last;
+}
+
+.marginalia a {
+  color: var(--md-color-accent);
+  text-decoration-thickness: 0.08em;
+  text-underline-offset: 0.16em;
+}
+
+.marginalia blockquote {
+  font-style: normal;
+  padding-left: 1.1em;
+  border-left-width: 4px;
+  color: var(--md-color-fg);
+}
+
+.marginalia :not(pre) > code {
+  border: 1px solid var(--md-color-border);
+}
+
+.marginalia .admonitionblock {
+  border-left-width: 4px;
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgb(18 36 42 / 0.06);
+}
+
+.marginalia .admonitionblock td.icon {
+  font-size: 0.78em;
+  letter-spacing: 0.06em;
+}
+
+.marginalia .admonitionblock.task td.content {
+  background: #fffef7;
+  border: 1px solid #e6e0c9;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgb(108 96 44 / 0.08);
+  padding: 0.85em 1em;
+}
+
+.marginalia .admonitionblock.task {
+  background: transparent;
+  border-left-color: #b59b36;
+  padding: 0;
+  box-shadow: none;
+}
+
+.marginalia .toc > .sectlevel1 > li {
+  border-top: 1px solid var(--md-color-border);
+  padding-top: 0.75em;
+  margin-top: 0.75em;
+}
+
+.marginalia .toc > .sectlevel1 > li:first-child {
+  margin-top: 0;
+}
+
+.marginalia .toc > .sectlevel1 > li > a {
+  font-size: 1.05em;
+  font-weight: 700;
+}
+
+/* ------------------------------------------------------------------
+ * DARK VARIANT — cool, quiet UI chrome with the same structured feel.
+ * ------------------------------------------------------------------ */
+
+[data-appearance="dark"] .marginalia-theme,
+[data-appearance="dark"] .marginalia {
+  --md-color-fg: #e5edf2;
+  --md-color-fg-muted: #97a8b5;
+  --md-color-bg: transparent;
+  --md-color-accent: #67c1c8;
+  --md-color-accent-muted: #21474c;
+  --md-color-border: #2a3640;
+  --md-color-code-bg: #182028;
+  --md-color-code-fg: #e5edf2;
+  --md-color-quote-bar: #42656a;
+  --md-color-table-stripe: #171d24;
+  --md-color-selection-bg: #254247;
+  --md-color-block-bg: #192128;
+}
+
+[data-appearance="dark"] .marginalia .admonitionblock {
+  box-shadow: none;
+}
+
+[data-appearance="dark"] .marginalia .admonitionblock.task td.content {
+  background: #28241b;
+  border-color: #544b34;
+  box-shadow: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-appearance="auto"] .marginalia-theme,
+  [data-appearance="auto"] .marginalia {
+    --md-color-fg: #e5edf2;
+    --md-color-fg-muted: #97a8b5;
+    --md-color-bg: transparent;
+    --md-color-accent: #67c1c8;
+    --md-color-accent-muted: #21474c;
+    --md-color-border: #2a3640;
+    --md-color-code-bg: #182028;
+    --md-color-code-fg: #e5edf2;
+    --md-color-quote-bar: #42656a;
+    --md-color-table-stripe: #171d24;
+    --md-color-selection-bg: #254247;
+    --md-color-block-bg: #192128;
+  }
+
+  [data-appearance="auto"] .marginalia .admonitionblock {
+    box-shadow: none;
+  }
+
+  [data-appearance="auto"] .marginalia .admonitionblock.task td.content {
+    background: #28241b;
+    border-color: #544b34;
+    box-shadow: none;
+  }
+}

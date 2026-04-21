@@ -6,6 +6,7 @@
     "./default.css": "./css/default.css",
     "./asciidoc-compat.css": "./css/asciidoc-compat.css",
     "./serif-print.css": "./css/serif-print.css",
+    "./handbook.css": "./css/handbook.css",
     "./book.css": "./css/book.css",
     "./article.css": "./css/article.css",
     "./technical.css": "./css/technical.css",

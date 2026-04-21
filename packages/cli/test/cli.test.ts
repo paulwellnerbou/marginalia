@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -60,6 +60,7 @@ describe('marginalia CLI', () => {
     const r = await runCli(['themes', 'list']);
     expect(r.code).toBe(0);
     expect(r.stdout).toContain('default');
+    expect(r.stdout).toContain('handbook');
     expect(r.stdout).toContain('beautiful');
     expect(r.stdout).toContain('serif-print');
   });
@@ -96,5 +97,13 @@ describe('marginalia CLI', () => {
     expect(r.stdout).not.toContain('@import');
     // and the imported file's content is present
     expect(r.stdout).toContain('--md-max-width');
+  });
+
+  test('handbook theme inlines its imports and exposes its accent palette', async () => {
+    const r = await runCli(['themes', 'show', 'handbook']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).not.toContain("@import './default.css'");
+    expect(r.stdout).toContain('Open Sans');
+    expect(r.stdout).toContain('--md-color-accent: #1c6a72;');
   });
 });
