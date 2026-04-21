@@ -873,6 +873,11 @@ button.primary:disabled {
   transform: scale(1.15);
 }
 
+.created-admin-link {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Subtle pop when the check appears. */
 @keyframes copyable-pop {
   0% {

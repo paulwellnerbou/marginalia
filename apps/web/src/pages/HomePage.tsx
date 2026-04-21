@@ -607,12 +607,19 @@ function UploadDialog({
               control.
             </Dialog.Description>
             <Flex direction="column" gap="3" mb="4">
-              <Box>
-                <Text as="div" size="1" color="gray" mb="1">
-                  Admin link
-                </Text>
-                <Copyable text={createdAdminUrl} multiline ariaLabel="Copy admin link" />
-              </Box>
+              <Flex
+                direction={{ initial: 'column', sm: 'row' }}
+                align={{ initial: 'stretch', sm: 'end' }}
+                gap="3"
+              >
+                <Box className="created-admin-link">
+                  <Text as="div" size="1" color="gray" mb="1">
+                    Admin link
+                  </Text>
+                  <Copyable text={createdAdminUrl} multiline ariaLabel="Copy admin link" />
+                </Box>
+                <Button onClick={openCreated}>Open the document</Button>
+              </Flex>
               {createdPassword && (
                 <Box>
                   <Text as="div" size="1" color="gray" mb="1">
@@ -621,9 +628,6 @@ function UploadDialog({
                   <Copyable text={createdPassword} ariaLabel="Copy password" />
                 </Box>
               )}
-            </Flex>
-            <Flex justify="end">
-              <Button onClick={openCreated}>Open the document</Button>
             </Flex>
           </>
         ) : (
