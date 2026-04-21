@@ -621,7 +621,29 @@ button.primary:disabled {
   border-radius: 0.18rem;
 }
 .toc-l1 > .toc-row > a {
+  font-size: 1.05rem;
   font-weight: 600;
+}
+.toc-l2 > .toc-row > a {
+  font-size: 0.95rem;
+}
+.toc-l3 > .toc-row > a {
+  font-size: 0.875rem;
+}
+.toc-l4 > .toc-row > a,
+.toc-l5 > .toc-row > a,
+.toc-l6 > .toc-row > a {
+  font-size: 0.8rem;
+}
+.toc > .toc-list > .toc-item {
+  border-top: 1px solid var(--ui-border);
+  padding-top: 0.5rem;
+  margin-top: 0.5rem;
+}
+.toc > .toc-list > .toc-item:first-child {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
 }
 .toc-empty {
   padding: 1rem;
