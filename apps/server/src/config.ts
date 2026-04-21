@@ -36,7 +36,7 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
   const dataDir =
     overrides.dataDir ??
     process.env.MARGINALIA_DATA_DIR ??
-    'var';
+    fileURLToPath(new URL('../../../.data', import.meta.url));
   const webDir =
     overrides.webDir ??
     process.env.MARGINALIA_WEB_DIR ??

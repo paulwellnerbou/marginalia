@@ -67,7 +67,7 @@ SSR required; the renderer already produces good HTML from the API.
 
 * **Git** for Markdown document contents + assets (requirement §3.3).
   Implemented with `isomorphic-git` (pure JS; avoids shelling out and
-  works identically in tests). One repository at `var/repo/`.
+  works identically in tests). One repository at `.data/repo/`.
 * **SQLite** via `bun:sqlite` for metadata that doesn't belong in git:
   * documents (uid, path, admin client ID, password hash, visibility,
     editable-by-non-admin flag, created/updated),
@@ -117,7 +117,7 @@ marginalia/
 ├── apps/
 │   ├── server/            # Hono + Bun + SQLite + isomorphic-git
 │   └── web/               # Vite + React SPA (viewer/editor UI)
-├── var/                   # runtime data (gitignored): repo/, db.sqlite
+├── .data/                 # repo-root runtime data (gitignored): repo/, db.sqlite
 ├── REQUIREMENTS.md
 ├── PLAN.md
 └── package.json           # workspaces root

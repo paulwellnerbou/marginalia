@@ -120,7 +120,8 @@ This repo includes Docker-based deployment automation:
 These are the main runtime env vars the container understands:
 
 - `PORT` — HTTP listen port inside the container. Default: `3434`
-- `MARGINALIA_DATA_DIR` — persistent data directory. Default: `/app/.data/`
+- `MARGINALIA_DATA_DIR` — persistent data directory. Default:
+  repo-root `.data/` in local dev, `/app/.data/` in Docker
 - `MARGINALIA_WEB_DIR` — built SPA directory. Default: `/app/apps/web/dist`
 - `APP_ENV_LABEL` — optional label appended to the browser title, e.g. `DEV`
 - `MARGINALIA_BLOB_STORAGE` — `fs` (default) or `s3`. See
@@ -160,11 +161,12 @@ docker run -d \
 
 ## Server-side state
 
-All persistent server state lives in a single directory — `var/` by default,
-or the path in `MARGINALIA_DATA_DIR` (see [config.ts](apps/server/src/config.ts)):
+All persistent server state lives in a single directory — the repo-root
+`.data/` by default in local development, or the path in
+`MARGINALIA_DATA_DIR` (see [config.ts](apps/server/src/config.ts)):
 
 ```
-var/
+.data/
 ├── db.sqlite          SQLite DB: documents, invites, sessions, doc_users,
 │                       comments, comment_mentions, edit_proposals,
 │                       assets, document_assets
@@ -180,7 +182,7 @@ var/
 Stop the server, then delete the data directory:
 
 ```sh
-rm -rf apps/server/var/
+rm -rf .data/
 ```
 
 Next startup recreates the directory, an empty SQLite schema, and a fresh
@@ -190,7 +192,7 @@ To reset while preserving the git history for manual inspection, delete
 only the DB files:
 
 ```sh
-rm -f apps/server/var/db.sqlite apps/server/var/db.sqlite-wal apps/server/var/db.sqlite-shm
+rm -f .data/db.sqlite .data/db.sqlite-wal .data/db.sqlite-shm
 ```
 
 Note that the git repo references documents by uid; dropping the DB
