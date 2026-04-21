@@ -510,9 +510,15 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
   // which closes a class of user-upload XSS paths even though Word
   // ignores it. Defense in depth.
   c.header('X-Content-Type-Options', 'nosniff');
-  // Hono doesn't have a first-class Buffer helper; return a Uint8Array
-  // so the underlying Response pipeline sends exact bytes.
-  return c.body(new Uint8Array(buf));
+  // `buf` is already a Buffer (a Uint8Array view over the underlying
+  // ArrayBuffer). Passing it through avoids the allocate-and-copy
+  // cost of wrapping in a fresh `new Uint8Array(buf)` on every
+  // export. The cast bridges a type-only mismatch: Node's Buffer
+  // types as `Uint8Array<ArrayBufferLike>` (to allow a
+  // SharedArrayBuffer backing in principle) while Hono insists on
+  // `Uint8Array<ArrayBuffer>`. Runtime is identical — Bun's Buffer
+  // is always ArrayBuffer-backed.
+  return c.body(buf as unknown as Uint8Array<ArrayBuffer>);
 }
 
 // --- POST /api/documents/import (consume a bundle) -------------------

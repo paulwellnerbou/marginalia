@@ -560,8 +560,13 @@ function decodeDataUrl(url: string): ResolvedAsset | null {
   const isBase64 = m[2] === ';base64';
   const payload = m[3] ?? '';
   try {
-    const bytes = isBase64
-      ? Uint8Array.from(atob(payload), (c) => c.charCodeAt(0))
+    // `Buffer.from(…, 'base64')` is available in Node, Bun, and is
+    // an alias of `Uint8Array` under the hood — no allocation copy
+    // vs the `atob` + `Uint8Array.from(s, charCodeAt)` pattern,
+    // which also has the downside that `atob` is a Web API not
+    // guaranteed on every Node version.
+    const bytes: Uint8Array = isBase64
+      ? Buffer.from(payload, 'base64')
       : new TextEncoder().encode(decodeURIComponent(payload));
     return { bytes, mime };
   } catch {
