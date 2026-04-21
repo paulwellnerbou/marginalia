@@ -15,14 +15,19 @@
  *   blocks with Shiki per-token colors carried through.
  * - M3a: bookmarks on headings (slug id), internal hash-links resolve
  *   to those bookmarks so TOC-style navigation works inside Word.
+ * - M3b: native Word TOC field, prepended when the doc has ≥ 2
+ *   headings (configurable via `DocxExportOptions.includeToc`).
+ * - M3c: GFM footnotes lifted into native Word footnotes — references
+ *   become `FootnoteReferenceRun`s, bodies land in `footnotes.xml`.
  * - M4a: images embed as real `ImageRun`s when a `resolveAsset`
  *   callback yields bytes; `data:` URLs decode inline without a
  *   callback. Unsupported or unresolvable images fall back to a muted
  *   italic placeholder so the doc still reads.
+ * - M5: BCP-47 language tag + `<w:bidi/>` for RTL frontmatter.
  *
- * Out of scope (future milestones): mermaid rasterization, native
- * TOC field, footnotes. The renderer already exposes the metadata
- * those need, so we can layer them on without re-walking.
+ * Out of scope (future milestones): real Mermaid rasterization (blocks
+ * currently fall back to a labeled code block until a headless-browser
+ * backend is wired up).
  */
 
 import rehypeParse from 'rehype-parse';
@@ -130,11 +135,12 @@ export interface DocxExportOptions {
    * the image's bytes and MIME type for embedding. Data URLs are
    * decoded inline and never hit this resolver.
    *
-   * Return `null` (or throw — caught and logged) to skip: the image
-   * renders as a muted italic `[image: alt]` placeholder so the doc
-   * still reads without the asset. The server wires this up against
-   * its per-document asset store; CLI/library consumers can supply
-   * their own (e.g. read from disk).
+   * Return `null` (or throw — the exporter catches and swallows the
+   * error rather than propagating it) to skip: the image renders as a
+   * muted italic `[image: alt]` placeholder so the doc still reads
+   * without the asset. The server wires this up against its
+   * per-document asset store; CLI/library consumers can supply their
+   * own (e.g. read from disk).
    */
   resolveAsset?: (src: string) => Promise<ResolvedAsset | null>;
 
@@ -524,26 +530,34 @@ function extractFootnotes(
   const ids = new Map<string, number>();
   const content: Record<string, { children: Paragraph[] }> = {};
 
-  // Find the `<section class="footnotes">` (also marked with
-  // `data-footnotes`). Remove it from the top-level children and walk
-  // its `<ol><li id="user-content-fn-X">` entries.
-  const children = root.children as HastNode[];
-  for (let i = children.length - 1; i >= 0; i--) {
-    const node = children[i];
-    if (!isElement(node) || node.tagName !== 'section') continue;
+  // Find every `<section class="footnotes">` (also marked with
+  // `data-footnotes`), regardless of whether it sits at the root or
+  // inside an `<html>/<body>` wrapper introduced by some input paths
+  // (e.g. the AsciiDoc re-parse path). `visit` recurses through the
+  // tree and records the parent array + index so we can splice the
+  // section out after processing.
+  interface FootnoteSectionHit {
+    section: Element;
+    parent: Parent;
+    index: number;
+  }
+  const hits: FootnoteSectionHit[] = [];
+  visit(root, 'element', (node: Element, index, parent) => {
+    if (node.tagName !== 'section') return;
     const cls = node.properties?.className;
     const isFootnotes =
       (Array.isArray(cls) && (cls as unknown[]).includes('footnotes')) ||
       node.properties?.['dataFootnotes'] !== undefined;
-    if (!isFootnotes) continue;
+    if (!isFootnotes || !parent || index === undefined) return;
+    hits.push({ section: node, parent: parent as Parent, index });
+  });
 
-    // Walk the nested <ol> once to assign ids in document order.
-    const ol = findChild(node, 'ol');
-    if (!ol) {
-      children.splice(i, 1);
-      continue;
-    }
-    let nextId = 1;
+  // Walk each hit in the order we found them so footnote ids are
+  // numbered in document order.
+  for (const { section } of hits) {
+    const ol = findChild(section, 'ol');
+    if (!ol) continue;
+    let nextId = ids.size + 1;
     for (const li of ol.children) {
       if (!isElement(li) || li.tagName !== 'li') continue;
       const rawId = typeof li.properties?.id === 'string' ? li.properties.id : '';
@@ -555,21 +569,32 @@ function extractFootnotes(
       const id = nextId++;
       ids.set(slug, id);
     }
+  }
 
-    // Second pass: build the Paragraph content, now that every slug
-    // has an id (so a footnote that itself refs another still works).
-    nextId = 1;
+  // Second pass: build the Paragraph content, now that every slug has
+  // an id (so a footnote that itself refs another still works).
+  for (const { section } of hits) {
+    const ol = findChild(section, 'ol');
+    if (!ol) continue;
     for (const li of ol.children) {
       if (!isElement(li) || li.tagName !== 'li') continue;
       const rawId = typeof li.properties?.id === 'string' ? li.properties.id : '';
       const slug = stripFootnotePrefix(rawId);
       if (!slug) continue;
-      const id = nextId++;
-      const paragraphs = buildFootnoteParagraphs(li, ctx);
-      content[String(id)] = { children: paragraphs };
+      const id = ids.get(slug);
+      if (id === undefined) continue;
+      content[String(id)] = { children: buildFootnoteParagraphs(li, ctx) };
     }
+  }
 
-    children.splice(i, 1);
+  // Splice every hit out of its parent. Re-resolve the current index
+  // via `indexOf` at splice time so earlier splices (in the same
+  // parent, or in an ancestor chain) don't invalidate the stored
+  // index captured during visit.
+  for (const { section, parent } of hits) {
+    const children = parent.children as HastNode[];
+    const idx = children.indexOf(section);
+    if (idx !== -1) children.splice(idx, 1);
   }
 
   return { ids, content };
@@ -589,19 +614,24 @@ function findChild(parent: Element, tagName: string): Element | null {
 }
 
 /**
- * Turn the paragraphs inside a `<li>` footnote definition into DOCX
+ * Turn the content inside a `<li>` footnote definition into DOCX
  * Paragraphs, skipping the trailing backref link (the `↩` arrow that
  * GFM adds to jump back to the reference — Word generates its own
  * visual for this automatically).
+ *
+ * Footnote bodies can be multi-block: paragraphs, lists, code, quotes.
+ * We lean on the shared block walker for anything that converts to
+ * paragraphs natively, and fall back to a flattened plain-text
+ * paragraph for structures DOCX footnotes can't host (tables).
+ * Silently dropping user content is worse than a simplified rendering.
  */
 function buildFootnoteParagraphs(li: Element, ctx: BuildCtx): Paragraph[] {
   const out: Paragraph[] = [];
   for (const child of li.children as HastNode[]) {
     if (!isElement(child)) continue;
-    if (child.tagName !== 'p') continue;
-    const inline = collectInline(child, ctx, {});
-    if (inline.length === 0) continue;
-    out.push(new Paragraph({ children: inline }));
+    // Inline text directly inside the <li> (rare but possible) just
+    // becomes a paragraph of that text.
+    appendFootnoteBlock(child, ctx, out);
   }
   if (out.length === 0) {
     // Always emit at least one paragraph so the footnote renders —
@@ -609,6 +639,70 @@ function buildFootnoteParagraphs(li: Element, ctx: BuildCtx): Paragraph[] {
     out.push(new Paragraph({ children: [] }));
   }
   return out;
+}
+
+function appendFootnoteBlock(node: Element, ctx: BuildCtx, out: Paragraph[]): void {
+  switch (node.tagName) {
+    case 'p': {
+      const inline = collectInline(node, ctx, {});
+      if (inline.length > 0) out.push(new Paragraph({ children: inline }));
+      return;
+    }
+    case 'pre':
+      // Reuses the CodeBlock style built for the body; still valid
+      // inside footnote paragraphs.
+      out.push(...buildCodeBlock(node, ctx.tokens));
+      return;
+    case 'blockquote':
+      for (const c of node.children as HastNode[]) {
+        if (!isElement(c)) continue;
+        const inline = collectInline(c, ctx, {});
+        if (inline.length > 0) {
+          out.push(new Paragraph({ style: 'Blockquote', children: inline }));
+        }
+      }
+      return;
+    case 'ul':
+    case 'ol': {
+      // DOCX numbering refs are document-scoped, so we can't share
+      // `marginalia-bullet` / `marginalia-ordered` cleanly here —
+      // Word would restart the main list's numbering every time a
+      // footnote contained a list. Prefix each item manually: this
+      // keeps content intact and readable without polluting the
+      // numbering registry.
+      const ordered = node.tagName === 'ol';
+      let index = 1;
+      for (const item of node.children as HastNode[]) {
+        if (!isElement(item) || item.tagName !== 'li') continue;
+        const prefix = ordered ? `${index++}. ` : '• ';
+        const children = collectInline(item, ctx, {});
+        out.push(
+          new Paragraph({
+            children: [new TextRun({ text: prefix }), ...children],
+          }),
+        );
+      }
+      return;
+    }
+    case 'section':
+    case 'div':
+    case 'figure':
+    case 'article':
+      for (const c of node.children as HastNode[]) {
+        if (isElement(c)) appendFootnoteBlock(c, ctx, out);
+      }
+      return;
+    default: {
+      // Last-resort: flatten to plain text so nothing the user wrote
+      // disappears silently. `hastTextContent` strips tags; the
+      // trailing backref `↩` is still inside the tree here but
+      // walkInline-free paths need their own filter. We keep it: the
+      // arrow is a literal Unicode char, harmless if it slips through.
+      const text = hastTextContent(node).trim();
+      if (text) out.push(new Paragraph({ children: [new TextRun({ text })] }));
+      return;
+    }
+  }
 }
 
 // -- Document assembly --------------------------------------------------
@@ -1287,12 +1381,28 @@ function readShikiColor(el: Element): string | null {
 function buildTable(node: Element, ctx: BuildCtx): Table {
   const tokens = ctx.tokens;
   const rows: TableRow[] = [];
+  // Matches CSS `tbody tr:nth-child(even)` — header rows don't count
+  // toward the stripe parity. Tracked separately from `rows.length`
+  // so a `<thead>` doesn't shift every data row's background.
+  let bodyRowIndex = 0;
   let headerSeen = false;
+
+  // Heavier bottom border on header cells, matching the CSS `th {
+  // border-bottom-width: 2px; border-bottom-color: var(--md-color-fg) }`
+  // in the default theme. Size is in eighths of a point; `16` ≈ 2pt.
+  const headerBottomBorder = tokens.table.headerUnderline
+    ? {
+        style: BorderStyle.SINGLE,
+        size: 16,
+        color: hex(tokens.colors.fg),
+      }
+    : null;
 
   function collectRows(parent: Element, isHeader: boolean): void {
     for (const tr of parent.children) {
       if (!isElement(tr) || tr.tagName !== 'tr') continue;
       const cells: TableCell[] = [];
+      const isZebraRow = !isHeader && tokens.table.zebra && bodyRowIndex % 2 === 1;
       for (const cell of tr.children) {
         if (!isElement(cell) || (cell.tagName !== 'td' && cell.tagName !== 'th')) continue;
         const isHeaderCell = cell.tagName === 'th' || isHeader;
@@ -1301,13 +1411,16 @@ function buildTable(node: Element, ctx: BuildCtx): Table {
           new TableCell({
             shading: isHeaderCell
               ? { type: ShadingType.CLEAR, fill: hex(tokens.colors.tableStripe), color: 'auto' }
-              : rows.length % 2 === 1 && tokens.table.zebra
+              : isZebraRow
                 ? {
                     type: ShadingType.CLEAR,
                     fill: hex(tokens.colors.tableStripe),
                     color: 'auto',
                   }
                 : { type: ShadingType.CLEAR, fill: 'auto', color: 'auto' },
+            ...(isHeaderCell && headerBottomBorder
+              ? { borders: { bottom: headerBottomBorder } }
+              : {}),
             children: [
               new Paragraph({
                 ...(isHeaderCell ? { style: 'TableHeader' } : {}),
@@ -1325,6 +1438,7 @@ function buildTable(node: Element, ctx: BuildCtx): Table {
           ...(isHeader ? { tableHeader: true } : {}),
         }),
       );
+      if (!isHeader) bodyRowIndex++;
     }
   }
 

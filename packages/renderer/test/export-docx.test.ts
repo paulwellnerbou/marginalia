@@ -384,6 +384,29 @@ describe('exportDocx — footnotes (M3c)', () => {
     const { documentXml } = await inspectDocx(buf);
     expect(documentXml).not.toContain('<w:footnoteReference');
   });
+
+  test('multi-block footnote bodies are preserved, not silently dropped', async () => {
+    // GFM footnote with a paragraph, a list, and a code block in one
+    // body. Previous implementation only kept the first paragraph.
+    const md = [
+      'See[^multi] below.',
+      '',
+      '[^multi]: Opening paragraph.',
+      '',
+      '    - bullet one',
+      '    - bullet two',
+      '',
+      '    ```',
+      '    code line',
+      '    ```',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const footnotesXml = await loadFootnotes(buf);
+    expect(footnotesXml).toContain('Opening paragraph.');
+    expect(footnotesXml).toContain('bullet one');
+    expect(footnotesXml).toContain('bullet two');
+    expect(footnotesXml).toContain('code line');
+  });
 });
 
 describe('exportDocx — language / RTL (M5)', () => {
@@ -435,6 +458,61 @@ describe('exportDocx — language / RTL (M5)', () => {
     const buf = await exportDocx('Just a doc.\n');
     const stylesXml = await loadStyles(buf);
     expect(stylesXml).not.toMatch(/<w:bidi\b/);
+  });
+});
+
+describe('exportDocx — tables (Copilot review follow-ups)', () => {
+  function countRowShadings(documentXml: string): {
+    headerShaded: number;
+    bodyShaded: number;
+  } {
+    // `<w:tr>` opens a row; within each row, the first cell's shading
+    // is the one we care about for stripe parity. Header rows are
+    // flagged by `<w:tblHeader/>` inside `<w:trPr>`.
+    const rows = documentXml.split('<w:tr>').slice(1);
+    let headerShaded = 0;
+    let bodyShaded = 0;
+    for (const chunk of rows) {
+      const tr = chunk.split('</w:tr>')[0] ?? '';
+      const isHeader = tr.includes('<w:tblHeader');
+      const firstCell = tr.split('<w:tc>')[1]?.split('</w:tc>')[0] ?? '';
+      const hasShade = /<w:shd[^>]*w:fill="[0-9a-f]{6}"/i.test(firstCell);
+      if (isHeader && hasShade) headerShaded++;
+      else if (!isHeader && hasShade) bodyShaded++;
+    }
+    return { headerShaded, bodyShaded };
+  }
+
+  test('zebra parity counts body rows only (C6)', async () => {
+    // 1 header row + 3 body rows. With header-counted parity (the
+    // bug), `rows.length % 2 === 1` at body row 0 (second row
+    // overall) would shade row 0, which should actually be unshaded.
+    const md = [
+      '| H1 | H2 |',
+      '|----|----|',
+      '| A  | 1  |', // body row 0 — should NOT be shaded
+      '| B  | 2  |', // body row 1 — SHOULD be shaded
+      '| C  | 3  |', // body row 2 — should NOT be shaded
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    const { headerShaded, bodyShaded } = countRowShadings(documentXml);
+    expect(headerShaded).toBe(1); // header always shaded
+    expect(bodyShaded).toBe(1); // only the second body row striped
+  });
+
+  test('header cells carry a heavier bottom border when token enabled (C7)', async () => {
+    const md = [
+      '| Col A | Col B |',
+      '|-------|-------|',
+      '| a     | b     |',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The header cell's bottom border is 2pt (size=16 in eighths of
+    // a point), colored with the theme's fg. Match on `w:sz="16"`
+    // inside a `<w:tcBorders>` / `<w:bottom ...>` element.
+    expect(documentXml).toMatch(/<w:bottom[^/]*w:sz="16"/);
   });
 });
 

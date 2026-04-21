@@ -29,7 +29,7 @@ Three candidates were considered:
 | `pandoc` shell-out | Battle-tested | System dependency, inversion of the render pipeline, theme mapping is indirect (reference.docx) |
 | **`docx` npm package (programmatic)** | **Full control, proper Word styles, deterministic, native Shiki color mapping** | **Need an AST walker** |
 
-**Recommendation:** use [`docx`](https://www.npmjs.com/package/docx) and walk the existing HAST (the same tree `render.ts` produces before stringification). HAST is richer than raw HTML and already has Shiki highlight spans, heading anchors, and block IDs attached. A new plugin `rehype-docx` in `packages/renderer/src/plugins/` takes the HAST and emits a `docx.Document`.
+**Recommendation:** use [`docx`](https://www.npmjs.com/package/docx) and walk the existing HAST (the same tree `render.ts` produces before stringification). HAST is richer than raw HTML and already has Shiki highlight spans, heading anchors, and block IDs attached. The shipped implementation builds the `docx.Document` directly in `packages/renderer/src/export-docx.ts` from that HAST, rather than via a separate `rehype-docx` plugin under `packages/renderer/src/plugins/`.
 
 ## 3. Theme mapping
 
