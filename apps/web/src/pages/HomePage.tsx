@@ -621,13 +621,6 @@ function UploadDialog({
                   <Copyable text={createdPassword} ariaLabel="Copy password" />
                 </Box>
               )}
-              <Callout.Root size="1" color="blue">
-                <Callout.Text>
-                  Mint named or generic access links (e.g. "Alice — editor", "anyone who has the
-                  URL — collaborator") from the document's Access control dialog once you've
-                  opened it.
-                </Callout.Text>
-              </Callout.Root>
             </Flex>
             <Flex justify="end">
               <Button onClick={openCreated}>Open the document</Button>

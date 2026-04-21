@@ -327,6 +327,7 @@ export function openDatabase(path: string): Database {
   db.exec('PRAGMA journal_mode = WAL;');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(SCHEMA);
+  ensureColumn(db, 'documents', 'name', 'TEXT');
   ensureColumn(db, 'comments', 'anchor_heading_path', 'TEXT');
   ensureColumn(db, 'comments', 'anchor_section_index', 'INTEGER');
   ensureColumn(db, 'comments', 'anchor_section_index_path', 'TEXT');

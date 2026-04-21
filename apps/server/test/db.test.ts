@@ -138,4 +138,59 @@ describe('openDatabase migrations', () => {
     expect(stillCommentors.n).toBe(0);
     db2.close();
   });
+
+  test('documents schema: legacy tables get nullable name column on open', () => {
+    {
+      const seed = new Database(dbPath);
+      seed.exec(`
+        CREATE TABLE documents (
+          uid                  TEXT PRIMARY KEY,
+          path                 TEXT NOT NULL,
+          password_hash        TEXT,
+          editable_by_anyone   INTEGER NOT NULL DEFAULT 0,
+          default_theme        TEXT NOT NULL DEFAULT 'default',
+          format               TEXT NOT NULL DEFAULT 'markdown',
+          created_at           INTEGER NOT NULL,
+          updated_at           INTEGER NOT NULL
+        )
+      `);
+      const now = Date.now();
+      seed
+        .prepare(
+          `INSERT INTO documents
+             (uid, path, password_hash, editable_by_anyone, default_theme, format, created_at, updated_at)
+           VALUES (?, ?, NULL, 0, ?, ?, ?, ?)`,
+        )
+        .run('doc-1', 'docs/doc-1.md', 'default', 'markdown', now, now);
+      seed.close();
+    }
+
+    const db = openDatabase(dbPath);
+    const cols = db.prepare('PRAGMA table_info(documents)').all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+    const nameCol = cols.find((c) => c.name === 'name');
+    expect(nameCol).toBeDefined();
+    expect(nameCol!.notnull).toBe(0);
+
+    const row = db.prepare('SELECT uid, path, name FROM documents WHERE uid = ?').get('doc-1') as {
+      uid: string;
+      path: string;
+      name: string | null;
+    };
+    expect(row).toEqual({
+      uid: 'doc-1',
+      path: 'docs/doc-1.md',
+      name: null,
+    });
+    db.close();
+
+    const db2 = openDatabase(dbPath);
+    const row2 = db2.prepare('SELECT name FROM documents WHERE uid = ?').get('doc-1') as {
+      name: string | null;
+    };
+    expect(row2.name).toBeNull();
+    db2.close();
+  });
 });
