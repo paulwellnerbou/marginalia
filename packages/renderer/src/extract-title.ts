@@ -52,12 +52,47 @@ function extractMarkdownTitle(source: string): string | null {
   const fm = readYamlFrontmatterTitle(source);
   if (fm) return fm;
 
-  // 2. First ATX `# ` heading in the body. Setext-style (`===`
-  // underline) headings are also a thing but GFM deprecates them and
-  // they're rare in practice — keep the extractor simple.
-  const body = stripFrontmatter(source);
-  const m = body.match(/^\s*#\s+(.+?)\s*#*\s*$/m);
-  return m && m[1] ? sanitize(m[1]) : null;
+  // 2. First ATX `# ` heading in the body — but we have to track
+  // fenced code-block state by hand, otherwise a `# foo` inside a
+  // ```…``` block would be mistaken for the document title. A naive
+  // multiline regex would pick up comments in code samples, which
+  // happens in practice on README-style documents.
+  //
+  // CommonMark: a fence is three-or-more backticks OR tildes (the
+  // two kinds don't mix: a ``` fence closes only on ``` of equal or
+  // greater length, never on ~~~ and vice versa). ATX headings
+  // themselves can be indented up to 3 spaces; 4+ spaces is an
+  // indented code block, so we cap the indent match at 3.
+  //
+  // Setext-style (`===` underline) headings are also a thing but GFM
+  // deprecates them and they're rare in practice — not worth the
+  // extra parser state.
+  const lines = stripFrontmatter(source).split(/\r?\n/);
+  let fenceChar: '`' | '~' | null = null;
+  let fenceLen = 0;
+  const headingRe = /^ {0,3}#\s+(.+?)\s*#*\s*$/;
+  const openFenceRe = /^ {0,3}(`{3,}|~{3,})/;
+  const closeFenceRe = /^ {0,3}(`{3,}|~{3,})\s*$/;
+
+  for (const line of lines) {
+    if (fenceChar) {
+      const close = line.match(closeFenceRe);
+      if (close && close[1]![0] === fenceChar && close[1]!.length >= fenceLen) {
+        fenceChar = null;
+        fenceLen = 0;
+      }
+      continue;
+    }
+    const open = line.match(openFenceRe);
+    if (open) {
+      fenceChar = open[1]![0] as '`' | '~';
+      fenceLen = open[1]!.length;
+      continue;
+    }
+    const h = line.match(headingRe);
+    if (h && h[1]) return sanitize(h[1]);
+  }
+  return null;
 }
 
 function extractAsciidocTitle(source: string): string | null {

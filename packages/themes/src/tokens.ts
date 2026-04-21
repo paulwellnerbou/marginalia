@@ -56,9 +56,11 @@ export interface ThemeTokens {
   readonly headingLetterSpacingEm: number;
 
   /**
-   * Headings that render in ALL CAPS in this theme. We translate to a
-   * character-level transform in DOCX because DOCX doesn't have a native
-   * "CSS text-transform" attribute.
+   * Headings that render in ALL CAPS in this theme. The DOCX exporter
+   * maps this to the native `w:caps` run property (via `docx`'s
+   * `allCaps: true`), which tells Word to render the text in
+   * uppercase while preserving the original casing in the source —
+   * no character-level transform required.
    */
   readonly headingUppercase: {
     readonly h1: boolean;

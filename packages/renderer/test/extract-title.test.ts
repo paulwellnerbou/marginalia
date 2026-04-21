@@ -79,6 +79,60 @@ describe('extractDocumentTitle — markdown', () => {
   test('returns null when the document has no H1 (only deeper headings)', () => {
     expect(extractDocumentTitle('## Only H2s here\n\n### And H3\n', 'markdown')).toBeNull();
   });
+
+  test('ignores `# ...` inside fenced code blocks (backticks)', () => {
+    const md = [
+      '```bash',
+      '# This is a shell comment',
+      'echo hi',
+      '```',
+      '',
+      '# Real Title',
+      '',
+      'Body.',
+    ].join('\n');
+    expect(extractDocumentTitle(md, 'markdown')).toBe('Real Title');
+  });
+
+  test('ignores `# ...` inside fenced code blocks (tildes)', () => {
+    const md = [
+      '~~~',
+      '# Not a heading',
+      '~~~',
+      '',
+      '# The Actual Title',
+    ].join('\n');
+    expect(extractDocumentTitle(md, 'markdown')).toBe('The Actual Title');
+  });
+
+  test('handles longer closing fences correctly (4 backticks)', () => {
+    // CommonMark: a closing fence must be ≥ the opening fence length
+    // of the same character. Use 4-backtick fence to include 3
+    // backticks inside; we should still skip everything until the
+    // matching close.
+    const md = [
+      '````',
+      '```',
+      '# Still inside the nested example',
+      '```',
+      '````',
+      '',
+      '# The Real Title',
+    ].join('\n');
+    expect(extractDocumentTitle(md, 'markdown')).toBe('The Real Title');
+  });
+
+  test('4-space-indented `# ...` is a code block, not a heading', () => {
+    // CommonMark: ATX headings allow 0–3 spaces of indent; 4+ spaces
+    // is an indented code block. The extractor should respect this.
+    const md = ['    # Not a heading (indented code)', '', '# Actual Title'].join('\n');
+    expect(extractDocumentTitle(md, 'markdown')).toBe('Actual Title');
+  });
+
+  test('document that is ONLY a code block yields no title', () => {
+    const md = ['```', '# Inside only', '```', ''].join('\n');
+    expect(extractDocumentTitle(md, 'markdown')).toBeNull();
+  });
 });
 
 describe('extractDocumentTitle — asciidoc', () => {
