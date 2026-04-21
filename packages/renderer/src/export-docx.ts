@@ -605,8 +605,12 @@ function extractFootnotes(
     }
   }
 
-  // Second pass: build the Paragraph content, now that every slug has
-  // an id (so a footnote that itself refs another still works).
+  // Second pass: build the Paragraph content, now that every slug
+  // has an id. The ctx passed to `buildFootnoteParagraphs` must
+  // carry the populated `ids` map — otherwise a footnote body that
+  // references *another* footnote would find an empty lookup table
+  // and fall back to rendering the reference as plain text.
+  const ctxWithIds: BuildCtx = { ...ctx, footnoteIds: ids };
   for (const { section } of hits) {
     const ol = findChild(section, 'ol');
     if (!ol) continue;
@@ -617,7 +621,7 @@ function extractFootnotes(
       if (!slug) continue;
       const id = ids.get(slug);
       if (id === undefined) continue;
-      content[String(id)] = { children: buildFootnoteParagraphs(li, ctx) };
+      content[String(id)] = { children: buildFootnoteParagraphs(li, ctxWithIds) };
     }
   }
 
@@ -1310,16 +1314,40 @@ function buildImageParagraph(node: Element, ctx: BuildCtx): Paragraph {
   // Unresolvable → placeholder paragraph (same visual as a broken
   // inline image, but promoted to a full paragraph since that's the
   // context we're in).
-  const alt = String(node.properties?.alt ?? node.properties?.src ?? '');
   return new Paragraph({
     children: [
       new TextRun({
-        text: `[image: ${alt}]`,
+        text: `[image: ${imagePlaceholderLabel(node)}]`,
         italics: true,
         color: hex(ctx.tokens.colors.fgMuted),
       }),
     ],
   });
+}
+
+/**
+ * Safe label for an unresolvable `<img>` placeholder. Prefers the
+ * author's alt text, then a short identifier derived from the `src`
+ * (filename-ish for URLs/paths; a fixed "embedded image" for data:
+ * URLs), finally a generic "image".
+ *
+ * Kept deliberately short — a missing-alt image pointing at a 2 MB
+ * base64 data: URL should NOT dump the whole URL into the DOCX as
+ * visible text. That regression inflated files and made documents
+ * unreadable.
+ */
+function imagePlaceholderLabel(node: Element): string {
+  const altRaw = node.properties?.alt;
+  if (typeof altRaw === 'string' && altRaw.trim()) return altRaw.trim().slice(0, 120);
+  const srcRaw = node.properties?.src;
+  if (typeof srcRaw !== 'string') return 'image';
+  if (srcRaw.startsWith('data:')) return 'embedded image';
+  // URL-or-path basename: strip query/fragment, take the last
+  // non-empty segment. Works for `logo.png`, `https://cdn/pics/x.png`,
+  // and `../dir/shot.jpg` alike. Cap length to stay readable.
+  const basename = srcRaw.split(/[?#]/)[0]?.split('/').filter(Boolean).pop();
+  if (basename && basename.length > 0) return basename.slice(0, 120);
+  return 'image';
 }
 
 /**
@@ -1459,7 +1487,14 @@ function splitCodeLines(node: Element, tokens: ThemeTokens): TextRun[][] {
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i]!;
       if (part !== '')
-        lines[lines.length - 1]!.push(new TextRun(runOptions({ ...style, code: true }, part, tokens)));
+        // Deliberately NOT passing `code: true` here — that flag is
+        // for INLINE `<code>` inside a Normal paragraph, where the
+        // run has to carry its own mono font + 0.9× size override.
+        // Code-block runs live inside a paragraph styled `CodeBlock`
+        // which already sets font and size on the style; a run-level
+        // override would just show up as "CodeBlock + 11pt" in
+        // Word's style inspector.
+        lines[lines.length - 1]!.push(new TextRun(runOptions(style, part, tokens)));
       if (i < parts.length - 1) lines.push([]);
     }
   }
@@ -1748,12 +1783,11 @@ function walkInline(
         out.push(run);
         return;
       }
-      const alt = String(n.properties?.alt ?? n.properties?.src ?? '');
       out.push(
         new TextRun(
           runOptions(
             { ...style, italic: true, color: tokens.colors.fgMuted },
-            `[image: ${alt}]`,
+            `[image: ${imagePlaceholderLabel(n)}]`,
             tokens,
           ),
         ),

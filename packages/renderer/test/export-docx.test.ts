@@ -410,6 +410,66 @@ describe('exportDocx — run-level size overrides (follow-up)', () => {
     expect(codeRun).not.toBeNull();
     expect(codeRun![0]).toMatch(/<w:sz\b/);
   });
+
+  test('code block runs do NOT carry a size override (CodeBlock style owns it)', async () => {
+    // splitCodeLines previously passed `code: true` into runOptions,
+    // which forced a run-level size/font override on every Shiki
+    // span even though the `CodeBlock` paragraph style already
+    // sets both. Regression guard: assert no `<w:sz>` inside
+    // paragraph runs styled CodeBlock.
+    const md = '```js\nconst x = 1;\n```\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    const codePara = documentXml.match(
+      /<w:p\b[^>]*>(?:(?!<\/w:p>)[\s\S])*<w:pStyle w:val="CodeBlock"[\s\S]*?<\/w:p>/,
+    );
+    expect(codePara).not.toBeNull();
+    // No `<w:sz>` in any run-properties block inside the code
+    // paragraph. Shiki colors should still be there — those go via
+    // `<w:color>`, not `<w:sz>`.
+    expect(codePara![0]).not.toMatch(/<w:rPr>[\s\S]*?<w:sz\b/);
+  });
+});
+
+describe('exportDocx — image placeholder labels (follow-up)', () => {
+  test('missing alt + data: URL does NOT leak the URL into the placeholder', async () => {
+    // `![](data:image/svg+xml,<svg/>)` — SVG falls back because we
+    // don't support it, and there's no alt text. Previously the
+    // placeholder would dump the full data URL into the body. Now
+    // it should say "embedded image".
+    const dataUrl = 'data:image/svg+xml;base64,' + 'A'.repeat(500);
+    const md = `![](${dataUrl})\n`;
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('embedded image');
+    expect(documentXml).not.toContain('A'.repeat(80)); // URL body isn't dumped
+    expect(documentXml).not.toContain('data:image');
+  });
+
+  test('missing alt + http URL falls back to the filename', async () => {
+    const md = '![](https://cdn.example.com/path/to/Logo_v2.png)\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('[image: Logo_v2.png]');
+    expect(documentXml).not.toContain('https://cdn.example.com');
+  });
+
+  test('missing alt + relative path falls back to the basename', async () => {
+    // The client didn't attach this ref → resolveAsset returns null
+    // → placeholder. Should use the ref as-is since it's short.
+    const md = '![](diagrams/flow.png)\n';
+    const buf = await exportDocx(md, { includeToc: false, resolveAsset: async () => null });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('[image: flow.png]');
+  });
+
+  test('alt text is still preferred over src-derived labels', async () => {
+    const md = '![Company logo](https://cdn.example.com/logo.png)\n';
+    const buf = await exportDocx(md, { includeToc: false, resolveAsset: async () => null });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('[image: Company logo]');
+    expect(documentXml).not.toContain('logo.png');
+  });
 });
 
 describe('exportDocx — base font size calibration', () => {
@@ -539,6 +599,24 @@ describe('exportDocx — footnotes (M3c)', () => {
     expect(footnotesXml).toContain('bullet one');
     expect(footnotesXml).toContain('bullet two');
     expect(footnotesXml).toContain('code line');
+  });
+
+  test('footnote whose body references another footnote resolves that ref', async () => {
+    // Regression: previously the second pass in `extractFootnotes`
+    // ran with an empty `ctx.footnoteIds`, so cross-refs between
+    // footnotes rendered as plain internal links instead of real
+    // `FootnoteReferenceRun`s.
+    const md = [
+      'Intro[^a] and[^b].',
+      '',
+      '[^a]: First note — see also[^b].',
+      '[^b]: Second note.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const footnotesXml = await loadFootnotes(buf);
+    // The first footnote's body should contain a footnoteReference
+    // pointing at footnote 2 (the cross-ref), not just plain text.
+    expect(footnotesXml).toMatch(/<w:footnoteReference\b/);
   });
 
   test('direct text inside a footnote <li> is preserved', async () => {
