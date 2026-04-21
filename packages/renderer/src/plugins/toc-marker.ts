@@ -28,32 +28,72 @@
  */
 
 import type { Plugin } from 'unified';
-import type { Root } from 'mdast';
-import { toString } from 'mdast-util-to-string';
+import type { Emphasis, Paragraph, PhrasingContent, Root, Text } from 'mdast';
 
 export const TOC_MARKER_CLASSNAME = 'marginalia-toc-marker';
 
 const MARKER_HTML = `<div class="${TOC_MARKER_CLASSNAME}" aria-hidden="true"></div>`;
-
-// Accepted stringified forms, after remark has parsed the paragraph.
-//
-// `[[_TOC_]]` is surprisingly tricky: the inner `_TOC_` gets treated
-// as CommonMark intraword emphasis (because `_` adjacent to a `[`/`]`
-// punctuation is valid-flanking), so remark builds a paragraph of
-// `text("[[") + emphasis("TOC") + text("]]")`. `mdast-util-to-string`
-// strips emphasis markers, leaving the user's `[[_TOC_]]` indistinguishable
-// from a user-typed `[[TOC]]` at the check point. We therefore accept
-// both stringified forms — authors in either camp get what they expect.
-const ACCEPTED = new Set(['[TOC]', '[[_TOC_]]', '[[TOC]]']);
 
 export const remarkTocMarker: Plugin<[], Root> = () => {
   return (tree) => {
     for (let i = 0; i < tree.children.length; i++) {
       const node = tree.children[i];
       if (!node || node.type !== 'paragraph') continue;
-      const text = toString(node).trim();
-      if (!ACCEPTED.has(text)) continue;
+      if (!isTocMarkerParagraph(node)) continue;
       tree.children[i] = { type: 'html', value: MARKER_HTML };
     }
   };
 };
+
+/**
+ * Detect the two literal forms of a TOC marker by the PARSED mdast
+ * structure, not by the stringified text.
+ *
+ *  Form A  `[TOC]`       → paragraph with a single text child.
+ *  Form B  `[[_TOC_]]`   → paragraph with [text("[["), emphasis("TOC"), text("]]")].
+ *
+ * Checking structure lets us tell `[[_TOC_]]` (`emphasis`, intended as a
+ * marker) apart from `[[__TOC__]]` (`strong`, intended as literal
+ * bolded text in a document). The shared text representation —
+ * `mdast-util-to-string` strips both emphasis markers and both render
+ * as `[[TOC]]` after stringification — made the previous text-based
+ * matcher collide with the strong-emphasis case, so authors couldn't
+ * write `[[__TOC__]]` in their prose without it being swallowed.
+ */
+function isTocMarkerParagraph(node: Paragraph): boolean {
+  // Form A: plain `[TOC]`.
+  if (node.children.length === 1) {
+    const only = node.children[0];
+    if (only && only.type === 'text' && only.value.trim() === '[TOC]') return true;
+  }
+  // Form B: `[[_TOC_]]`. remark-gfm's parser splits this into three
+  // phrasing children around an emphasis wrapper — the emphasis is
+  // what distinguishes it from the strong-emphasis variant.
+  if (node.children.length === 3) {
+    const [open, mid, close] = node.children as [
+      PhrasingContent,
+      PhrasingContent,
+      PhrasingContent,
+    ];
+    if (
+      open.type === 'text' &&
+      (open as Text).value.trim() === '[[' &&
+      mid.type === 'emphasis' &&
+      isSingleTextChild((mid as Emphasis).children, 'TOC') &&
+      close.type === 'text' &&
+      (close as Text).value.trim() === ']]'
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSingleTextChild(
+  children: readonly PhrasingContent[],
+  expected: string,
+): boolean {
+  if (children.length !== 1) return false;
+  const only = children[0];
+  return !!only && only.type === 'text' && (only as Text).value === expected;
+}

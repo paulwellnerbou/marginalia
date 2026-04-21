@@ -58,4 +58,28 @@ describe('remarkTocMarker', () => {
     const matches = html.match(/class="marginalia-toc-marker"/g) ?? [];
     expect(matches.length).toBe(2);
   });
+
+  test('[[__TOC__]] (double underscores / strong emphasis) is NOT a marker', async () => {
+    // The paragraph parses as `text("[[") + strong("TOC") + text("]]")`.
+    // `mdast-util-to-string` strips both emphasis and strong, so the
+    // stringified form matches `[[_TOC_]]`'s stringified form. The
+    // plugin must distinguish them via the mdast wrapper type —
+    // `emphasis` is a marker, `strong` is literal content — so an
+    // author can write `[[__TOC__]]` in documentation without it
+    // being swallowed.
+    const md = '[[__TOC__]]\n';
+    const { html } = await render(md);
+    expect(html).not.toContain('class="marginalia-toc-marker"');
+    // The content renders as literal brackets wrapping <strong>TOC</strong>.
+    expect(html).toContain('<strong>TOC</strong>');
+  });
+
+  test('[[TOC]] with no underscores at all is NOT a marker', async () => {
+    // Someone writing exactly `[[TOC]]` in prose gets literal text,
+    // not a TOC. The canonical GitLab form is `[[_TOC_]]`; we only
+    // accept that and `[TOC]`.
+    const { html } = await render('[[TOC]]\n');
+    expect(html).not.toContain('class="marginalia-toc-marker"');
+    expect(html).toContain('[[TOC]]');
+  });
 });

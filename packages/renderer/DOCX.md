@@ -66,32 +66,38 @@ field is injected:
 ```
 
 `[TOC]` is the Python-Markdown / MkDocs / Typora convention;
-`[[_TOC_]]` is GitLab Flavored Markdown and Obsidian. Both are accepted
-so authors moving between ecosystems keep the same source working.
-`[[TOC]]` (without the underscores) is also recognised because
-CommonMark's intraword-emphasis rule turns `[[_TOC_]]` into
-`[[<em>TOC</em>]]` after parsing and we can't distinguish the two at
-the mdast level.
+`[[_TOC_]]` is GitLab Flavored Markdown and Obsidian. Both are
+accepted so authors moving between ecosystems keep the same source
+working.
 
-When multiple markers appear the TOC lands at the **first** one; later
-markers are silently dropped. Markers inside code blocks, blockquotes,
-or list items are left as literal text — they have to sit at the top
-level on a line of their own to count.
+Detection runs on the **parsed mdast structure**, not the stringified
+text, so the plugin can tell `[[_TOC_]]` (emphasis, a marker) apart
+from `[[__TOC__]]` (strong emphasis, literal bolded content in a
+document). `mdast-util-to-string` strips both, so relying on
+stringified equality would have quietly swallowed any author who
+wrote `[[__TOC__]]` as prose. `[[TOC]]` without underscores is also
+literal content — it is *not* recognised as a marker.
+
+When multiple markers appear the TOC lands at the **first** one;
+later markers are silently dropped. Markers inside code blocks,
+blockquotes, or list items are left as literal text — they have to
+sit at the top level on a line of their own to count.
 
 Precedence:
 
 1. Explicit `[TOC]` / `[[_TOC_]]` marker → TOC at that position.
-2. No marker, `options.includeToc === 'auto'` (default) and the doc has
-   ≥ 2 headings → TOC right after the leading heading.
-3. `options.includeToc === true` → always emit (with marker placement
-   if available, otherwise the heuristic).
+2. No marker, `options.includeToc === 'auto'` (default) and the doc
+   has ≥ 2 headings → TOC right after the leading heading.
+3. `options.includeToc === true` → always emit (with marker
+   placement if available, otherwise the heuristic).
 4. `options.includeToc === false` → never emit; any markers in the
    source are stripped without creating a TOC.
 
-The viewer renders the marker as an empty `<div class="marginalia-
-toc-marker">` which the themes hide via `display: none` — Marginalia
-already has a sidebar TOC, so marker placement is a DOCX-only concern
-for now.
+In the viewer, the marker renders as a small italic pill (`§ Table of
+contents`) so the author can see where the TOC will land in the
+exported document without having to re-export. The sidebar TOC is
+unchanged; the badge is purely positional. It's `aria-hidden` — the
+sidebar remains the accessible navigation.
 
 ## Edge cases
 
