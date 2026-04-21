@@ -811,6 +811,65 @@ describe('exportDocx — language / RTL (M5)', () => {
   });
 });
 
+describe('exportDocx — list items', () => {
+  test('multi-paragraph list items preserve paragraph boundaries', async () => {
+    // Loose-list markdown: each item's second paragraph should NOT
+    // carry its own bullet, but it MUST stay a distinct paragraph —
+    // the previous flattening merged the two paragraphs' text
+    // into one long run.
+    const md = [
+      '- First paragraph of item one.',
+      '',
+      '  Second paragraph of item one.',
+      '',
+      '- Item two.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+
+    // Both halves of item one appear — and they are separate
+    // paragraphs (there's a closing `</w:p>` between them).
+    const firstIdx = documentXml.indexOf('First paragraph of item one.');
+    const secondIdx = documentXml.indexOf('Second paragraph of item one.');
+    const itemTwoIdx = documentXml.indexOf('Item two.');
+    expect(firstIdx).toBeGreaterThan(-1);
+    expect(secondIdx).toBeGreaterThan(-1);
+    expect(itemTwoIdx).toBeGreaterThan(-1);
+    expect(firstIdx).toBeLessThan(secondIdx);
+    expect(secondIdx).toBeLessThan(itemTwoIdx);
+    // There's at least one `</w:p>` between the two halves — proves
+    // they're distinct paragraphs, not merged runs.
+    const between = documentXml.slice(firstIdx, secondIdx);
+    expect(between).toContain('</w:p>');
+
+    // Bullet count: exactly two numPr entries (one per list item),
+    // NOT three. If the continuation paragraph picked up a bullet,
+    // we'd see three.
+    const numPrMatches = documentXml.match(/<w:numPr\b/g) ?? [];
+    expect(numPrMatches.length).toBe(2);
+  });
+
+  test('list item with a nested list preserves the nesting', async () => {
+    // Regression: the rewrite must keep nested lists working and
+    // place them at the correct depth (level + 1).
+    const md = [
+      '- outer one',
+      '  - nested a',
+      '  - nested b',
+      '- outer two',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('outer one');
+    expect(documentXml).toContain('nested a');
+    expect(documentXml).toContain('nested b');
+    expect(documentXml).toContain('outer two');
+    // Four list items → four numbered paragraphs.
+    const numPrMatches = documentXml.match(/<w:numPr\b/g) ?? [];
+    expect(numPrMatches.length).toBe(4);
+  });
+});
+
 describe('exportDocx — grid tables', () => {
   test('grid-table cell content survives to document.xml', async () => {
     // Pandoc-style grid table. `preprocessGridTables` converts it to

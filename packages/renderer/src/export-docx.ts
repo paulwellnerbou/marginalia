@@ -1521,36 +1521,68 @@ function convertList(
   const reference = ordered ? 'marginalia-ordered' : 'marginalia-bullet';
   const level = Math.min(walk.listDepth, 5);
 
+  // Left indent (in twips) applied to continuation paragraphs inside
+  // a multi-paragraph list item. Matches the bullet's computed
+  // indent from `buildNumbering` (`18 * (level + 1)`) minus the
+  // hanging prefix, so continuation text aligns flush under the
+  // first paragraph's body.
+  const continuationIndent = pt2twip(18 * (level + 1));
+
   for (const item of node.children) {
     if (!isElement(item) || item.tagName !== 'li') continue;
-    // The li's first paragraph (or loose inline content) becomes the
-    // list item's paragraph; nested lists follow.
-    const inlineChildren: HastNode[] = [];
-    const blockChildren: HastNode[] = [];
+
+    // Walk the <li>'s children in source order. The FIRST chunk of
+    // paragraph-ish content carries the list's numbering (the bullet
+    // or number); subsequent paragraphs inside the same <li> become
+    // continuation paragraphs — same left indent, no numbering — so
+    // Word doesn't restart the bullet for each paragraph of a loose
+    // list item. Nested lists keep their own recursion at the deeper
+    // list depth.
+    let firstParaEmitted = false;
+    let pendingInline: HastNode[] = [];
+
+    const flushPending = () => {
+      if (pendingInline.length === 0) return;
+      const children = collectInlineFromMany(pendingInline, ctx, {});
+      if (!firstParaEmitted) {
+        out.push(new Paragraph({ numbering: { reference, level }, children }));
+        firstParaEmitted = true;
+      } else {
+        out.push(
+          new Paragraph({ indent: { left: continuationIndent }, children }),
+        );
+      }
+      pendingInline = [];
+    };
+
     for (const c of item.children) {
       if (isElement(c) && (c.tagName === 'ul' || c.tagName === 'ol')) {
-        blockChildren.push(c);
+        flushPending();
+        convertBlock(c, ctx, out, {
+          listDepth: walk.listDepth + 1,
+          inOrderedList: ordered,
+        });
       } else if (isElement(c) && c.tagName === 'p') {
-        // tight list items wrap a <p> — unwrap so all inline content
-        // lands in one list paragraph.
-        inlineChildren.push(...(c.children as HastNode[]));
+        // A `<p>` is its own paragraph. Flush anything we've been
+        // accumulating (turns into the previous paragraph), then put
+        // THIS `<p>`'s content into pendingInline and flush again so
+        // it emits as its own paragraph.
+        flushPending();
+        pendingInline = [...(c.children as HastNode[])];
+        flushPending();
       } else {
-        inlineChildren.push(c);
+        // Loose inline (tight-list text, inline elements between
+        // paragraphs, stray whitespace). Accumulate and flush with
+        // the next block boundary.
+        pendingInline.push(c);
       }
     }
+    flushPending();
 
-    out.push(
-      new Paragraph({
-        numbering: { reference, level },
-        children: collectInlineFromMany(inlineChildren, ctx, {}),
-      }),
-    );
-
-    for (const nested of blockChildren) {
-      convertBlock(nested, ctx, out, {
-        listDepth: walk.listDepth + 1,
-        inOrderedList: ordered,
-      });
+    // Empty `<li>` still needs to exist so the numbered list stays
+    // intact — emit a numbered paragraph with no content.
+    if (!firstParaEmitted) {
+      out.push(new Paragraph({ numbering: { reference, level }, children: [] }));
     }
   }
 }
