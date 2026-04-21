@@ -5,12 +5,13 @@
  * used by MkDocs, Typora) and GitLab Flavored Markdown's
  * `[[_TOC_]]` (also recognised by Obsidian). We accept both.
  *
- * A marker is a top-level paragraph whose combined text, trimmed,
- * exactly matches either literal. remark parses `[TOC]` as either a
- * link-reference-fallback or a plain text node depending on the
- * surrounding reference definitions; using `mdast-util-to-string` to
- * compare the rendered text handles both cases without having to
- * reason about which AST shape we got.
+ * A marker is a top-level paragraph whose mdast structure matches one
+ * of those two literals exactly. remark parses `[TOC]` as either a
+ * plain text node or a shortcut `linkReference` depending on the
+ * surrounding reference definitions, and `[[_TOC_]]` as a specific
+ * text/emphasis/text sequence. We intentionally match those AST
+ * shapes directly rather than stringifying, to avoid collisions such
+ * as `[[__TOC__]]`.
  *
  * The plugin replaces each matching paragraph with an HTML node that
  * emits `<div class="marginalia-toc-marker" aria-hidden="true"></div>`.
