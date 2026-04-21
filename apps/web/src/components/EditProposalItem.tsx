@@ -73,26 +73,22 @@ export function EditProposalItem({
   const diffBefore = resolvedDiff?.before ?? originalSource;
   const diffAfter = resolvedDiff?.after ?? proposal.proposed_text;
 
-  const statusBadge = (() => {
-    switch (proposal.status) {
-      case 'pending':
-        return <Badge color="blue" variant="soft">Proposed change</Badge>;
-      case 'accepted':
-        return (
-          <Badge color="green" variant="soft">
-            Accepted{proposal.decided_by_name ? ` by ${proposal.decided_by_name}` : ''}
-          </Badge>
-        );
-      case 'rejected':
-        return (
-          <Badge color="red" variant="soft">
-            Rejected{proposal.decided_by_name ? ` by ${proposal.decided_by_name}` : ''}
-          </Badge>
-        );
-      case 'orphaned':
-        return <Badge color="gray" variant="soft">Orphaned</Badge>;
-    }
-  })();
+  const headerBadges = (
+    <Flex gap="1" align="center" wrap="wrap">
+      <Badge color="blue" variant="soft">Proposed change</Badge>
+      {proposal.status === 'accepted' && (
+        <Badge color="green" variant="soft">
+          Accepted{proposal.decided_by_name ? ` by ${proposal.decided_by_name}` : ''}
+        </Badge>
+      )}
+      {proposal.status === 'rejected' && (
+        <Badge color="red" variant="soft">
+          Rejected{proposal.decided_by_name ? ` by ${proposal.decided_by_name}` : ''}
+        </Badge>
+      )}
+      {proposal.status === 'orphaned' && <Badge color="gray" variant="soft">Orphaned</Badge>}
+    </Flex>
+  );
 
   const canDelete =
     (isAuthor || isDocAdmin) &&
@@ -205,7 +201,11 @@ export function EditProposalItem({
     <Text as="p" className="comment-body proposal-rationale">
       {proposal.rationale}
     </Text>
-  ) : null;
+  ) : (
+    <Text as="p" className="comment-body proposal-rationale proposal-rationale-empty">
+      Change proposal
+    </Text>
+  );
 
   return (
     <>
@@ -216,6 +216,7 @@ export function EditProposalItem({
         onJump={jump}
         summary={formatThreadSummary(replies.length)}
         toolbarActions={toolbarActions}
+        headerBadge={headerBadges}
         focused={threadFocused}
         collapsed={collapsed}
         className={`proposal proposal-${proposal.status}`}
@@ -223,8 +224,8 @@ export function EditProposalItem({
       >
         <DiscussionEntry
           authorName={proposal.author.display_name}
+          authorId={proposal.author.client_id}
           createdAt={proposal.created_at}
-          badge={statusBadge}
           actions={actions}
           surface={surface}
           className="proposal-entry"

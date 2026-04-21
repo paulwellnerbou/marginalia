@@ -72,6 +72,7 @@ export function CommentItem({ comment, isDocAdmin, onEdit, onDelete, onQuote }: 
   return (
     <DiscussionEntry
       authorName={comment.author.display_name}
+      authorId={comment.author.client_id}
       createdAt={comment.created_at}
       actions={actions}
       surface={surface}

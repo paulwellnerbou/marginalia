@@ -9,6 +9,7 @@ interface DiscussionThreadProps {
   onJump?: (() => void) | undefined;
   summary: ReactNode;
   toolbarActions?: ReactNode | undefined;
+  headerBadge?: ReactNode | undefined;
   focused: boolean;
   collapsed: boolean;
   className?: string | undefined;
@@ -18,10 +19,10 @@ interface DiscussionThreadProps {
 
 interface DiscussionEntryProps {
   authorName: string;
+  authorId?: string | undefined;
   createdAt: number;
   surface: ReactNode;
   actions?: ReactNode | undefined;
-  badge?: ReactNode | undefined;
   className?: string | undefined;
 }
 
@@ -32,6 +33,7 @@ export function DiscussionThread({
   onJump,
   summary,
   toolbarActions,
+  headerBadge,
   focused,
   collapsed,
   className,
@@ -43,6 +45,7 @@ export function DiscussionThread({
       className={joinClasses('anchor-group', focused ? 'thread-focused' : null, className)}
       data-comment-thread-id={threadId}
     >
+      {headerBadge ? <div className="anchor-header-badge">{headerBadge}</div> : null}
       {quote && (
         <button
           type="button"
@@ -84,6 +87,7 @@ export function DiscussionThread({
 
 export function DiscussionEntry({
   authorName,
+  authorId,
   createdAt,
   surface,
   actions,
@@ -92,24 +96,48 @@ export function DiscussionEntry({
 }: DiscussionEntryProps) {
   return (
     <div className={joinClasses('comment', className)}>
-      <Flex align="baseline" gap="2" mb="1" className="comment-meta">
-        <Text weight="medium" size="2" className="comment-author">
-          {authorName}
-        </Text>
-        <Text size="1" color="gray" className="comment-ts" title={formatFullTs(createdAt)}>
+      <Avatar name={authorName} id={authorId ?? authorName} />
+      <div className="comment-col">
+        <div className="comment-surface">{surface}</div>
+        {badge ? <div className="comment-badge-row">{badge}</div> : null}
+      </div>
+      <div className="comment-aside">
+        <Text size="1" color="gray" className="comment-ts" title={`${authorName} · ${formatFullTs(createdAt)}`}>
           {formatTs(createdAt)}
         </Text>
-        {badge}
-        {actions ? (
-          <>
-            <span className="spacer" />
-            {actions}
-          </>
-        ) : null}
-      </Flex>
-      <div className="comment-surface">{surface}</div>
+        {actions}
+      </div>
     </div>
   );
+}
+
+function Avatar({ name, id }: { name: string; id: string }) {
+  const letters = initials(name);
+  const hue = hashHue(id);
+  const style = {
+    backgroundColor: `hsl(${hue} 55% 45%)`,
+  } as const;
+  return (
+    <div className="comment-avatar" style={style} aria-hidden title={name}>
+      {letters}
+    </div>
+  );
+}
+
+function initials(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return '?';
+  const parts = trimmed.split(/\s+/);
+  if (parts.length >= 2) {
+    return ((parts[0]?.[0] ?? '') + (parts[parts.length - 1]?.[0] ?? '')).toUpperCase();
+  }
+  return trimmed.slice(0, 2).toUpperCase();
+}
+
+function hashHue(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h) % 360;
 }
 
 export function formatTs(ts: number): string {
