@@ -577,7 +577,7 @@ button.primary:disabled {
   margin: 0;
 }
 .toc-list .toc-list {
-  padding-left: 1.1rem;
+  padding-left: 0.75rem;
 }
 .toc-item {
   margin-top: 0.15rem;
@@ -588,11 +588,13 @@ button.primary:disabled {
   gap: 0.15rem;
   border-radius: 0.45rem;
 }
-.toc-toggle {
+.toc-toggle,
+.toc-toggle-spacer {
   flex-shrink: 0;
+  width: 1.25rem;
+  min-width: 1.25rem;
 }
 .toc-toggle-spacer {
-  width: calc(var(--space-5) + 0.15rem);
   display: inline-block;
 }
 .toc a {
@@ -621,7 +623,32 @@ button.primary:disabled {
   border-radius: 0.18rem;
 }
 .toc-l1 > .toc-row > a {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+.toc-l2 > .toc-row > a {
+  font-size: 1.05rem;
   font-weight: 600;
+}
+.toc-l3 > .toc-row > a {
+  font-size: 0.95rem;
+}
+.toc-l4 > .toc-row > a {
+  font-size: 0.875rem;
+}
+.toc-l5 > .toc-row > a,
+.toc-l6 > .toc-row > a {
+  font-size: 0.8rem;
+}
+.toc-l2 {
+  border-top: 1px solid var(--ui-border);
+  padding-top: 0.5rem;
+  margin-top: 0.5rem;
+}
+.toc-l2:first-child {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
 }
 .toc-empty {
   padding: 1rem;
