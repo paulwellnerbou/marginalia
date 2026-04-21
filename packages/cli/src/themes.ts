@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 export const BUILT_IN_THEMES = [
   'default',
   'handbook',
+  'asciidoc-article',
   'book',
   'article',
   'technical',

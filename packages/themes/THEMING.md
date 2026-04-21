@@ -67,6 +67,7 @@ Built-in themes in this package:
 
 - `@marginalia/themes/default` (light + dark via `[data-appearance]`)
 - `@marginalia/themes/handbook`
+- `@marginalia/themes/asciidoc-article`
 - `@marginalia/themes/beautiful`
 - `@marginalia/themes/book`
 - `@marginalia/themes/article`

@@ -61,6 +61,7 @@ describe('marginalia CLI', () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain('default');
     expect(r.stdout).toContain('handbook');
+    expect(r.stdout).toContain('asciidoc-article');
     expect(r.stdout).toContain('beautiful');
     expect(r.stdout).toContain('serif-print');
   });
@@ -105,5 +106,13 @@ describe('marginalia CLI', () => {
     expect(r.stdout).not.toMatch(/@import\s+["'][^"']*default\.css["']/);
     expect(r.stdout).toContain('Open Sans');
     expect(r.stdout).toContain('--md-color-accent: #1c6a72;');
+  });
+
+  test('asciidoc-article theme exposes the academy font stack and toc styling', async () => {
+    const r = await runCli(['themes', 'show', 'asciidoc-article']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).not.toMatch(/@import\s+["'][^"']*default\.css["']/);
+    expect(r.stdout).toContain('Noto Serif');
+    expect(r.stdout).toContain('#toc > .sectlevel1 > li');
   });
 });
