@@ -7,7 +7,7 @@
  * left-hand TOC on large screens.
  */
 
-@import url("https://fonts.googleapis.com/css?family=Open+Sans:300,300italic,400,400italic,600,600italic%7CNoto+Serif:400,400italic,700,700italic%7CDroid+Sans+Mono:400,700");
+@import url("https://fonts.googleapis.com/css2?family=Open+Sans:ital,wght@0,300;0,400;0,600;1,300;1,400;1,600&family=Noto+Serif:ital,wght@0,400;0,700;1,400;1,700&family=Droid+Sans+Mono:wght@400;700&display=swap");
 @import "./default.css";
 
 .marginalia-theme,
@@ -44,8 +44,8 @@
 
 .marginalia {
   padding: 0 0 2rem;
-  color: rgb(0 0 0 / 80%);
-  line-height: 1;
+  color: var(--md-color-fg);
+  line-height: var(--md-line-height);
   -moz-osx-font-smoothing: grayscale;
   word-wrap: anywhere;
 }
@@ -55,21 +55,9 @@
   max-width: none;
 }
 
-.marginalia > :is(#header, #content, #footnotes, #footer) {
-  width: 100%;
-  max-width: 62.5em;
-  margin: 0 auto;
-  position: relative;
-  padding-left: 0.9375em;
-  padding-right: 0.9375em;
-}
-
-.marginalia > :not(#header):not(#content):not(#footnotes):not(#footer) {
-  max-width: 62.5em;
-  margin-left: auto;
-  margin-right: auto;
-  padding-left: 0.9375em;
-  padding-right: 0.9375em;
+.marginalia > #content > :is(#preamble, .sect1, .sect2, .sect3, .sect4, .sect5) {
+  padding-left: 0;
+  padding-right: 0;
 }
 
 .marginalia > #content {
@@ -208,37 +196,12 @@
   padding-bottom: 0;
 }
 
-.marginalia :is(h1, h2, h3, h4, h5, h6) > a.heading-anchor {
-  position: absolute;
-  z-index: 1001;
-  width: 1.5ex;
-  margin-left: -1.5ex;
-  display: block;
-  text-decoration: none;
-  visibility: hidden;
-  text-align: center;
-  font-weight: 400;
-  color: inherit;
-  font-size: 0;
-  left: 0;
-  opacity: 1;
-}
-
-.marginalia :is(h1, h2, h3, h4, h5, h6) > a.heading-anchor::before {
-  content: "\00A7";
-  font-size: 0.85rem;
-  display: block;
-  padding-top: 0.1em;
-}
-
-.marginalia :is(h1, h2, h3, h4, h5, h6):hover > a.heading-anchor,
-.marginalia :is(h1, h2, h3, h4, h5, h6) > a.heading-anchor:hover {
-  visibility: visible;
-}
-
-.marginalia :is(h1, h2, h3, h4, h5, h6) > a:not(.heading-anchor) {
-  color: inherit;
-  text-decoration: none;
+.marginalia #content > .sect1 > h2,
+.marginalia .sect2 > h3,
+.marginalia .sect3 > h4,
+.marginalia .sect4 > h5,
+.marginalia .sect5 > h6 {
+  margin-left: 0;
 }
 
 .marginalia :not(pre) > code {
@@ -305,7 +268,7 @@
 .marginalia blockquote {
   margin: 0 0 1.25em;
   padding: 0.5625em 1.25em 0 1.1875em;
-  border-left: 1px solid #dddddd;
+  border-left: 1px solid var(--md-color-quote-bar);
   color: rgb(0 0 0 / 85%);
   font-style: normal;
 }
@@ -378,7 +341,7 @@
 }
 
 .marginalia #toc > .sectlevel1 > li {
-  border-top: 1px solid gray;
+  border-top: 1px solid var(--md-color-border);
   padding-top: 1em;
 }
 

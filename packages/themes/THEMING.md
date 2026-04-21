@@ -65,14 +65,14 @@ structural rules, then override only what you need.
 
 Built-in themes in this package:
 
-- `@marginalia/themes/default` (light + dark via `[data-appearance]`)
-- `@marginalia/themes/handbook`
-- `@marginalia/themes/asciidoc-article`
-- `@marginalia/themes/beautiful`
-- `@marginalia/themes/book`
-- `@marginalia/themes/article`
-- `@marginalia/themes/technical`
-- `@marginalia/themes/serif-print` (intended for PDF export)
+- `@marginalia/themes/default.css` (light + dark via `[data-appearance]`)
+- `@marginalia/themes/handbook.css`
+- `@marginalia/themes/asciidoc-article.css`
+- `@marginalia/themes/beautiful.css`
+- `@marginalia/themes/book.css`
+- `@marginalia/themes/article.css`
+- `@marginalia/themes/technical.css`
+- `@marginalia/themes/serif-print.css` (intended for PDF export)
 
 ## Non-CSS consumers
 
