@@ -28,7 +28,14 @@
  */
 
 import type { Plugin } from 'unified';
-import type { Emphasis, Paragraph, PhrasingContent, Root, Text } from 'mdast';
+import type {
+  Emphasis,
+  LinkReference,
+  Paragraph,
+  PhrasingContent,
+  Root,
+  Text,
+} from 'mdast';
 
 export const TOC_MARKER_CLASSNAME = 'marginalia-toc-marker';
 
@@ -49,7 +56,14 @@ export const remarkTocMarker: Plugin<[], Root> = () => {
  * Detect the two literal forms of a TOC marker by the PARSED mdast
  * structure, not by the stringified text.
  *
- *  Form A  `[TOC]`       → paragraph with a single text child.
+ *  Form A  `[TOC]`       → paragraph with a single text child,
+ *                          OR a shortcut `linkReference` with label
+ *                          "TOC" when the doc happens to contain a
+ *                          `[TOC]: url` reference definition (remark
+ *                          flips unresolved refs to text but turns
+ *                          them into `linkReference` the moment a
+ *                          matching definition appears anywhere in
+ *                          the doc).
  *  Form B  `[[_TOC_]]`   → paragraph with [text("[["), emphasis("TOC"), text("]]")].
  *
  * Checking structure lets us tell `[[_TOC_]]` (`emphasis`, intended as a
@@ -59,12 +73,28 @@ export const remarkTocMarker: Plugin<[], Root> = () => {
  * as `[[TOC]]` after stringification — made the previous text-based
  * matcher collide with the strong-emphasis case, so authors couldn't
  * write `[[__TOC__]]` in their prose without it being swallowed.
+ *
+ * The shortcut-reference variant also keeps `[Read more][TOC]` (a
+ * FULL reference pointing at the `[TOC]: url` definition) working as
+ * a real link — that's `referenceType: 'full'` with non-`TOC` children,
+ * which doesn't match the shortcut predicate below.
  */
 function isTocMarkerParagraph(node: Paragraph): boolean {
-  // Form A: plain `[TOC]`.
+  // Form A: plain `[TOC]` (no matching ref def anywhere in the doc),
+  // OR a SHORTCUT `[TOC]` reference whose label is exactly "TOC"
+  // (matching ref def exists).
   if (node.children.length === 1) {
     const only = node.children[0];
     if (only && only.type === 'text' && only.value.trim() === '[TOC]') return true;
+    if (
+      only &&
+      only.type === 'linkReference' &&
+      (only as LinkReference).referenceType === 'shortcut' &&
+      (only as LinkReference).identifier === 'toc' &&
+      isSingleTextChild((only as LinkReference).children, 'TOC')
+    ) {
+      return true;
+    }
   }
   // Form B: `[[_TOC_]]`. remark-gfm's parser splits this into three
   // phrasing children around an emphasis wrapper — the emphasis is

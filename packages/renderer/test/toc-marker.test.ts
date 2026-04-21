@@ -2,10 +2,13 @@ import { describe, expect, test } from 'bun:test';
 import { render } from '../src/index.js';
 
 // The remark plugin rewrites matching paragraphs to
-// `<div class="marginalia-toc-marker">`. The viewer's CSS hides it,
-// but the HTML still carries the class so the DOCX exporter can
-// recognise it. These tests go through the full render pipeline so
-// sanitize-schema / rehype-raw interactions are covered too.
+// `<div class="marginalia-toc-marker">`. The viewer's CSS renders it
+// as a visible TOC badge (see `.marginalia-toc-marker` in
+// `@marginalia/themes/css/default.css`), and the HTML still carries
+// the class so the DOCX exporter can recognise it as an injection
+// point for the Word TOC field. These tests go through the full
+// render pipeline so sanitize-schema / rehype-raw interactions are
+// covered too.
 
 describe('remarkTocMarker', () => {
   test('converts a standalone [TOC] paragraph into a marker div', async () => {
@@ -81,5 +84,42 @@ describe('remarkTocMarker', () => {
     const { html } = await render('[[TOC]]\n');
     expect(html).not.toContain('class="marginalia-toc-marker"');
     expect(html).toContain('[[TOC]]');
+  });
+
+  test('[TOC] keeps working even when the doc has a [TOC]: ref def', async () => {
+    // When any `[TOC]: url` definition appears in the document,
+    // remark flips the standalone `[TOC]` from a text node to a
+    // shortcut linkReference. The plugin still recognises that as
+    // a marker — otherwise adding a ref def anywhere in the doc
+    // would silently break an existing marker.
+    const md = [
+      '# Doc',
+      '',
+      'See the [table of contents][TOC] for details.',
+      '',
+      '[TOC]',
+      '',
+      '## A',
+      '',
+      '## B',
+      '',
+      '[TOC]: #contents',
+    ].join('\n');
+    const { html } = await render(md);
+    // The standalone `[TOC]` still becomes the marker.
+    expect(html).toMatch(/class="marginalia-toc-marker"/);
+    // And the FULL reference `[table of contents][TOC]` still
+    // becomes a real hyperlink (the ref def wins for that one).
+    expect(html).toMatch(/<a href="#contents"[^>]*>table of contents<\/a>/);
+  });
+
+  test('[Read more][TOC] (full reference) is NOT a marker, stays a link', async () => {
+    // A FULL-form reference pointing at a `[TOC]: url` definition
+    // is an ordinary link — the user's visible text is "Read
+    // more", not "TOC". Must not be swallowed by the marker rule.
+    const md = 'See [Read more][TOC] for the list.\n\n[TOC]: /contents\n';
+    const { html } = await render(md);
+    expect(html).not.toContain('class="marginalia-toc-marker"');
+    expect(html).toContain('<a href="/contents">Read more</a>');
   });
 });
