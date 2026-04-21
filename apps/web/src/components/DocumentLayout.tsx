@@ -401,8 +401,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const scrollToAnchor = useCallback((blockId: string) => {
     const root = docRef.current;
     if (!root) return;
+    const escaped = CSS.escape(blockId);
     const target = root.querySelector<HTMLElement>(
-      `[data-block="${blockId.replace(/"/g, '\\"')}"]`,
+      `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
     );
     if (!target) return;
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -627,6 +628,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
   const commentHighlights = useMemo(() => {
     const highlights: Array<{
+      scope: 'range' | 'block';
       threadId?: string;
       blockId: string;
       quote: string;
@@ -642,6 +644,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           comment.anchor.end_offset > comment.anchor.start_offset,
       )
       .map((comment) => ({
+        scope: 'range' as const,
         threadId: comment.id,
         blockId: comment.anchor!.block_id,
         quote: comment.anchor!.quote,
@@ -654,6 +657,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       if (!proposal.anchor.block_id || !proposal.anchor.quote) continue;
 
       highlights.push({
+        scope: 'block',
+        threadId: proposal.id,
         blockId: proposal.anchor.block_id,
         quote: proposal.anchor.quote,
         startOffset: 0,
@@ -668,6 +673,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       pendingAnchor.end_offset > pendingAnchor.start_offset
     ) {
       highlights.push({
+        scope: 'range',
         blockId: pendingAnchor.block_id,
         quote: pendingAnchor.quote,
         startOffset: pendingAnchor.start_offset,

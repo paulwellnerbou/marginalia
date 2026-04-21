@@ -179,6 +179,24 @@
   cursor: pointer;
 }
 
+.marginalia .comment-highlight-block {
+  background: var(--md-color-comment-highlight-bg);
+  border-radius: 0.25rem;
+}
+
+.marginalia .comment-highlight-block[data-comment-thread-id] {
+  cursor: pointer;
+}
+
+.marginalia .comment-highlight-block mark.comment-highlight {
+  text-decoration-thickness: 0.1em;
+}
+
+.marginalia .comment-highlight-block[data-comment-thread-id]:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
 .marginalia mark.comment-highlight[data-comment-thread-id]:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 2px;
@@ -186,7 +204,8 @@
 
 /* Applied by the viewer when a user clicks a comment thread — flashes the
    anchored block so the user can spot it after the scroll. */
-.marginalia [data-block].anchor-flash {
+.marginalia [data-block].anchor-flash,
+.marginalia [data-subblock].anchor-flash {
   animation: md-anchor-flash 1.6s ease-out;
 }
 @keyframes md-anchor-flash {

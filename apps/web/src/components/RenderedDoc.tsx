@@ -28,6 +28,7 @@ interface RenderedDocProps {
   textZoom?: number;
   /** Exact text ranges to keep visibly highlighted in the rendered document. */
   highlights?: ReadonlyArray<{
+    scope?: 'range' | 'block';
     threadId?: string;
     blockId: string;
     quote: string;
@@ -205,7 +206,7 @@ export function RenderedDoc({
         }
       }
 
-      const highlight = target.closest<HTMLElement>('mark[data-comment-thread-id]');
+      const highlight = target.closest<HTMLElement>('[data-comment-thread-id]');
       const threadId = highlight?.dataset.commentThreadId;
       if (threadId && onHighlightClick) {
         e.preventDefault();
@@ -263,7 +264,7 @@ export function RenderedDoc({
     const keydown = (e: KeyboardEvent) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
       const target = e.target as HTMLElement | null;
-      const highlight = target?.closest<HTMLElement>('mark[data-comment-thread-id]');
+      const highlight = target?.closest<HTMLElement>('[data-comment-thread-id]');
       const threadId = highlight?.dataset.commentThreadId;
       if (!threadId || !onHighlightClick) return;
       e.preventDefault();
@@ -453,6 +454,7 @@ function svgToDataUrl(svg: SVGElement): string {
 function applyCommentHighlights(
   root: HTMLElement,
   highlights: ReadonlyArray<{
+    scope?: 'range' | 'block';
     threadId?: string;
     blockId: string;
     quote: string;
@@ -466,37 +468,53 @@ function applyCommentHighlights(
   >();
 
   for (const highlight of highlights) {
-    if (highlight.endOffset <= highlight.startOffset || !highlight.quote) continue;
-
-    const block = root.querySelector<HTMLElement>(
-      `[data-block="${CSS.escape(highlight.blockId)}"]`,
-    );
+    const block = findHighlightBlock(root, highlight.blockId);
     if (!block) continue;
 
     const map = buildBlockTextMap(block);
-    const resolved = resolveNormalizedRange(
-      map.normalizedText,
-      highlight.quote,
-      highlight.startOffset,
-      highlight.endOffset,
-    );
-    if (!resolved) continue;
+    let rawStart: number | undefined;
+    let rawEnd: number | undefined;
 
-    const rawStart = map.normalizedToRaw[resolved.start];
-    const rawEndChar = map.normalizedToRaw[resolved.end - 1];
-    if (rawStart === undefined || rawEndChar === undefined) continue;
+    if (highlight.scope === 'block') {
+      if (map.rawLength <= 0) continue;
+      block.dataset.commentHighlightBlock = 'true';
+      block.classList.add('comment-highlight-block');
+      if (highlight.threadId) {
+        block.dataset.commentThreadId = highlight.threadId;
+        block.tabIndex = 0;
+        block.setAttribute('role', 'button');
+        block.setAttribute('aria-label', 'Open comment thread');
+      }
+      rawStart = 0;
+      rawEnd = map.rawLength;
+    } else {
+      if (highlight.endOffset <= highlight.startOffset || !highlight.quote) continue;
+
+      const resolved = resolveNormalizedRange(
+        map.normalizedText,
+        highlight.quote,
+        highlight.startOffset,
+        highlight.endOffset,
+      );
+      if (!resolved) continue;
+
+      rawStart = map.normalizedToRaw[resolved.start];
+      const rawEndChar = map.normalizedToRaw[resolved.end - 1];
+      if (rawStart === undefined || rawEndChar === undefined) continue;
+      rawEnd = rawEndChar + 1;
+    }
 
     const blockRanges = rangesByBlock.get(highlight.blockId) ?? [];
     blockRanges.push({
       rawStart,
-      rawEnd: rawEndChar + 1,
+      rawEnd,
       threadIds: highlight.threadId ? [highlight.threadId] : [],
     });
     rangesByBlock.set(highlight.blockId, blockRanges);
   }
 
   for (const [blockId, ranges] of rangesByBlock) {
-    const block = root.querySelector<HTMLElement>(`[data-block="${CSS.escape(blockId)}"]`);
+    const block = findHighlightBlock(root, blockId);
     if (!block) continue;
 
     const merged = mergeRanges(ranges);
@@ -518,6 +536,16 @@ function clearCommentHighlights(root: HTMLElement): void {
     while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
     parent.removeChild(mark);
     parent.normalize();
+  }
+
+  const blockHighlights = root.querySelectorAll<HTMLElement>('[data-comment-highlight-block="true"]');
+  for (const block of blockHighlights) {
+    block.classList.remove('comment-highlight-block');
+    delete block.dataset.commentHighlightBlock;
+    delete block.dataset.commentThreadId;
+    block.removeAttribute('tabindex');
+    block.removeAttribute('role');
+    block.removeAttribute('aria-label');
   }
 }
 
@@ -627,6 +655,7 @@ function resolveNormalizedRange(
 function buildBlockTextMap(block: HTMLElement): {
   normalizedText: string;
   normalizedToRaw: number[];
+  rawLength: number;
 } {
   const textNodes = collectTextNodes(block);
   let rawText = '';
@@ -656,7 +685,14 @@ function buildBlockTextMap(block: HTMLElement): {
     sawContent = true;
   }
 
-  return { normalizedText, normalizedToRaw };
+  return { normalizedText, normalizedToRaw, rawLength: rawText.length };
+}
+
+function findHighlightBlock(root: HTMLElement, blockId: string): HTMLElement | null {
+  const escaped = CSS.escape(blockId);
+  return root.querySelector<HTMLElement>(
+    `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
+  );
 }
 
 function collectTextNodes(root: HTMLElement): Array<{ node: Text; start: number; end: number }> {
