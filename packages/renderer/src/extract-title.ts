@@ -41,7 +41,9 @@ export function sanitizeDocumentFilename(
   title: string | null | undefined,
   fallback: string,
 ): string {
-  const source = (title ?? '').trim() || fallback;
+  const source = (title ?? '').trim();
+  if (!source) return fallback;
+
   const sanitized = source.replace(/[^\w.-]+/g, '_').slice(0, 80);
   const trimmed = sanitized.replace(/^[._-]+|[._-]+$/g, '');
   return trimmed || fallback;

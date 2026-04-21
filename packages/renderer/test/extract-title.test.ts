@@ -189,6 +189,11 @@ describe('sanitizeDocumentFilename', () => {
     expect(sanitizeDocumentFilename(undefined, 'abc123')).toBe('abc123');
   });
 
+  test('preserves the fallback verbatim when no title is available', () => {
+    expect(sanitizeDocumentFilename(null, '-abc123_')).toBe('-abc123_');
+    expect(sanitizeDocumentFilename('   ', '_-uid-_')).toBe('_-uid-_');
+  });
+
   test('falls back when the title trims to empty', () => {
     expect(sanitizeDocumentFilename('   ', 'abc123')).toBe('abc123');
   });
@@ -197,6 +202,7 @@ describe('sanitizeDocumentFilename', () => {
     // "🎉" → "_", then trim separators → "", then fallback.
     expect(sanitizeDocumentFilename('🎉', 'abc123')).toBe('abc123');
     expect(sanitizeDocumentFilename('🎉✨🎊', 'abc123')).toBe('abc123');
+    expect(sanitizeDocumentFilename('🎉✨🎊', '-abc123_')).toBe('-abc123_');
   });
 
   test('strips leading/trailing separators so we never produce a hidden file', () => {
