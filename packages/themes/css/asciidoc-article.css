@@ -1,0 +1,677 @@
+/*
+ * Marginalia — AsciiDoc Article
+ *
+ * A direct nod to the older tesolva academy crashcourse output:
+ * Asciidoctor-default typography and section styling, plus the small
+ * custom layer used there for tasks, TOC separators, and the wide
+ * left-hand TOC on large screens.
+ */
+
+@import url("https://fonts.googleapis.com/css?family=Open+Sans:300,300italic,400,400italic,600,600italic%7CNoto+Serif:400,400italic,700,700italic%7CDroid+Sans+Mono:400,700");
+@import "./default.css";
+
+.marginalia-theme,
+.marginalia {
+  --md-max-width: 62.5em;
+
+  --md-font-body: "Noto Serif", "DejaVu Serif", Georgia, serif;
+  --md-font-heading: "Open Sans", "DejaVu Sans", "Segoe UI", Arial, sans-serif;
+  --md-font-mono: "Droid Sans Mono", "DejaVu Sans Mono", "SF Mono", Consolas, monospace;
+
+  --md-font-size: 16px;
+  --md-line-height: 1.6;
+  --md-heading-weight: 300;
+  --md-heading-line-height: 1.2;
+  --md-heading-letter-spacing: 0;
+
+  --md-space-block: 1.25em;
+  --md-space-heading-top: 1em;
+  --md-space-list-item: 0.33em;
+
+  --md-color-fg: #333333;
+  --md-color-fg-muted: #666666;
+  --md-color-bg: #ffffff;
+  --md-color-accent: #2156a5;
+  --md-color-accent-muted: #1d4b8f;
+  --md-color-border: #dddddf;
+  --md-color-code-bg: #f7f7f8;
+  --md-color-code-fg: #111111;
+  --md-color-quote-bar: #dddddd;
+  --md-color-table-stripe: #f8f8f7;
+  --md-color-selection-bg: #dfe8f6;
+  --md-color-block-bg: #f8f8f7;
+}
+
+.marginalia {
+  padding: 0 0 2rem;
+  color: rgb(0 0 0 / 80%);
+  line-height: 1;
+  -moz-osx-font-smoothing: grayscale;
+  word-wrap: anywhere;
+}
+
+.marginalia:has(> #header),
+.marginalia:has(> #content) {
+  max-width: none;
+}
+
+.marginalia > :is(#header, #content, #footnotes, #footer) {
+  width: 100%;
+  max-width: 62.5em;
+  margin: 0 auto;
+  position: relative;
+  padding-left: 0.9375em;
+  padding-right: 0.9375em;
+}
+
+.marginalia > :not(#header):not(#content):not(#footnotes):not(#footer) {
+  max-width: 62.5em;
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 0.9375em;
+  padding-right: 0.9375em;
+}
+
+.marginalia > #content {
+  margin-top: 1.25em;
+  margin-bottom: 0.625em;
+}
+
+.marginalia > #content::before {
+  content: none;
+}
+
+.marginalia > * + * {
+  margin-top: 0;
+}
+
+.marginalia p {
+  line-height: 1.6;
+  margin-bottom: 1.25em;
+  text-rendering: optimizeLegibility;
+}
+
+.marginalia :is(ul, ol, dl) {
+  line-height: 1.6;
+  margin-bottom: 1.25em;
+}
+
+.marginalia :is(ul, ol) {
+  margin-left: 1.5em;
+  padding-left: 0;
+}
+
+.marginalia li + li {
+  margin-top: 0;
+}
+
+.marginalia a {
+  color: var(--md-color-accent);
+  text-decoration: underline;
+  text-decoration-color: currentColor;
+  text-underline-offset: 0.12em;
+}
+
+.marginalia a:hover,
+.marginalia a:focus {
+  color: var(--md-color-accent-muted);
+}
+
+.marginalia :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--md-font-heading);
+  font-weight: 300;
+  font-style: normal;
+  color: #ba3925;
+  text-rendering: optimizeLegibility;
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+  line-height: 1.2;
+  letter-spacing: 0;
+  word-spacing: -0.05em;
+  border: 0;
+  padding: 0;
+  text-transform: none;
+}
+
+.marginalia h1 {
+  font-size: 2.125em;
+}
+
+.marginalia h2 {
+  font-size: 1.6875em;
+}
+
+.marginalia h3 {
+  font-size: 1.375em;
+}
+
+.marginalia h4,
+.marginalia h5 {
+  font-size: 1.125em;
+}
+
+.marginalia h6 {
+  font-size: 1em;
+}
+
+.marginalia > #header > h1:first-child {
+  color: rgb(0 0 0 / 85%);
+  margin-top: 2.25rem;
+  margin-bottom: 0;
+}
+
+.marginalia #header .details {
+  border-bottom: 1px solid var(--md-color-border);
+  line-height: 1.45;
+  padding-top: 0.25em;
+  padding-bottom: 0.25em;
+  padding-left: 0.25em;
+  color: rgb(0 0 0 / 60%);
+  display: flex;
+  flex-flow: row wrap;
+}
+
+.marginalia #header .details span:first-child {
+  margin-left: -0.125em;
+}
+
+.marginalia #header .details br {
+  display: none;
+}
+
+.marginalia #header .details br + span::before {
+  content: "\00a0\2013\00a0";
+}
+
+.marginalia #header .details br + span.author::before {
+  content: "\00a0\22c5\00a0";
+  color: rgb(0 0 0 / 85%);
+}
+
+.marginalia #header #revnumber {
+  text-transform: capitalize;
+}
+
+.marginalia #header #revnumber::after {
+  content: "\00a0";
+}
+
+.marginalia .sect1 {
+  padding-bottom: 0.625em;
+}
+
+.marginalia .sect1 + .sect1 {
+  border-top: 1px solid #e7e7e9;
+}
+
+.marginalia .sect1:last-child {
+  padding-bottom: 0;
+}
+
+.marginalia :is(h1, h2, h3, h4, h5, h6) > a.heading-anchor {
+  position: absolute;
+  z-index: 1001;
+  width: 1.5ex;
+  margin-left: -1.5ex;
+  display: block;
+  text-decoration: none;
+  visibility: hidden;
+  text-align: center;
+  font-weight: 400;
+  color: inherit;
+  font-size: 0;
+  left: 0;
+  opacity: 1;
+}
+
+.marginalia :is(h1, h2, h3, h4, h5, h6) > a.heading-anchor::before {
+  content: "\00A7";
+  font-size: 0.85rem;
+  display: block;
+  padding-top: 0.1em;
+}
+
+.marginalia :is(h1, h2, h3, h4, h5, h6):hover > a.heading-anchor,
+.marginalia :is(h1, h2, h3, h4, h5, h6) > a.heading-anchor:hover {
+  visibility: visible;
+}
+
+.marginalia :is(h1, h2, h3, h4, h5, h6) > a:not(.heading-anchor) {
+  color: inherit;
+  text-decoration: none;
+}
+
+.marginalia :not(pre) > code {
+  font-family: var(--md-font-mono);
+  font-size: 0.9375em;
+  font-style: normal;
+  letter-spacing: 0;
+  padding: 0.1em 0.5ex;
+  word-spacing: -0.15em;
+  background: var(--md-color-code-bg);
+  border: 0;
+  border-radius: 4px;
+  line-height: 1.45;
+  text-rendering: optimizeSpeed;
+  white-space: normal;
+}
+
+.marginalia pre {
+  color: rgb(0 0 0 / 90%);
+  font-family: var(--md-font-mono);
+  line-height: 1.45;
+  text-rendering: optimizeSpeed;
+  border-radius: 4px;
+  overflow-x: auto;
+  padding: 1em;
+  font-size: 0.8125em;
+  background: var(--md-color-code-bg);
+}
+
+.marginalia pre.shiki,
+.marginalia pre.shiki span {
+  background-color: var(--shiki-light-bg, var(--md-color-code-bg));
+}
+
+.marginalia table {
+  background: #ffffff;
+  margin-bottom: 1.25em;
+  border: 1px solid #dedede;
+  word-wrap: normal;
+  width: 100%;
+}
+
+.marginalia table :is(thead, tfoot) {
+  background: #f7f8f7;
+}
+
+.marginalia table :is(th, td) {
+  padding: 0.5625em 0.625em;
+  font-size: inherit;
+  color: rgb(0 0 0 / 80%);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 0;
+}
+
+.marginalia table :is(thead, tfoot) :is(th, td) {
+  padding: 0.5em 0.625em 0.625em;
+}
+
+.marginalia tbody tr:nth-child(even) td {
+  background: var(--md-color-table-stripe);
+}
+
+.marginalia blockquote {
+  margin: 0 0 1.25em;
+  padding: 0.5625em 1.25em 0 1.1875em;
+  border-left: 1px solid #dddddd;
+  color: rgb(0 0 0 / 85%);
+  font-style: normal;
+}
+
+.marginalia .quoteblock {
+  margin: 0 1em 1.25em 1.5em;
+  display: table;
+}
+
+.marginalia .quoteblock blockquote,
+.marginalia .quoteblock p {
+  color: rgb(0 0 0 / 85%);
+  font-size: 1.15rem;
+  line-height: 1.75;
+  word-spacing: 0.1em;
+  font-style: italic;
+  text-align: justify;
+}
+
+.marginalia .quoteblock blockquote {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.marginalia .quoteblock blockquote::before {
+  content: "\201c";
+  float: left;
+  font-size: 2.75em;
+  font-weight: bold;
+  line-height: 0.6em;
+  margin-left: -0.6em;
+  color: #7a2518;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 10%);
+}
+
+.marginalia #toc {
+  border-bottom: 1px solid #e7e7e9;
+  padding-bottom: 0.5em;
+}
+
+.marginalia #toc > ul {
+  margin-left: 0.125em;
+}
+
+.marginalia #toc ul {
+  font-family: var(--md-font-heading);
+  list-style: none;
+  padding-left: 0;
+  margin-bottom: 0;
+}
+
+.marginalia #toc li {
+  line-height: 1.3334;
+  margin-top: 0.3334em;
+}
+
+.marginalia #toc a {
+  text-decoration: none;
+}
+
+.marginalia #toc a:active {
+  text-decoration: underline;
+}
+
+.marginalia #toctitle {
+  color: #7a2518;
+  font-size: 1.2em;
+  font-weight: 300;
+}
+
+.marginalia #toc > .sectlevel1 > li {
+  border-top: 1px solid gray;
+  padding-top: 1em;
+}
+
+.marginalia #toc > .sectlevel1 > li > a {
+  font-size: 1.1em;
+  font-weight: bold;
+}
+
+.marginalia .admonitionblock {
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.marginalia .admonitionblock .icon {
+  vertical-align: top;
+}
+
+.marginalia .admonitionblock > table {
+  border-collapse: separate;
+  border: 0;
+  background: none;
+  width: 100%;
+}
+
+.marginalia .admonitionblock > table > tbody,
+.marginalia .admonitionblock > table > tbody > tr {
+  display: table-row-group;
+}
+
+.marginalia .admonitionblock td {
+  display: table-cell;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.marginalia .admonitionblock td.icon {
+  text-align: center;
+  width: 80px;
+  margin-bottom: 0;
+  font-size: 1em;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: inherit;
+}
+
+.marginalia .admonitionblock td.icon .title {
+  font-family: var(--md-font-heading);
+  font-style: normal;
+  font-weight: bold;
+  text-transform: uppercase;
+  margin: 0;
+  color: inherit;
+}
+
+.marginalia .admonitionblock td.content {
+  padding-left: 1.125em;
+  padding-right: 1.25em;
+  border: 1px solid #dddddf;
+  color: rgb(0 0 0 / 60%);
+  word-wrap: anywhere;
+}
+
+.marginalia .admonitionblock td.content > .title {
+  font-size: 1.2rem;
+}
+
+.marginalia .admonitionblock td.content > :first-child {
+  margin-top: 0;
+}
+
+.marginalia .admonitionblock td.content > :last-child,
+.marginalia .admonitionblock td.content > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
+.marginalia .admonitionblock.task td.content {
+  background: #fffef7;
+  border-color: #e0e0dc;
+  box-shadow: 0 1px 4px #e0e0dc;
+  color: rgb(0 0 0 / 80%);
+}
+
+.marginalia .admonitionblock td.icon a,
+.marginalia .admonitionblock td.icon a i::before {
+  cursor: pointer;
+}
+
+.marginalia .admonitionblock td.icon .icon-task::before {
+  content: "✍🏽";
+  color: #871452;
+}
+
+.marginalia div.checkboxdiv {
+  font-family: sans-serif;
+  font-size: 0.8em;
+  display: flex;
+  flex-direction: row-reverse;
+}
+
+@media screen and (min-width: 768px) {
+  .marginalia h1 {
+    font-size: 2.75em;
+  }
+
+  .marginalia h2 {
+    font-size: 2.3125em;
+  }
+
+  .marginalia h3,
+  .marginalia #toctitle {
+    font-size: 1.6875em;
+  }
+
+  .marginalia h4 {
+    font-size: 1.4375em;
+  }
+
+  .marginalia pre {
+    font-size: 0.90625em;
+  }
+
+  .marginalia > #content {
+    margin-bottom: 1.25em;
+  }
+
+  .marginalia .sect1 {
+    padding-bottom: 1.25em;
+  }
+}
+
+@media screen and (min-width: 1280px) {
+  .marginalia:has(> #header > #toc.toc2) {
+    max-width: none;
+    padding-left: 30em;
+  }
+
+  .marginalia > #header > #toc.toc2 {
+    width: 30em;
+    margin-top: 0;
+    background: #f8f8f7;
+    position: fixed;
+    left: 0;
+    top: 0;
+    border-right: 1px solid #e7e7e9;
+    border-top-width: 0;
+    border-bottom-width: 0;
+    z-index: 1000;
+    padding: 1.25em 1em;
+    height: 100%;
+    overflow: auto;
+  }
+
+  .marginalia > #header > #toc.toc2 #toctitle {
+    margin-top: 0;
+    margin-bottom: 0.8rem;
+    font-size: 1.375em;
+  }
+
+  .marginalia > #header > #toc.toc2 > ul {
+    font-size: 0.95em;
+    margin-bottom: 0;
+  }
+
+  .marginalia > #header > #toc.toc2 ul ul {
+    padding-left: 1.25em;
+  }
+}
+
+[data-appearance="dark"] .marginalia-theme,
+[data-appearance="dark"] .marginalia {
+  --md-color-fg: #ddd8d0;
+  --md-color-fg-muted: #aaa399;
+  --md-color-bg: transparent;
+  --md-color-accent: #7ca8ef;
+  --md-color-accent-muted: #9dbcf1;
+  --md-color-border: #4a443e;
+  --md-color-code-bg: #24211f;
+  --md-color-code-fg: #ede7df;
+  --md-color-quote-bar: #5a534d;
+  --md-color-table-stripe: #262220;
+  --md-color-selection-bg: #3f4e69;
+  --md-color-block-bg: #1f1b19;
+}
+
+[data-appearance="dark"] .marginalia {
+  color: #ddd8d0;
+}
+
+[data-appearance="dark"] .marginalia :is(h1, h2, h3, h4, h5, h6),
+[data-appearance="dark"] .marginalia #toctitle {
+  color: #d98473;
+}
+
+[data-appearance="dark"] .marginalia > #header > h1:first-child {
+  color: #f2ece5;
+}
+
+[data-appearance="dark"] .marginalia #header .details,
+[data-appearance="dark"] .marginalia #toc,
+[data-appearance="dark"] .marginalia .sect1 + .sect1 {
+  border-color: #4a443e;
+}
+
+[data-appearance="dark"] .marginalia table {
+  background: transparent;
+  border-color: #4a443e;
+}
+
+[data-appearance="dark"] .marginalia table :is(thead, tfoot) {
+  background: #211d1b;
+}
+
+[data-appearance="dark"] .marginalia .admonitionblock td.content {
+  border-color: #4a443e;
+  color: #c7c0b7;
+}
+
+[data-appearance="dark"] .marginalia .admonitionblock.task td.content {
+  background: #332d22;
+  border-color: #60543f;
+  box-shadow: none;
+  color: #ede7df;
+}
+
+[data-appearance="dark"] .marginalia > #header > #toc.toc2 {
+  background: #211d1b;
+  border-right-color: #4a443e;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-appearance="auto"] .marginalia-theme,
+  [data-appearance="auto"] .marginalia {
+    --md-color-fg: #ddd8d0;
+    --md-color-fg-muted: #aaa399;
+    --md-color-bg: transparent;
+    --md-color-accent: #7ca8ef;
+    --md-color-accent-muted: #9dbcf1;
+    --md-color-border: #4a443e;
+    --md-color-code-bg: #24211f;
+    --md-color-code-fg: #ede7df;
+    --md-color-quote-bar: #5a534d;
+    --md-color-table-stripe: #262220;
+    --md-color-selection-bg: #3f4e69;
+    --md-color-block-bg: #1f1b19;
+  }
+
+  [data-appearance="auto"] .marginalia {
+    color: #ddd8d0;
+  }
+
+  [data-appearance="auto"] .marginalia :is(h1, h2, h3, h4, h5, h6),
+  [data-appearance="auto"] .marginalia #toctitle {
+    color: #d98473;
+  }
+
+  [data-appearance="auto"] .marginalia > #header > h1:first-child {
+    color: #f2ece5;
+  }
+
+  [data-appearance="auto"] .marginalia #header .details,
+  [data-appearance="auto"] .marginalia #toc,
+  [data-appearance="auto"] .marginalia .sect1 + .sect1 {
+    border-color: #4a443e;
+  }
+
+  [data-appearance="auto"] .marginalia table {
+    background: transparent;
+    border-color: #4a443e;
+  }
+
+  [data-appearance="auto"] .marginalia table :is(thead, tfoot) {
+    background: #211d1b;
+  }
+
+  [data-appearance="auto"] .marginalia .admonitionblock td.content {
+    border-color: #4a443e;
+    color: #c7c0b7;
+  }
+
+  [data-appearance="auto"] .marginalia .admonitionblock.task td.content {
+    background: #332d22;
+    border-color: #60543f;
+    box-shadow: none;
+    color: #ede7df;
+  }
+
+  [data-appearance="auto"] .marginalia > #header > #toc.toc2 {
+    background: #211d1b;
+    border-right-color: #4a443e;
+  }
+}

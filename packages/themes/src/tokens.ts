@@ -198,6 +198,33 @@ const JETBRAINS_MONO: FontStack = {
   ],
 };
 
+const OPEN_SANS_BODY: FontStack = {
+  families: [
+    'Open Sans',
+    'Inter',
+    'ui-sans-serif',
+    'system-ui',
+    '-apple-system',
+    'Segoe UI',
+    'Roboto',
+    'Helvetica Neue',
+    'Arial',
+    'sans-serif',
+  ],
+};
+
+const NOTO_SERIF_BODY: FontStack = {
+  families: ['Noto Serif', 'DejaVu Serif', 'Georgia', 'serif'],
+};
+
+const OPEN_SANS_HEADING: FontStack = {
+  families: ['Open Sans', 'DejaVu Sans', 'Segoe UI', 'Arial', 'sans-serif'],
+};
+
+const DROID_SANS_MONO: FontStack = {
+  families: ['Droid Sans Mono', 'DejaVu Sans Mono', 'SF Mono', 'Consolas', 'monospace'],
+};
+
 // -- Per-theme tokens ---------------------------------------------------
 //
 // `basePt` is hand-picked per theme for print rendering (DOCX),
@@ -426,6 +453,90 @@ const technicalTokens: ThemeTokens = {
   table: { headerUnderline: true, zebra: true },
 };
 
+const handbookTokens: ThemeTokens = {
+  id: 'handbook',
+  label: 'Handbook',
+  fonts: { body: OPEN_SANS_BODY, heading: OPEN_SANS_BODY, mono: JETBRAINS_MONO },
+  fontSize: {
+    basePt: 12,
+    h1Em: 2.35,
+    h2Em: 1.55,
+    h3Em: 1.22,
+    h4Em: 1,
+    h5Em: 1,
+    h6Em: 1,
+  },
+  lineHeight: { body: 1.72, heading: 1.18 },
+  headingWeight: 780,
+  headingLetterSpacingEm: -0.02,
+  headingUppercase: {
+    h1: false,
+    h2: false,
+    h3: false,
+    h4: true,
+    h5: true,
+    h6: true,
+  },
+  colors: {
+    fg: '#19202a',
+    fgMuted: '#617081',
+    bg: '#fbfcf9',
+    accent: '#1c6a72',
+    accentMuted: '#c8e0dd',
+    border: '#d9e2e1',
+    codeBg: '#f3f7f7',
+    codeFg: '#17212b',
+    quoteBar: '#97b8b5',
+    tableStripe: '#f6f8f7',
+  },
+  spacing: { blockEm: 1.15, headingTopEm: 2.3, listItemEm: 0.24 },
+  page: { size: 'A4', marginPt: 72 },
+  blockquote: { italic: false, hasBar: true },
+  table: { headerUnderline: true, zebra: true },
+};
+
+const asciidocArticleTokens: ThemeTokens = {
+  id: 'asciidoc-article',
+  label: 'AsciiDoc Article',
+  fonts: { body: NOTO_SERIF_BODY, heading: OPEN_SANS_HEADING, mono: DROID_SANS_MONO },
+  fontSize: {
+    basePt: 11,
+    h1Em: 2.75,
+    h2Em: 2.3125,
+    h3Em: 1.6875,
+    h4Em: 1.4375,
+    h5Em: 1.125,
+    h6Em: 1,
+  },
+  lineHeight: { body: 1.6, heading: 1.2 },
+  headingWeight: 300,
+  headingLetterSpacingEm: 0,
+  headingUppercase: {
+    h1: false,
+    h2: false,
+    h3: false,
+    h4: false,
+    h5: false,
+    h6: false,
+  },
+  colors: {
+    fg: '#333333',
+    fgMuted: '#666666',
+    bg: '#ffffff',
+    accent: '#2156a5',
+    accentMuted: '#1d4b8f',
+    border: '#dddddf',
+    codeBg: '#f7f7f8',
+    codeFg: '#111111',
+    quoteBar: '#dddddd',
+    tableStripe: '#f8f8f7',
+  },
+  spacing: { blockEm: 1.25, headingTopEm: 1, listItemEm: 0.33 },
+  page: { size: 'A4', marginPt: 72 },
+  blockquote: { italic: true, hasBar: true },
+  table: { headerUnderline: true, zebra: true },
+};
+
 const serifPrintTokens: ThemeTokens = {
   id: 'serif-print',
   label: 'Serif (Print)',
@@ -472,6 +583,8 @@ const serifPrintTokens: ThemeTokens = {
 
 export const THEME_TOKENS: Readonly<Record<string, ThemeTokens>> = Object.freeze({
   default: defaultTokens,
+  handbook: handbookTokens,
+  'asciidoc-article': asciidocArticleTokens,
   beautiful: beautifulTokens,
   book: bookTokens,
   article: articleTokens,

@@ -1,14 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import {
-  THEME_IDS,
-  THEME_TOKENS,
-  getThemeTokens,
-  type ThemeTokens,
-} from '../src/tokens.js';
+import { THEME_IDS, THEME_TOKENS, type ThemeTokens, getThemeTokens } from '../src/tokens.js';
 
 const THEMES_DIR = dirname(fileURLToPath(import.meta.url));
 const CSS_DIR = join(THEMES_DIR, '..', 'css');
@@ -19,6 +14,8 @@ const CSS_DIR = join(THEMES_DIR, '..', 'css');
 // test fails — intentional: every theme must have tokens.
 const EXPECTED_IDS = [
   'default',
+  'handbook',
+  'asciidoc-article',
   'beautiful',
   'book',
   'article',
@@ -26,16 +23,22 @@ const EXPECTED_IDS = [
   'serif-print',
 ];
 
+function mustGetThemeTokens(id: string): ThemeTokens {
+  const tokens = THEME_TOKENS[id];
+  expect(tokens, `missing tokens for theme '${id}'`).toBeDefined();
+  return tokens as ThemeTokens;
+}
+
 describe('theme tokens', () => {
   test('every built-in theme has tokens', () => {
     for (const id of EXPECTED_IDS) {
-      expect(THEME_TOKENS[id], `missing tokens for theme '${id}'`).toBeDefined();
+      expect(mustGetThemeTokens(id)).toBeDefined();
     }
     expect([...THEME_IDS].sort()).toEqual([...EXPECTED_IDS].sort());
   });
 
   test.each(EXPECTED_IDS)('%s tokens are structurally complete', (id) => {
-    const t = THEME_TOKENS[id]!;
+    const t = mustGetThemeTokens(id);
     expect(t.id).toBe(id);
     expect(t.label.length).toBeGreaterThan(0);
     expect(t.fonts.body.families.length).toBeGreaterThan(0);
@@ -84,24 +87,39 @@ describe('theme tokens', () => {
     }
 
     test('default palette matches the CSS', () => {
-      const t = THEME_TOKENS.default!;
+      const t = mustGetThemeTokens('default');
       expectCssContains('default', t.colors.fg);
       expectCssContains('default', t.colors.accent);
     });
 
     test('beautiful uses Fraunces for headings', () => {
-      const t = THEME_TOKENS.beautiful!;
+      const t = mustGetThemeTokens('beautiful');
       expect(t.fonts.heading.families[0]).toBe('Fraunces');
       expectCssContains('beautiful', 'Fraunces');
       expectCssContains('beautiful', t.colors.accent);
     });
 
     test('technical uses Inter body and JetBrains Mono', () => {
-      const t = THEME_TOKENS.technical!;
+      const t = mustGetThemeTokens('technical');
       expect(t.fonts.body.families[0]).toBe('Inter');
       expect(t.fonts.mono.families[0]).toBe('JetBrains Mono');
       expectCssContains('technical', 'Inter');
       expectCssContains('technical', 'JetBrains Mono');
+    });
+
+    test('handbook uses Open Sans for body text', () => {
+      const t = mustGetThemeTokens('handbook');
+      expect(t.fonts.body.families[0]).toBe('Open Sans');
+      expectCssContains('handbook', 'Open Sans');
+      expectCssContains('handbook', t.colors.accent);
+    });
+
+    test('asciidoc-article matches the academy font stack', () => {
+      const t = mustGetThemeTokens('asciidoc-article');
+      expect(t.fonts.body.families[0]).toBe('Noto Serif');
+      expect(t.fonts.heading.families[0]).toBe('Open Sans');
+      expectCssContains('asciidoc-article', 'Noto Serif');
+      expectCssContains('asciidoc-article', '#toc > .sectlevel1 > li');
     });
   });
 
@@ -110,12 +128,12 @@ describe('theme tokens', () => {
   // 14.25 pt and reads too large on paper. Assert a sane range to
   // catch accidental regressions to the old values.
   test.each(EXPECTED_IDS)('%s basePt lands in a reasonable print range', (id) => {
-    const t = THEME_TOKENS[id]!;
+    const t = mustGetThemeTokens(id);
     expect(t.fontSize.basePt).toBeGreaterThanOrEqual(9);
     expect(t.fontSize.basePt).toBeLessThanOrEqual(14);
   });
 });
 
 // Type-level: ensure the interface is re-exported for consumers.
-const _typeCheck: ThemeTokens = THEME_TOKENS.default!;
+const _typeCheck: ThemeTokens = mustGetThemeTokens('default');
 void _typeCheck;

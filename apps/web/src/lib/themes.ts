@@ -21,6 +21,11 @@ export const BUILT_IN_THEMES: ThemeMeta[] = [
     label: 'Handbook',
     blurb: 'Structured sans-serif reading theme for documentation and training material.',
   },
+  {
+    id: 'asciidoc-article',
+    label: 'AsciiDoc Article',
+    blurb: 'Classic Asciidoctor article styling with academy-style task and TOC tweaks.',
+  },
   { id: 'beautiful', label: 'Book', blurb: 'Editorial serif with drop cap and ornament.' },
   { id: 'book', label: 'Document', blurb: 'Classic serif, narrow column, long-form reading.' },
   { id: 'article', label: 'Article', blurb: 'Magazine-style essay with bold headings.' },
@@ -33,6 +38,7 @@ export const BUILT_IN_THEMES: ThemeMeta[] = [
 const themeImports: Record<string, () => Promise<unknown>> = {
   default: () => import('@marginalia/themes/default.css?url'),
   handbook: () => import('@marginalia/themes/handbook.css?url'),
+  'asciidoc-article': () => import('@marginalia/themes/asciidoc-article.css?url'),
   book: () => import('@marginalia/themes/book.css?url'),
   article: () => import('@marginalia/themes/article.css?url'),
   technical: () => import('@marginalia/themes/technical.css?url'),
