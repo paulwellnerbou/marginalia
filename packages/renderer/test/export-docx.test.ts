@@ -309,6 +309,134 @@ describe('exportDocx — Table of Contents (M3b)', () => {
     expect(documentXml).toContain('fldChar');
     expect(documentXml).not.toContain('>Contents<');
   });
+
+  test('"Contents" label uses the dedicated TocHeading style, not Heading1', async () => {
+    const md = '# Doc Title\n\n## A\n\n## B\n';
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    // Find the paragraph that contains "Contents" and check its style.
+    const contentsPara = documentXml.match(
+      /<w:p\b[^>]*>(?:(?!<\/w:p>)[\s\S])*Contents(?:(?!<\/w:p>)[\s\S])*<\/w:p>/,
+    );
+    expect(contentsPara).not.toBeNull();
+    expect(contentsPara![0]).toContain('<w:pStyle w:val="TocHeading"');
+    expect(contentsPara![0]).not.toContain('<w:pStyle w:val="Heading1"');
+  });
+
+  test('TOC appears AFTER the first heading, not before it', async () => {
+    const md = '# Document Title\n\n## Chapter A\n\n## Chapter B\n';
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    const titleIdx = documentXml.indexOf('Document Title');
+    const contentsIdx = documentXml.indexOf('Contents');
+    const chapterAIdx = documentXml.indexOf('Chapter A');
+    expect(titleIdx).toBeGreaterThan(-1);
+    expect(contentsIdx).toBeGreaterThan(-1);
+    expect(chapterAIdx).toBeGreaterThan(-1);
+    // Order must be: title → Contents → chapter A
+    expect(titleIdx).toBeLessThan(contentsIdx);
+    expect(contentsIdx).toBeLessThan(chapterAIdx);
+  });
+
+  test('TOC falls back to the top when the doc has no leading heading', async () => {
+    // A doc that opens with a paragraph (not a heading) still needs
+    // its TOC somewhere visible — the top is the natural place.
+    const md = [
+      'Intro paragraph before any heading.',
+      '',
+      '## A',
+      '',
+      '## B',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    const introIdx = documentXml.indexOf('Intro paragraph');
+    const contentsIdx = documentXml.indexOf('Contents');
+    expect(contentsIdx).toBeLessThan(introIdx);
+  });
+});
+
+describe('exportDocx — run-level size overrides (follow-up)', () => {
+  test('heading paragraph runs have no w:sz override (style-only sizing)', async () => {
+    // Previously a catch-all in runOptions set size on every run, so
+    // the document title rendered as "Heading1 + 12pt" in Word's
+    // style inspector. With the override removed, the heading's
+    // run-properties block inside the paragraph should have no
+    // `<w:sz>`; the Heading1 style provides the size.
+    const md = '# A Heading\n\nBody paragraph.\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+
+    // Narrow to the paragraph styled Heading1.
+    const headingPara = documentXml.match(
+      /<w:p\b[^>]*>(?:(?!<\/w:p>)[\s\S])*<w:pStyle w:val="Heading1"[\s\S]*?<\/w:p>/,
+    );
+    expect(headingPara).not.toBeNull();
+    // `<w:sz>` inside `<w:rPr>` of the heading's runs would be a
+    // run-level size override. Assert there is none.
+    const runSizeInsideHeading = headingPara![0].match(/<w:rPr>[\s\S]*?<w:sz\b/);
+    expect(runSizeInsideHeading).toBeNull();
+  });
+
+  test('body paragraph runs also have no w:sz override', async () => {
+    const md = 'Plain body text with **bold** and *italic* runs.\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // Extract all run-property blocks inside the body paragraph and
+    // check none carries a size override.
+    const bodyPara = documentXml.match(
+      /<w:p\b[^>]*>(?:(?!<\/w:p>)[\s\S])*Plain body(?:(?!<\/w:p>)[\s\S])*<\/w:p>/,
+    );
+    expect(bodyPara).not.toBeNull();
+    expect(bodyPara![0]).not.toMatch(/<w:rPr>[\s\S]*?<w:sz\b/);
+  });
+
+  test('inline code keeps its size override (intentional 0.9× body size)', async () => {
+    // Inline `<code>` runs size down slightly because the
+    // surrounding paragraph is Normal, not CodeBlock — so the
+    // override is needed. Confirm we still emit it.
+    const md = 'A paragraph with `inline code` inside.\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The run carrying "inline code" should have a w:sz element.
+    const codeRun = documentXml.match(
+      /<w:r>[^<]*<w:rPr>[\s\S]*?<\/w:rPr>[^<]*<w:t[^>]*>inline code<\/w:t>[^<]*<\/w:r>/,
+    );
+    expect(codeRun).not.toBeNull();
+    expect(codeRun![0]).toMatch(/<w:sz\b/);
+  });
+});
+
+describe('exportDocx — base font size calibration', () => {
+  async function loadStyles(buf: Buffer): Promise<string> {
+    const zip = await JSZip.loadAsync(buf);
+    return (await zip.file('word/styles.xml')?.async('string')) ?? '';
+  }
+
+  test('default theme: Normal is 12pt (24 half-points)', async () => {
+    const buf = await exportDocx('Body.', { theme: 'default', includeToc: false });
+    const stylesXml = await loadStyles(buf);
+    // The document default run size sits inside <w:docDefaults><w:rPrDefault>.
+    const defaultRunSize = stylesXml.match(
+      /<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:sz\s+w:val="(\d+)"/,
+    );
+    expect(defaultRunSize).not.toBeNull();
+    // 12pt = 24 half-points.
+    expect(defaultRunSize![1]).toBe('24');
+  });
+
+  test('technical theme is denser (10pt) and beautiful is larger (13pt)', async () => {
+    const [tech, beautiful] = await Promise.all([
+      exportDocx('Body.', { theme: 'technical', includeToc: false }).then(loadStyles),
+      exportDocx('Body.', { theme: 'beautiful', includeToc: false }).then(loadStyles),
+    ]);
+    expect(tech).toMatch(
+      /<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:sz\s+w:val="20"/,
+    );
+    expect(beautiful).toMatch(
+      /<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:sz\s+w:val="26"/,
+    );
+  });
 });
 
 describe('exportDocx — footnotes (M3c)', () => {

@@ -217,18 +217,29 @@ export async function exportDocx(
   const footnotes = extractFootnotes(hast, ctxWithoutFootnotes);
   const ctx: BuildCtx = { ...ctxWithoutFootnotes, footnoteIds: footnotes.ids };
 
-  const body = hastToDocxChildren(hast, ctx);
-
-  // Prepend TOC if requested. `auto` (and undefined) emit a TOC only
-  // when the doc has ≥ 2 headings, so single-heading notes don't get
-  // a pointless "Contents" section above their lone title.
+  // `auto` (and undefined) emit a TOC only when the doc has ≥ 2
+  // headings, so single-heading notes don't get a pointless "Contents"
+  // section above their lone title.
   const shouldIncludeToc =
     options.includeToc === true ||
     ((options.includeToc === 'auto' || options.includeToc === undefined) &&
       countHeadings(hast) >= 2);
-  const blocks: FileChild[] = shouldIncludeToc
-    ? [...buildTocBlocks(options.tocLabel ?? 'Contents', tokens), ...body]
-    : body;
+  const tocBlocks = shouldIncludeToc
+    ? buildTocBlocks(options.tocLabel ?? 'Contents', tokens)
+    : [];
+
+  // Insert the TOC AFTER the first heading in the body so the
+  // reader's eye lands on the title first, then the TOC, then the
+  // content — standard Word-document convention. When the doc has
+  // no opening heading (e.g., starts with a paragraph), the TOC
+  // goes at the top so it remains visible.
+  const leadingHeadingIdx = indexOfLeadingHeading(hast);
+  const body = hastToDocxChildren(hast, ctx, {
+    injectAfterTopLevelIndex: leadingHeadingIdx,
+    injectedBlocks: tocBlocks,
+  });
+  const blocks: FileChild[] =
+    shouldIncludeToc && leadingHeadingIdx < 0 ? [...tocBlocks, ...body] : body;
 
   const doc = buildDocument(blocks, tokens, options, footnotes.content, {
     language,
@@ -294,14 +305,18 @@ function countHeadings(root: HastRoot): number {
  * auto-populate the TOC on first open — otherwise they'd see an empty
  * placeholder until they press F9 themselves.
  */
-function buildTocBlocks(label: string, tokens: ThemeTokens): FileChild[] {
+function buildTocBlocks(label: string, _tokens: ThemeTokens): FileChild[] {
   const out: FileChild[] = [];
   if (label) {
+    // Use the custom `TocHeading` style — NOT `Heading1`. Two reasons:
+    //   1. Visually, "Contents" should be less dominant than the
+    //      document's own H1 title.
+    //   2. The TOC field's `headingStyleRange: '1-6'` would otherwise
+    //      self-include "Contents" as an entry in its own list.
     out.push(
       new Paragraph({
-        style: 'Heading1',
-        heading: HeadingLevel.HEADING_1,
-        children: [new TextRun({ text: label, color: hex(tokens.colors.fg) })],
+        style: 'TocHeading',
+        children: [new TextRun({ text: label })],
       }),
     );
   }
@@ -918,6 +933,32 @@ function buildStyles(
         next: 'Normal',
         run: { bold: true, color: hex(tokens.colors.fg) },
       },
+      {
+        // "Contents" label above the TOC. Deliberately NOT a
+        // `Heading1`-`Heading6` so the TOC field (which pulls
+        // `headingStyleRange: '1-6'`) doesn't list "Contents" as its
+        // own entry. Matches Word's built-in "TOC Heading" role.
+        id: 'TocHeading',
+        name: 'TOC Heading',
+        basedOn: 'Normal',
+        next: 'Normal',
+        quickFormat: true,
+        run: {
+          font: headingFont,
+          size: pt2hp(base * 1.55),
+          bold: true,
+          color: hex(tokens.colors.fg),
+        },
+        paragraph: {
+          spacing: {
+            before: pt2twip(tokens.spacing.blockEm * base * 0.5),
+            after: pt2twip(tokens.spacing.blockEm * base * 0.5),
+            line: Math.round(tokens.lineHeight.heading * 240),
+          },
+          keepNext: true,
+          keepLines: true,
+        },
+      },
     ],
   };
 }
@@ -1008,13 +1049,55 @@ function hastTextContent(node: HastNode): string {
   return out;
 }
 
-function hastToDocxChildren(root: HastRoot, ctx: BuildCtx): FileChild[] {
+interface WalkOptions {
+  /**
+   * Index (into the flattened top-level hast children) AFTER which the
+   * caller wants additional blocks inserted. `-1` or undefined means
+   * no injection. Used to place a TOC block immediately after the
+   * document's first heading without having to post-process the
+   * output paragraphs (which would need heading-style detection).
+   */
+  injectAfterTopLevelIndex?: number;
+  /** Blocks to splice in after the injection index has been processed. */
+  injectedBlocks?: readonly FileChild[];
+}
+
+function hastToDocxChildren(
+  root: HastRoot,
+  ctx: BuildCtx,
+  options: WalkOptions = {},
+): FileChild[] {
   const out: FileChild[] = [];
   const topLevel = flattenRoot(root);
-  for (const node of topLevel) {
-    convertBlock(node, ctx, out, { listDepth: 0 });
+  const injectAt = options.injectAfterTopLevelIndex ?? -1;
+  for (let i = 0; i < topLevel.length; i++) {
+    convertBlock(topLevel[i] as HastNode, ctx, out, { listDepth: 0 });
+    if (i === injectAt && options.injectedBlocks) {
+      out.push(...options.injectedBlocks);
+    }
   }
   return out;
+}
+
+/**
+ * Index of the document's "opening heading", or -1 if there isn't one.
+ *
+ * A heading counts as the opener only if it's the first
+ * non-whitespace top-level element in the body. That matches the
+ * user's mental model ("the document title"): if the doc starts with
+ * an intro paragraph before any heading, the TOC goes at the top, not
+ * after some arbitrary downstream heading.
+ */
+function indexOfLeadingHeading(root: HastRoot): number {
+  const children = flattenRoot(root);
+  for (let i = 0; i < children.length; i++) {
+    const node = children[i];
+    // Whitespace-only text at the top is noise — skip it.
+    if (isText(node) && node.value.trim() === '') continue;
+    if (isElement(node) && /^h[1-6]$/.test(node.tagName)) return i;
+    return -1; // first real block is NOT a heading → TOC goes at the top.
+  }
+  return -1;
 }
 
 /** Peel <html>/<body> wrappers if present so we iterate real blocks. */
@@ -1703,11 +1786,21 @@ function runOptions(style: InlineStyle, text: string, tokens: ThemeTokens): IRun
   }
   if (style.code) {
     // Inline code runs size down slightly, matching the CSS rule
-    // `.marginalia :not(pre) > code { font-size: 0.9em }`.
+    // `.marginalia :not(pre) > code { font-size: 0.9em }`. The
+    // explicit size is only applied for inline code because the
+    // containing paragraph's style is Normal — code blocks use the
+    // CodeBlock style which already sets the right size, so they
+    // don't need a run-level override.
     opts.size = pt2hp(tokens.fontSize.basePt * 0.9);
     opts.font = style.font ?? tokens.fonts.mono.families[0] ?? 'monospace';
   }
-  if (text && opts.size === undefined) opts.size = pt2hp(tokens.fontSize.basePt);
+  // Deliberately DO NOT set `opts.size` as a catch-all on every run.
+  // The document-default style (`styles.default.document.run.size`)
+  // applies when there's no override, and the various named
+  // paragraph styles (Heading1..6, CodeBlock, TableHeader, …) each
+  // define their own run sizes. Setting a run-level size here would
+  // override the style and show up as "Heading1 + 12pt" in Word's
+  // style inspector, even when the intent is the style alone.
   return opts as IRunOptions;
 }
 

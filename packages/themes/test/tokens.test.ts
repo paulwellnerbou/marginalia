@@ -69,11 +69,10 @@ describe('theme tokens', () => {
     expect(getThemeTokens('beautiful').id).toBe('beautiful');
   });
 
-  // Lightweight drift check: a handful of values that are easy to grep
-  // for in the CSS. Not exhaustive — the goal is to catch "someone
-  // changed the CSS and forgot to update tokens" for the most-looked-at
-  // values (colors and font sizes). Structural unit mismatches (em vs
-  // pt) would show up here as well.
+  // Lightweight drift check — restricted to the values that SHOULD
+  // match the CSS exactly: font families and color palette. Font
+  // SIZES are intentionally decoupled between CSS (px, screen-sized)
+  // and tokens (pt, print-sized), so we don't cross-check those.
   describe('CSS drift spot-checks', () => {
     function readCss(id: string): string {
       return readFileSync(join(CSS_DIR, `${id}.css`), 'utf8');
@@ -84,11 +83,8 @@ describe('theme tokens', () => {
       expect(css, `${id}.css should contain "${needle}"`).toContain(needle);
     }
 
-    test('default palette and base size', () => {
+    test('default palette matches the CSS', () => {
       const t = THEME_TOKENS.default!;
-      // basePt 12.75 ← 17px (pxPt conversion)
-      expect(t.fontSize.basePt).toBeCloseTo(12.75, 3);
-      expectCssContains('default', '--md-font-size: 17px');
       expectCssContains('default', t.colors.fg);
       expectCssContains('default', t.colors.accent);
     });
@@ -107,12 +103,16 @@ describe('theme tokens', () => {
       expectCssContains('technical', 'Inter');
       expectCssContains('technical', 'JetBrains Mono');
     });
+  });
 
-    test('serif-print uses pt-based base size (12pt)', () => {
-      const t = THEME_TOKENS['serif-print']!;
-      expect(t.fontSize.basePt).toBe(12);
-      expectCssContains('serif-print', '--md-font-size: 12pt');
-    });
+  // DOCX base sizes are hand-tuned around modern-Office conventions
+  // (~11pt), not the naive CSS-px-to-pt conversion which runs 12.75–
+  // 14.25 pt and reads too large on paper. Assert a sane range to
+  // catch accidental regressions to the old values.
+  test.each(EXPECTED_IDS)('%s basePt lands in a reasonable print range', (id) => {
+    const t = THEME_TOKENS[id]!;
+    expect(t.fontSize.basePt).toBeGreaterThanOrEqual(9);
+    expect(t.fontSize.basePt).toBeLessThanOrEqual(14);
   });
 });
 

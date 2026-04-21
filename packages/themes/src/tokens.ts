@@ -196,19 +196,22 @@ const JETBRAINS_MONO: FontStack = {
   ],
 };
 
-// -- Helpers ------------------------------------------------------------
-
-/** CSS px → points (CSS convention: 1px = 0.75pt). */
-const pxPt = (px: number): number => Number((px * 0.75).toFixed(3));
-
 // -- Per-theme tokens ---------------------------------------------------
+//
+// `basePt` is hand-picked per theme for print rendering (DOCX),
+// intentionally NOT a direct conversion of the CSS `--md-font-size`.
+// The two media have different comfortable reading sizes: 17 CSS px
+// on a 96 dpi monitor reads fine, while the same naive 0.75× → 12.75
+// pt on paper looks oversized. Modern Office defaults land at 11 pt
+// Calibri; marginalia's DOCX base sizes hover around that, biased
+// upward for the more editorial / long-form themes.
 
 const defaultTokens: ThemeTokens = {
   id: 'default',
   label: 'Default',
   fonts: { body: SYSTEM_SANS, heading: SYSTEM_SANS, mono: SYSTEM_MONO },
   fontSize: {
-    basePt: pxPt(17),
+    basePt: 12,
     h1Em: 2.1,
     h2Em: 1.55,
     h3Em: 1.25,
@@ -250,7 +253,7 @@ const beautifulTokens: ThemeTokens = {
   label: 'Book',
   fonts: { body: EDITORIAL_BODY_SERIF, heading: FRAUNCES_DISPLAY, mono: SYSTEM_MONO },
   fontSize: {
-    basePt: pxPt(19),
+    basePt: 13,
     h1Em: 3.0,
     h2Em: 1.9,
     h3Em: 1.35,
@@ -295,7 +298,7 @@ const bookTokens: ThemeTokens = {
   label: 'Document',
   fonts: { body: CLASSIC_SERIF, heading: CLASSIC_SERIF, mono: SYSTEM_MONO },
   fontSize: {
-    basePt: pxPt(18),
+    basePt: 12,
     h1Em: 2.2,
     h2Em: 1.5,
     h3Em: 1.25,
@@ -341,7 +344,7 @@ const articleTokens: ThemeTokens = {
   label: 'Article',
   fonts: { body: CHARTER_BODY, heading: INTER_SANS, mono: SYSTEM_MONO },
   fontSize: {
-    basePt: pxPt(18),
+    basePt: 12,
     h1Em: 2.1,
     h2Em: 1.55,
     h3Em: 1.25,
@@ -384,7 +387,7 @@ const technicalTokens: ThemeTokens = {
   label: 'Technical',
   fonts: { body: INTER_SANS, heading: INTER_SANS, mono: JETBRAINS_MONO },
   fontSize: {
-    basePt: pxPt(15),
+    basePt: 10,
     h1Em: 2.1,
     h2Em: 1.55,
     h3Em: 1.25,
@@ -426,7 +429,7 @@ const serifPrintTokens: ThemeTokens = {
   label: 'Serif (Print)',
   fonts: { body: CLASSIC_SERIF, heading: CLASSIC_SERIF, mono: SYSTEM_MONO },
   fontSize: {
-    basePt: 12,
+    basePt: 11,
     h1Em: 2.1,
     h2Em: 1.55,
     h3Em: 1.25,
