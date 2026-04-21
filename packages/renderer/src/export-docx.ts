@@ -430,7 +430,7 @@ async function sourceToHast(
  */
 async function renderCellForDocx(
   markdown: string,
-  options: DocxExportOptions,
+  renderOptions: Pick<DocxExportOptions, 'highlight'>,
 ): Promise<string> {
   const proc = unified()
     .use(remarkParse)
@@ -438,7 +438,7 @@ async function renderCellForDocx(
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeRaw)
     .use(rehypeSanitize, sanitizeSchemaForDocx)
-    .use(rehypeShikiHighlight, options.highlight ?? {})
+    .use(rehypeShikiHighlight, renderOptions.highlight ?? {})
     .use(rehypeStringify, { allowDangerousHtml: false });
   const file = await proc.process(markdown);
   const html = String(file).trim();
@@ -756,12 +756,31 @@ function appendFootnoteBlock(node: Element, ctx: BuildCtx, out: Paragraph[]): vo
       out.push(...buildCodeBlock(node, ctx.tokens));
       return;
     case 'blockquote':
+      // Same nested-content concern as the main walker's
+      // blockquote handler: a quote inside a footnote can contain
+      // lists, code blocks, multiple paragraphs. `<p>` → Blockquote
+      // paragraph; everything else recurses so its own structure
+      // (list prefix, code block, etc.) survives.
       for (const c of node.children as HastNode[]) {
-        if (!isElement(c)) continue;
-        const inline = collectInline(c, ctx, {});
-        if (inline.length > 0) {
-          out.push(new Paragraph({ style: 'Blockquote', children: inline }));
+        if (!isElement(c)) {
+          if (isText(c) && c.value.trim()) {
+            out.push(
+              new Paragraph({
+                style: 'Blockquote',
+                children: [new TextRun({ text: c.value })],
+              }),
+            );
+          }
+          continue;
         }
+        if (c.tagName === 'p') {
+          const inline = collectInline(c, ctx, {});
+          if (inline.length > 0) {
+            out.push(new Paragraph({ style: 'Blockquote', children: inline }));
+          }
+          continue;
+        }
+        appendFootnoteBlock(c, ctx, out);
       }
       return;
     case 'ul':
@@ -1260,14 +1279,40 @@ function convertBlock(
       return;
 
     case 'blockquote':
-      for (const child of node.children) {
-        if (!isElement(child)) continue;
-        out.push(
-          new Paragraph({
-            style: 'Blockquote',
-            children: collectInline(child, ctx, {}),
-          }),
-        );
+      // Nested block content inside a blockquote (lists, code
+      // blocks, multi-paragraph quotes) should keep its structure
+      // rather than being flattened into a single Blockquote run.
+      // The old code called `collectInline` on every child, which
+      // silently dropped `<li>` bullets / `<pre>` shading / run-
+      // level Shiki colours in quoted content.
+      //
+      // Strategy:
+      //   - `<p>` children emit as Blockquote-styled paragraphs
+      //     (the common case: prose inside `>` quotes).
+      //   - Other block children (ul/ol, pre, table, nested
+      //     blockquote, …) recurse through the normal walker so
+      //     their own style (BulletList numbering, CodeBlock, …)
+      //     is preserved.
+      for (const child of node.children as HastNode[]) {
+        if (!isElement(child)) {
+          if (isText(child) && child.value.trim()) {
+            out.push(
+              new Paragraph({
+                style: 'Blockquote',
+                children: [new TextRun({ text: child.value })],
+              }),
+            );
+          }
+          continue;
+        }
+        if (child.tagName === 'p') {
+          const inline = collectInline(child, ctx, {});
+          if (inline.length > 0) {
+            out.push(new Paragraph({ style: 'Blockquote', children: inline }));
+          }
+          continue;
+        }
+        convertBlock(child, ctx, out, walk);
       }
       return;
 

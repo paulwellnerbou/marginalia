@@ -811,6 +811,80 @@ describe('exportDocx — language / RTL (M5)', () => {
   });
 });
 
+describe('exportDocx — blockquote nesting', () => {
+  test('blockquote with a nested list preserves the bullets', async () => {
+    // Regression: the previous `case 'blockquote'` flattened every
+    // child via `collectInline`, so an inner `<ul>` lost its
+    // numbering and items became a single plain-text run.
+    const md = [
+      '> Intro paragraph.',
+      '>',
+      '> - item one',
+      '> - item two',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The intro paragraph carries Blockquote styling.
+    expect(documentXml).toMatch(/<w:pStyle w:val="Blockquote"/);
+    // List items keep their numbering properties — NOT flattened.
+    const numPrInBlockquote = documentXml.match(/<w:numPr\b/g) ?? [];
+    expect(numPrInBlockquote.length).toBe(2);
+    expect(documentXml).toContain('item one');
+    expect(documentXml).toContain('item two');
+  });
+
+  test('blockquote with a nested code block keeps CodeBlock styling', async () => {
+    const md = [
+      '> Quoted prose.',
+      '>',
+      '> ```js',
+      '> const x = 1;',
+      '> ```',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The prose paragraph is styled Blockquote.
+    expect(documentXml).toMatch(/<w:pStyle w:val="Blockquote"[\s\S]*?Quoted prose\./);
+    // The code block keeps its own CodeBlock style (NOT Blockquote).
+    expect(documentXml).toMatch(/<w:pStyle w:val="CodeBlock"/);
+    // Shiki splits the code into per-token runs, so `const x = 1;`
+    // won't appear contiguously. Assert on the individual tokens
+    // — `const` and `1` are enough to confirm the code survived.
+    expect(documentXml).toContain('const');
+    expect(documentXml).toContain('1');
+  });
+
+  test('blockquote with multiple paragraphs keeps each as its own Blockquote paragraph', async () => {
+    const md = ['> First paragraph.', '>', '> Second paragraph.'].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // Both paragraphs carry Blockquote styling — and they're
+    // distinct paragraphs, not a merged run.
+    const bqMatches = documentXml.match(/<w:pStyle w:val="Blockquote"/g) ?? [];
+    expect(bqMatches.length).toBe(2);
+    expect(documentXml).toContain('First paragraph.');
+    expect(documentXml).toContain('Second paragraph.');
+  });
+
+  test('footnote blockquote with a list keeps both intact', async () => {
+    const md = [
+      'See[^a].',
+      '',
+      '[^a]: > A quoted preamble.',
+      '    >',
+      '    > - first bullet',
+      '    > - second bullet',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const zip = await JSZip.loadAsync(buf);
+    const footnotesXml =
+      (await zip.file('word/footnotes.xml')?.async('string')) ?? '';
+    expect(footnotesXml).toContain('A quoted preamble.');
+    expect(footnotesXml).toContain('first bullet');
+    expect(footnotesXml).toContain('second bullet');
+  });
+});
+
 describe('exportDocx — list items', () => {
   test('multi-paragraph list items preserve paragraph boundaries', async () => {
     // Loose-list markdown: each item's second paragraph should NOT
