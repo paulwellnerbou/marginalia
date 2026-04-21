@@ -23,6 +23,12 @@ interface DiscussionEntryProps {
   createdAt: number;
   surface: ReactNode;
   actions?: ReactNode | undefined;
+  /** Optional pill/badge rendered under the comment surface (e.g.
+   * "edited", status indicators). The component already destructures
+   * this prop and conditionally renders it; the interface just needed
+   * to declare it to satisfy the typechecker. No call site passes it
+   * yet. */
+  badge?: ReactNode | undefined;
   className?: string | undefined;
 }
 
