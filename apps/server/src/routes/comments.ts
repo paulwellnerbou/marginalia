@@ -35,8 +35,10 @@ async function listComments(c: Context, deps: AppDeps) {
 
   const rows = db
     .prepare(
-      `SELECT * FROM comments
-         WHERE doc_uid = ? AND deleted_at IS NULL
+      `SELECT c.*
+         FROM comments c
+         LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.doc_uid = ? AND c.deleted_at IS NULL AND cep.comment_id IS NULL
          ORDER BY created_at ASC`,
     )
     .all(doc.uid) as CommentRow[];
@@ -87,7 +89,10 @@ async function createComment(c: Context, deps: AppDeps) {
   if (parentProposalId) {
     const parent = db
       .prepare(
-        'SELECT id FROM edit_proposals WHERE id = ? AND doc_uid = ? AND deleted_at IS NULL',
+        `SELECT c.id
+           FROM comments c
+           INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+          WHERE c.id = ? AND c.doc_uid = ? AND c.deleted_at IS NULL`,
       )
       .get(parentProposalId, doc.uid) as { id: string } | undefined;
     if (!parent) return c.json({ error: 'parent-proposal-not-found' }, 400);
@@ -176,7 +181,12 @@ async function editComment(c: Context, deps: AppDeps) {
   const cid = c.req.param('cid');
   if (!cid) return c.json({ error: 'not-found' }, 404);
   const row = db
-    .prepare('SELECT * FROM comments WHERE id = ? AND doc_uid = ? AND deleted_at IS NULL')
+    .prepare(
+      `SELECT c.*
+         FROM comments c
+         LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.id = ? AND c.doc_uid = ? AND c.deleted_at IS NULL AND cep.comment_id IS NULL`,
+    )
     .get(cid, doc.uid) as CommentRow | undefined;
   if (!row) return c.json({ error: 'not-found' }, 404);
   if (row.author_client_id !== identity.clientId) {
@@ -224,7 +234,12 @@ async function deleteComment(c: Context, deps: AppDeps) {
   const cid = c.req.param('cid');
   if (!cid) return c.json({ error: 'not-found' }, 404);
   const row = db
-    .prepare('SELECT * FROM comments WHERE id = ? AND doc_uid = ? AND deleted_at IS NULL')
+    .prepare(
+      `SELECT c.*
+         FROM comments c
+         LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.id = ? AND c.doc_uid = ? AND c.deleted_at IS NULL AND cep.comment_id IS NULL`,
+    )
     .get(cid, doc.uid) as CommentRow | undefined;
   if (!row) return c.json({ error: 'not-found' }, 404);
 
@@ -252,7 +267,12 @@ async function resolveComment(c: Context, deps: AppDeps) {
   const cid = c.req.param('cid');
   if (!cid) return c.json({ error: 'not-found' }, 404);
   const row = db
-    .prepare('SELECT * FROM comments WHERE id = ? AND doc_uid = ? AND deleted_at IS NULL')
+    .prepare(
+      `SELECT c.*
+         FROM comments c
+         LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.id = ? AND c.doc_uid = ? AND c.deleted_at IS NULL AND cep.comment_id IS NULL`,
+    )
     .get(cid, doc.uid) as CommentRow | undefined;
   if (!row) return c.json({ error: 'not-found' }, 404);
   if (row.parent_id !== null) {

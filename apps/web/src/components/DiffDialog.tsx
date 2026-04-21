@@ -1,5 +1,5 @@
 import { Button, Dialog, Flex, Text } from '@radix-ui/themes';
-import { diffLines } from '../lib/line-diff.js';
+import { diffLines, type DiffLine } from '../lib/line-diff.js';
 
 interface Props {
   open: boolean;
@@ -32,7 +32,7 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
                 <span className="diff-marker">
                   {l.op === 'add' ? '+' : l.op === 'remove' ? '−' : ' '}
                 </span>
-                <span className="diff-text">{l.text || '\u00a0'}</span>
+                <span className="diff-text">{renderLineText(l)}</span>
               </div>
             ))
           )}
@@ -46,5 +46,20 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
         </Flex>
       </Dialog.Content>
     </Dialog.Root>
+  );
+}
+
+function renderLineText(line: DiffLine): React.ReactNode {
+  if (!line.text) return '\u00a0';
+  if (!line.segments?.length) return line.text;
+
+  return line.segments.map((segment, idx) =>
+    segment.changed ? (
+      <span key={idx} className="diff-inline-change">
+        {segment.text}
+      </span>
+    ) : (
+      <span key={idx}>{segment.text}</span>
+    )
   );
 }

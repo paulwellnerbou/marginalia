@@ -481,12 +481,22 @@ describe('documents API', () => {
     );
 
     // Sanity — the rows we expect to be wiped actually exist.
-    const countBefore = (table: string): number =>
-      (app.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE doc_uid = ?`).get(created.uid) as {
+    const countBefore = (table: string): number => {
+      if (table === 'comments_edit_proposals') {
+        return (
+          app.db.prepare(
+            `SELECT count(*) AS n
+               FROM comments_edit_proposals
+              WHERE comment_id IN (SELECT id FROM comments WHERE doc_uid = ?)`,
+          ).get(created.uid) as { n: number }
+        ).n;
+      }
+      return (app.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE doc_uid = ?`).get(created.uid) as {
         n: number;
       }).n;
+    };
     expect(countBefore('doc_users')).toBeGreaterThan(0);
-    expect(countBefore('edit_proposals')).toBeGreaterThan(0);
+    expect(countBefore('comments_edit_proposals')).toBeGreaterThan(0);
     expect(countBefore('comments')).toBeGreaterThan(0);
     expect(countBefore('invites')).toBeGreaterThan(0);
 
@@ -522,8 +532,8 @@ describe('documents API', () => {
     // And gone from every per-doc table — no orphaned rows.
     for (const table of [
       'comments',
+      'comments_edit_proposals',
       'comment_mentions',
-      'edit_proposals',
       'doc_users',
       'invites',
       'sessions',

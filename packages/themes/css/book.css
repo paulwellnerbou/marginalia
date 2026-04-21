@@ -62,7 +62,7 @@
   --md-color-code-fg: #ebe4d1;
   --md-color-quote-bar: #5a4f3a;
   --md-color-table-stripe: #221e18;
-  --md-color-selection-bg: #5a4a2e;
+  --md-color-selection-bg: #365d8c;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -78,6 +78,6 @@
     --md-color-code-fg: #ebe4d1;
     --md-color-quote-bar: #5a4f3a;
     --md-color-table-stripe: #221e18;
-    --md-color-selection-bg: #5a4a2e;
+    --md-color-selection-bg: #365d8c;
   }
 }

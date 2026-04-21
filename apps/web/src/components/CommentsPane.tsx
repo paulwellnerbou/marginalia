@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import {
   Badge,
   Button,
@@ -7,25 +7,15 @@ import {
   IconButton,
   SegmentedControl,
   Text,
-  TextArea,
-  TextField,
 } from '@radix-ui/themes';
-import {
-  CheckCircledIcon,
-  ChevronDownIcon,
-  ChevronRightIcon,
-  DotsHorizontalIcon,
-  PaperPlaneIcon,
-} from '@radix-ui/react-icons';
+import { DotsHorizontalIcon } from '@radix-ui/react-icons';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { Comment, CommentAnchor, EditProposal } from '../lib/api.js';
+import { CommentComposer, type ComposerHandle } from './CommentComposer.js';
 import { CommentItem } from './CommentItem.js';
+import { DiscussionThread } from './DiscussionUi.js';
 import { EditProposalItem } from './EditProposalItem.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
-
-export interface ComposerHandle {
-  insertText: (text: string) => void;
-}
 
 interface Props {
   comments: Comment[];
@@ -81,6 +71,36 @@ interface AnchorGroup {
   replies: Comment[];
 }
 
+interface ProposalThread {
+  proposal: EditProposal;
+  replies: Comment[];
+}
+
+interface ThreadAnchorOrder {
+  blockId: string | null;
+  sectionIndex: number | null;
+  sectionIndexPath: number[];
+  startOffset: number | null;
+}
+
+type ThreadListItem =
+  | {
+    kind: 'comment';
+    id: string;
+    createdAt: number;
+    latestActivityAt: number;
+    anchor: ThreadAnchorOrder;
+    group: AnchorGroup;
+  }
+  | {
+    kind: 'proposal';
+    id: string;
+    createdAt: number;
+    latestActivityAt: number;
+    anchor: ThreadAnchorOrder;
+    thread: ProposalThread;
+  };
+
 type CommentSortMode = 'document' | 'latest';
 
 export function CommentsPane(props: Props) {
@@ -128,25 +148,42 @@ export function CommentsPane(props: Props) {
     () => comments.filter((c) => !c.parent_proposal_id),
     [comments],
   );
-  const { activeProposals, decidedProposals } = useMemo(
-    () => groupProposals(proposals),
-    [proposals],
+  const blockOrder = useMemo(() => {
+    const order = new Map<string, number>();
+    let index = 0;
+    for (const blockId of blockRanges.keys()) {
+      order.set(blockId, index);
+      index += 1;
+    }
+    return order;
+  }, [blockRanges]);
+  const { active: activeProposalThreads, orphans: orphanedProposalThreads } = useMemo(
+    () => groupProposalThreads(proposals, proposalReplies),
+    [proposalReplies, proposals],
   );
   const [sortMode, setSortMode] = useState<CommentSortMode>('document');
   const { active, orphans } = useMemo(
     () => groupByAnchor(commentsWithoutProposalReplies, sortMode),
     [commentsWithoutProposalReplies, sortMode],
   );
+  const activeThreads = useMemo(
+    () => combineThreads(active, activeProposalThreads, sortMode, blockOrder),
+    [active, activeProposalThreads, blockOrder, sortMode],
+  );
+  const orphanedThreads = useMemo(
+    () => combineThreads(orphans, orphanedProposalThreads, sortMode, blockOrder),
+    [blockOrder, orphanedProposalThreads, orphans, sortMode],
+  );
   const [collapsedThreads, setCollapsedThreads] = useState<Set<string>>(new Set());
-  const [collapsedReplies, setCollapsedReplies] = useState<Set<string>>(new Set());
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const lastHandledFocusNonce = useRef<number | null>(null);
-  const threadIds = useMemo(() => [...orphans, ...active].map((group) => group.top.id), [active, orphans]);
+  const threadIds = useMemo(
+    () => [...orphanedThreads, ...activeThreads].map((thread) => thread.id),
+    [activeThreads, orphanedThreads],
+  );
   const totalThreads = threadIds.length;
   const allCollapsed = totalThreads > 0 && threadIds.every((threadId) => collapsedThreads.has(threadId));
-  const allRepliesCollapsed =
-    totalThreads > 0 && threadIds.every((threadId) => collapsedReplies.has(threadId));
 
   useEffect(() => {
     setCollapsedThreads((prev) => {
@@ -161,38 +198,11 @@ export function CommentsPane(props: Props) {
   }, [threadIds]);
 
   useEffect(() => {
-    setCollapsedReplies((prev) => {
-      const validIds = new Set(threadIds);
-      const next = new Set<string>();
-      for (const threadId of prev) {
-        if (validIds.has(threadId)) next.add(threadId);
-      }
-      for (const threadId of threadIds) {
-        if (!prev.has(threadId)) next.add(threadId);
-      }
-      if (next.size !== prev.size) return next;
-      for (const threadId of next) {
-        if (!prev.has(threadId)) return next;
-      }
-      return prev;
-    });
-  }, [threadIds]);
-
-  useEffect(() => {
     if (!focusedThread) return;
     if (lastHandledFocusNonce.current === focusedThread.nonce) return;
 
-    if (
-      collapsedThreads.has(focusedThread.threadId) ||
-      collapsedReplies.has(focusedThread.threadId)
-    ) {
+    if (collapsedThreads.has(focusedThread.threadId)) {
       setCollapsedThreads((prev) => {
-        if (!prev.has(focusedThread.threadId)) return prev;
-        const next = new Set(prev);
-        next.delete(focusedThread.threadId);
-        return next;
-      });
-      setCollapsedReplies((prev) => {
         if (!prev.has(focusedThread.threadId)) return prev;
         const next = new Set(prev);
         next.delete(focusedThread.threadId);
@@ -219,7 +229,7 @@ export function CommentsPane(props: Props) {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
     };
-  }, [active, collapsedReplies, collapsedThreads, focusedThread, orphans]);
+  }, [activeThreads, collapsedThreads, focusedThread, orphanedThreads]);
 
   async function submitNew(body: string, name?: string) {
     if (!pendingAnchor) return;
@@ -234,78 +244,77 @@ export function CommentsPane(props: Props) {
     await onCreate(payload);
   }
 
+  async function submitProposalReply(proposalId: string, body: string, name?: string) {
+    const payload: Parameters<typeof onCreate>[0] = { parent_proposal_id: proposalId, body };
+    if (name !== undefined) payload.display_name = name;
+    await onCreate(payload);
+  }
+
+  function toggleCollapsed(threadId: string) {
+    setCollapsedThreads((prev) => {
+      const next = new Set(prev);
+      if (next.has(threadId)) next.delete(threadId);
+      else next.add(threadId);
+      return next;
+    });
+  }
+
+  function renderThread(thread: ThreadListItem) {
+    const sharedThreadState = {
+      canComment,
+      needsName: !displayName,
+      threadFocused: focusedThreadId === thread.id,
+      collapsed: collapsedThreads.has(thread.id),
+      onToggleCollapsed: () => toggleCollapsed(thread.id),
+    };
+
+    if (thread.kind === 'comment') {
+      return (
+        <AnchorGroupView
+          key={thread.id}
+          group={thread.group}
+          isDocAdmin={isDocAdmin}
+          viewerClientId={viewerClientId}
+          submitReply={submitReply}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onResolve={onResolve}
+          onScrollToAnchor={onScrollToAnchor}
+          mentionCandidates={mentionCandidates}
+          {...sharedThreadState}
+        />
+      );
+    }
+
+    return (
+      <EditProposalItem
+        key={thread.id}
+        proposal={thread.thread.proposal}
+        replies={thread.thread.replies}
+        docSource={docSource}
+        blockRanges={blockRanges}
+        canEdit={canEdit}
+        mentionCandidates={mentionCandidates}
+        isDocAdmin={isDocAdmin}
+        onAccept={onAcceptProposal}
+        onReject={onRejectProposal}
+        onDelete={onDeleteProposal}
+        onEditRationale={onEditProposalRationale}
+        onReply={submitProposalReply}
+        onEditReply={onEdit}
+        onDeleteReply={onDelete}
+        onScrollToAnchor={onScrollToAnchor}
+        {...sharedThreadState}
+      />
+    );
+  }
+
   return (
     <div ref={rootRef} className="comments-pane">
-      {activeProposals.length > 0 && (
-        <section className="proposals-section">
-          <h4 className="subtle">Proposed changes</h4>
-          {activeProposals.map((p) => (
-            <EditProposalItem
-              key={p.id}
-              proposal={p}
-              replies={proposalReplies.get(p.id) ?? []}
-              docSource={docSource}
-              blockRanges={blockRanges}
-              canEdit={canEdit}
-              canComment={canComment}
-              isDocAdmin={isDocAdmin}
-              onAccept={onAcceptProposal}
-              onReject={onRejectProposal}
-              onDelete={onDeleteProposal}
-              onEditRationale={onEditProposalRationale}
-              onReply={(pid, body) => onCreate({ parent_proposal_id: pid, body })}
-              onEditReply={onEdit}
-              onDeleteReply={onDelete}
-              onScrollToAnchor={onScrollToAnchor}
-            />
-          ))}
-        </section>
-      )}
-
-      {decidedProposals.length > 0 && (
-        <section className="proposals-section decided">
-          <h4 className="subtle">Decided proposals</h4>
-          {decidedProposals.map((p) => (
-            <EditProposalItem
-              key={p.id}
-              proposal={p}
-              replies={proposalReplies.get(p.id) ?? []}
-              docSource={docSource}
-              blockRanges={blockRanges}
-              canEdit={canEdit}
-              canComment={canComment}
-              isDocAdmin={isDocAdmin}
-              onAccept={onAcceptProposal}
-              onReject={onRejectProposal}
-              onDelete={onDeleteProposal}
-              onEditRationale={onEditProposalRationale}
-              onReply={(pid, body) => onCreate({ parent_proposal_id: pid, body })}
-              onEditReply={onEdit}
-              onDeleteReply={onDelete}
-              onScrollToAnchor={onScrollToAnchor}
-            />
-          ))}
-        </section>
-      )}
-
-      {canComment && pendingAnchor && (
-        <div className="comment-composer">
-          <div className="quote">“{pendingAnchor.quote}”</div>
-          <Composer
-            mentionCandidates={mentionCandidates}
-            placeholder="Your comment…"
-            needsName={!displayName}
-            onCancel={onCancelPending}
-            onSubmit={submitNew}
-          />
-        </div>
-      )}
-
       {totalThreads > 1 && (
         <Flex align="center" gap="2" className="comments-pane-toolbar">
-          {/* Two options, expected to be used often → visible segmented
-              toggle with an explicit label, not a Select. Both choices are
-              visible at once; one click to switch. */}
+          {/* Keep thread sorting visible even when proposal/composer sections
+              add content above the first thread list. */}
           <Text as="label" htmlFor="threads-sort" size="1" color="gray">
             Sort by
           </Text>
@@ -342,62 +351,35 @@ export function CommentsPane(props: Props) {
               >
                 Collapse all threads
               </DropdownMenu.Item>
-              <DropdownMenu.Item
-                onSelect={() => setCollapsedReplies(new Set(threadIds))}
-                disabled={allRepliesCollapsed}
-              >
-                Collapse all replies
-              </DropdownMenu.Item>
             </DropdownMenu.Content>
           </DropdownMenu.Root>
         </Flex>
       )}
 
-      {orphans.length > 0 && (
+      {canComment && pendingAnchor && (
+        <div className="comment-composer">
+          <div className="quote">“{pendingAnchor.quote}”</div>
+          <CommentComposer
+            mentionCandidates={mentionCandidates}
+            placeholder="Your comment…"
+            needsName={!displayName}
+            onCancel={onCancelPending}
+            onSubmit={submitNew}
+          />
+        </div>
+      )}
+
+      {orphanedThreads.length > 0 && (
         <section className="orphans">
-          <h4 className="subtle">Orphaned comments</h4>
+          <h4 className="subtle">Orphaned discussions</h4>
           <p className="subtle small">
-            These comments could not be matched to the current document.
+            These comments or proposed changes could not be matched to the current document.
           </p>
-          {orphans.map((g) => (
-            <AnchorGroupView
-              key={g.top.id}
-              group={g}
-              isDocAdmin={isDocAdmin}
-              viewerClientId={viewerClientId}
-              mentionCandidates={mentionCandidates}
-              canComment={canComment}
-              submitReply={submitReply}
-              onEdit={onEdit}
-              onDelete={onDelete}
-              onResolve={onResolve}
-              onScrollToAnchor={onScrollToAnchor}
-              needsName={!displayName}
-              threadFocused={focusedThreadId === g.top.id}
-              collapsed={collapsedThreads.has(g.top.id)}
-              repliesCollapsed={collapsedReplies.has(g.top.id)}
-              onToggleCollapsed={() =>
-                setCollapsedThreads((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(g.top.id)) next.delete(g.top.id);
-                  else next.add(g.top.id);
-                  return next;
-                })
-              }
-              onToggleRepliesCollapsed={() =>
-                setCollapsedReplies((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(g.top.id)) next.delete(g.top.id);
-                  else next.add(g.top.id);
-                  return next;
-                })
-              }
-            />
-          ))}
+          {orphanedThreads.map((thread) => renderThread(thread))}
         </section>
       )}
 
-      {active.length === 0 && !pendingAnchor && orphans.length === 0 && (
+      {activeThreads.length === 0 && !pendingAnchor && orphanedThreads.length === 0 && (
         <div className="comments-empty subtle">
           {canComment
             ? 'Select text in the document to comment.'
@@ -405,41 +387,7 @@ export function CommentsPane(props: Props) {
         </div>
       )}
 
-      {active.map((g) => (
-        <AnchorGroupView
-          key={g.top.id}
-          group={g}
-          isDocAdmin={isDocAdmin}
-          viewerClientId={viewerClientId}
-          mentionCandidates={mentionCandidates}
-          canComment={canComment}
-          submitReply={submitReply}
-          onEdit={onEdit}
-          onDelete={onDelete}
-          onResolve={onResolve}
-          onScrollToAnchor={onScrollToAnchor}
-          needsName={!displayName}
-          threadFocused={focusedThreadId === g.top.id}
-          collapsed={collapsedThreads.has(g.top.id)}
-          repliesCollapsed={collapsedReplies.has(g.top.id)}
-          onToggleCollapsed={() =>
-            setCollapsedThreads((prev) => {
-              const next = new Set(prev);
-              if (next.has(g.top.id)) next.delete(g.top.id);
-              else next.add(g.top.id);
-              return next;
-            })
-          }
-          onToggleRepliesCollapsed={() =>
-            setCollapsedReplies((prev) => {
-              const next = new Set(prev);
-              if (next.has(g.top.id)) next.delete(g.top.id);
-              else next.add(g.top.id);
-              return next;
-            })
-          }
-        />
-      ))}
+      {activeThreads.map((thread) => renderThread(thread))}
     </div>
   );
 }
@@ -458,9 +406,7 @@ function AnchorGroupView({
   needsName,
   threadFocused,
   collapsed,
-  repliesCollapsed,
   onToggleCollapsed,
-  onToggleRepliesCollapsed,
 }: {
   group: AnchorGroup;
   isDocAdmin: boolean;
@@ -475,15 +421,10 @@ function AnchorGroupView({
   needsName: boolean;
   threadFocused: boolean;
   collapsed: boolean;
-  repliesCollapsed: boolean;
   onToggleCollapsed: () => void;
-  onToggleRepliesCollapsed: () => void;
 }) {
   const isResolved = group.top.resolved_at !== null;
   const canResolve = isDocAdmin || group.top.author.client_id === viewerClientId;
-  const showThread = !collapsed;
-  const showReplies = !repliesCollapsed;
-  const canToggleReplies = group.replies.length > 0 || (canComment && !isResolved);
   const anchorBlockId = group.top.anchor?.block_id ?? null;
 
   const composerRef = useRef<ComposerHandle>(null);
@@ -499,376 +440,80 @@ function AnchorGroupView({
   // Clicking the quote or the thread-jump button scrolls the document pane
   // to the commented block.
   const jump = anchorBlockId ? () => onScrollToAnchor(anchorBlockId) : undefined;
-
-  return (
-    <div
-      className={`anchor-group ${isResolved ? 'resolved' : ''} ${threadFocused ? 'thread-focused' : ''}`}
-      data-comment-thread-id={group.top.id}
-    >
-      {group.top.anchor?.quote && (
-        <button
-          type="button"
-          className="anchor-quote"
-          title="Jump to this location in the document"
-          onClick={jump}
-        >
-          <span className="jump-icon" aria-hidden>
-            ↗
-          </span>
-          “{group.top.anchor.quote}”
-        </button>
-      )}
-
-      <Flex align="center" gap="2" className="thread-toolbar">
+  const toolbarActions = isResolved ? (
+    <>
+      <Badge color="green" variant="soft">
+        Resolved{group.top.resolved_by_name ? ` by ${group.top.resolved_by_name}` : ''}
+      </Badge>
+      {canResolve && (
         <Button
           size="1"
-          variant="ghost"
+          variant="soft"
           color="gray"
-          className="thread-collapse-button"
-          aria-expanded={showThread}
-          onClick={onToggleCollapsed}
+          onClick={() => onResolve(group.top.id, false)}
         >
-          {showThread ? <ChevronDownIcon /> : <ChevronRightIcon />}
-          {showThread ? 'Collapse thread' : 'Expand thread'}
+          Reopen
         </Button>
-        <Text size="1" color="gray">
-          {(() => {
-            const total = group.replies.length + 1;
-            return `${total} comment${total === 1 ? '' : 's'}`;
-          })()}
-        </Text>
-        <span className="spacer" />
-        {isResolved ? (
-          <>
-            <Badge color="green" variant="soft">
-              <CheckCircledIcon />
-              Resolved{group.top.resolved_by_name ? ` by ${group.top.resolved_by_name}` : ''}
-            </Badge>
-            {canResolve && (
-              <Button
-                size="1"
-                variant="soft"
-                color="gray"
-                onClick={() => onResolve(group.top.id, false)}
-              >
-                Reopen
-              </Button>
-            )}
-          </>
-        ) : canResolve ? (
-          <>
-            <Button
-              size="1"
-              variant="soft"
-              color="green"
-              className="thread-resolve-button"
-              onClick={() => onResolve(group.top.id, true)}
-            >
-              Resolve thread
-            </Button>
-          </>
-        ) : null}
-      </Flex>
+      )}
+    </>
+  ) : canResolve ? (
+    <Button
+      size="1"
+      variant="soft"
+      color="green"
+      className="thread-resolve-button"
+      onClick={() => onResolve(group.top.id, true)}
+    >
+      Resolve thread
+    </Button>
+  ) : null;
 
-      {showThread && (
-        <>
+  return (
+    <DiscussionThread
+      threadId={group.top.id}
+      quote={group.top.anchor?.quote ?? null}
+      quoteTitle="Jump to this location in the document"
+      onJump={jump}
+      summary={`${group.replies.length + 1} comment${group.replies.length === 0 ? '' : 's'}`}
+      toolbarActions={toolbarActions}
+      focused={threadFocused}
+      collapsed={collapsed}
+      className={isResolved ? 'resolved' : undefined}
+      onToggleCollapsed={onToggleCollapsed}
+    >
+      <>
+        <CommentItem
+          comment={group.top}
+          isDocAdmin={isDocAdmin}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onQuote={canComment ? handleQuote : undefined}
+        />
+        {group.replies.map((r) => (
           <CommentItem
-            comment={group.top}
+            key={r.id}
+            comment={r}
             isDocAdmin={isDocAdmin}
             onEdit={onEdit}
             onDelete={onDelete}
             onQuote={canComment ? handleQuote : undefined}
           />
-          {group.replies.length === 0 ? (
-            <Text size="1" color="gray">No replies</Text>
-          ) : (
-            <Button
-              size="1"
-              variant="ghost"
-              color="gray"
-              className="thread-collapse-button"
-              aria-expanded={showReplies}
-              onClick={onToggleRepliesCollapsed}
-            >
-              {showReplies ? <ChevronDownIcon /> : <ChevronRightIcon />}
-              {showReplies ? 'Collapse replies' : `Expand ${group.replies.length} repl${group.replies.length === 1 ? 'y' : 'ies'}`}
-            </Button>
-          )}
-          {showReplies &&
-            group.replies.map((r) => (
-              <CommentItem
-                key={r.id}
-                comment={r}
-                isDocAdmin={isDocAdmin}
-                onEdit={onEdit}
-                onDelete={onDelete}
-                onQuote={canComment ? handleQuote : undefined}
-              />
-            ))}
-          {canComment && !isResolved && (
-            <div className="reply-composer">
-              <Composer
-                ref={composerRef}
-                mentionCandidates={mentionCandidates}
-                placeholder="Reply…"
-                needsName={needsName}
-                rows={2}
-                onSubmit={(body, name) => submitReply(group.top.id, body, name)}
-              />
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-const Composer = forwardRef<
-  ComposerHandle,
-  {
-    mentionCandidates: string[];
-    placeholder: string;
-    needsName: boolean;
-    rows?: number;
-    onCancel?: () => void;
-    onSubmit: (body: string, name?: string) => Promise<void> | void;
-  }
->(({ mentionCandidates, placeholder, needsName, rows = 3, onCancel, onSubmit }, ref) => {
-  const [value, setValue] = useState('');
-  const [name, setName] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [caret, setCaret] = useState(0);
-  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
-  const textRef = useRef<HTMLTextAreaElement>(null);
-  const hasDraft = value.trim().length > 0;
-  const pendingCursorRef = useRef<number | null>(null);
-  const mentionOptions = useMemo(() => {
-    const deduped = new Map<string, string>();
-    deduped.set('all', 'all');
-    for (const candidate of mentionCandidates) {
-      const trimmed = candidate.trim();
-      if (!trimmed) continue;
-      const key = trimmed.toLowerCase();
-      if (!deduped.has(key)) deduped.set(key, trimmed);
-    }
-    return Array.from(deduped.values());
-  }, [mentionCandidates]);
-  const activeMention = useMemo(() => getActiveMention(value, caret), [value, caret]);
-  const filteredMentionOptions = useMemo(() => {
-    if (!activeMention) return [];
-    const query = normalizeMentionQuery(activeMention.query);
-    if (!query) return mentionOptions.slice(0, 8);
-    return mentionOptions
-      .filter((option) => {
-        const normalized = option.toLowerCase();
-        return normalized.startsWith(query) || normalized.includes(query);
-      })
-      .slice(0, 8);
-  }, [activeMention, mentionOptions]);
-
-  useEffect(() => {
-    if (activeMentionIndex < filteredMentionOptions.length) return;
-    setActiveMentionIndex(0);
-  }, [activeMentionIndex, filteredMentionOptions.length]);
-
-  useImperativeHandle(ref, () => ({
-    insertText: (text: string) => {
-      setValue((prev) => {
-        const prefix = prev
-          ? prev + (prev.endsWith('\n\n') ? '' : prev.endsWith('\n') ? '\n' : '\n\n')
-          : '';
-        const next = `${prefix}${text}\n\n`;
-        pendingCursorRef.current = next.length;
-        return next;
-      });
-      setTimeout(() => {
-        const el = textRef.current;
-        if (!el) return;
-        el.focus();
-        const pos = pendingCursorRef.current ?? el.value.length;
-        el.setSelectionRange(pos, pos);
-        setCaret(pos);
-        pendingCursorRef.current = null;
-      }, 0);
-    },
-  }));
-
-  const ready = value.trim().length > 0 && (!needsName || name.trim().length > 0);
-
-  async function send() {
-    if (!ready) return;
-    setSubmitting(true);
-    try {
-      await onSubmit(value.trim(), needsName ? name.trim() : undefined);
-      setValue('');
-      setCaret(0);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  function handleCancel() {
-    setValue('');
-    setCaret(0);
-    if (onCancel) onCancel();
-  }
-
-  function handleKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (filteredMentionOptions.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setActiveMentionIndex((prev) => (prev + 1) % filteredMentionOptions.length);
-        return;
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setActiveMentionIndex(
-          (prev) => (prev - 1 + filteredMentionOptions.length) % filteredMentionOptions.length,
-        );
-        return;
-      }
-      if ((e.key === 'Enter' || e.key === 'Tab') && activeMention) {
-        e.preventDefault();
-        const selected = filteredMentionOptions[activeMentionIndex] ?? filteredMentionOptions[0];
-        if (selected) insertMention(selected);
-        return;
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setCaret(-1);
-        return;
-      }
-    }
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      if (ready && !submitting) void send();
-    }
-  }
-
-  function updateCaret(target: HTMLTextAreaElement) {
-    setCaret(target.selectionStart ?? target.value.length);
-    setActiveMentionIndex(0);
-  }
-
-  function insertMention(rawName: string) {
-    if (!activeMention) return;
-    const mentionText = `@${rawName}`;
-    const nextChar = value[activeMention.end] ?? '';
-    const trailing = nextChar && /\s/.test(nextChar) ? '' : ' ';
-    const nextValue =
-      value.slice(0, activeMention.start) + mentionText + trailing + value.slice(activeMention.end);
-    const nextCaret = activeMention.start + mentionText.length + trailing.length;
-    setValue(nextValue);
-    setCaret(nextCaret);
-    setActiveMentionIndex(0);
-    window.setTimeout(() => {
-      const el = textRef.current;
-      if (!el) return;
-      el.focus();
-      el.setSelectionRange(nextCaret, nextCaret);
-    }, 0);
-  }
-
-  return (
-    <Flex direction="column" gap="2" className="composer">
-      {needsName && (
-        <TextField.Root
-          className="composer-name-field"
-          size="1"
-          placeholder="Your display name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          maxLength={80}
-          autoFocus
-        />
-      )}
-      <TextArea
-        className="composer-body-field"
-        ref={textRef}
-        value={value}
-        onChange={(e) => {
-          setValue(e.target.value);
-          updateCaret(e.target);
-        }}
-        onKeyDown={handleKey}
-        onClick={(e) => updateCaret(e.currentTarget)}
-        onKeyUp={(e) => updateCaret(e.currentTarget)}
-        onSelect={(e) => updateCaret(e.currentTarget)}
-        placeholder={placeholder}
-        rows={rows}
-        size="1"
-        autoFocus={!needsName}
-      />
-      {activeMention && filteredMentionOptions.length > 0 && (
-        <div className="mention-menu" aria-label="Mention suggestions">
-          {filteredMentionOptions.map((option, index) => (
-            <button
-              key={option.toLowerCase()}
-              type="button"
-              className={`mention-option ${index === activeMentionIndex ? 'active' : ''}`}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                insertMention(option);
-              }}
-            >
-              @{option}
-            </button>
-          ))}
-        </div>
-      )}
-      <Flex gap="2" align="center" justify="end" className="comment-composer-actions">
-        <Text size="1" color="gray">
-          Markdown supported · ⌘/Ctrl+Enter to post
-        </Text>
-        {(onCancel || hasDraft) && (
-          <Button variant="soft" color="gray" size="1" onClick={handleCancel} disabled={submitting}>
-            Cancel
-          </Button>
+        ))}
+        {canComment && !isResolved && (
+          <div className="reply-composer">
+            <CommentComposer
+              ref={composerRef}
+              mentionCandidates={mentionCandidates}
+              placeholder="Reply…"
+              needsName={needsName}
+              rows={2}
+              onSubmit={(body, name) => submitReply(group.top.id, body, name)}
+            />
+          </div>
         )}
-        <IconButton size="1" variant="soft" onClick={send} disabled={!ready || submitting}>
-          <PaperPlaneIcon />
-        </IconButton>
-      </Flex>
-    </Flex>
+      </>
+    </DiscussionThread>
   );
-});
-
-interface ActiveMention {
-  start: number;
-  end: number;
-  query: string;
-}
-
-function getActiveMention(value: string, caret: number): ActiveMention | null {
-  if (caret < 0) return null;
-  const uptoCaret = value.slice(0, caret);
-  const at = uptoCaret.lastIndexOf('@');
-  if (at < 0) return null;
-  const prev = at === 0 ? '' : (uptoCaret[at - 1] ?? '');
-  if (/[0-9A-Za-z_]/.test(prev)) return null;
-  const query = uptoCaret.slice(at + 1);
-  if (query.includes('\n')) return null;
-  if (/[.,!?;:()[\]{}<>]/.test(query)) return null;
-  return { start: at, end: caret, query };
-}
-
-function normalizeMentionQuery(query: string): string {
-  return query.replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-function groupProposals(proposals: EditProposal[]): {
-  activeProposals: EditProposal[];
-  decidedProposals: EditProposal[];
-} {
-  const activeProposals: EditProposal[] = [];
-  const decidedProposals: EditProposal[] = [];
-  for (const p of proposals) {
-    if (p.status === 'pending') activeProposals.push(p);
-    else decidedProposals.push(p);
-  }
-  activeProposals.sort((a, b) => a.created_at - b.created_at);
-  decidedProposals.sort((a, b) => b.updated_at - a.updated_at);
-  return { activeProposals, decidedProposals };
 }
 
 function groupByAnchor(
@@ -898,6 +543,52 @@ function groupByAnchor(
   return { active, orphans };
 }
 
+function groupProposalThreads(
+  proposals: EditProposal[],
+  proposalReplies: Map<string, Comment[]>,
+): { active: ProposalThread[]; orphans: ProposalThread[] } {
+  const active: ProposalThread[] = [];
+  const orphans: ProposalThread[] = [];
+  for (const proposal of proposals) {
+    const thread = { proposal, replies: proposalReplies.get(proposal.id) ?? [] };
+    if (proposal.status === 'orphaned') orphans.push(thread);
+    else active.push(thread);
+  }
+  return { active, orphans };
+}
+
+function combineThreads(
+  commentGroups: AnchorGroup[],
+  proposalThreads: ProposalThread[],
+  sortMode: CommentSortMode,
+  blockOrder: Map<string, number>,
+): ThreadListItem[] {
+  const threads = [
+    ...commentGroups.map((group) => ({
+      kind: 'comment' as const,
+      id: group.top.id,
+      createdAt: group.top.created_at,
+      latestActivityAt: latestActivityTs(group),
+      anchor: anchorOrderFromComment(group.top.anchor),
+      group,
+    })),
+    ...proposalThreads.map((thread) => ({
+      kind: 'proposal' as const,
+      id: thread.proposal.id,
+      createdAt: thread.proposal.created_at,
+      latestActivityAt: proposalLatestActivityTs(thread),
+      anchor: anchorOrderFromProposal(thread.proposal),
+      thread,
+    })),
+  ];
+  threads.sort((a, b) =>
+    sortMode === 'latest'
+      ? compareThreadsByLatestActivityDesc(a, b)
+      : compareThreadsByDocumentOrder(a, b, blockOrder),
+  );
+  return threads;
+}
+
 function compareGroupsByLatestActivityDesc(a: AnchorGroup, b: AnchorGroup): number {
   return latestActivityTs(b) - latestActivityTs(a) || a.top.created_at - b.top.created_at;
 }
@@ -913,9 +604,47 @@ function compareGroupsByDocumentOrder(a: AnchorGroup, b: AnchorGroup): number {
   return a.top.created_at - b.top.created_at;
 }
 
+function compareThreadsByLatestActivityDesc(a: ThreadListItem, b: ThreadListItem): number {
+  return b.latestActivityAt - a.latestActivityAt || a.createdAt - b.createdAt;
+}
+
+function compareThreadsByDocumentOrder(
+  a: ThreadListItem,
+  b: ThreadListItem,
+  blockOrder: Map<string, number>,
+): number {
+  const anchorCmp = compareThreadAnchorOrder(a.anchor, b.anchor, blockOrder);
+  if (anchorCmp !== 0) return anchorCmp;
+  return a.createdAt - b.createdAt;
+}
+
 function compareAnchorPaths(a: CommentAnchor | null, b: CommentAnchor | null): number {
   const aPath = normalizeAnchorPath(a);
   const bPath = normalizeAnchorPath(b);
+  return compareNumberArrays(aPath, bPath);
+}
+
+function compareThreadAnchorOrder(
+  a: ThreadAnchorOrder,
+  b: ThreadAnchorOrder,
+  blockOrder: Map<string, number>,
+): number {
+  const aBlockIndex = a.blockId ? blockOrder.get(a.blockId) ?? null : null;
+  const bBlockIndex = b.blockId ? blockOrder.get(b.blockId) ?? null : null;
+  const blockCmp = compareNullableNumber(aBlockIndex, bBlockIndex);
+  if (blockCmp !== 0) return blockCmp;
+
+  const pathCmp = compareNumberArrays(normalizeThreadAnchorPath(a), normalizeThreadAnchorPath(b));
+  if (pathCmp !== 0) return pathCmp;
+
+  if (a.startOffset !== null && b.startOffset !== null && a.startOffset !== b.startOffset) {
+    return a.startOffset - b.startOffset;
+  }
+
+  return 0;
+}
+
+function compareNumberArrays(aPath: number[], bPath: number[]): number {
   const len = Math.max(aPath.length, bPath.length);
   for (let i = 0; i < len; i += 1) {
     const aPart = aPath[i] ?? Number.MAX_SAFE_INTEGER;
@@ -933,6 +662,12 @@ function normalizeAnchorPath(anchor: CommentAnchor | null): number[] {
   return [];
 }
 
+function normalizeThreadAnchorPath(anchor: ThreadAnchorOrder): number[] {
+  if (anchor.sectionIndexPath.length > 0) return anchor.sectionIndexPath;
+  if (anchor.sectionIndex !== null) return [anchor.sectionIndex];
+  return [];
+}
+
 function compareNullableNumber(a: number | null, b: number | null): number {
   if (a === null && b === null) return 0;
   if (a === null) return 1;
@@ -946,4 +681,31 @@ function latestActivityTs(group: AnchorGroup): number {
     if (reply.created_at > latest) latest = reply.created_at;
   }
   return latest;
+}
+
+function proposalLatestActivityTs(thread: ProposalThread): number {
+  let latest = thread.proposal.updated_at;
+  for (const reply of thread.replies) {
+    if (reply.created_at > latest) latest = reply.created_at;
+  }
+  return latest;
+}
+
+function anchorOrderFromComment(anchor: CommentAnchor | null): ThreadAnchorOrder {
+  return {
+    blockId: anchor?.block_id ?? null,
+    sectionIndex: typeof anchor?.section_index === 'number' ? anchor.section_index : null,
+    sectionIndexPath: anchor?.section_index_path ?? [],
+    startOffset:
+      typeof anchor?.start_offset === 'number' ? anchor.start_offset : null,
+  };
+}
+
+function anchorOrderFromProposal(proposal: EditProposal): ThreadAnchorOrder {
+  return {
+    blockId: proposal.anchor.block_id,
+    sectionIndex: null,
+    sectionIndexPath: [],
+    startOffset: null,
+  };
 }

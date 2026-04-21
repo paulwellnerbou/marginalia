@@ -23,7 +23,9 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   Cross2Icon,
+  LetterCaseToggleIcon,
   MagnifyingGlassIcon,
+  TokensIcon,
 } from '@radix-ui/react-icons';
 import type {
   CommentAnchor,
@@ -61,7 +63,7 @@ import {
   setUserThemeOverride,
 } from '../lib/themes.js';
 import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
-import { RenderedDoc } from './RenderedDoc.js';
+import { RenderedDoc, type DocumentSearchOptions } from './RenderedDoc.js';
 import { Toc } from './Toc.js';
 import { SelectionToolbar, type ProposalTarget } from './SelectionToolbar.js';
 import { BlockActions } from './BlockActions.js';
@@ -106,11 +108,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const [docSearchOpen, setDocSearchOpen] = useState(false);
   const [docSearchQuery, setDocSearchQuery] = useState('');
+  const [docSearchCaseSensitive, setDocSearchCaseSensitive] = useState(false);
+  const [docSearchWholeWords, setDocSearchWholeWords] = useState(false);
   const deferredDocSearchQuery = useDeferredValue(docSearchQuery);
   const [searchResults, setSearchResults] = useState<DocumentSearchResult[]>([]);
-  const [activeSearchTarget, setActiveSearchTarget] = useState<{ id: string; nonce: number } | null>(
-    null,
-  );
+  const [activeSearchTarget, setActiveSearchTarget] = useState<{
+    id: string;
+    nonce: number;
+  } | null>(null);
 
   const [maxWidth, setMaxWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(MAX_WIDTH_KEY));
@@ -162,10 +167,20 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     setDocSearchOpen(false);
     setDocSearchQuery('');
+    setDocSearchCaseSensitive(false);
+    setDocSearchWholeWords(false);
     setSearchResults([]);
     setActiveSearchTarget(null);
     setActiveHeadingId(null);
   }, [doc.uid]);
+
+  const docSearchOptions = useMemo<DocumentSearchOptions>(
+    () => ({
+      caseSensitive: docSearchCaseSensitive,
+      wholeWords: docSearchWholeWords,
+    }),
+    [docSearchCaseSensitive, docSearchWholeWords],
+  );
 
   // Reactive across UserMenu, composer, invite-load seeding, other tabs.
   const displayName = useDisplayName();
@@ -611,7 +626,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [comments],
   );
   const commentHighlights = useMemo(() => {
-    const fromComments: Array<{
+    const highlights: Array<{
       threadId?: string;
       blockId: string;
       quote: string;
@@ -634,13 +649,25 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         endOffset: comment.anchor!.end_offset,
       }));
 
+    for (const proposal of proposals) {
+      if (proposal.status !== 'pending') continue;
+      if (!proposal.anchor.block_id || !proposal.anchor.quote) continue;
+
+      highlights.push({
+        blockId: proposal.anchor.block_id,
+        quote: proposal.anchor.quote,
+        startOffset: 0,
+        endOffset: proposal.anchor.quote.length,
+      });
+    }
+
     if (
       canComment &&
       pendingAnchor &&
       pendingAnchor.quote &&
       pendingAnchor.end_offset > pendingAnchor.start_offset
     ) {
-      fromComments.push({
+      highlights.push({
         blockId: pendingAnchor.block_id,
         quote: pendingAnchor.quote,
         startOffset: pendingAnchor.start_offset,
@@ -648,8 +675,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       });
     }
 
-    return fromComments;
-  }, [canComment, comments, pendingAnchor]);
+    return highlights;
+  }, [canComment, comments, pendingAnchor, proposals]);
 
   const openCommentThread = useCallback((threadId: string) => {
     setCommentsOpen(true);
@@ -705,16 +732,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   return (
     <div className="doc-page">
-      <AppBar
-        docTitle={title}
-        role={doc.role}
-        format={doc.format}
-        trailing={
-          <>
-            {children}
-          </>
-        }
-      />
+      <AppBar docTitle={title} role={doc.role} format={doc.format} trailing={<>{children}</>} />
 
       <div className="doc-layout" style={gridStyle}>
         <aside className={`pane pane-toc ${tocOpen ? 'open' : 'closed'}`}>
@@ -751,7 +769,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 value={[maxWidth]}
                 onValueChange={(v) => setMaxWidth(v[0] ?? maxWidth)}
               />
-              <Text size="1" color="gray" style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}>
+              <Text
+                size="1"
+                color="gray"
+                style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
                 {maxWidth}ch
               </Text>
             </Flex>
@@ -768,7 +790,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 value={[textZoom]}
                 onValueChange={(v) => setTextZoom(v[0] ?? textZoom)}
               />
-              <Text size="1" color="gray" style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}>
+              <Text
+                size="1"
+                color="gray"
+                style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}
+              >
                 {textZoom}%
               </Text>
               <Button
@@ -854,6 +880,52 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     <MagnifyingGlassIcon />
                   </TextField.Slot>
                 </TextField.Root>
+                <Tooltip
+                  content={
+                    docSearchCaseSensitive ? 'Disable case sensitivity' : 'Enable case sensitivity'
+                  }
+                >
+                  <IconButton
+                    size="1"
+                    variant={docSearchCaseSensitive ? 'soft' : 'ghost'}
+                    color={docSearchCaseSensitive ? 'indigo' : 'gray'}
+                    className={`doc-search-option ${docSearchCaseSensitive ? 'active' : ''}`}
+                    aria-label={
+                      docSearchCaseSensitive
+                        ? 'Disable case-sensitive search'
+                        : 'Enable case-sensitive search'
+                    }
+                    aria-pressed={docSearchCaseSensitive}
+                    onClick={() => {
+                      setDocSearchCaseSensitive((prev) => !prev);
+                      docSearchInputRef.current?.focus({ preventScroll: true });
+                    }}
+                  >
+                    <LetterCaseToggleIcon />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip
+                  content={
+                    docSearchWholeWords ? 'Disable whole-word matching' : 'Match whole words only'
+                  }
+                >
+                  <IconButton
+                    size="1"
+                    variant={docSearchWholeWords ? 'soft' : 'ghost'}
+                    color={docSearchWholeWords ? 'indigo' : 'gray'}
+                    className={`doc-search-option ${docSearchWholeWords ? 'active' : ''}`}
+                    aria-label={
+                      docSearchWholeWords ? 'Disable whole-word search' : 'Enable whole-word search'
+                    }
+                    aria-pressed={docSearchWholeWords}
+                    onClick={() => {
+                      setDocSearchWholeWords((prev) => !prev);
+                      docSearchInputRef.current?.focus({ preventScroll: true });
+                    }}
+                  >
+                    <TokensIcon />
+                  </IconButton>
+                </Tooltip>
                 <Text size="1" color="gray" className="doc-search-count">
                   {searchResults.length === 0
                     ? '0 results'
@@ -899,6 +971,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               textZoom={textZoom / 100}
               highlights={commentHighlights}
               searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}
+              searchOptions={docSearchOptions}
               activeSearchResultId={activeSearchTarget?.id ?? null}
               activeSearchVersion={activeSearchTarget?.nonce ?? 0}
               onSearchResultsChange={updateSearchResults}
@@ -912,9 +985,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 onPropose={setPendingProposalTarget}
               />
             )}
-            {canComment && (
-              <BlockActions rootRef={docRef} onPropose={setPendingProposalTarget} />
-            )}
+            {canComment && <BlockActions rootRef={docRef} onPropose={setPendingProposalTarget} />}
           </div>
         </main>
 

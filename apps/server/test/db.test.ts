@@ -193,4 +193,133 @@ describe('openDatabase migrations', () => {
     expect(row2.name).toBeNull();
     db2.close();
   });
+
+  test('legacy edit_proposals are migrated into comments + comments_edit_proposals', () => {
+    {
+      const seed = new Database(dbPath);
+      seed.exec(`
+        CREATE TABLE comments (
+          id                    TEXT PRIMARY KEY,
+          doc_uid               TEXT NOT NULL,
+          parent_id             TEXT,
+          parent_proposal_id    TEXT,
+          anchor_block_id       TEXT,
+          anchor_quote          TEXT,
+          anchor_prefix         TEXT,
+          anchor_suffix         TEXT,
+          anchor_start_offset   INTEGER,
+          anchor_end_offset     INTEGER,
+          anchor_heading_path   TEXT,
+          anchor_section_index  INTEGER,
+          anchor_section_index_path TEXT,
+          author_client_id      TEXT NOT NULL,
+          author_display_name   TEXT NOT NULL,
+          body                  TEXT NOT NULL,
+          status                TEXT NOT NULL DEFAULT 'active',
+          resolved_at           INTEGER,
+          resolved_by_name      TEXT,
+          created_at            INTEGER NOT NULL,
+          updated_at            INTEGER NOT NULL,
+          deleted_at            INTEGER
+        );
+        CREATE TABLE edit_proposals (
+          id                    TEXT PRIMARY KEY,
+          doc_uid               TEXT NOT NULL,
+          anchor_block_id       TEXT,
+          anchor_quote          TEXT,
+          anchor_kind           TEXT,
+          proposed_text         TEXT NOT NULL,
+          rationale             TEXT,
+          author_client_id      TEXT NOT NULL,
+          author_display_name   TEXT NOT NULL,
+          status                TEXT NOT NULL DEFAULT 'pending',
+          decided_at            INTEGER,
+          decided_by_name       TEXT,
+          created_at            INTEGER NOT NULL,
+          updated_at            INTEGER NOT NULL,
+          deleted_at            INTEGER
+        );
+      `);
+      const now = Date.now();
+      seed.prepare(
+        `INSERT INTO edit_proposals
+           (id, doc_uid, anchor_block_id, anchor_quote, anchor_kind, proposed_text,
+            rationale, author_client_id, author_display_name, status,
+            decided_at, decided_by_name, created_at, updated_at, deleted_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        'prop-1',
+        'doc-1',
+        'block-1',
+        'Original block',
+        'paragraph',
+        'Edited block',
+        'Why this should change',
+        'client-1',
+        'Alice',
+        'pending',
+        null,
+        null,
+        now,
+        now,
+        null,
+      );
+      seed.close();
+    }
+
+    const db = openDatabase(dbPath);
+
+    const oldTable = db.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'edit_proposals'`,
+    ).get() as { name: string } | null;
+    expect(oldTable).toBeNull();
+
+    const migratedComment = db.prepare(
+      `SELECT id, doc_uid, anchor_block_id, anchor_quote, body, status, author_client_id, author_display_name
+         FROM comments
+        WHERE id = ?`,
+    ).get('prop-1') as {
+      id: string;
+      doc_uid: string;
+      anchor_block_id: string | null;
+      anchor_quote: string | null;
+      body: string;
+      status: string;
+      author_client_id: string;
+      author_display_name: string;
+    };
+    expect(migratedComment).toEqual({
+      id: 'prop-1',
+      doc_uid: 'doc-1',
+      anchor_block_id: 'block-1',
+      anchor_quote: 'Original block',
+      body: 'Why this should change',
+      status: 'active',
+      author_client_id: 'client-1',
+      author_display_name: 'Alice',
+    });
+
+    const migratedProposal = db.prepare(
+      `SELECT comment_id, anchor_kind, proposed_text, status, decided_at, decided_by_name
+         FROM comments_edit_proposals
+        WHERE comment_id = ?`,
+    ).get('prop-1') as {
+      comment_id: string;
+      anchor_kind: string | null;
+      proposed_text: string;
+      status: string;
+      decided_at: number | null;
+      decided_by_name: string | null;
+    };
+    expect(migratedProposal).toEqual({
+      comment_id: 'prop-1',
+      anchor_kind: 'paragraph',
+      proposed_text: 'Edited block',
+      status: 'pending',
+      decided_at: null,
+      decided_by_name: null,
+    });
+
+    db.close();
+  });
 });

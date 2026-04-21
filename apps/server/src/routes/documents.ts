@@ -342,9 +342,12 @@ async function deleteDocument(c: Context, deps: AppDeps) {
   // Drop everything the server stores about the doc. Order doesn't matter
   // (no FKs declared). Must list every per-doc table; orphans here would
   // leak author history + in-flight proposals after the doc is gone.
+  db.prepare(
+    `DELETE FROM comments_edit_proposals
+      WHERE comment_id IN (SELECT id FROM comments WHERE doc_uid = ?)`,
+  ).run(doc.uid);
   db.prepare('DELETE FROM comments WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM comment_mentions WHERE doc_uid = ?').run(doc.uid);
-  db.prepare('DELETE FROM edit_proposals WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM doc_users WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
@@ -378,8 +381,10 @@ async function exportDocument(c: Context, deps: AppDeps) {
   const rendered = await renderDocument(source, doc.format);
   const comments = db
     .prepare(
-      `SELECT * FROM comments
-         WHERE doc_uid = ? AND deleted_at IS NULL
+      `SELECT c.*
+         FROM comments c
+         LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.doc_uid = ? AND c.deleted_at IS NULL AND cep.comment_id IS NULL
          ORDER BY created_at ASC`,
     )
     .all(doc.uid) as CommentRow[];

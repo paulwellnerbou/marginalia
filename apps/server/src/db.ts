@@ -71,6 +71,15 @@ CREATE TABLE IF NOT EXISTS comments (
 CREATE INDEX IF NOT EXISTS idx_comments_doc ON comments(doc_uid);
 CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id);
 
+CREATE TABLE IF NOT EXISTS comments_edit_proposals (
+  comment_id             TEXT PRIMARY KEY,
+  anchor_kind            TEXT,
+  proposed_text          TEXT NOT NULL,
+  status                 TEXT NOT NULL DEFAULT 'pending',
+  decided_at             INTEGER,
+  decided_by_name        TEXT
+);
+
 CREATE TABLE IF NOT EXISTS comment_mentions (
   doc_uid               TEXT NOT NULL,
   comment_id            TEXT NOT NULL,
@@ -98,26 +107,6 @@ CREATE TABLE IF NOT EXISTS doc_users (
 
 CREATE INDEX IF NOT EXISTS idx_doc_users_name
   ON doc_users(doc_uid, display_name);
-
-CREATE TABLE IF NOT EXISTS edit_proposals (
-  id                    TEXT PRIMARY KEY,
-  doc_uid               TEXT NOT NULL,
-  anchor_block_id       TEXT,
-  anchor_quote          TEXT,          -- snapshot of the original block text
-  anchor_kind           TEXT,          -- mdast node type of the original block
-  proposed_text         TEXT NOT NULL, -- new markdown source for the block
-  rationale             TEXT,
-  author_client_id      TEXT NOT NULL,
-  author_display_name   TEXT NOT NULL,
-  status                TEXT NOT NULL DEFAULT 'pending',
-  decided_at            INTEGER,
-  decided_by_name       TEXT,
-  created_at            INTEGER NOT NULL,
-  updated_at            INTEGER NOT NULL,
-  deleted_at            INTEGER
-);
-
-CREATE INDEX IF NOT EXISTS idx_proposals_doc ON edit_proposals(doc_uid);
 
 -- Content-addressed blob metadata. One row per unique sha256; reused
 -- across documents via document_assets. Rows are GC'd inline (see
@@ -342,6 +331,7 @@ export function openDatabase(path: string): Database {
   // Legacy 'commentor' rows → 'collaborator' (same server-side behavior).
   db.exec(`UPDATE invites SET role = 'collaborator' WHERE role = 'commentor'`);
   migrateInvitesKind(db);
+  migrateEditProposalsToCommentExtensions(db);
   return db;
 }
 
@@ -395,4 +385,72 @@ function ensureColumn(db: Database, table: string, column: string, ddl: string):
   if (!cols.some((c) => c.name === column)) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
   }
+}
+
+function migrateEditProposalsToCommentExtensions(db: Database): void {
+  if (!tableExists(db, 'edit_proposals')) return;
+
+  db.exec('BEGIN');
+  try {
+    db.exec(`
+      INSERT OR IGNORE INTO comments (
+        id, doc_uid, parent_id, parent_proposal_id,
+        anchor_block_id, anchor_quote, anchor_prefix, anchor_suffix,
+        anchor_start_offset, anchor_end_offset,
+        anchor_heading_path, anchor_section_index, anchor_section_index_path,
+        author_client_id, author_display_name,
+        body, status, resolved_at, resolved_by_name,
+        created_at, updated_at, deleted_at
+      )
+      SELECT
+        id,
+        doc_uid,
+        NULL,
+        NULL,
+        anchor_block_id,
+        anchor_quote,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        author_client_id,
+        author_display_name,
+        COALESCE(rationale, ''),
+        CASE WHEN status = 'orphaned' THEN 'orphaned' ELSE 'active' END,
+        NULL,
+        NULL,
+        created_at,
+        updated_at,
+        deleted_at
+      FROM edit_proposals
+    `);
+    db.exec(`
+      INSERT OR IGNORE INTO comments_edit_proposals (
+        comment_id, anchor_kind, proposed_text, status, decided_at, decided_by_name
+      )
+      SELECT
+        id,
+        anchor_kind,
+        proposed_text,
+        status,
+        decided_at,
+        decided_by_name
+      FROM edit_proposals
+    `);
+    db.exec('DROP TABLE edit_proposals');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+function tableExists(db: Database, table: string): boolean {
+  const row = db.prepare(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
+  ).get(table) as { name: string } | undefined;
+  return row?.name === table;
 }

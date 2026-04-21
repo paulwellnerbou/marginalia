@@ -34,6 +34,27 @@ export function editProposalsRouter(deps: AppDeps): Hono {
   return r;
 }
 
+const PROPOSAL_SELECT = `
+  SELECT
+    c.id,
+    c.doc_uid,
+    c.anchor_block_id,
+    c.anchor_quote,
+    cep.anchor_kind,
+    cep.proposed_text,
+    NULLIF(c.body, '') AS rationale,
+    c.author_client_id,
+    c.author_display_name,
+    cep.status,
+    cep.decided_at,
+    cep.decided_by_name,
+    c.created_at,
+    c.updated_at,
+    c.deleted_at
+  FROM comments c
+  INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+`;
+
 // --- list ------------------------------------------------------------
 
 async function listProposals(c: Context, deps: AppDeps) {
@@ -46,9 +67,9 @@ async function listProposals(c: Context, deps: AppDeps) {
 
   const rows = db
     .prepare(
-      `SELECT * FROM edit_proposals
-         WHERE doc_uid = ? AND deleted_at IS NULL
-         ORDER BY created_at ASC`,
+      `${PROPOSAL_SELECT}
+       WHERE c.doc_uid = ? AND c.deleted_at IS NULL
+       ORDER BY c.created_at ASC`,
     )
     .all(doc.uid) as EditProposalRow[];
 
@@ -87,18 +108,42 @@ async function createProposal(c: Context, deps: AppDeps) {
 
   const id = newProposalId();
   const now = Date.now();
-  db.prepare(
-    `INSERT INTO edit_proposals
-       (id, doc_uid, anchor_block_id, anchor_quote, anchor_kind, proposed_text,
-        rationale, author_client_id, author_display_name,
-        status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
-  ).run(
-    id, doc.uid, blockId, quote, kind, proposed, rationale,
-    identity.clientId, identity.displayName, now, now,
-  );
+  db.exec('BEGIN');
+  try {
+    db.prepare(
+      `INSERT INTO comments
+         (id, doc_uid, parent_id, parent_proposal_id,
+          anchor_block_id, anchor_quote, anchor_prefix, anchor_suffix,
+          anchor_start_offset, anchor_end_offset,
+          anchor_heading_path, anchor_section_index, anchor_section_index_path,
+          author_client_id, author_display_name,
+          body, status, resolved_at, resolved_by_name,
+          created_at, updated_at, deleted_at)
+       VALUES (?, ?, NULL, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, 'active', NULL, NULL, ?, ?, NULL)`,
+    ).run(
+      id,
+      doc.uid,
+      blockId,
+      quote,
+      identity.clientId,
+      identity.displayName,
+      rationale ?? '',
+      now,
+      now,
+    );
+    db.prepare(
+      `INSERT INTO comments_edit_proposals
+         (comment_id, anchor_kind, proposed_text, status, decided_at, decided_by_name)
+       VALUES (?, ?, ?, 'pending', NULL, NULL)`,
+    ).run(id, kind, proposed);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 
-  const row = db.prepare('SELECT * FROM edit_proposals WHERE id = ?').get(id) as EditProposalRow;
+  const row = loadProposalRow(db, id, doc.uid);
+  if (!row) return c.json({ error: 'not-found' }, 404);
   const wire = toWire(row);
   deps.realtime.broadcast(
     doc.uid,
@@ -123,9 +168,7 @@ async function editProposal(c: Context, deps: AppDeps) {
 
   const pid = c.req.param('pid');
   if (!pid) return c.json({ error: 'not-found' }, 404);
-  const row = db
-    .prepare('SELECT * FROM edit_proposals WHERE id = ? AND doc_uid = ? AND deleted_at IS NULL')
-    .get(pid, doc.uid) as EditProposalRow | undefined;
+  const row = loadProposalRow(db, pid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
   if (row.author_client_id !== decision.identity.clientId) {
     return c.json({ error: 'forbidden' }, 403);
@@ -146,12 +189,13 @@ async function editProposal(c: Context, deps: AppDeps) {
   if (rationale === undefined) return c.json({ error: 'rationale-required' }, 400);
 
   const now = Date.now();
-  db.prepare('UPDATE edit_proposals SET rationale = ?, updated_at = ? WHERE id = ?').run(
+  db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(
     rationale,
     now,
     pid,
   );
-  const updated = db.prepare('SELECT * FROM edit_proposals WHERE id = ?').get(pid) as EditProposalRow;
+  const updated = loadProposalRow(db, pid, doc.uid);
+  if (!updated) return c.json({ error: 'not-found' }, 404);
   const wire = toWire(updated);
   deps.realtime.broadcast(
     doc.uid,
@@ -174,9 +218,7 @@ async function deleteProposal(c: Context, deps: AppDeps) {
 
   const pid = c.req.param('pid');
   if (!pid) return c.json({ error: 'not-found' }, 404);
-  const row = db
-    .prepare('SELECT * FROM edit_proposals WHERE id = ? AND doc_uid = ? AND deleted_at IS NULL')
-    .get(pid, doc.uid) as EditProposalRow | undefined;
+  const row = loadProposalRow(db, pid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
 
   const isAuthor = row.author_client_id === decision.identity.clientId;
@@ -188,7 +230,7 @@ async function deleteProposal(c: Context, deps: AppDeps) {
     return c.json({ error: 'forbidden-accepted' }, 403);
   }
 
-  db.prepare('UPDATE edit_proposals SET deleted_at = ? WHERE id = ?').run(Date.now(), pid);
+  db.prepare('UPDATE comments SET deleted_at = ? WHERE id = ?').run(Date.now(), pid);
   deps.realtime.broadcast(
     doc.uid,
     { type: 'edit_proposal.deleted', edit_proposal_id: pid },
@@ -211,20 +253,20 @@ async function rejectProposal(c: Context, deps: AppDeps) {
 
   const pid = c.req.param('pid');
   if (!pid) return c.json({ error: 'not-found' }, 404);
-  const row = db
-    .prepare('SELECT * FROM edit_proposals WHERE id = ? AND doc_uid = ? AND deleted_at IS NULL')
-    .get(pid, doc.uid) as EditProposalRow | undefined;
+  const row = loadProposalRow(db, pid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
   if (row.status !== 'pending') return c.json({ error: 'not-pending' }, 400);
 
   const now = Date.now();
   db.prepare(
-    `UPDATE edit_proposals
-        SET status = 'rejected', decided_at = ?, decided_by_name = ?, updated_at = ?
-      WHERE id = ?`,
-  ).run(now, decision.identity.displayName, now, pid);
+    `UPDATE comments_edit_proposals
+        SET status = 'rejected', decided_at = ?, decided_by_name = ?
+      WHERE comment_id = ?`,
+  ).run(now, decision.identity.displayName, pid);
+  db.prepare('UPDATE comments SET updated_at = ? WHERE id = ?').run(now, pid);
 
-  const updated = db.prepare('SELECT * FROM edit_proposals WHERE id = ?').get(pid) as EditProposalRow;
+  const updated = loadProposalRow(db, pid, doc.uid);
+  if (!updated) return c.json({ error: 'not-found' }, 404);
   const wire = toWire(updated);
   deps.realtime.broadcast(
     doc.uid,
@@ -249,9 +291,7 @@ async function acceptProposal(c: Context, deps: AppDeps) {
 
   const pid = c.req.param('pid');
   if (!pid) return c.json({ error: 'not-found' }, 404);
-  const row = db
-    .prepare('SELECT * FROM edit_proposals WHERE id = ? AND doc_uid = ? AND deleted_at IS NULL')
-    .get(pid, doc.uid) as EditProposalRow | undefined;
+  const row = loadProposalRow(db, pid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
   if (row.status !== 'pending') return c.json({ error: 'not-pending' }, 400);
   if (!row.anchor_block_id) return c.json({ error: 'proposal-orphaned' }, 409);
@@ -265,9 +305,15 @@ async function acceptProposal(c: Context, deps: AppDeps) {
     // Block no longer present — mark orphaned so the UI reflects reality.
     const now = Date.now();
     db.prepare(
-      `UPDATE edit_proposals SET status = 'orphaned', updated_at = ? WHERE id = ?`,
+      `UPDATE comments_edit_proposals SET status = 'orphaned' WHERE comment_id = ?`,
+    ).run(pid);
+    db.prepare(
+      `UPDATE comments
+          SET status = 'orphaned', anchor_block_id = NULL, updated_at = ?
+        WHERE id = ?`,
     ).run(now, pid);
-    const updated = db.prepare('SELECT * FROM edit_proposals WHERE id = ?').get(pid) as EditProposalRow;
+    const updated = loadProposalRow(db, pid, doc.uid);
+    if (!updated) return c.json({ error: 'not-found' }, 404);
     realtime.broadcast(
       doc.uid,
       { type: 'edit_proposal.updated', edit_proposal: toWire(updated) },
@@ -287,8 +333,14 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   const rendered = await renderDocument(nextSource, doc.format);
   const topLevelComments = db
     .prepare(
-      `SELECT * FROM comments
-         WHERE doc_uid = ? AND parent_id IS NULL AND deleted_at IS NULL`,
+      `SELECT c.*
+         FROM comments c
+         LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.doc_uid = ?
+          AND c.parent_id IS NULL
+          AND c.parent_proposal_id IS NULL
+          AND c.deleted_at IS NULL
+          AND cep.comment_id IS NULL`,
     )
     .all(doc.uid) as CommentRow[];
   const updateCommentStmt = db.prepare(
@@ -315,12 +367,14 @@ async function acceptProposal(c: Context, deps: AppDeps) {
 
   // Mark this proposal accepted.
   db.prepare(
-    `UPDATE edit_proposals
-        SET status = 'accepted', decided_at = ?, decided_by_name = ?, updated_at = ?
-      WHERE id = ?`,
-  ).run(now, identity.displayName, now, pid);
+    `UPDATE comments_edit_proposals
+        SET status = 'accepted', decided_at = ?, decided_by_name = ?
+      WHERE comment_id = ?`,
+  ).run(now, identity.displayName, pid);
+  db.prepare('UPDATE comments SET updated_at = ? WHERE id = ?').run(now, pid);
 
-  const accepted = db.prepare('SELECT * FROM edit_proposals WHERE id = ?').get(pid) as EditProposalRow;
+  const accepted = loadProposalRow(db, pid, doc.uid);
+  if (!accepted) return c.json({ error: 'not-found' }, 404);
   const wire = toWire(accepted);
 
   realtime.broadcast(
@@ -360,21 +414,26 @@ export function reanchorProposals(
   const present = new Set(presentBlockIds);
   const pending = db
     .prepare(
-      `SELECT * FROM edit_proposals
-         WHERE doc_uid = ? AND status = 'pending' AND deleted_at IS NULL`,
+      `${PROPOSAL_SELECT}
+       WHERE c.doc_uid = ? AND cep.status = 'pending' AND c.deleted_at IS NULL`,
     )
     .all(docUid) as EditProposalRow[];
-  const mark = db.prepare(
-    `UPDATE edit_proposals
+  const markProposal = db.prepare(
+    `UPDATE comments_edit_proposals
+        SET status = 'orphaned'
+      WHERE comment_id = ?`,
+  );
+  const markComment = db.prepare(
+    `UPDATE comments
         SET status = 'orphaned', anchor_block_id = NULL, updated_at = ?
       WHERE id = ?`,
   );
-  const fetch = db.prepare('SELECT * FROM edit_proposals WHERE id = ?');
   const orphaned: EditProposalRow[] = [];
   for (const p of pending) {
     if (!p.anchor_block_id || !present.has(p.anchor_block_id)) {
-      mark.run(now, p.id);
-      const fresh = fetch.get(p.id) as EditProposalRow | undefined;
+      markProposal.run(p.id);
+      markComment.run(now, p.id);
+      const fresh = loadProposalRow(db, p.id, docUid);
       if (fresh) {
         orphaned.push(fresh);
         if (realtime) {
@@ -418,6 +477,13 @@ function asString(v: unknown): string | null {
 
 function newProposalId(): string {
   return randomBytes(12).toString('base64url');
+}
+
+function loadProposalRow(db: Database, proposalId: string, docUid: string): EditProposalRow | undefined {
+  return db.prepare(
+    `${PROPOSAL_SELECT}
+      WHERE c.id = ? AND c.doc_uid = ? AND c.deleted_at IS NULL`,
+  ).get(proposalId, docUid) as EditProposalRow | undefined;
 }
 
 export function toWire(row: EditProposalRow): Record<string, unknown> {

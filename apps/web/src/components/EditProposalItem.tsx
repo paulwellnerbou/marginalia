@@ -1,15 +1,18 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import type React from 'react';
 import { Badge, Button, Flex, IconButton, Text, TextArea, Tooltip } from '@radix-ui/themes';
 import {
-  ChatBubbleIcon,
   EyeOpenIcon,
   Pencil2Icon,
+  QuoteIcon,
 } from '@radix-ui/react-icons';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { Comment, EditProposal } from '../lib/api.js';
 import { getClientId } from '../lib/identity.js';
+import { CommentComposer, type ComposerHandle } from './CommentComposer.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import { CommentItem } from './CommentItem.js';
+import { DiscussionEntry, DiscussionThread } from './DiscussionUi.js';
 import { DiffDialog } from './DiffDialog.js';
 
 interface Props {
@@ -25,27 +28,34 @@ interface Props {
   canEdit: boolean;
   /** Viewer may comment / reply. */
   canComment: boolean;
+  mentionCandidates: string[];
   isDocAdmin: boolean;
   onAccept: (id: string) => Promise<void> | void;
   onReject: (id: string) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
   onEditRationale: (id: string, rationale: string | null) => Promise<void> | void;
-  onReply: (proposalId: string, body: string) => Promise<void> | void;
+  onReply: (proposalId: string, body: string, name?: string) => Promise<void> | void;
   onEditReply: (commentId: string, body: string) => Promise<void> | void;
   onDeleteReply: (commentId: string) => Promise<void> | void;
   onScrollToAnchor: (blockId: string) => void;
+  threadFocused: boolean;
+  collapsed: boolean;
+  needsName: boolean;
+  onToggleCollapsed: () => void;
 }
 
 export function EditProposalItem({
-  proposal, replies, docSource, blockRanges, canEdit, canComment, isDocAdmin,
+  proposal, replies, docSource, blockRanges, canEdit, canComment, mentionCandidates, isDocAdmin,
   onAccept, onReject, onDelete, onEditRationale, onReply, onEditReply, onDeleteReply,
-  onScrollToAnchor,
+  onScrollToAnchor, threadFocused, collapsed, needsName,
+  onToggleCollapsed,
 }: Props) {
   const [diffOpen, setDiffOpen] = useState(false);
   const [editingRationale, setEditingRationale] = useState(false);
-  const [replying, setReplying] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
   const myId = getClientId();
   const isAuthor = proposal.author.client_id === myId;
+  const composerRef = useRef<ComposerHandle>(null);
 
   const originalSource = useMemo(() => {
     if (!proposal.anchor.block_id) return proposal.anchor.quote ?? '';
@@ -82,129 +92,130 @@ export function EditProposalItem({
   const canDelete =
     (isAuthor || isDocAdmin) &&
     (proposal.status !== 'accepted' || isDocAdmin);
+  const quoteBody = (proposal.rationale ?? proposal.proposed_text).trim();
+  const handleQuote = () => {
+    if (!quoteBody) return;
+    insertQuotedText(composerRef, quoteBody);
+  };
+  const handleReplyQuote = canComment
+    ? (text: string) => insertQuotedText(composerRef, text)
+    : undefined;
+  const toolbarActions = (
+    <Flex gap="2" align="center" wrap="wrap">
+      <Button size="1" variant="soft" onClick={() => setDiffOpen(true)}>
+        <EyeOpenIcon /> Show diff
+      </Button>
+      {proposal.status === 'pending' && canEdit && (
+        <>
+          <Button size="1" color="green" variant="soft" onClick={() => onAccept(proposal.id)}>
+            Accept
+          </Button>
+          <Button size="1" color="red" variant="soft" onClick={() => onReject(proposal.id)}>
+            Reject
+          </Button>
+        </>
+      )}
+    </Flex>
+  );
+  const actions = (
+    <Flex gap="1" align="center" wrap="wrap" className="comment-actions comment-actions-inline">
+      {!deleteArmed && canComment && quoteBody && (
+        <Tooltip content="Quote">
+          <IconButton
+            size="1"
+            variant="ghost"
+            color="gray"
+            aria-label="Quote"
+            onClick={handleQuote}
+          >
+            <QuoteIcon />
+          </IconButton>
+        </Tooltip>
+      )}
+      {!deleteArmed && isAuthor && proposal.status === 'pending' && !editingRationale && (
+        <Tooltip content="Edit reason">
+          <IconButton
+            size="1"
+            variant="ghost"
+            color="gray"
+            aria-label="Edit reason"
+            onClick={() => setEditingRationale(true)}
+          >
+            <Pencil2Icon />
+          </IconButton>
+        </Tooltip>
+      )}
+      {canDelete && (
+        <ConfirmButton
+          label="Delete"
+          confirmLabel="Confirm delete"
+          ariaLabel="Delete"
+          reserveWidth={false}
+          onArmedChange={setDeleteArmed}
+          onConfirm={() => onDelete(proposal.id)}
+        />
+      )}
+    </Flex>
+  );
+  const surface = editingRationale ? (
+    <RationaleEditor
+      initial={proposal.rationale ?? ''}
+      onCancel={() => setEditingRationale(false)}
+      onSave={async (v) => {
+        await onEditRationale(proposal.id, v.trim().length > 0 ? v.trim() : null);
+        setEditingRationale(false);
+      }}
+    />
+  ) : proposal.rationale ? (
+    <Text as="p" className="comment-body proposal-rationale">
+      {proposal.rationale}
+    </Text>
+  ) : null;
 
   return (
-    <div className={`anchor-group proposal proposal-${proposal.status}`}>
-      {proposal.anchor.quote && (
-        <button
-          type="button"
-          className="anchor-quote"
-          title="Jump to this paragraph"
-          onClick={jump}
-          disabled={!jump}
-        >
-          <span className="jump-icon" aria-hidden>↗</span>
-          “{proposal.anchor.quote.slice(0, 120)}{proposal.anchor.quote.length > 120 ? '…' : ''}”
-        </button>
-      )}
+    <DiscussionThread
+      threadId={proposal.id}
+      quote={proposal.anchor.quote ? `${proposal.anchor.quote.slice(0, 120)}${proposal.anchor.quote.length > 120 ? '…' : ''}` : null}
+      quoteTitle="Jump to this paragraph"
+      onJump={jump}
+      summary={formatThreadSummary(replies.length)}
+      toolbarActions={toolbarActions}
+      focused={threadFocused}
+      collapsed={collapsed}
+      className={`proposal proposal-${proposal.status}`}
+      onToggleCollapsed={onToggleCollapsed}
+    >
+      <DiscussionEntry
+        authorName={proposal.author.display_name}
+        createdAt={proposal.created_at}
+        badge={statusBadge}
+        actions={actions}
+        surface={surface}
+        className="proposal-entry"
+      />
+      {replies.map((r) => (
+        <CommentItem
+          key={r.id}
+          comment={r}
+          isDocAdmin={isDocAdmin}
+          onEdit={onEditReply}
+          onDelete={onDeleteReply}
+          onQuote={handleReplyQuote}
+        />
+      ))}
 
-      {/* Mirror CommentItem's meta line: author, status, action icons. */}
-      <Flex align="center" gap="2" mb="1" className="comment-meta">
-        <Text weight="medium" size="2" className="comment-author">
-          {proposal.author.display_name}
-        </Text>
-        {statusBadge}
-        <span className="spacer" />
-        <Flex gap="1" align="center" wrap="wrap" className="comment-actions comment-actions-inline">
-          {isAuthor && proposal.status === 'pending' && !editingRationale && (
-            <Tooltip content="Edit reason">
-              <IconButton
-                size="1"
-                variant="ghost"
-                color="gray"
-                aria-label="Edit reason"
-                onClick={() => setEditingRationale(true)}
-              >
-                <Pencil2Icon />
-              </IconButton>
-            </Tooltip>
-          )}
-          {canComment && !replying && (
-            <Tooltip content="Reply">
-              <IconButton
-                size="1"
-                variant="ghost"
-                color="gray"
-                aria-label="Reply"
-                onClick={() => setReplying(true)}
-              >
-                <ChatBubbleIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          {canDelete && (
-            <ConfirmButton
-              label="Delete"
-              confirmLabel="Confirm delete"
-              ariaLabel="Delete"
-              onConfirm={() => onDelete(proposal.id)}
-            />
-          )}
-        </Flex>
-      </Flex>
-
-      <div className="comment-surface">
-        {editingRationale ? (
-          <RationaleEditor
-            initial={proposal.rationale ?? ''}
-            onCancel={() => setEditingRationale(false)}
-            onSave={async (v) => {
-              await onEditRationale(proposal.id, v.trim().length > 0 ? v.trim() : null);
-              setEditingRationale(false);
-            }}
-          />
-        ) : proposal.rationale ? (
-          <Text as="p" className="comment-body proposal-rationale">
-            {proposal.rationale}
-          </Text>
-        ) : null}
-      </div>
-
-      {/* Single-line review action bar: Show diff / Accept / Reject. */}
-      <Flex gap="2" align="center" mt="2" wrap="wrap" className="proposal-review-actions">
-        <Button size="1" variant="soft" onClick={() => setDiffOpen(true)}>
-          <EyeOpenIcon /> Show diff
-        </Button>
-        {proposal.status === 'pending' && canEdit && (
-          <>
-            <Button size="1" color="green" variant="soft" onClick={() => onAccept(proposal.id)}>
-              Accept
-            </Button>
-            <ConfirmButton
-              label="Reject"
-              confirmLabel="Confirm reject"
-              onConfirm={() => onReject(proposal.id)}
-            />
-          </>
-        )}
-      </Flex>
-
-      {replies.length > 0 && (
-        <div className="proposal-replies">
-          {replies.map((r) => (
-            <CommentItem
-              key={r.id}
-              comment={r}
-              isDocAdmin={isDocAdmin}
-              onEdit={onEditReply}
-              onDelete={onDeleteReply}
-            />
-          ))}
-        </div>
-      )}
-
-      {replying && (
-        <div className="proposal-reply-composer">
-          <ReplyComposer
-            onCancel={() => setReplying(false)}
-            onSubmit={async (body) => {
-              await onReply(proposal.id, body);
-              setReplying(false);
-            }}
+      {canComment && (
+        <div className="reply-composer">
+          <CommentComposer
+            ref={composerRef}
+            mentionCandidates={mentionCandidates}
+            needsName={needsName}
+            placeholder="Reply…"
+            rows={2}
+            onSubmit={(body, name) => onReply(proposal.id, body, name)}
           />
         </div>
       )}
-
       <DiffDialog
         open={diffOpen}
         onOpenChange={setDiffOpen}
@@ -239,8 +250,19 @@ export function EditProposalItem({
           ) : null
         }
       />
-    </div>
+    </DiscussionThread>
   );
+}
+
+function insertQuotedText(
+  composerRef: React.RefObject<ComposerHandle | null>,
+  text: string,
+): void {
+  const quoted = text
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n');
+  composerRef.current?.insertText(quoted);
 }
 
 function RationaleEditor({
@@ -272,51 +294,7 @@ function RationaleEditor({
   );
 }
 
-function ReplyComposer({
-  onCancel,
-  onSubmit,
-}: {
-  onCancel: () => void;
-  onSubmit: (body: string) => Promise<void> | void;
-}) {
-  const [value, setValue] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const ready = value.trim().length > 0;
-  async function send() {
-    if (!ready) return;
-    setSubmitting(true);
-    try {
-      await onSubmit(value.trim());
-      setValue('');
-    } finally {
-      setSubmitting(false);
-    }
-  }
-  return (
-    <div className="comment-edit">
-      <TextArea
-        className="comment-edit-field"
-        size="1"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        rows={3}
-        placeholder="Reply…"
-        autoFocus
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
-            if (ready && !submitting) void send();
-          }
-        }}
-      />
-      <Flex gap="3" justify="end" align="center" wrap="wrap" className="comment-actions comment-edit-actions">
-        <Button size="1" variant="soft" color="gray" onClick={onCancel} disabled={submitting}>
-          Cancel
-        </Button>
-        <Button size="1" variant="soft" disabled={!ready || submitting} onClick={send}>
-          {submitting ? 'Posting…' : 'Post reply'}
-        </Button>
-      </Flex>
-    </div>
-  );
+function formatThreadSummary(replyCount: number): string {
+  const total = replyCount + 1;
+  return `${total} comment${total === 1 ? '' : 's'}`;
 }

@@ -68,7 +68,7 @@
   --md-color-code-fg: #ece3d2;
   --md-color-quote-bar: var(--md-color-accent);
   --md-color-table-stripe: #1d1811;
-  --md-color-selection-bg: #5a3a22;
+  --md-color-selection-bg: #365d8f;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -84,6 +84,6 @@
     --md-color-code-fg: #ece3d2;
     --md-color-quote-bar: var(--md-color-accent);
     --md-color-table-stripe: #1d1811;
-    --md-color-selection-bg: #5a3a22;
+    --md-color-selection-bg: #365d8f;
   }
 }

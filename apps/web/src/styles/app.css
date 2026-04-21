@@ -19,6 +19,12 @@
   --doc-chrome-height: 44px;
 }
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 html,
 body,
 #root {
@@ -226,8 +232,7 @@ button.primary:disabled {
      left fades through the panel tint into a teal tail on the right. Both
      stops are Radix alpha tokens so the bar keeps its character in dark
      appearance without turning muddy. */
-  background:
-    linear-gradient(90deg, var(--accent-a3) 0%, transparent 45%, var(--teal-a3) 100%),
+  background: linear-gradient(90deg, var(--accent-a3) 0%, transparent 45%, var(--teal-a3) 100%),
     var(--color-panel-solid);
   height: var(--app-bar-height);
   position: sticky;
@@ -263,12 +268,7 @@ button.primary:disabled {
   letter-spacing: -0.035em;
   /* Reuse the home-page title's warmer accent→ruby→ink gradient, but at a
      calmer scale so the app bar still behaves like navigation chrome. */
-  background: linear-gradient(
-    120deg,
-    var(--accent-11) 0%,
-    var(--ruby-11) 48%,
-    var(--gray-12) 100%
-  );
+  background: linear-gradient(120deg, var(--accent-11) 0%, var(--ruby-11) 48%, var(--gray-12) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: var(--accent-11);
@@ -293,6 +293,7 @@ button.primary:disabled {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 .doc-layout {
@@ -382,8 +383,7 @@ button.primary:disabled {
   border-bottom: 1px solid var(--gray-a5);
   /* Very subtle tint — weaker than .app-bar so the two bars are visually
      distinguishable but part of the same family. */
-  background:
-    linear-gradient(90deg, var(--accent-a2) 0%, transparent 60%, var(--teal-a2) 100%),
+  background: linear-gradient(90deg, var(--accent-a2) 0%, transparent 60%, var(--teal-a2) 100%),
     var(--color-panel-solid);
   height: var(--doc-chrome-height);
 }
@@ -436,12 +436,21 @@ button.primary:disabled {
   color: var(--accent-12);
 }
 
+.doc-search-option {
+  flex-shrink: 0;
+}
+
+.doc-search-option.active {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-a7) 45%, transparent);
+}
+
 .doc-search-field :is(.rt-TextFieldSlot, .rt-TextFieldInput),
 .toc-search-field :is(.rt-TextFieldSlot, .rt-TextFieldInput) {
   font-size: var(--ui-control-font-size);
 }
 
 .doc-search-field .rt-TextFieldSlot svg,
+.doc-search-option svg,
 .toc-search-icon {
   width: 16px;
   height: 16px;
@@ -485,22 +494,40 @@ button.primary:disabled {
 }
 
 .doc-search-result-hit {
-  background: color-mix(in srgb, var(--yellow-4) 74%, transparent);
+  background: color-mix(in srgb, var(--green-4) 82%, transparent);
   color: inherit;
   padding: 0 0.08rem;
   border-radius: 0.18rem;
 }
 
-.doc-search-highlight {
-  background: color-mix(in srgb, var(--yellow-4) 68%, transparent);
+.marginalia mark.doc-search-highlight {
+  background: var(
+    --md-color-search-highlight-bg,
+    color-mix(in srgb, var(--green-4) 70%, transparent)
+  );
   color: inherit;
   padding: 0;
   border-radius: 0.14rem;
+  box-shadow: inset 0 -1px 0
+    var(--md-color-search-highlight-ring, color-mix(in srgb, var(--green-8) 30%, transparent));
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
-.doc-search-highlight.active {
-  background: color-mix(in srgb, var(--amber-5) 82%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber-8) 30%, transparent);
+.marginalia mark.doc-search-highlight.active {
+  background: var(
+    --md-color-search-highlight-active-bg,
+    color-mix(in srgb, var(--green-5) 82%, transparent)
+  );
+  box-shadow: inset 0 -1px 0
+    var(
+      --md-color-search-highlight-active-ring,
+      color-mix(in srgb, var(--green-9) 34%, transparent)
+    ), 0 0 0 1px
+    var(
+      --md-color-search-highlight-active-ring,
+      color-mix(in srgb, var(--green-9) 34%, transparent)
+    );
 }
 
 .width-slider {
@@ -662,6 +689,7 @@ button.primary:disabled {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
 }
 .edit-body {
   flex: 1;
@@ -987,6 +1015,7 @@ button.primary:disabled {
 
 .landing {
   min-height: calc(100vh - var(--app-bar-height));
+  min-height: calc(100dvh - var(--app-bar-height));
 }
 
 .landing-hero {
@@ -995,8 +1024,7 @@ button.primary:disabled {
   /* Layered radial halos: a central accent wash, a warm ruby bloom on the
      right, and a cool teal bloom on the left. All alpha tokens, so in dark
      mode they turn into quiet luminous patches instead of flat color. */
-  background:
-    radial-gradient(ellipse 80% 60% at 50% 0%, var(--accent-a5), transparent 70%),
+  background: radial-gradient(ellipse 80% 60% at 50% 0%, var(--accent-a5), transparent 70%),
     radial-gradient(ellipse 45% 55% at 100% 10%, var(--ruby-a4), transparent 65%),
     radial-gradient(ellipse 40% 50% at 0% 20%, var(--teal-a3), transparent 60%);
   border-bottom: 1px solid var(--gray-a3);
@@ -1022,12 +1050,7 @@ button.primary:disabled {
   /* Diagonal gradient from accent → ruby → fg. Gives the title a sense of
      warmth without shouting; the final stop uses gray-12 so the end of the
      heading stays grounded and readable in both appearances. */
-  background: linear-gradient(
-    120deg,
-    var(--accent-11) 0%,
-    var(--ruby-11) 45%,
-    var(--gray-12) 100%
-  );
+  background: linear-gradient(120deg, var(--accent-11) 0%, var(--ruby-11) 45%, var(--gray-12) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -1088,8 +1111,7 @@ button.primary:disabled {
 
 .landing-footer {
   border-top: 1px solid var(--gray-a5);
-  background:
-    linear-gradient(90deg, var(--accent-a2) 0%, transparent 55%, var(--teal-a2) 100%),
+  background: linear-gradient(90deg, var(--accent-a2) 0%, transparent 55%, var(--teal-a2) 100%),
     var(--color-panel-solid);
 }
 
@@ -1125,12 +1147,15 @@ button.primary:disabled {
 .imprint-md p:last-child {
   margin-bottom: 0;
 }
-.imprint-md h1, .imprint-md h2, .imprint-md h3 {
+.imprint-md h1,
+.imprint-md h2,
+.imprint-md h3 {
   font-size: var(--font-size-3);
   font-weight: 600;
   margin: 0.8em 0 0.3em;
 }
-.imprint-md ul, .imprint-md ol {
+.imprint-md ul,
+.imprint-md ol {
   padding-left: 1.4em;
   margin: 0.4em 0;
   font-size: var(--font-size-2);
@@ -1244,7 +1269,6 @@ button.anchor-quote:hover {
   margin-left: 1rem;
   padding-left: calc(0.7rem + 0.85rem);
   border-left: 2px solid var(--gray-5);
-  margin-top: 0.55rem;
 }
 .comment-meta {
   display: flex;
@@ -1260,6 +1284,8 @@ button.anchor-quote:hover {
 }
 .comment:hover .comment-actions-inline,
 .comment:focus-within .comment-actions-inline,
+.anchor-group:hover .comment-actions-inline,
+.anchor-group:focus-within .comment-actions-inline,
 .comment-actions-inline:hover,
 .comment-actions-inline:focus-within {
   opacity: 1;
@@ -1347,7 +1373,7 @@ button.primary.small {
 
 .composer .composer-name-field :is(input, .rt-TextFieldInput),
 .composer .composer-body-field :is(textarea, .rt-TextAreaInput),
-.comment-edit .comment-edit-field :is(textarea, .rt-TextAreaInput) {
+.comment-edit .comment-edit-field :is(input, .rt-TextFieldInput, textarea, .rt-TextAreaInput) {
   width: 100%;
   box-sizing: border-box;
   margin: 0;
@@ -1369,7 +1395,7 @@ button.primary.small {
 
 .composer .composer-name-field :is(input, .rt-TextFieldInput)::placeholder,
 .composer .composer-body-field :is(textarea, .rt-TextAreaInput)::placeholder,
-.comment-edit .comment-edit-field :is(textarea, .rt-TextAreaInput)::placeholder {
+.comment-edit .comment-edit-field :is(input, .rt-TextFieldInput, textarea, .rt-TextAreaInput)::placeholder {
   font: inherit;
   letter-spacing: normal;
 }
@@ -1434,9 +1460,9 @@ button.primary.small {
 }
 
 .reply-composer {
-  margin-top: 0.55rem;
   margin-left: 1rem;
   padding-left: calc(0.7rem + 0.85rem);
+  padding-right: 0.7rem;
   border-left: 2px solid var(--gray-5);
 }
 
@@ -1593,6 +1619,18 @@ button.primary.small {
 .marginalia img,
 .marginalia div.mermaid[data-processed="true"] {
   cursor: zoom-in;
+}
+
+/*
+ * Mermaid injects a global `.mermaidTooltip` into `document.body`. Its
+ * default absolute positioning can nudge the root scroll height a few
+ * pixels past the viewport, which creates a tiny window scrollbar even
+ * though the app shell itself is correctly sized. Keep it as a fixed
+ * overlay so it never participates in page layout.
+ */
+.mermaidTooltip {
+  position: fixed !important;
+  z-index: 1000;
 }
 
 /* Radix Dialog.Content override for the lightbox — take the full viewport
@@ -1852,13 +1890,21 @@ button.primary.small {
   padding: 0.15rem 0.55rem;
   font-size: 0.75rem;
   font-weight: 500;
+  white-space: nowrap;
   color: var(--ui-fg, #222);
   background: var(--ui-bg, #fff);
   border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.15));
   border-radius: 4px;
   cursor: pointer;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease-out, border-color 120ms ease, color 120ms ease;
+}
+.block-actions-btn.is-visible {
   opacity: 0.9;
+  pointer-events: auto;
+  transition: opacity 90ms ease-out, border-color 120ms ease, color 120ms ease;
 }
 .block-actions-btn:hover {
   opacity: 1;
@@ -1888,25 +1934,17 @@ button.primary.small {
   min-height: calc(var(--ui-control-height) * 5);
 }
 
-.proposals-section {
-  margin-bottom: 1rem;
-}
-.proposals-section.decided {
-  opacity: 0.8;
-}
-
 .anchor-group.proposal {
-  border-left: 3px solid var(--accent-9, #3b82f6);
-  padding-left: 0.6rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0;
 }
-.anchor-group.proposal-accepted { border-left-color: #16a34a; }
-.anchor-group.proposal-rejected { border-left-color: #dc2626; }
-.anchor-group.proposal-orphaned { border-left-color: #9ca3af; }
 
 .proposal-rationale {
   margin-top: 0.35rem;
   color: var(--ui-fg-subtle, rgba(0, 0, 0, 0.75));
+}
+
+.proposal-review-actions {
+  margin-bottom: 0.55rem;
 }
 
 /* ============================================================
@@ -1935,8 +1973,32 @@ button.primary.small {
   user-select: none;
   opacity: 0.6;
 }
-.diff-line .diff-text { flex: 1 1 auto; }
-.diff-line.diff-add { background: rgba(22, 163, 74, 0.12); }
-.diff-line.diff-add .diff-marker { color: #16a34a; opacity: 1; }
-.diff-line.diff-remove { background: rgba(220, 38, 38, 0.10); }
-.diff-line.diff-remove .diff-marker { color: #dc2626; opacity: 1; }
+.diff-line .diff-text {
+  flex: 1 1 auto;
+}
+.diff-line .diff-inline-change {
+  border-radius: 3px;
+  padding: 0 0.08rem;
+}
+.diff-line.diff-add {
+  background: rgba(22, 163, 74, 0.12);
+}
+.diff-line.diff-add .diff-inline-change {
+  background: rgba(22, 163, 74, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(22, 163, 74, 0.2);
+}
+.diff-line.diff-add .diff-marker {
+  color: #16a34a;
+  opacity: 1;
+}
+.diff-line.diff-remove {
+  background: rgba(220, 38, 38, 0.1);
+}
+.diff-line.diff-remove .diff-inline-change {
+  background: rgba(220, 38, 38, 0.2);
+  box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.18);
+}
+.diff-line.diff-remove .diff-marker {
+  color: #dc2626;
+  opacity: 1;
+}

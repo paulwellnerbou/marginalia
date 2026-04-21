@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { Button, Flex, IconButton, Text, TextArea, Tooltip } from '@radix-ui/themes';
+import { Button, Flex, IconButton, TextArea, Tooltip } from '@radix-ui/themes';
 import { Pencil2Icon, QuoteIcon } from '@radix-ui/react-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Comment } from '../lib/api.js';
 import { getClientId } from '../lib/identity.js';
 import { ConfirmButton } from './ConfirmButton.js';
+import { DiscussionEntry } from './DiscussionUi.js';
 
 interface Props {
   comment: Comment;
@@ -21,65 +22,61 @@ export function CommentItem({ comment, isDocAdmin, onEdit, onDelete, onQuote }: 
   const [draft, setDraft] = useState(comment.body);
   const myId = getClientId();
   const isAuthor = comment.author.client_id === myId;
+  const actions = !editing ? (
+    <Flex gap="1" align="center" wrap="wrap" className="comment-actions comment-actions-inline">
+      {!deleteArmed && onQuote && (
+        <Tooltip content="Quote">
+          <IconButton size="1" variant="ghost" color="gray" aria-label="Quote" onClick={() => onQuote(comment.body)}>
+            <QuoteIcon />
+          </IconButton>
+        </Tooltip>
+      )}
+      {!deleteArmed && isAuthor && (
+        <Tooltip content="Edit">
+          <IconButton size="1" variant="ghost" color="gray" aria-label="Edit" onClick={() => setEditing(true)}>
+            <Pencil2Icon />
+          </IconButton>
+        </Tooltip>
+      )}
+      {(isAuthor || isDocAdmin) && (
+        <ConfirmButton
+          label="Delete"
+          confirmLabel="Confirm delete"
+          ariaLabel="Delete"
+          reserveWidth={false}
+          onArmedChange={setDeleteArmed}
+          onConfirm={() => onDelete(comment.id)}
+        />
+      )}
+    </Flex>
+  ) : undefined;
+  const surface = editing ? (
+    <EditForm
+      initial={draft}
+      onCancel={() => {
+        setEditing(false);
+        setDraft(comment.body);
+      }}
+      onSave={async (v) => {
+        await onEdit(comment.id, v);
+        setDraft(v);
+        setEditing(false);
+      }}
+    />
+  ) : (
+    <div className="comment-body">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{comment.body}</ReactMarkdown>
+    </div>
+  );
 
   return (
-    <div className={`comment ${comment.parent_id ? 'reply' : 'top'}`}>
-      <Flex align="baseline" gap="2" mb="1" className="comment-meta">
-        <Text weight="medium" size="2" className="comment-author">{comment.author.display_name}</Text>
-        <Text size="1" color="gray" className="comment-ts" title={formatFullTs(comment.created_at)}>
-          {formatTs(comment.created_at)}
-        </Text>
-        {!editing && (
-          <Flex gap="1" align="center" wrap="wrap" className="comment-actions comment-actions-inline">
-            <span className="spacer" />
-            {!deleteArmed && onQuote && (
-              <Tooltip content="Quote">
-                <IconButton size="1" variant="ghost" color="gray" aria-label="Quote" onClick={() => onQuote(comment.body)}>
-                  <QuoteIcon />
-                </IconButton>
-              </Tooltip>
-            )}
-            {!deleteArmed && isAuthor && (
-              <Tooltip content="Edit">
-                <IconButton size="1" variant="ghost" color="gray" aria-label="Edit" onClick={() => setEditing(true)}>
-                  <Pencil2Icon />
-                </IconButton>
-              </Tooltip>
-            )}
-            {(isAuthor || isDocAdmin) && (
-              <ConfirmButton
-                label="Delete"
-                confirmLabel="Confirm delete"
-                ariaLabel="Delete"
-                reserveWidth={false}
-                onArmedChange={setDeleteArmed}
-                onConfirm={() => onDelete(comment.id)}
-              />
-            )}
-          </Flex>
-        )}
-      </Flex>
-      <div className="comment-surface">
-        {editing ? (
-          <EditForm
-            initial={draft}
-            onCancel={() => {
-              setEditing(false);
-              setDraft(comment.body);
-            }}
-            onSave={async (v) => {
-              await onEdit(comment.id, v);
-              setDraft(v);
-              setEditing(false);
-            }}
-          />
-        ) : (
-          <div className="comment-body">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{comment.body}</ReactMarkdown>
-          </div>
-        )}
-      </div>
-    </div>
+    <DiscussionEntry
+      authorName={comment.author.display_name}
+      createdAt={comment.created_at}
+      actions={actions}
+      surface={surface}
+      className={comment.parent_id ? 'reply' : 'top'}
+    />
   );
 }
 
@@ -117,22 +114,4 @@ function EditForm({
       </Flex>
     </div>
   );
-}
-
-function formatTs(ts: number): string {
-  const d = new Date(ts);
-  const today = new Date();
-  const sameDay =
-    d.getFullYear() === today.getFullYear() &&
-    d.getMonth() === today.getMonth() &&
-    d.getDate() === today.getDate();
-  if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleDateString();
-}
-
-function formatFullTs(ts: number): string {
-  return new Date(ts).toLocaleString([], {
-    dateStyle: 'full',
-    timeStyle: 'medium',
-  });
 }

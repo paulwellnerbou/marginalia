@@ -13,6 +13,11 @@ export interface DocumentSearchResult {
   headingId: string | null;
 }
 
+export interface DocumentSearchOptions {
+  caseSensitive: boolean;
+  wholeWords: boolean;
+}
+
 interface RenderedDocProps {
   rendered: Pick<RenderResult, 'html'>;
   /** Optional external ref — lets the parent reach the article DOM node. */
@@ -31,6 +36,8 @@ interface RenderedDocProps {
   }>;
   /** Plain-text query to highlight inside the rendered document. */
   searchQuery?: string;
+  /** Matching rules for document search. */
+  searchOptions?: DocumentSearchOptions;
   /** Result id currently selected by the document search UI. */
   activeSearchResultId?: string | null;
   /** Bumped when the selected result should scroll into view again. */
@@ -72,6 +79,7 @@ export function RenderedDoc({
   textZoom,
   highlights = [],
   searchQuery = '',
+  searchOptions = { caseSensitive: false, wholeWords: false },
   activeSearchResultId = null,
   activeSearchVersion = 0,
   onSearchResultsChange,
@@ -139,10 +147,10 @@ export function RenderedDoc({
       return;
     }
 
-    const results = applyDocumentSearchHighlights(el, trimmedQuery);
+    const results = applyDocumentSearchHighlights(el, trimmedQuery, searchOptions);
     onSearchResultsChange?.(results);
     return () => clearDocumentSearchHighlights(el);
-  }, [highlights, onSearchResultsChange, ref, rendered.html, searchQuery]);
+  }, [highlights, onSearchResultsChange, ref, rendered.html, searchOptions, searchQuery]);
 
   useEffect(() => {
     const el = ref.current;
@@ -333,9 +341,7 @@ function refreshMissingAssetPlaceholders(
   canUpload: boolean,
   cbRef: UploadCbRef,
 ): void {
-  const existing = root.querySelectorAll<HTMLElement>(
-    '.missing-asset[data-missing-asset-ref]',
-  );
+  const existing = root.querySelectorAll<HTMLElement>('.missing-asset[data-missing-asset-ref]');
   for (const old of Array.from(existing)) {
     const refName = old.dataset.missingAssetRef ?? '';
     if (!refName) continue;
@@ -515,7 +521,11 @@ function clearCommentHighlights(root: HTMLElement): void {
   }
 }
 
-function applyDocumentSearchHighlights(root: HTMLElement, query: string): DocumentSearchResult[] {
+function applyDocumentSearchHighlights(
+  root: HTMLElement,
+  query: string,
+  options: DocumentSearchOptions,
+): DocumentSearchResult[] {
   if (!query) return [];
 
   const textNodes = collectTextNodes(root);
@@ -524,25 +534,31 @@ function applyDocumentSearchHighlights(root: HTMLElement, query: string): Docume
   let rawText = '';
   for (const entry of textNodes) rawText += entry.node.data;
 
-  const loweredText = rawText.toLocaleLowerCase();
-  const loweredQuery = query.toLocaleLowerCase();
+  const haystack = options.caseSensitive ? rawText : rawText.toLocaleLowerCase();
+  const needle = options.caseSensitive ? query : query.toLocaleLowerCase();
   const results: DocumentSearchResult[] = [];
   const ranges: Array<{ rawStart: number; rawEnd: number; resultId: string }> = [];
 
   let searchFrom = 0;
   let index = 0;
-  while (searchFrom <= loweredText.length - loweredQuery.length) {
-    const found = loweredText.indexOf(loweredQuery, searchFrom);
+  while (searchFrom <= haystack.length - needle.length) {
+    const found = haystack.indexOf(needle, searchFrom);
     if (found < 0) break;
+    const rawEnd = found + query.length;
+    if (options.wholeWords && !isWholeWordMatch(rawText, found, rawEnd)) {
+      searchFrom = found + 1;
+      continue;
+    }
 
-    const resultId = `doc-search-${index}`;
-    const matchText = rawText.slice(found, found + query.length);
+    const resultId = `doc-search-${found}-${index}`;
+    const matchText = rawText.slice(found, rawEnd);
     const startEntry = findTextNodeEntry(textNodes, found);
     const blockId =
       startEntry?.node.parentElement?.closest<HTMLElement>('[data-block]')?.dataset.block ?? null;
     const headingId =
-      startEntry?.node.parentElement?.closest<HTMLElement>('h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]')
-        ?.id ?? null;
+      startEntry?.node.parentElement?.closest<HTMLElement>(
+        'h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]',
+      )?.id ?? null;
 
     results.push({
       id: resultId,
@@ -550,13 +566,13 @@ function applyDocumentSearchHighlights(root: HTMLElement, query: string): Docume
       text: matchText,
       contextBefore: formatContext(rawText.slice(Math.max(0, found - 36), found), true),
       contextAfter: formatContext(
-        rawText.slice(found + query.length, Math.min(rawText.length, found + query.length + 52)),
+        rawText.slice(rawEnd, Math.min(rawText.length, rawEnd + 52)),
         false,
       ),
       blockId,
       headingId,
     });
-    ranges.push({ rawStart: found, rawEnd: found + query.length, resultId });
+    ranges.push({ rawStart: found, rawEnd, resultId });
 
     searchFrom = found + Math.max(query.length, 1);
     index += 1;
@@ -780,4 +796,14 @@ function formatContext(text: string, isPrefix: boolean): string {
   const compact = text.replace(/\s+/gu, ' ').trim();
   if (!compact) return '';
   return isPrefix ? `...${compact} ` : ` ${compact}...`;
+}
+
+function isWholeWordMatch(text: string, start: number, end: number): boolean {
+  const before = start > 0 ? (text[start - 1] ?? '') : '';
+  const after = end < text.length ? (text[end] ?? '') : '';
+  return !isWordChar(before) && !isWordChar(after);
+}
+
+function isWordChar(char: string): boolean {
+  return char ? /[\p{L}\p{N}\p{M}_]/u.test(char) : false;
 }

@@ -27,7 +27,7 @@
   --md-color-code-fg: #22201b;
   --md-color-quote-bar: transparent;
   --md-color-table-stripe: #f5efe3;
-  --md-color-selection-bg: #f2e4b8;
+  --md-color-selection-bg: #d5e2ff;
 
   /* --- Typography ------------------------------------------------- */
   --md-font-body:
@@ -254,7 +254,7 @@
   --md-color-code-bg: #2a2620;
   --md-color-code-fg: #f0ecdf;
   --md-color-table-stripe: #22201b;
-  --md-color-selection-bg: #6a5830;
+  --md-color-selection-bg: #365f93;
 }
 [data-appearance='dark'] .marginalia > h1:first-child + p::first-letter {
   color: var(--md-color-accent);
@@ -276,7 +276,7 @@
     --md-color-code-bg: #2a2620;
     --md-color-code-fg: #f0ecdf;
     --md-color-table-stripe: #22201b;
-    --md-color-selection-bg: #6a5830;
+    --md-color-selection-bg: #365f93;
   }
   [data-appearance='auto'] .marginalia > h1:first-child + p::first-letter {
     color: var(--md-color-accent);
