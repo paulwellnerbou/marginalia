@@ -165,6 +165,15 @@ export interface DocxExportOptions {
    * so RTL scripts render correctly in Word.
    */
   language?: string;
+
+  /**
+   * Paper size override. Most callers should leave this unset and let
+   * the selected theme drive page geometry — every built-in theme
+   * ships with sensible A4 / A5 / B5 / Letter defaults. Set when you
+   * need a specific size regardless of theme (e.g. "all exports go
+   * to Letter for our US office").
+   */
+  pageSize?: 'A4' | 'Letter' | 'A5' | 'B5';
 }
 
 /**
@@ -198,10 +207,11 @@ export async function exportDocx(
   // assign each a numeric id, and remove the `<section>` so it won't
   // appear inline. The walker later turns `<sup>` refs into
   // `FootnoteReferenceRun`s pointed at those ids.
+  const effectivePageSize = options.pageSize ?? tokens.page.size;
   const ctxWithoutFootnotes: BuildCtx = {
     tokens,
     images,
-    pageWidthPx: contentWidthPx(tokens),
+    pageWidthPx: contentWidthPx(effectivePageSize, tokens.page.marginPt),
     footnoteIds: new Map(),
   };
   const footnotes = extractFootnotes(hast, ctxWithoutFootnotes);
@@ -413,10 +423,13 @@ const hex = (c: string): string => c.replace(/^#/, '').toLowerCase();
  * use this to scale images down so they don't blow past the margins.
  * docx's `ImageRun` transformation is in pixels.
  */
-function contentWidthPx(tokens: ThemeTokens): number {
+function contentWidthPx(
+  size: ThemeTokens['page']['size'],
+  marginPt: number,
+): number {
   // A4 ≈ 595pt, Letter ≈ 612pt, A5 ≈ 420pt, B5 ≈ 499pt.
-  const pageWidthPt = ({ A4: 595, Letter: 612, A5: 420, B5: 499 } as const)[tokens.page.size];
-  const contentPt = pageWidthPt - 2 * tokens.page.marginPt;
+  const pageWidthPt = ({ A4: 595, Letter: 612, A5: 420, B5: 499 } as const)[size];
+  const contentPt = pageWidthPt - 2 * marginPt;
   return Math.max(100, Math.round((contentPt * 96) / 72));
 }
 
@@ -719,10 +732,14 @@ function buildDocument(
   footnotes: Readonly<Record<string, { readonly children: readonly Paragraph[] }>>,
   lang: DocumentLang,
 ): Document {
+  // `options.pageSize` overrides the theme default when the caller
+  // needs a specific sheet size regardless of theme. Margins still
+  // come from the theme — nobody wants Letter with A4-height margins.
+  const effectivePageSize = options.pageSize ?? tokens.page.size;
   const section: ISectionOptions = {
     properties: {
       page: {
-        size: pageSize(tokens),
+        size: pageSizeOf(effectivePageSize),
         margin: {
           top: pt2twip(tokens.page.marginPt),
           bottom: pt2twip(tokens.page.marginPt),
@@ -747,14 +764,16 @@ function buildDocument(
   });
 }
 
-function pageSize(tokens: ThemeTokens): { width: number; height: number } {
+function pageSizeOf(
+  size: ThemeTokens['page']['size'],
+): { width: number; height: number } {
   // DOCX uses twips; sizes below cover the theme token enum values.
   // 1 mm = ~56.69 twips; use convertMillimetersToTwip for accuracy.
   const mm = (w: number, h: number) => ({
     width: convertMillimetersToTwip(w),
     height: convertMillimetersToTwip(h),
   });
-  switch (tokens.page.size) {
+  switch (size) {
     case 'Letter':
       return { width: 12240, height: 15840 }; // 8.5" x 11" in twips
     case 'A5':
@@ -968,6 +987,8 @@ type InlineStyle = {
   bg?: string;
   font?: string;
   size?: number; // half-points
+  /** Underline, for hyperlinks. Omit for plain text. */
+  underline?: { color?: string };
 };
 
 function isElement(n: HastNode | undefined): n is Element {
@@ -1579,8 +1600,18 @@ function walkInline(
       if (n.properties?.['dataFootnoteBackref'] !== undefined) {
         return;
       }
+      // Color + underline make the link visually recognisable in
+      // Word. Matches the default hyperlink treatment Word applies
+      // to its own "Insert > Hyperlink" output — without these,
+      // internal links in particular just look like blue text.
+      const linkStyle: InlineStyle = {
+        ...style,
+        color: tokens.colors.accent,
+        underline: { color: tokens.colors.accent },
+      };
       const linkChildren: ParagraphChild[] = [];
-      walkChildren(n, ctx, { ...style, color: tokens.colors.accent }, linkChildren);
+      walkChildren(n, ctx, linkStyle, linkChildren);
+      const fallbackChildren = [new TextRun(runOptions(linkStyle, href, tokens))];
 
       if (href.startsWith('#') && href.length > 1) {
         // Internal anchor link — points at a heading bookmark in this
@@ -1589,13 +1620,7 @@ function walkInline(
         out.push(
           new InternalHyperlink({
             anchor: href.slice(1),
-            children: linkChildren.length > 0
-              ? linkChildren
-              : [
-                  new TextRun(
-                    runOptions({ ...style, color: tokens.colors.accent }, href, tokens),
-                  ),
-                ],
+            children: linkChildren.length > 0 ? linkChildren : fallbackChildren,
           }),
         );
         return;
@@ -1604,13 +1629,7 @@ function walkInline(
       out.push(
         new ExternalHyperlink({
           link: href,
-          children: linkChildren.length > 0
-            ? linkChildren
-            : [
-                new TextRun(
-                  runOptions({ ...style, color: tokens.colors.accent }, href, tokens),
-                ),
-              ],
+          children: linkChildren.length > 0 ? linkChildren : fallbackChildren,
         }),
       );
       return;
@@ -1672,6 +1691,15 @@ function runOptions(style: InlineStyle, text: string, tokens: ThemeTokens): IRun
   if (style.size) opts.size = style.size;
   if (style.bg) {
     opts.shading = { type: ShadingType.CLEAR, fill: hex(style.bg), color: 'auto' };
+  }
+  if (style.underline) {
+    // docx accepts `{ type, color }`. `UnderlineType.SINGLE` is the
+    // convention for Word hyperlinks — matches the underline Word
+    // applies to its own Insert > Hyperlink output.
+    opts.underline = {
+      type: UnderlineType.SINGLE,
+      ...(style.underline.color ? { color: hex(style.underline.color) } : {}),
+    };
   }
   if (style.code) {
     // Inline code runs size down slightly, matching the CSS rule

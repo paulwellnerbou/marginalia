@@ -516,6 +516,90 @@ describe('exportDocx — tables (Copilot review follow-ups)', () => {
   });
 });
 
+describe('exportDocx — page size & margins', () => {
+  // Millimeter-to-twip conversion doesn't land on the exact tabulated
+  // sheet size by a twip or two; assert within a small tolerance.
+  // Letter is defined directly in twips so it lands exact.
+  const A4 = { width: 11906, height: 16838 };
+  const A5 = { width: 8390, height: 11906 };
+  const LETTER = { width: 12240, height: 15840 };
+
+  function readPageSize(documentXml: string): { width: number; height: number } {
+    // `<w:pgSz w:w="…" w:h="…" .../>` in section properties.
+    const m = documentXml.match(/<w:pgSz[^/]*w:w="(\d+)"[^/]*w:h="(\d+)"/);
+    return m && m[1] && m[2]
+      ? { width: Number.parseInt(m[1], 10), height: Number.parseInt(m[2], 10) }
+      : { width: 0, height: 0 };
+  }
+
+  function expectSize(
+    actual: { width: number; height: number },
+    target: { width: number; height: number },
+  ): void {
+    expect(Math.abs(actual.width - target.width)).toBeLessThanOrEqual(3);
+    expect(Math.abs(actual.height - target.height)).toBeLessThanOrEqual(3);
+  }
+
+  test('default theme exports on A4 (sanity)', async () => {
+    const buf = await exportDocx('# Doc', { theme: 'default' });
+    const { documentXml } = await inspectDocx(buf);
+    expectSize(readPageSize(documentXml), A4);
+  });
+
+  test('book theme also exports on A4 (was A5 — changed per feedback)', async () => {
+    const buf = await exportDocx('# Doc', { theme: 'book' });
+    const { documentXml } = await inspectDocx(buf);
+    expectSize(readPageSize(documentXml), A4);
+  });
+
+  test('pageSize option overrides the theme default', async () => {
+    const buf = await exportDocx('# Doc', { theme: 'book', pageSize: 'A5' });
+    const { documentXml } = await inspectDocx(buf);
+    expectSize(readPageSize(documentXml), A5);
+  });
+
+  test('pageSize: Letter overrides any theme', async () => {
+    const buf = await exportDocx('# Doc', { theme: 'default', pageSize: 'Letter' });
+    const { documentXml } = await inspectDocx(buf);
+    expectSize(readPageSize(documentXml), LETTER);
+  });
+});
+
+describe('exportDocx — hyperlink underlines', () => {
+  test('internal links carry a single underline', async () => {
+    const md = [
+      '[Go to section](#my-section)',
+      '',
+      '## My Section',
+      '',
+      'Body.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The hyperlink runs should include `<w:u w:val="single" .../>`.
+    // Narrow to the region inside a `<w:hyperlink w:anchor="…">` so
+    // we don't accidentally match an unrelated underline elsewhere.
+    const hyperlinkRegion = documentXml.match(
+      /<w:hyperlink[^>]*w:anchor="my-section"[\s\S]*?<\/w:hyperlink>/,
+    );
+    expect(hyperlinkRegion).not.toBeNull();
+    expect(hyperlinkRegion![0]).toMatch(/<w:u\b[^/]*w:val="single"/);
+  });
+
+  test('external links carry a single underline', async () => {
+    const md = '[Example](https://example.com/x)';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // External hyperlinks don't carry w:anchor; they reference a
+    // relationship via r:id. The run inside should still be underlined.
+    const hyperlinkRegion = documentXml.match(
+      /<w:hyperlink[^>]*r:id="[^"]+"[\s\S]*?<\/w:hyperlink>/,
+    );
+    expect(hyperlinkRegion).not.toBeNull();
+    expect(hyperlinkRegion![0]).toMatch(/<w:u\b[^/]*w:val="single"/);
+  });
+});
+
 describe('exportDocx — mermaid fallback (M4b stopgap)', () => {
   test('mermaid code blocks render as labeled code', async () => {
     const md = [

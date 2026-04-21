@@ -327,7 +327,11 @@ const bookTokens: ThemeTokens = {
     tableStripe: '#f5efe1',
   },
   spacing: { blockEm: 1.3, headingTopEm: 2.4, listItemEm: 0.3 },
-  page: { size: 'A5', marginPt: 54 },
+  // A4 with generous inner margins. A5 would be truer to the "book"
+  // metaphor, but users export DOCX to share/edit on standard office
+  // paper — A5 surprises more often than it delights. Reach for A5
+  // explicitly via `options.pageSize` when you really want it.
+  page: { size: 'A4', marginPt: 90 },
   blockquote: { italic: true, hasBar: true },
   table: { headerUnderline: true, zebra: true },
 };
