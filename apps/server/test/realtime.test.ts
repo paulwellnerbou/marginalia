@@ -33,9 +33,9 @@ describe('realtime events', () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     server?.stop(true);
-    app.close();
+    await app.close();
     rmSync(dir, { recursive: true, force: true });
   });
 

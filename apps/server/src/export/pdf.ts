@@ -58,7 +58,7 @@ export class ExportEngineMissingError extends Error {
     // ES2022 `Error` accepts `{ cause }`; pass through so the original
     // Playwright error is preserved on `err.cause` for logging.
     super(
-      'Playwright Chromium is not installed. Run `bunx playwright install chromium`.',
+      'Playwright Chromium is not installed. Run `bunx playwright install chromium-headless-shell`.',
       cause !== undefined ? { cause } : undefined,
     );
     this.name = 'ExportEngineMissingError';
@@ -111,6 +111,32 @@ let config: Config = {
 export function configureExport(patch: Partial<Config>): void {
   config = { ...config, ...patch };
 }
+
+/**
+ * Hostnames the export Chromium is allowed to reach over HTTP(S).
+ * Everything else is aborted at the request-routing layer (see
+ * `exportPdf` below) — this is the main SSRF mitigation, since the
+ * rendered document and theme CSS can contain user-authored
+ * absolute URLs.
+ *
+ * Narrow on purpose: these are the fonts origins used by the
+ * built-in themes (`beautiful`, `handbook`, `asciidoc-article`) via
+ * `@import url(...)` at the top of their CSS files. Anything not on
+ * this list is declined.
+ *
+ * Operators who bundle additional themes that pull fonts from other
+ * CDNs can extend this via `MARGINALIA_PDF_ALLOWED_HOSTS` (comma-
+ * separated hostnames). The env override is opt-in so the default
+ * posture stays restrictive.
+ */
+export const ALLOWED_EXPORT_HOSTS = new Set<string>(
+  ['fonts.googleapis.com', 'fonts.gstatic.com'].concat(
+    (process.env.MARGINALIA_PDF_ALLOWED_HOSTS ?? '')
+      .split(',')
+      .map((h) => h.trim())
+      .filter((h) => h.length > 0),
+  ),
+);
 
 // ---------------------------------------------------------------------
 // Browser lifecycle (shared singleton)
@@ -178,14 +204,19 @@ function isBrowserMissing(err: unknown): boolean {
  * `App.close()` and a test's `afterEach`. If the browser never
  * launched, this resolves immediately.
  *
- * Also resets the semaphore: if a test's `exportPdf()` call timed
- * out at the bun-test level, its `release()` never ran, leaving
- * `inFlight` stuck at a non-zero value across tests. Zeroing it
- * here turns every teardown into a true clean slate.
+ * Also bumps the semaphore generation and resets `inFlight` to zero.
+ * The generation token makes this safe even when an in-flight export
+ * is still running: the late `release()` callback captures the
+ * generation from its acquire, and a mismatch at release time means
+ * "your accounting is from a previous lifetime — don't touch the
+ * current counter". Without the generation check, a late release
+ * could drive `inFlight` negative and silently raise the effective
+ * concurrency cap for future exports.
  */
 export async function closeExportBrowser(): Promise<void> {
   const pending = browserPromise;
   browserPromise = null;
+  semaphoreGeneration += 1;
   inFlight = 0;
   waiters.length = 0;
   if (!pending) return;
@@ -203,6 +234,13 @@ export async function closeExportBrowser(): Promise<void> {
 
 let inFlight = 0;
 const waiters: Array<() => void> = [];
+/**
+ * Bumped by `closeExportBrowser()`. Each slot acquisition captures
+ * the current generation; releases from a prior generation become
+ * no-ops so the counter can be safely reset during teardown without
+ * risking underflow from a still-unfinished export's `finally`.
+ */
+let semaphoreGeneration = 0;
 
 /**
  * Try to acquire a slot without waiting. Returns a release function on
@@ -214,11 +252,18 @@ const waiters: Array<() => void> = [];
 function tryAcquireSlot(): (() => void) | null {
   if (inFlight >= config.concurrency) return null;
   inFlight += 1;
+  const myGeneration = semaphoreGeneration;
   let released = false;
   return () => {
     if (released) return;
     released = true;
-    inFlight -= 1;
+    // If teardown bumped the generation between acquire and release,
+    // our slot has already been accounted for by closeExportBrowser.
+    // Don't touch inFlight or the waiters queue in that case — doing
+    // so would either drive the counter negative or wake a waiter
+    // that's now orphaned (the browser it expects to use is gone).
+    if (myGeneration !== semaphoreGeneration) return;
+    inFlight = Math.max(0, inFlight - 1);
     const next = waiters.shift();
     if (next) next();
   };
@@ -281,6 +326,41 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
       serviceWorkers: 'block',
     });
     const page = await context.newPage();
+
+    // Outbound-request firewall. The rendered document can contain
+    // user-authored absolute URLs (e.g. `<img src="http://internal/">`)
+    // and theme CSS can carry `@import url('https://fonts.googleapis.com/…')`.
+    // Without filtering, a malicious document could make the server's
+    // Chromium probe internal networks or pull attacker-controlled
+    // content into the PDF — a classic SSRF vector.
+    //
+    // Policy: abort EVERYTHING except the initial `about:blank`
+    // document and fetches to the Google Fonts origins the built-in
+    // themes use. Every other URL (user-authored image hosts,
+    // `<link rel>`, redirects, XHR, etc.) aborts at the routing layer
+    // before Chromium can issue the request.
+    //
+    // Local asset refs never reach this layer — they were already
+    // inlined as `data:` URLs by inlineImageAssets() in the HTML
+    // envelope.
+    await page.route('**/*', (route) => {
+      const url = route.request().url();
+      if (url.startsWith('data:') || url.startsWith('about:')) {
+        return route.continue();
+      }
+      try {
+        const { protocol, hostname } = new URL(url);
+        if (
+          (protocol === 'https:' || protocol === 'http:') &&
+          ALLOWED_EXPORT_HOSTS.has(hostname)
+        ) {
+          return route.continue();
+        }
+      } catch {
+        // Unparseable URL — fall through to abort.
+      }
+      return route.abort('blockedbyclient');
+    });
 
     // Conditional spread — `mermaidUmd` is only present on the object
     // when we actually loaded it, so `exactOptionalPropertyTypes`

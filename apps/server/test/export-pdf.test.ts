@@ -331,4 +331,85 @@ describe('PDF export', () => {
     const buf = Buffer.from(await res.arrayBuffer());
     expect(buf.subarray(0, 5).toString('utf8')).toBe('%PDF-');
   }, 30_000);
+
+  test('GET /:uid/export.pdf blocks outbound requests to disallowed hosts (SSRF)', async () => {
+    // A doc authored with an absolute `<img src="http://…">` pointed
+    // at an unroutable host. Without the request-routing firewall,
+    // Chromium would try to fetch this during export and either hang
+    // for 30 s (timeout) or potentially probe the server's internal
+    // network. With the firewall, the request is aborted at
+    // route.abort() and the export completes in <1 s.
+    const created = await upload(CLIENT_A, {
+      // 192.0.2.0/24 is RFC 5737 TEST-NET-1 — guaranteed unroutable.
+      // Using it means the test proves request abort (not DNS or
+      // connection refusal) is what lets the export finish quickly.
+      markdown: '# SSRF smoke\n\n![external](http://192.0.2.1/internal.png)\n\nBody.\n',
+      name: 'SSRF fixture',
+    });
+    const started = Date.now();
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.pdf`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    const elapsed = Date.now() - started;
+    expect(res.status).toBe(200);
+    const buf = Buffer.from(await res.arrayBuffer());
+    expect(buf.subarray(0, 5).toString('utf8')).toBe('%PDF-');
+    // If the firewall were off, this would be at or near the 20 s
+    // test-level timeout waiting for 192.0.2.1 to fail. Cap at 10 s
+    // to leave generous headroom for a loaded CI box while still
+    // catching regressions that remove the block.
+    expect(elapsed).toBeLessThan(10_000);
+  }, 30_000);
+
+  test('inlineImageAssets targets the src attribute even when alt text shares the ref name', async () => {
+    // Regression test for the pre-`d`-flag indexOf-based inliner,
+    // which would have targeted the FIRST occurrence of "logo.png"
+    // in the `<img>` tag — i.e. the alt text — leaving the real
+    // `src` intact. Result: the blob was never inlined, and
+    // Chromium saw an unresolved relative path.
+    //
+    // The renderer produces `<img src="REF" alt="ALT">` in that
+    // attribute order (verified by rehype-stringify), so we exploit
+    // alt text containing the ref name to hit the collision path.
+    const created = await upload(CLIENT_A, {
+      markdown: '# Alt collision\n\n![logo.png has a preview](logo.png)\n',
+      name: 'Alt collision',
+    });
+    const PNG_BYTES = Uint8Array.from(
+      atob(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
+      ),
+      (c) => c.charCodeAt(0),
+    );
+    const form = new FormData();
+    form.append('file', new Blob([PNG_BYTES], { type: 'image/png' }), 'logo.png');
+    form.append('ref_name', 'logo.png');
+    const uploadRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/assets`, {
+        method: 'POST',
+        headers: withInvite(
+          new Headers({
+            [CLIENT_HEADER]: CLIENT_A.id,
+            [CLIENT_NAME_HEADER]: CLIENT_A.name,
+          }),
+          created.admin_invite.token,
+        ),
+        body: form,
+      }),
+    );
+    expect(uploadRes.status).toBe(201);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.pdf`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const buf = Buffer.from(await res.arrayBuffer());
+    // PNG actually landed as a PDF image object — same assertion as
+    // the plain embedded-asset test.
+    expect(buf.toString('latin1')).toMatch(/\/Subtype\s*\/Image/);
+  }, 30_000);
 });

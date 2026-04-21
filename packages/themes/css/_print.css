@@ -36,9 +36,8 @@
 
   .marginalia,
   .marginalia-theme {
-    /* Neutralise the dark-mode variable overrides — same values as the
-     * light defaults in default.css. Kept in sync by tests that render
-     * a sample doc and assert the printed colors. */
+    /* Neutralise the dark-mode variable overrides by restoring the
+     * light-default values from default.css for printed output. */
     --md-color-fg: #111;
     --md-color-bg: transparent;
   }

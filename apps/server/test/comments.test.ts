@@ -27,8 +27,8 @@ describe('comments API', () => {
     app = await createApp(loadConfig({ dataDir: dir, port: 0 }));
   });
 
-  afterEach(() => {
-    app.close();
+  afterEach(async () => {
+    await app.close();
     rmSync(dir, { recursive: true, force: true });
   });
 

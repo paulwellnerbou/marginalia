@@ -51,8 +51,8 @@ describe('documents API', () => {
     app = await createApp(loadConfig({ dataDir: dir, port: 0, webDir }));
   });
 
-  afterEach(() => {
-    app.close();
+  afterEach(async () => {
+    await app.close();
     rmSync(dir, { recursive: true, force: true });
     rmSync(webDir, { recursive: true, force: true });
   });

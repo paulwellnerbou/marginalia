@@ -20,7 +20,17 @@ export interface App {
   websocket: ReturnType<typeof createBunWebSocket<ServerWebSocket>>['websocket'];
   /** Exposed for tests that need to assert direct DB state. */
   db: Database;
-  close(): void | Promise<void>;
+  /**
+   * Tears down the app's long-lived resources: the SQLite handle and
+   * the shared PDF export Chromium (if it was ever started).
+   *
+   * Always returns a promise — callers should `await` it so teardown
+   * ordering stays deterministic (especially in tests, where an
+   * un-awaited browser close can leak a process into the next case
+   * and flake the semaphore). The DB close is synchronous; the
+   * browser close is the part worth awaiting.
+   */
+  close(): Promise<void>;
 }
 
 export async function createApp(config: ServerConfig): Promise<App> {

@@ -153,16 +153,25 @@ export async function inlineImageAssets(
     mime: string;
     assetId: string;
   }
+  // The `d` flag exposes `match.indices[n] = [start, end]` for each
+  // capture group. We use it to get the EXACT span of the `src`
+  // attribute value in the source HTML — an earlier
+  // `m[0].indexOf(src)` implementation was wrong for `<img>` tags
+  // where the same substring happens to appear earlier in the tag
+  // (e.g. `alt="logo.png image"` with `src="logo.png"` would target
+  // the alt text).
   const hits: Hit[] = [];
-  const imgRe = /<img\b[^>]*\bsrc="([^"]+)"[^>]*>/g;
+  const imgRe = /<img\b[^>]*\bsrc="([^"]+)"[^>]*>/gd;
   for (let m: RegExpExecArray | null; (m = imgRe.exec(html)); ) {
     const src = m[1]!;
     if (isAbsoluteUrl(src)) continue;
     const hit = attached.get(src);
     if (!hit) continue;
+    const srcIndices = m.indices?.[1];
+    if (!srcIndices) continue; // paranoia: requires the `d` flag to be set
     hits.push({
-      start: m.index + m[0].indexOf(src),
-      end: m.index + m[0].indexOf(src) + src.length,
+      start: srcIndices[0],
+      end: srcIndices[1],
       ref: src,
       mime: hit.mime,
       assetId: hit.assetId,
@@ -230,8 +239,9 @@ function escapeHtml(s: string): string {
 
 /**
  * Read and cache the mermaid IIFE bundle. The bundle ships ~3 MB of
- * text; we read it once at module import time to avoid a disk hit on
- * every mermaid-bearing export.
+ * text; we read it lazily on the first `loadMermaidUmd()` call and
+ * cache the resulting promise to avoid a disk hit on every
+ * mermaid-bearing export.
  *
  * Resolution order:
  *   1. `MARGINALIA_MERMAID_JS_PATH` env var — points at a fully

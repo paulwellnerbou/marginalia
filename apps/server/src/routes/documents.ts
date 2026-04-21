@@ -609,13 +609,18 @@ async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
         appearance: 'light',
       },
       hasMermaid: rendered.mermaid.length > 0,
+      // Wire the request's abort signal into the exporter so
+      // Chromium work stops promptly when the client disconnects
+      // (no point burning a semaphore slot to produce bytes no
+      // one will read).
+      signal: c.req.raw.signal,
     });
   } catch (err) {
     if (err instanceof ExportEngineMissingError) {
       return c.json(
         {
           error: err.code,
-          hint: 'Run `bunx playwright install chromium` on the server, then retry.',
+          hint: 'Run `bunx playwright install chromium-headless-shell` on the server, then retry.',
         },
         500,
       );
