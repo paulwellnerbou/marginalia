@@ -17,7 +17,8 @@
  * That element:
  *   - survives `rehype-raw` + the sanitizer (we allow `className` /
  *     `ariaHidden` everywhere);
- *   - is hidden by the viewer's CSS so users don't see a blank line;
+ *   - is rendered by the viewer's CSS as a visible pill badge marking
+ *     the TOC insertion point;
  *   - is recognised by the DOCX exporter as an injection point for
  *     the native Word TOC field.
  *
