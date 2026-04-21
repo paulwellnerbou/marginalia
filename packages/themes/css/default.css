@@ -116,9 +116,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.6em;
-  margin: 2.4em auto;
-  padding: 0.45em 1.25em;
+  gap: 0.5em;
+  margin: 2em auto;
+  padding: 0.25em 0.9em;
   /* `max-content` makes the pill hug its label instead of stretching
    * full-width, and `max-width: 100%` guards against pathological
    * overflow on narrow columns. */
@@ -128,9 +128,9 @@
   border-radius: 999px;
   color: var(--md-color-fg-muted);
   font-family: var(--md-font-heading);
-  font-size: 0.82em;
+  font-size: 0.72em;
   font-style: italic;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   /* CSS-injected content isn't user-editable; block selection so the
    * author doesn't accidentally copy the label into their document. */
