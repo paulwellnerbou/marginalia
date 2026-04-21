@@ -84,7 +84,10 @@ export function DocumentSettingsDialog({
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
+      // Defer the revoke a tick: a synchronous revoke right after
+      // `click()` can cancel the download in Safari/WebKit. See
+      // DownloadMenu's `downloadBlob` for the longer write-up.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (err) {
       reportError('DocumentSettings.exportJson', err, { uid: doc.uid });
       setError(err instanceof Error ? err.message : 'Export failed');

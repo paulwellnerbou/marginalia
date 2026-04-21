@@ -44,7 +44,12 @@ export function DownloadMenu({
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    // Defer the revoke: Safari/WebKit treats a synchronous
+    // `revokeObjectURL` right after `click()` as an "URL is gone,
+    // cancel the download" signal and can truncate or drop the file
+    // entirely. One macro-task later the navigation has started and
+    // it's safe to release the object URL.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   function downloadSource(): void {

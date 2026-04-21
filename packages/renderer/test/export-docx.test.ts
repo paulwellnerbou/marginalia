@@ -811,6 +811,49 @@ describe('exportDocx — language / RTL (M5)', () => {
   });
 });
 
+describe('exportDocx — grid tables', () => {
+  test('grid-table cell content survives to document.xml', async () => {
+    // Pandoc-style grid table. `preprocessGridTables` converts it to
+    // an HTML `<table>` by rendering each cell's markdown via
+    // `renderCellForDocx`. A no-op renderCell (the old bug) would
+    // leave every cell empty in the export.
+    const md = [
+      '+---------+---------+',
+      '| Head A  | Head B  |',
+      '+=========+=========+',
+      '| cell-a1 | cell-b1 |',
+      '+---------+---------+',
+      '| cell-a2 | cell-b2 |',
+      '+---------+---------+',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // Every header and body cell makes it into the rendered DOCX.
+    expect(documentXml).toContain('Head A');
+    expect(documentXml).toContain('Head B');
+    expect(documentXml).toContain('cell-a1');
+    expect(documentXml).toContain('cell-b1');
+    expect(documentXml).toContain('cell-a2');
+    expect(documentXml).toContain('cell-b2');
+  });
+
+  test('grid-table cells with inline formatting render bold / italic runs', async () => {
+    const md = [
+      '+-----------+------------+',
+      '| **bold**  | *italic*   |',
+      '+===========+============+',
+      '| plain     | `code`     |',
+      '+-----------+------------+',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('bold');
+    expect(documentXml).toContain('italic');
+    expect(documentXml).toMatch(/<w:b\b/); // bold run property
+    expect(documentXml).toMatch(/<w:i\b/); // italic run property
+  });
+});
+
 describe('exportDocx — tables (Copilot review follow-ups)', () => {
   function countRowShadings(documentXml: string): {
     headerShaded: number;

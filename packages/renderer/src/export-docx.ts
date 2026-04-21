@@ -31,6 +31,7 @@
  */
 
 import rehypeParse from 'rehype-parse';
+import rehypeStringify from 'rehype-stringify';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
@@ -386,7 +387,7 @@ async function sourceToHast(
   }
 
   const preprocessed = await preprocessGridTables(source, {
-    renderCell: async () => '', // DOCX path doesn't need per-cell HTML
+    renderCell: (cellMd) => renderCellForDocx(cellMd, options),
   });
 
   const processor = unified()
@@ -414,6 +415,39 @@ async function sourceToHast(
   // plugin, but it avoids pulling in `vfile` as a direct dep.
   const frontmatter = parseFrontmatter(preprocessed);
   return { hast, frontmatter };
+}
+
+/**
+ * Render a single grid-table cell's markdown to HTML for the DOCX
+ * path. Mirrors `render.ts`'s sub-pipeline: parse → rehype with
+ * raw-HTML pass-through → sanitize (DOCX flavour, so `data:` image
+ * URLs survive) → shiki highlighting → stringify. Returning HTML
+ * lets the grid-tables preprocessor splice it into the `<td>`, and
+ * the DOCX walker later turns each cell into real paragraph runs.
+ *
+ * Returning `''` here — as this code did before — silently emptied
+ * every grid-table cell on the export path.
+ */
+async function renderCellForDocx(
+  markdown: string,
+  options: DocxExportOptions,
+): Promise<string> {
+  const proc = unified()
+    .use(remarkParse)
+    .use(remarkGfm)
+    .use(remarkRehype, { allowDangerousHtml: true })
+    .use(rehypeRaw)
+    .use(rehypeSanitize, sanitizeSchemaForDocx)
+    .use(rehypeShikiHighlight, options.highlight ?? {})
+    .use(rehypeStringify, { allowDangerousHtml: false });
+  const file = await proc.process(markdown);
+  const html = String(file).trim();
+  // Unwrap a single `<p>…</p>` so simple cells render as inline
+  // content — matches how GFM pipe tables look, and avoids an extra
+  // Paragraph per cell in the DOCX walker.
+  const m = html.match(/^<p>([\s\S]*)<\/p>$/);
+  if (m && !m[1]!.includes('<p>') && !m[1]!.includes('<div>')) return m[1]!;
+  return html;
 }
 
 /**

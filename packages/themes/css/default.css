@@ -106,8 +106,11 @@
  * Implementation note: the element emitted by the plugin is an empty
  * `<div>`, so the label ("Table of contents") and the `§` ornament
  * are CSS-generated content on the ::before/::after pseudo-elements.
- * That keeps the HTML minimal and lets the label follow the viewer's
- * language chain naturally in a future i18n pass.
+ * That keeps the HTML minimal, but the label string is hard-coded in
+ * CSS — a future i18n pass will need an explicit injection point
+ * (a data-attribute the CSS reads with `attr()`, a CSS custom
+ * property the host app sets per-document, or server/client-rendered
+ * text inside the `<div>`).
  */
 .marginalia .marginalia-toc-marker {
   display: flex;
