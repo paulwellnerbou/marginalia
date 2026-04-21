@@ -19,6 +19,34 @@ export function extractDocumentTitle(source: string, format: DocumentFormat): st
   return format === 'asciidoc' ? extractAsciidocTitle(source) : extractMarkdownTitle(source);
 }
 
+/**
+ * Turn a derived (or explicit) document title into a filename-safe
+ * base name. Shared between the server (DOCX download) and the client
+ * (source download) so the two paths produce identical filenames for
+ * the same document — no client/server drift.
+ *
+ * Behavior:
+ *  - Characters outside `[\w.-]` collapse to `_`.
+ *  - The result is trimmed to 80 characters, then stripped of leading
+ *    and trailing separator characters (so all-emoji titles don't
+ *    leave a lone `_`, and dot-only prefixes don't create a hidden
+ *    file on Unix).
+ *  - If the sanitised result is empty, returns `fallback` (typically
+ *    the document uid).
+ *
+ * The extension is the caller's responsibility: this helper returns
+ * the base only.
+ */
+export function sanitizeDocumentFilename(
+  title: string | null | undefined,
+  fallback: string,
+): string {
+  const source = (title ?? '').trim() || fallback;
+  const sanitized = source.replace(/[^\w.-]+/g, '_').slice(0, 80);
+  const trimmed = sanitized.replace(/^[._-]+|[._-]+$/g, '');
+  return trimmed || fallback;
+}
+
 function extractMarkdownTitle(source: string): string | null {
   // 1. `title:` in YAML frontmatter, if present.
   const fm = readYamlFrontmatterTitle(source);

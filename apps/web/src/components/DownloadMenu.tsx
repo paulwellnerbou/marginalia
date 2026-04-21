@@ -1,7 +1,7 @@
 import { DownloadIcon } from '@radix-ui/react-icons';
 import { DropdownMenu, IconButton } from '@radix-ui/themes';
 import { useState } from 'react';
-import { extractDocumentTitle } from '@marginalia/renderer';
+import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer';
 import type { Document } from '../lib/api.js';
 import { downloadDocumentDocx } from '../lib/api.js';
 import { reportError } from '../lib/log.js';
@@ -50,7 +50,7 @@ export function DownloadMenu({
   function downloadSource(): void {
     setBusy('source');
     try {
-      const base = sanitizeFilename(resolveTitle(doc, source) ?? doc.uid);
+      const base = sanitizeDocumentFilename(resolveTitle(doc, source), doc.uid);
       const mime = doc.format === 'asciidoc' ? 'text/asciidoc' : 'text/markdown';
       downloadBlob(
         new Blob([source], { type: `${mime};charset=utf-8` }),
@@ -107,10 +107,4 @@ export function DownloadMenu({
 function resolveTitle(doc: Document, source: string): string | null {
   if (doc.name && doc.name.trim()) return doc.name.trim();
   return extractDocumentTitle(source, doc.format);
-}
-
-function sanitizeFilename(name: string): string {
-  const trimmed = name.trim();
-  if (!trimmed) return 'document';
-  return trimmed.replace(/[^\w.-]+/g, '_').slice(0, 80) || 'document';
 }

@@ -3,7 +3,7 @@ export type { DocumentFormat } from './render.js';
 export { renderAsciidoc } from './render-asciidoc.js';
 export { exportDocx } from './export-docx.js';
 export type { DocxExportOptions } from './export-docx.js';
-export { extractDocumentTitle } from './extract-title.js';
+export { extractDocumentTitle, sanitizeDocumentFilename } from './extract-title.js';
 export { rewriteAssetReferences } from './asset-rewrite.js';
 export type { RewriteOptions as AssetRewriteOptions } from './asset-rewrite.js';
 export { locateBlockSource, locateAllBlocks } from './locate-block.js';

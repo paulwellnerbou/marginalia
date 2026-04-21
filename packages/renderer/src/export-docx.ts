@@ -662,10 +662,18 @@ function findChild(parent: Element, tagName: string): Element | null {
 function buildFootnoteParagraphs(li: Element, ctx: BuildCtx): Paragraph[] {
   const out: Paragraph[] = [];
   for (const child of li.children as HastNode[]) {
-    if (!isElement(child)) continue;
-    // Inline text directly inside the <li> (rare but possible) just
-    // becomes a paragraph of that text.
-    appendFootnoteBlock(child, ctx, out);
+    if (isElement(child)) {
+      appendFootnoteBlock(child, ctx, out);
+      continue;
+    }
+    // Inline text directly inside the <li> (rare — usually GFM wraps
+    // footnote bodies in a <p>, but loose text can show up if the
+    // content survives sanitize without a paragraph wrapper) becomes
+    // its own paragraph so it's not silently dropped.
+    if (isText(child)) {
+      const text = child.value.trim();
+      if (text) out.push(new Paragraph({ children: [new TextRun({ text })] }));
+    }
   }
   if (out.length === 0) {
     // Always emit at least one paragraph so the footnote renders —

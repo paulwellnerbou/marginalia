@@ -540,6 +540,24 @@ describe('exportDocx — footnotes (M3c)', () => {
     expect(footnotesXml).toContain('bullet two');
     expect(footnotesXml).toContain('code line');
   });
+
+  test('direct text inside a footnote <li> is preserved', async () => {
+    // GFM normally wraps footnote bodies in `<p>`, but if a <li>
+    // somehow ends up with a bare text child (we use raw HTML here
+    // to construct the shape) the exporter must not silently drop
+    // the text. Regression guard: the walker previously skipped
+    // non-element children unconditionally.
+    const md = [
+      'Anchor text.',
+      '',
+      '<section data-footnotes class="footnotes"><ol>',
+      '<li id="user-content-fn-stray">Bare text child</li>',
+      '</ol></section>',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const footnotesXml = await loadFootnotes(buf);
+    expect(footnotesXml).toContain('Bare text child');
+  });
 });
 
 describe('exportDocx — language / RTL (M5)', () => {

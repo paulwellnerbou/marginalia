@@ -7,6 +7,7 @@ import {
   locateAllBlocksAsciidoc,
   renderDocument,
   rewriteAssetReferences,
+  sanitizeDocumentFilename,
 } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -497,7 +498,7 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
     },
   });
 
-  const filename = buildDocxFilename(derivedTitle, doc.uid);
+  const filename = sanitizeDocumentFilename(derivedTitle, doc.uid);
   c.header(
     'Content-Type',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -512,23 +513,6 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
   // Hono doesn't have a first-class Buffer helper; return a Uint8Array
   // so the underlying Response pipeline sends exact bytes.
   return c.body(new Uint8Array(buf));
-}
-
-/**
- * Safe filename from a derived title, falling back to the uid.
- *
- * `replace(/[^\w.-]+/g, '_')` lets through ASCII word chars, dots and
- * hyphens and collapses everything else (emoji, punctuation, whitespace)
- * into underscores. Titles like "🎉" would collapse to "_" — not empty,
- * but uninformative. Titles that sanitize to *only* underscores / dots /
- * hyphens (edge case: a title of all zero-width punctuation) get the
- * uid treatment so we never emit `filename=".docx"`.
- */
-function buildDocxFilename(title: string | null, uid: string): string {
-  const source = title ?? uid;
-  const sanitized = source.replace(/[^\w.-]+/g, '_').slice(0, 80);
-  const trimmed = sanitized.replace(/^[._-]+|[._-]+$/g, '');
-  return trimmed || uid;
 }
 
 // --- POST /api/documents/import (consume a bundle) -------------------
