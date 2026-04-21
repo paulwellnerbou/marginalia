@@ -14,12 +14,13 @@ import { useState } from 'react';
 import type { Document } from '../lib/api.js';
 import {
   type DocumentSettingsResponse,
+  downloadDocumentDocx,
   exportDocumentBundle,
   updateDocumentSettings,
 } from '../lib/api.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
-import { BUILT_IN_THEMES } from '../lib/themes.js';
+import { BUILT_IN_THEMES, getUserThemeOverride } from '../lib/themes.js';
 
 /**
  * "Document Settings" — non-permission concerns. Splits cleanly from
@@ -40,6 +41,7 @@ export function DocumentSettingsDialog({
   const [defaultTheme, setDefaultTheme] = useState(doc.default_theme);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportingDocx, setExportingDocx] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
@@ -88,6 +90,31 @@ export function DocumentSettingsDialog({
       setError(err instanceof Error ? err.message : 'Export failed');
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function exportWordDoc() {
+    setExportingDocx(true);
+    setError(null);
+    try {
+      // Use the user's currently-selected theme (what they see in the
+      // viewer), falling back to the document's default. This matches
+      // the principle "the export looks like what I was looking at".
+      const selectedTheme = getUserThemeOverride(doc.uid) ?? doc.default_theme;
+      const { blob, filename } = await downloadDocumentDocx(doc.uid, selectedTheme);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename || `${sanitizeFilename(doc.name ?? doc.uid)}.docx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      reportError('DocumentSettings.exportDocx', err, { uid: doc.uid });
+      setError(err instanceof Error ? err.message : 'DOCX export failed');
+    } finally {
+      setExportingDocx(false);
     }
   }
 
@@ -148,16 +175,27 @@ export function DocumentSettingsDialog({
 
           <Flex direction="column" gap="2">
             <Text size="2" weight="medium">
-              JSON export
+              Export
             </Text>
             <Text size="1" color="gray">
-              Downloads a versioned JSON bundle with the markdown source, comments, and renderer
-              metadata for tooling or later import.
+              JSON: versioned bundle with the source, comments, and renderer metadata for tooling
+              or later import. DOCX: a Word document styled to match your current theme — fonts,
+              spacing, heading hierarchy, tables, and code blocks all carry over.
             </Text>
-            <Flex>
-              <Button variant="soft" onClick={exportJson} disabled={exporting}>
+            <Text size="1" color="gray" style={{ fontStyle: 'italic' }}>
+              Word falls back to a similar font when the theme's preferred family isn't installed
+              locally (e.g. Fraunces or JetBrains Mono on a fresh machine). The document still
+              reads correctly — open its <em>Styles</em> pane to pick a substitute if you need a
+              specific face.
+            </Text>
+            <Flex gap="2" wrap="wrap">
+              <Button variant="soft" onClick={exportJson} disabled={exporting || exportingDocx}>
                 <DownloadIcon />
                 {exporting ? 'Exporting…' : 'Export JSON bundle'}
+              </Button>
+              <Button variant="soft" onClick={exportWordDoc} disabled={exporting || exportingDocx}>
+                <DownloadIcon />
+                {exportingDocx ? 'Exporting…' : 'Export DOCX'}
               </Button>
             </Flex>
           </Flex>

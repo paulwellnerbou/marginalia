@@ -282,6 +282,52 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
+/**
+ * Binary sibling of `request<T>` — same auth-gate and identity/invite
+ * headers, but returns the raw Response so the caller can read a Blob
+ * (or parse a Content-Disposition filename) without force-parsing
+ * JSON. Used by the DOCX export today; any future binary export can
+ * share this.
+ */
+async function requestBinary(
+  path: string,
+  init: RequestInit & { identity?: Identity | null; docUid?: string; _retry?: boolean } = {},
+): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const identity = init.identity ?? fallbackIdentity();
+  const clientId = identity?.clientId ?? getClientId();
+  headers.set('x-marginalia-client', clientId);
+  if (identity?.displayName) {
+    headers.set('x-marginalia-client-name', encodeHeaderValue(identity.displayName));
+  }
+  if (init.docUid) {
+    const token = loadInviteToken(init.docUid);
+    if (token) headers.set('x-marginalia-invite', token);
+  }
+
+  const res = await fetch(path, { ...init, headers, credentials: 'include' });
+  if (!res.ok) {
+    let code = 'unknown';
+    try {
+      const body = (await res.clone().json()) as { error?: string };
+      if (body.error) code = body.error;
+    } catch {
+      /* ignore */
+    }
+    if (
+      res.status === 401 &&
+      code === 'password-required' &&
+      init.docUid &&
+      !init._retry
+    ) {
+      await waitForAuth(init.docUid);
+      return requestBinary(path, { ...init, _retry: true });
+    }
+    throw new ApiError(res.status, code);
+  }
+  return res;
+}
+
 function fallbackIdentity(): Identity | null {
   const clientId = getClientId();
   const displayName = getDisplayName();
@@ -311,6 +357,33 @@ export function exportDocumentBundle(uid: string): Promise<DocumentBundle> {
     method: 'GET',
     docUid: uid,
   });
+}
+
+/**
+ * Fetches a DOCX export of the document and returns the bytes plus a
+ * server-suggested filename (from Content-Disposition). The caller is
+ * responsible for triggering the browser download — kept outside this
+ * function so tests and other consumers (e.g. a future "Send DOCX via
+ * email" button) don't have to stub out DOM side effects.
+ *
+ * Theme defaults to the document's current default theme on the
+ * server; passing an explicit id overrides it (matches viewer
+ * behavior: the user's selected theme gets baked into the export).
+ */
+export async function downloadDocumentDocx(
+  uid: string,
+  theme?: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const params = theme ? `?theme=${encodeURIComponent(theme)}` : '';
+  const res = await requestBinary(
+    `/api/documents/${encodeURIComponent(uid)}/export.docx${params}`,
+    { method: 'GET', docUid: uid },
+  );
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  const match = cd.match(/filename="([^"]+)"/);
+  const filename = match?.[1] ?? `${uid}.docx`;
+  return { blob, filename };
 }
 
 export function updateDocument(

@@ -6,5 +6,5 @@
     "outDir": "dist",
     "noEmit": true
   },
-  "include": ["css/**/*.css"]
+  "include": ["css/**/*.css", "src/**/*.ts", "test/**/*.ts"]
 }
