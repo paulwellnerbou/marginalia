@@ -44,7 +44,7 @@ consumes only tokens, never CSS.
 | External link | `ExternalHyperlink` with accent-colored, underlined runs. |
 | Internal link (`[x](#slug)`) | `InternalHyperlink` targeting the matching heading bookmark. Same accent + underline treatment. |
 | Heading-anchor sigil (`<a class="heading-anchor">`) | Stripped — UI chrome, not content. |
-| TOC | Real Word `TableOfContents` field with `hyperlink:true`, `headingStyleRange:'1-6'`, `beginDirty:true` (so Word prompts to populate on first open). Prepended automatically when the doc has ≥ 2 headings; controlled by `options.includeToc`. |
+| TOC | Real Word `TableOfContents` field with `hyperlink:true`, `headingStyleRange:'1-6'`, `beginDirty:true` (so Word prompts to populate on first open). Placement: an explicit `[TOC]` or `[[_TOC_]]` marker in the source wins; otherwise auto-emitted after the leading heading when the doc has ≥ 2 headings. Controlled by `options.includeToc` (`'auto' \| true \| false`). |
 | Footnotes (GFM) | Native DOCX footnotes. Refs become `FootnoteReferenceRun`s; bodies land in `word/footnotes.xml` with multi-block content (paragraphs, lists, code, blockquotes) preserved. |
 | Mermaid block | **Stopgap:** rendered as a labeled code block. Real SVG → PNG rasterization is deferred; it needs a headless Chromium backend. |
 | Horizontal rule | `Paragraph` with a `top` border styled from `tokens.colors.border`. |
@@ -54,6 +54,44 @@ All named styles (`Heading1`–`Heading6`, `Normal`, `CodeBlock`,
 `Blockquote`, `TableHeader`) are registered once per export from the
 active theme's tokens, so they also show up in Word's Styles pane —
 editable downstream.
+
+## TOC placement markers
+
+Either of these on a line by itself marks the spot where the Word TOC
+field is injected:
+
+```md
+[TOC]
+[[_TOC_]]
+```
+
+`[TOC]` is the Python-Markdown / MkDocs / Typora convention;
+`[[_TOC_]]` is GitLab Flavored Markdown and Obsidian. Both are accepted
+so authors moving between ecosystems keep the same source working.
+`[[TOC]]` (without the underscores) is also recognised because
+CommonMark's intraword-emphasis rule turns `[[_TOC_]]` into
+`[[<em>TOC</em>]]` after parsing and we can't distinguish the two at
+the mdast level.
+
+When multiple markers appear the TOC lands at the **first** one; later
+markers are silently dropped. Markers inside code blocks, blockquotes,
+or list items are left as literal text — they have to sit at the top
+level on a line of their own to count.
+
+Precedence:
+
+1. Explicit `[TOC]` / `[[_TOC_]]` marker → TOC at that position.
+2. No marker, `options.includeToc === 'auto'` (default) and the doc has
+   ≥ 2 headings → TOC right after the leading heading.
+3. `options.includeToc === true` → always emit (with marker placement
+   if available, otherwise the heuristic).
+4. `options.includeToc === false` → never emit; any markers in the
+   source are stripped without creating a TOC.
+
+The viewer renders the marker as an empty `<div class="marginalia-
+toc-marker">` which the themes hide via `display: none` — Marginalia
+already has a sidebar TOC, so marker placement is a DOCX-only concern
+for now.
 
 ## Edge cases
 

@@ -14,6 +14,7 @@ import { remarkSlugger } from './plugins/slugger.js';
 import { remarkBlockIds } from './plugins/block-ids.js';
 import { remarkMermaid } from './plugins/mermaid.js';
 import { remarkAssetCollector } from './plugins/asset-collector.js';
+import { remarkTocMarker } from './plugins/toc-marker.js';
 import { rehypeShikiHighlight } from './plugins/shiki.js';
 import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
 import { sanitizeSchema } from './plugins/sanitize-schema.js';
@@ -77,6 +78,7 @@ export async function render(
     .use(remarkSlugger)
     .use(remarkBlockIds)
     .use(remarkMermaid, { mode: options.mermaid ?? 'client' })
+    .use(remarkTocMarker)
     .use(remarkAssetCollector)
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeRaw)

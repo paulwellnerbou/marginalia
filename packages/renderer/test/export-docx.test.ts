@@ -361,6 +361,127 @@ describe('exportDocx — Table of Contents (M3b)', () => {
   });
 });
 
+describe('exportDocx — [TOC] / [[_TOC_]] markers', () => {
+  test('[TOC] marker places the TOC at the marker position', async () => {
+    const md = [
+      '# Document Title',
+      '',
+      'Intro before the TOC.',
+      '',
+      '[TOC]',
+      '',
+      '## Chapter A',
+      '',
+      'Body A.',
+      '',
+      '## Chapter B',
+      '',
+      'Body B.',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    const titleIdx = documentXml.indexOf('Document Title');
+    const introIdx = documentXml.indexOf('Intro before');
+    const contentsIdx = documentXml.indexOf('Contents');
+    const chapterAIdx = documentXml.indexOf('Chapter A');
+    // Title → Intro → Contents (from marker) → Chapter A.
+    expect(titleIdx).toBeLessThan(introIdx);
+    expect(introIdx).toBeLessThan(contentsIdx);
+    expect(contentsIdx).toBeLessThan(chapterAIdx);
+    // The marker element itself is stripped from the DOCX body.
+    expect(documentXml).not.toContain('marginalia-toc-marker');
+  });
+
+  test('[[_TOC_]] marker is also honoured', async () => {
+    const md = [
+      '# Title',
+      '',
+      '[[_TOC_]]',
+      '',
+      '## A',
+      '',
+      '## B',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    // TOC field lands in the body (not just the heading).
+    expect(documentXml).toContain('fldChar');
+    // The `[[_TOC_]]` literal must not survive.
+    expect(documentXml).not.toContain('[[_TOC_]]');
+    expect(documentXml).not.toContain('[[TOC]]');
+  });
+
+  test('explicit marker wins over the "after-leading-heading" heuristic', async () => {
+    // Without the marker, the TOC would go right after the title.
+    // With the marker, it goes where the author put it.
+    const md = [
+      '# Title',
+      '',
+      '## A',
+      '',
+      'Some content between.',
+      '',
+      '[TOC]',
+      '',
+      '## B',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    const titleIdx = documentXml.indexOf('Title');
+    const chapterAIdx = documentXml.indexOf('>A<');
+    const contentsIdx = documentXml.indexOf('Contents');
+    const chapterBIdx = documentXml.indexOf('>B<');
+    expect(titleIdx).toBeLessThan(chapterAIdx);
+    // Critical: Contents comes AFTER Chapter A (the marker position),
+    // not immediately after the title.
+    expect(chapterAIdx).toBeLessThan(contentsIdx);
+    expect(contentsIdx).toBeLessThan(chapterBIdx);
+  });
+
+  test('only the FIRST marker becomes a TOC; later markers are silently dropped', async () => {
+    const md = [
+      '# Title',
+      '',
+      '[TOC]',
+      '',
+      '## A',
+      '',
+      '[[_TOC_]]',
+      '',
+      '## B',
+    ].join('\n');
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    // A single Word TOC field uses three `<w:fldChar>` elements
+    // (begin + separate + end). Two TOCs would give us six. One
+    // TOC → three.
+    const fldCharMatches = documentXml.match(/<w:fldChar/g) ?? [];
+    expect(fldCharMatches.length).toBe(3);
+    // No stray "Contents" from a second emission.
+    const contentsMatches = documentXml.match(/>Contents</g) ?? [];
+    expect(contentsMatches.length).toBe(1);
+  });
+
+  test('includeToc: false suppresses the TOC even when a marker is present', async () => {
+    const md = '# Title\n\n[TOC]\n\n## A\n\n## B\n';
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).not.toContain('fldChar');
+    expect(documentXml).not.toContain('Contents');
+    // The marker div itself should not leak into the body.
+    expect(documentXml).not.toContain('marginalia-toc-marker');
+  });
+
+  test('marker forces TOC even for a single-heading doc', async () => {
+    // Normally auto-mode would skip a doc with only one heading,
+    // but an explicit marker signals "I want a TOC here, really".
+    const md = '# Sole heading\n\n[TOC]\n\nBody text.\n';
+    const buf = await exportDocx(md);
+    const { documentXml } = await inspectDocx(buf);
+    expect(documentXml).toContain('fldChar');
+  });
+});
+
 describe('exportDocx — run-level size overrides (follow-up)', () => {
   test('heading paragraph runs have no w:sz override (style-only sizing)', async () => {
     // Previously a catch-all in runOptions set size on every run, so

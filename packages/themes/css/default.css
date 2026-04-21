@@ -92,6 +92,14 @@
   background: var(--md-color-selection-bg);
 }
 
+/* `[TOC]` / `[[_TOC_]]` markers (see `remarkTocMarker`) are
+ * placeholders for DOCX export placement only. The viewer already
+ * renders a sidebar TOC, so the marker must not leave a visible gap
+ * in the reading column. */
+.marginalia .marginalia-toc-marker {
+  display: none;
+}
+
 .marginalia mark.comment-highlight {
   background: var(--md-color-selection-bg);
   color: inherit;

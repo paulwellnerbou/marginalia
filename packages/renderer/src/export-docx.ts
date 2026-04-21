@@ -77,6 +77,7 @@ import { remarkSlugger } from './plugins/slugger.js';
 import { remarkBlockIds } from './plugins/block-ids.js';
 import { remarkMermaid } from './plugins/mermaid.js';
 import { remarkAssetCollector } from './plugins/asset-collector.js';
+import { remarkTocMarker, TOC_MARKER_CLASSNAME } from './plugins/toc-marker.js';
 import { rehypeShikiHighlight } from './plugins/shiki.js';
 import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
 import { sanitizeSchema } from './plugins/sanitize-schema.js';
@@ -217,29 +218,44 @@ export async function exportDocx(
   const footnotes = extractFootnotes(hast, ctxWithoutFootnotes);
   const ctx: BuildCtx = { ...ctxWithoutFootnotes, footnoteIds: footnotes.ids };
 
-  // `auto` (and undefined) emit a TOC only when the doc has ≥ 2
-  // headings, so single-heading notes don't get a pointless "Contents"
-  // section above their lone title.
+  // TOC decision tree:
+  //  1. Any `[TOC]` / `[[_TOC_]]` marker wins. We emit at the first
+  //     marker's position and silently drop the rest.
+  //  2. Otherwise, `auto` (and undefined) emit a TOC iff the doc has
+  //     ≥ 2 headings, sited after the leading heading if any.
+  //  3. `includeToc: false` suppresses everything — markers become
+  //     no-ops, no auto emission.
+  const hasMarker = hasTocMarker(hast);
   const shouldIncludeToc =
     options.includeToc === true ||
     ((options.includeToc === 'auto' || options.includeToc === undefined) &&
-      countHeadings(hast) >= 2);
+      (hasMarker || countHeadings(hast) >= 2));
   const tocBlocks = shouldIncludeToc
     ? buildTocBlocks(options.tocLabel ?? 'Contents', tokens)
     : [];
 
-  // Insert the TOC AFTER the first heading in the body so the
-  // reader's eye lands on the title first, then the TOC, then the
-  // content — standard Word-document convention. When the doc has
-  // no opening heading (e.g., starts with a paragraph), the TOC
-  // goes at the top so it remains visible.
-  const leadingHeadingIdx = indexOfLeadingHeading(hast);
-  const body = hastToDocxChildren(hast, ctx, {
+  // If a marker drives placement, pendingToc carries the blocks to
+  // emit when the walker first hits a marker element. After the
+  // walker consumes it, subsequent markers become no-ops.
+  const walkerCtx: BuildCtx = hasMarker
+    ? {
+        ...ctx,
+        pendingToc: shouldIncludeToc ? { blocks: [...tocBlocks], consumed: false } : null,
+      }
+    : ctx;
+
+  // Without a marker, fall back to the existing "insert after the
+  // leading heading" heuristic (or prepend if the doc has no
+  // leading heading at all).
+  const leadingHeadingIdx = hasMarker ? -1 : indexOfLeadingHeading(hast);
+  const body = hastToDocxChildren(hast, walkerCtx, {
     injectAfterTopLevelIndex: leadingHeadingIdx,
-    injectedBlocks: tocBlocks,
+    injectedBlocks: hasMarker ? [] : tocBlocks,
   });
   const blocks: FileChild[] =
-    shouldIncludeToc && leadingHeadingIdx < 0 ? [...tocBlocks, ...body] : body;
+    !hasMarker && shouldIncludeToc && leadingHeadingIdx < 0
+      ? [...tocBlocks, ...body]
+      : body;
 
   const doc = buildDocument(blocks, tokens, options, footnotes.content, {
     language,
@@ -381,6 +397,7 @@ async function sourceToHast(
     .use(remarkSlugger)
     .use(remarkBlockIds)
     .use(remarkMermaid, { mode: 'client' })
+    .use(remarkTocMarker)
     .use(remarkAssetCollector)
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypeRaw)
@@ -1035,6 +1052,17 @@ interface BuildCtx {
    * hits a `<sup><a data-footnote-ref>` reference.
    */
   readonly footnoteIds: Map<string, number>;
+  /**
+   * TOC blocks waiting to be emitted at the first `[TOC]` / `[[_TOC_]]`
+   * marker. The walker consumes this when it encounters the marker
+   * element; later markers find `consumed: true` and skip silently.
+   *
+   * Null when:
+   *  - the document contains no markers (the caller's heuristic
+   *    injection point is used instead);
+   *  - `includeToc: false` (markers should be ignored).
+   */
+  readonly pendingToc?: { blocks: FileChild[]; consumed: boolean } | null;
 }
 
 type InlineStyle = {
@@ -1116,6 +1144,26 @@ function indexOfLeadingHeading(root: HastRoot): number {
     return -1; // first real block is NOT a heading → TOC goes at the top.
   }
   return -1;
+}
+
+/**
+ * Detect whether the document contains at least one `[TOC]` /
+ * `[[_TOC_]]` marker at the top level. Used by the caller to pick
+ * between marker-driven placement and the leading-heading heuristic.
+ * A marker inside a nested block (blockquote, list item, etc.) is
+ * deliberately ignored — it would be ambiguous content anyway.
+ */
+function hasTocMarker(root: HastRoot): boolean {
+  for (const node of flattenRoot(root)) {
+    if (isTocMarkerElement(node)) return true;
+  }
+  return false;
+}
+
+function isTocMarkerElement(node: HastNode): boolean {
+  if (!isElement(node) || node.tagName !== 'div') return false;
+  const cls = node.properties?.className;
+  return Array.isArray(cls) && (cls as unknown[]).includes(TOC_MARKER_CLASSNAME);
 }
 
 /** Peel <html>/<body> wrappers if present so we iterate real blocks. */
@@ -1224,12 +1272,27 @@ function convertBlock(
       return;
 
     case 'div': {
+      const cls = node.properties?.className;
+      // `[TOC]` / `[[_TOC_]]` marker: the remark plugin replaced the
+      // paragraph with `<div class="marginalia-toc-marker">`. If the
+      // caller queued TOC blocks, emit them here (first marker wins).
+      // Silently drop later markers and any marker when TOC is
+      // suppressed via `includeToc: false`.
+      const isMarker =
+        Array.isArray(cls) && (cls as unknown[]).includes(TOC_MARKER_CLASSNAME);
+      if (isMarker) {
+        const pending = ctx.pendingToc;
+        if (pending && !pending.consumed) {
+          out.push(...pending.blocks);
+          pending.consumed = true;
+        }
+        return;
+      }
       // `<div class="mermaid">` carries the diagram source. Real
       // rasterization (SVG → PNG → ImageRun) is M4b territory and
       // depends on headless Chromium — until that lands, render the
       // source as a labeled code block so readers at least get a
       // legible record of the diagram instead of a stray inline run.
-      const cls = node.properties?.className;
       const isMermaid =
         Array.isArray(cls) && (cls as unknown[]).includes('mermaid');
       if (isMermaid) {
