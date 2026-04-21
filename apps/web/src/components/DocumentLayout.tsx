@@ -7,6 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Badge,
   Button,
@@ -48,8 +49,12 @@ import {
   acceptEditProposal as apiAcceptProposal,
   rejectEditProposal as apiRejectProposal,
   getDocument,
+  getHistoryDiff,
+  restoreHistoryVersion as apiRestoreHistoryVersion,
+  revertHistoryVersion as apiRevertHistoryVersion,
   uploadAsset,
   ApiError,
+  type HistoryEntry,
 } from '../lib/api.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
@@ -62,6 +67,7 @@ import {
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
+import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
 import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import { RenderedDoc, type DocumentSearchOptions } from './RenderedDoc.js';
 import { Toc } from './Toc.js';
@@ -100,6 +106,7 @@ interface ThreadFocusTarget {
 }
 
 export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
+  const navigate = useNavigate();
   const canComment = doc.role !== 'reader';
   const [tocOpen, setTocOpen] = useState(true);
   const [commentsOpen, setCommentsOpen] = useState(true);
@@ -484,6 +491,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     }
   }, [doc.uid]);
 
+  const refreshThreads = useCallback(async () => {
+    try {
+      const [commentsRes, proposalsRes] = await Promise.all([
+        listComments(doc.uid),
+        listEditProposals(doc.uid),
+      ]);
+      setComments(commentsRes.comments);
+      setMentionSeedNames(commentsRes.mention_candidates);
+      notifyPendingMentions(commentsRes.comments, commentsRes.pending_mentions);
+      setProposals(proposalsRes.edit_proposals);
+    } catch (err) {
+      reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
+    }
+  }, [doc.uid]);
+
   const canEdit = doc.role === 'admin' || doc.role === 'editor';
 
   // Editors can fill missing-asset placeholders directly in view mode
@@ -615,6 +637,48 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [doc.uid, displayName, effectiveDisplayName],
   );
 
+  const onRestoreHistoryVersion = useCallback(
+    async (oid: string) => {
+      const identity = resolveIdentity();
+      if (!identity) {
+        setError('Please set your display name first.');
+        throw new Error('display-name-required');
+      }
+      try {
+        await apiRestoreHistoryVersion(doc.uid, oid, identity);
+        await Promise.all([refreshDoc(), refreshThreads()]);
+        setHistoryVersion((v) => v + 1);
+        setError(null);
+      } catch (err) {
+        reportError('DocumentLayout.restoreHistoryVersion', err, { oid, uid: doc.uid });
+        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Restore failed');
+        throw err;
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName, effectiveDisplayName, refreshDoc, refreshThreads],
+  );
+
+  const onRestoreAsNewDocument = useCallback(
+    async (oid: string) => {
+      try {
+        const diff = await getHistoryDiff(doc.uid, oid);
+        savePendingNewDocumentDraft({
+          source: diff.after,
+          format: doc.format,
+        });
+        navigate('/');
+      } catch (err) {
+        reportError('DocumentLayout.restoreAsNewDocument', err, { oid, uid: doc.uid });
+        setError(
+          err instanceof ApiError ? `${err.status}: ${err.code}` : 'Could not open as new document',
+        );
+        throw err;
+      }
+    },
+    [doc.format, doc.uid, navigate],
+  );
+
   const tocPx = tocOpen ? tocWidth : COLLAPSED_WIDTH;
   const commentsPx = commentsOpen ? commentsWidth : COLLAPSED_WIDTH;
   const gridStyle: React.CSSProperties = {
@@ -690,6 +754,34 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1 }));
   }, []);
 
+  const onRevertLatestHistoryVersion = useCallback(
+    async (entry: HistoryEntry) => {
+      const identity = resolveIdentity();
+      if (!identity) {
+        setError('Please set your display name first.');
+        throw new Error('display-name-required');
+      }
+      try {
+        const res = await apiRevertHistoryVersion(doc.uid, entry.oid, identity);
+        await Promise.all([refreshDoc(), refreshThreads()]);
+        setHistoryVersion((v) => v + 1);
+        setError(null);
+
+        const reopenedThreadId = res.reopened_proposal_id;
+        if (reopenedThreadId) openCommentThread(reopenedThreadId);
+      } catch (err) {
+        reportError('DocumentLayout.revertLatestHistoryVersion', err, {
+          oid: entry.oid,
+          uid: doc.uid,
+        });
+        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Revert failed');
+        throw err;
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName, effectiveDisplayName, openCommentThread, refreshDoc, refreshThreads],
+  );
+
   const updateSearchResults = useCallback((results: DocumentSearchResult[]) => {
     setSearchResults(results);
   }, []);
@@ -738,7 +830,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   return (
     <div className="doc-page">
-      <AppBar docTitle={title} role={doc.role} format={doc.format} trailing={<>{children}</>} />
+      <AppBar docTitle={title} role={doc.role} format={doc.format} />
 
       <div className="doc-layout" style={gridStyle}>
         <aside className={`pane pane-toc ${tocOpen ? 'open' : 'closed'}`}>
@@ -845,6 +937,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 gear so the whole toolbar cluster reads as a single set
                 of per-document actions. */}
             <DownloadMenu doc={doc} source={liveSource} theme={theme} />
+            {children}
             {doc.role === 'admin' && onDocSettingsChanged && (
               <>
                 <DocumentSettingsDialog doc={doc} onChange={onDocSettingsChanged} />
@@ -1038,6 +1131,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </Flex>
               <Tabs.Content value="comments" className="right-tab-panel">
                 <CommentsPane
+                  uid={doc.uid}
                   comments={comments}
                   proposals={proposals}
                   docSource={liveSource}
@@ -1066,7 +1160,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 />
               </Tabs.Content>
               <Tabs.Content value="history" className="right-tab-panel">
-                <HistoryList uid={doc.uid} version={historyVersion} />
+                <HistoryList
+                  uid={doc.uid}
+                  version={historyVersion}
+                  canRestore={canEdit}
+                  onRestoreAsNewDocument={onRestoreAsNewDocument}
+                  onRevertLatest={onRevertLatestHistoryVersion}
+                  onOpenThread={openCommentThread}
+                  {...(canEdit ? { onRestoreVersion: onRestoreHistoryVersion } : {})}
+                />
               </Tabs.Content>
               {hasSearchResults && (
                 <Tabs.Content value="search" className="right-tab-panel">

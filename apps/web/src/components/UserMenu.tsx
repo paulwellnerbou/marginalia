@@ -24,9 +24,11 @@ import { Copyable } from './Copyable.js';
 export function UserMenu({
   onChange,
   role,
+  showName = false,
 }: {
   onChange?: (name: string) => void;
   role?: Role | undefined;
+  showName?: boolean;
 }) {
   // Reactive: stays in sync when any other part of the app (or another tab)
   // writes a new display name.
@@ -58,13 +60,26 @@ export function UserMenu({
     <>
       <DropdownMenu.Root>
         <DropdownMenu.Trigger>
-          <IconButton
-            variant="soft"
-            size="2"
-            aria-label={`User menu for ${name}`}
-          >
-            <PersonIcon />
-          </IconButton>
+          {showName ? (
+            <Button
+              variant="soft"
+              size="2"
+              aria-label={`User menu for ${name}`}
+              className="user-menu-trigger user-menu-trigger--with-name"
+            >
+              <PersonIcon />
+              <span className="user-menu-trigger-label">{name}</span>
+            </Button>
+          ) : (
+            <IconButton
+              variant="soft"
+              size="2"
+              aria-label={`User menu for ${name}`}
+              className="user-menu-trigger"
+            >
+              <PersonIcon />
+            </IconButton>
+          )}
         </DropdownMenu.Trigger>
         <DropdownMenu.Content align="end" style={{ minWidth: 320 }}>
           <Flex px="3" pt="3" pb="2" direction="column" gap="1">

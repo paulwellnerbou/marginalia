@@ -8,7 +8,7 @@ import type { DocumentFormat } from './db.js';
  * Thin wrapper around isomorphic-git that stores every document as a file
  * at the repo root with a name derived from uid + format
  * (`<uid>.md` or `<uid>.adoc`). Every write is a commit authored by the
- * display name (+ client ID in the trailer).
+ * stable client ID (+ extra Marginalia trailers when needed).
  *
  * `read()`, `history()`, `readAt()`, `deleteDoc()` take a relative `path`
  * — typically the value already stored in `documents.path`, so callers
@@ -55,16 +55,24 @@ export class GitStore {
     content: string,
     author: { displayName: string; clientId: string },
     action: 'upload' | 'update' | 'restore' | 'accept-proposal',
+    meta: { proposalId?: string; restoredFromOid?: string } = {},
   ): Promise<{ oid: string; path: string }> {
     const path = this.docPath(uid, format);
     writeFileSync(this.absPath(path), content);
     await git.add({ fs, dir: this.repoDir, filepath: path });
+    const subject =
+      action === 'accept-proposal' ? `${action}: ${meta.proposalId ?? uid}` : `${action}: ${uid}`;
+    const trailers = [
+      `X-Marginalia-Client-ID: ${author.clientId}`,
+      meta.proposalId ? `X-Marginalia-Proposal-ID: ${meta.proposalId}` : null,
+      meta.restoredFromOid ? `X-Marginalia-Restored-From: ${meta.restoredFromOid}` : null,
+    ].filter((line): line is string => Boolean(line));
     const oid = await git.commit({
       fs,
       dir: this.repoDir,
-      message: `${action}: ${uid}\n\nX-Marginalia-Client-ID: ${author.clientId}\n`,
+      message: `${subject}\n\n${trailers.join('\n')}\n`,
       author: {
-        name: author.displayName,
+        name: author.clientId,
         email: `${author.clientId}@marginalia.local`,
       },
     });
@@ -93,7 +101,7 @@ export class GitStore {
       dir: this.repoDir,
       message: `delete: ${uid}\n\nX-Marginalia-Client-ID: ${author.clientId}\n`,
       author: {
-        name: author.displayName,
+        name: author.clientId,
         email: `${author.clientId}@marginalia.local`,
       },
     });
@@ -117,6 +125,22 @@ export class GitStore {
     }));
   }
 
+  async diffAt(path: string, oid: string): Promise<{ before: string; after: string } | null> {
+    const after = await this.tryReadAt(path, oid);
+    if (after === null) return null;
+
+    let parentOid: string | undefined;
+    try {
+      const { commit } = await git.readCommit({ fs, dir: this.repoDir, oid });
+      parentOid = commit.parent[0];
+    } catch {
+      return null;
+    }
+
+    const before = parentOid ? (await this.tryReadAt(path, parentOid)) ?? '' : '';
+    return { before, after };
+  }
+
   async readAt(path: string, oid: string): Promise<string> {
     const { blob } = await git.readBlob({
       fs,
@@ -125,6 +149,14 @@ export class GitStore {
       filepath: path,
     });
     return new TextDecoder().decode(blob);
+  }
+
+  private async tryReadAt(path: string, oid: string): Promise<string | null> {
+    try {
+      return await this.readAt(path, oid);
+    } catch {
+      return null;
+    }
   }
 }
 

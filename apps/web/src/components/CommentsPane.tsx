@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, useRef } from 'react';
+import type { BlockSourceRange } from '@marginalia/renderer';
+import { DotsHorizontalIcon } from '@radix-ui/react-icons';
 import {
   Badge,
   Button,
@@ -8,16 +9,17 @@ import {
   SegmentedControl,
   Text,
 } from '@radix-ui/themes';
-import { DotsHorizontalIcon } from '@radix-ui/react-icons';
-import type { BlockSourceRange } from '@marginalia/renderer';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Comment, CommentAnchor, EditProposal } from '../lib/api.js';
 import { CommentComposer, type ComposerHandle } from './CommentComposer.js';
 import { CommentItem } from './CommentItem.js';
 import { DiscussionThread } from './DiscussionUi.js';
 import { EditProposalItem } from './EditProposalItem.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
+import { buildThreadCollapseState, reconcileThreadCollapseState } from './threadCollapseState.js';
 
 interface Props {
+  uid: string;
   comments: Comment[];
   proposals: EditProposal[];
   /** Live document source, used by diff/composer. */
@@ -85,26 +87,27 @@ interface ThreadAnchorOrder {
 
 type ThreadListItem =
   | {
-    kind: 'comment';
-    id: string;
-    createdAt: number;
-    latestActivityAt: number;
-    anchor: ThreadAnchorOrder;
-    group: AnchorGroup;
-  }
+      kind: 'comment';
+      id: string;
+      createdAt: number;
+      latestActivityAt: number;
+      anchor: ThreadAnchorOrder;
+      group: AnchorGroup;
+    }
   | {
-    kind: 'proposal';
-    id: string;
-    createdAt: number;
-    latestActivityAt: number;
-    anchor: ThreadAnchorOrder;
-    thread: ProposalThread;
-  };
+      kind: 'proposal';
+      id: string;
+      createdAt: number;
+      latestActivityAt: number;
+      anchor: ThreadAnchorOrder;
+      thread: ProposalThread;
+    };
 
 type CommentSortMode = 'document' | 'latest';
 
 export function CommentsPane(props: Props) {
   const {
+    uid,
     comments,
     proposals,
     docSource,
@@ -174,39 +177,45 @@ export function CommentsPane(props: Props) {
     () => combineThreads(orphans, orphanedProposalThreads, sortMode, blockOrder),
     [blockOrder, orphanedProposalThreads, orphans, sortMode],
   );
-  const [collapsedThreads, setCollapsedThreads] = useState<Set<string>>(new Set());
+  const threadCollapseDefaults = useMemo(
+    () =>
+      [...orphanedThreads, ...activeThreads].map((thread) => ({
+        id: thread.id,
+        autoCollapse: shouldThreadAutoCollapse(thread),
+      })),
+    [activeThreads, orphanedThreads],
+  );
+  const [threadCollapseState, setThreadCollapseState] = useState(() =>
+    buildThreadCollapseState(threadCollapseDefaults),
+  );
+  const collapsedThreads = threadCollapseState.collapsed;
   const [focusedThreadId, setFocusedThreadId] = useState<string | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const lastHandledFocusNonce = useRef<number | null>(null);
   const threadIds = useMemo(
-    () => [...orphanedThreads, ...activeThreads].map((thread) => thread.id),
-    [activeThreads, orphanedThreads],
+    () => threadCollapseDefaults.map((thread) => thread.id),
+    [threadCollapseDefaults],
   );
+  const focusedThreadExists = focusedThread ? threadIds.includes(focusedThread.threadId) : false;
   const totalThreads = threadIds.length;
-  const allCollapsed = totalThreads > 0 && threadIds.every((threadId) => collapsedThreads.has(threadId));
+  const allCollapsed =
+    totalThreads > 0 && threadIds.every((threadId) => collapsedThreads.has(threadId));
 
   useEffect(() => {
-    setCollapsedThreads((prev) => {
-      if (prev.size === 0) return prev;
-      const validIds = new Set(threadIds);
-      const next = new Set<string>();
-      for (const threadId of prev) {
-        if (validIds.has(threadId)) next.add(threadId);
-      }
-      return next.size === prev.size ? prev : next;
-    });
-  }, [threadIds]);
+    setThreadCollapseState((prev) => reconcileThreadCollapseState(prev, threadCollapseDefaults));
+  }, [threadCollapseDefaults]);
 
   useEffect(() => {
     if (!focusedThread) return;
+    if (!focusedThreadExists) return;
     if (lastHandledFocusNonce.current === focusedThread.nonce) return;
 
     if (collapsedThreads.has(focusedThread.threadId)) {
-      setCollapsedThreads((prev) => {
-        if (!prev.has(focusedThread.threadId)) return prev;
-        const next = new Set(prev);
+      setThreadCollapseState((prev) => {
+        if (!prev.collapsed.has(focusedThread.threadId)) return prev;
+        const next = new Set(prev.collapsed);
         next.delete(focusedThread.threadId);
-        return next;
+        return { ...prev, collapsed: next };
       });
       return;
     }
@@ -221,15 +230,13 @@ export function CommentsPane(props: Props) {
       threadEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
     const timeout = window.setTimeout(() => {
-      setFocusedThreadId((current) =>
-        current === focusedThread.threadId ? null : current,
-      );
+      setFocusedThreadId((current) => (current === focusedThread.threadId ? null : current));
     }, 1800);
     return () => {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timeout);
     };
-  }, [activeThreads, collapsedThreads, focusedThread, orphanedThreads]);
+  }, [collapsedThreads, focusedThread, focusedThreadExists]);
 
   async function submitNew(body: string, name?: string) {
     if (!pendingAnchor) return;
@@ -251,11 +258,11 @@ export function CommentsPane(props: Props) {
   }
 
   function toggleCollapsed(threadId: string) {
-    setCollapsedThreads((prev) => {
-      const next = new Set(prev);
+    setThreadCollapseState((prev) => {
+      const next = new Set(prev.collapsed);
       if (next.has(threadId)) next.delete(threadId);
       else next.add(threadId);
-      return next;
+      return { ...prev, collapsed: next };
     });
   }
 
@@ -289,6 +296,7 @@ export function CommentsPane(props: Props) {
     return (
       <EditProposalItem
         key={thread.id}
+        uid={uid}
         proposal={thread.thread.proposal}
         replies={thread.thread.replies}
         docSource={docSource}
@@ -346,7 +354,22 @@ export function CommentsPane(props: Props) {
             </DropdownMenu.Trigger>
             <DropdownMenu.Content align="end">
               <DropdownMenu.Item
-                onSelect={() => setCollapsedThreads(new Set(threadIds))}
+                onSelect={() =>
+                  setThreadCollapseState((prev) => {
+                    const next = new Set(threadIds);
+                    if (next.size === prev.collapsed.size) {
+                      let identical = true;
+                      for (const threadId of next) {
+                        if (!prev.collapsed.has(threadId)) {
+                          identical = false;
+                          break;
+                        }
+                      }
+                      if (identical) return prev;
+                    }
+                    return { ...prev, collapsed: next };
+                  })
+                }
                 disabled={allCollapsed}
               >
                 Collapse all threads
@@ -358,7 +381,7 @@ export function CommentsPane(props: Props) {
 
       {canComment && pendingAnchor && (
         <div className="comment-composer">
-          <div className="quote">“{pendingAnchor.quote}”</div>
+          <div className="composer-quote">“{pendingAnchor.quote}”</div>
           <CommentComposer
             mentionCandidates={mentionCandidates}
             placeholder="Your comment…"
@@ -446,12 +469,7 @@ function AnchorGroupView({
         Resolved{group.top.resolved_by_name ? ` by ${group.top.resolved_by_name}` : ''}
       </Badge>
       {canResolve && (
-        <Button
-          size="1"
-          variant="soft"
-          color="gray"
-          onClick={() => onResolve(group.top.id, false)}
-        >
+        <Button size="1" variant="soft" color="gray" onClick={() => onResolve(group.top.id, false)}>
           Reopen
         </Button>
       )}
@@ -629,8 +647,8 @@ function compareThreadAnchorOrder(
   b: ThreadAnchorOrder,
   blockOrder: Map<string, number>,
 ): number {
-  const aBlockIndex = a.blockId ? blockOrder.get(a.blockId) ?? null : null;
-  const bBlockIndex = b.blockId ? blockOrder.get(b.blockId) ?? null : null;
+  const aBlockIndex = a.blockId ? (blockOrder.get(a.blockId) ?? null) : null;
+  const bBlockIndex = b.blockId ? (blockOrder.get(b.blockId) ?? null) : null;
   const blockCmp = compareNullableNumber(aBlockIndex, bBlockIndex);
   if (blockCmp !== 0) return blockCmp;
 
@@ -691,13 +709,19 @@ function proposalLatestActivityTs(thread: ProposalThread): number {
   return latest;
 }
 
+function shouldThreadAutoCollapse(thread: ThreadListItem): boolean {
+  if (thread.kind === 'comment') return thread.group.top.resolved_at !== null;
+  return (
+    thread.thread.proposal.status === 'accepted' || thread.thread.proposal.status === 'rejected'
+  );
+}
+
 function anchorOrderFromComment(anchor: CommentAnchor | null): ThreadAnchorOrder {
   return {
     blockId: anchor?.block_id ?? null,
     sectionIndex: typeof anchor?.section_index === 'number' ? anchor.section_index : null,
     sectionIndexPath: anchor?.section_index_path ?? [],
-    startOffset:
-      typeof anchor?.start_offset === 'number' ? anchor.start_offset : null,
+    startOffset: typeof anchor?.start_offset === 'number' ? anchor.start_offset : null,
   };
 }
 

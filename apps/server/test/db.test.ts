@@ -300,22 +300,26 @@ describe('openDatabase migrations', () => {
     });
 
     const migratedProposal = db.prepare(
-      `SELECT comment_id, anchor_kind, proposed_text, status, decided_at, decided_by_name
+      `SELECT comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid, decided_at, decided_by_name
          FROM comments_edit_proposals
         WHERE comment_id = ?`,
     ).get('prop-1') as {
       comment_id: string;
       anchor_kind: string | null;
+      source_snapshot: string | null;
       proposed_text: string;
       status: string;
+      accepted_oid: string | null;
       decided_at: number | null;
       decided_by_name: string | null;
     };
     expect(migratedProposal).toEqual({
       comment_id: 'prop-1',
       anchor_kind: 'paragraph',
+      source_snapshot: 'Original block',
       proposed_text: 'Edited block',
       status: 'pending',
+      accepted_oid: null,
       decided_at: null,
       decided_by_name: null,
     });

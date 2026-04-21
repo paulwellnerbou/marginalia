@@ -185,12 +185,27 @@ function recordAndReturn(db: Database, docUid: string, decision: AuthDecision): 
   if (!decision.ok || !decision.identity) return decision;
 
   const { clientId, displayName } = decision.identity;
+  syncAdminInviteDisplayName(db, decision.invite, displayName);
   const { oldName } = upsertDocUser(db, docUid, decision.identity);
 
   if (oldName !== null && oldName !== displayName) {
     propagateRename(db, docUid, clientId, oldName, displayName);
   }
   return decision;
+}
+
+function syncAdminInviteDisplayName(
+  db: Database,
+  invite: InviteRow | null,
+  displayName: string,
+): void {
+  if (!invite || invite.kind !== 'admin') return;
+  if (invite.display_name === displayName) return;
+  db.prepare(
+    `UPDATE invites
+        SET display_name = ?
+      WHERE token = ? AND kind = 'admin'`,
+  ).run(displayName, invite.token);
 }
 
 export type AuthDecision =

@@ -13,16 +13,18 @@ interface Props {
   /** Source flavour of the currently-open doc. Drives the MARKDOWN /
    *  ASCIIDOC badge next to the title — omitted on the home page. */
   format?: DocumentFormat;
-  /** Extra trailing slot for page-specific controls (e.g. Save in EditPage,
-   *  admin settings gear in ViewPage). Rendered before the appearance/user. */
+  /** Extra trailing slot for page-specific controls (e.g. Save/Cancel in
+   *  EditPage). Rendered before the appearance/user. */
   trailing?: ReactNode;
+  /** Expand the user trigger to show the current display name. */
+  showUserName?: boolean;
 }
 
 /**
  * The persistent top bar, present on every page. Anchors the app's home
  * navigation, identity, and global appearance control.
  */
-export function AppBar({ docTitle, role, format, trailing }: Props) {
+export function AppBar({ docTitle, role, format, trailing, showUserName }: Props) {
   const brandGradientId = useId().replace(/:/g, '');
 
   return (
@@ -77,7 +79,7 @@ export function AppBar({ docTitle, role, format, trailing }: Props) {
       <span className="spacer" />
       {trailing}
       <AppearanceToggle />
-      <UserMenu role={role} />
+      <UserMenu role={role} showName={showUserName ?? false} />
     </Flex>
   );
 }

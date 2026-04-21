@@ -12,7 +12,12 @@ import {
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
-import { reanchorProposals } from './edit-proposals.js';
+import {
+  loadProposalRow,
+  reopenAcceptedProposal,
+  reanchorProposals,
+  toWire as toEditProposalWire,
+} from './edit-proposals.js';
 import {
   type Identity,
   SESSION_COOKIE,
@@ -36,9 +41,10 @@ import type {
   InviteRow,
 } from '../db.js';
 import { isDocumentFormat, isInviteKind, isInviteRole } from '../db.js';
-import type { GitStore } from '../git-store.js';
+import type { HistoryEntry as GitHistoryEntry, GitStore } from '../git-store.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
 import type { Realtime } from '../realtime.js';
+import { listDocUserNameMap, upsertDocUser } from '../users.js';
 
 export interface AppDeps {
   db: Database;
@@ -60,6 +66,9 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.patch('/:uid/settings', async (c) => updateSettings(c, deps));
   r.delete('/:uid', async (c) => deleteDocument(c, deps));
   r.get('/:uid/history', async (c) => getHistory(c, deps));
+  r.get('/:uid/history/:oid/diff', async (c) => getHistoryDiff(c, deps));
+  r.post('/:uid/history/:oid/restore', async (c) => restoreHistoryVersion(c, deps));
+  r.post('/:uid/history/:oid/revert', async (c) => revertLatestHistoryVersion(c, deps));
   r.post('/:uid/auth', async (c) => authenticate(c, deps));
 
   r.get('/:uid/invites', async (c) => listInvites(c, deps));
@@ -111,6 +120,7 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
        (uid, path, name, password_hash, editable_by_anyone, default_theme, format, created_at, updated_at)
      VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`,
   ).run(uid, path, docName, passwordHash, theme, format, now, now);
+  upsertDocUser(db, uid, identity);
 
   // Every doc gets an admin invite for its creator. The returned URL is the
   // admin's canonical way to come back to the doc.
@@ -154,6 +164,7 @@ async function getDocument(c: Context, deps: AppDeps) {
   rendered.html = await rewriteAssetReferences(rendered.html, {
     docUid: doc.uid,
     attached: new Set(attached.map((a) => a.ref_name)),
+    assetVersions: new Map(attached.map((a) => [a.ref_name, a.asset_id])),
   });
 
   // For admin/named invites: the server-resolved current name (invite
@@ -161,7 +172,7 @@ async function getDocument(c: Context, deps: AppDeps) {
   // null. Client uses this to keep localStorage in sync with the server.
   const forcedDisplayName =
     decision.invite && decision.invite.kind !== 'generic'
-      ? decision.identity?.displayName ?? null
+      ? (decision.identity?.displayName ?? null)
       : null;
   return c.json({
     uid: doc.uid,
@@ -463,9 +474,10 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
 
   const identity = readIdentity(c.req.raw.headers);
   const themeParam = c.req.query('theme');
-  const theme = typeof themeParam === 'string' && themeParam.length > 0
-    ? themeParam
-    : (doc.default_theme ?? 'default');
+  const theme =
+    typeof themeParam === 'string' && themeParam.length > 0
+      ? themeParam
+      : (doc.default_theme ?? 'default');
 
   // Build an asset-resolver scoped to this document so markdown `<img>`
   // srcs that match an attached ref land as real embedded images in the
@@ -558,6 +570,7 @@ async function importDocument(c: Context, deps: AppDeps) {
        (uid, path, name, password_hash, editable_by_anyone, default_theme, format, created_at, updated_at)
      VALUES (?, ?, ?, NULL, 0, ?, ?, ?, ?)`,
   ).run(uid, path, name, theme, format, now, now);
+  upsertDocUser(db, uid, identity);
 
   // Fresh admin invite for the importer — not re-using the one from the
   // bundle (tokens are tied to specific deployments / user IDs).
@@ -695,8 +708,175 @@ async function getHistory(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
-  const history = await store.history(doc.path);
+  const userNames = listDocUserNameMap(db, doc.uid);
+  const history = (await store.history(doc.path)).map((entry) =>
+    toHistoryWire(db, doc.uid, entry, userNames),
+  );
   return c.json({ history });
+}
+
+async function getHistoryDiff(c: Context, deps: AppDeps) {
+  const { db, store } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+  const oid = c.req.param('oid');
+  if (!oid) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+
+  const diff = await store.diffAt(doc.path, oid);
+  if (!diff) return c.json({ error: 'not-found' }, 404);
+  return c.json(diff);
+}
+
+async function restoreHistoryVersion(c: Context, deps: AppDeps) {
+  const { db, store, realtime } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+  const targetOid = c.req.param('oid');
+  if (!targetOid) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
+
+  let restoredSource: string;
+  try {
+    restoredSource = await store.readAt(doc.path, targetOid);
+  } catch {
+    return c.json({ error: 'not-found' }, 404);
+  }
+
+  const { oid } = await store.write(
+    doc.uid,
+    doc.format,
+    restoredSource,
+    decision.identity,
+    'restore',
+    {
+      restoredFromOid: targetOid,
+    },
+  );
+  const now = Date.now();
+  db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
+
+  const rendered = await renderDocument(restoredSource, doc.format);
+  const topLevel = db
+    .prepare(
+      `SELECT * FROM comments
+         WHERE doc_uid = ? AND parent_id IS NULL AND deleted_at IS NULL`,
+    )
+    .all(doc.uid) as CommentRow[];
+  const updateStmt = db.prepare(
+    `UPDATE comments
+        SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
+            status = ?, updated_at = ?
+      WHERE id = ?`,
+  );
+  for (const comment of topLevel) {
+    const upd = reanchor(comment, rendered.blocks);
+    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
+  }
+
+  const knownIds =
+    doc.format === 'asciidoc'
+      ? [...locateAllBlocksAsciidoc(restoredSource).keys()]
+      : [...locateAllBlocks(restoredSource).keys()];
+  reanchorProposals(db, doc.uid, knownIds, now, realtime, decision.identity.clientId);
+
+  realtime.broadcast(
+    doc.uid,
+    { type: 'document.updated', oid, author: decision.identity.displayName },
+    decision.identity.clientId,
+  );
+
+  return c.json({ oid });
+}
+
+async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
+  const { db, store, realtime } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+  const targetOid = c.req.param('oid');
+  if (!targetOid) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
+
+  const history = await store.history(doc.path);
+  const latest = history[0];
+  const parent = history[1];
+  if (!latest || latest.oid !== targetOid) return c.json({ error: 'not-latest' }, 409);
+  if (!parent) return c.json({ error: 'no-parent' }, 409);
+
+  const diff = await store.diffAt(doc.path, targetOid);
+  if (!diff) return c.json({ error: 'not-found' }, 404);
+
+  const meta = parseHistoryMetadata(latest);
+  const { oid } = await store.write(
+    doc.uid,
+    doc.format,
+    diff.before,
+    decision.identity,
+    'restore',
+    {
+      restoredFromOid: parent.oid,
+    },
+  );
+  const now = Date.now();
+  db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
+
+  const rendered = await renderDocument(diff.before, doc.format);
+  const topLevel = db
+    .prepare(
+      `SELECT * FROM comments
+         WHERE doc_uid = ? AND parent_id IS NULL AND deleted_at IS NULL`,
+    )
+    .all(doc.uid) as CommentRow[];
+  const updateStmt = db.prepare(
+    `UPDATE comments
+        SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
+            status = ?, updated_at = ?
+      WHERE id = ?`,
+  );
+  for (const comment of topLevel) {
+    const upd = reanchor(comment, rendered.blocks);
+    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
+  }
+
+  const reopenedProposalId =
+    meta.action === 'accept-proposal' && meta.proposalId
+      ? (reopenAcceptedProposal(db, doc.uid, meta.proposalId, now)?.id ?? null)
+      : null;
+
+  const knownIds =
+    doc.format === 'asciidoc'
+      ? [...locateAllBlocksAsciidoc(diff.before).keys()]
+      : [...locateAllBlocks(diff.before).keys()];
+  reanchorProposals(db, doc.uid, knownIds, now, realtime, decision.identity.clientId);
+
+  if (reopenedProposalId) {
+    const reopened = loadProposalRow(db, reopenedProposalId, doc.uid);
+    if (reopened && reopened.status === 'pending') {
+      realtime.broadcast(
+        doc.uid,
+        { type: 'edit_proposal.updated', edit_proposal: toEditProposalWire(reopened) },
+        decision.identity.clientId,
+      );
+    }
+  }
+
+  realtime.broadcast(
+    doc.uid,
+    { type: 'document.updated', oid, author: decision.identity.displayName },
+    decision.identity.clientId,
+  );
+
+  return c.json({ oid, reopened_proposal_id: reopenedProposalId });
 }
 
 // --- POST /api/documents/:uid/auth -----------------------------------
@@ -855,15 +1035,18 @@ async function rotateAdminInvite(c: Context, deps: AppDeps) {
   // Insert-then-delete so the doc is never admin-less between steps.
   const fresh = createInviteRow(db, {
     docUid: doc.uid,
-    displayName: existing?.display_name ?? decision.identity.displayName,
+    // Carry the admin's CURRENT identity forward so a local rename is
+    // reflected in the rotated link immediately.
+    displayName: decision.identity.displayName,
     role: 'admin',
     kind: 'admin',
     note: existing?.note ?? 'Author',
     createdByName: decision.identity.displayName,
   });
-  db.prepare(
-    `DELETE FROM invites WHERE doc_uid = ? AND kind = 'admin' AND token != ?`,
-  ).run(doc.uid, fresh.token);
+  db.prepare(`DELETE FROM invites WHERE doc_uid = ? AND kind = 'admin' AND token != ?`).run(
+    doc.uid,
+    fresh.token,
+  );
   return c.json({
     admin_invite: {
       token: fresh.token,
@@ -917,6 +1100,173 @@ function toInviteWire(row: InviteRow): Record<string, unknown> {
 }
 
 // --- helpers ---------------------------------------------------------
+
+type HistoryAction = 'upload' | 'update' | 'restore' | 'accept-proposal' | 'unknown';
+
+interface AcceptedProposalHistoryRow {
+  id: string;
+  rationale: string | null;
+  proposed_text: string;
+  author_client_id: string;
+  author_display_name: string;
+}
+
+function toHistoryWire(
+  db: Database,
+  docUid: string,
+  entry: GitHistoryEntry,
+  userNames: Map<string, string>,
+): Record<string, unknown> {
+  const meta = parseHistoryMetadata(entry);
+  const actorDisplayName = meta.clientId
+    ? (userNames.get(meta.clientId) ?? fallbackHistoryAuthorName(entry.author.name, meta.clientId))
+    : fallbackHistoryAuthorName(entry.author.name, null);
+  const proposal =
+    meta.action === 'accept-proposal'
+      ? loadAcceptedProposalHistory(db, docUid, entry.oid, userNames, meta.proposalId)
+      : null;
+
+  return {
+    oid: entry.oid,
+    action: meta.action,
+    actor: {
+      client_id: meta.clientId,
+      display_name: actorDisplayName,
+    },
+    timestamp: entry.timestamp,
+    restored_from_oid: meta.restoredFromOid,
+    proposal,
+  };
+}
+
+function parseHistoryMetadata(entry: GitHistoryEntry): {
+  action: HistoryAction;
+  clientId: string | null;
+  proposalId: string | null;
+  restoredFromOid: string | null;
+} {
+  const firstLine = entry.message.split('\n', 1)[0]?.trim() ?? '';
+  const action = parseHistoryAction(firstLine);
+  const trailerClientId = readCommitTrailer(entry.message, 'X-Marginalia-Client-ID');
+  const emailClientId = extractClientIdFromEmail(entry.author.email);
+  const proposalId =
+    readCommitTrailer(entry.message, 'X-Marginalia-Proposal-ID') ??
+    extractHistorySubjectValue(firstLine, 'accept-proposal:');
+
+  return {
+    action,
+    clientId: trailerClientId ?? emailClientId,
+    proposalId,
+    restoredFromOid: readCommitTrailer(entry.message, 'X-Marginalia-Restored-From'),
+  };
+}
+
+function parseHistoryAction(firstLine: string): HistoryAction {
+  if (firstLine.startsWith('upload:')) return 'upload';
+  if (firstLine.startsWith('update:')) return 'update';
+  if (firstLine.startsWith('restore:')) return 'restore';
+  if (firstLine.startsWith('accept-proposal:')) return 'accept-proposal';
+  return 'unknown';
+}
+
+function readCommitTrailer(message: string, key: string): string | null {
+  const needle = `${key}:`;
+  for (const rawLine of message.split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith(needle)) continue;
+    const value = line.slice(needle.length).trim();
+    return value.length > 0 ? value : null;
+  }
+  return null;
+}
+
+function extractHistorySubjectValue(firstLine: string, prefix: string): string | null {
+  if (!firstLine.startsWith(prefix)) return null;
+  const value = firstLine.slice(prefix.length).trim();
+  return value.length > 0 ? value : null;
+}
+
+function extractClientIdFromEmail(email: string): string | null {
+  const at = email.indexOf('@');
+  if (at <= 0) return null;
+  const local = email.slice(0, at).trim();
+  return local.length > 0 ? local : null;
+}
+
+function fallbackHistoryAuthorName(authorName: string, clientId: string | null): string | null {
+  const trimmed = authorName.trim();
+  if (!trimmed) return null;
+  if (clientId && trimmed === clientId) return null;
+  return trimmed;
+}
+
+function loadAcceptedProposalHistory(
+  db: Database,
+  docUid: string,
+  acceptedOid: string,
+  userNames: Map<string, string>,
+  proposalId: string | null,
+): Record<string, unknown> | null {
+  const row = proposalId
+    ? (db
+        .prepare(
+          `SELECT
+           c.id,
+           NULLIF(c.body, '') AS rationale,
+           cep.proposed_text,
+           c.author_client_id,
+           c.author_display_name
+         FROM comments c
+         INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.doc_uid = ?
+          AND c.id = ?
+          AND c.deleted_at IS NULL
+        LIMIT 1`,
+        )
+        .get(docUid, proposalId) as AcceptedProposalHistoryRow | null | undefined)
+    : (db
+        .prepare(
+          `SELECT
+           c.id,
+           NULLIF(c.body, '') AS rationale,
+           cep.proposed_text,
+           c.author_client_id,
+           c.author_display_name
+         FROM comments c
+         INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.doc_uid = ?
+          AND cep.accepted_oid = ?
+          AND c.deleted_at IS NULL
+        LIMIT 1`,
+        )
+        .get(docUid, acceptedOid) as AcceptedProposalHistoryRow | null | undefined);
+  if (!row) return null;
+
+  return {
+    id: row.id,
+    author: {
+      client_id: row.author_client_id,
+      display_name: userNames.get(row.author_client_id) ?? row.author_display_name,
+    },
+    summary: summarizeProposalHistory(row),
+  };
+}
+
+function summarizeProposalHistory(row: AcceptedProposalHistoryRow): string {
+  const rationale = row.rationale?.trim();
+  if (rationale) return clipHistoryText(rationale, 160);
+
+  const firstLine =
+    row.proposed_text
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.length > 0) ?? row.proposed_text.trim();
+  return clipHistoryText(firstLine || '(empty proposal)', 160);
+}
+
+function clipHistoryText(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
 
 function loadDoc(db: Database, uid: string | undefined): DocumentRow | null {
   if (!uid) return null;

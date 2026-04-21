@@ -285,6 +285,17 @@ button.primary:disabled {
   max-width: 40ch;
 }
 
+.user-menu-trigger--with-name {
+  max-width: min(18rem, 32vw);
+}
+
+.user-menu-trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ============================================================
  * Document three-pane layout
  * ============================================================ */
@@ -1108,6 +1119,10 @@ button.primary:disabled {
 }
 
 @media (max-width: 640px) {
+  .user-menu-trigger--with-name {
+    max-width: 11rem;
+  }
+
   .landing-github-link {
     top: 0.85rem;
     right: 1rem;
@@ -1248,18 +1263,41 @@ button.primary:disabled {
   border-bottom: 1px solid var(--ui-border);
 }
 
+.anchor-group {
+  position: relative;
+  isolation: isolate;
+  padding: 0.45rem 0.55rem 0.65rem;
+  border-radius: 10px;
+}
+
+.anchor-group::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--ui-accent) 8%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+  transition: opacity 520ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.anchor-group > * {
+  position: relative;
+  z-index: 1;
+}
+
 .anchor-group + .anchor-group,
 .orphans + .anchor-group {
   margin-top: 1.5rem;
-  padding-top: 1.5rem;
+  padding-top: 1.95rem;
   border-top: 1px solid var(--ui-border);
 }
 
-.anchor-group.thread-focused {
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--ui-accent) 8%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ui-accent) 24%, transparent);
-  transition: background-color 180ms ease-out, box-shadow 180ms ease-out;
+.anchor-group.thread-focused::before {
+  opacity: 1;
+  transition-duration: 110ms;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* The anchor quote is a button so the whole thread is keyboard-clickable to
@@ -1504,10 +1542,14 @@ button.primary.small {
   background: var(--accent-2);
   margin-bottom: 1rem;
 }
-.comment-composer .quote {
-  font-size: 0.85rem;
+
+.composer-quote {
   color: var(--ui-fg-muted);
   font-style: italic;
+  font-size: 0.875rem;
+}
+
+.comment-composer .composer-quote {
   margin-bottom: 0.4rem;
 }
 
@@ -1972,11 +2014,6 @@ button.primary.small {
    nested .composer .composer-body-field rule applies the same font /
    padding / border / resize-vertical treatment the comment composer
    uses, so the two look identical. */
-.edit-proposal-composer .quote {
-  font-style: italic;
-  color: var(--ui-fg-muted);
-  font-size: 0.9em;
-}
 /* Markdown source deserves a monospace face so indentation and fences
    are readable. Sized slightly larger than the rationale field for the
    same reason — it's the primary field users type into. */
@@ -1984,10 +2021,6 @@ button.primary.small {
   font-family: var(--md-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-size: 0.875rem;
   min-height: calc(var(--ui-control-height) * 5);
-}
-
-.anchor-group.proposal {
-  margin-bottom: 0;
 }
 
 .proposal-rationale {
@@ -2004,14 +2037,24 @@ button.primary.small {
  * ============================================================ */
 
 .diff-view {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.82rem;
   line-height: 1.5;
-  max-height: 60vh;
-  overflow: auto;
   border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.1));
   border-radius: 4px;
   background: var(--ui-bg, #fff);
+  overflow: hidden;
+}
+.diff-scroll {
+  max-height: 60vh;
+  min-width: 0;
+  overflow: auto;
+}
+.diff-scroll-empty {
+  padding: 0.5rem;
 }
 .diff-line {
   display: flex;
@@ -2027,6 +2070,7 @@ button.primary.small {
 }
 .diff-line .diff-text {
   flex: 1 1 auto;
+  min-width: 0;
 }
 .diff-line .diff-inline-change {
   border-radius: 3px;
@@ -2053,4 +2097,62 @@ button.primary.small {
 .diff-line.diff-remove .diff-marker {
   color: #dc2626;
   opacity: 1;
+}
+.diff-overview {
+  display: flex;
+  align-self: stretch;
+  width: 1rem;
+  padding: 0 0.25rem 0 0.15rem;
+  border-left: 1px solid var(--ui-border, rgba(0, 0, 0, 0.08));
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.02), rgba(15, 23, 42, 0.05));
+}
+.diff-overview-track {
+  appearance: none;
+  display: block;
+  position: relative;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  cursor: pointer;
+}
+.diff-overview-track:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.35);
+  outline-offset: 2px;
+}
+.diff-overview-marker {
+  display: block;
+  position: absolute;
+  left: 0;
+  right: 0;
+  min-height: 3px;
+  border-radius: 999px;
+  opacity: 0.95;
+  pointer-events: none;
+  z-index: 1;
+}
+.diff-overview-marker-add {
+  background: rgba(22, 163, 74, 0.92);
+}
+.diff-overview-marker-remove {
+  background: rgba(220, 38, 38, 0.88);
+}
+.diff-overview-viewport {
+  position: absolute;
+  left: 0;
+  right: 0;
+  min-height: 1rem;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.42);
+  background: rgba(15, 23, 42, 0.18);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.18);
+  pointer-events: none;
+  z-index: 2;
 }

@@ -29,7 +29,7 @@ import {
   TextField,
   Tooltip,
 } from '@radix-ui/themes';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { Copyable } from '../components/Copyable.js';
@@ -45,6 +45,10 @@ import {
 import { deriveDisplayName, getClientId, getDisplayName, setDisplayName } from '../lib/identity.js';
 import { saveInviteToken } from '../lib/invite.js';
 import { reportError } from '../lib/log.js';
+import {
+  consumePendingNewDocumentDraft,
+  type PendingNewDocumentDraft,
+} from '../lib/new-document-draft.js';
 import {
   type RecentDoc,
   loadRecentDocs,
@@ -73,10 +77,28 @@ const GITHUB_REPO_URL = 'https://github.com/paulwellnerbou/marginalia';
 export function HomePage() {
   const navigate = useNavigate();
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadDraft, setUploadDraft] = useState<PendingNewDocumentDraft | null>(null);
   const [recent, setRecent] = useState<RecentDoc[]>(() => loadRecentDocs());
 
   function refreshRecent() {
     setRecent(loadRecentDocs());
+  }
+
+  useEffect(() => {
+    const pendingDraft = consumePendingNewDocumentDraft();
+    if (!pendingDraft) return;
+    setUploadDraft(pendingDraft);
+    setUploadOpen(true);
+  }, []);
+
+  function openFreshUploadDialog() {
+    setUploadDraft(null);
+    setUploadOpen(true);
+  }
+
+  function handleUploadOpenChange(nextOpen: boolean) {
+    setUploadOpen(nextOpen);
+    if (!nextOpen) setUploadDraft(null);
   }
 
   return (
@@ -110,7 +132,7 @@ export function HomePage() {
                 git, and lets collaborators leave comments and change proposals on any paragraph.
               </Text>
               <Flex gap="3" mt="2" wrap="wrap" justify="center">
-                <Button size="4" onClick={() => setUploadOpen(true)}>
+                <Button size="4" onClick={openFreshUploadDialog}>
                   <PlusIcon />
                   New document
                 </Button>
@@ -148,7 +170,6 @@ export function HomePage() {
             </Grid>
           </Container>
         </section>
-
         {/* RECENT DOCS */}
         <section className="landing-recent" id="recent">
           <Container size="4" px="4" py="7">
@@ -160,14 +181,14 @@ export function HomePage() {
                 </Text>
               </Box>
               {recent.length > 0 && (
-                <Button variant="soft" onClick={() => setUploadOpen(true)}>
+                <Button variant="soft" onClick={openFreshUploadDialog}>
                   <PlusIcon /> New document
                 </Button>
               )}
             </Flex>
 
             {recent.length === 0 ? (
-              <EmptyState onCreate={() => setUploadOpen(true)} />
+              <EmptyState onCreate={openFreshUploadDialog} />
             ) : (
               <Grid columns={{ initial: '1', sm: '2', md: '3' }} gap="3">
                 {recent.map((r) => (
@@ -191,7 +212,8 @@ export function HomePage() {
 
       <UploadDialog
         open={uploadOpen}
-        onOpenChange={setUploadOpen}
+        onOpenChange={handleUploadOpenChange}
+        draft={uploadDraft}
         onUploaded={(d) => {
           const { token, ...recent } = d;
           recordVisit(recent);
@@ -439,10 +461,12 @@ function RecentCard({
 function UploadDialog({
   open,
   onOpenChange,
+  draft,
   onUploaded,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
+  draft: PendingNewDocumentDraft | null;
   onUploaded: (d: RecentDoc & { token?: string }) => void;
 }) {
   const [source, setSource] = useState(SAMPLE);
@@ -485,6 +509,11 @@ function UploadDialog({
   const derivedTitle =
     format === 'asciidoc' ? deriveAsciidocTitle(source) : deriveDisplayName(source);
   const effectiveDocName = docName.trim() || derivedTitle;
+
+  useEffect(() => {
+    if (!open || !draft || createdAdminUrl) return;
+    reset(draft);
+  }, [createdAdminUrl, draft, open]);
 
   async function handleFile(file: File) {
     if (isBundleFile(file)) {
@@ -589,18 +618,19 @@ function UploadDialog({
     }
   }
 
-  function reset() {
-    setSource(SAMPLE);
-    setFormat('markdown');
-    setDocName('');
+  function reset(nextDraft: PendingNewDocumentDraft | null = null) {
+    setSource(nextDraft?.source ?? SAMPLE);
+    setFormat(nextDraft?.format ?? 'markdown');
+    setDocName(nextDraft?.docName ?? '');
     setPasswordProtected(false);
+    setSubmitting(false);
     setError(null);
     setCreatedPassword(null);
     setCreatedAdminUrl(null);
     setCreatedUid(null);
     setCreatedToken(null);
     setCreatedTitle('Untitled');
-    setCreatedFormat('markdown');
+    setCreatedFormat(nextDraft?.format ?? 'markdown');
   }
 
   function openCreated() {

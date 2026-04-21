@@ -74,8 +74,10 @@ CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id);
 CREATE TABLE IF NOT EXISTS comments_edit_proposals (
   comment_id             TEXT PRIMARY KEY,
   anchor_kind            TEXT,
+  source_snapshot        TEXT,
   proposed_text          TEXT NOT NULL,
   status                 TEXT NOT NULL DEFAULT 'pending',
+  accepted_oid           TEXT,
   decided_at             INTEGER,
   decided_by_name        TEXT
 );
@@ -296,11 +298,13 @@ export interface EditProposalRow {
   anchor_block_id: string | null;
   anchor_quote: string | null;
   anchor_kind: string | null;
+  source_snapshot: string | null;
   proposed_text: string;
   rationale: string | null;
   author_client_id: string;
   author_display_name: string;
   status: EditProposalStatus;
+  accepted_oid: string | null;
   decided_at: number | null;
   decided_by_name: string | null;
   created_at: number;
@@ -322,6 +326,8 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments', 'anchor_section_index_path', 'TEXT');
   ensureColumn(db, 'comments', 'parent_proposal_id', 'TEXT');
   ensureColumn(db, 'documents', 'format', "TEXT NOT NULL DEFAULT 'markdown'");
+  ensureColumn(db, 'comments_edit_proposals', 'source_snapshot', 'TEXT');
+  ensureColumn(db, 'comments_edit_proposals', 'accepted_oid', 'TEXT');
   ensureColumn(
     db,
     'document_assets',
@@ -429,13 +435,15 @@ function migrateEditProposalsToCommentExtensions(db: Database): void {
     `);
     db.exec(`
       INSERT OR IGNORE INTO comments_edit_proposals (
-        comment_id, anchor_kind, proposed_text, status, decided_at, decided_by_name
+        comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid, decided_at, decided_by_name
       )
       SELECT
         id,
         anchor_kind,
+        anchor_quote,
         proposed_text,
         status,
+        NULL,
         decided_at,
         decided_by_name
       FROM edit_proposals

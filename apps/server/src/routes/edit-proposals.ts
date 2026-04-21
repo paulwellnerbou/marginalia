@@ -25,6 +25,7 @@ export function editProposalsRouter(deps: AppDeps): Hono {
   const r = new Hono();
 
   r.get('/:uid/edit-proposals', async (c) => listProposals(c, deps));
+  r.get('/:uid/edit-proposals/:pid/diff', async (c) => getProposalDiff(c, deps));
   r.post('/:uid/edit-proposals', async (c) => createProposal(c, deps));
   r.patch('/:uid/edit-proposals/:pid', async (c) => editProposal(c, deps));
   r.delete('/:uid/edit-proposals/:pid', async (c) => deleteProposal(c, deps));
@@ -41,11 +42,13 @@ const PROPOSAL_SELECT = `
     c.anchor_block_id,
     c.anchor_quote,
     cep.anchor_kind,
+    cep.source_snapshot,
     cep.proposed_text,
     NULLIF(c.body, '') AS rationale,
     c.author_client_id,
     c.author_display_name,
     cep.status,
+    cep.accepted_oid,
     cep.decided_at,
     cep.decided_by_name,
     c.created_at,
@@ -79,7 +82,7 @@ async function listProposals(c: Context, deps: AppDeps) {
 // --- create ----------------------------------------------------------
 
 async function createProposal(c: Context, deps: AppDeps) {
-  const { db } = deps;
+  const { db, store } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
@@ -96,9 +99,10 @@ async function createProposal(c: Context, deps: AppDeps) {
   const quote = typeof body.anchor_quote === 'string' ? body.anchor_quote : null;
   const kind = typeof body.anchor_kind === 'string' ? body.anchor_kind : null;
   const proposed = typeof body.proposed_text === 'string' ? body.proposed_text : null;
-  const rationale = typeof body.rationale === 'string' && body.rationale.trim().length > 0
-    ? body.rationale.trim().slice(0, 2000)
-    : null;
+  const rationale =
+    typeof body.rationale === 'string' && body.rationale.trim().length > 0
+      ? body.rationale.trim().slice(0, 2000)
+      : null;
 
   if (!blockId || quote === null) return c.json({ error: 'anchor-required' }, 400);
   if (proposed === null || proposed.length === 0) {
@@ -106,6 +110,8 @@ async function createProposal(c: Context, deps: AppDeps) {
   }
   if (proposed.length > 20000) return c.json({ error: 'proposed-text-too-long' }, 400);
 
+  const currentSource = store.read(doc.path);
+  const sourceSnapshot = readProposalBlockSource(doc, currentSource, blockId) ?? quote;
   const id = newProposalId();
   const now = Date.now();
   db.exec('BEGIN');
@@ -133,9 +139,9 @@ async function createProposal(c: Context, deps: AppDeps) {
     );
     db.prepare(
       `INSERT INTO comments_edit_proposals
-         (comment_id, anchor_kind, proposed_text, status, decided_at, decided_by_name)
-       VALUES (?, ?, ?, 'pending', NULL, NULL)`,
-    ).run(id, kind, proposed);
+         (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid, decided_at, decided_by_name)
+       VALUES (?, ?, ?, ?, 'pending', NULL, NULL, NULL)`,
+    ).run(id, kind, sourceSnapshot, proposed);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
@@ -151,6 +157,25 @@ async function createProposal(c: Context, deps: AppDeps) {
     identity.clientId,
   );
   return c.json({ edit_proposal: wire }, 201);
+}
+
+// --- diff ------------------------------------------------------------
+
+async function getProposalDiff(c: Context, deps: AppDeps) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+
+  const pid = c.req.param('pid');
+  if (!pid) return c.json({ error: 'not-found' }, 404);
+  const row = loadProposalRow(db, pid, doc.uid);
+  if (!row) return c.json({ error: 'not-found' }, 404);
+
+  const before = await resolveProposalDiffBefore(doc, row, deps);
+  return c.json({ before, after: row.proposed_text });
 }
 
 // --- delete ----------------------------------------------------------
@@ -189,11 +214,7 @@ async function editProposal(c: Context, deps: AppDeps) {
   if (rationale === undefined) return c.json({ error: 'rationale-required' }, 400);
 
   const now = Date.now();
-  db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(
-    rationale,
-    now,
-    pid,
-  );
+  db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(rationale, now, pid);
   const updated = loadProposalRow(db, pid, doc.uid);
   if (!updated) return c.json({ error: 'not-found' }, 404);
   const wire = toWire(updated);
@@ -299,14 +320,14 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   const source = store.read(doc.path);
   const range =
     doc.format === 'asciidoc'
-      ? locateAllBlocksAsciidoc(source).get(row.anchor_block_id) ?? null
+      ? (locateAllBlocksAsciidoc(source).get(row.anchor_block_id) ?? null)
       : locateBlockSource(source, row.anchor_block_id);
   if (!range) {
     // Block no longer present — mark orphaned so the UI reflects reality.
     const now = Date.now();
-    db.prepare(
-      `UPDATE comments_edit_proposals SET status = 'orphaned' WHERE comment_id = ?`,
-    ).run(pid);
+    db.prepare(`UPDATE comments_edit_proposals SET status = 'orphaned' WHERE comment_id = ?`).run(
+      pid,
+    );
     db.prepare(
       `UPDATE comments
           SET status = 'orphaned', anchor_block_id = NULL, updated_at = ?
@@ -322,10 +343,11 @@ async function acceptProposal(c: Context, deps: AppDeps) {
     return c.json({ error: 'block-not-found' }, 409);
   }
 
-  const nextSource =
-    source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
+  const nextSource = source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
 
-  const { oid } = await store.write(doc.uid, doc.format, nextSource, identity, 'accept-proposal');
+  const { oid } = await store.write(doc.uid, doc.format, nextSource, identity, 'accept-proposal', {
+    proposalId: pid,
+  });
   const now = Date.now();
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
@@ -351,9 +373,7 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   );
   for (const comment of topLevelComments) {
     const upd = reanchor(comment, rendered.blocks);
-    updateCommentStmt.run(
-      upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id,
-    );
+    updateCommentStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
   }
 
   // Re-anchor other pending proposals (their block hash may have shifted).
@@ -368,9 +388,9 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   // Mark this proposal accepted.
   db.prepare(
     `UPDATE comments_edit_proposals
-        SET status = 'accepted', decided_at = ?, decided_by_name = ?
+        SET status = 'accepted', accepted_oid = ?, decided_at = ?, decided_by_name = ?
       WHERE comment_id = ?`,
-  ).run(now, identity.displayName, pid);
+  ).run(oid, now, identity.displayName, pid);
   db.prepare('UPDATE comments SET updated_at = ? WHERE id = ?').run(now, pid);
 
   const accepted = loadProposalRow(db, pid, doc.uid);
@@ -479,11 +499,135 @@ function newProposalId(): string {
   return randomBytes(12).toString('base64url');
 }
 
-function loadProposalRow(db: Database, proposalId: string, docUid: string): EditProposalRow | undefined {
-  return db.prepare(
-    `${PROPOSAL_SELECT}
+export function loadProposalRow(
+  db: Database,
+  proposalId: string,
+  docUid: string,
+): EditProposalRow | undefined {
+  return db
+    .prepare(
+      `${PROPOSAL_SELECT}
       WHERE c.id = ? AND c.doc_uid = ? AND c.deleted_at IS NULL`,
-  ).get(proposalId, docUid) as EditProposalRow | undefined;
+    )
+    .get(proposalId, docUid) as EditProposalRow | undefined;
+}
+
+export function reopenAcceptedProposal(
+  db: Database,
+  docUid: string,
+  proposalId: string,
+  now: number,
+): EditProposalRow | null {
+  const row = loadProposalRow(db, proposalId, docUid);
+  if (!row) return null;
+  if (row.status !== 'accepted') return null;
+
+  db.prepare(
+    `UPDATE comments_edit_proposals
+        SET status = 'pending', accepted_oid = NULL, decided_at = NULL, decided_by_name = NULL
+      WHERE comment_id = ?`,
+  ).run(proposalId);
+  db.prepare('UPDATE comments SET updated_at = ? WHERE id = ?').run(now, proposalId);
+
+  return loadProposalRow(db, proposalId, docUid) ?? null;
+}
+
+async function resolveProposalDiffBefore(
+  doc: DocumentRow,
+  proposal: EditProposalRow,
+  deps: AppDeps,
+): Promise<string> {
+  const snapshot = proposal.source_snapshot ?? proposal.anchor_quote ?? '';
+
+  if (proposal.status !== 'accepted') {
+    const liveSource = deps.store.read(doc.path);
+    const liveBlock = readProposalBlockSource(doc, liveSource, proposal.anchor_block_id);
+    if (!liveBlock) return snapshot;
+    if (liveBlock === proposal.proposed_text && snapshot !== proposal.proposed_text)
+      return snapshot;
+    return liveBlock;
+  }
+
+  if (proposal.source_snapshot) return proposal.source_snapshot;
+
+  const repaired = await resolveAcceptedProposalSnapshot(doc, proposal, deps);
+  return repaired ?? snapshot;
+}
+
+async function resolveAcceptedProposalSnapshot(
+  doc: DocumentRow,
+  proposal: EditProposalRow,
+  deps: AppDeps,
+): Promise<string | null> {
+  if (!proposal.anchor_block_id) return null;
+
+  const exact = proposal.accepted_oid
+    ? await readAcceptedProposalSnapshotAtCommit(doc, proposal, proposal.accepted_oid, deps)
+    : null;
+  if (exact) {
+    persistResolvedProposalSnapshot(deps.db, proposal.id, exact, proposal.accepted_oid);
+    return exact;
+  }
+
+  if (!proposal.decided_at) return null;
+
+  const history = await deps.store.history(doc.path);
+  const candidates = history
+    .filter((entry) => entry.message.startsWith('accept-proposal:'))
+    .sort(
+      (a, b) =>
+        Math.abs(a.timestamp - proposal.decided_at!) - Math.abs(b.timestamp - proposal.decided_at!),
+    );
+
+  for (const entry of candidates) {
+    const snapshot = await readAcceptedProposalSnapshotAtCommit(doc, proposal, entry.oid, deps);
+    if (!snapshot) continue;
+    persistResolvedProposalSnapshot(deps.db, proposal.id, snapshot, entry.oid);
+    return snapshot;
+  }
+
+  return null;
+}
+
+async function readAcceptedProposalSnapshotAtCommit(
+  doc: DocumentRow,
+  proposal: EditProposalRow,
+  acceptedOid: string,
+  deps: AppDeps,
+): Promise<string | null> {
+  const diff = await deps.store.diffAt(doc.path, acceptedOid);
+  if (!diff) return null;
+  const before = readProposalBlockSource(doc, diff.before, proposal.anchor_block_id);
+  if (!before) return null;
+  if (!diff.after.includes(proposal.proposed_text)) return null;
+  return before;
+}
+
+function persistResolvedProposalSnapshot(
+  db: Database,
+  proposalId: string,
+  snapshot: string,
+  acceptedOid: string | null,
+): void {
+  db.prepare(
+    `UPDATE comments_edit_proposals
+        SET source_snapshot = COALESCE(source_snapshot, ?),
+            accepted_oid = COALESCE(accepted_oid, ?)
+      WHERE comment_id = ?`,
+  ).run(snapshot, acceptedOid, proposalId);
+}
+
+function readProposalBlockSource(
+  doc: DocumentRow,
+  source: string,
+  blockId: string | null,
+): string | null {
+  if (!blockId) return null;
+  const range =
+    doc.format === 'asciidoc'
+      ? (locateAllBlocksAsciidoc(source).get(blockId) ?? null)
+      : locateBlockSource(source, blockId);
+  return range ? source.slice(range.start, range.end) : null;
 }
 
 export function toWire(row: EditProposalRow): Record<string, unknown> {
@@ -494,6 +638,7 @@ export function toWire(row: EditProposalRow): Record<string, unknown> {
       quote: row.anchor_quote,
       kind: row.anchor_kind,
     },
+    source_snapshot: row.source_snapshot,
     proposed_text: row.proposed_text,
     rationale: row.rationale,
     author: { client_id: row.author_client_id, display_name: row.author_display_name },

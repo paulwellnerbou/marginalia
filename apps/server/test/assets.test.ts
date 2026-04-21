@@ -175,7 +175,8 @@ describe('assets API', () => {
   test('GET /api/documents/:uid returns attached_assets and rewrites <img src>', async () => {
     const doc = await upload();
     const bytes = new Uint8Array([9, 9, 9]);
-    await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', bytes);
+    const uploadRes = await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', bytes);
+    const uploaded = (await uploadRes.json()) as { asset: { asset_id: string } };
 
     const res = await app.hono.fetch(
       new Request(`http://test/api/documents/${doc.uid}`, {
@@ -189,7 +190,9 @@ describe('assets API', () => {
       attached_assets: Array<{ ref_name: string }>;
     };
     expect(payload.attached_assets.map((a) => a.ref_name)).toEqual(['cat.png']);
-    expect(payload.rendered.html).toContain(`/api/documents/${doc.uid}/assets/cat.png`);
+    expect(payload.rendered.html).toContain(
+      `/api/documents/${doc.uid}/assets/cat.png?v=${uploaded.asset.asset_id}`,
+    );
     expect(payload.rendered.html).not.toContain('data-missing-asset="cat.png"');
   });
 

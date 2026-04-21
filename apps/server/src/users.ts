@@ -117,6 +117,16 @@ export function listDocUserNames(db: Database, docUid: string): string[] {
   return out;
 }
 
+export function listDocUserNameMap(db: Database, docUid: string): Map<string, string> {
+  const rows = db
+    .prepare(
+      `SELECT client_id, display_name FROM doc_users
+         WHERE doc_uid = ?`,
+    )
+    .all(docUid) as Array<{ client_id: string; display_name: string }>;
+  return new Map(rows.map((row) => [row.client_id, row.display_name]));
+}
+
 function addName(out: string[], seen: Set<string>, name: string): void {
   const key = name.trim().toLowerCase();
   if (!key || seen.has(key)) return;

@@ -116,9 +116,20 @@ export interface Document {
 
 export interface HistoryEntry {
   oid: string;
-  message: string;
-  author: { name: string; email: string };
+  action: 'upload' | 'update' | 'restore' | 'accept-proposal' | 'unknown';
+  actor: { client_id: string | null; display_name: string | null };
   timestamp: number;
+  restored_from_oid: string | null;
+  proposal: {
+    id: string;
+    author: { client_id: string; display_name: string };
+    summary: string;
+  } | null;
+}
+
+export interface HistoryDiff {
+  before: string;
+  after: string;
 }
 
 export interface UploadOptions {
@@ -267,12 +278,7 @@ async function request<T>(
       /* ignore */
     }
     // Pause-prompt-retry once; _retry guards against retry loops.
-    if (
-      res.status === 401 &&
-      code === 'password-required' &&
-      init.docUid &&
-      !init._retry
-    ) {
+    if (res.status === 401 && code === 'password-required' && init.docUid && !init._retry) {
       await waitForAuth(init.docUid);
       return request(path, { ...init, _retry: true });
     }
@@ -314,12 +320,7 @@ async function requestBinary(
     } catch {
       /* ignore */
     }
-    if (
-      res.status === 401 &&
-      code === 'password-required' &&
-      init.docUid &&
-      !init._retry
-    ) {
+    if (res.status === 401 && code === 'password-required' && init.docUid && !init._retry) {
       await waitForAuth(init.docUid);
       return requestBinary(path, { ...init, _retry: true });
     }
@@ -406,6 +407,46 @@ export function getHistory(uid: string): Promise<{ history: HistoryEntry[] }> {
   });
 }
 
+export function getHistoryDiff(uid: string, oid: string): Promise<HistoryDiff> {
+  return request<HistoryDiff>(
+    `/api/documents/${encodeURIComponent(uid)}/history/${encodeURIComponent(oid)}/diff`,
+    {
+      method: 'GET',
+      docUid: uid,
+    },
+  );
+}
+
+export function restoreHistoryVersion(
+  uid: string,
+  oid: string,
+  identity: Identity,
+): Promise<{ oid: string }> {
+  return request<{ oid: string }>(
+    `/api/documents/${encodeURIComponent(uid)}/history/${encodeURIComponent(oid)}/restore`,
+    {
+      method: 'POST',
+      identity,
+      docUid: uid,
+    },
+  );
+}
+
+export function revertHistoryVersion(
+  uid: string,
+  oid: string,
+  identity: Identity,
+): Promise<{ oid: string; reopened_proposal_id: string | null }> {
+  return request<{ oid: string; reopened_proposal_id: string | null }>(
+    `/api/documents/${encodeURIComponent(uid)}/history/${encodeURIComponent(oid)}/revert`,
+    {
+      method: 'POST',
+      identity,
+      docUid: uid,
+    },
+  );
+}
+
 export function authenticate(uid: string, password: string): Promise<void> {
   return request<void>(`/api/documents/${encodeURIComponent(uid)}/auth`, {
     method: 'POST',
@@ -428,10 +469,10 @@ export function importDocumentBundle(
 // --- assets ----------------------------------------------------------
 
 export function listAttachedAssets(uid: string): Promise<{ assets: AttachedAsset[] }> {
-  return request<{ assets: AttachedAsset[] }>(
-    `/api/documents/${encodeURIComponent(uid)}/assets`,
-    { method: 'GET', docUid: uid },
-  );
+  return request<{ assets: AttachedAsset[] }>(`/api/documents/${encodeURIComponent(uid)}/assets`, {
+    method: 'GET',
+    docUid: uid,
+  });
 }
 
 export function uploadAsset(
@@ -450,10 +491,12 @@ export function uploadAsset(
   // otherwise an upload against a password-protected doc with an
   // expired session would just fail silently instead of triggering
   // the password prompt.
-  return request<{ asset: AttachedAsset }>(
-    `/api/documents/${encodeURIComponent(uid)}/assets`,
-    { method: 'POST', body: form, identity, docUid: uid },
-  );
+  return request<{ asset: AttachedAsset }>(`/api/documents/${encodeURIComponent(uid)}/assets`, {
+    method: 'POST',
+    body: form,
+    identity,
+    docUid: uid,
+  });
 }
 
 export function deleteAttachedAsset(
@@ -467,8 +510,9 @@ export function deleteAttachedAsset(
   );
 }
 
-export function assetProxyUrl(uid: string, refName: string): string {
-  return `/api/documents/${encodeURIComponent(uid)}/assets/${encodeRefPath(refName)}`;
+export function assetProxyUrl(uid: string, refName: string, version?: string): string {
+  const base = `/api/documents/${encodeURIComponent(uid)}/assets/${encodeRefPath(refName)}`;
+  return version ? `${base}?v=${encodeURIComponent(version)}` : base;
 }
 
 function encodeRefPath(refName: string): string {
@@ -682,6 +726,7 @@ export interface EditProposalAnchor {
 export interface EditProposal {
   id: string;
   anchor: EditProposalAnchor;
+  source_snapshot: string | null;
   proposed_text: string;
   rationale: string | null;
   author: { client_id: string; display_name: string };
@@ -692,9 +737,7 @@ export interface EditProposal {
   updated_at: number;
 }
 
-export function listEditProposals(
-  uid: string,
-): Promise<{ edit_proposals: EditProposal[] }> {
+export function listEditProposals(uid: string): Promise<{ edit_proposals: EditProposal[] }> {
   return request<{ edit_proposals: EditProposal[] }>(
     `/api/documents/${encodeURIComponent(uid)}/edit-proposals`,
     { method: 'GET', docUid: uid },
@@ -730,11 +773,7 @@ export function updateEditProposal(
   );
 }
 
-export function deleteEditProposal(
-  uid: string,
-  pid: string,
-  identity: Identity,
-): Promise<void> {
+export function deleteEditProposal(uid: string, pid: string, identity: Identity): Promise<void> {
   return request<void>(
     `/api/documents/${encodeURIComponent(uid)}/edit-proposals/${encodeURIComponent(pid)}`,
     { method: 'DELETE', identity, docUid: uid },
@@ -760,6 +799,13 @@ export function rejectEditProposal(
   return request<{ edit_proposal: EditProposal }>(
     `/api/documents/${encodeURIComponent(uid)}/edit-proposals/${encodeURIComponent(pid)}/reject`,
     { method: 'POST', identity, docUid: uid },
+  );
+}
+
+export function getEditProposalDiff(uid: string, pid: string): Promise<HistoryDiff> {
+  return request<HistoryDiff>(
+    `/api/documents/${encodeURIComponent(uid)}/edit-proposals/${encodeURIComponent(pid)}/diff`,
+    { method: 'GET', docUid: uid },
   );
 }
 

@@ -7,8 +7,9 @@ describe('rewriteAssetReferences', () => {
     const out = await rewriteAssetReferences(html, {
       docUid: 'DOC123',
       attached: new Set(['cat.png']),
+      assetVersions: new Map([['cat.png', 'sha256-cat']]),
     });
-    expect(out).toContain('src="/api/documents/DOC123/assets/cat.png"');
+    expect(out).toContain('src="/api/documents/DOC123/assets/cat.png?v=sha256-cat"');
     expect(out).toContain('data-asset-ref="cat.png"');
     expect(out).not.toContain('data-missing-asset');
   });
@@ -48,8 +49,9 @@ describe('rewriteAssetReferences', () => {
     const out = await rewriteAssetReferences(html, {
       docUid: 'DOC',
       attached: new Set(['images/diagram.png']),
+      assetVersions: new Map([['images/diagram.png', 'asset-42']]),
     });
-    expect(out).toContain('src="/api/documents/DOC/assets/images/diagram.png"');
+    expect(out).toContain('src="/api/documents/DOC/assets/images/diagram.png?v=asset-42"');
   });
 
   test('leaves dot-segment paths alone (server rejects them; no dropzone UX)', async () => {

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { saveInviteToken } from '../lib/invite.js';
-import { Button, Container, Text, TextField } from '@radix-ui/themes';
-import { ChevronLeftIcon } from '@radix-ui/react-icons';
+import { Button, Container, Text } from '@radix-ui/themes';
+import { Cross2Icon } from '@radix-ui/react-icons';
 import type { RenderResult } from '@marginalia/renderer';
 import type { EditorView } from 'codemirror';
-import { getClientId, getDisplayName, setDisplayName } from '../lib/identity.js';
+import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import {
   getDocument,
   updateDocument,
@@ -97,8 +97,8 @@ export function EditPage() {
   const [rendered, setRendered] = useState<RenderResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [name, setName] = useState<string>(() => getDisplayName() ?? '');
   const [attached, setAttached] = useState<AttachedAsset[]>([]);
+  const displayName = useDisplayName();
 
   const editorEl = useRef<HTMLDivElement>(null);
   const previewEl = useRef<HTMLDivElement>(null);
@@ -112,6 +112,10 @@ export function EditPage() {
 
   const attachedRefs = useMemo(
     () => new Set(attached.map((a) => a.ref_name)),
+    [attached],
+  );
+  const assetVersions = useMemo(
+    () => new Map(attached.map((a) => [a.ref_name, a.asset_id])),
     [attached],
   );
 
@@ -145,17 +149,15 @@ export function EditPage() {
     );
   }, [uid]);
 
-  // Mirror ViewPage: sync localStorage AND the header TextField state to
-  // the server's authoritative name. Without the setName, the TextField
-  // keeps showing whatever getDisplayName() returned at mount and Save
-  // would silently revert the invite-seeded identity.
+  // Mirror ViewPage: sync localStorage to the server's authoritative
+  // name so the shared UserMenu label and save identity match the
+  // invite-seeded identity.
   useEffect(() => {
     if (!doc?.display_name) return;
-    if (getDisplayName() !== doc.display_name) {
+    if (displayName !== doc.display_name) {
       setDisplayName(doc.display_name);
     }
-    setName(doc.display_name);
-  }, [doc]);
+  }, [displayName, doc?.display_name]);
 
   useEffect(() => {
     if (!editorEl.current || doc === null || viewRef.current) return;
@@ -213,6 +215,7 @@ export function EditPage() {
         r.html = await rewriteAssetReferences(r.html, {
           docUid: uid,
           attached: attachedRefs,
+          assetVersions,
         });
         if (previewRequestRef.current !== requestId) return;
         setRendered(r);
@@ -221,7 +224,7 @@ export function EditPage() {
       }
     }, 200);
     return () => clearTimeout(handle);
-  }, [source, uid, attachedRefs, doc?.format]);
+  }, [source, uid, attachedRefs, assetVersions, doc?.format]);
 
   // Sync scrolling between source and preview
   useEffect(() => {
@@ -272,7 +275,7 @@ export function EditPage() {
   const uploadAndAttach = useCallback(
     async (refName: string, file: File) => {
       if (!uid) return;
-      const resolvedName = (name || getDisplayName() || '').trim();
+      const resolvedName = displayName.trim();
       if (!resolvedName) {
         setError('Enter a display name before uploading.');
         return;
@@ -298,13 +301,13 @@ export function EditPage() {
         else setError('Upload failed');
       }
     },
-    [uid, name],
+    [uid, displayName],
   );
 
   const handleDeleteAsset = useCallback(
     async (refName: string) => {
       if (!uid) return;
-      const resolvedName = (name || getDisplayName() || '').trim();
+      const resolvedName = displayName.trim();
       if (!resolvedName) {
         setError('Enter a display name before deleting assets.');
         return;
@@ -321,13 +324,13 @@ export function EditPage() {
         else setError('Delete failed');
       }
     },
-    [uid, name],
+    [uid, displayName],
   );
 
   // Editor-pane paste: if the clipboard has an image, upload it under a
   // generated ref name and insert the markdown reference at the cursor.
   // Deliberately scoped to the editor DOM, not the window, so pasting
-  // into the display-name field etc. is unaffected.
+  // into unrelated UI outside the editor is unaffected.
   useEffect(() => {
     const root = editorEl.current;
     if (!root || !canEdit || !uid) return;
@@ -362,7 +365,7 @@ export function EditPage() {
 
   async function handleSave() {
     if (!uid) return;
-    const resolved = name.trim();
+    const resolved = displayName.trim();
     if (!resolved) {
       setError('Enter a display name to save.');
       return;
@@ -417,27 +420,18 @@ export function EditPage() {
       <AppBar
         docTitle={`Editing: ${documentTitle(doc)}`}
         role={doc.role}
+        showUserName
         trailing={
           <>
             <Button variant="soft" color="gray" size="2" asChild>
-              <Link to={`/d/${doc.uid}`} aria-label="Back to view">
-                <ChevronLeftIcon /> Back
+              <Link to={`/d/${doc.uid}`} aria-label="Cancel editing">
+                <Cross2Icon /> Cancel
               </Link>
             </Button>
-            {canSave && (
-              <TextField.Root
-                size="1"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Your display name"
-                maxLength={80}
-                style={{ width: 180 }}
-              />
-            )}
             {error && <Text size="1" color="red">{error}</Text>}
             <Button
               size="2"
-              disabled={!canSave || saving || !name.trim()}
+              disabled={!canSave || saving || !displayName.trim()}
               onClick={handleSave}
               variant={canSave ? 'solid' : 'soft'}
             >
@@ -466,7 +460,6 @@ export function EditPage() {
             canEdit={canEdit}
             onReplace={uploadAndAttach}
             onDelete={handleDeleteAsset}
-            onAdd={uploadAndAttach}
           />
         )}
       </div>

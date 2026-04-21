@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { locateAllBlocks } from '@marginalia/renderer';
 import { type App, createApp } from '../src/app.js';
 import { CLIENT_HEADER, CLIENT_NAME_HEADER, INVITE_HEADER, SESSION_COOKIE } from '../src/auth.js';
 import { loadConfig } from '../src/config.js';
@@ -106,6 +107,59 @@ describe('documents API', () => {
     const doc = (await getRes.json()) as { role: string; display_name: string };
     expect(doc.role).toBe('admin');
     expect(doc.display_name).toBe('Alice');
+  });
+
+  test('admin invite display name tracks the current admin identity in invite listings and rotation', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Original\n\nBody.' });
+
+    const primeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(primeRes.status).toBe(200);
+
+    const renamedHeaders = withInvite(
+      headersFor({ id: CLIENT_A.id, name: 'Alicia' }),
+      created.admin_invite.token,
+    );
+
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        headers: renamedHeaders,
+      }),
+    );
+    expect(listRes.status).toBe(200);
+    const { invites } = (await listRes.json()) as {
+      invites: Array<{ kind: string; display_name: string | null }>;
+    };
+    expect(invites.find((invite) => invite.kind === 'admin')?.display_name).toBe('Alicia');
+
+    const rotateRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites/admin/rotate`, {
+        method: 'POST',
+        headers: renamedHeaders,
+      }),
+    );
+    expect(rotateRes.status).toBe(200);
+    const rotated = (await rotateRes.json()) as {
+      admin_invite: { token: string; display_name: string };
+    };
+    expect(rotated.admin_invite.display_name).toBe('Alicia');
+
+    const relistedRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        headers: withInvite(
+          headersFor({ id: CLIENT_A.id, name: 'Alicia' }),
+          rotated.admin_invite.token,
+        ),
+      }),
+    );
+    expect(relistedRes.status).toBe(200);
+    const relisted = (await relistedRes.json()) as {
+      invites: Array<{ kind: string; display_name: string | null }>;
+    };
+    expect(relisted.invites.find((invite) => invite.kind === 'admin')?.display_name).toBe('Alicia');
   });
 
   test('password-protected doc: invite AND password are both required', async () => {
@@ -374,6 +428,529 @@ describe('documents API', () => {
     expect(res.status).toBe(404);
   });
 
+  test('history diff returns a revision against its previous revision', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Title\n\nalpha' });
+
+    const updateRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ markdown: '# Title\n\nbeta' }),
+      }),
+    );
+    expect(updateRes.status).toBe(200);
+
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(historyRes.status).toBe(200);
+    const { history } = (await historyRes.json()) as {
+      history: Array<{ oid: string }>;
+    };
+    expect(history).toHaveLength(2);
+
+    const latestDiffRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history/${history[0]!.oid}/diff`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(latestDiffRes.status).toBe(200);
+    expect(await latestDiffRes.json()).toEqual({
+      before: '# Title\n\nalpha',
+      after: '# Title\n\nbeta',
+    });
+
+    const initialDiffRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history/${history[1]!.oid}/diff`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(initialDiffRes.status).toBe(200);
+    expect(await initialDiffRes.json()).toEqual({
+      before: '',
+      after: '# Title\n\nalpha',
+    });
+  });
+
+  test('history resolves the current display name from the per-document user table', async () => {
+    const created = await upload({ id: CLIENT_A.id, name: 'Sky Pica' }, { markdown: '# Title' });
+    const renamedHeaders = withInvite(
+      headersFor({ id: CLIENT_A.id, name: 'Paul' }),
+      created.admin_invite.token,
+    );
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: renamedHeaders,
+      }),
+    );
+    expect(docRes.status).toBe(200);
+
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, {
+        headers: renamedHeaders,
+      }),
+    );
+    expect(historyRes.status).toBe(200);
+    const { history } = (await historyRes.json()) as {
+      history: Array<{
+        action: string;
+        actor: { client_id: string | null; display_name: string | null };
+      }>;
+    };
+    expect(history[0]?.action).toBe('upload');
+    expect(history[0]?.actor.client_id).toBe(CLIENT_A.id);
+    expect(history[0]?.actor.display_name).toBe('Paul');
+  });
+
+  test('accepted proposal history includes proposal metadata and current author name', async () => {
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const inviteRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ display_name: 'Bob', role: 'collaborator' }),
+      }),
+    );
+    expect(inviteRes.status).toBe(201);
+    const { invite } = (await inviteRes.json()) as { invite: { token: string } };
+
+    const bobHeaders = withInvite(headersFor(CLIENT_B), invite.token);
+    const bobDocRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: bobHeaders,
+      }),
+    );
+    expect(bobDocRes.status).toBe(200);
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/edit-proposals`, {
+        method: 'POST',
+        headers: bobHeaders,
+        body: JSON.stringify({
+          anchor_block_id: blockId,
+          anchor_quote: 'alpha',
+          proposed_text: 'First replacement\nSecond line',
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as {
+      edit_proposal: { id: string };
+    };
+
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/edit-proposals/${proposal.edit_proposal.id}/accept`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    const renamedBobRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor({ id: CLIENT_B.id, name: 'Robert' }), invite.token),
+      }),
+    );
+    expect(renamedBobRes.status).toBe(200);
+
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(historyRes.status).toBe(200);
+    const { history } = (await historyRes.json()) as {
+      history: Array<{
+        action: string;
+        proposal: {
+          id: string;
+          author: { client_id: string; display_name: string };
+          summary: string;
+        } | null;
+      }>;
+    };
+    const accepted = history.find((entry) => entry.action === 'accept-proposal');
+    expect(accepted?.proposal).toEqual({
+      id: proposal.edit_proposal.id,
+      author: { client_id: CLIENT_B.id, display_name: 'Robert' },
+      summary: 'First replacement',
+    });
+  });
+
+  test('restoring a history version creates a restore entry and restores the source', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Title\n\nalpha' });
+
+    const updateRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ markdown: '# Title\n\nbeta' }),
+      }),
+    );
+    expect(updateRes.status).toBe(200);
+
+    const historyBeforeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(historyBeforeRes.status).toBe(200);
+    const historyBefore = (await historyBeforeRes.json()) as {
+      history: Array<{ oid: string }>;
+    };
+    const initialOid = historyBefore.history[1]?.oid;
+    expect(initialOid).toBeString();
+
+    const restoreRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history/${initialOid}/restore`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(restoreRes.status).toBe(200);
+    const restored = (await restoreRes.json()) as { oid: string };
+    expect(restored.oid).toBeString();
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(docRes.status).toBe(200);
+    const doc = (await docRes.json()) as { source: string };
+    expect(doc.source).toBe('# Title\n\nalpha');
+
+    const historyAfterRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(historyAfterRes.status).toBe(200);
+    const historyAfter = (await historyAfterRes.json()) as {
+      history: Array<{
+        oid: string;
+        action: string;
+        restored_from_oid: string | null;
+      }>;
+    };
+    expect(historyAfter.history[0]).toMatchObject({
+      oid: restored.oid,
+      action: 'restore',
+      restored_from_oid: initialOid,
+    });
+
+    const restoreDiffRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history/${restored.oid}/diff`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(restoreDiffRes.status).toBe(200);
+    expect(await restoreDiffRes.json()).toEqual({
+      before: '# Title\n\nbeta',
+      after: '# Title\n\nalpha',
+    });
+  });
+
+  test('reverting the latest history change restores the previous source', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Title\n\nalpha' });
+
+    const updateRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ markdown: '# Title\n\nbeta' }),
+      }),
+    );
+    expect(updateRes.status).toBe(200);
+
+    const historyBeforeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(historyBeforeRes.status).toBe(200);
+    const historyBefore = (await historyBeforeRes.json()) as {
+      history: Array<{ oid: string }>;
+    };
+    const latestOid = historyBefore.history[0]?.oid;
+    const previousOid = historyBefore.history[1]?.oid;
+    expect(latestOid).toBeString();
+    expect(previousOid).toBeString();
+
+    const revertRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history/${latestOid}/revert`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(revertRes.status).toBe(200);
+    const reverted = (await revertRes.json()) as {
+      oid: string;
+      reopened_proposal_id: string | null;
+    };
+    expect(reverted.oid).toBeString();
+    expect(reverted.reopened_proposal_id).toBeNull();
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(docRes.status).toBe(200);
+    const doc = (await docRes.json()) as { source: string };
+    expect(doc.source).toBe('# Title\n\nalpha');
+
+    const historyAfterRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(historyAfterRes.status).toBe(200);
+    const historyAfter = (await historyAfterRes.json()) as {
+      history: Array<{
+        oid: string;
+        action: string;
+        restored_from_oid: string | null;
+      }>;
+    };
+    expect(historyAfter.history[0]).toMatchObject({
+      oid: reverted.oid,
+      action: 'restore',
+      restored_from_oid: previousOid,
+    });
+
+    const revertDiffRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history/${reverted.oid}/diff`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(revertDiffRes.status).toBe(200);
+    expect(await revertDiffRes.json()).toEqual({
+      before: '# Title\n\nbeta',
+      after: '# Title\n\nalpha',
+    });
+  });
+
+  test('reverting the latest accepted proposal restores the source and reopens the proposal', async () => {
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const inviteRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ display_name: 'Bob', role: 'collaborator' }),
+      }),
+    );
+    expect(inviteRes.status).toBe(201);
+    const { invite } = (await inviteRes.json()) as { invite: { token: string } };
+    const bobHeaders = withInvite(headersFor(CLIENT_B), invite.token);
+
+    const bobDocRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: bobHeaders,
+      }),
+    );
+    expect(bobDocRes.status).toBe(200);
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/edit-proposals`, {
+        method: 'POST',
+        headers: bobHeaders,
+        body: JSON.stringify({
+          anchor_block_id: blockId,
+          anchor_quote: 'alpha',
+          proposed_text: 'beta',
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as {
+      edit_proposal: { id: string };
+    };
+
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/edit-proposals/${proposal.edit_proposal.id}/accept`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    const historyBeforeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(historyBeforeRes.status).toBe(200);
+    const historyBefore = (await historyBeforeRes.json()) as {
+      history: Array<{
+        oid: string;
+        action: string;
+        proposal: { id: string } | null;
+      }>;
+    };
+    const latestAccepted = historyBefore.history[0];
+    const previousOid = historyBefore.history[1]?.oid;
+    expect(latestAccepted?.action).toBe('accept-proposal');
+    expect(latestAccepted?.proposal?.id).toBe(proposal.edit_proposal.id);
+    expect(previousOid).toBeString();
+
+    const revertRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/history/${latestAccepted?.oid}/revert`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        },
+      ),
+    );
+    expect(revertRes.status).toBe(200);
+    const reverted = (await revertRes.json()) as {
+      oid: string;
+      reopened_proposal_id: string | null;
+    };
+    expect(reverted.oid).toBeString();
+    expect(reverted.reopened_proposal_id).toBe(proposal.edit_proposal.id);
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(docRes.status).toBe(200);
+    const doc = (await docRes.json()) as { source: string };
+    expect(doc.source).toBe(source);
+
+    const proposalRow = app.db
+      .prepare(
+        `SELECT status, accepted_oid, decided_at, decided_by_name
+         FROM comments_edit_proposals
+        WHERE comment_id = ?`,
+      )
+      .get(proposal.edit_proposal.id) as {
+      status: string;
+      accepted_oid: string | null;
+      decided_at: number | null;
+      decided_by_name: string | null;
+    };
+    expect(proposalRow).toEqual({
+      status: 'pending',
+      accepted_oid: null,
+      decided_at: null,
+      decided_by_name: null,
+    });
+
+    const historyAfterRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(historyAfterRes.status).toBe(200);
+    const historyAfter = (await historyAfterRes.json()) as {
+      history: Array<{
+        oid: string;
+        action: string;
+        restored_from_oid: string | null;
+        proposal: { id: string } | null;
+      }>;
+    };
+    expect(historyAfter.history[0]).toMatchObject({
+      oid: reverted.oid,
+      action: 'restore',
+      restored_from_oid: previousOid,
+    });
+    expect(
+      historyAfter.history.find((entry) => entry.oid === latestAccepted?.oid)?.proposal?.id,
+    ).toBe(proposal.edit_proposal.id);
+  });
+
+  test('accepted proposal diff reconstructs the original table-cell source for legacy rows', async () => {
+    const source = [
+      '| Label | Link |',
+      '| --- | --- |',
+      '| Availability | [5.3](#53-hosting--betrieb) |',
+    ].join('\n');
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.kind === 'tableCell' && range.text === '5.3',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/edit-proposals`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor_block_id: blockId,
+          anchor_quote: '5.3',
+          anchor_kind: 'tableCell',
+          proposed_text: '[5.3](#53-hosting-betrieb)',
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as {
+      edit_proposal: { id: string; source_snapshot: string | null };
+    };
+    expect(proposal.edit_proposal.source_snapshot).toBe('[5.3](#53-hosting--betrieb)');
+
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/edit-proposals/${proposal.edit_proposal.id}/accept`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    // Simulate an older accepted row that predates source_snapshot /
+    // accepted_oid persistence. The diff endpoint should still recover
+    // the true source from git history.
+    app.db
+      .prepare(
+        `UPDATE comments_edit_proposals
+          SET source_snapshot = NULL, accepted_oid = NULL
+        WHERE comment_id = ?`,
+      )
+      .run(proposal.edit_proposal.id);
+
+    const diffRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/edit-proposals/${proposal.edit_proposal.id}/diff`,
+        {
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        },
+      ),
+    );
+    expect(diffRes.status).toBe(200);
+    expect(await diffRes.json()).toEqual({
+      before: '[5.3](#53-hosting--betrieb)',
+      after: '[5.3](#53-hosting-betrieb)',
+    });
+  });
+
   test('health endpoint', async () => {
     const res = await app.hono.fetch(new Request('http://test/health'));
     expect(res.status).toBe(200);
@@ -484,16 +1061,20 @@ describe('documents API', () => {
     const countBefore = (table: string): number => {
       if (table === 'comments_edit_proposals') {
         return (
-          app.db.prepare(
-            `SELECT count(*) AS n
+          app.db
+            .prepare(
+              `SELECT count(*) AS n
                FROM comments_edit_proposals
               WHERE comment_id IN (SELECT id FROM comments WHERE doc_uid = ?)`,
-          ).get(created.uid) as { n: number }
+            )
+            .get(created.uid) as { n: number }
         ).n;
       }
-      return (app.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE doc_uid = ?`).get(created.uid) as {
-        n: number;
-      }).n;
+      return (
+        app.db.prepare(`SELECT count(*) AS n FROM ${table} WHERE doc_uid = ?`).get(created.uid) as {
+          n: number;
+        }
+      ).n;
     };
     expect(countBefore('doc_users')).toBeGreaterThan(0);
     expect(countBefore('comments_edit_proposals')).toBeGreaterThan(0);
@@ -744,9 +1325,7 @@ describe('documents API', () => {
     expect(res.headers.get('content-type')).toContain(
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     );
-    expect(res.headers.get('content-disposition')).toMatch(
-      /filename="DOCX_fixture\.docx"/,
-    );
+    expect(res.headers.get('content-disposition')).toMatch(/filename="DOCX_fixture\.docx"/);
     const buf = Buffer.from(await res.arrayBuffer());
     // ZIP magic (docx is a zip).
     expect(buf[0]).toBe(0x50);
@@ -757,10 +1336,9 @@ describe('documents API', () => {
 
     // Explicit ?theme=... overrides the default and still works.
     const res2 = await app.hono.fetch(
-      new Request(
-        `http://test/api/documents/${created.uid}/export.docx?theme=technical`,
-        { headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token) },
-      ),
+      new Request(`http://test/api/documents/${created.uid}/export.docx?theme=technical`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
     );
     expect(res2.status).toBe(200);
     const buf2 = Buffer.from(await res2.arrayBuffer());
@@ -782,9 +1360,7 @@ describe('documents API', () => {
     expect(res.status).toBe(200);
     // Frontmatter title beats the H1 — matches extractDocumentTitle's
     // priority. Non-filename chars get sanitized to `_`.
-    expect(res.headers.get('content-disposition')).toMatch(
-      /filename="My_Great_Doc\.docx"/,
-    );
+    expect(res.headers.get('content-disposition')).toMatch(/filename="My_Great_Doc\.docx"/);
   });
 
   test('GET /:uid/export.docx falls back to uid when no title is derivable', async () => {
@@ -1265,7 +1841,11 @@ describe('documents API', () => {
     const body = (await res.json()) as {
       format: string;
       source: string;
-      rendered: { html: string; frontmatter: Record<string, unknown>; blocks: Array<{ id: string }> };
+      rendered: {
+        html: string;
+        frontmatter: Record<string, unknown>;
+        blocks: Array<{ id: string }>;
+      };
     };
     expect(body.format).toBe('asciidoc');
     expect(body.source).toBe(src);

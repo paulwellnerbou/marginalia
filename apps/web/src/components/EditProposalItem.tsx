@@ -2,20 +2,23 @@ import { useMemo, useRef, useState } from 'react';
 import type React from 'react';
 import { Badge, Button, Flex, IconButton, Text, TextArea, Tooltip } from '@radix-ui/themes';
 import {
-  EyeOpenIcon,
   Pencil2Icon,
   QuoteIcon,
 } from '@radix-ui/react-icons';
 import type { BlockSourceRange } from '@marginalia/renderer';
-import type { Comment, EditProposal } from '../lib/api.js';
+import { getEditProposalDiff, type Comment, type EditProposal } from '../lib/api.js';
 import { getClientId } from '../lib/identity.js';
+import { reportError } from '../lib/log.js';
 import { CommentComposer, type ComposerHandle } from './CommentComposer.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import { CommentItem } from './CommentItem.js';
 import { DiscussionEntry, DiscussionThread } from './DiscussionUi.js';
 import { DiffDialog } from './DiffDialog.js';
+import { resolveProposalDiffBefore } from './proposalDiff.js';
+import { ShowDiffButton } from './ShowDiffButton.js';
 
 interface Props {
+  uid: string;
   proposal: EditProposal;
   /** Replies on this proposal (comments with parent_proposal_id === id). */
   replies: Comment[];
@@ -45,12 +48,16 @@ interface Props {
 }
 
 export function EditProposalItem({
+  uid,
   proposal, replies, docSource, blockRanges, canEdit, canComment, mentionCandidates, isDocAdmin,
   onAccept, onReject, onDelete, onEditRationale, onReply, onEditReply, onDeleteReply,
   onScrollToAnchor, threadFocused, collapsed, needsName,
   onToggleCollapsed,
 }: Props) {
   const [diffOpen, setDiffOpen] = useState(false);
+  const [resolvedDiff, setResolvedDiff] = useState<{ before: string; after: string } | null>(null);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [loadingDiff, setLoadingDiff] = useState(false);
   const [editingRationale, setEditingRationale] = useState(false);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const myId = getClientId();
@@ -58,15 +65,13 @@ export function EditProposalItem({
   const composerRef = useRef<ComposerHandle>(null);
 
   const originalSource = useMemo(() => {
-    if (!proposal.anchor.block_id) return proposal.anchor.quote ?? '';
-    const range = blockRanges.get(proposal.anchor.block_id);
-    if (range) return docSource.slice(range.start, range.end);
-    // Fall back to the quoted snapshot captured at creation time.
-    return proposal.anchor.quote ?? '';
-  }, [docSource, blockRanges, proposal.anchor.block_id, proposal.anchor.quote]);
+    return resolveProposalDiffBefore({ proposal, docSource, blockRanges });
+  }, [proposal, docSource, blockRanges]);
 
   const blockId = proposal.anchor.block_id;
   const jump = blockId ? () => onScrollToAnchor(blockId) : undefined;
+  const diffBefore = resolvedDiff?.before ?? originalSource;
+  const diffAfter = resolvedDiff?.after ?? proposal.proposed_text;
 
   const statusBadge = (() => {
     switch (proposal.status) {
@@ -100,11 +105,40 @@ export function EditProposalItem({
   const handleReplyQuote = canComment
     ? (text: string) => insertQuotedText(composerRef, text)
     : undefined;
+
+  async function handleShowDiff(): Promise<void> {
+    if (loadingDiff) return;
+    setDiffError(null);
+
+    if (proposal.status === 'accepted' && !proposal.source_snapshot) {
+      if (resolvedDiff) {
+        setDiffOpen(true);
+        return;
+      }
+      setLoadingDiff(true);
+      try {
+        const diff = await getEditProposalDiff(uid, proposal.id);
+        setResolvedDiff(diff);
+        setDiffOpen(true);
+      } catch (err) {
+        reportError('EditProposalItem.getEditProposalDiff', err, { uid, proposalId: proposal.id });
+        setDiffError('Could not load diff');
+      } finally {
+        setLoadingDiff(false);
+      }
+      return;
+    }
+
+    setResolvedDiff(null);
+    setDiffOpen(true);
+  }
+
   const toolbarActions = (
     <Flex gap="2" align="center" wrap="wrap">
-      <Button size="1" variant="soft" onClick={() => setDiffOpen(true)}>
-        <EyeOpenIcon /> Show diff
-      </Button>
+      <ShowDiffButton
+        onClick={() => void handleShowDiff()}
+        loading={loadingDiff}
+      />
       {proposal.status === 'pending' && canEdit && (
         <>
           <Button size="1" color="green" variant="soft" onClick={() => onAccept(proposal.id)}>
@@ -115,6 +149,7 @@ export function EditProposalItem({
           </Button>
         </>
       )}
+      {diffError ? <Text size="1" color="red">{diffError}</Text> : null}
     </Flex>
   );
   const actions = (
@@ -173,55 +208,57 @@ export function EditProposalItem({
   ) : null;
 
   return (
-    <DiscussionThread
-      threadId={proposal.id}
-      quote={proposal.anchor.quote ? `${proposal.anchor.quote.slice(0, 120)}${proposal.anchor.quote.length > 120 ? '…' : ''}` : null}
-      quoteTitle="Jump to this paragraph"
-      onJump={jump}
-      summary={formatThreadSummary(replies.length)}
-      toolbarActions={toolbarActions}
-      focused={threadFocused}
-      collapsed={collapsed}
-      className={`proposal proposal-${proposal.status}`}
-      onToggleCollapsed={onToggleCollapsed}
-    >
-      <DiscussionEntry
-        authorName={proposal.author.display_name}
-        createdAt={proposal.created_at}
-        badge={statusBadge}
-        actions={actions}
-        surface={surface}
-        className="proposal-entry"
-      />
-      {replies.map((r) => (
-        <CommentItem
-          key={r.id}
-          comment={r}
-          isDocAdmin={isDocAdmin}
-          onEdit={onEditReply}
-          onDelete={onDeleteReply}
-          onQuote={handleReplyQuote}
+    <>
+      <DiscussionThread
+        threadId={proposal.id}
+        quote={proposal.anchor.quote ? `${proposal.anchor.quote.slice(0, 120)}${proposal.anchor.quote.length > 120 ? '…' : ''}` : null}
+        quoteTitle="Jump to this paragraph"
+        onJump={jump}
+        summary={formatThreadSummary(replies.length)}
+        toolbarActions={toolbarActions}
+        focused={threadFocused}
+        collapsed={collapsed}
+        className={`proposal proposal-${proposal.status}`}
+        onToggleCollapsed={onToggleCollapsed}
+      >
+        <DiscussionEntry
+          authorName={proposal.author.display_name}
+          createdAt={proposal.created_at}
+          badge={statusBadge}
+          actions={actions}
+          surface={surface}
+          className="proposal-entry"
         />
-      ))}
-
-      {canComment && (
-        <div className="reply-composer">
-          <CommentComposer
-            ref={composerRef}
-            mentionCandidates={mentionCandidates}
-            needsName={needsName}
-            placeholder="Reply…"
-            rows={2}
-            onSubmit={(body, name) => onReply(proposal.id, body, name)}
+        {replies.map((r) => (
+          <CommentItem
+            key={r.id}
+            comment={r}
+            isDocAdmin={isDocAdmin}
+            onEdit={onEditReply}
+            onDelete={onDeleteReply}
+            onQuote={handleReplyQuote}
           />
-        </div>
-      )}
+        ))}
+
+        {canComment && (
+          <div className="reply-composer">
+            <CommentComposer
+              ref={composerRef}
+              mentionCandidates={mentionCandidates}
+              needsName={needsName}
+              placeholder="Reply…"
+              rows={2}
+              onSubmit={(body, name) => onReply(proposal.id, body, name)}
+            />
+          </div>
+        )}
+      </DiscussionThread>
       <DiffDialog
         open={diffOpen}
         onOpenChange={setDiffOpen}
         title="Proposed change"
-        before={originalSource}
-        after={proposal.proposed_text}
+        before={diffBefore}
+        after={diffAfter}
         actions={
           proposal.status === 'pending' && canEdit ? (
             <>
@@ -250,7 +287,7 @@ export function EditProposalItem({
           ) : null
         }
       />
-    </DiscussionThread>
+    </>
   );
 }
 

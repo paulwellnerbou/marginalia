@@ -281,7 +281,7 @@
 .marginalia .quoteblock blockquote,
 .marginalia .quoteblock p {
   color: rgb(0 0 0 / 85%);
-  font-size: 1.15rem;
+  font-size: inherit;
   line-height: 1.75;
   word-spacing: 0.1em;
   font-style: italic;

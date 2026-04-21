@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge,
   Box,
@@ -25,7 +25,7 @@ import {
   type InviteKind,
   type Role,
 } from '../lib/api.js';
-import { getClientId, getDisplayName } from '../lib/identity.js';
+import { getClientId, getDisplayName, useDisplayName } from '../lib/identity.js';
 import { saveInviteToken } from '../lib/invite.js';
 import { reportError } from '../lib/log.js';
 
@@ -160,6 +160,7 @@ function kindColor(kind: InviteKind): 'indigo' | 'cyan' | 'gray' {
 }
 
 export function InvitesPanel({ uid }: { uid: string }) {
+  const displayName = useDisplayName();
   const [invites, setInvites] = useState<Invite[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<'named' | 'generic'>('named');
@@ -168,7 +169,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
   const [submitting, setSubmitting] = useState(false);
   const [rotating, setRotating] = useState(false);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     try {
       const r = await listInvites(uid);
       setInvites(r.invites);
@@ -176,12 +177,11 @@ export function InvitesPanel({ uid }: { uid: string }) {
       reportError('InvitesPanel.list', err, { uid });
       setError('Could not load invites');
     }
-  }
+  }, [uid]);
 
   useEffect(() => {
     void refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uid]);
+  }, [displayName, refresh]);
 
   async function addInvite() {
     setError(null);

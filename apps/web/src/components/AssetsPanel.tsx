@@ -10,9 +10,6 @@ interface AssetsPanelProps {
   referencedRefs: ReadonlySet<string>;
   onReplace: (refName: string, file: File) => void;
   onDelete: (refName: string) => void;
-  // Callers match the (refName, file) shape used by the other write
-  // callbacks so the panel can wire them up without adapters.
-  onAdd: (refName: string, file: File) => void;
   canEdit: boolean;
 }
 
@@ -22,33 +19,12 @@ export function AssetsPanel({
   referencedRefs,
   onReplace,
   onDelete,
-  onAdd,
   canEdit,
 }: AssetsPanelProps) {
-  const addInput = useRef<HTMLInputElement>(null);
   const sorted = useMemo(
     () => [...assets].sort((a, b) => a.ref_name.localeCompare(b.ref_name)),
     [assets],
   );
-
-  function handleAdd(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) {
-      e.target.value = '';
-      return;
-    }
-    // Trim to match the server's normalizeRefName(). Otherwise a
-    // filename with surrounding whitespace round-trips to a different
-    // stored name than the one we pushed into local state, producing
-    // duplicate React keys after the server reply lands.
-    const ref = file.name.trim();
-    if (!ref) {
-      e.target.value = '';
-      return;
-    }
-    onAdd(ref, file);
-    e.target.value = '';
-  }
 
   return (
     <aside className="assets-panel" aria-label="Document assets">
@@ -68,7 +44,7 @@ export function AssetsPanel({
               {asset.kind === 'image' ? (
                 <img
                   className="assets-panel__thumb"
-                  src={assetProxyUrl(docUid, asset.ref_name)}
+                  src={assetProxyUrl(docUid, asset.ref_name, asset.asset_id)}
                   alt=""
                 />
               ) : (
@@ -104,23 +80,6 @@ export function AssetsPanel({
             </div>
           );
         })
-      )}
-      {canEdit && (
-        <label className="assets-panel__add">
-          <input
-            ref={addInput}
-            type="file"
-            style={{ display: 'none' }}
-            onChange={handleAdd}
-          />
-          <button
-            type="button"
-            className="rt-Button rt-r-size-1 rt-variant-soft"
-            onClick={() => addInput.current?.click()}
-          >
-            + Attach file
-          </button>
-        </label>
       )}
     </aside>
   );

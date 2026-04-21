@@ -102,7 +102,7 @@ function ComposerBody({
       </Dialog.Description>
 
       <Flex direction="column" gap="3" className="edit-proposal-composer composer">
-        <div className="quote">
+        <div className="composer-quote">
           “{target.block_text.slice(0, 240)}
           {target.block_text.length > 240 ? '…' : ''}”
         </div>

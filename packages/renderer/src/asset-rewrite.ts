@@ -14,6 +14,13 @@ export interface RewriteOptions {
    * a placeholder / dropzone in their place.
    */
   attached: ReadonlySet<string>;
+  /**
+   * Optional per-ref version token appended to rewritten asset URLs.
+   * Supplying a content-derived value such as `asset_id` forces the
+   * browser to request a fresh URL immediately after replacement,
+   * rather than waiting for the current <img> element to be recreated.
+   */
+  assetVersions?: ReadonlyMap<string, string>;
   /** Proxy URL prefix. Defaults to `/api/documents`. */
   apiBase?: string;
 }
@@ -58,7 +65,10 @@ export async function rewriteAssetReferences(
         if (!refName) return;
         const props = { ...(node.properties ?? {}) };
         if (opts.attached.has(refName)) {
-          props.src = `${prefix}${encodeRefSegment(refName)}`;
+          props.src = appendVersion(
+            `${prefix}${encodeRefSegment(refName)}`,
+            opts.assetVersions?.get(refName),
+          );
           // Keep the original ref around so the UI can offer "replace".
           props['data-asset-ref'] = refName;
         } else {
@@ -130,4 +140,8 @@ function normalizeRefName(src: string): string | null {
  */
 function encodeRefSegment(ref: string): string {
   return ref.split('/').map(encodeURIComponent).join('/');
+}
+
+function appendVersion(url: string, version: string | undefined): string {
+  return version ? `${url}?v=${encodeURIComponent(version)}` : url;
 }

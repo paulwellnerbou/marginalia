@@ -45,7 +45,7 @@
 }
 .marginalia h3 { font-size: 1.3em; }
 .marginalia blockquote {
-  font-size: 1.15em;
+  font-size: inherit;
   font-style: normal;
   padding-left: 1.2em;
   border-left-width: 4px;
