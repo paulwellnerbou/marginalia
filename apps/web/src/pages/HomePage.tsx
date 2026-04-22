@@ -165,8 +165,8 @@ export function HomePage() {
               <FeatureCard
                 icon={<PaperPlaneIcon width="20" height="20" />}
                 iconVariant="gray"
-                title="Local-first identities"
-                body="People are managed in browser and by invite links. No online accounts, no sign-ups, and no external profile store. Share invite links and collaborate anonymously."
+                title="Browser-held auth"
+                body="Invite tokens, password-session cookies, and display names live in this browser. Documents, comments, and history live on the server. No online accounts or external profile store."
               />
             </Grid>
           </Container>
@@ -258,7 +258,8 @@ function LandingFooter() {
           className="landing-footer-row"
         >
           <Text size="1" color="gray">
-            Marginalia is local-first and does not use analytics or tracking.
+            Marginalia stores auth state in your browser and document data on the server. No
+            analytics or tracking.
           </Text>
           <Flex gap="3" wrap="wrap" className="landing-footer-links">
             <Dialog.Root>
@@ -296,13 +297,12 @@ function LandingFooter() {
                     We do not use third-party analytics, ad trackers, or behavioral profiling.
                   </Text>
                   <Text as="p" size="2">
-                    We do not require online user accounts. Display names and recent-document
-                    entries are stored in your browser so collaboration remains local-first.
+                    We do not require online user accounts. This browser stores invite tokens,
+                    display names, recent-document entries, and password-session cookies.
                   </Text>
                   <Text as="p" size="2">
-                    The only data processed on the server is what collaboration needs: document
-                    content, comment threads, invite roles, and optional document passwords when
-                    enabled.
+                    The server stores the collaboration data: document content, comment threads,
+                    history, invite roles, and optional document password hashes when enabled.
                   </Text>
                   <Text as="p" size="2">
                     Data is retained until removed by an administrator of the corresponding

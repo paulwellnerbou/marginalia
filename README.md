@@ -2,6 +2,10 @@
 
 Markdown → beautiful themed HTML, with a collaborative viewer.
 
+Documents, comments, invites, sessions, and assets are persisted on the
+server. The browser only stores local auth/session helpers and UI state
+such as invite tokens, display name, recent docs, and theme.
+
 See [REQUIREMENTS.md](REQUIREMENTS.md) and [PLAN.md](PLAN.md).
 
 ## Layout
@@ -203,5 +207,10 @@ once the DB is gone they're dead weight and safe to remove.
 
 ### Reset **client** state (invite tokens, display name, recent docs, theme)
 
-Everything the web app persists lives in `localStorage` under the
-`marginalia.*` prefix. Or just wipe the site in browser settings.
+This only clears browser-held auth/session helpers and UI state. It does
+not remove any server-stored documents, comments, history, invites, or
+assets.
+
+Everything the web app persists locally lives in `localStorage` under the
+`marginalia.*` prefix. Password-protected docs also use the
+`marginalia_session` cookie. Or just wipe the site in browser settings.
