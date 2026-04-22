@@ -34,6 +34,7 @@ import { useNavigate } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { Copyable } from '../components/Copyable.js';
 import { FormatBadge } from '../components/FormatBadge.js';
+import { PasswordDisclosureCard } from '../components/PasswordDisclosureCard.js';
 import {
   ApiError,
   type DocumentBundle,
@@ -129,8 +130,9 @@ export function HomePage() {
                 <span className="landing-title-sub">Full-featured Markdown documents.</span>
               </Heading>
               <Text size="5" color="gray" align="center" style={{ maxWidth: '52ch' }}>
-                Marginalia renders your Markdown or AsciiDoc with book-quality typography, tracks every save in
-                git, and lets collaborators leave comments and change proposals on any paragraph.
+                Marginalia renders your Markdown or AsciiDoc with book-quality typography, tracks
+                every save in git, and lets collaborators leave comments and change proposals on any
+                paragraph.
               </Text>
               <Flex gap="3" mt="2" wrap="wrap" justify="center">
                 <Button size="4" onClick={openFreshUploadDialog}>
@@ -263,7 +265,9 @@ function LandingFooter() {
           </Text>
           <Flex gap="3" wrap="wrap" className="landing-footer-links">
             <Dialog.Root>
-              <Dialog.Trigger className="landing-footer-link"><span>Imprint</span></Dialog.Trigger>
+              <Dialog.Trigger className="landing-footer-link">
+                <span>Imprint</span>
+              </Dialog.Trigger>
               <Dialog.Content maxWidth="620px">
                 <Dialog.Title>Imprint</Dialog.Title>
                 <Box className="imprint-md">
@@ -286,7 +290,9 @@ function LandingFooter() {
             </Dialog.Root>
 
             <Dialog.Root>
-              <Dialog.Trigger className="landing-footer-link"><span>Privacy</span></Dialog.Trigger>
+              <Dialog.Trigger className="landing-footer-link">
+                <span>Privacy</span>
+              </Dialog.Trigger>
               <Dialog.Content maxWidth="680px">
                 <Dialog.Title>Privacy</Dialog.Title>
                 <Dialog.Description size="2" color="gray" mb="4">
@@ -305,15 +311,17 @@ function LandingFooter() {
                     history, invite roles, and optional document password hashes when enabled.
                   </Text>
                   <Text as="p" size="2">
-                    Data is retained until removed by an administrator of the corresponding
-                    document or by the operator of this deployment.
+                    Data is retained until removed by an administrator of the corresponding document
+                    or by the operator of this deployment.
                   </Text>
                 </Flex>
               </Dialog.Content>
             </Dialog.Root>
 
             <Dialog.Root>
-              <Dialog.Trigger className="landing-footer-link"><span>Terms of Service</span></Dialog.Trigger>
+              <Dialog.Trigger className="landing-footer-link">
+                <span>Terms of Service</span>
+              </Dialog.Trigger>
               <Dialog.Content maxWidth="680px">
                 <Dialog.Title>Terms of Service</Dialog.Title>
                 <Dialog.Description size="2" color="gray" mb="4">
@@ -324,16 +332,16 @@ function LandingFooter() {
                     Use this service only for lawful content and lawful collaboration.
                   </Text>
                   <Text as="p" size="2">
-                    Invite links are access capabilities. Keep them private and share them only
-                    with people who should access the document.
+                    Invite links are access capabilities. Keep them private and share them only with
+                    people who should access the document.
                   </Text>
                   <Text as="p" size="2">
                     The service is provided without guaranteed uptime, permanence, or fitness for a
                     particular purpose unless separately agreed by the operator.
                   </Text>
                   <Text as="p" size="2">
-                    You are responsible for the content you upload and for respecting the rights
-                    and privacy of collaborators.
+                    You are responsible for the content you upload and for respecting the rights and
+                    privacy of collaborators.
                   </Text>
                 </Flex>
               </Dialog.Content>
@@ -431,12 +439,7 @@ function RecentCard({
       </Flex>
       <Flex gap="2" mt="2" wrap="wrap" align="center">
         <FormatBadge format={doc.format} />
-        <Badge
-          variant="soft"
-          color={appRoleColor(doc.role)}
-          size="1"
-          className="role-badge"
-        >
+        <Badge variant="soft" color={appRoleColor(doc.role)} size="1" className="role-badge">
           {doc.role}
         </Badge>
         {doc.password_protected && (
@@ -681,12 +684,11 @@ function UploadDialog({
                 <Button onClick={openCreated}>Open the document</Button>
               </Flex>
               {createdPassword && (
-                <Box>
-                  <Text as="div" size="1" color="gray" mb="1">
-                    Password (shown once)
-                  </Text>
-                  <Copyable text={createdPassword} ariaLabel="Copy password" />
-                </Box>
+                <PasswordDisclosureCard
+                  docUid={createdUid}
+                  password={createdPassword}
+                  label="Password"
+                />
               )}
             </Flex>
           </>

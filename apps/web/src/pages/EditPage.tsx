@@ -110,10 +110,7 @@ export function EditPage() {
     return doc.role === 'admin' || doc.role === 'editor';
   }, [doc]);
 
-  const attachedRefs = useMemo(
-    () => new Set(attached.map((a) => a.ref_name)),
-    [attached],
-  );
+  const attachedRefs = useMemo(() => new Set(attached.map((a) => a.ref_name)), [attached]);
   const assetVersions = useMemo(
     () => new Map(attached.map((a) => [a.ref_name, a.asset_id])),
     [attached],
@@ -241,7 +238,9 @@ export function EditPage() {
       if (isSyncingRight) return;
       isSyncingLeft = true;
       clearTimeout(timerLeft);
-      timerLeft = window.setTimeout(() => { isSyncingLeft = false; }, 50);
+      timerLeft = window.setTimeout(() => {
+        isSyncingLeft = false;
+      }, 50);
 
       const maxScrollSrc = scroller.scrollHeight - scroller.clientHeight;
       const maxScrollPreview = preview.scrollHeight - preview.clientHeight;
@@ -253,7 +252,9 @@ export function EditPage() {
       if (isSyncingLeft) return;
       isSyncingRight = true;
       clearTimeout(timerRight);
-      timerRight = window.setTimeout(() => { isSyncingRight = false; }, 50);
+      timerRight = window.setTimeout(() => {
+        isSyncingRight = false;
+      }, 50);
 
       const maxScrollSrc = scroller.scrollHeight - scroller.clientHeight;
       const maxScrollPreview = preview.scrollHeight - preview.clientHeight;
@@ -281,12 +282,10 @@ export function EditPage() {
         return;
       }
       try {
-        const { asset } = await uploadAsset(
-          uid,
-          refName,
-          file,
-          { clientId: getClientId(), displayName: resolvedName },
-        );
+        const { asset } = await uploadAsset(uid, refName, file, {
+          clientId: getClientId(),
+          displayName: resolvedName,
+        });
         // Upsert keyed on the server-returned canonical ref_name. Using
         // the caller-supplied `refName` could leave a duplicate if the
         // server normalized it (e.g. trimmed surrounding whitespace).
@@ -344,9 +343,8 @@ export function EditPage() {
         e.preventDefault();
         const ext = file.type.split('/')[1]?.split(/[;+]/)[0] || 'png';
         const refName = `pasted-${Date.now()}.${ext}`;
-        const insertion = doc?.format === 'asciidoc'
-          ? `\nimage::${refName}[]\n`
-          : `\n![](${refName})\n`;
+        const insertion =
+          doc?.format === 'asciidoc' ? `\nimage::${refName}[]\n` : `\n![](${refName})\n`;
         const view = viewRef.current;
         if (view) {
           const { from, to } = view.state.selection.main;
@@ -396,8 +394,7 @@ export function EditPage() {
         <AppBar />
         {uid && <PasswordPromptDialog docUid={uid} />}
         <Container size="2" py="8">
-          <Text color="red">{error}</Text>{' '}
-          <Link to="/">← Home</Link>
+          <Text color="red">{error}</Text> <Link to="/">← Home</Link>
         </Container>
       </>
     );
@@ -420,6 +417,9 @@ export function EditPage() {
       <AppBar
         docTitle={`Editing: ${documentTitle(doc)}`}
         role={doc.role}
+        docUid={doc.uid}
+        passwordProtected={doc.password_protected}
+        onLogout={() => window.location.reload()}
         showUserName
         trailing={
           <>
@@ -428,7 +428,11 @@ export function EditPage() {
                 <Cross2Icon /> Cancel
               </Link>
             </Button>
-            {error && <Text size="1" color="red">{error}</Text>}
+            {error && (
+              <Text size="1" color="red">
+                {error}
+              </Text>
+            )}
             <Button
               size="2"
               disabled={!canSave || saving || !displayName.trim()}
@@ -449,7 +453,9 @@ export function EditPage() {
               onMissingAssetUpload={canEdit ? uploadAndAttach : undefined}
             />
           ) : (
-            <Text color="gray" size="2" as="p" mx="4" mt="4">Preview…</Text>
+            <Text color="gray" size="2" as="p" mx="4" mt="4">
+              Preview…
+            </Text>
           )}
         </div>
         {canEdit && (

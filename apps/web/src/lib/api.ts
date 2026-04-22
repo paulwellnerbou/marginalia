@@ -401,10 +401,10 @@ export async function downloadDocumentPdf(
   theme?: string,
 ): Promise<{ blob: Blob; filename: string }> {
   const params = theme ? `?theme=${encodeURIComponent(theme)}` : '';
-  const res = await requestBinary(
-    `/api/documents/${encodeURIComponent(uid)}/export.pdf${params}`,
-    { method: 'GET', docUid: uid },
-  );
+  const res = await requestBinary(`/api/documents/${encodeURIComponent(uid)}/export.pdf${params}`, {
+    method: 'GET',
+    docUid: uid,
+  });
   const blob = await res.blob();
   const cd = res.headers.get('Content-Disposition') ?? '';
   const match = cd.match(/filename="([^"]+)"/);
@@ -472,12 +472,33 @@ export function revertHistoryVersion(
   );
 }
 
-export function authenticate(uid: string, password: string): Promise<void> {
+export function authenticate(
+  uid: string,
+  password: string,
+  opts: { remember?: boolean } = {},
+): Promise<void> {
   return request<void>(`/api/documents/${encodeURIComponent(uid)}/auth`, {
     method: 'POST',
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ password, remember: opts.remember !== false }),
     docUid: uid,
   });
+}
+
+export function logoutPasswordSession(uid: string): Promise<void> {
+  return request<void>(`/api/documents/${encodeURIComponent(uid)}/logout`, {
+    method: 'POST',
+    docUid: uid,
+  });
+}
+
+export function recoverCurrentPassword(uid: string): Promise<{ password: string }> {
+  return request<{ password: string }>(
+    `/api/documents/${encodeURIComponent(uid)}/password/recover`,
+    {
+      method: 'POST',
+      docUid: uid,
+    },
+  );
 }
 
 export function importDocumentBundle(

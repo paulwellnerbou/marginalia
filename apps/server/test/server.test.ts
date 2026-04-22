@@ -76,12 +76,13 @@ describe('documents API', () => {
     uid: string,
     password: string,
     client: { id: string; name: string },
+    opts: { remember?: boolean } = {},
   ): Promise<string> {
     const authRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/auth`, {
         method: 'POST',
         headers: headersFor(client),
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ password, remember: opts.remember !== false }),
       }),
     );
     expect(authRes.status).toBe(204);
@@ -408,6 +409,48 @@ describe('documents API', () => {
     const doc = (await inviteAfterAuth.json()) as { role: string; display_name: string };
     expect(doc.role).toBe('admin');
     expect(doc.display_name).toBe('Whatever');
+  });
+
+  test('admin invite can recover the current password without a password session', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Secret',
+      password_protected: true,
+    });
+    expect(created.password).toBeString();
+
+    const recovered = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/password/recover`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(recovered.status).toBe(200);
+    expect((await recovered.json()) as { password: string }).toEqual({
+      password: created.password!,
+    });
+
+    const mkRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: withInvite(
+          headersFor(CLIENT_A, {
+            cookie: await authenticateForDoc(created.uid, created.password!, CLIENT_A),
+          }),
+          created.admin_invite.token,
+        ),
+        body: JSON.stringify({ display_name: 'Bob', role: 'editor' }),
+      }),
+    );
+    expect(mkRes.status).toBe(201);
+    const { invite } = (await mkRes.json()) as { invite: { token: string } };
+
+    const forbidden = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/password/recover`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_B), invite.token),
+      }),
+    );
+    expect(forbidden.status).toBe(403);
   });
 
   test('missing identity header is a 400 on upload', async () => {
@@ -996,6 +1039,52 @@ describe('documents API', () => {
     expect(r2.headers.get('set-cookie')).toContain(SESSION_COOKIE);
   });
 
+  test('password auth supports session-only cookies and explicit logout', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Secret',
+      password_protected: true,
+    });
+
+    const authRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/auth`, {
+        method: 'POST',
+        headers: headersFor(CLIENT_A),
+        body: JSON.stringify({ password: created.password, remember: false }),
+      }),
+    );
+    expect(authRes.status).toBe(204);
+    const setCookie = authRes.headers.get('set-cookie') ?? '';
+    expect(setCookie).toContain(SESSION_COOKIE);
+    expect(setCookie).not.toContain('Max-Age=');
+    const cookie = setCookie.split(';')[0] ?? '';
+
+    const beforeLogout = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: headersFor(CLIENT_A, { cookie }),
+      }),
+    );
+    expect(beforeLogout.status).toBe(200);
+
+    const logout = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/logout`, {
+        method: 'POST',
+        headers: headersFor(CLIENT_A, { cookie }),
+      }),
+    );
+    expect(logout.status).toBe(204);
+    expect(logout.headers.get('set-cookie')).toContain(`${SESSION_COOKIE}=;`);
+
+    const afterLogout = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: headersFor(CLIENT_A, { cookie }),
+      }),
+    );
+    expect(afterLogout.status).toBe(401);
+    expect((await afterLogout.json()) as { error: string }).toEqual({
+      error: 'password-required',
+    });
+  });
+
   test('enabling password protection keeps the admin authenticated so it can be undone immediately', async () => {
     const created = await upload(CLIENT_A);
 
@@ -1023,6 +1112,27 @@ describe('documents API', () => {
     expect(disable.status).toBe(200);
     const disabled = (await disable.json()) as { password_protected: boolean };
     expect(disabled.password_protected).toBe(false);
+  });
+
+  test('password rotation preserves a session-only login when refreshing the initiator session', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Secret',
+      password_protected: true,
+    });
+    const cookie = await authenticateForDoc(created.uid, created.password!, CLIENT_A, {
+      remember: false,
+    });
+
+    const rotate = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/settings`, {
+        method: 'PATCH',
+        headers: withInvite(headersFor(CLIENT_A, { cookie }), created.admin_invite.token),
+        body: JSON.stringify({ password: 'rotate' }),
+      }),
+    );
+    expect(rotate.status).toBe(200);
+    expect(rotate.headers.get('set-cookie')).toContain(SESSION_COOKIE);
+    expect(rotate.headers.get('set-cookie')).not.toContain('Max-Age=');
   });
 
   test('DELETE /api/documents/:uid (admin only) removes doc + all per-doc tables', async () => {
@@ -1695,6 +1805,36 @@ describe('documents API', () => {
       }),
     );
     expect(denied.status).toBe(403);
+  });
+
+  test('password recovery follows admin invite rotation', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Secret',
+      password_protected: true,
+    });
+    const cookie = await authenticateForDoc(created.uid, created.password!, CLIENT_A);
+
+    const rot = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites/admin/rotate`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A, { cookie }), created.admin_invite.token),
+      }),
+    );
+    expect(rot.status).toBe(200);
+    const { admin_invite } = (await rot.json()) as {
+      admin_invite: { token: string };
+    };
+
+    const recovered = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/password/recover`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), admin_invite.token),
+      }),
+    );
+    expect(recovered.status).toBe(200);
+    expect((await recovered.json()) as { password: string }).toEqual({
+      password: created.password!,
+    });
   });
 
   test("admin rotation wipes EVERY kind='admin' row — covers legacy multi-admin DBs", async () => {

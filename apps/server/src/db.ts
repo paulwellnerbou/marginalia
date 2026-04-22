@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS documents (
   path                 TEXT NOT NULL,
   name                 TEXT,              -- human-friendly doc name; NULL → derive from content
   password_hash        TEXT,
+  password_recovery_ciphertext TEXT,
+  password_recovery_iv TEXT,
   -- DEPRECATED. Unread by authorize(), unwritten by new requests; kept so
   -- old bundles round-trip. Drop in a later migration.
   editable_by_anyone   INTEGER NOT NULL DEFAULT 0,
@@ -38,6 +40,7 @@ CREATE INDEX IF NOT EXISTS idx_invites_doc ON invites(doc_uid);
 CREATE TABLE IF NOT EXISTS sessions (
   token      TEXT PRIMARY KEY,
   doc_uid    TEXT NOT NULL,
+  persistent INTEGER NOT NULL DEFAULT 1,
   expires_at INTEGER NOT NULL
 );
 
@@ -162,6 +165,8 @@ export interface DocumentRow {
   path: string;
   name: string | null;
   password_hash: string | null;
+  password_recovery_ciphertext: string | null;
+  password_recovery_iv: string | null;
   editable_by_anyone: number;
   default_theme: string;
   format: DocumentFormat;
@@ -219,6 +224,7 @@ export interface InviteRow {
 export interface SessionRow {
   token: string;
   doc_uid: string;
+  persistent: number;
   expires_at: number;
 }
 
@@ -326,14 +332,12 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments', 'anchor_section_index_path', 'TEXT');
   ensureColumn(db, 'comments', 'parent_proposal_id', 'TEXT');
   ensureColumn(db, 'documents', 'format', "TEXT NOT NULL DEFAULT 'markdown'");
+  ensureColumn(db, 'documents', 'password_recovery_ciphertext', 'TEXT');
+  ensureColumn(db, 'documents', 'password_recovery_iv', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'source_snapshot', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'accepted_oid', 'TEXT');
-  ensureColumn(
-    db,
-    'document_assets',
-    'mime',
-    "TEXT NOT NULL DEFAULT 'application/octet-stream'",
-  );
+  ensureColumn(db, 'sessions', 'persistent', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'document_assets', 'mime', "TEXT NOT NULL DEFAULT 'application/octet-stream'");
   // Legacy 'commentor' rows → 'collaborator' (same server-side behavior).
   db.exec(`UPDATE invites SET role = 'collaborator' WHERE role = 'commentor'`);
   migrateInvitesKind(db);
@@ -457,8 +461,8 @@ function migrateEditProposalsToCommentExtensions(db: Database): void {
 }
 
 function tableExists(db: Database, table: string): boolean {
-  const row = db.prepare(
-    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`,
-  ).get(table) as { name: string } | undefined;
+  const row = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`)
+    .get(table) as { name: string } | undefined;
   return row?.name === table;
 }

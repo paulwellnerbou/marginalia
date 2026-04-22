@@ -41,6 +41,18 @@ body {
   font-family: var(--ui-font);
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* The Radix <Theme> root paints the correct background for us. Make sure
    it fills the viewport. */
 .radix-themes {
@@ -629,11 +641,8 @@ button.primary:disabled {
   line-height: 1.25;
   flex: 1;
   border-radius: 0.35rem;
-  transition:
-    color 160ms ease,
-    background-color 160ms ease,
-    box-shadow 160ms ease,
-    transform 160ms ease;
+  transition: color 160ms ease, background-color 160ms ease, box-shadow 160ms ease, transform 160ms
+    ease;
 }
 .toc a:hover,
 .toc a:focus-visible {
@@ -1259,7 +1268,7 @@ button.primary:disabled {
 }
 
 .anchor-group::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
@@ -1549,7 +1558,9 @@ button.primary.small {
 
 .composer .composer-name-field :is(input, .rt-TextFieldInput)::placeholder,
 .composer .composer-body-field :is(textarea, .rt-TextAreaInput)::placeholder,
-.comment-edit .comment-edit-field :is(input, .rt-TextFieldInput, textarea, .rt-TextAreaInput)::placeholder {
+.comment-edit
+  .comment-edit-field
+  :is(input, .rt-TextFieldInput, textarea, .rt-TextAreaInput)::placeholder {
   font: inherit;
   letter-spacing: normal;
 }
@@ -2214,9 +2225,7 @@ button.primary.small {
   border-radius: 999px;
   border: 1px solid rgba(15, 23, 42, 0.42);
   background: rgba(15, 23, 42, 0.18);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
-    0 0 0 1px rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.18);
   pointer-events: none;
   z-index: 2;
 }

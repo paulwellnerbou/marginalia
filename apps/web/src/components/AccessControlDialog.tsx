@@ -12,11 +12,15 @@ import {
 } from '@radix-ui/themes';
 import { useEffect, useState } from 'react';
 import type { Document } from '../lib/api.js';
-import { type DocumentSettingsResponse, updateDocumentSettings } from '../lib/api.js';
+import {
+  recoverCurrentPassword,
+  type DocumentSettingsResponse,
+  updateDocumentSettings,
+} from '../lib/api.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
-import { Copyable } from './Copyable.js';
 import { InvitesPanel } from './InvitesPanel.js';
+import { PasswordDisclosureCard } from './PasswordDisclosureCard.js';
 
 /**
  * "Access Control" — everything that decides who can read, edit, and
@@ -37,7 +41,20 @@ export function AccessControlDialog({
   const [passwordProtected, setPasswordProtected] = useState(doc.password_protected);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [freshPassword, setFreshPassword] = useState<string | null>(null);
+  const [disclosedPassword, setDisclosedPassword] = useState<{
+    label: string;
+    value: string;
+  } | null>(null);
+
+  function messageForError(err: unknown, fallback: string): string {
+    if (err instanceof Error && err.message === 'password-unavailable') {
+      return 'This document was password-protected before recovery was added. Rotate the password once to enable future recovery.';
+    }
+    if (err instanceof Error && err.message === 'forbidden') {
+      return 'Only the current admin link can reveal the password.';
+    }
+    return err instanceof Error ? err.message : fallback;
+  }
 
   useEffect(() => {
     setPasswordProtected(doc.password_protected);
@@ -68,12 +85,15 @@ export function AccessControlDialog({
       const result = await updateDocumentSettings(doc.uid, patch, identity);
       onChange(result);
       setPasswordProtected(result.password_protected);
-      if (result.password) setFreshPassword(result.password);
-      else setFreshPassword(null);
+      if (result.password) {
+        setDisclosedPassword({ label: 'New password', value: result.password });
+      } else {
+        setDisclosedPassword(null);
+      }
     } catch (err) {
       setPasswordProtected(previous);
       reportError('AccessControl.setPasswordProtection', err);
-      setError(err instanceof Error ? err.message : 'Update failed');
+      setError(messageForError(err, 'Update failed'));
     } finally {
       setSaving(false);
     }
@@ -91,10 +111,26 @@ export function AccessControlDialog({
     try {
       const result = await updateDocumentSettings(doc.uid, { password: 'rotate' }, identity);
       onChange(result);
-      if (result.password) setFreshPassword(result.password);
+      if (result.password) {
+        setDisclosedPassword({ label: 'New password', value: result.password });
+      }
     } catch (err) {
       reportError('AccessControl.rotate', err);
-      setError(err instanceof Error ? err.message : 'Rotate failed');
+      setError(messageForError(err, 'Rotate failed'));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function revealCurrentPassword() {
+    setError(null);
+    setSaving(true);
+    try {
+      const result = await recoverCurrentPassword(doc.uid);
+      setDisclosedPassword({ label: 'Current password', value: result.password });
+    } catch (err) {
+      reportError('AccessControl.revealCurrentPassword', err);
+      setError(messageForError(err, 'Could not reveal the current password for this document'));
     } finally {
       setSaving(false);
     }
@@ -108,7 +144,7 @@ export function AccessControlDialog({
         // Drop the one-shot password disclosure on close so reopening
         // doesn't surprise the user with a stale value.
         if (!v) {
-          setFreshPassword(null);
+          setDisclosedPassword(null);
           setError(null);
           setPasswordProtected(doc.password_protected);
         }
@@ -144,9 +180,12 @@ export function AccessControlDialog({
             {passwordProtected && doc.password_protected && (
               <Flex align="center" gap="2" pl="6">
                 <Text size="1" color="gray">
-                  Password is set. Rotate invalidates existing sessions; invite links still
-                  determine identity and role after re-authentication.
+                  Password is set. Rotate invalidates existing sessions; the admin link can reveal
+                  the current password later without rotating it.
                 </Text>
+                <Button size="1" variant="soft" disabled={saving} onClick={revealCurrentPassword}>
+                  Reveal current password
+                </Button>
                 {/* Destructive + unrecoverable: always confirm. */}
                 <AlertDialog.Root>
                   <AlertDialog.Trigger>
@@ -161,8 +200,8 @@ export function AccessControlDialog({
                       </Flex>
                     </AlertDialog.Title>
                     <AlertDialog.Description size="2" mb="3">
-                      Rotating generates a brand-new password and invalidates every existing
-                      session on this document.
+                      Rotating generates a brand-new password and invalidates every existing session
+                      on this document.
                     </AlertDialog.Description>
                     <Flex direction="column" gap="2" mb="4">
                       <Text size="2" as="p">
@@ -171,9 +210,9 @@ export function AccessControlDialog({
                         read or write anything.
                       </Text>
                       <Text size="2" as="p">
-                        The <b>new password is shown only once</b>, right after rotation. There is
-                        no way to recover it afterwards; you'll need to share it out of band with
-                        each person you want back in.
+                        The admin link can reveal the current password later, but everyone else
+                        still needs the <b>new password</b> shared out of band before they can get
+                        back in.
                       </Text>
                     </Flex>
                     <Flex gap="2" justify="end">
@@ -194,15 +233,12 @@ export function AccessControlDialog({
             )}
           </Flex>
 
-          {freshPassword && (
-            <Callout.Root color="amber">
-              <Callout.Text>
-                <Flex direction="column" gap="2">
-                  <span>New password (shown once):</span>
-                  <Copyable text={freshPassword} ariaLabel="Copy password" />
-                </Flex>
-              </Callout.Text>
-            </Callout.Root>
+          {disclosedPassword && (
+            <PasswordDisclosureCard
+              docUid={doc.uid}
+              password={disclosedPassword.value}
+              label={disclosedPassword.label}
+            />
           )}
 
           <Separator size="4" />

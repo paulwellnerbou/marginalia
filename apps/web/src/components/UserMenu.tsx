@@ -12,8 +12,9 @@ import {
   TextField,
 } from '@radix-ui/themes';
 import { PersonIcon } from '@radix-ui/react-icons';
-import type { Role } from '../lib/api.js';
+import { logoutPasswordSession, type Role } from '../lib/api.js';
 import { getClientId, setDisplayName as persistName, useDisplayName } from '../lib/identity.js';
+import { clearSavedPassword, useSavedPassword } from '../lib/passwords.js';
 import { appRoleColor } from '../styles/theme.js';
 import { Copyable } from './Copyable.js';
 
@@ -25,10 +26,16 @@ import { Copyable } from './Copyable.js';
 export function UserMenu({
   onChange,
   role,
+  docUid,
+  passwordProtected = false,
+  onLogout,
   showName = false,
 }: {
   onChange?: (name: string) => void;
   role?: Role | undefined;
+  docUid?: string;
+  passwordProtected?: boolean;
+  onLogout?: () => void;
   showName?: boolean;
 }) {
   // Reactive: stays in sync when any other part of the app (or another tab)
@@ -42,6 +49,9 @@ export function UserMenu({
   // have a stable identity.
   const clientId = getClientId();
   const shortId = clientId.slice(0, 10);
+  const savedPassword = useSavedPassword(docUid);
+  const [sessionBusy, setSessionBusy] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
 
   function save(next: string) {
     const trimmed = next.trim().slice(0, 80);
@@ -55,6 +65,20 @@ export function UserMenu({
   function openDialog() {
     setDraft(name ?? '');
     setDialogOpen(true);
+  }
+
+  async function handleLogout() {
+    if (!docUid) return;
+    setSessionError(null);
+    setSessionBusy(true);
+    try {
+      await logoutPasswordSession(docUid);
+      onLogout?.();
+    } catch (err) {
+      setSessionError(err instanceof Error ? err.message : 'Logout failed');
+    } finally {
+      setSessionBusy(false);
+    }
   }
 
   return (
@@ -84,7 +108,9 @@ export function UserMenu({
         </DropdownMenu.Trigger>
         <DropdownMenu.Content align="end" style={{ minWidth: 320 }}>
           <Flex px="3" pt="3" pb="2" direction="column" gap="1">
-            <Text size="1" color="gray">Identified as</Text>
+            <Text size="1" color="gray">
+              Identified as
+            </Text>
             <Flex align="center" justify="between" gap="3">
               <Box style={{ minWidth: 0, flex: 1 }}>
                 <Text size="4" weight="bold" style={{ color: 'var(--gray-12)' }} truncate>
@@ -98,7 +124,9 @@ export function UserMenu({
           </Flex>
           {role && (
             <Flex px="3" pb="2" direction="column" gap="1">
-              <Text size="1" color="gray">Role</Text>
+              <Text size="1" color="gray">
+                Role
+              </Text>
               <Badge
                 size="1"
                 color={appRoleColor(role)}
@@ -111,9 +139,50 @@ export function UserMenu({
             </Flex>
           )}
           <Flex px="3" pb="2" direction="column" gap="1">
-            <Text size="1" color="gray">User ID</Text>
+            <Text size="1" color="gray">
+              User ID
+            </Text>
             <Copyable text={clientId} ariaLabel="Copy user ID" size="1" />
           </Flex>
+          {passwordProtected && docUid && (
+            <>
+              <DropdownMenu.Separator />
+              <Flex px="3" pt="2" pb="3" direction="column" gap="2">
+                <Text size="1" color="gray">
+                  Protected document
+                </Text>
+                <Button
+                  size="1"
+                  variant="soft"
+                  color="gray"
+                  disabled={sessionBusy}
+                  onClick={() => void handleLogout()}
+                >
+                  {sessionBusy ? 'Logging out…' : 'Log out of password session'}
+                </Button>
+                {savedPassword && (
+                  <Button
+                    size="1"
+                    variant="soft"
+                    color="gray"
+                    onClick={() => clearSavedPassword(docUid)}
+                  >
+                    Forget saved password on this device
+                  </Button>
+                )}
+                {savedPassword && (
+                  <Text size="1" color="gray">
+                    Logging out does not remove the saved password unless you clear it here.
+                  </Text>
+                )}
+                {sessionError && (
+                  <Text size="1" color="red">
+                    {sessionError}
+                  </Text>
+                )}
+              </Flex>
+            </>
+          )}
         </DropdownMenu.Content>
       </DropdownMenu.Root>
 
@@ -122,8 +191,8 @@ export function UserMenu({
           <Dialog.Title>Display name</Dialog.Title>
           <Dialog.Description size="2" color="gray" mb="3">
             Shown on your edits and comments. Your persistent user ID (
-            <Code size="1">{shortId}…</Code>) stays the same, so your right to edit or delete
-            your own comments is preserved.
+            <Code size="1">{shortId}…</Code>) stays the same, so your right to edit or delete your
+            own comments is preserved.
           </Dialog.Description>
           <Flex direction="column" gap="3">
             <TextField.Root
@@ -141,7 +210,9 @@ export function UserMenu({
             />
             <Flex gap="2" justify="end">
               <Dialog.Close>
-                <Button variant="soft" color="gray">Cancel</Button>
+                <Button variant="soft" color="gray">
+                  Cancel
+                </Button>
               </Dialog.Close>
               <Button onClick={() => save(draft)} disabled={!draft.trim()}>
                 Save

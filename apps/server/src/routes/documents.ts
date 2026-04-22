@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import { randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import {
   exportDocx,
   extractDocumentTitle,
@@ -24,9 +24,12 @@ import {
   authorize,
   canEdit,
   createSession,
+  deleteSession,
   hashPassword,
   parseCookie,
   readIdentity,
+  readInvite,
+  readSession,
   verifyPassword,
 } from '../auth.js';
 import type { BlobStore } from '../blob-store.js';
@@ -79,6 +82,8 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.post('/:uid/history/:oid/restore', async (c) => restoreHistoryVersion(c, deps));
   r.post('/:uid/history/:oid/revert', async (c) => revertLatestHistoryVersion(c, deps));
   r.post('/:uid/auth', async (c) => authenticate(c, deps));
+  r.post('/:uid/logout', async (c) => logout(c, deps));
+  r.post('/:uid/password/recover', async (c) => recoverCurrentPassword(c, deps));
 
   r.get('/:uid/invites', async (c) => listInvites(c, deps));
   r.post('/:uid/invites', async (c) => createInvite(c, deps));
@@ -141,6 +146,14 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
     note: 'Author',
     createdByName: identity.displayName,
   });
+  if (plaintextPassword) {
+    const recovery = encryptRecoverablePassword(plaintextPassword, uid, adminInvite.token);
+    db.prepare(
+      `UPDATE documents
+          SET password_recovery_ciphertext = ?, password_recovery_iv = ?
+        WHERE uid = ?`,
+    ).run(recovery.ciphertext, recovery.iv, uid);
+  }
 
   const response: Record<string, unknown> = {
     uid,
@@ -153,7 +166,10 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
     default_theme: theme,
     format,
   };
-  if (plaintextPassword) response.password = plaintextPassword;
+  if (plaintextPassword) {
+    response.password = plaintextPassword;
+    c.header('Cache-Control', 'no-store');
+  }
   return c.json(response, 201);
 }
 
@@ -293,6 +309,7 @@ async function updateSettings(c: Context, deps: AppDeps) {
   const updates: Array<[string, Bind]> = [];
   let plaintextPassword: string | null = null;
   let shouldRefreshSession = false;
+  let refreshedSessionPersistent = true;
 
   // editable_by_anyone is unsettable; tolerated on incoming payloads for
   // back-compat with old clients.
@@ -306,9 +323,20 @@ async function updateSettings(c: Context, deps: AppDeps) {
   }
   if (body.password === null) {
     updates.push(['password_hash', null]);
+    updates.push(['password_recovery_ciphertext', null]);
+    updates.push(['password_recovery_iv', null]);
   } else if (body.password === 'rotate') {
+    if (!decision.invite || decision.invite.kind !== 'admin') {
+      return c.json({ error: 'admin-token-required' }, 400);
+    }
     plaintextPassword = generatePassword();
+    const recovery = encryptRecoverablePassword(plaintextPassword, doc.uid, decision.invite.token);
     updates.push(['password_hash', await hashPassword(plaintextPassword)]);
+    updates.push(['password_recovery_ciphertext', recovery.ciphertext]);
+    updates.push(['password_recovery_iv', recovery.iv]);
+    const priorToken = parseCookie(c.req.raw.headers.get('cookie'), SESSION_COOKIE);
+    const priorSession = priorToken ? readSession(db, priorToken) : null;
+    refreshedSessionPersistent = priorSession?.persistent !== 0;
     db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
     shouldRefreshSession = true;
   }
@@ -330,11 +358,14 @@ async function updateSettings(c: Context, deps: AppDeps) {
     default_theme: fresh.default_theme,
     password_protected: fresh.password_hash !== null,
   };
-  if (plaintextPassword) response.password = plaintextPassword;
+  if (plaintextPassword) {
+    response.password = plaintextPassword;
+    c.header('Cache-Control', 'no-store');
+  }
   if (shouldRefreshSession) {
     // Keep the initiating admin authenticated under the newly-rotated
     // password while invalidating every previously-issued session.
-    setSessionCookie(c, db, doc.uid, config.sessionTtlMs);
+    setSessionCookie(c, db, doc.uid, config.sessionTtlMs, refreshedSessionPersistent);
   }
   return c.json(response);
 }
@@ -998,21 +1029,65 @@ async function authenticate(c: Context, deps: AppDeps) {
   if (!body || typeof body.password !== 'string') {
     return c.json({ error: 'password-required' }, 400);
   }
+  const remember = body.remember !== false;
 
   const ok = await verifyPassword(body.password, doc.password_hash);
   if (!ok) return c.json({ error: 'wrong-password' }, 401);
 
-  setSessionCookie(c, db, doc.uid, config.sessionTtlMs);
+  setSessionCookie(c, db, doc.uid, config.sessionTtlMs, remember);
   return c.body(null, 204);
 }
 
-function setSessionCookie(c: Context, db: Database, docUid: string, ttlMs: number): void {
-  const token = createSession(db, docUid, ttlMs);
+async function logout(c: Context, deps: AppDeps) {
+  const doc = loadDoc(deps.db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const token = parseCookie(c.req.raw.headers.get('cookie'), SESSION_COOKIE);
+  if (token) deleteSession(deps.db, token);
+  clearSessionCookie(c);
+  return c.body(null, 204);
+}
+
+async function recoverCurrentPassword(c: Context, deps: AppDeps) {
+  const doc = loadDoc(deps.db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+  if (doc.password_hash === null) {
+    return c.json({ error: 'not-password-protected' }, 400);
+  }
+
+  const invite = requireAdminInvite(c, deps.db, doc.uid);
+  if (!invite) return c.json({ error: 'forbidden' }, 403);
+  if (!doc.password_recovery_ciphertext || !doc.password_recovery_iv) {
+    return c.json({ error: 'password-unavailable' }, 409);
+  }
+
+  try {
+    const password = decryptRecoverablePassword(doc, invite.token);
+    c.header('Cache-Control', 'no-store');
+    return c.json({ password });
+  } catch {
+    return c.json({ error: 'password-recovery-failed' }, 500);
+  }
+}
+
+function setSessionCookie(
+  c: Context,
+  db: Database,
+  docUid: string,
+  ttlMs: number,
+  persistent = true,
+): void {
+  const token = createSession(db, docUid, ttlMs, persistent);
   const maxAge = Math.floor(ttlMs / 1000);
+  const persistencePart = persistent ? `; Max-Age=${maxAge}` : '';
   c.header(
     'Set-Cookie',
-    `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+    `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax${persistencePart}`,
   );
+}
+
+function clearSessionCookie(c: Context): void {
+  c.header('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
 }
 
 // --- Invites (admin only) --------------------------------------------
@@ -1137,6 +1212,13 @@ async function rotateAdminInvite(c: Context, deps: AppDeps) {
   const existing = db
     .prepare(`SELECT * FROM invites WHERE doc_uid = ? AND kind = 'admin' LIMIT 1`)
     .get(doc.uid) as InviteRow | undefined;
+  const recoverablePassword =
+    decision.invite &&
+    doc.password_recovery_ciphertext &&
+    doc.password_recovery_iv &&
+    decision.invite.kind === 'admin'
+      ? decryptRecoverablePassword(doc, decision.invite.token)
+      : null;
   // Insert-then-delete so the doc is never admin-less between steps.
   const fresh = createInviteRow(db, {
     docUid: doc.uid,
@@ -1148,6 +1230,14 @@ async function rotateAdminInvite(c: Context, deps: AppDeps) {
     note: existing?.note ?? 'Author',
     createdByName: decision.identity.displayName,
   });
+  if (recoverablePassword !== null) {
+    const recovery = encryptRecoverablePassword(recoverablePassword, doc.uid, fresh.token);
+    db.prepare(
+      `UPDATE documents
+          SET password_recovery_ciphertext = ?, password_recovery_iv = ?
+        WHERE uid = ?`,
+    ).run(recovery.ciphertext, recovery.iv, doc.uid);
+  }
   db.prepare(`DELETE FROM invites WHERE doc_uid = ? AND kind = 'admin' AND token != ?`).run(
     doc.uid,
     fresh.token,
@@ -1386,6 +1476,12 @@ function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
   return authorize(deps.db, doc, c.req.raw.headers, sessionToken);
 }
 
+function requireAdminInvite(c: Context, db: Database, docUid: string): InviteRow | null {
+  const invite = readInvite(db, c.req.raw.headers, docUid);
+  if (!invite || invite.kind !== 'admin' || invite.role !== 'admin') return null;
+  return invite;
+}
+
 async function safeJson(c: Context): Promise<Record<string, unknown> | null> {
   try {
     const v = await c.req.json();
@@ -1414,4 +1510,42 @@ function generatePassword(): string {
     if (i % 4 === 3 && i < 15) out += '-';
   }
   return out;
+}
+
+function encryptRecoverablePassword(
+  plain: string,
+  docUid: string,
+  adminToken: string,
+): { ciphertext: string; iv: string } {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', passwordRecoveryKey(docUid, adminToken), iv);
+  const encrypted = Buffer.concat([cipher.update(plain, 'utf8'), cipher.final()]);
+  const payload = Buffer.concat([encrypted, cipher.getAuthTag()]);
+  return {
+    ciphertext: payload.toString('base64'),
+    iv: iv.toString('base64'),
+  };
+}
+
+function decryptRecoverablePassword(doc: DocumentRow, adminToken: string): string {
+  if (!doc.password_recovery_ciphertext || !doc.password_recovery_iv) {
+    throw new Error('password-unavailable');
+  }
+  const payload = Buffer.from(doc.password_recovery_ciphertext, 'base64');
+  if (payload.length < 17) throw new Error('password-recovery-payload-too-short');
+  const iv = Buffer.from(doc.password_recovery_iv, 'base64');
+  const ciphertext = payload.subarray(0, -16);
+  const authTag = payload.subarray(-16);
+  const decipher = createDecipheriv('aes-256-gcm', passwordRecoveryKey(doc.uid, adminToken), iv);
+  decipher.setAuthTag(authTag);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+}
+
+function passwordRecoveryKey(docUid: string, adminToken: string): Buffer {
+  return createHash('sha256')
+    .update('marginalia-password-recovery\0')
+    .update(docUid)
+    .update('\0')
+    .update(adminToken)
+    .digest();
 }

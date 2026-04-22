@@ -10,6 +10,9 @@ interface Props {
   /** Document title shown after the brand, when viewing/editing a doc. */
   docTitle?: string;
   role?: Role | undefined;
+  docUid?: string;
+  passwordProtected?: boolean;
+  onLogout?: () => void;
   /** Source flavour of the currently-open doc. Drives the MARKDOWN /
    *  ASCIIDOC badge next to the title — omitted on the home page. */
   format?: DocumentFormat;
@@ -24,7 +27,16 @@ interface Props {
  * The persistent top bar, present on every page. Anchors the app's home
  * navigation, identity, and global appearance control.
  */
-export function AppBar({ docTitle, role, format, trailing, showUserName }: Props) {
+export function AppBar({
+  docTitle,
+  role,
+  docUid,
+  passwordProtected,
+  onLogout,
+  format,
+  trailing,
+  showUserName,
+}: Props) {
   const brandGradientId = useId().replace(/:/g, '');
 
   return (
@@ -33,7 +45,14 @@ export function AppBar({ docTitle, role, format, trailing, showUserName }: Props
         <span className="app-brand-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" className="app-brand-icon-svg">
             <defs>
-              <linearGradient id={brandGradientId} x1="1" y1="3" x2="22" y2="20" gradientUnits="userSpaceOnUse">
+              <linearGradient
+                id={brandGradientId}
+                x1="1"
+                y1="3"
+                x2="22"
+                y2="20"
+                gradientUnits="userSpaceOnUse"
+              >
                 <stop offset="0%" stopColor="var(--ui-accent-strong)" />
                 <stop offset="48%" stopColor="var(--ui-accent-muted-strong)" />
                 <stop offset="100%" stopColor="var(--gray-12)" />
@@ -79,7 +98,13 @@ export function AppBar({ docTitle, role, format, trailing, showUserName }: Props
       <span className="spacer" />
       {trailing}
       <AppearanceToggle />
-      <UserMenu role={role} showName={showUserName ?? false} />
+      <UserMenu
+        role={role}
+        showName={showUserName ?? false}
+        {...(docUid ? { docUid } : {})}
+        {...(passwordProtected !== undefined ? { passwordProtected } : {})}
+        {...(onLogout ? { onLogout } : {})}
+      />
     </Flex>
   );
 }

@@ -83,27 +83,39 @@ export async function verifyPassword(plain: string, hash: string): Promise<boole
   return Bun.password.verify(plain, hash);
 }
 
-export function createSession(db: Database, docUid: string, ttlMs: number): string {
+export function createSession(
+  db: Database,
+  docUid: string,
+  ttlMs: number,
+  persistent = true,
+): string {
   const token = newSessionToken();
   const expiresAt = Date.now() + ttlMs;
-  db.prepare('INSERT INTO sessions (token, doc_uid, expires_at) VALUES (?, ?, ?)').run(
-    token,
-    docUid,
-    expiresAt,
-  );
+  db.prepare(
+    'INSERT INTO sessions (token, doc_uid, persistent, expires_at) VALUES (?, ?, ?, ?)',
+  ).run(token, docUid, persistent ? 1 : 0, expiresAt);
   return token;
 }
 
-export function checkSession(db: Database, token: string, docUid: string): boolean {
-  const row = db
-    .prepare('SELECT * FROM sessions WHERE token = ? AND doc_uid = ?')
-    .get(token, docUid) as SessionRow | undefined;
-  if (!row) return false;
+export function readSession(db: Database, token: string): SessionRow | null {
+  const row = db.prepare('SELECT * FROM sessions WHERE token = ?').get(token) as
+    | SessionRow
+    | undefined;
+  if (!row) return null;
   if (row.expires_at < Date.now()) {
     db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
-    return false;
+    return null;
   }
-  return true;
+  return row;
+}
+
+export function checkSession(db: Database, token: string, docUid: string): boolean {
+  const row = readSession(db, token);
+  return row?.doc_uid === docUid;
+}
+
+export function deleteSession(db: Database, token: string): void {
+  db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
 }
 
 export function parseCookie(header: string | null, name: string): string | null {

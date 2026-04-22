@@ -831,7 +831,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   return (
     <div className="doc-page">
-      <AppBar docTitle={title} role={doc.role} format={doc.format} />
+      <AppBar
+        docTitle={title}
+        role={doc.role}
+        docUid={doc.uid}
+        passwordProtected={doc.password_protected}
+        onLogout={() => window.location.reload()}
+        format={doc.format}
+      />
 
       <div className="doc-layout" style={gridStyle}>
         <aside className={`pane pane-toc ${tocOpen ? 'open' : 'closed'}`}>
