@@ -120,7 +120,7 @@ export function DiscussionEntry({
 }
 
 function Avatar({ name, id }: { name: string; id: string }) {
-  const letters = initials(name);
+  const letters = avatarInitials(name);
   const hue = hashHue(id);
   const style = {
     backgroundColor: `hsl(${hue} 55% 45%)`,
@@ -132,14 +132,17 @@ function Avatar({ name, id }: { name: string; id: string }) {
   );
 }
 
-function initials(name: string): string {
+export function avatarInitials(name: string): string {
   const trimmed = name.trim();
   if (!trimmed) return '?';
   const parts = trimmed.split(/\s+/);
   if (parts.length >= 2) {
-    return ((parts[0]?.[0] ?? '') + (parts[parts.length - 1]?.[0] ?? '')).toUpperCase();
+    return parts
+      .map((part) => Array.from(part)[0] ?? '')
+      .join('')
+      .toUpperCase();
   }
-  return trimmed.slice(0, 2).toUpperCase();
+  return Array.from(trimmed).slice(0, 2).join('');
 }
 
 function hashHue(s: string): number {
