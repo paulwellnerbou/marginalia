@@ -80,9 +80,7 @@ CREATE TABLE IF NOT EXISTS comments_edit_proposals (
   source_snapshot        TEXT,
   proposed_text          TEXT NOT NULL,
   status                 TEXT NOT NULL DEFAULT 'open',
-  accepted_oid           TEXT,
-  decided_at             INTEGER,
-  decided_by_name        TEXT
+  accepted_oid           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS comment_mentions (
@@ -305,8 +303,6 @@ export interface EditProposalRow {
   proposed_text: string;
   status: EditProposalStatus;
   accepted_oid: string | null;
-  decided_at: number | null;
-  decided_by_name: string | null;
 }
 
 export interface EditProposalThreadRow extends CommentRow {
@@ -348,6 +344,7 @@ export function openDatabase(path: string): Database {
   db.exec(`UPDATE invites SET role = 'collaborator' WHERE role = 'commentor'`);
   migrateInvitesKind(db);
   migrateEditProposalsToCommentExtensions(db);
+  migrateProposalDecisionColumnsToComments(db);
   return db;
 }
 
@@ -442,8 +439,8 @@ function migrateEditProposalsToCommentExtensions(db: Database): void {
         author_display_name,
         COALESCE(rationale, ''),
         CASE WHEN status = 'orphaned' THEN 'orphaned' ELSE 'linked' END,
-        NULL,
-        NULL,
+        CASE WHEN status IN ('accepted', 'rejected') THEN decided_at ELSE NULL END,
+        CASE WHEN status IN ('accepted', 'rejected') THEN decided_by_name ELSE NULL END,
         created_at,
         updated_at,
         deleted_at
@@ -451,7 +448,7 @@ function migrateEditProposalsToCommentExtensions(db: Database): void {
     `);
     db.exec(`
       INSERT OR IGNORE INTO comments_edit_proposals (
-        comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid, decided_at, decided_by_name
+        comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid
       )
       SELECT
         id,
@@ -463,12 +460,80 @@ function migrateEditProposalsToCommentExtensions(db: Database): void {
           WHEN status = 'rejected' THEN 'rejected'
           ELSE 'open'
         END,
-        NULL,
-        decided_at,
-        decided_by_name
+        NULL
       FROM edit_proposals
     `);
     db.exec('DROP TABLE edit_proposals');
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
+function migrateProposalDecisionColumnsToComments(db: Database): void {
+  const cols = db.prepare(`PRAGMA table_info(comments_edit_proposals)`).all() as Array<{
+    name: string;
+  }>;
+  const hasDecidedAt = cols.some((c) => c.name === 'decided_at');
+  const hasDecidedByName = cols.some((c) => c.name === 'decided_by_name');
+  if (!hasDecidedAt && !hasDecidedByName) return;
+
+  const assignments: string[] = [];
+  if (hasDecidedAt) {
+    assignments.push(`
+      resolved_at = COALESCE(
+        resolved_at,
+        (SELECT cep.decided_at
+           FROM comments_edit_proposals cep
+          WHERE cep.comment_id = comments.id)
+      )
+    `);
+  }
+  if (hasDecidedByName) {
+    assignments.push(`
+      resolved_by_name = COALESCE(
+        resolved_by_name,
+        (SELECT cep.decided_by_name
+           FROM comments_edit_proposals cep
+          WHERE cep.comment_id = comments.id)
+      )
+    `);
+  }
+
+  db.exec('BEGIN');
+  try {
+    db.exec(
+      `UPDATE comments
+          SET ${assignments.join(', ')}
+        WHERE EXISTS (
+              SELECT 1
+                FROM comments_edit_proposals cep
+               WHERE cep.comment_id = comments.id
+                 AND cep.status IN ('accepted', 'rejected')
+            )`,
+    );
+
+    db.exec(`ALTER TABLE comments_edit_proposals RENAME TO comments_edit_proposals_pre_cleanup`);
+    db.exec(`
+      CREATE TABLE comments_edit_proposals (
+        comment_id             TEXT PRIMARY KEY,
+        anchor_kind            TEXT,
+        source_snapshot        TEXT,
+        proposed_text          TEXT NOT NULL,
+        status                 TEXT NOT NULL DEFAULT 'open',
+        accepted_oid           TEXT
+      )
+    `);
+    db.exec(`
+      INSERT INTO comments_edit_proposals (
+        comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid
+      )
+      SELECT
+        comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid
+      FROM comments_edit_proposals_pre_cleanup
+    `);
+    db.exec(`DROP TABLE comments_edit_proposals_pre_cleanup`);
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');

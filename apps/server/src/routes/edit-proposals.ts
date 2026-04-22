@@ -38,8 +38,8 @@ const PROPOSAL_SELECT = `
     cep.proposed_text,
     cep.status AS proposal_status,
     cep.accepted_oid,
-    cep.decided_at,
-    cep.decided_by_name
+    c.resolved_at AS decided_at,
+    c.resolved_by_name AS decided_by_name
   FROM comments c
   INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
 `;
@@ -127,8 +127,8 @@ async function createProposal(c: Context, deps: AppDeps) {
     );
     db.prepare(
       `INSERT INTO comments_edit_proposals
-         (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid, decided_at, decided_by_name)
-       VALUES (?, ?, ?, ?, 'open', NULL, NULL, NULL)`,
+         (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid)
+       VALUES (?, ?, ?, ?, 'open', NULL)`,
     ).run(id, kind, sourceSnapshot, proposed);
     db.exec('COMMIT');
   } catch (err) {
@@ -273,9 +273,9 @@ async function rejectProposal(c: Context, deps: AppDeps) {
   const now = Date.now();
   db.prepare(
     `UPDATE comments_edit_proposals
-        SET status = 'rejected', decided_at = ?, decided_by_name = ?
+        SET status = 'rejected'
       WHERE comment_id = ?`,
-  ).run(now, decision.identity.displayName, pid);
+  ).run(pid);
   db.prepare(
     `UPDATE comments
         SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
@@ -391,9 +391,9 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   // so the thread stays attached after the block hash changes.
   db.prepare(
     `UPDATE comments_edit_proposals
-        SET status = 'accepted', accepted_oid = ?, decided_at = ?, decided_by_name = ?
+        SET status = 'accepted', accepted_oid = ?
       WHERE comment_id = ?`,
-  ).run(oid, now, identity.displayName, pid);
+  ).run(oid, pid);
   db.prepare(
     `UPDATE comments
         SET anchor_block_id = ?,
@@ -551,7 +551,7 @@ export function reopenAcceptedProposal(
 
   db.prepare(
     `UPDATE comments_edit_proposals
-        SET status = 'open', accepted_oid = NULL, decided_at = NULL, decided_by_name = NULL
+        SET status = 'open', accepted_oid = NULL
       WHERE comment_id = ?`,
   ).run(proposalId);
   db.prepare(

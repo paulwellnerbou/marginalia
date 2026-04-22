@@ -274,6 +274,12 @@ describe('openDatabase migrations', () => {
     ).get() as { name: string } | null;
     expect(oldTable).toBeNull();
 
+    const proposalCols = db.prepare('PRAGMA table_info(comments_edit_proposals)').all() as Array<{
+      name: string;
+    }>;
+    expect(proposalCols.some((col) => col.name === 'decided_at')).toBe(false);
+    expect(proposalCols.some((col) => col.name === 'decided_by_name')).toBe(false);
+
     const migratedComment = db.prepare(
       `SELECT id, doc_uid, anchor_block_id, anchor_quote, body, link_status, author_client_id, author_display_name
          FROM comments
@@ -300,7 +306,7 @@ describe('openDatabase migrations', () => {
     });
 
     const migratedProposal = db.prepare(
-      `SELECT comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid, decided_at, decided_by_name
+      `SELECT comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid
          FROM comments_edit_proposals
         WHERE comment_id = ?`,
     ).get('prop-1') as {
@@ -310,8 +316,6 @@ describe('openDatabase migrations', () => {
       proposed_text: string;
       status: string;
       accepted_oid: string | null;
-      decided_at: number | null;
-      decided_by_name: string | null;
     };
     expect(migratedProposal).toEqual({
       comment_id: 'prop-1',
@@ -320,8 +324,120 @@ describe('openDatabase migrations', () => {
       proposed_text: 'Edited block',
       status: 'open',
       accepted_oid: null,
-      decided_at: null,
-      decided_by_name: null,
+    });
+
+    db.close();
+  });
+
+  test('proposal decision columns are migrated from comments_edit_proposals to comments', () => {
+    const now = Date.now();
+    {
+      const seed = new Database(dbPath);
+      seed.exec(`
+        CREATE TABLE comments (
+          id                    TEXT PRIMARY KEY,
+          doc_uid               TEXT NOT NULL,
+          parent_id             TEXT,
+          parent_proposal_id    TEXT,
+          anchor_block_id       TEXT,
+          anchor_quote          TEXT,
+          anchor_prefix         TEXT,
+          anchor_suffix         TEXT,
+          anchor_start_offset   INTEGER,
+          anchor_end_offset     INTEGER,
+          anchor_heading_path   TEXT,
+          anchor_section_index  INTEGER,
+          anchor_section_index_path TEXT,
+          author_client_id      TEXT NOT NULL,
+          author_display_name   TEXT NOT NULL,
+          body                  TEXT NOT NULL,
+          link_status           TEXT NOT NULL DEFAULT 'linked',
+          resolved_at           INTEGER,
+          resolved_by_name      TEXT,
+          created_at            INTEGER NOT NULL,
+          updated_at            INTEGER NOT NULL,
+          deleted_at            INTEGER
+        );
+        CREATE TABLE comments_edit_proposals (
+          comment_id             TEXT PRIMARY KEY,
+          anchor_kind            TEXT,
+          source_snapshot        TEXT,
+          proposed_text          TEXT NOT NULL,
+          status                 TEXT NOT NULL DEFAULT 'open',
+          accepted_oid           TEXT,
+          decided_at             INTEGER,
+          decided_by_name        TEXT
+        );
+      `);
+      seed.prepare(
+        `INSERT INTO comments
+           (id, doc_uid, parent_id, parent_proposal_id,
+            anchor_block_id, anchor_quote, anchor_prefix, anchor_suffix,
+            anchor_start_offset, anchor_end_offset,
+            anchor_heading_path, anchor_section_index, anchor_section_index_path,
+            author_client_id, author_display_name, body, link_status,
+            resolved_at, resolved_by_name, created_at, updated_at, deleted_at)
+         VALUES (?, ?, NULL, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, 'linked', NULL, NULL, ?, ?, NULL)`,
+      ).run(
+        'prop-accepted',
+        'doc-1',
+        'block-1',
+        'Original block',
+        'client-1',
+        'Alice',
+        'Why this should change',
+        now,
+        now,
+      );
+      seed.prepare(
+        `INSERT INTO comments_edit_proposals
+           (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid, decided_at, decided_by_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        'prop-accepted',
+        'paragraph',
+        'Original block',
+        'Edited block',
+        'accepted',
+        'oid-1',
+        now,
+        'Alice',
+      );
+      seed.close();
+    }
+
+    const db = openDatabase(dbPath);
+
+    const proposalCols = db.prepare('PRAGMA table_info(comments_edit_proposals)').all() as Array<{
+      name: string;
+    }>;
+    expect(proposalCols.some((col) => col.name === 'decided_at')).toBe(false);
+    expect(proposalCols.some((col) => col.name === 'decided_by_name')).toBe(false);
+
+    const migratedComment = db.prepare(
+      `SELECT resolved_at, resolved_by_name
+         FROM comments
+        WHERE id = ?`,
+    ).get('prop-accepted') as {
+      resolved_at: number | null;
+      resolved_by_name: string | null;
+    };
+    expect(migratedComment).toEqual({
+      resolved_at: now,
+      resolved_by_name: 'Alice',
+    });
+
+    const migratedProposal = db.prepare(
+      `SELECT status, accepted_oid
+         FROM comments_edit_proposals
+        WHERE comment_id = ?`,
+    ).get('prop-accepted') as {
+      status: string;
+      accepted_oid: string | null;
+    };
+    expect(migratedProposal).toEqual({
+      status: 'accepted',
+      accepted_oid: 'oid-1',
     });
 
     db.close();

@@ -961,21 +961,17 @@ describe('documents API', () => {
 
     const proposalRow = app.db
       .prepare(
-        `SELECT status, accepted_oid, decided_at, decided_by_name
+        `SELECT status, accepted_oid
          FROM comments_edit_proposals
         WHERE comment_id = ?`,
       )
       .get(proposal.thread.id) as {
       status: string;
       accepted_oid: string | null;
-      decided_at: number | null;
-      decided_by_name: string | null;
     };
     expect(proposalRow).toEqual({
       status: 'open',
       accepted_oid: null,
-      decided_at: null,
-      decided_by_name: null,
     });
 
     const historyAfterRes = await app.hono.fetch(
