@@ -221,6 +221,21 @@ async function getBrowser(): Promise<Browser> {
 }
 
 /**
+ * Detect Playwright's `TimeoutError`. We want to normalize these to
+ * our `ExportTimeoutError` (→ 504) so the frontend sees the typed
+ * contract, not a generic 500.
+ *
+ * Checked by `name` rather than `instanceof` — importing
+ * `playwright.errors.TimeoutError` directly binds us to Playwright's
+ * internal module layout (the `errors` subpath has moved between
+ * versions). The `name` field is part of the public surface and has
+ * been stable since Playwright 1.0.
+ */
+function isPlaywrightTimeoutError(err: unknown): boolean {
+  return err instanceof Error && err.name === 'TimeoutError';
+}
+
+/**
  * Playwright throws a generic `Error` when the browser binary is
  * absent; the message includes `Executable doesn't exist` and a
  * `playwright install` hint. Match defensively.
@@ -462,6 +477,13 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
     //
     // Google Fonts still have to finish loading for print fidelity; we
     // handle those separately via `document.fonts.ready` below.
+    // Playwright's own `timeout` here backs up the module-level
+    // `race(abortPromise)` — whichever fires first wins. If it's
+    // Playwright's, the resulting `TimeoutError` is normalized to
+    // our `ExportTimeoutError` in the catch path (so the route
+    // returns 504, not a generic 500). Keeping both so the
+    // Playwright-level timeout still acts as a safety net against
+    // any case where the module timer's close-context path fails.
     await race(
       page.setContent(html, {
         waitUntil: 'load',
@@ -492,15 +514,27 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
       // diagram inside the boot script is swallowed (see html-envelope),
       // so this only actually stalls if mermaid itself hangs — cap at
       // 15 s so a pathological doc can't eat the whole export budget.
-      await race(
-        page.waitForFunction(
-          () =>
-            (window as unknown as { __marginaliaMermaidReady?: boolean })
-              .__marginaliaMermaidReady === true,
-          undefined,
-          { timeout: config.mermaidWaitMs },
-        ),
-      );
+      //
+      // This is the ONE place we intentionally rely on a Playwright
+      // per-action timeout (shorter than the total export budget).
+      // Convert its `TimeoutError` to our `ExportTimeoutError` so the
+      // route returns 504 instead of a generic 500.
+      try {
+        await race(
+          page.waitForFunction(
+            () =>
+              (window as unknown as { __marginaliaMermaidReady?: boolean })
+                .__marginaliaMermaidReady === true,
+            undefined,
+            { timeout: config.mermaidWaitMs },
+          ),
+        );
+      } catch (err) {
+        if (isPlaywrightTimeoutError(err)) {
+          throw new ExportTimeoutError(Date.now() - started);
+        }
+        throw err;
+      }
     }
 
     await race(page.emulateMedia({ media: 'print' }));
@@ -524,6 +558,15 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
     // else raced to throw first.
     if (err instanceof ExportTimeoutError) throw err;
     if (timedOut) throw new ExportTimeoutError(Date.now() - started);
+
+    // Belt-and-braces: any Playwright TimeoutError that reaches here
+    // despite the per-site `timeout: 0` / `setDefaultTimeout(0)` gets
+    // normalized to the typed HTTP contract. The mermaid wait above
+    // converts inline; this catches anything else (e.g. Playwright's
+    // internal default timeout on a surface we forgot to silence).
+    if (isPlaywrightTimeoutError(err)) {
+      throw new ExportTimeoutError(Date.now() - started);
+    }
 
     // Chromium crash mid-export: clear the singleton so the next call
     // re-launches. Playwright surfaces this as "Target closed" /

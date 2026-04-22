@@ -412,4 +412,41 @@ describe('PDF export', () => {
     // the plain embedded-asset test.
     expect(buf.toString('latin1')).toMatch(/\/Subtype\s*\/Image/);
   }, 30_000);
+
+  test('mermaid-wait timeout is reported as 504 export-timeout, not 500', async () => {
+    // Regression: before pdf.ts distinguished Playwright's own
+    // `TimeoutError` from unexpected errors, a mermaid bootstrap that
+    // never resolved `__marginaliaMermaidReady` within `mermaidWaitMs`
+    // would surface to the client as a generic 500 instead of the
+    // documented 504 export-timeout contract.
+    //
+    // We force the condition by configuring a hilariously-short
+    // mermaid budget (1 ms) — mermaid.initialize() alone takes
+    // several ms on any hardware, so Playwright's `waitForFunction`
+    // always hits its timeout before the sentinel flips. Other
+    // budgets stay at the test defaults so the failure is localised
+    // to the mermaid path.
+    configureExport({ mermaidWaitMs: 1 });
+    try {
+      const created = await upload(CLIENT_A, {
+        markdown:
+          '# Timeout fixture\n\n```mermaid\ngraph TD\n  A --> B\n```\n',
+        name: 'Timeout fixture',
+      });
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/export.pdf`, {
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        }),
+      );
+      expect(res.status).toBe(504);
+      const body = (await res.json()) as { error: string; elapsed_ms?: number };
+      expect(body.error).toBe('export-timeout');
+      expect(typeof body.elapsed_ms).toBe('number');
+    } finally {
+      // Restore the suite-level defaults so downstream tests aren't
+      // starved. configureExport() validates positive integers now
+      // (see export-config.test.ts).
+      configureExport({ mermaidWaitMs: 10_000 });
+    }
+  }, 30_000);
 });
