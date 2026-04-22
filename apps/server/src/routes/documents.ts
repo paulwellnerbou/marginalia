@@ -554,7 +554,7 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
  * renderer, wraps it in a self-contained HTML envelope with the
  * selected theme + print stylesheet, and prints via headless
  * Chromium (Playwright). See `apps/server/src/export/pdf.ts` and
- * [apps/server/PDF_EXPORT.md](../../../PDF_EXPORT.md) for the full
+ * [apps/server/PDF_EXPORT.md](../../PDF_EXPORT.md) for the full
  * design and the env knobs.
  *
  * Mirrors the DOCX route's auth, theme-resolution, title-extraction,

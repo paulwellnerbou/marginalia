@@ -578,11 +578,13 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
     if (err instanceof ExportTimeoutError) throw err;
     if (timedOut) throw new ExportTimeoutError(Date.now() - started);
 
-    // Belt-and-braces: any Playwright TimeoutError that reaches here
-    // despite the per-site `timeout: 0` / `setDefaultTimeout(0)` gets
-    // normalized to the typed HTTP contract. The mermaid wait above
-    // converts inline; this catches anything else (e.g. Playwright's
-    // internal default timeout on a surface we forgot to silence).
+    // Belt-and-braces: normalize any Playwright TimeoutError that
+    // still reaches this catch block into the typed HTTP contract.
+    // The main timeout/abort path comes from `abortPromise`; the
+    // mermaid wait and `setContent` also use explicit Playwright
+    // timeouts. This catches anything else that surfaces as a
+    // Playwright timeout (e.g. default-timeout of a surface we
+    // didn't silence explicitly).
     if (isPlaywrightTimeoutError(err)) {
       throw new ExportTimeoutError(Date.now() - started);
     }
