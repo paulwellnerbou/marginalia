@@ -487,6 +487,11 @@ const pt2hp = (pt: number): number => Math.round(pt * 2);
 /** Points → twips (1/20pt). DOCX spacing units. */
 const pt2twip = (pt: number): number => Math.round(pt * 20);
 
+/** Shared left indent used by the Blockquote style. */
+const BLOCKQUOTE_INDENT_PT = 18;
+/** Word body copy reads too airy above 1.5; keep DOCX body/list spacing fixed. */
+const DOCX_BODY_LINE_HEIGHT = 1.5;
+
 /** Strip leading '#' and validate — defensive; we control token hex strings. */
 const hex = (c: string): string => c.replace(/^#/, '').toLowerCase();
 
@@ -723,7 +728,7 @@ function buildFootnoteParagraphs(li: Element, ctx: BuildCtx): Paragraph[] {
   const out: Paragraph[] = [];
   for (const child of li.children as HastNode[]) {
     if (isElement(child)) {
-      appendFootnoteBlock(child, ctx, out);
+      appendFootnoteBlock(child, ctx, out, 0);
       continue;
     }
     // Inline text directly inside the <li> (rare — usually GFM wraps
@@ -743,11 +748,29 @@ function buildFootnoteParagraphs(li: Element, ctx: BuildCtx): Paragraph[] {
   return out;
 }
 
-function appendFootnoteBlock(node: Element, ctx: BuildCtx, out: Paragraph[]): void {
+function appendFootnoteBlock(
+  node: Element,
+  ctx: BuildCtx,
+  out: Paragraph[],
+  blockquoteDepth: number,
+): void {
+  const quoteIndent = blockquoteDepth > 0 ? pt2twip(BLOCKQUOTE_INDENT_PT * blockquoteDepth) : 0;
+  const quoted = (options: ParagraphOptions): ParagraphOptions =>
+    blockquoteDepth > 0
+      ? {
+          ...options,
+          style: options.style ?? 'Blockquote',
+          indent: {
+            ...(options.indent ?? {}),
+            left: (typeof options.indent?.left === 'number' ? options.indent.left : 0) + quoteIndent,
+          },
+        }
+      : options;
+
   switch (node.tagName) {
     case 'p': {
       const inline = collectInline(node, ctx, {});
-      if (inline.length > 0) out.push(new Paragraph({ children: inline }));
+      if (inline.length > 0) out.push(new Paragraph(quoted({ children: inline })));
       return;
     }
     case 'pre':
@@ -765,22 +788,17 @@ function appendFootnoteBlock(node: Element, ctx: BuildCtx, out: Paragraph[]): vo
         if (!isElement(c)) {
           if (isText(c) && c.value.trim()) {
             out.push(
-              new Paragraph({
-                style: 'Blockquote',
-                children: [new TextRun({ text: c.value })],
-              }),
+              new Paragraph(
+                quoted({
+                  style: 'Blockquote',
+                  children: [new TextRun({ text: c.value })],
+                }),
+              ),
             );
           }
           continue;
         }
-        if (c.tagName === 'p') {
-          const inline = collectInline(c, ctx, {});
-          if (inline.length > 0) {
-            out.push(new Paragraph({ style: 'Blockquote', children: inline }));
-          }
-          continue;
-        }
-        appendFootnoteBlock(c, ctx, out);
+        appendFootnoteBlock(c, ctx, out, blockquoteDepth + 1);
       }
       return;
     case 'ul':
@@ -798,9 +816,11 @@ function appendFootnoteBlock(node: Element, ctx: BuildCtx, out: Paragraph[]): vo
         const prefix = ordered ? `${index++}. ` : '• ';
         const children = collectInline(item, ctx, {});
         out.push(
-          new Paragraph({
-            children: [new TextRun({ text: prefix }), ...children],
-          }),
+          new Paragraph(
+            quoted({
+              children: [new TextRun({ text: prefix }), ...children],
+            }),
+          ),
         );
       }
       return;
@@ -810,7 +830,7 @@ function appendFootnoteBlock(node: Element, ctx: BuildCtx, out: Paragraph[]): vo
     case 'figure':
     case 'article':
       for (const c of node.children as HastNode[]) {
-        if (isElement(c)) appendFootnoteBlock(c, ctx, out);
+        if (isElement(c)) appendFootnoteBlock(c, ctx, out, blockquoteDepth);
       }
       return;
     default: {
@@ -820,7 +840,7 @@ function appendFootnoteBlock(node: Element, ctx: BuildCtx, out: Paragraph[]): vo
       // walkInline-free paths need their own filter. We keep it: the
       // arrow is a literal Unicode char, harmless if it slips through.
       const text = hastTextContent(node).trim();
-      if (text) out.push(new Paragraph({ children: [new TextRun({ text })] }));
+      if (text) out.push(new Paragraph(quoted({ children: [new TextRun({ text })] })));
       return;
     }
   }
@@ -951,7 +971,7 @@ function buildStyles(
         paragraph: {
           spacing: {
             after: pt2twip(tokens.spacing.blockEm * base * 0.5),
-            line: Math.round(tokens.lineHeight.body * 240),
+            line: Math.round(DOCX_BODY_LINE_HEIGHT * 240),
           },
           // `bidirectional: true` flips the paragraph direction to
           // right-to-left; combined with the `lang` hint above, Word
@@ -977,7 +997,7 @@ function buildStyles(
           color: hex(tokens.colors.fgMuted),
         },
         paragraph: {
-          indent: { left: pt2twip(18) },
+          indent: { left: pt2twip(BLOCKQUOTE_INDENT_PT) },
           border: tokens.blockquote.hasBar
             ? {
                 left: {
@@ -1174,8 +1194,13 @@ function hastToDocxChildren(
   const out: FileChild[] = [];
   const topLevel = flattenRoot(root);
   const injectAt = options.injectAfterTopLevelIndex ?? -1;
+  let afterTable = false;
   for (let i = 0; i < topLevel.length; i++) {
-    convertBlock(topLevel[i] as HastNode, ctx, out, { listDepth: 0 });
+    const node = topLevel[i] as HastNode;
+    convertBlock(node, ctx, out, { listDepth: 0, blockquoteDepth: 0, afterTable });
+    if (!isIgnorableBlockWhitespace(node)) {
+      afterTable = isElement(node) && node.tagName === 'table';
+    }
     if (i === injectAt && options.injectedBlocks) {
       out.push(...options.injectedBlocks);
     }
@@ -1243,6 +1268,50 @@ function flattenRoot(root: HastRoot): readonly HastNode[] {
 interface WalkCtx {
   readonly listDepth: number;
   readonly inOrderedList?: boolean;
+  readonly blockquoteDepth: number;
+  readonly afterTable?: boolean;
+}
+
+type ParagraphOptions = Exclude<ConstructorParameters<typeof Paragraph>[0], string>;
+
+function tableLeadSpacingTwip(tokens: ThemeTokens): number {
+  return pt2twip(tokens.spacing.blockEm * tokens.fontSize.basePt * 0.5);
+}
+
+function withParagraphContext(
+  options: ParagraphOptions,
+  ctx: BuildCtx,
+  walk: WalkCtx,
+): ParagraphOptions {
+  let next = { ...options };
+
+  if (walk.afterTable) {
+    next = {
+      ...next,
+      spacing: {
+        ...(next.spacing ?? {}),
+        before: tableLeadSpacingTwip(ctx.tokens),
+      },
+    };
+  }
+
+  if (walk.blockquoteDepth > 0) {
+    const quoteIndent = pt2twip(BLOCKQUOTE_INDENT_PT * walk.blockquoteDepth);
+    next = {
+      ...next,
+      style: next.style ?? 'Blockquote',
+      indent: {
+        ...(next.indent ?? {}),
+        left: (typeof next.indent?.left === 'number' ? next.indent.left : 0) + quoteIndent,
+      },
+    };
+  }
+
+  return next;
+}
+
+function isIgnorableBlockWhitespace(node: HastNode): boolean {
+  return isText(node) && node.value.trim() === '';
 }
 
 function convertBlock(
@@ -1255,7 +1324,11 @@ function convertBlock(
   if (!isElement(node)) {
     // Bare text at block level → wrap in a paragraph.
     if (isText(node) && node.value.trim()) {
-      out.push(new Paragraph({ children: [new TextRun({ text: node.value })] }));
+      out.push(
+        new Paragraph(
+          withParagraphContext({ children: [new TextRun({ text: node.value })] }, ctx, walk),
+        ),
+      );
     }
     return;
   }
@@ -1272,47 +1345,26 @@ function convertBlock(
 
     case 'p':
       out.push(
-        new Paragraph({
-          children: collectInline(node, ctx, {}),
-        }),
+        new Paragraph(withParagraphContext({ children: collectInline(node, ctx, {}) }, ctx, walk)),
       );
       return;
 
     case 'blockquote':
-      // Nested block content inside a blockquote (lists, code
-      // blocks, multi-paragraph quotes) should keep its structure
-      // rather than being flattened into a single Blockquote run.
-      // The old code called `collectInline` on every child, which
-      // silently dropped `<li>` bullets / `<pre>` shading / run-
-      // level Shiki colours in quoted content.
-      //
-      // Strategy:
-      //   - `<p>` children emit as Blockquote-styled paragraphs
-      //     (the common case: prose inside `>` quotes).
-      //   - Other block children (ul/ol, pre, table, nested
-      //     blockquote, …) recurse through the normal walker so
-      //     their own style (BulletList numbering, CodeBlock, …)
-      //     is preserved.
-      for (const child of node.children as HastNode[]) {
-        if (!isElement(child)) {
-          if (isText(child) && child.value.trim()) {
-            out.push(
-              new Paragraph({
-                style: 'Blockquote',
-                children: [new TextRun({ text: child.value })],
-              }),
-            );
+      // A blockquote is a context: nested paragraphs and list items
+      // should still carry the quote's left bar/indent instead of
+      // only direct `<p>` children doing so.
+      {
+        let afterTable = walk.afterTable ?? false;
+        for (const child of node.children as HastNode[]) {
+          convertBlock(child, ctx, out, {
+            ...walk,
+            blockquoteDepth: walk.blockquoteDepth + 1,
+            afterTable,
+          });
+          if (!isIgnorableBlockWhitespace(child)) {
+            afterTable = isElement(child) && child.tagName === 'table';
           }
-          continue;
         }
-        if (child.tagName === 'p') {
-          const inline = collectInline(child, ctx, {});
-          if (inline.length > 0) {
-            out.push(new Paragraph({ style: 'Blockquote', children: inline }));
-          }
-          continue;
-        }
-        convertBlock(child, ctx, out, walk);
       }
       return;
 
@@ -1352,7 +1404,15 @@ function convertBlock(
     case 'section':
     case 'article':
       // Transparent containers: walk children.
-      for (const child of node.children) convertBlock(child as HastNode, ctx, out, walk);
+      {
+        let afterTable = walk.afterTable ?? false;
+        for (const child of node.children as HastNode[]) {
+          convertBlock(child, ctx, out, { ...walk, afterTable });
+          if (!isIgnorableBlockWhitespace(child)) {
+            afterTable = isElement(child) && child.tagName === 'table';
+          }
+        }
+      }
       return;
 
     case 'div': {
@@ -1403,7 +1463,15 @@ function convertBlock(
         return;
       }
       // Generic `<div>`: walk children like other transparent wrappers.
-      for (const child of node.children) convertBlock(child as HastNode, ctx, out, walk);
+      {
+        let afterTable = walk.afterTable ?? false;
+        for (const child of node.children as HastNode[]) {
+          convertBlock(child, ctx, out, { ...walk, afterTable });
+          if (!isIgnorableBlockWhitespace(child)) {
+            afterTable = isElement(child) && child.tagName === 'table';
+          }
+        }
+      }
       return;
     }
 
@@ -1416,7 +1484,9 @@ function convertBlock(
       // Skips script/style/etc. that sanitize already removes.
       if (node.children && node.children.length > 0) {
         const inline = collectInline(node, ctx, {});
-        if (inline.length > 0) out.push(new Paragraph({ children: inline }));
+        if (inline.length > 0) {
+          out.push(new Paragraph(withParagraphContext({ children: inline }, ctx, walk)));
+        }
       }
       return;
   }
@@ -1570,6 +1640,7 @@ function convertList(
   const ordered = node.tagName === 'ol';
   const reference = ordered ? 'marginalia-ordered' : 'marginalia-bullet';
   const level = Math.min(walk.listDepth, 5);
+  const hangingIndent = pt2twip(18);
 
   // Left indent (in twips) applied to continuation paragraphs inside
   // a multi-paragraph list item. Matches the bullet's computed
@@ -1577,6 +1648,7 @@ function convertList(
   // hanging prefix, so continuation text aligns flush under the
   // first paragraph's body.
   const continuationIndent = pt2twip(18 * (level + 1));
+  let afterTable = walk.afterTable ?? false;
 
   for (const item of node.children) {
     if (!isElement(item) || item.tagName !== 'li') continue;
@@ -1595,13 +1667,34 @@ function convertList(
       if (pendingInline.length === 0) return;
       const children = collectInlineFromMany(pendingInline, ctx, {});
       if (!firstParaEmitted) {
-        out.push(new Paragraph({ numbering: { reference, level }, children }));
+        out.push(
+          new Paragraph(
+            withParagraphContext(
+              {
+                numbering: { reference, level },
+                ...(walk.blockquoteDepth > 0
+                  ? { indent: { left: continuationIndent, hanging: hangingIndent } }
+                  : {}),
+                children,
+              },
+              ctx,
+              { ...walk, afterTable },
+            ),
+          ),
+        );
         firstParaEmitted = true;
       } else {
         out.push(
-          new Paragraph({ indent: { left: continuationIndent }, children }),
+          new Paragraph(
+            withParagraphContext(
+              { indent: { left: continuationIndent }, children },
+              ctx,
+              { ...walk, afterTable },
+            ),
+          ),
         );
       }
+      afterTable = false;
       pendingInline = [];
     };
 
@@ -1611,7 +1704,10 @@ function convertList(
         convertBlock(c, ctx, out, {
           listDepth: walk.listDepth + 1,
           inOrderedList: ordered,
+          blockquoteDepth: walk.blockquoteDepth,
+          afterTable,
         });
+        afterTable = false;
       } else if (isElement(c) && c.tagName === 'p') {
         // A `<p>` is its own paragraph. Flush anything we've been
         // accumulating (turns into the previous paragraph), then put
@@ -1632,7 +1728,22 @@ function convertList(
     // Empty `<li>` still needs to exist so the numbered list stays
     // intact — emit a numbered paragraph with no content.
     if (!firstParaEmitted) {
-      out.push(new Paragraph({ numbering: { reference, level }, children: [] }));
+      out.push(
+        new Paragraph(
+          withParagraphContext(
+            {
+              numbering: { reference, level },
+              ...(walk.blockquoteDepth > 0
+                ? { indent: { left: continuationIndent, hanging: hangingIndent } }
+                : {}),
+              children: [],
+            },
+            ctx,
+            { ...walk, afterTable },
+          ),
+        ),
+      );
+      afterTable = false;
     }
   }
 }

@@ -623,6 +623,25 @@ describe('exportDocx — base font size calibration', () => {
       /<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:sz\s+w:val="26"/,
     );
   });
+
+  test('body and list paragraphs use fixed 1.5 line spacing in DOCX', async () => {
+    const stylesXml = await exportDocx('- one\n- two\n\nBody.', {
+      theme: 'beautiful',
+      includeToc: false,
+    }).then(loadStyles);
+    // 1.5 lines in Word's 240ths-of-a-line unit = 360. This is a
+    // DOCX-specific override; browser theme line-height can differ.
+    expect(stylesXml).toMatch(
+      /<w:docDefaults>[\s\S]*?<w:pPrDefault>[\s\S]*?<w:spacing[^>]*w:line="360"/,
+    );
+    // Word's built-in ListParagraph style should keep inheriting that
+    // body spacing instead of overriding it with its own line height.
+    const listParagraphStyle = stylesXml.match(
+      /<w:style[^>]*w:styleId="ListParagraph"[\s\S]*?>([\s\S]*?)<\/w:style>/,
+    );
+    expect(listParagraphStyle).not.toBeNull();
+    expect(listParagraphStyle![1]).not.toContain('<w:spacing');
+  });
 });
 
 describe('exportDocx — footnotes (M3c)', () => {
@@ -833,6 +852,27 @@ describe('exportDocx — blockquote nesting', () => {
     expect(documentXml).toContain('item two');
   });
 
+  test('blockquote list items keep Blockquote styling instead of plain ListParagraph', async () => {
+    const md = [
+      '> Intro paragraph.',
+      '>',
+      '> - item one',
+      '> - item two',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // The quoted list paragraphs need BOTH the quote style and list
+    // numbering. Without the fix they came out as plain ListParagraph
+    // items, so the left quote bar/indent disappeared in Word.
+    expect(documentXml).toMatch(
+      /<w:pStyle w:val="Blockquote"\/>[\s\S]*?<w:numPr>[\s\S]*?item one/,
+    );
+    expect(documentXml).toMatch(
+      /<w:pStyle w:val="Blockquote"\/>[\s\S]*?<w:numPr>[\s\S]*?item two/,
+    );
+    expect(documentXml).not.toContain('<w:pStyle w:val="ListParagraph"/>');
+  });
+
   test('blockquote with a nested code block keeps CodeBlock styling', async () => {
     const md = [
       '> Quoted prose.',
@@ -1039,6 +1079,24 @@ describe('exportDocx — tables (Copilot review follow-ups)', () => {
     // a point), colored with the theme's fg. Match on `w:sz="16"`
     // inside a `<w:tcBorders>` / `<w:bottom ...>` element.
     expect(documentXml).toMatch(/<w:bottom[^/]*w:sz="16"/);
+  });
+
+  test('paragraph after a table keeps explicit top spacing', async () => {
+    const md = [
+      '| A | B |',
+      '|---|---|',
+      '| 1 | 2 |',
+      '',
+      'Next paragraph.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    // Tables don't contribute paragraph spacing on their own. The
+    // paragraph after the table must carry a `before` spacing so Word
+    // leaves a visible gap instead of collapsing the blocks together.
+    expect(documentXml).toMatch(
+      /<w:tbl>[\s\S]*?<\/w:tbl>[\s\S]*?<w:p>[\s\S]*?<w:spacing[^>]*w:before="\d+"[\s\S]*?Next paragraph\./,
+    );
   });
 });
 
