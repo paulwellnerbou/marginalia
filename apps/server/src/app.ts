@@ -8,6 +8,7 @@ import type { ServerConfig } from './config.js';
 import { openDatabase } from './db.js';
 import { GitStore } from './git-store.js';
 import { Realtime } from './realtime.js';
+import { closeExportBrowser } from './export/pdf.js';
 import { assetsRouter } from './routes/assets.js';
 import { commentsRouter } from './routes/comments.js';
 import { documentsRouter } from './routes/documents.js';
@@ -19,7 +20,17 @@ export interface App {
   websocket: ReturnType<typeof createBunWebSocket<ServerWebSocket>>['websocket'];
   /** Exposed for tests that need to assert direct DB state. */
   db: Database;
-  close(): void;
+  /**
+   * Tears down the app's long-lived resources: the SQLite handle and
+   * the shared PDF export Chromium (if it was ever started).
+   *
+   * Always returns a promise — callers should `await` it so teardown
+   * ordering stays deterministic (especially in tests, where an
+   * un-awaited browser close can leak a process into the next case
+   * and flake the semaphore). The DB close is synchronous; the
+   * browser close is the part worth awaiting.
+   */
+  close(): Promise<void>;
 }
 
 export async function createApp(config: ServerConfig): Promise<App> {
@@ -48,8 +59,14 @@ export async function createApp(config: ServerConfig): Promise<App> {
     hono,
     websocket,
     db,
-    close() {
+    async close() {
       db.close();
+      // The PDF export browser is a module-level singleton shared
+      // across App instances in a process. Closing it here is mostly
+      // for tests (which spin up an App per test case) and `bun --hot`
+      // reloads — production relies on SIGTERM taking down the whole
+      // process tree, including the Chromium children.
+      await closeExportBrowser();
     },
   };
 }
