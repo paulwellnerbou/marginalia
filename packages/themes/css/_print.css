@@ -8,10 +8,16 @@
  *   - visibility toggles that hide interactive / editor-only UI that
  *     leaks through the sanitized renderer output.
  *
- * Lives in the themes package (not the server) so themes can override
- * anything they want — a per-theme stylesheet loaded afterward wins on
- * specificity. `serif-print.css` already ships its own heading / table
- * page-break rules; those continue to work.
+ * Precedence: this file is concatenated AFTER the selected theme's
+ * CSS (see `buildExportHtml()` in
+ * `apps/server/src/export/html-envelope.ts`), so on equal-specificity
+ * conflicts its rules win via source order. That makes this the
+ * authoritative print layer — themes get a known baseline to build
+ * on. A theme that wants to override a rule here needs either higher
+ * specificity (e.g. `.marginalia-theme .marginalia h1` beats plain
+ * `.marginalia h1`) or `!important`. Lives in the themes package so
+ * theme authors can edit it alongside the theme files they already
+ * maintain.
  */
 
 @page {

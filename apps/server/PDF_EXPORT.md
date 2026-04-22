@@ -56,9 +56,12 @@ this runs; the exporter appends no untrusted HTML of its own.
 
 All styling flows through the theme's CSS (from `@marginalia/themes`)
 plus the shared [`_print.css`](../../packages/themes/css/_print.css).
-Theme authors can override anything in the print layer — the print
-stylesheet is always concatenated AFTER the theme so no `!important`
-is needed for theme-side overrides.
+The print stylesheet is concatenated AFTER the theme, so on
+equal-specificity conflicts the print layer wins — this gives every
+theme a known print baseline (page box, page breaks, UI-chrome
+suppression) without needing per-theme print rules. A theme that
+wants to diverge from the baseline needs either higher specificity
+or `!important`.
 
 ## Security posture
 
@@ -94,9 +97,10 @@ is needed for theme-side overrides.
   `{ error: 'export-engine-missing', hint: '…' }`. The frontend
   shows a specific toast pointing at
   `bunx playwright install chromium-headless-shell`.
-- **Export queue full**: 503 with `Retry-After: 2`. The web client
-  retries once automatically; UI surfaces "another export is in
-  progress, try again" on repeated failure.
+- **Export queue full**: 503 with `Retry-After: 2`. The UI surfaces
+  "another export is in progress, try again" — the client does not
+  retry automatically in v1; the `Retry-After` header is present for
+  callers (cli, scripts) that want to respect it.
 - **Export timeout** (30 s by default): 504 with
   `{ error: 'export-timeout', elapsed_ms }`. Timeout races every
   await inside `exportPdf` via an `abortPromise`, so even a stalled
