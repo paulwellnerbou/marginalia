@@ -99,17 +99,53 @@ interface Config {
   fontsWaitMs: number;
 }
 
+/**
+ * Parse and validate a positive-integer env var. Empty / unset → use
+ * the default. Any other value must parse cleanly to an integer >= 1,
+ * otherwise we throw — misconfiguration should break startup loudly,
+ * not produce a server that silently rejects every export with 503
+ * (the old `Number(env) || default` let `MARGINALIA_PDF_CONCURRENCY=-1`
+ * pass through and made `inFlight >= concurrency` always true).
+ */
+function parsePositiveIntEnv(name: string, defaultValue: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return defaultValue;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(
+      `${name} must be a positive integer; got ${JSON.stringify(raw)}`,
+    );
+  }
+  return parsed;
+}
+
+/** Validate a single config patch value. Used by `configureExport()`. */
+function assertPositiveInt(name: keyof Config, value: number): number {
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer; got ${value}`);
+  }
+  return value;
+}
+
 let config: Config = {
-  concurrency: Number(process.env.MARGINALIA_PDF_CONCURRENCY) || 2,
-  timeoutMs: Number(process.env.MARGINALIA_PDF_TIMEOUT_MS) || 30_000,
-  mermaidWaitMs: Number(process.env.MARGINALIA_PDF_MERMAID_WAIT_MS) || 15_000,
-  fontsWaitMs: Number(process.env.MARGINALIA_PDF_FONTS_WAIT_MS) || 3_000,
+  concurrency: parsePositiveIntEnv('MARGINALIA_PDF_CONCURRENCY', 2),
+  timeoutMs: parsePositiveIntEnv('MARGINALIA_PDF_TIMEOUT_MS', 30_000),
+  mermaidWaitMs: parsePositiveIntEnv('MARGINALIA_PDF_MERMAID_WAIT_MS', 15_000),
+  fontsWaitMs: parsePositiveIntEnv('MARGINALIA_PDF_FONTS_WAIT_MS', 3_000),
 };
 
-/** Override runtime config. Intended for tests; production tunes via
- * env vars at startup. */
+/**
+ * Override runtime config. Intended for tests; production tunes via
+ * env vars at startup. All fields are positive-integer-validated —
+ * a test that passes `{ concurrency: 0 }` or a negative timeout
+ * throws immediately instead of silently breaking the suite.
+ */
 export function configureExport(patch: Partial<Config>): void {
-  config = { ...config, ...patch };
+  const validated: Partial<Config> = {};
+  for (const [k, v] of Object.entries(patch) as [keyof Config, number][]) {
+    if (v !== undefined) validated[k] = assertPositiveInt(k, v);
+  }
+  config = { ...config, ...validated };
 }
 
 /**
