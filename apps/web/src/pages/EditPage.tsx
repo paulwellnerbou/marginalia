@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Button, Container, Text } from '@mantine/core';
 import { saveInviteToken } from '../lib/invite.js';
-import { Button, Container, Text } from '@radix-ui/themes';
-import { Cross2Icon } from '@radix-ui/react-icons';
+import { Cross2Icon } from '../icons.js';
 import type { RenderResult } from '@marginalia/renderer';
 import type { EditorView } from 'codemirror';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
@@ -395,8 +395,8 @@ export function EditPage() {
       <>
         <AppBar />
         {uid && <PasswordPromptDialog docUid={uid} />}
-        <Container size="2" py="8">
-          <Text color="red">{error}</Text>{' '}
+        <Container size={640} py="8">
+          <Text c="red">{error}</Text>{' '}
           <Link to="/">← Home</Link>
         </Container>
       </>
@@ -407,8 +407,8 @@ export function EditPage() {
       <>
         <AppBar />
         {uid && <PasswordPromptDialog docUid={uid} />}
-        <Container size="2" py="8">
-          <Text color="gray">Loading…</Text>
+        <Container size={640} py="8">
+          <Text c="dimmed">Loading…</Text>
         </Container>
       </>
     );
@@ -423,17 +423,22 @@ export function EditPage() {
         showUserName
         trailing={
           <>
-            <Button variant="soft" color="gray" size="2" asChild>
-              <Link to={`/d/${doc.uid}`} aria-label="Cancel editing">
-                <Cross2Icon /> Cancel
-              </Link>
-            </Button>
-            {error && <Text size="1" color="red">{error}</Text>}
             <Button
-              size="2"
+              variant="light"
+              color="gray"
+              size="sm"
+              component={Link}
+              to={`/d/${doc.uid}`}
+              aria-label="Cancel editing"
+            >
+              <Cross2Icon /> Cancel
+            </Button>
+            {error && <Text size="xs" c="red">{error}</Text>}
+            <Button
+              size="sm"
               disabled={!canSave || saving || !displayName.trim()}
               onClick={handleSave}
-              variant={canSave ? 'solid' : 'soft'}
+              variant={canSave ? 'filled' : 'light'}
             >
               {saving ? 'Saving…' : canSave ? 'Save' : 'Read-only'}
             </Button>
@@ -449,7 +454,7 @@ export function EditPage() {
               onMissingAssetUpload={canEdit ? uploadAndAttach : undefined}
             />
           ) : (
-            <Text color="gray" size="2" as="p" mx="4" mt="4">Preview…</Text>
+            <Text c="dimmed" size="sm" component="p" mx="4" mt="4">Preview…</Text>
           )}
         </div>
         {canEdit && (

@@ -1,39 +1,35 @@
 import ReactMarkdown from 'react-markdown';
 import {
   ChatBubbleIcon,
-  Cross2Icon,
   FileTextIcon,
-  LockClosedIcon,
+  GitHubLogoIcon,
   MagicWandIcon,
   PaperPlaneIcon,
   PlusIcon,
   UploadIcon,
-} from '@radix-ui/react-icons';
+} from '../icons.js';
 import {
+  Alert,
   Badge,
   Box,
   Button,
-  Callout,
   Card,
   Checkbox,
   Code,
   Container,
-  Dialog,
+  Divider as Separator,
   Flex,
-  Grid,
-  Heading,
-  IconButton,
-  Separator,
+  Modal,
+  SimpleGrid,
   Text,
-  TextArea,
-  TextField,
-  Tooltip,
-} from '@radix-ui/themes';
+  Textarea,
+  TextInput,
+} from '@mantine/core';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { Copyable } from '../components/Copyable.js';
-import { FormatBadge } from '../components/FormatBadge.js';
+import { RecentDocumentCard } from '../components/RecentDocumentCard.js';
 import {
   ApiError,
   type DocumentBundle,
@@ -56,7 +52,6 @@ import {
   recordVisit,
   removeFromRecent,
 } from '../lib/recent-docs.js';
-import { appRoleColor } from '../styles/theme.js';
 
 const SAMPLE = `# Welcome
 
@@ -109,37 +104,37 @@ export function HomePage() {
       <div className="landing">
         {/* HERO */}
         <section className="landing-hero">
-          <Container size="3" px="4" className="landing-hero-shell">
+          <Container size={880} px="4" className="landing-hero-shell">
             <a
               href={GITHUB_REPO_URL}
               target="_blank"
               rel="noreferrer"
               className="landing-github-link"
             >
-              <GitHubMark />
+              <GitHubLogoIcon className="landing-github-icon" />
               <span>View on GitHub</span>
             </a>
             <Flex direction="column" align="center" gap="5" py="9" className="landing-hero-inner">
-              <Badge variant="soft" size="2" className="landing-eyebrow">
+              <Badge variant="light" size="sm" className="landing-eyebrow">
                 <MagicWandIcon /> Markdown, set in type
               </Badge>
-              <Heading size="9" align="center" className="landing-title">
+              <Text component="h1" className="landing-title" ta="center">
                 Collaborate beautifully.
                 <br />
                 <span className="landing-title-sub">Full-featured Markdown documents.</span>
-              </Heading>
-              <Text size="5" color="gray" align="center" style={{ maxWidth: '52ch' }}>
+              </Text>
+              <Text size="xl" c="dimmed" ta="center" style={{ maxWidth: '52ch' }}>
                 Marginalia renders your Markdown or AsciiDoc with book-quality typography, tracks every save in
                 git, and lets collaborators leave comments and change proposals on any paragraph.
               </Text>
               <Flex gap="3" mt="2" wrap="wrap" justify="center">
-                <Button size="4" onClick={openFreshUploadDialog}>
+                <Button size="lg" onClick={openFreshUploadDialog}>
                   <PlusIcon />
                   New document
                 </Button>
                 {recent.length > 0 && (
-                  <Button size="4" variant="soft" asChild>
-                    <a href="#recent">Your documents</a>
+                  <Button size="lg" variant="light" component="a" href="#recent">
+                    Your documents
                   </Button>
                 )}
               </Flex>
@@ -149,8 +144,8 @@ export function HomePage() {
 
         {/* FEATURE STRIP */}
         <section className="landing-features">
-          <Container size="4" px="4" pb="7">
-            <Grid columns={{ initial: '1', sm: '3' }} gap="4">
+          <Container size={1120} px="4" pb="7">
+            <SimpleGrid cols={{ base: 1, sm: 3 }} spacing="4">
               <FeatureCard
                 icon={<FileTextIcon width="20" height="20" />}
                 title="Properly typeset"
@@ -168,21 +163,21 @@ export function HomePage() {
                 title="Local-first identities"
                 body="People are managed in browser and by invite links. No online accounts, no sign-ups, and no external profile store. Share invite links and collaborate anonymously."
               />
-            </Grid>
+            </SimpleGrid>
           </Container>
         </section>
         {/* RECENT DOCS */}
         <section className="landing-recent" id="recent">
-          <Container size="4" px="4" py="7">
+          <Container size={1120} px="4" py="7">
             <Flex justify="between" align="end" mb="4" wrap="wrap" gap="3">
               <Box>
-                <Heading size="6">Your documents</Heading>
-                <Text size="2" color="gray" as="p" mt="1">
+                <Text component="h2" size="lg" fw={600}>Your documents</Text>
+                <Text size="sm" c="dimmed" component="p" mt="1">
                   Everything you've opened on this browser. Click to re-open with the same role.
                 </Text>
               </Box>
               {recent.length > 0 && (
-                <Button variant="soft" onClick={openFreshUploadDialog}>
+                <Button variant="light" onClick={openFreshUploadDialog}>
                   <PlusIcon /> New document
                 </Button>
               )}
@@ -191,9 +186,9 @@ export function HomePage() {
             {recent.length === 0 ? (
               <EmptyState onCreate={openFreshUploadDialog} />
             ) : (
-              <Grid columns={{ initial: '1', sm: '2', md: '3' }} gap="3">
+              <SimpleGrid cols={{ base: 1, sm: 2, md: 3 }} spacing="3">
                 {recent.map((r) => (
-                  <RecentCard
+                  <RecentDocumentCard
                     key={r.uid}
                     doc={r}
                     onOpen={() => navigate(openUrlFor(r))}
@@ -203,7 +198,7 @@ export function HomePage() {
                     }}
                   />
                 ))}
-              </Grid>
+              </SimpleGrid>
             )}
           </Container>
         </section>
@@ -226,30 +221,14 @@ export function HomePage() {
   );
 }
 
-function GitHubMark() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 16 16" className="landing-github-icon">
-      <path
-        fill="currentColor"
-        d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38
-        0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13
-        -.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66
-        .07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15
-        -.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09
-        2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82
-        2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01
-        2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
-      />
-    </svg>
-  );
-}
-
 const IMPRINT_MD = import.meta.env.VITE_IMPRINT_MD as string | undefined;
 
 function LandingFooter() {
+  const [dialog, setDialog] = useState<'imprint' | 'privacy' | 'terms' | null>(null);
+
   return (
     <footer className="landing-footer">
-      <Container size="4" px="4" py="2">
+      <Container size={1120} px="4" py="2">
         <Flex
           justify="between"
           align={{ initial: 'start', sm: 'center' }}
@@ -257,90 +236,102 @@ function LandingFooter() {
           wrap="wrap"
           className="landing-footer-row"
         >
-          <Text size="1" color="gray">
+          <Text size="xs" c="dimmed">
             Marginalia is local-first and does not use analytics or tracking.
           </Text>
           <Flex gap="3" wrap="wrap" className="landing-footer-links">
-            <Dialog.Root>
-              <Dialog.Trigger className="landing-footer-link"><span>Imprint</span></Dialog.Trigger>
-              <Dialog.Content maxWidth="620px">
-                <Dialog.Title>Imprint</Dialog.Title>
-                <Box className="imprint-md">
-                  {IMPRINT_MD ? (
-                    <ReactMarkdown>{IMPRINT_MD}</ReactMarkdown>
-                  ) : (
-                    <Flex direction="column" gap="3">
-                      <Text as="p" size="2">
-                        This instance is self-hosted software. The responsible operator is the
-                        person or organization running this installation.
-                      </Text>
-                      <Text as="p" size="2" color="gray">
-                        Set <Code>VITE_IMPRINT_MD</Code> at build time to show operator details
-                        here. The value is rendered as Markdown.
-                      </Text>
-                    </Flex>
-                  )}
-                </Box>
-              </Dialog.Content>
-            </Dialog.Root>
-
-            <Dialog.Root>
-              <Dialog.Trigger className="landing-footer-link"><span>Privacy</span></Dialog.Trigger>
-              <Dialog.Content maxWidth="680px">
-                <Dialog.Title>Privacy</Dialog.Title>
-                <Dialog.Description size="2" color="gray" mb="4">
-                  Short privacy notice for this app.
-                </Dialog.Description>
-                <Flex direction="column" gap="3">
-                  <Text as="p" size="2">
-                    We do not use third-party analytics, ad trackers, or behavioral profiling.
-                  </Text>
-                  <Text as="p" size="2">
-                    We do not require online user accounts. Display names and recent-document
-                    entries are stored in your browser so collaboration remains local-first.
-                  </Text>
-                  <Text as="p" size="2">
-                    The only data processed on the server is what collaboration needs: document
-                    content, comment threads, invite roles, and optional document passwords when
-                    enabled.
-                  </Text>
-                  <Text as="p" size="2">
-                    Data is retained until removed by an administrator of the corresponding
-                    document or by the operator of this deployment.
-                  </Text>
-                </Flex>
-              </Dialog.Content>
-            </Dialog.Root>
-
-            <Dialog.Root>
-              <Dialog.Trigger className="landing-footer-link"><span>Terms of Service</span></Dialog.Trigger>
-              <Dialog.Content maxWidth="680px">
-                <Dialog.Title>Terms of Service</Dialog.Title>
-                <Dialog.Description size="2" color="gray" mb="4">
-                  Basic terms for using this collaboration app.
-                </Dialog.Description>
-                <Flex direction="column" gap="3">
-                  <Text as="p" size="2">
-                    Use this service only for lawful content and lawful collaboration.
-                  </Text>
-                  <Text as="p" size="2">
-                    Invite links are access capabilities. Keep them private and share them only
-                    with people who should access the document.
-                  </Text>
-                  <Text as="p" size="2">
-                    The service is provided without guaranteed uptime, permanence, or fitness for a
-                    particular purpose unless separately agreed by the operator.
-                  </Text>
-                  <Text as="p" size="2">
-                    You are responsible for the content you upload and for respecting the rights
-                    and privacy of collaborators.
-                  </Text>
-                </Flex>
-              </Dialog.Content>
-            </Dialog.Root>
+            <button type="button" className="landing-footer-link" onClick={() => setDialog('imprint')}>
+              <span>Imprint</span>
+            </button>
+            <button type="button" className="landing-footer-link" onClick={() => setDialog('privacy')}>
+              <span>Privacy</span>
+            </button>
+            <button type="button" className="landing-footer-link" onClick={() => setDialog('terms')}>
+              <span>Terms of Service</span>
+            </button>
           </Flex>
         </Flex>
       </Container>
+      <Modal
+        opened={dialog !== null}
+        onClose={() => setDialog(null)}
+        size={dialog === 'imprint' ? '620px' : '680px'}
+        title={(
+          <Text fw={600} size="lg">
+            {dialog === 'imprint'
+              ? 'Imprint'
+              : dialog === 'privacy'
+                ? 'Privacy'
+                : 'Terms of Service'}
+          </Text>
+        )}
+      >
+        {dialog === 'imprint' ? (
+          <Box className="imprint-md">
+            {IMPRINT_MD ? (
+              <ReactMarkdown>{IMPRINT_MD}</ReactMarkdown>
+            ) : (
+              <Flex direction="column" gap="3">
+                <Text component="p" size="sm">
+                  This instance is self-hosted software. The responsible operator is the
+                  person or organization running this installation.
+                </Text>
+                <Text component="p" size="sm" c="dimmed">
+                  Set <Code>VITE_IMPRINT_MD</Code> at build time to show operator details
+                  here. The value is rendered as Markdown.
+                </Text>
+              </Flex>
+            )}
+          </Box>
+        ) : dialog === 'privacy' ? (
+          <>
+            <Text size="sm" c="dimmed" mb="4">
+              Short privacy notice for this app.
+            </Text>
+            <Flex direction="column" gap="3">
+              <Text component="p" size="sm">
+                We do not use third-party analytics, ad trackers, or behavioral profiling.
+              </Text>
+              <Text component="p" size="sm">
+                We do not require online user accounts. Display names and recent-document
+                entries are stored in your browser so collaboration remains local-first.
+              </Text>
+              <Text component="p" size="sm">
+                The only data processed on the server is what collaboration needs: document
+                content, comment threads, invite roles, and optional document passwords when
+                enabled.
+              </Text>
+              <Text component="p" size="sm">
+                Data is retained until removed by an administrator of the corresponding
+                document or by the operator of this deployment.
+              </Text>
+            </Flex>
+          </>
+        ) : (
+          <>
+            <Text size="sm" c="dimmed" mb="4">
+              Basic terms for using this collaboration app.
+            </Text>
+            <Flex direction="column" gap="3">
+              <Text component="p" size="sm">
+                Use this service only for lawful content and lawful collaboration.
+              </Text>
+              <Text component="p" size="sm">
+                Invite links are access capabilities. Keep them private and share them only
+                with people who should access the document.
+              </Text>
+              <Text component="p" size="sm">
+                The service is provided without guaranteed uptime, permanence, or fitness for a
+                particular purpose unless separately agreed by the operator.
+              </Text>
+              <Text component="p" size="sm">
+                You are responsible for the content you upload and for respecting the rights
+                and privacy of collaborators.
+              </Text>
+            </Flex>
+          </>
+        )}
+      </Modal>
     </footer>
   );
 }
@@ -358,7 +349,7 @@ function FeatureCard({
   body: string;
 }) {
   return (
-    <Card size="3" className="feature-card">
+    <Card p="3" className="feature-card">
       <Flex direction="column" gap="3">
         <Flex
           align="center"
@@ -367,10 +358,10 @@ function FeatureCard({
         >
           {icon}
         </Flex>
-        <Heading size="4" weight="medium">
+        <Text component="h3" size="md" fw={500}>
           {title}
-        </Heading>
-        <Text size="2" color="gray">
+        </Text>
+        <Text size="sm" c="dimmed">
           {body}
         </Text>
       </Flex>
@@ -380,79 +371,18 @@ function FeatureCard({
 
 function EmptyState({ onCreate }: { onCreate: () => void }) {
   return (
-    <Card size="3" className="landing-empty">
+    <Card p="3" className="landing-empty">
       <Flex direction="column" align="center" gap="3" py="5">
         <FileTextIcon width="28" height="28" />
-        <Heading size="4">No documents yet</Heading>
-        <Text size="2" color="gray" align="center" style={{ maxWidth: '40ch' }}>
+        <Text component="h3" size="md" fw={600}>No documents yet</Text>
+        <Text size="sm" c="dimmed" ta="center" style={{ maxWidth: '40ch' }}>
           Paste some Markdown and you'll get a shareable URL with beautiful typography in one click.
         </Text>
-        <Button size="3" onClick={onCreate} mt="2">
+        <Button size="md" onClick={onCreate} mt="2">
           <PlusIcon />
           Create your first document
         </Button>
       </Flex>
-    </Card>
-  );
-}
-
-function RecentCard({
-  doc,
-  onOpen,
-  onRemove,
-}: {
-  doc: RecentDoc;
-  onOpen: () => void;
-  onRemove: () => void;
-}) {
-  const updatedSinceVisit = doc.updated_at > doc.visited_at;
-  return (
-    <Card size="2" className="recent-card" onClick={onOpen}>
-      <Flex justify="between" align="start" gap="2">
-        <button type="button" onClick={onOpen} className="recent-card-title">
-          <Heading size="3" weight="medium" truncate>
-            {doc.title}
-          </Heading>
-        </button>
-        <Tooltip content="Remove from recent">
-          <IconButton
-            variant="ghost"
-            size="1"
-            color="gray"
-            aria-label="Remove from recent"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemove();
-            }}
-          >
-            <Cross2Icon />
-          </IconButton>
-        </Tooltip>
-      </Flex>
-      <Flex gap="2" mt="2" wrap="wrap" align="center">
-        <FormatBadge format={doc.format} />
-        <Badge
-          variant="soft"
-          color={appRoleColor(doc.role)}
-          size="1"
-          className="role-badge"
-        >
-          {doc.role}
-        </Badge>
-        {doc.password_protected && (
-          <Badge color="amber" variant="soft" size="1">
-            <LockClosedIcon />
-          </Badge>
-        )}
-        {updatedSinceVisit && (
-          <Badge color="green" variant="soft" size="1">
-            New since last visit
-          </Badge>
-        )}
-      </Flex>
-      <Text size="1" color="gray" mt="3" as="div" title={formatFullTs(doc.visited_at)}>
-        Last opened {formatRelative(doc.visited_at)}
-      </Text>
     </Card>
   );
 }
@@ -651,21 +581,25 @@ function UploadDialog({
   }
 
   return (
-    <Dialog.Root
-      open={open}
-      onOpenChange={(v) => {
-        onOpenChange(v);
-        if (!v) reset();
+    <Modal
+      opened={open}
+      onClose={() => {
+        onOpenChange(false);
+        reset();
       }}
+      size="860px"
+      title={(
+        <Text fw={600} size="lg">
+          {createdAdminUrl && createdUid && createdToken ? 'Document ready' : 'New document'}
+        </Text>
+      )}
     >
-      <Dialog.Content maxWidth="860px">
         {createdAdminUrl && createdUid && createdToken ? (
           <>
-            <Dialog.Title>Document ready</Dialog.Title>
-            <Dialog.Description size="2" color="gray" mb="4">
+            <Text size="sm" c="dimmed" mb="4">
               Bookmark the admin link below — it's the only way back into this document with full
               control.
-            </Dialog.Description>
+            </Text>
             <Flex direction="column" gap="3" mb="4">
               <Flex
                 direction={{ initial: 'column', sm: 'row' }}
@@ -673,7 +607,7 @@ function UploadDialog({
                 gap="3"
               >
                 <Box className="created-admin-link">
-                  <Text as="div" size="1" color="gray" mb="1">
+                  <Text component="div" size="xs" c="dimmed" mb="1">
                     Admin link
                   </Text>
                   <Copyable text={createdAdminUrl} multiline ariaLabel="Copy admin link" />
@@ -682,7 +616,7 @@ function UploadDialog({
               </Flex>
               {createdPassword && (
                 <Box>
-                  <Text as="div" size="1" color="gray" mb="1">
+                  <Text component="div" size="xs" c="dimmed" mb="1">
                     Password (shown once)
                   </Text>
                   <Copyable text={createdPassword} ariaLabel="Copy password" />
@@ -692,23 +626,22 @@ function UploadDialog({
           </>
         ) : (
           <form onSubmit={submit}>
-            <Dialog.Title>New document</Dialog.Title>
-            <Dialog.Description size="2" color="gray" mb="4">
+            <Text size="sm" c="dimmed" mb="4">
               Paste Markdown, upload a <Code>.md</Code> file, or import a previously exported
               <Code>.json</Code> bundle. It gets its own URL.
-            </Dialog.Description>
+            </Text>
 
             <Flex direction="column" gap="3">
               {!getDisplayName() && (
                 <Box className="callout-soft">
-                  <Text size="2" color="gray" as="p" mb="2">
+                  <Text size="sm" c="dimmed" component="p" mb="2">
                     Please set your display name first. It is the name shown on your edits and
                     comments.
                   </Text>
-                  <TextField.Root
-                    size="2"
+                  <TextInput
+                    size="sm"
                     value={userDisplayName ?? ''}
-                    onChange={(e) => setUserDisplayNameState(e.target.value)}
+                    onChange={(e: any) => setUserDisplayNameState(e.target.value)}
                     placeholder="Your display name (e.g. Alex Cho)"
                     maxLength={80}
                     autoFocus
@@ -717,18 +650,18 @@ function UploadDialog({
               )}
 
               <Box>
-                <Text as="label" size="2" htmlFor="doc-name">
+                <Text component="label" size="sm" htmlFor="doc-name">
                   Document name
-                  <Text as="span" size="1" color="gray">
+                  <Text component="span" size="xs" c="dimmed">
                     {' '}
                     (optional
                     {docName.trim() ? '' : derivedTitle ? ` — will use “${derivedTitle}”` : ''})
                   </Text>
                 </Text>
-                <TextField.Root
+                <TextInput
                   id="doc-name"
                   value={docName}
-                  onChange={(e) => setDocName(e.target.value)}
+                  onChange={(e: any) => setDocName(e.target.value)}
                   placeholder="Leave blank to use the document's title"
                   maxLength={200}
                   mt="1"
@@ -737,14 +670,14 @@ function UploadDialog({
               </Box>
 
               <Box>
-                <Text as="label" size="2" htmlFor="markdown-source">
+                <Text component="label" size="sm" htmlFor="markdown-source">
                   {format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source'}
                 </Text>
                 <MarkdownDropZone onFile={handleFile}>
-                  <TextArea
+                  <Textarea
                     id="markdown-source"
                     value={source}
-                    onChange={(e) => setSource(e.target.value)}
+                    onChange={(e: any) => setSource(e.target.value)}
                     rows={14}
                     spellCheck={false}
                     className="markdown-textarea"
@@ -765,7 +698,7 @@ function UploadDialog({
                   type="file"
                   accept=".json,application/json"
                   style={{ display: 'none' }}
-                  onChange={(e) => {
+                  onChange={(e: any) => {
                     const f = e.target.files?.[0];
                     if (f) void importBundleFile(f);
                     e.currentTarget.value = '';
@@ -773,26 +706,26 @@ function UploadDialog({
                 />
                 <Button
                   type="button"
-                  variant="soft"
+                  variant="light"
                   onClick={() => jsonInputRef.current?.click()}
                   disabled={submitting || !userDisplayName}
                 >
                   <UploadIcon />
                   Import JSON bundle
                 </Button>
-                <Text size="2" color="gray">
+                <Text size="sm" c="dimmed">
                   Restores source, comments, and renderer metadata from an exported bundle.
                 </Text>
               </Flex>
 
-              <Separator size="4" />
+              <Separator />
 
               <Flex direction="column" gap="2">
-                <Text as="label" size="2">
+                <Text component="label" size="sm">
                   <Flex align="center" gap="2">
                     <Checkbox
                       checked={passwordProtected}
-                      onCheckedChange={(c) => setPasswordProtected(c === true)}
+                      onChange={(event) => setPasswordProtected(event.currentTarget.checked)}
                     />
                     Password-protect (server generates a password, shown once)
                   </Flex>
@@ -802,17 +735,22 @@ function UploadDialog({
               </Flex>
 
               {error && (
-                <Callout.Root color="red" size="1">
-                  <Callout.Text>{error}</Callout.Text>
-                </Callout.Root>
+                <Alert color="red" variant="light">
+                  {error}
+                </Alert>
               )}
 
               <Flex justify="end" gap="2">
-                <Dialog.Close>
-                  <Button variant="soft" color="gray">
-                    Cancel
-                  </Button>
-                </Dialog.Close>
+                <Button
+                  variant="light"
+                  color="gray"
+                  onClick={() => {
+                    reset();
+                    onOpenChange(false);
+                  }}
+                >
+                  Cancel
+                </Button>
                 <Button type="submit" disabled={submitting || !source || !userDisplayName}>
                   {submitting ? 'Uploading…' : 'Create document'}
                 </Button>
@@ -820,8 +758,7 @@ function UploadDialog({
             </Flex>
           </form>
         )}
-      </Dialog.Content>
-    </Dialog.Root>
+    </Modal>
   );
 }
 
@@ -896,7 +833,7 @@ function MarkdownDropZone({
       {children}
       {over && (
         <div className="drop-zone-overlay">
-          <Text size="3" weight="medium">
+          <Text size="md" fw={500}>
             Drop Markdown, AsciiDoc, or a JSON bundle to load it
           </Text>
         </div>
@@ -936,7 +873,7 @@ function FileDropZone({
       role="button"
       tabIndex={0}
       onClick={openPicker}
-      onKeyDown={(e) => {
+      onKeyDown={(e: any) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           openPicker();
@@ -977,7 +914,7 @@ function FileDropZone({
         type="file"
         accept={accept}
         style={{ display: 'none' }}
-        onChange={(e) => {
+        onChange={(e: any) => {
           const f = e.target.files?.[0];
           if (f) void onFile(f);
           // Reset so re-selecting the same file still fires onChange.
@@ -985,7 +922,7 @@ function FileDropZone({
         }}
       />
       <UploadIcon width="18" height="18" />
-      <Text size="2">{label}</Text>
+      <Text size="sm">{label}</Text>
     </div>
   );
 }
@@ -1020,19 +957,4 @@ function deriveAsciidocTitle(source: string): string {
     return line.slice(0, 80);
   }
   return '';
-}
-
-function formatRelative(ts: number): string {
-  const diff = Date.now() - ts;
-  if (diff < 60_000) return 'just now';
-  if (diff < 60 * 60_000) return `${Math.round(diff / 60_000)}m ago`;
-  if (diff < 24 * 60 * 60_000) return `${Math.round(diff / (60 * 60_000))}h ago`;
-  return new Date(ts).toLocaleDateString();
-}
-
-function formatFullTs(ts: number): string {
-  return new Date(ts).toLocaleString([], {
-    dateStyle: 'full',
-    timeStyle: 'medium',
-  });
 }

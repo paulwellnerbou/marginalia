@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Flex, IconButton, Tooltip } from '@radix-ui/themes';
-import { CheckIcon, Cross2Icon, TrashIcon } from '@radix-ui/react-icons';
+import { ActionIcon as IconButton, Flex, Tooltip } from '@mantine/core';
+import { CheckIcon, Cross2Icon, TrashIcon } from '../icons.js';
 
 interface Props {
   /** Label shown in the default state (e.g. "Delete"). */
   label: string;
   /** Label shown after the first click (e.g. "Confirm"). Defaults to "Confirm". */
   confirmLabel?: string;
-  /** Radix size token for both buttons. */
+  /** Shared UI size token for both buttons. */
   size?: '1' | '2' | '3';
   /** Auto-revert to the initial state if no second click arrives in this many ms. */
   timeoutMs?: number;
@@ -19,6 +19,12 @@ interface Props {
   onArmedChange?: (armed: boolean) => void;
   onConfirm: () => void | Promise<void>;
 }
+
+const MANTINE_SIZE = {
+  '1': 'xs',
+  '2': 'sm',
+  '3': 'md',
+} as const;
 
 /**
  * Inline two-step confirmation in place of native `window.confirm`.
@@ -59,10 +65,10 @@ export function ConfirmButton({
 
   if (!armed) {
     const trigger = (
-      <Tooltip content={label}>
+      <Tooltip label={label}>
         <IconButton
-          size={size}
-          variant="soft"
+          size={MANTINE_SIZE[size]}
+          variant="light"
           color="red"
           aria-label={ariaLabel ?? label}
           onClick={() => setArmedAndNotify(true)}
@@ -77,8 +83,8 @@ export function ConfirmButton({
     return (
       <Flex gap="2" align="center" className="confirm-pair">
         <IconButton
-          size={size}
-          variant="soft"
+          size={MANTINE_SIZE[size]}
+          variant="light"
           color="gray"
           aria-hidden="true"
           tabIndex={-1}
@@ -93,10 +99,10 @@ export function ConfirmButton({
 
   return (
     <Flex gap="2" align="center" className="confirm-pair">
-      <Tooltip content="Cancel delete">
+      <Tooltip label="Cancel delete">
         <IconButton
-          size={size}
-          variant="soft"
+          size={MANTINE_SIZE[size]}
+          variant="light"
           color="gray"
           aria-label="Cancel delete"
           onClick={() => setArmedAndNotify(false)}
@@ -104,10 +110,10 @@ export function ConfirmButton({
           <Cross2Icon />
         </IconButton>
       </Tooltip>
-      <Tooltip content={confirmLabel}>
+      <Tooltip label={confirmLabel}>
         <IconButton
-          size={size}
-          variant="soft"
+          size={MANTINE_SIZE[size]}
+          variant="light"
           color="red"
           aria-label={confirmLabel}
           onClick={() => {

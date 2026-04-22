@@ -29,8 +29,8 @@ export function AppearanceProvider({ children }: { children: ReactNode }) {
   const [appearance, setAppearance] = useState<Appearance>(() => readStored());
   const [resolved, setResolved] = useState<'light' | 'dark'>(() => resolve(readStored()));
 
-  // Persist + mirror onto `<html data-appearance>` so theme CSS + Radix
-  // both pick up the change.
+  // Persist + mirror onto `<html data-appearance>` so the CSS token layer
+  // and the component theme stay in sync.
   useEffect(() => {
     localStorage.setItem(APPEARANCE_KEY, appearance);
     document.documentElement.setAttribute('data-appearance', appearance);

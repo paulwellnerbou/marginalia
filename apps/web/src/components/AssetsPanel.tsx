@@ -1,6 +1,6 @@
 import { useMemo, useRef } from 'react';
-import { IconButton, Text } from '@radix-ui/themes';
-import { Cross2Icon } from '@radix-ui/react-icons';
+import { ActionIcon as IconButton, Button, Text } from '@mantine/core';
+import { Cross2Icon } from '../icons.js';
 import { type AttachedAsset, assetProxyUrl } from '../lib/api.js';
 
 interface AssetsPanelProps {
@@ -30,7 +30,7 @@ export function AssetsPanel({
     <aside className="assets-panel" aria-label="Document assets">
       <div className="assets-panel__title">Assets</div>
       {sorted.length === 0 ? (
-        <Text className="assets-panel__empty" as="p">
+        <Text className="assets-panel__empty" component="p">
           No assets yet.
         </Text>
       ) : (
@@ -67,9 +67,9 @@ export function AssetsPanel({
                     onReplace={onReplace}
                   />
                   <IconButton
-                    variant="ghost"
+                    variant="subtle"
                     color="gray"
-                    size="1"
+                    size="xs"
                     onClick={() => onDelete(asset.ref_name)}
                     aria-label={`Remove ${asset.ref_name}`}
                   >
@@ -108,20 +108,21 @@ function ReplaceButton({
         type="file"
         style={{ display: 'none' }}
         {...(accept ? { accept } : {})}
-        onChange={(e) => {
+        onChange={(e: any) => {
           const file = e.target.files?.[0];
           if (file && isKindCompatible(file, kind)) onReplace(refName, file);
           e.target.value = '';
         }}
       />
-      <button
+      <Button
         type="button"
-        className="rt-Button rt-r-size-1 rt-variant-ghost"
+        size="xs"
+        variant="subtle"
         onClick={() => ref.current?.click()}
         aria-label={`Replace ${refName}`}
       >
         Replace
-      </button>
+      </Button>
     </label>
   );
 }

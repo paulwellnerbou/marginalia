@@ -1,17 +1,17 @@
 import { useState } from 'react';
 import {
+  ActionIcon as IconButton,
   Badge,
   Button,
   Box,
   Code,
-  Dialog,
-  DropdownMenu,
   Flex,
-  IconButton,
+  Menu,
+  Modal,
   Text,
-  TextField,
-} from '@radix-ui/themes';
-import { PersonIcon } from '@radix-ui/react-icons';
+  TextInput,
+} from '@mantine/core';
+import { PersonIcon } from '../icons.js';
 import type { Role } from '../lib/api.js';
 import { getClientId, setDisplayName as persistName, useDisplayName } from '../lib/identity.js';
 import { appRoleColor } from '../styles/theme.js';
@@ -59,12 +59,12 @@ export function UserMenu({
 
   return (
     <>
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger>
+      <Menu position="bottom-end">
+        <Menu.Target>
           {showName ? (
             <Button
-              variant="soft"
-              size="2"
+              variant="light"
+              size="sm"
               aria-label={`User menu for ${name}`}
               className="user-menu-trigger user-menu-trigger--with-name"
             >
@@ -73,36 +73,36 @@ export function UserMenu({
             </Button>
           ) : (
             <IconButton
-              variant="soft"
-              size="2"
+              variant="light"
+              size="sm"
               aria-label={`User menu for ${name}`}
               className="user-menu-trigger"
             >
               <PersonIcon />
             </IconButton>
           )}
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Content align="end" style={{ minWidth: 320 }}>
-          <Flex px="3" pt="3" pb="2" direction="column" gap="1">
-            <Text size="1" color="gray">Identified as</Text>
-            <Flex align="center" justify="between" gap="3">
-              <Box style={{ minWidth: 0, flex: 1 }}>
-                <Text size="4" weight="bold" style={{ color: 'var(--gray-12)' }} truncate>
+        </Menu.Target>
+        <Menu.Dropdown className="user-menu-dropdown" style={{ minWidth: 320 }}>
+          <Flex px="3" pt="3" pb="2" direction="column" gap="1" className="user-menu-section">
+            <Text size="xs" c="dimmed" className="user-menu-kicker">Identified as</Text>
+            <Box className="user-menu-main-row">
+              <Box className="user-menu-main-copy">
+                <Text size="lg" fw={700} style={{ color: 'var(--gray-12)' }} truncate className="user-menu-name">
                   {name}
                 </Text>
               </Box>
-              <Button size="1" variant="soft" onClick={openDialog}>
+              <Button size="xs" variant="light" onClick={openDialog} className="user-menu-action">
                 Change
               </Button>
-            </Flex>
+            </Box>
           </Flex>
           {role && (
-            <Flex px="3" pb="2" direction="column" gap="1">
-              <Text size="1" color="gray">Role</Text>
+            <Flex px="3" pb="2" direction="column" gap="1" className="user-menu-section">
+              <Text size="xs" c="dimmed" className="user-menu-kicker">Role</Text>
               <Badge
-                size="1"
+                size="xs"
                 color={appRoleColor(role)}
-                variant="soft"
+                variant="light"
                 className="role-badge"
                 style={{ width: 'fit-content' }}
               >
@@ -110,29 +110,34 @@ export function UserMenu({
               </Badge>
             </Flex>
           )}
-          <Flex px="3" pb="2" direction="column" gap="1">
-            <Text size="1" color="gray">User ID</Text>
-            <Copyable text={clientId} ariaLabel="Copy user ID" size="1" />
+          <Flex px="3" pb="2" direction="column" gap="1" className="user-menu-section">
+            <Text size="xs" c="dimmed" className="user-menu-kicker">User ID</Text>
+            <Box className="user-menu-copyable">
+              <Copyable text={clientId} ariaLabel="Copy user ID" size="1" />
+            </Box>
           </Flex>
-        </DropdownMenu.Content>
-      </DropdownMenu.Root>
+        </Menu.Dropdown>
+      </Menu>
 
-      <Dialog.Root open={dialogOpen} onOpenChange={setDialogOpen}>
-        <Dialog.Content size="2" maxWidth="520px">
-          <Dialog.Title>Display name</Dialog.Title>
-          <Dialog.Description size="2" color="gray" mb="3">
+      <Modal
+        opened={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        size="520px"
+        title={<Text fw={600} size="lg">Display name</Text>}
+      >
+          <Text size="sm" c="dimmed" mb="3">
             Shown on your edits and comments. Your persistent user ID (
-            <Code size="1">{shortId}…</Code>) stays the same, so your right to edit or delete
+            <Code fz="xs">{shortId}…</Code>) stays the same, so your right to edit or delete
             your own comments is preserved.
-          </Dialog.Description>
+          </Text>
           <Flex direction="column" gap="3">
-            <TextField.Root
+            <TextInput
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e: any) => setDraft(e.target.value)}
               placeholder="e.g. Alex Cho"
               maxLength={80}
               autoFocus
-              onKeyDown={(e) => {
+              onKeyDown={(e: any) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
                   save(draft);
@@ -140,16 +145,13 @@ export function UserMenu({
               }}
             />
             <Flex gap="2" justify="end">
-              <Dialog.Close>
-                <Button variant="soft" color="gray">Cancel</Button>
-              </Dialog.Close>
+              <Button variant="light" color="gray" onClick={() => setDialogOpen(false)}>Cancel</Button>
               <Button onClick={() => save(draft)} disabled={!draft.trim()}>
                 Save
               </Button>
             </Flex>
           </Flex>
-        </Dialog.Content>
-      </Dialog.Root>
+      </Modal>
     </>
   );
 }

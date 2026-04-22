@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertDialog, Box, Button, Code, Flex, Text } from '@radix-ui/themes';
+import { Box, Button, Code, Flex, Modal, Text } from '@mantine/core';
 import { getDocument, getHistory, getHistoryDiff, type HistoryEntry } from '../lib/api.js';
 import { reportError } from '../lib/log.js';
 import { DiffDialog } from './DiffDialog.js';
@@ -207,7 +207,7 @@ export function HistoryList({
   if (loadError)
     return (
       <Box p="3">
-        <Text size="1" color="red">
+        <Text size="xs" c="red">
           {loadError}
         </Text>
       </Box>
@@ -215,7 +215,7 @@ export function HistoryList({
   if (!entries)
     return (
       <Box p="3">
-        <Text size="1" color="gray">
+        <Text size="xs" c="dimmed">
           Loading…
         </Text>
       </Box>
@@ -223,7 +223,7 @@ export function HistoryList({
   if (entries.length === 0) {
     return (
       <Box p="3">
-        <Text size="1" color="gray">
+        <Text size="xs" c="dimmed">
           No history yet.
         </Text>
       </Box>
@@ -235,14 +235,14 @@ export function HistoryList({
       <Box p="3" className="history-list">
         {diffError ? (
           <Box pb="2">
-            <Text size="1" color="red">
+            <Text size="xs" c="red">
               {diffError}
             </Text>
           </Box>
         ) : null}
         {restoreError ? (
           <Box pb="2">
-            <Text size="1" color="red">
+            <Text size="xs" c="red">
               {restoreError}
             </Text>
           </Box>
@@ -266,27 +266,27 @@ export function HistoryList({
               <Flex align="start" justify="between" gap="3">
                 <Box style={{ flex: 1, minWidth: 0 }}>
                   <Flex align="baseline" gap="2" wrap="wrap">
-                    <Text size="2" weight="medium">
+                    <Text size="sm" fw={500}>
                       {describeEntry(entry)}
                     </Text>
-                    <Text size="1" color="gray" title={formatFullTs(entry.timestamp)}>
+                    <Text size="xs" c="dimmed" title={formatFullTs(entry.timestamp)}>
                       {formatTs(entry.timestamp)}
                     </Text>
                   </Flex>
-                  <Text size="1" color="gray">
-                    by {actorName} · <Code size="1">{shortOid(entry.oid)}</Code>
+                  <Text size="xs" c="dimmed">
+                    by {actorName} · <Code fz="xs">{shortOid(entry.oid)}</Code>
                   </Text>
                   {proposal ? (
                     <Flex direction="column" gap="1" mt="2">
-                      <Text size="1" color="gray">
+                      <Text size="xs" c="dimmed">
                         Proposal by {proposalAuthor}
                       </Text>
-                      <Text size="1">“{proposal.summary}”</Text>
+                      <Text size="xs">“{proposal.summary}”</Text>
                     </Flex>
                   ) : null}
                   {entry.restored_from_oid ? (
-                    <Text size="1" color="gray" mt="2">
-                      Restored from <Code size="1">{shortOid(entry.restored_from_oid)}</Code>
+                    <Text size="xs" c="dimmed" mt="2">
+                      Restored from <Code fz="xs">{shortOid(entry.restored_from_oid)}</Code>
                     </Text>
                   ) : null}
                   <Flex gap="2" wrap="wrap" mt="2">
@@ -301,8 +301,8 @@ export function HistoryList({
                     />
                     {!isCurrent ? (
                       <Button
-                        size="1"
-                        variant="soft"
+                        size="xs"
+                        variant="light"
                         onClick={() => void handleCompareWithCurrent(entry)}
                         disabled={
                           loadingDiffOid !== null ||
@@ -315,8 +315,8 @@ export function HistoryList({
                     ) : null}
                     {proposal && onOpenThread ? (
                       <Button
-                        size="1"
-                        variant="soft"
+                        size="xs"
+                        variant="light"
                         onClick={() => onOpenThread(proposal.id)}
                         disabled={
                           loadingDiffOid !== null ||
@@ -329,8 +329,8 @@ export function HistoryList({
                     ) : null}
                     {canRestore && canRevertLatest ? (
                       <Button
-                        size="1"
-                        variant="soft"
+                        size="xs"
+                        variant="light"
                         color="amber"
                         title={revertTitle}
                         onClick={() => void handleRevertLatest(entry)}
@@ -345,8 +345,8 @@ export function HistoryList({
                     ) : null}
                     {canRestore && onRestoreVersion && !isCurrent ? (
                       <Button
-                        size="1"
-                        variant="soft"
+                        size="xs"
+                        variant="light"
                         color="amber"
                         onClick={() => {
                           setRestoreError(null);
@@ -377,44 +377,46 @@ export function HistoryList({
         after={selectedDiff?.after ?? ''}
       />
 
-      <AlertDialog.Root
-        open={restoreTarget !== null}
-        onOpenChange={(open) => {
-          if (open) return;
+      <Modal
+        opened={restoreTarget !== null}
+        onClose={() => {
           if (restoringOid || openingNewDocumentOid) return;
           setRestoreTarget(null);
           setRestoreError(null);
         }}
+        size="520px"
+        title={<Text fw={600} size="lg">Restore this version?</Text>}
+        withCloseButton={false}
       >
-        <AlertDialog.Content maxWidth="520px">
-          <AlertDialog.Title>Restore this version?</AlertDialog.Title>
-          <AlertDialog.Description size="2" mb="3">
+          <Text size="sm" mb="3">
             Choose what to do with version{' '}
-            <Code size="1">{restoreTarget ? shortOid(restoreTarget.oid) : ''}</Code>.
-          </AlertDialog.Description>
+            <Code fz="xs">{restoreTarget ? shortOid(restoreTarget.oid) : ''}</Code>.
+          </Text>
           <Flex direction="column" gap="2" mb="4">
-            <Text size="2" as="p">
+            <Text size="sm" component="p">
               <b>Restore version</b> replaces the current document source, creates a new history
               entry, and re-anchors comments and proposals where possible.
             </Text>
-            <Text size="2" as="p">
+            <Text size="sm" component="p">
               <b>Restore as new document</b> opens the New document modal with this version's source
               prefilled, leaving the current document untouched.
             </Text>
           </Flex>
           <Flex gap="2" justify="end">
-            <AlertDialog.Cancel>
-              <Button
-                variant="soft"
-                color="gray"
-                disabled={restoringOid !== null || openingNewDocumentOid !== null}
-              >
-                Cancel
-              </Button>
-            </AlertDialog.Cancel>
+            <Button
+              variant="light"
+              color="gray"
+              disabled={restoringOid !== null || openingNewDocumentOid !== null}
+              onClick={() => {
+                setRestoreTarget(null);
+                setRestoreError(null);
+              }}
+            >
+              Cancel
+            </Button>
             {onRestoreAsNewDocument ? (
               <Button
-                variant="soft"
+                variant="light"
                 onClick={() => void handleRestoreAsNewDocument()}
                 disabled={restoringOid !== null || openingNewDocumentOid !== null}
               >
@@ -431,8 +433,7 @@ export function HistoryList({
               {restoringOid ? 'Restoring…' : 'Restore version'}
             </Button>
           </Flex>
-        </AlertDialog.Content>
-      </AlertDialog.Root>
+      </Modal>
     </>
   );
 }

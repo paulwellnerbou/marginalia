@@ -1,5 +1,5 @@
 :root,
-.radix-themes {
+.app-theme {
   --ui-bg: var(--color-background);
   --ui-surface: var(--color-panel-solid);
   --ui-border: var(--gray-6);
@@ -47,7 +47,8 @@
   --ui-feature-tertiary-border: var(--gray-a5);
 }
 
-.radix-themes:where(.light, .light-theme) {
+:root:where(.light),
+.app-theme:where(.light) {
   /* In light mode, the plain blue accent is a little too saturated for the
      active TOC entry. Bias it toward slate for a darker, calmer blue-grey. */
   --ui-toc-active: color-mix(in srgb, var(--accent-11) 78%, var(--gray-12));

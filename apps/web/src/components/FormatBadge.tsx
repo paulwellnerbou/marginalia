@@ -1,4 +1,4 @@
-import { Badge } from '@radix-ui/themes';
+import { Badge } from '@mantine/core';
 import type { DocumentFormat } from '../lib/api.js';
 import { appFormatColor } from '../styles/theme.js';
 
@@ -11,7 +11,7 @@ import { appFormatColor } from '../styles/theme.js';
 export function FormatBadge({ format }: { format: DocumentFormat }) {
   const label = format === 'asciidoc' ? 'ASCIIDOC' : 'MARKDOWN';
   return (
-    <Badge variant="soft" color={appFormatColor(format)} size="1" className="format-badge">
+    <Badge variant="light" color={appFormatColor(format)} size="xs" className="format-badge">
       {label}
     </Badge>
   );

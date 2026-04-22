@@ -1,11 +1,11 @@
 import { forwardRef, useState, type ComponentPropsWithoutRef, type MouseEvent } from 'react';
-import { EyeNoneIcon, EyeOpenIcon } from '@radix-ui/react-icons';
-import { TextField } from '@radix-ui/themes';
+import { TextInput } from '@mantine/core';
+import { EyeNoneIcon, EyeOpenIcon } from '../icons.js';
 
-type PasswordFieldProps = Omit<ComponentPropsWithoutRef<typeof TextField.Root>, 'type'>;
+type PasswordFieldProps = Omit<ComponentPropsWithoutRef<typeof TextInput>, 'type' | 'rightSection'>;
 
 export const PasswordField = forwardRef<HTMLInputElement, PasswordFieldProps>(
-  function PasswordField({ children, ...props }, ref) {
+  function PasswordField(props, ref) {
     const [revealed, setRevealed] = useState(false);
 
     function keepFocus(event: MouseEvent<HTMLButtonElement>) {
@@ -13,9 +13,11 @@ export const PasswordField = forwardRef<HTMLInputElement, PasswordFieldProps>(
     }
 
     return (
-      <TextField.Root {...props} ref={ref} type={revealed ? 'text' : 'password'}>
-        {children}
-        <TextField.Slot side="right">
+      <TextInput
+        {...props}
+        ref={ref}
+        type={revealed ? 'text' : 'password'}
+        rightSection={
           <button
             type="button"
             className="password-field-toggle"
@@ -26,8 +28,8 @@ export const PasswordField = forwardRef<HTMLInputElement, PasswordFieldProps>(
           >
             {revealed ? <EyeNoneIcon /> : <EyeOpenIcon />}
           </button>
-        </TextField.Slot>
-      </TextField.Root>
+        }
+      />
     );
   },
 );

@@ -1,5 +1,5 @@
-import { EyeOpenIcon } from '@radix-ui/react-icons';
-import { Button } from '@radix-ui/themes';
+import { EyeOpenIcon } from '../icons.js';
+import { Button } from '@mantine/core';
 
 interface Props {
   onClick: () => void;
@@ -9,7 +9,7 @@ interface Props {
 
 export function ShowDiffButton({ onClick, disabled = false, loading = false }: Props) {
   return (
-    <Button size="1" variant="soft" onClick={onClick} disabled={disabled}>
+    <Button size="xs" variant="light" onClick={onClick} disabled={disabled}>
       <EyeOpenIcon />
       {loading ? 'Loading…' : 'Show diff'}
     </Button>

@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
-import { ChevronDownIcon, ChevronRightIcon } from '@radix-ui/react-icons';
-import { Button, Flex, Text } from '@radix-ui/themes';
+import { Button, Flex, Text } from '@mantine/core';
+import { ChevronDownIcon, ChevronRightIcon } from '../icons.js';
 
 interface DiscussionThreadProps {
   threadId: string;
@@ -71,8 +71,8 @@ export function DiscussionThread({
 
       <Flex align="center" gap="2" className="thread-toolbar">
         <Button
-          size="1"
-          variant="ghost"
+          size="xs"
+          variant="subtle"
           color="gray"
           className="thread-collapse-button"
           aria-expanded={!collapsed}
@@ -81,7 +81,7 @@ export function DiscussionThread({
           {collapsed ? <ChevronRightIcon /> : <ChevronDownIcon />}
           {collapsed ? 'Expand thread' : 'Collapse thread'}
         </Button>
-        <Text size="1" color="gray">
+        <Text size="xs" c="dimmed">
           {summary}
         </Text>
         <span className="spacer" />
@@ -110,7 +110,7 @@ export function DiscussionEntry({
         {badge ? <div className="comment-badge-row">{badge}</div> : null}
       </div>
       <div className="comment-aside">
-        <Text size="1" color="gray" className="comment-ts" title={`${authorName} · ${formatFullTs(createdAt)}`}>
+        <Text size="xs" c="dimmed" className="comment-ts" title={`${authorName} · ${formatFullTs(createdAt)}`}>
           {formatTs(createdAt)}
         </Text>
         {actions}

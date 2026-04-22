@@ -1,19 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActionIcon as IconButton,
+  Alert,
   Badge,
   Box,
   Button,
-  Callout,
+  Divider as Separator,
   Flex,
-  IconButton,
   SegmentedControl,
   Select,
-  Separator,
   Text,
-  TextField,
+  TextInput,
   Tooltip,
-} from '@radix-ui/themes';
-import { CheckIcon, Cross2Icon, UpdateIcon } from '@radix-ui/react-icons';
+} from '@mantine/core';
+import { CheckIcon, Cross2Icon, UpdateIcon } from '../icons.js';
 import { Copyable } from './Copyable.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import {
@@ -64,8 +64,8 @@ function RotateAdminButton({
     return (
       <Flex gap="2" align="center" className="confirm-pair">
         <IconButton
-          size="1"
-          variant="soft"
+          size="xs"
+          variant="light"
           color="gray"
           aria-hidden="true"
           tabIndex={-1}
@@ -73,13 +73,13 @@ function RotateAdminButton({
         >
           <Cross2Icon />
         </IconButton>
-        <Tooltip content="Rotate admin link (invalidates the current URL)">
+        <Tooltip label="Rotate admin link (invalidates the current URL)">
           <IconButton
-            size="1"
-            variant="soft"
+            size="xs"
+            variant="light"
             color="amber"
             aria-label="Rotate admin link"
-            disabled={disabled}
+            disabled={disabled ?? false}
             onClick={() => setArmed(true)}
           >
             <UpdateIcon />
@@ -90,10 +90,10 @@ function RotateAdminButton({
   }
   return (
     <Flex gap="2" align="center" className="confirm-pair">
-      <Tooltip content="Cancel">
+      <Tooltip label="Cancel">
         <IconButton
-          size="1"
-          variant="soft"
+          size="xs"
+          variant="light"
           color="gray"
           aria-label="Cancel rotate"
           onClick={() => setArmed(false)}
@@ -101,16 +101,16 @@ function RotateAdminButton({
           <Cross2Icon />
         </IconButton>
       </Tooltip>
-      <Tooltip content="Confirm rotate — the old admin URL stops working immediately">
+      <Tooltip label="Confirm rotate — the old admin URL stops working immediately">
         <IconButton
-          size="1"
-          variant="soft"
-          color="amber"
-          aria-label="Confirm rotate admin link"
-          disabled={disabled}
-          onClick={() => {
-            setArmed(false);
-            void onConfirm();
+          size="xs"
+            variant="light"
+            color="amber"
+            aria-label="Confirm rotate admin link"
+            disabled={disabled ?? false}
+            onClick={() => {
+              setArmed(false);
+              void onConfirm();
           }}
         >
           <CheckIcon />
@@ -234,10 +234,10 @@ export function InvitesPanel({ uid }: { uid: string }) {
 
   return (
     <Flex direction="column" gap="3">
-      <Text size="2" weight="medium">
+      <Text size="sm" fw={500}>
         Access links
       </Text>
-      <Text size="1" color="gray">
+      <Text size="xs" c="dimmed">
         Each link is a shareable URL. A <b>named</b> link sets the recipient's display name and is only meant to be used by a specific person
         (useful for personal invites); a <b>generic</b> link lets the visitor bring their own
         name (useful for "anyone with this URL can comment").
@@ -245,59 +245,54 @@ export function InvitesPanel({ uid }: { uid: string }) {
 
       <Flex gap="2" align="end" wrap="wrap" className="invite-create-form">
         <Box>
-          <Text as="div" size="1" color="gray" mb="1">
+          <Text component="div" size="xs" c="dimmed" mb="1">
             Kind
           </Text>
-          <SegmentedControl.Root
-            size="2"
+          <SegmentedControl
+            size="sm"
             value={kind}
-            onValueChange={(v) => setKind(v as 'named' | 'generic')}
+            onChange={(v) => setKind(v as 'named' | 'generic')}
             aria-label="Invite kind"
-          >
-            <SegmentedControl.Item value="named" title="Forces a display name on the recipient">
-              Named
-            </SegmentedControl.Item>
-            <SegmentedControl.Item value="generic" title="Visitor keeps their own name">
-              Generic
-            </SegmentedControl.Item>
-          </SegmentedControl.Root>
+            data={[
+              { value: 'named', label: 'Named' },
+              { value: 'generic', label: 'Generic' },
+            ]}
+          />
         </Box>
         <Box style={{ flex: 1, minWidth: 160 }}>
-          <Text as="label" size="1" color="gray" mb="1" htmlFor="invite-name">
+          <Text component="label" size="xs" c="dimmed" mb="1" htmlFor="invite-name">
             Recipient name {kind === 'generic' && <i>(not used for generic)</i>}
           </Text>
-          <TextField.Root
+          <TextInput
             id="invite-name"
-            size="2"
+            size="sm"
             placeholder={kind === 'named' ? 'e.g. Alice' : '—'}
             value={kind === 'named' ? name : ''}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e: any) => setName(e.target.value)}
             maxLength={80}
             disabled={kind === 'generic'}
           />
         </Box>
         <Box>
-          <Text as="div" size="1" color="gray" mb="1">
+          <Text component="div" size="xs" c="dimmed" mb="1">
             Role
           </Text>
-          <Select.Root value={role} onValueChange={(v) => setRole(v as Role)} size="2">
-            <Select.Trigger variant="soft" aria-label={`Role: ${roleLabel(role)}`}>
-              <Text as="span">{roleLabel(role)}</Text>
-            </Select.Trigger>
-            <Select.Content position="popper">
-              <Select.Item value="reader">Reader (view only)</Select.Item>
-              <Select.Item value="collaborator">
-                Collaborator (comment + propose edits)
-              </Select.Item>
-              <Select.Item value="editor">Editor (can edit directly)</Select.Item>
-              {/* 'admin' is intentionally absent — admin invites are minted
-                  at document creation and rotated via the per-row action
-                  below, never granted to third parties through this form. */}
-            </Select.Content>
-          </Select.Root>
+          <Select
+            value={role}
+            onChange={(value) => {
+              if (value) setRole(value as Role);
+            }}
+            size="sm"
+            aria-label={`Role: ${roleLabel(role)}`}
+            data={[
+              { value: 'reader', label: 'Reader (view only)' },
+              { value: 'collaborator', label: 'Collaborator (comment + propose edits)' },
+              { value: 'editor', label: 'Editor (can edit directly)' },
+            ]}
+          />
         </Box>
         <Button
-          size="2"
+          size="sm"
           disabled={submitting || (kind === 'named' && !name.trim())}
           onClick={addInvite}
         >
@@ -306,19 +301,19 @@ export function InvitesPanel({ uid }: { uid: string }) {
       </Flex>
 
       {error && (
-        <Callout.Root color="red" size="1">
-          <Callout.Text>{error}</Callout.Text>
-        </Callout.Root>
+        <Alert color="red" variant="light">
+          {error}
+        </Alert>
       )}
 
-      <Separator size="4" />
+      <Separator />
 
       {!invites ? (
-        <Text size="1" color="gray">
+        <Text size="xs" c="dimmed">
           Loading…
         </Text>
       ) : invites.length === 0 ? (
-        <Text size="1" color="gray">
+        <Text size="xs" c="dimmed">
           No invites yet.
         </Text>
       ) : (
@@ -333,13 +328,13 @@ export function InvitesPanel({ uid }: { uid: string }) {
             >
               <Flex align="start" justify="between" gap="2" className="invite-header">
                 <Flex align="baseline" gap="2" wrap="wrap" className="invite-header-meta">
-                  <Text size="2" weight="medium">
+                  <Text size="sm" fw={500}>
                     {inv.display_name ?? <span style={{ fontStyle: 'italic' }}>Any visitor</span>}
                   </Text>
-                  <Badge size="1" color={appRoleColor(inv.role)} variant="soft" className="role-badge">
+                  <Badge size="xs" color={appRoleColor(inv.role)} variant="light" className="role-badge">
                     {inv.role}
                   </Badge>
-                  <Badge size="1" color={appInviteKindColor(inv.kind)} variant="surface">
+                  <Badge size="xs" color={appInviteKindColor(inv.kind)} variant="outline">
                     {inv.kind}
                   </Badge>
                 </Flex>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Callout, Dialog, Flex, Text } from '@radix-ui/themes';
+import { Alert, Button, Flex, Modal, Text } from '@mantine/core';
 import {
   ApiError,
   AUTH_REQUIRED_EVENT,
@@ -82,42 +82,42 @@ export function PasswordPromptDialog({ docUid }: { docUid: string }) {
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={handleOpenChange}>
-      <Dialog.Content maxWidth="420px">
-        <Dialog.Title>Password required</Dialog.Title>
-        <Dialog.Description size="2" color="gray" mb="4">
+    <Modal
+      opened={open}
+      onClose={() => handleOpenChange(false)}
+      size="420px"
+      title={<Text fw={600} size="lg">Password required</Text>}
+    >
+      <Text size="sm" c="dimmed" mb="4">
           This document is password-protected. Enter the password to continue.
-        </Dialog.Description>
-        <form onSubmit={handleSubmit}>
-          <Flex direction="column" gap="3">
-            <PasswordField
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password"
-              autoFocus
-            />
-            {error && (
-              <Callout.Root color="red" size="1">
-                <Callout.Text>{error}</Callout.Text>
-              </Callout.Root>
-            )}
-            <Flex gap="2" justify="end">
-              <Dialog.Close>
-                <Button type="button" variant="soft" color="gray" disabled={submitting}>
-                  Cancel
-                </Button>
-              </Dialog.Close>
-              <Button type="submit" disabled={submitting || !password}>
-                {submitting ? 'Checking…' : 'Unlock'}
-              </Button>
-            </Flex>
-            <Text size="1" color="gray">
-              The password was shown once when the document was created or rotated. Ask the doc
-              admin if you don't have it.
-            </Text>
+      </Text>
+      <form onSubmit={handleSubmit}>
+        <Flex direction="column" gap="3">
+          <PasswordField
+            value={password}
+            onChange={(e: any) => setPassword(e.target.value)}
+            placeholder="Password"
+            autoFocus
+          />
+          {error && (
+            <Alert color="red" variant="light">
+              {error}
+            </Alert>
+          )}
+          <Flex gap="2" justify="end">
+            <Button type="button" variant="light" color="gray" disabled={submitting} onClick={() => handleOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting || !password}>
+              {submitting ? 'Checking…' : 'Unlock'}
+            </Button>
           </Flex>
-        </form>
-      </Dialog.Content>
-    </Dialog.Root>
+          <Text size="xs" c="dimmed">
+            The password was shown once when the document was created or rotated. Ask the doc
+            admin if you don't have it.
+          </Text>
+        </Flex>
+      </form>
+    </Modal>
   );
 }

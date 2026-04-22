@@ -1,15 +1,15 @@
-import { DownloadIcon, GearIcon } from '@radix-ui/react-icons';
+import { DownloadIcon, GearIcon } from '../icons.js';
 import {
+  ActionIcon as IconButton,
+  Alert,
   Button,
-  Callout,
-  Dialog,
+  Divider as Separator,
   Flex,
-  IconButton,
+  Modal,
   Select,
-  Separator,
   Text,
-  TextField,
-} from '@radix-ui/themes';
+  TextInput,
+} from '@mantine/core';
 import { useState } from 'react';
 import type { Document } from '../lib/api.js';
 import {
@@ -97,71 +97,70 @@ export function DocumentSettingsDialog({
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger>
-        <IconButton variant="soft" size="2" aria-label="Document settings" title="Document settings">
-          <GearIcon />
-        </IconButton>
-      </Dialog.Trigger>
-      <Dialog.Content size="3" maxWidth="640px">
-        <Dialog.Title>Document settings</Dialog.Title>
-        <Dialog.Description size="2" color="gray" mb="4">
+    <>
+      <IconButton variant="light" size="sm" aria-label="Document settings" title="Document settings" onClick={() => setOpen(true)}>
+        <GearIcon />
+      </IconButton>
+      <Modal
+        opened={open}
+        onClose={() => setOpen(false)}
+        size="640px"
+        title={<Text fw={600} size="lg">Document settings</Text>}
+      >
+        <Text size="sm" c="dimmed" mb="4">
           Naming, presentation, and export. Permissions live in Access control.
-        </Dialog.Description>
+        </Text>
 
         <Flex direction="column" gap="4">
           <Flex direction="column" gap="1">
-            <Text as="label" size="2" weight="medium" htmlFor="doc-name-setting">
+            <Text component="label" size="sm" fw={500} htmlFor="doc-name-setting">
               Document name
             </Text>
-            <Text size="1" color="gray">
+            <Text size="xs" c="dimmed">
               Shown on the home page and in the browser tab. Leave blank to derive from the
               document's title / first heading.
             </Text>
-            <TextField.Root
+            <TextInput
               id="doc-name-setting"
-              size="2"
+              size="sm"
               value={docName}
-              onChange={(e) => setDocName(e.target.value)}
+              onChange={(e: any) => setDocName(e.target.value)}
               placeholder="Leave blank to use the document's title"
               maxLength={200}
             />
           </Flex>
 
-          <Separator size="4" />
+          <Separator />
 
           <Flex direction="column" gap="1">
-            <Text size="2" weight="medium">
+            <Text size="sm" fw={500}>
               Default theme
             </Text>
-            <Text size="1" color="gray">
+            <Text size="xs" c="dimmed">
               Applied to anyone opening this document for the first time.
             </Text>
-            <Select.Root value={defaultTheme} onValueChange={setDefaultTheme}>
-              <Select.Trigger />
-              <Select.Content position="popper">
-                {BUILT_IN_THEMES.map((t) => (
-                  <Select.Item key={t.id} value={t.id}>
-                    {t.label}
-                  </Select.Item>
-                ))}
-              </Select.Content>
-            </Select.Root>
+            <Select
+              value={defaultTheme}
+              onChange={(value) => {
+                if (value) setDefaultTheme(value);
+              }}
+              data={BUILT_IN_THEMES.map((theme) => ({ value: theme.id, label: theme.label }))}
+            />
           </Flex>
 
-          <Separator size="4" />
+          <Separator />
 
           <Flex direction="column" gap="2">
-            <Text size="2" weight="medium">
+            <Text size="sm" fw={500}>
               JSON bundle
             </Text>
-            <Text size="1" color="gray">
+            <Text size="xs" c="dimmed">
               Versioned bundle with the source, comments, and renderer metadata for tooling or
               later import. For day-to-day source or DOCX downloads, use the download icon
               next to this gear instead.
             </Text>
             <Flex>
-              <Button variant="soft" onClick={exportJson} disabled={exporting}>
+              <Button variant="light" onClick={exportJson} disabled={exporting}>
                 <DownloadIcon />
                 {exporting ? 'Exporting…' : 'Export JSON bundle'}
               </Button>
@@ -169,24 +168,22 @@ export function DocumentSettingsDialog({
           </Flex>
 
           {error && (
-            <Callout.Root color="red" size="1">
-              <Callout.Text>{error}</Callout.Text>
-            </Callout.Root>
+            <Alert color="red" variant="light">
+              {error}
+            </Alert>
           )}
 
           <Flex gap="2" justify="end">
-            <Dialog.Close>
-              <Button variant="soft" color="gray">
-                Cancel
-              </Button>
-            </Dialog.Close>
+            <Button variant="light" color="gray" onClick={() => setOpen(false)}>
+              Cancel
+            </Button>
             <Button onClick={save} disabled={saving}>
               {saving ? 'Saving…' : 'Save changes'}
             </Button>
           </Flex>
         </Flex>
-      </Dialog.Content>
-    </Dialog.Root>
+      </Modal>
+    </>
   );
 }
 

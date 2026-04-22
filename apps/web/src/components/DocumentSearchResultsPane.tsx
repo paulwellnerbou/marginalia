@@ -1,4 +1,4 @@
-import { Box, Button, Flex, Text } from '@radix-ui/themes';
+import { Box, Button, Flex, Text } from '@mantine/core';
 import { APP_ACCENT_COLOR } from '../styles/theme.js';
 
 export interface DocumentSearchResult {
@@ -29,7 +29,7 @@ export function DocumentSearchResultsPane({
   if (!trimmedQuery) {
     return (
       <Box p="3">
-        <Text size="1" color="gray">
+        <Text size="xs" c="dimmed">
           Type in document search to see matching results here.
         </Text>
       </Box>
@@ -39,7 +39,7 @@ export function DocumentSearchResultsPane({
   if (results.length === 0) {
     return (
       <Box p="3">
-        <Text size="1" color="gray">
+        <Text size="xs" c="dimmed">
           No matches for "{trimmedQuery}".
         </Text>
       </Box>
@@ -54,23 +54,23 @@ export function DocumentSearchResultsPane({
           <Button
             key={result.id}
             type="button"
-            variant={active ? 'soft' : 'ghost'}
+            variant={active ? 'light' : 'subtle'}
             color={active ? APP_ACCENT_COLOR : 'gray'}
             className={`doc-search-result ${active ? 'active' : ''}`}
             onClick={() => onSelectResult(result.id)}
           >
             <Flex direction="column" align="start" gap="1">
               <Flex align="center" gap="2">
-                <Text size="1" color="gray">
+                <Text size="xs" c="dimmed">
                   {result.index + 1}
                 </Text>
                 {result.headingId && (
-                  <Text size="1" color="gray" className="doc-search-result-heading">
+                  <Text size="xs" c="dimmed" className="doc-search-result-heading">
                     #{result.headingId}
                   </Text>
                 )}
               </Flex>
-              <Text size="2" className="doc-search-result-snippet">
+              <Text size="sm" className="doc-search-result-snippet">
                 {result.contextBefore && (
                   <span className="doc-search-result-context">{result.contextBefore}</span>
                 )}

@@ -1,14 +1,14 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
-import { DotsHorizontalIcon } from '@radix-ui/react-icons';
 import {
+  ActionIcon as IconButton,
   Badge,
   Button,
-  DropdownMenu,
   Flex,
-  IconButton,
+  Menu,
   SegmentedControl,
   Text,
-} from '@radix-ui/themes';
+} from '@mantine/core';
+import { DotsHorizontalIcon } from '../icons.js';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Comment, CommentAnchor, EditProposal } from '../lib/api.js';
 import { CommentComposer, type ComposerHandle } from './CommentComposer.js';
@@ -339,38 +339,35 @@ export function CommentsPane(props: Props) {
         <Flex align="center" gap="2" className="comments-pane-toolbar">
           {/* Keep thread sorting visible even when proposal/composer sections
               add content above the first thread list. */}
-          <Text as="label" htmlFor="threads-sort" size="1" color="gray">
+          <Text component="label" htmlFor="threads-sort" size="xs" c="dimmed">
             Sort by
           </Text>
-          <SegmentedControl.Root
+          <SegmentedControl
             id="threads-sort"
-            size="1"
+            size="xs"
             value={sortMode}
-            onValueChange={(value) => setSortMode(value as CommentSortMode)}
+            onChange={(value) => setSortMode(value as CommentSortMode)}
             aria-label="Sort threads"
-          >
-            <SegmentedControl.Item value="document" title="Appearance in document">
-              Appearance
-            </SegmentedControl.Item>
-            <SegmentedControl.Item value="latest" title="Latest activity first">
-              Latest
-            </SegmentedControl.Item>
-          </SegmentedControl.Root>
+            data={[
+              { value: 'document', label: 'Appearance' },
+              { value: 'latest', label: 'Latest' },
+            ]}
+          />
           <span className="spacer" />
           {/* Collapse-all is the one low-frequency bulk action — tucked into
               an overflow menu so it's reachable without cluttering the bar.
               No "Expand all" — if the user wants to read a thread they just
               click that thread's chevron; collapsing is the only useful
               bulk direction. */}
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger>
-              <IconButton variant="ghost" size="1" aria-label="More thread actions">
+          <Menu position="bottom-end">
+            <Menu.Target>
+              <IconButton variant="subtle" size="xs" aria-label="More thread actions">
                 <DotsHorizontalIcon />
               </IconButton>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Content align="end">
-              <DropdownMenu.Item
-                onSelect={() =>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item
+                onClick={() =>
                   setThreadCollapseState((prev) => {
                     const next = new Set(threadIds);
                     if (next.size === prev.collapsed.size) {
@@ -389,9 +386,9 @@ export function CommentsPane(props: Props) {
                 disabled={allCollapsed}
               >
                 Collapse all threads
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Root>
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
         </Flex>
       )}
 
@@ -483,19 +480,19 @@ function AnchorGroupView({
   const jump = anchorBlockId ? () => onScrollToAnchor(anchorBlockId) : undefined;
   const toolbarActions = isResolved ? (
     <>
-      <Badge color="green" variant="soft">
+      <Badge color="green" variant="light">
         Resolved{group.top.resolved_by_name ? ` by ${group.top.resolved_by_name}` : ''}
       </Badge>
       {canResolve && (
-        <Button size="1" variant="soft" color="gray" onClick={() => onResolve(group.top.id, false)}>
+        <Button size="xs" variant="light" color="gray" onClick={() => onResolve(group.top.id, false)}>
           Reopen
         </Button>
       )}
     </>
   ) : canResolve ? (
     <Button
-      size="1"
-      variant="soft"
+      size="xs"
+      variant="light"
       color="green"
       className="thread-resolve-button"
       onClick={() => onResolve(group.top.id, true)}

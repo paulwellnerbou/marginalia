@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Button, Flex, IconButton, TextArea, Tooltip } from '@radix-ui/themes';
-import { Pencil2Icon, QuoteIcon } from '@radix-ui/react-icons';
+import { ActionIcon as IconButton, Button, Flex, Textarea, Tooltip } from '@mantine/core';
+import { Pencil2Icon, QuoteIcon } from '../icons.js';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Comment } from '../lib/api.js';
@@ -25,15 +25,15 @@ export function CommentItem({ comment, isDocAdmin, onEdit, onDelete, onQuote }: 
   const actions = !editing ? (
     <Flex gap="1" align="center" wrap="wrap" className="comment-actions comment-actions-inline">
       {!deleteArmed && onQuote && (
-        <Tooltip content="Quote">
-          <IconButton size="1" variant="ghost" color="gray" aria-label="Quote" onClick={() => onQuote(comment.body)}>
+        <Tooltip label="Quote">
+          <IconButton size="xs" variant="subtle" color="gray" aria-label="Quote" onClick={() => onQuote(comment.body)}>
             <QuoteIcon />
           </IconButton>
         </Tooltip>
       )}
       {!deleteArmed && isAuthor && (
-        <Tooltip content="Edit">
-          <IconButton size="1" variant="ghost" color="gray" aria-label="Edit" onClick={() => setEditing(true)}>
+        <Tooltip label="Edit">
+          <IconButton size="xs" variant="subtle" color="gray" aria-label="Edit" onClick={() => setEditing(true)}>
             <Pencil2Icon />
           </IconButton>
         </Tooltip>
@@ -93,11 +93,11 @@ function EditForm({
   const [value, setValue] = useState(initial);
   return (
     <div className="comment-edit">
-      <TextArea
+      <Textarea
         className="comment-edit-field"
-        size="1"
+        size="xs"
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={(e: any) => setValue(e.target.value)}
         rows={3}
         autoFocus
       />
@@ -108,8 +108,8 @@ function EditForm({
         wrap="wrap"
         className="comment-actions comment-edit-actions"
       >
-        <Button size="1" variant="soft" color="gray" onClick={onCancel}>Cancel</Button>
-        <Button size="1" variant="soft" disabled={!value.trim()} onClick={() => onSave(value.trim())}>
+        <Button size="xs" variant="light" color="gray" onClick={onCancel}>Cancel</Button>
+        <Button size="xs" variant="light" disabled={!value.trim()} onClick={() => onSave(value.trim())}>
           Save
         </Button>
       </Flex>

@@ -1,6 +1,6 @@
 import { useId, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { Flex, Separator, Text } from '@radix-ui/themes';
+import { Divider as Separator, Flex, Text } from '@mantine/core';
 import type { DocumentFormat, Role } from '../lib/api.js';
 import { AppearanceToggle } from './AppearanceToggle.js';
 import { FormatBadge } from './FormatBadge.js';
@@ -70,7 +70,7 @@ export function AppBar({ docTitle, role, format, trailing, showUserName }: Props
       {docTitle && (
         <>
           <Separator orientation="vertical" size="2" />
-          <Text size="2" className="app-bar-title" truncate>
+          <Text size="sm" className="app-bar-title" truncate>
             {docTitle}
           </Text>
           {format && <FormatBadge format={format} />}

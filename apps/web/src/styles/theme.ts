@@ -3,7 +3,6 @@ import type { DocumentFormat, InviteKind, Role } from '../lib/api.js';
 export const APP_THEME = {
   accentColor: 'blue',
   grayColor: 'slate',
-  radius: 'medium',
   scaling: '100%',
 } as const;
 

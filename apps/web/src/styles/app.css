@@ -2,7 +2,7 @@
    styles/theme.css so we can retune the app without chasing values across
    the whole stylesheet. */
 :root,
-.radix-themes {
+.app-theme {
   --ui-font: var(--default-font-family, ui-sans-serif, system-ui, sans-serif);
   --ui-control-height: 36px;
   --ui-control-radius: 8px;
@@ -41,9 +41,9 @@ body {
   font-family: var(--ui-font);
 }
 
-/* The Radix <Theme> root paints the correct background for us. Make sure
+/* The Mantine theme root paints the correct background for us. Make sure
    it fills the viewport. */
-.radix-themes {
+.app-theme {
   min-height: 100%;
 }
 
@@ -276,11 +276,70 @@ button.primary:disabled {
   max-width: min(18rem, 32vw);
 }
 
+.ui-button {
+  font-weight: 600;
+}
+
+.ui-icon-button {
+  flex-shrink: 0;
+}
+
 .user-menu-trigger-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.user-menu-dropdown {
+  padding: 0.2rem 0;
+}
+
+.user-menu-section + .user-menu-section {
+  border-top: 1px solid var(--gray-a4);
+  margin-top: 0.1rem;
+  padding-top: 0.75rem;
+}
+
+.user-menu-kicker {
+  letter-spacing: 0.03em;
+}
+
+.user-menu-main-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.75rem;
+  row-gap: 0.35rem;
+}
+
+.user-menu-main-copy {
+  min-width: 0;
+}
+
+.user-menu-name {
+  line-height: 1.15;
+}
+
+.user-menu-action {
+  justify-self: end;
+}
+
+.user-menu-copyable {
+  min-width: 0;
+}
+
+.user-menu-copyable .copyable-inline {
+  display: block;
+}
+
+.user-menu-copyable .copyable-surface {
+  display: flex;
+  width: 100%;
+}
+
+.user-menu-copyable .copyable-text {
+  flex: 1 1 auto;
 }
 
 /* ============================================================
@@ -368,13 +427,13 @@ button.primary:disabled {
   letter-spacing: 0.04em;
 }
 
-/* Role badges (admin/editor/reader) rendered via Radix <Badge> — uppercase
+/* Role badges (admin/editor/reader) rendered via the shared Badge wrapper — uppercase
    presentation is purely cosmetic, not baked into the TS source. */
 .role-badge {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   font-variant: small-caps;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 .doc-chrome {
@@ -427,6 +486,16 @@ button.primary:disabled {
   flex-shrink: 0;
 }
 
+.doc-chrome .ui-button,
+.doc-chrome .ui-icon-button {
+  min-height: 2.5rem;
+  border-radius: 0.9rem;
+}
+
+.doc-chrome .ui-icon-button {
+  min-width: 2.5rem;
+}
+
 .doc-search-trigger.active {
   color: var(--accent-12);
 }
@@ -439,12 +508,12 @@ button.primary:disabled {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-a7) 45%, transparent);
 }
 
-.doc-search-field :is(.rt-TextFieldSlot, .rt-TextFieldInput),
-.toc-search-field :is(.rt-TextFieldSlot, .rt-TextFieldInput) {
+.doc-search-field :is(.ui-text-field-slot, .ui-text-field-input),
+.toc-search-field :is(.ui-text-field-slot, .ui-text-field-input) {
   font-size: var(--ui-control-font-size);
 }
 
-.doc-search-field .rt-TextFieldSlot svg,
+.doc-search-field .ui-text-field-slot svg,
 .doc-search-option svg,
 .toc-search-icon {
   width: 16px;
@@ -1002,21 +1071,6 @@ button.primary:disabled {
   flex-shrink: 0;
 }
 
-.recent-card-title {
-  background: transparent;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  flex: 1;
-  min-width: 0;
-}
-.recent-card-title:hover {
-  text-decoration: underline;
-}
-
 /* ============================================================
  * Landing page
  * ============================================================ */
@@ -1052,7 +1106,7 @@ button.primary:disabled {
   color: var(--gray-12);
   text-decoration: none;
   font-size: var(--font-size-2);
-  font-weight: 500;
+  font-weight: 400;
   line-height: 1;
   box-shadow: var(--shadow-2);
   backdrop-filter: blur(10px);
@@ -1087,7 +1141,7 @@ button.primary:disabled {
 }
 
 .landing-title {
-  /* Tight, confident typography for the hero. Uses Radix's default font
+  /* Tight, confident typography for the hero. Uses the shared UI font
      with a display-y size + letter-spacing. */
   font-family: var(--default-font-family);
   letter-spacing: -0.035em !important;
@@ -1217,18 +1271,6 @@ button.primary:disabled {
 }
 .imprint-md a {
   color: var(--accent-11);
-}
-
-/* Cards in the recent grid become hover-able: whole card is clickable. */
-.recent-card {
-  cursor: pointer;
-  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
-  border: 1px solid transparent;
-}
-.recent-card:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-3);
-  border-color: var(--gray-a5);
 }
 
 .comments-empty {
@@ -1525,9 +1567,9 @@ button.primary.small {
   line-height: var(--ui-control-line-height);
 }
 
-.composer .composer-name-field :is(input, .rt-TextFieldInput),
-.composer .composer-body-field :is(textarea, .rt-TextAreaInput),
-.comment-edit .comment-edit-field :is(input, .rt-TextFieldInput, textarea, .rt-TextAreaInput) {
+.composer .composer-name-field :is(input, .ui-text-field-input),
+.composer .composer-body-field :is(textarea, .ui-textarea-input),
+.comment-edit .comment-edit-field :is(input, .ui-text-field-input, textarea, .ui-textarea-input) {
   width: 100%;
   box-sizing: border-box;
   margin: 0;
@@ -1543,13 +1585,13 @@ button.primary.small {
   resize: vertical;
 }
 
-.composer .composer-name-field :is(input, .rt-TextFieldInput) {
+.composer .composer-name-field :is(input, .ui-text-field-input) {
   min-height: var(--ui-control-height);
 }
 
-.composer .composer-name-field :is(input, .rt-TextFieldInput)::placeholder,
-.composer .composer-body-field :is(textarea, .rt-TextAreaInput)::placeholder,
-.comment-edit .comment-edit-field :is(input, .rt-TextFieldInput, textarea, .rt-TextAreaInput)::placeholder {
+.composer .composer-name-field :is(input, .ui-text-field-input)::placeholder,
+.composer .composer-body-field :is(textarea, .ui-textarea-input)::placeholder,
+.comment-edit .comment-edit-field :is(input, .ui-text-field-input, textarea, .ui-textarea-input)::placeholder {
   font: inherit;
   letter-spacing: normal;
 }
@@ -1648,7 +1690,7 @@ button.primary.small {
   width: 180px;
 }
 
-.invite-create-form [data-radix-select-trigger] {
+.invite-create-form [data-ui-select-trigger] {
   min-width: 17rem;
 }
 
@@ -1791,29 +1833,25 @@ button.primary.small {
   z-index: 1000;
 }
 
-/* Radix Dialog.Content override for the lightbox — take the full viewport
+/* Modal content override for the lightbox — take the full viewport
    so the image has room to breathe. The backdrop deliberately ignores the
-   per-image bg toggle: it always uses Radix's theme overlay so the lightbox
+   per-image bg toggle: it always uses the shared theme overlay so the lightbox
    itself tracks the app's light/dark appearance. The toggle only swaps the
    background *behind the image* (`.lightbox-media`) — useful for gauging
    transparency without re-skinning the whole modal. */
-.rt-BaseDialogOverlay:has(.lightbox)::before {
-  background: var(--color-overlay);
-  backdrop-filter: blur(10px) saturate(0.9);
-}
-
-.rt-BaseDialogScroll:has(.lightbox) {
+.ui-dialog-inner:has(.lightbox) {
   overflow: hidden;
+  padding: 0;
 }
 
-.rt-BaseDialogScrollPadding:has(.lightbox) {
+.lightbox .ui-dialog-body {
   width: 100%;
   height: 100%;
   padding: 0;
 }
 
 .lightbox {
-  /* Fill the Radix dialog wrapper exactly; the wrapper owns the viewport. */
+  /* Fill the modal wrapper exactly; the wrapper owns the viewport. */
   width: 100vw !important;
   max-width: 100vw !important;
   height: 100vh !important;
@@ -2032,7 +2070,7 @@ button.primary.small {
   cursor: pointer;
 }
 .selection-toolbar button:hover {
-  /* --accent-contrast is Radix's companion token for accent-9 — the correct
+  /* --accent-contrast is the companion token for accent-9 — the correct
      readable text color on the solid accent background in both appearances. */
   background: var(--accent-9);
   color: var(--accent-contrast);
@@ -2081,7 +2119,7 @@ button.primary.small {
 /* Markdown source deserves a monospace face so indentation and fences
    are readable. Sized slightly larger than the rationale field for the
    same reason — it's the primary field users type into. */
-.edit-proposal-composer .proposal-source-field :is(textarea, .rt-TextAreaInput) {
+.edit-proposal-composer .proposal-source-field :is(textarea, .ui-textarea-input) {
   font-family: var(--md-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-size: 0.875rem;
   min-height: calc(var(--ui-control-height) * 5);

@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { Button, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
-import { PaperPlaneIcon } from '@radix-ui/react-icons';
+import { ActionIcon as IconButton, Button, Flex, Text, Textarea, TextInput } from '@mantine/core';
+import { PaperPlaneIcon } from '../icons.js';
 
 export interface ComposerHandle {
   insertText: (text: string) => void;
@@ -157,31 +157,31 @@ export const CommentComposer = forwardRef<ComposerHandle, Props>(function Commen
   return (
     <Flex direction="column" gap="2" className="composer">
       {needsName && (
-        <TextField.Root
+        <TextInput
           className="composer-name-field"
-          size="1"
+          size="xs"
           placeholder="Your display name"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          onChange={(e: any) => setName(e.target.value)}
           maxLength={80}
           autoFocus
         />
       )}
-      <TextArea
+      <Textarea
         className="composer-body-field"
         ref={textRef}
         value={value}
-        onChange={(e) => {
+        onChange={(e: any) => {
           setValue(e.target.value);
           updateCaret(e.target);
         }}
         onKeyDown={handleKey}
-        onClick={(e) => updateCaret(e.currentTarget)}
-        onKeyUp={(e) => updateCaret(e.currentTarget)}
-        onSelect={(e) => updateCaret(e.currentTarget)}
+        onClick={(e: any) => updateCaret(e.currentTarget)}
+        onKeyUp={(e: any) => updateCaret(e.currentTarget)}
+        onSelect={(e: any) => updateCaret(e.currentTarget)}
         placeholder={placeholder}
         rows={rows}
-        size="1"
+        size="xs"
         autoFocus={!needsName}
       />
       {activeMention && filteredMentionOptions.length > 0 && (
@@ -202,15 +202,15 @@ export const CommentComposer = forwardRef<ComposerHandle, Props>(function Commen
         </div>
       )}
       <Flex gap="2" align="center" justify="end" className="comment-composer-actions">
-        <Text size="1" color="gray">
+        <Text size="xs" c="dimmed">
           Markdown supported · ⌘/Ctrl+Enter to post
         </Text>
         {(onCancel || hasDraft) && (
-          <Button variant="soft" color="gray" size="1" onClick={handleCancel} disabled={submitting}>
+          <Button variant="light" color="gray" size="xs" onClick={handleCancel} disabled={submitting}>
             Cancel
           </Button>
         )}
-        <IconButton size="1" variant="soft" onClick={send} disabled={!ready || submitting}>
+        <IconButton size="xs" variant="light" onClick={send} disabled={!ready || submitting}>
           <PaperPlaneIcon />
         </IconButton>
       </Flex>

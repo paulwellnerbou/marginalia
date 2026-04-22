@@ -1,14 +1,19 @@
-import { Suspense, StrictMode, lazy } from 'react';
+import { Suspense, StrictMode, lazy, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { Container, Text, Theme } from '@radix-ui/themes';
+import { Container, MantineProvider, Text } from '@mantine/core';
 import { HomePage } from './pages/HomePage.js';
 import { ToastContainer } from './components/ToastContainer.js';
 import { AppearanceProvider, useAppearance } from './lib/appearance.js';
+import {
+  APP_THEME_ROOT_CLASS,
+  createAppMantineTheme,
+  createAppThemeCssVars,
+} from './theme/mantine.js';
 
-// Radix UI base + our markdown theme baseline. Radix styles come first so
-// document theme CSS wins when selectors collide.
-import '@radix-ui/themes/styles.css';
+// Mantine base + our markdown theme baseline. The theme helper defines
+// the legacy token names that the app styles still consume.
+import '@mantine/core/styles.css';
 import '@marginalia/themes/default.css';
 import './styles/theme.css';
 import './styles/app.css';
@@ -16,6 +21,8 @@ import { installGlobalErrorLogging } from './lib/log.js';
 import { APP_THEME } from './styles/theme.js';
 
 installGlobalErrorLogging();
+
+const mantineTheme = createAppMantineTheme(APP_THEME);
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root not found');
@@ -32,36 +39,49 @@ const EditPage = lazy(async () => {
 
 function RouteLoading() {
   return (
-    <Container size="2" py="8">
-      <Text color="gray">Loading…</Text>
+    <Container size={640} py="8">
+      <Text c="dimmed">Loading…</Text>
     </Container>
   );
 }
 
 function App() {
   const { resolved } = useAppearance();
+  const themeCssVars = createAppThemeCssVars(mantineTheme, {
+    accentColor: APP_THEME.accentColor,
+    grayColor: APP_THEME.grayColor,
+    scaling: APP_THEME.scaling,
+    appearance: resolved,
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle('light', resolved === 'light');
+    root.classList.toggle('dark', resolved === 'dark');
+
+    for (const [name, value] of Object.entries(themeCssVars)) {
+      root.style.setProperty(name, value);
+    }
+  }, [resolved, themeCssVars]);
+
   return (
-    <Theme
-      accentColor={APP_THEME.accentColor}
-      grayColor={APP_THEME.grayColor}
-      radius={APP_THEME.radius}
-      scaling={APP_THEME.scaling}
-      appearance={resolved}
-    >
-      <BrowserRouter>
-        <Suspense fallback={<RouteLoading />}>
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/d/:uid" element={<ViewPage />} />
-            <Route path="/d/:uid/:token" element={<ViewPage />} />
-            <Route path="/d/:uid/:token/edit" element={<EditPage />} />
-            <Route path="/d/:uid/edit" element={<EditPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
-        <ToastContainer />
-      </BrowserRouter>
-    </Theme>
+    <MantineProvider theme={mantineTheme} forceColorScheme={resolved}>
+      <div className={`${APP_THEME_ROOT_CLASS} ${resolved}`} style={themeCssVars}>
+        <BrowserRouter>
+          <Suspense fallback={<RouteLoading />}>
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/d/:uid" element={<ViewPage />} />
+              <Route path="/d/:uid/:token" element={<ViewPage />} />
+              <Route path="/d/:uid/:token/edit" element={<EditPage />} />
+              <Route path="/d/:uid/edit" element={<EditPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+          <ToastContainer />
+        </BrowserRouter>
+      </div>
+    </MantineProvider>
   );
 }
 

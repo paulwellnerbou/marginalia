@@ -1,6 +1,6 @@
 import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { IconButton, Text, TextField } from '@radix-ui/themes';
-import { ChevronDownIcon, ChevronRightIcon, Cross2Icon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
+import { ActionIcon as IconButton, Text, TextInput } from '@mantine/core';
+import { ChevronDownIcon, ChevronRightIcon, Cross2Icon, MagnifyingGlassIcon } from '../icons.js';
 import type { TocNode } from '../lib/api.js';
 
 export function Toc({ nodes, activeId }: { nodes: TocNode[]; activeId?: string | null }) {
@@ -9,25 +9,26 @@ export function Toc({ nodes, activeId }: { nodes: TocNode[]; activeId?: string |
   const deferredQuery = useDeferredValue(query);
   const filteredNodes = useMemo(() => filterNodes(nodes, deferredQuery.trim()), [deferredQuery, nodes]);
 
-  if (nodes.length === 0) return <Text size="1" color="gray" className="toc-empty">No headings</Text>;
+  if (nodes.length === 0) return <Text size="xs" c="dimmed" className="toc-empty">No headings</Text>;
 
   return (
     <nav className="toc">
       <div className="toc-search">
-        <TextField.Root
+        <TextInput
           ref={searchInputRef}
-          size="1"
+          size="xs"
           type="search"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event: any) => setQuery(event.target.value)}
           placeholder="Filter contents"
           className="toc-search-field"
-        >
-          <TextField.Slot className="toc-search-slot">
-            <MagnifyingGlassIcon className="toc-search-icon" />
-          </TextField.Slot>
-          {query.length > 0 && (
-            <TextField.Slot side="right" className="toc-search-clear-slot">
+          leftSection={
+            <span className="toc-search-slot">
+              <MagnifyingGlassIcon className="toc-search-icon" />
+            </span>
+          }
+          rightSection={
+            query.length > 0 ? (
               <button
                 type="button"
                 className="toc-search-clear"
@@ -40,9 +41,9 @@ export function Toc({ nodes, activeId }: { nodes: TocNode[]; activeId?: string |
               >
                 <Cross2Icon className="toc-search-clear-icon" />
               </button>
-            </TextField.Slot>
-          )}
-        </TextField.Root>
+            ) : undefined
+          }
+        />
       </div>
       {filteredNodes.length > 0 ? (
         <TocList
@@ -51,7 +52,7 @@ export function Toc({ nodes, activeId }: { nodes: TocNode[]; activeId?: string |
           query={deferredQuery.trim()}
         />
       ) : (
-        <Text size="1" color="gray" className="toc-empty">No headings match "{query.trim()}".</Text>
+        <Text size="xs" c="dimmed" className="toc-empty">No headings match "{query.trim()}".</Text>
       )}
     </nav>
   );
@@ -115,8 +116,9 @@ function TocItem({
       <div className={`toc-row ${isActive ? 'active' : ''}`}>
         {hasChildren ? (
           <IconButton
-            size="1"
-            variant="ghost"
+            size="xs"
+            variant="subtle"
+            color="gray"
             onClick={() => setOpen((v) => !v)}
             aria-label={effectiveOpen ? 'Collapse' : 'Expand'}
             className="toc-toggle"

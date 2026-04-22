@@ -1,4 +1,4 @@
-import { Button, Dialog, Flex, Text } from '@radix-ui/themes';
+import { Button, Flex, Modal, Text } from '@mantine/core';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type DiffOverviewLineLayout,
@@ -179,86 +179,87 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Content size="3" maxWidth="900px">
-        <Dialog.Title>{title ?? 'Proposed change'}</Dialog.Title>
-        <Dialog.Description size="2" color="gray" mb="3">
+    <Modal
+      opened={open}
+      onClose={() => onOpenChange(false)}
+      size="900px"
+      title={<Text fw={600} size="lg">{title ?? 'Proposed change'}</Text>}
+      withCloseButton={false}
+    >
+      <Text size="sm" c="dimmed" mb="3">
           Original on the left of each line (−), proposed on the right (+). Unchanged lines are
           shown for context.
-        </Dialog.Description>
+      </Text>
 
-        <section className="diff-view" aria-label="Diff">
-          <div ref={scrollRef} className={`diff-scroll${hasChanges ? '' : ' diff-scroll-empty'}`}>
-            <div ref={contentRef}>
-              {hasChanges ? (
-                renderedLines.map(({ key, line }) => (
-                  <div
-                    key={key}
-                    ref={(node) => {
-                      if (node) lineRefs.current.set(key, node);
-                      else lineRefs.current.delete(key);
-                    }}
-                    className={`diff-line diff-${line.op}`}
-                  >
-                    <span className="diff-marker">
-                      {line.op === 'add' ? '+' : line.op === 'remove' ? '−' : ' '}
-                    </span>
-                    <span className="diff-text">{renderLineText(line)}</span>
-                  </div>
-                ))
-              ) : (
-                <Text size="1" color="gray">
-                  (no changes)
-                </Text>
-              )}
-            </div>
+      <section className="diff-view" aria-label="Diff">
+        <div ref={scrollRef} className={`diff-scroll${hasChanges ? '' : ' diff-scroll-empty'}`}>
+          <div ref={contentRef}>
+            {hasChanges ? (
+              renderedLines.map(({ key, line }) => (
+                <div
+                  key={key}
+                  ref={(node) => {
+                    if (node) lineRefs.current.set(key, node);
+                    else lineRefs.current.delete(key);
+                  }}
+                  className={`diff-line diff-${line.op}`}
+                >
+                  <span className="diff-marker">
+                    {line.op === 'add' ? '+' : line.op === 'remove' ? '−' : ' '}
+                  </span>
+                  <span className="diff-text">{renderLineText(line)}</span>
+                </div>
+              ))
+            ) : (
+              <Text size="xs" c="dimmed">
+                (no changes)
+              </Text>
+            )}
           </div>
-          {overviewMarkers.length ? (
-            <div className="diff-overview" aria-label="Diff overview">
-              <button
-                type="button"
-                className="diff-overview-track"
-                style={overviewTrackStyle}
-                onClick={handleOverviewClick}
-                onKeyDown={handleOverviewKeyDown}
-                aria-label="Jump through diff overview"
-              >
-                {hasMeasuredOverviewTrack
-                  ? overviewMarkers.map((marker) => (
-                      <span
-                        key={`${marker.op}-${marker.startLine}-${marker.lineCount}`}
-                        className={`diff-overview-marker diff-overview-marker-${marker.op}`}
-                        style={{
-                          top: `${(marker.topPercent / 100) * overviewTrackHeight}px`,
-                          height: `${Math.max((marker.heightPercent / 100) * overviewTrackHeight, 3)}px`,
-                        }}
-                      />
-                    ))
-                  : null}
-                {overviewViewport && hasMeasuredOverviewTrack ? (
-                  <div
-                    className="diff-overview-viewport"
-                    style={{
-                      top: `${(overviewViewport.topPercent / 100) * overviewTrackHeight}px`,
-                      height: `${Math.max((overviewViewport.heightPercent / 100) * overviewTrackHeight, 16)}px`,
-                    }}
-                  />
-                ) : null}
-              </button>
-            </div>
-          ) : null}
-        </section>
+        </div>
+        {overviewMarkers.length ? (
+          <div className="diff-overview" aria-label="Diff overview">
+            <button
+              type="button"
+              className="diff-overview-track"
+              style={overviewTrackStyle}
+              onClick={handleOverviewClick}
+              onKeyDown={handleOverviewKeyDown}
+              aria-label="Jump through diff overview"
+            >
+              {hasMeasuredOverviewTrack
+                ? overviewMarkers.map((marker) => (
+                    <span
+                      key={`${marker.op}-${marker.startLine}-${marker.lineCount}`}
+                      className={`diff-overview-marker diff-overview-marker-${marker.op}`}
+                      style={{
+                        top: `${(marker.topPercent / 100) * overviewTrackHeight}px`,
+                        height: `${Math.max((marker.heightPercent / 100) * overviewTrackHeight, 3)}px`,
+                      }}
+                    />
+                  ))
+                : null}
+              {overviewViewport && hasMeasuredOverviewTrack ? (
+                <div
+                  className="diff-overview-viewport"
+                  style={{
+                    top: `${(overviewViewport.topPercent / 100) * overviewTrackHeight}px`,
+                    height: `${Math.max((overviewViewport.heightPercent / 100) * overviewTrackHeight, 16)}px`,
+                  }}
+                />
+              ) : null}
+            </button>
+          </div>
+        ) : null}
+      </section>
 
-        <Flex gap="2" justify="end" mt="4" align="center">
-          {actions}
-          <Dialog.Close>
-            <Button variant="soft" color="gray">
-              Close
-            </Button>
-          </Dialog.Close>
-        </Flex>
-      </Dialog.Content>
-    </Dialog.Root>
+      <Flex gap="2" justify="end" mt="4" align="center">
+        {actions}
+        <Button variant="light" color="gray" onClick={() => onOpenChange(false)}>
+          Close
+        </Button>
+      </Flex>
+    </Modal>
   );
 }
 

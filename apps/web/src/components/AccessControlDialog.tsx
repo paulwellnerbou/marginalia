@@ -1,15 +1,14 @@
-import { ExclamationTriangleIcon, LockClosedIcon, Share2Icon } from '@radix-ui/react-icons';
+import { ExclamationTriangleIcon, LockClosedIcon, Share2Icon } from '../icons.js';
 import {
-  AlertDialog,
+  ActionIcon as IconButton,
+  Alert,
   Button,
-  Callout,
   Checkbox,
-  Dialog,
+  Divider as Separator,
   Flex,
-  IconButton,
-  Separator,
+  Modal,
   Text,
-} from '@radix-ui/themes';
+} from '@mantine/core';
 import { useEffect, useState } from 'react';
 import type { Document } from '../lib/api.js';
 import { type DocumentSettingsResponse, updateDocumentSettings } from '../lib/api.js';
@@ -38,6 +37,7 @@ export function AccessControlDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [freshPassword, setFreshPassword] = useState<string | null>(null);
+  const [rotateDialogOpen, setRotateDialogOpen] = useState(false);
 
   useEffect(() => {
     setPasswordProtected(doc.password_protected);
@@ -79,12 +79,12 @@ export function AccessControlDialog({
     }
   }
 
-  async function rotate() {
+  async function rotate(): Promise<boolean> {
     setError(null);
     const name = getDisplayName();
     if (!name) {
       setError('Please set your display name first.');
-      return;
+      return false;
     }
     const identity = { clientId: getClientId(), displayName: name };
     setSaving(true);
@@ -92,50 +92,48 @@ export function AccessControlDialog({
       const result = await updateDocumentSettings(doc.uid, { password: 'rotate' }, identity);
       onChange(result);
       if (result.password) setFreshPassword(result.password);
+      return true;
     } catch (err) {
       reportError('AccessControl.rotate', err);
       setError(err instanceof Error ? err.message : 'Rotate failed');
+      return false;
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <Dialog.Root
-      open={open}
-      onOpenChange={(v) => {
-        setOpen(v);
-        // Drop the one-shot password disclosure on close so reopening
-        // doesn't surprise the user with a stale value.
-        if (!v) {
+    <>
+      <IconButton variant="light" size="sm" aria-label="Access control" title="Access control" onClick={() => setOpen(true)}>
+        <Share2Icon />
+      </IconButton>
+      <Modal
+        opened={open}
+        onClose={() => {
+          setOpen(false);
+          setRotateDialogOpen(false);
           setFreshPassword(null);
           setError(null);
           setPasswordProtected(doc.password_protected);
-        }
-      }}
-    >
-      <Dialog.Trigger>
-        <IconButton variant="soft" size="2" aria-label="Access control" title="Access control">
-          <Share2Icon />
-        </IconButton>
-      </Dialog.Trigger>
-      <Dialog.Content size="3" maxWidth="780px">
-        <Dialog.Title>Access control</Dialog.Title>
-        <Dialog.Description size="2" color="gray" mb="4">
+        }}
+        size="780px"
+        title={<Text fw={600} size="lg">Access control</Text>}
+      >
+        <Text size="sm" c="dimmed" mb="4">
           Who can read, edit, and comment. Document name, theme, and export live in Document
           settings.
-        </Dialog.Description>
+        </Text>
 
         <Flex direction="column" gap="4">
           {/* No anyone-can-edit toggle: non-reader rights come only from
               invite links below. */}
           <Flex direction="column" gap="2">
-            <Text as="label" size="2">
+            <Text component="label" size="sm">
               <Flex align="center" gap="2">
                 <Checkbox
                   checked={passwordProtected}
                   disabled={saving}
-                  onCheckedChange={(c) => void setPasswordProtection(c === true)}
+                  onChange={(event) => void setPasswordProtection(event.currentTarget.checked)}
                 />
                 <LockClosedIcon />
                 Password-protect this document
@@ -143,87 +141,86 @@ export function AccessControlDialog({
             </Text>
             {passwordProtected && doc.password_protected && (
               <Flex align="center" gap="2" pl="6">
-                <Text size="1" color="gray">
+                <Text size="xs" c="dimmed">
                   Password is set. Rotate invalidates existing sessions; invite links still
                   determine identity and role after re-authentication.
                 </Text>
                 {/* Destructive + unrecoverable: always confirm. */}
-                <AlertDialog.Root>
-                  <AlertDialog.Trigger>
-                    <Button size="1" variant="soft" color="amber" disabled={saving}>
-                      Rotate password
-                    </Button>
-                  </AlertDialog.Trigger>
-                  <AlertDialog.Content maxWidth="480px">
-                    <AlertDialog.Title>
-                      <Flex align="center" gap="2">
-                        <ExclamationTriangleIcon /> Rotate the document password?
-                      </Flex>
-                    </AlertDialog.Title>
-                    <AlertDialog.Description size="2" mb="3">
-                      Rotating generates a brand-new password and invalidates every existing
-                      session on this document.
-                    </AlertDialog.Description>
-                    <Flex direction="column" gap="2" mb="4">
-                      <Text size="2" as="p">
-                        <b>Everyone</b> who has the current password — including users who already
-                        had this document open — will be prompted to re-enter it before they can
-                        read or write anything.
-                      </Text>
-                      <Text size="2" as="p">
-                        The <b>new password is shown only once</b>, right after rotation. There is
-                        no way to recover it afterwards; you'll need to share it out of band with
-                        each person you want back in.
-                      </Text>
-                    </Flex>
-                    <Flex gap="2" justify="end">
-                      <AlertDialog.Cancel>
-                        <Button variant="soft" color="gray">
-                          Cancel
-                        </Button>
-                      </AlertDialog.Cancel>
-                      <AlertDialog.Action>
-                        <Button color="amber" onClick={rotate}>
-                          Rotate password
-                        </Button>
-                      </AlertDialog.Action>
-                    </Flex>
-                  </AlertDialog.Content>
-                </AlertDialog.Root>
+                <Button size="xs" variant="light" color="amber" disabled={saving} onClick={() => setRotateDialogOpen(true)}>
+                  Rotate password
+                </Button>
               </Flex>
             )}
           </Flex>
 
           {freshPassword && (
-            <Callout.Root color="amber">
-              <Callout.Text>
-                <Flex direction="column" gap="2">
-                  <span>New password (shown once):</span>
-                  <Copyable text={freshPassword} ariaLabel="Copy password" />
-                </Flex>
-              </Callout.Text>
-            </Callout.Root>
+            <Alert color="amber" variant="light">
+              <Flex direction="column" gap="2">
+                <span>New password (shown once):</span>
+                <Copyable text={freshPassword} ariaLabel="Copy password" />
+              </Flex>
+            </Alert>
           )}
 
-          <Separator size="4" />
+          <Separator />
 
           <InvitesPanel uid={doc.uid} />
 
           {error && (
-            <Callout.Root color="red" size="1">
-              <Callout.Text>{error}</Callout.Text>
-            </Callout.Root>
+            <Alert color="red" variant="light">
+              {error}
+            </Alert>
           )}
 
           <Flex gap="2" justify="end">
-            <Dialog.Close>
-              <Button variant="soft" color="gray">
-                Close
-              </Button>
-            </Dialog.Close>
+            <Button variant="light" color="gray" onClick={() => setOpen(false)}>
+              Close
+            </Button>
           </Flex>
         </Flex>
-      </Dialog.Content>
-    </Dialog.Root>
+      </Modal>
+      <Modal
+        opened={rotateDialogOpen}
+        onClose={() => setRotateDialogOpen(false)}
+        size="480px"
+        title={(
+          <Flex align="center" gap="2">
+            <ExclamationTriangleIcon /> Rotate the document password?
+          </Flex>
+        )}
+        withCloseButton={false}
+      >
+        <Text size="sm" mb="3">
+          Rotating generates a brand-new password and invalidates every existing
+          session on this document.
+        </Text>
+        <Flex direction="column" gap="2" mb="4">
+          <Text size="sm" component="p">
+            <b>Everyone</b> who has the current password — including users who already
+            had this document open — will be prompted to re-enter it before they can
+            read or write anything.
+          </Text>
+          <Text size="sm" component="p">
+            The <b>new password is shown only once</b>, right after rotation. There is
+            no way to recover it afterwards; you'll need to share it out of band with
+            each person you want back in.
+          </Text>
+        </Flex>
+        <Flex gap="2" justify="end">
+          <Button variant="light" color="gray" onClick={() => setRotateDialogOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            color="amber"
+            onClick={async () => {
+              const rotated = await rotate();
+              if (rotated) setRotateDialogOpen(false);
+            }}
+          >
+            Rotate password
+          </Button>
+        </Flex>
+      </Modal>
+    </>
   );
 }

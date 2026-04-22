@@ -1,10 +1,18 @@
 import { useMemo, useRef, useState } from 'react';
 import type React from 'react';
-import { Badge, Button, Flex, IconButton, Text, TextArea, Tooltip } from '@radix-ui/themes';
+import {
+  ActionIcon as IconButton,
+  Badge,
+  Button,
+  Flex,
+  Text,
+  Textarea,
+  Tooltip,
+} from '@mantine/core';
 import {
   Pencil2Icon,
   QuoteIcon,
-} from '@radix-ui/react-icons';
+} from '../icons.js';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import { getEditProposalDiff, type Comment, type EditProposal } from '../lib/api.js';
 import { getClientId } from '../lib/identity.js';
@@ -76,18 +84,18 @@ export function EditProposalItem({
 
   const headerBadges = (
     <Flex gap="1" align="center" wrap="wrap">
-      <Badge variant="soft">Proposed change</Badge>
+      <Badge variant="light">Proposed change</Badge>
       {proposal.status === 'accepted' && (
-        <Badge color="green" variant="soft">
+        <Badge color="green" variant="light">
           Accepted{proposal.decided_by_name ? ` by ${proposal.decided_by_name}` : ''}
         </Badge>
       )}
       {proposal.status === 'rejected' && (
-        <Badge color="red" variant="soft">
+        <Badge color="red" variant="light">
           Rejected{proposal.decided_by_name ? ` by ${proposal.decided_by_name}` : ''}
         </Badge>
       )}
-      {proposal.status === 'orphaned' && <Badge color="gray" variant="soft">Orphaned</Badge>}
+      {proposal.status === 'orphaned' && <Badge color="gray" variant="light">Orphaned</Badge>}
     </Flex>
   );
 
@@ -138,24 +146,24 @@ export function EditProposalItem({
       />
       {proposal.status === 'pending' && canEdit && (
         <>
-          <Button size="1" color="green" variant="soft" onClick={() => onAccept(proposal.id)}>
+          <Button size="xs" color="green" variant="light" onClick={() => onAccept(proposal.id)}>
             Accept
           </Button>
-          <Button size="1" color="red" variant="soft" onClick={() => onReject(proposal.id)}>
+          <Button size="xs" color="red" variant="light" onClick={() => onReject(proposal.id)}>
             Reject
           </Button>
         </>
       )}
-      {diffError ? <Text size="1" color="red">{diffError}</Text> : null}
+      {diffError ? <Text size="xs" c="red">{diffError}</Text> : null}
     </Flex>
   );
   const actions = (
     <Flex gap="1" align="center" wrap="wrap" className="comment-actions comment-actions-inline">
       {!deleteArmed && canComment && quoteBody && (
-        <Tooltip content="Quote">
+        <Tooltip label="Quote">
           <IconButton
-            size="1"
-            variant="ghost"
+            size="xs"
+            variant="subtle"
             color="gray"
             aria-label="Quote"
             onClick={handleQuote}
@@ -165,10 +173,10 @@ export function EditProposalItem({
         </Tooltip>
       )}
       {!deleteArmed && isAuthor && proposal.status === 'pending' && !editingRationale && (
-        <Tooltip content="Edit reason">
+        <Tooltip label="Edit reason">
           <IconButton
-            size="1"
-            variant="ghost"
+            size="xs"
+            variant="subtle"
             color="gray"
             aria-label="Edit reason"
             onClick={() => setEditingRationale(true)}
@@ -199,11 +207,11 @@ export function EditProposalItem({
       }}
     />
   ) : proposal.rationale ? (
-    <Text as="p" className="comment-body proposal-rationale">
+    <Text component="p" className="comment-body proposal-rationale">
       {proposal.rationale}
     </Text>
   ) : (
-    <Text as="p" className="comment-body proposal-rationale proposal-rationale-empty">
+    <Text component="p" className="comment-body proposal-rationale proposal-rationale-empty">
       Change proposal
     </Text>
   );
@@ -266,7 +274,7 @@ export function EditProposalItem({
           proposal.status === 'pending' && canEdit ? (
             <>
               <Button
-                size="2"
+                size="sm"
                 color="green"
                 onClick={async () => {
                   await onAccept(proposal.id);
@@ -276,9 +284,9 @@ export function EditProposalItem({
                 Accept
               </Button>
               <Button
-                size="2"
+                size="sm"
                 color="red"
-                variant="soft"
+                variant="light"
                 onClick={async () => {
                   await onReject(proposal.id);
                   setDiffOpen(false);
@@ -317,18 +325,18 @@ function RationaleEditor({
   const [value, setValue] = useState(initial);
   return (
     <div className="comment-edit">
-      <TextArea
+      <Textarea
         className="comment-edit-field"
-        size="1"
+        size="xs"
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        onChange={(e: any) => setValue(e.target.value)}
         rows={3}
         placeholder="Reason for this change (optional)"
         autoFocus
       />
       <Flex gap="3" justify="end" align="center" wrap="wrap" className="comment-actions comment-edit-actions">
-        <Button size="1" variant="soft" color="gray" onClick={onCancel}>Cancel</Button>
-        <Button size="1" variant="soft" onClick={() => onSave(value)}>Save</Button>
+        <Button size="xs" variant="light" color="gray" onClick={onCancel}>Cancel</Button>
+        <Button size="xs" variant="light" onClick={() => onSave(value)}>Save</Button>
       </Flex>
     </div>
   );

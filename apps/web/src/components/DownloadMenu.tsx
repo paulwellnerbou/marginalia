@@ -1,6 +1,6 @@
-import { DownloadIcon } from '@radix-ui/react-icons';
-import { DropdownMenu, IconButton } from '@radix-ui/themes';
+import { DownloadIcon } from '../icons.js';
 import { useState } from 'react';
+import { ActionIcon as IconButton, Menu } from '@mantine/core';
 import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer';
 import type { Document } from '../lib/api.js';
 import { downloadDocumentDocx } from '../lib/api.js';
@@ -83,29 +83,29 @@ export function DownloadMenu({
   }
 
   return (
-    <DropdownMenu.Root>
-      {/* Radix Tooltip wraps would break the DropdownMenu.Trigger, so
+    <Menu position="bottom-end">
+      {/* Tooltip wrappers would break the DropdownMenu.Trigger, so
           fall back to the plain HTML `title` attribute on the icon. */}
-      <DropdownMenu.Trigger>
+      <Menu.Target>
         <IconButton
-          variant="soft"
-          size="2"
+          variant="light"
+          size="sm"
           aria-label="Download document"
           title="Download document"
           disabled={busy !== null}
         >
           <DownloadIcon />
         </IconButton>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Content align="end">
-        <DropdownMenu.Item onSelect={downloadSource} disabled={busy !== null}>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Menu.Item onClick={downloadSource} disabled={busy !== null}>
           {sourceLabel} (.{sourceExt})
-        </DropdownMenu.Item>
-        <DropdownMenu.Item onSelect={downloadDocx} disabled={busy !== null}>
+        </Menu.Item>
+        <Menu.Item onClick={downloadDocx} disabled={busy !== null}>
           Word document (.docx)
-        </DropdownMenu.Item>
-      </DropdownMenu.Content>
-    </DropdownMenu.Root>
+        </Menu.Item>
+      </Menu.Dropdown>
+    </Menu>
   );
 }
 

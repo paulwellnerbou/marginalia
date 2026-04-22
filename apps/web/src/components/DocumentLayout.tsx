@@ -9,17 +9,17 @@ import {
 } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  ActionIcon as IconButton,
   Badge,
   Button,
   Flex,
-  IconButton,
   Select,
   Slider,
   Tabs,
   Text,
-  TextField,
+  TextInput,
   Tooltip,
-} from '@radix-ui/themes';
+} from '@mantine/core';
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -27,7 +27,8 @@ import {
   LetterCaseToggleIcon,
   MagnifyingGlassIcon,
   TokensIcon,
-} from '@radix-ui/react-icons';
+  UpdateIcon,
+} from '../icons.js';
 import type {
   CommentAnchor,
   Document,
@@ -836,13 +837,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       <div className="doc-layout" style={gridStyle}>
         <aside className={`pane pane-toc ${tocOpen ? 'open' : 'closed'}`}>
           <Flex align="center" gap="2" px="2" py="2" className="pane-header">
-            <Tooltip content={tocOpen ? 'Collapse' : 'Expand contents'}>
-              <IconButton variant="ghost" size="1" onClick={() => setTocOpen((v) => !v)}>
+            <Tooltip label={tocOpen ? 'Collapse' : 'Expand contents'}>
+              <IconButton variant="subtle" color="gray" size="xs" onClick={() => setTocOpen((v) => !v)}>
                 {tocOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
               </IconButton>
             </Tooltip>
             {tocOpen && (
-              <Text size="1" color="gray" weight="medium">
+              <Text size="xs" c="dimmed" fw={500}>
                 Contents
               </Text>
             )}
@@ -856,80 +857,84 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               only over the document column, not above the side panes. */}
           <Flex align="center" gap="3" px="3" py="2" className="doc-chrome">
             <Flex align="center" gap="2" className="width-slider">
-              <Text size="1" color="gray">
+              <Text size="xs" c="dimmed">
                 Reading width
               </Text>
               <Slider
-                size="1"
+                size="xs"
                 style={{ width: 116 }}
                 min={40}
                 max={120}
                 step={1}
-                value={[maxWidth]}
-                onValueChange={(v) => setMaxWidth(v[0] ?? maxWidth)}
+                label={null}
+                value={maxWidth}
+                onChange={setMaxWidth}
               />
               <Text
-                size="1"
-                color="gray"
+                size="xs"
+                c="dimmed"
                 style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}
               >
                 {maxWidth}ch
               </Text>
             </Flex>
             <Flex align="center" gap="2" className="width-slider">
-              <Text size="1" color="gray">
+              <Text size="xs" c="dimmed">
                 Text size
               </Text>
               <Slider
-                size="1"
+                size="xs"
                 style={{ width: 92 }}
                 min={80}
                 max={140}
                 step={1}
-                value={[textZoom]}
-                onValueChange={(v) => setTextZoom(v[0] ?? textZoom)}
+                label={null}
+                value={textZoom}
+                onChange={setTextZoom}
               />
               <Text
-                size="1"
-                color="gray"
+                size="xs"
+                c="dimmed"
                 style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}
               >
                 {textZoom}%
               </Text>
-              <Button
-                size="1"
-                variant="ghost"
-                onClick={() => setTextZoom(100)}
-                disabled={textZoom === 100}
-              >
-                Reset
-              </Button>
+              <Tooltip label="Reset text size">
+                <IconButton
+                  size="xs"
+                  variant="subtle"
+                  color="gray"
+                  aria-label="Reset text size"
+                  onClick={() => setTextZoom(100)}
+                  disabled={textZoom === 100}
+                >
+                  <UpdateIcon />
+                </IconButton>
+              </Tooltip>
             </Flex>
             <Flex align="center" gap="2">
-              <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
+              <Text size="xs" c="dimmed" component="label" htmlFor="doc-theme-select">
                 Theme
               </Text>
-              <Select.Root
+              <Select
+                id="doc-theme-select"
                 value={theme}
-                size="1"
-                onValueChange={(next) => {
+                size="xs"
+                onChange={(next) => {
+                  if (!next) return;
                   setTheme(next);
                   setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
                 }}
-              >
-                <Select.Trigger id="doc-theme-select" variant="soft" />
-                <Select.Content position="popper" style={{ maxHeight: 360 }}>
-                  {BUILT_IN_THEMES.map((t) => (
-                    <Select.Item key={t.id} value={t.id}>
-                      {t.label}
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select.Root>
+                data={BUILT_IN_THEMES.map((themeOption) => ({
+                  value: themeOption.id,
+                  label: themeOption.label,
+                }))}
+                styles={{ dropdown: { maxHeight: 360, overflowY: 'auto' } }}
+              />
             </Flex>
             <span className="spacer" />
             {error && (
-              <Text size="1" color="red">
+              <Text size="xs" c="red">
                 {error}
               </Text>
             )}
@@ -945,11 +950,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 <AccessControlDialog doc={doc} onChange={onDocSettingsChanged} />
               </>
             )}
-            <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
+            <Tooltip label={docSearchOpen ? 'Close document search' : 'Search document'}>
               <IconButton
-                variant="soft"
+                variant="light"
                 color={APP_ACCENT_COLOR}
-                size="2"
+                size="sm"
                 className={`doc-search-trigger ${docSearchOpen ? 'active' : ''}`}
                 onClick={() => {
                   if (docSearchOpen) {
@@ -967,27 +972,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           {docSearchOpen && (
             <div className="doc-search-popover">
               <Flex align="center" gap="2" className="doc-search-toolbar">
-                <TextField.Root
+                <TextInput
                   ref={docSearchInputRef}
-                  size="1"
+                  size="xs"
                   type="search"
                   value={docSearchQuery}
-                  onChange={(event) => setDocSearchQuery(event.target.value)}
+                  onChange={(event: any) => setDocSearchQuery(event.target.value)}
                   placeholder="Search this document"
                   className="doc-search-field"
-                >
-                  <TextField.Slot>
-                    <MagnifyingGlassIcon />
-                  </TextField.Slot>
-                </TextField.Root>
+                  leftSection={<MagnifyingGlassIcon />}
+                />
                 <Tooltip
-                  content={
+                  label={
                     docSearchCaseSensitive ? 'Disable case sensitivity' : 'Enable case sensitivity'
                   }
                 >
                   <IconButton
-                    size="1"
-                    variant={docSearchCaseSensitive ? 'soft' : 'ghost'}
+                    size="xs"
+                    variant={docSearchCaseSensitive ? 'light' : 'subtle'}
                     color={docSearchCaseSensitive ? APP_ACCENT_COLOR : 'gray'}
                     className={`doc-search-option ${docSearchCaseSensitive ? 'active' : ''}`}
                     aria-label={
@@ -1005,13 +1007,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   </IconButton>
                 </Tooltip>
                 <Tooltip
-                  content={
+                  label={
                     docSearchWholeWords ? 'Disable whole-word matching' : 'Match whole words only'
                   }
                 >
                   <IconButton
-                    size="1"
-                    variant={docSearchWholeWords ? 'soft' : 'ghost'}
+                    size="xs"
+                    variant={docSearchWholeWords ? 'light' : 'subtle'}
                     color={docSearchWholeWords ? APP_ACCENT_COLOR : 'gray'}
                     className={`doc-search-option ${docSearchWholeWords ? 'active' : ''}`}
                     aria-label={
@@ -1026,14 +1028,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     <TokensIcon />
                   </IconButton>
                 </Tooltip>
-                <Text size="1" color="gray" className="doc-search-count">
+                <Text size="xs" c="dimmed" className="doc-search-count">
                   {searchResults.length === 0
                     ? '0 results'
                     : `${activeSearchIndex >= 0 ? activeSearchIndex + 1 : 1}/${searchResults.length}`}
                 </Text>
                 <IconButton
-                  size="1"
-                  variant="ghost"
+                  size="xs"
+                  variant="subtle"
                   color="gray"
                   aria-label="Previous search result"
                   onClick={() => navigateSearchResult(-1)}
@@ -1042,8 +1044,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   <ChevronLeftIcon />
                 </IconButton>
                 <IconButton
-                  size="1"
-                  variant="ghost"
+                  size="xs"
+                  variant="subtle"
                   color="gray"
                   aria-label="Next search result"
                   onClick={() => navigateSearchResult(1)}
@@ -1052,8 +1054,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   <ChevronRightIcon />
                 </IconButton>
                 <IconButton
-                  size="1"
-                  variant="ghost"
+                  size="xs"
+                  variant="subtle"
                   color="gray"
                   aria-label="Close document search"
                   onClick={closeDocumentSearch}
@@ -1094,43 +1096,43 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             <ResizeHandle side="right" width={commentsWidth} onResize={setCommentsWidth} />
           )}
           {commentsOpen ? (
-            <Tabs.Root
+            <Tabs
               value={rightTab}
-              onValueChange={(v) => setRightTab(v as 'comments' | 'history' | 'search')}
+              onChange={(v) => setRightTab((v as 'comments' | 'history' | 'search') ?? 'comments')}
               className="right-tabs"
             >
               <Flex align="center" px="2" pt="2" className="pane-header">
-                <Tabs.List size="1">
-                  <Tabs.Trigger value="comments">
+                <Tabs.List>
+                  <Tabs.Tab value="comments">
                     <Flex align="center" gap="2">
                       Threads
                       {threadCount > 0 && (
-                        <Badge size="1" variant="soft" color="gray" radius="full">
+                        <Badge size="xs" variant="light" color="gray" radius="full">
                           {threadCount}
                         </Badge>
                       )}
                     </Flex>
-                  </Tabs.Trigger>
-                  <Tabs.Trigger value="history">History</Tabs.Trigger>
+                  </Tabs.Tab>
+                  <Tabs.Tab value="history">History</Tabs.Tab>
                   {hasSearchResults && (
-                    <Tabs.Trigger value="search">
+                    <Tabs.Tab value="search">
                       <Flex align="center" gap="2">
                         Search Results
-                        <Badge size="1" variant="soft" color="gray" radius="full">
+                        <Badge size="xs" variant="light" color="gray" radius="full">
                           {searchResults.length}
                         </Badge>
                       </Flex>
-                    </Tabs.Trigger>
+                    </Tabs.Tab>
                   )}
                 </Tabs.List>
                 <span className="spacer" />
-                <Tooltip content="Collapse">
-                  <IconButton variant="ghost" size="1" onClick={() => setCommentsOpen(false)}>
+                <Tooltip label="Collapse">
+                  <IconButton variant="subtle" color="gray" size="xs" onClick={() => setCommentsOpen(false)}>
                     <ChevronRightIcon />
                   </IconButton>
                 </Tooltip>
               </Flex>
-              <Tabs.Content value="comments" className="right-tab-panel">
+              <Tabs.Panel value="comments" className="right-tab-panel">
                 <CommentsPane
                   uid={doc.uid}
                   comments={comments}
@@ -1159,8 +1161,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onEditProposalRationale={onEditProposalRationale}
                   onScrollToAnchor={scrollToAnchor}
                 />
-              </Tabs.Content>
-              <Tabs.Content value="history" className="right-tab-panel">
+              </Tabs.Panel>
+              <Tabs.Panel value="history" className="right-tab-panel">
                 <HistoryList
                   uid={doc.uid}
                   version={historyVersion}
@@ -1170,22 +1172,22 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onOpenThread={openCommentThread}
                   {...(canEdit ? { onRestoreVersion: onRestoreHistoryVersion } : {})}
                 />
-              </Tabs.Content>
+              </Tabs.Panel>
               {hasSearchResults && (
-                <Tabs.Content value="search" className="right-tab-panel">
+                <Tabs.Panel value="search" className="right-tab-panel">
                   <DocumentSearchResultsPane
                     query={deferredDocSearchQuery}
                     results={searchResults}
                     activeResultId={activeSearchTarget?.id ?? null}
                     onSelectResult={focusSearchResult}
                   />
-                </Tabs.Content>
+                </Tabs.Panel>
               )}
-            </Tabs.Root>
+            </Tabs>
           ) : (
             <Flex align="center" justify="center" py="2">
-              <Tooltip content="Expand comments / history">
-                <IconButton variant="ghost" size="1" onClick={() => setCommentsOpen(true)}>
+              <Tooltip label="Expand comments / history">
+                <IconButton variant="subtle" color="gray" size="xs" onClick={() => setCommentsOpen(true)}>
                   <ChevronLeftIcon />
                 </IconButton>
               </Tooltip>
@@ -1197,7 +1199,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       {/*
         Proposal composer lives here (outside the right sidebar) so it
         stays mounted — and therefore openable — even when the user has
-        the Threads/History pane collapsed. Radix Dialog portals the
+        the Threads/History pane collapsed. The dialog portals the
         actual overlay to the body, so its DOM position here doesn't
         affect rendering.
       */}

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
-import { Code, IconButton, Tooltip } from '@radix-ui/themes';
-import { CheckIcon, CopyIcon } from '@radix-ui/react-icons';
+import { ActionIcon as IconButton, Code, Tooltip } from '@mantine/core';
+import { CheckIcon, CopyIcon } from '../icons.js';
 import { reportError } from '../lib/log.js';
 
 interface Props {
@@ -12,9 +12,21 @@ interface Props {
   multiline?: boolean;
   /** Accessible label for the copy action. Defaults to "Copy". */
   ariaLabel?: string;
-  /** Radix Code size. */
+  /** Shared UI size token for the code surface. */
   size?: '1' | '2' | '3';
 }
+
+const FONT_SIZE = {
+  '1': 'xs',
+  '2': 'sm',
+  '3': 'md',
+} as const;
+
+const ACTION_SIZE = {
+  '1': 'xs',
+  '2': 'sm',
+  '3': 'md',
+} as const;
 
 /**
  * A small, self-contained "copyable code block" with a subtle copy icon
@@ -39,12 +51,12 @@ export function Copyable({ text, multiline = false, ariaLabel = 'Copy', size = '
   return (
     <div className={`copyable ${multiline ? 'copyable-multiline' : 'copyable-inline'}`}>
       <div className="copyable-surface">
-        <Code size={size} className="copyable-text">{text}</Code>
-        <Tooltip content={copied ? 'Copied!' : ariaLabel}>
+        <Code fz={FONT_SIZE[size]} className="copyable-text">{text}</Code>
+        <Tooltip label={copied ? 'Copied!' : ariaLabel}>
           <IconButton
             type="button"
-            size="1"
-            variant="ghost"
+            size={ACTION_SIZE[size]}
+            variant="subtle"
             color={copied ? 'green' : 'gray'}
             aria-label={ariaLabel}
             className={`copyable-btn ${copied ? 'copyable-btn--copied' : ''}`}

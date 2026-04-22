@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Button, Container, Flex, Text } from '@radix-ui/themes';
+import { ActionIcon as IconButton, Button, Container, Flex, Text, Tooltip } from '@mantine/core';
 import {
   getDocument,
   ApiError,
@@ -15,6 +15,7 @@ import { recordVisit } from '../lib/recent-docs.js';
 import { AppBar } from '../components/AppBar.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
 import { getDisplayName, setDisplayName } from '../lib/identity.js';
+import { Pencil2Icon } from '../icons.js';
 
 export function ViewPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
@@ -109,12 +110,12 @@ export function ViewPage() {
       <>
         <AppBar />
         {uid && <PasswordPromptDialog docUid={uid} />}
-        <Container size="2" py="8">
-          <Text as="p" color="red">{error}</Text>
+        <Container size={640} py="8">
+          <Text component="p" c="red">{error}</Text>
           <Flex gap="3" mt="3">
             <Link to="/">← Home</Link>
             {uid && (
-              <Button variant="soft" onClick={() => setReloadNonce((n) => n + 1)}>
+              <Button variant="light" onClick={() => setReloadNonce((n) => n + 1)}>
                 Try again
               </Button>
             )}
@@ -128,8 +129,8 @@ export function ViewPage() {
       <>
         <AppBar />
         {uid && <PasswordPromptDialog docUid={uid} />}
-        <Container size="2" py="8">
-          <Text color="gray">Loading…</Text>
+        <Container size={640} py="8">
+          <Text c="dimmed">Loading…</Text>
         </Container>
       </>
     );
@@ -140,9 +141,18 @@ export function ViewPage() {
       <PasswordPromptDialog docUid={doc.uid} />
       <DocumentLayout doc={doc} onDocSettingsChanged={handleSettingsChanged}>
         {(doc.role === 'admin' || doc.role === 'editor') && (
-          <Button variant="soft" asChild>
-            <Link to={`/d/${doc.uid}/edit`}>Edit</Link>
-          </Button>
+          <Tooltip label="Edit document">
+            <IconButton
+              variant="light"
+              size="sm"
+              component={Link}
+              to={`/d/${doc.uid}/edit`}
+              aria-label="Edit document"
+              title="Edit document"
+            >
+              <Pencil2Icon />
+            </IconButton>
+          </Tooltip>
         )}
       </DocumentLayout>
     </>

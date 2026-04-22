@@ -1,5 +1,5 @@
-import { IconButton, Tooltip } from '@radix-ui/themes';
-import { MoonIcon, SunIcon, DesktopIcon } from '@radix-ui/react-icons';
+import { ActionIcon as IconButton, Tooltip } from '@mantine/core';
+import { MoonIcon, SunIcon, DesktopIcon } from '../icons.js';
 import { useAppearance, type Appearance } from '../lib/appearance.js';
 
 /**
@@ -19,16 +19,22 @@ const LABEL: Record<Appearance, string> = {
   auto: 'System (click for light)',
 };
 
+const MANTINE_SIZE = {
+  '1': 'xs',
+  '2': 'sm',
+  '3': 'md',
+} as const;
+
 export function AppearanceToggle({ size = '2' }: { size?: '1' | '2' | '3' }) {
   const { appearance, setAppearance } = useAppearance();
   const icon =
     appearance === 'light' ? <SunIcon /> : appearance === 'dark' ? <MoonIcon /> : <DesktopIcon />;
 
   return (
-    <Tooltip content={LABEL[appearance]}>
+    <Tooltip label={LABEL[appearance]}>
       <IconButton
-        variant="soft"
-        size={size}
+        variant="light"
+        size={MANTINE_SIZE[size]}
         onClick={() => setAppearance(CYCLE[appearance])}
         aria-label={LABEL[appearance]}
       >
