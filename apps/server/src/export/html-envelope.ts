@@ -2,14 +2,20 @@
  * Self-contained HTML document assembly for the PDF exporter.
  *
  * Takes the renderer's body HTML, the resolved theme CSS, the shared
- * print stylesheet, and per-document metadata, and produces a single
- * HTML string suitable for `page.setContent()` — no external asset
- * references (images are inlined as data URLs) and no external script
- * src (mermaid's UMD is inlined when present).
+ * print stylesheet, and per-document metadata, and produces an HTML
+ * string suitable for `page.setContent()`. Mermaid's UMD is inlined
+ * when present (no external script src).
  *
- * Google Fonts `@import url(...)` lines in the theme CSS are left
- * alone — Chromium fetches those at load time and `document.fonts.ready`
- * gates the print.
+ * What this module does NOT do: rewrite absolute / remote URLs that
+ * remain in `body`. `inlineImageAssets()` handles document-local
+ * blob refs only — any `<img src="https://…">` the author wrote is
+ * left alone here. The outbound-request firewall in `pdf.ts`
+ * (`page.route('**\/*', …)`) is what prevents those from reaching
+ * the network at render time.
+ *
+ * Google Fonts `@import url(...)` lines in the theme CSS are also
+ * left alone and ARE allowed through the firewall — Chromium
+ * fetches them and `document.fonts.ready` gates the print.
  */
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';

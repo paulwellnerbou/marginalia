@@ -138,14 +138,15 @@ Client UI (DownloadMenu) ────► GET /api/documents/:uid/export.pdf?them
                                        │ read theme CSS + _print.css
                                        ▼
                     apps/server/src/export/pdf.ts
-                          exportPdf({ html, themeCss, printCss, meta, signal })
+                          exportPdf({ body, themeCss, printCss, meta, hasMermaid, signal })
                                        │ get or lazy-init shared Browser
                                        │ semaphore.acquire()
                                        │ browser.newContext() + newPage()
-                                       │ page.setContent(assembledHtml, { waitUntil: 'networkidle' })
-                                       │ page.waitForFunction('__marginaliaMermaidReady')
+                                       │ page.route('**/*', firewall)   // allowlist fonts, block everything else
+                                       │ page.setContent(assembledHtml, { waitUntil: 'load' })
+                                       │ page.waitForFunction('__marginaliaMermaidReady')   // if hasMermaid
                                        │ page.emulateMedia({ media: 'print' })
-                                       │ page.pdf({ format: 'A4', printBackground: true })
+                                       │ page.pdf({ preferCSSPageSize: true, printBackground: true })
                                        ▼
                               Uint8Array<ArrayBuffer>
                                        │
