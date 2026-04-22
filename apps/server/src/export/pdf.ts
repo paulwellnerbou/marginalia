@@ -218,7 +218,6 @@ export async function closeExportBrowser(): Promise<void> {
   browserPromise = null;
   semaphoreGeneration += 1;
   inFlight = 0;
-  waiters.length = 0;
   if (!pending) return;
   try {
     const browser = await pending;
@@ -233,7 +232,6 @@ export async function closeExportBrowser(): Promise<void> {
 // ---------------------------------------------------------------------
 
 let inFlight = 0;
-const waiters: Array<() => void> = [];
 /**
  * Bumped by `closeExportBrowser()`. Each slot acquisition captures
  * the current generation; releases from a prior generation become
@@ -244,10 +242,9 @@ let semaphoreGeneration = 0;
 
 /**
  * Try to acquire a slot without waiting. Returns a release function on
- * success, or null if the queue is full. A waiting-queue would also
- * work but for v1 we prefer the caller (HTTP handler) to get an
- * immediate 503 rather than quietly queueing — the latter hides load
- * problems.
+ * success, or null if the cap is already reached. Deliberately no
+ * waiting-queue: the HTTP handler should surface an immediate 503
+ * rather than quietly queueing. A queue would hide load problems.
  */
 function tryAcquireSlot(): (() => void) | null {
   if (inFlight >= config.concurrency) return null;
@@ -259,13 +256,10 @@ function tryAcquireSlot(): (() => void) | null {
     released = true;
     // If teardown bumped the generation between acquire and release,
     // our slot has already been accounted for by closeExportBrowser.
-    // Don't touch inFlight or the waiters queue in that case — doing
-    // so would either drive the counter negative or wake a waiter
-    // that's now orphaned (the browser it expects to use is gone).
+    // Don't touch inFlight — doing so would drive the counter negative
+    // and silently raise the effective cap for later exports.
     if (myGeneration !== semaphoreGeneration) return;
     inFlight = Math.max(0, inFlight - 1);
-    const next = waiters.shift();
-    if (next) next();
   };
 }
 
@@ -299,33 +293,69 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
   const started = Date.now();
   let context: BrowserContext | null = null;
   let timedOut = false;
-  const timer = setTimeout(() => {
+
+  // `abortPromise` rejects when the timer fires OR the external signal
+  // aborts. Racing every major step against it makes the hard timeout
+  // actually bite even when the hang is pre-context (e.g. `getBrowser()`
+  // or `browser.newContext()` stalling). Without the race, a flipped
+  // `timedOut` flag does nothing — there's no context to close, so the
+  // pending `await` just keeps waiting forever and the semaphore slot
+  // is held past the advertised deadline.
+  //
+  // `.catch(() => void 0)` suppresses the unhandled-rejection warning
+  // when the happy path resolves before we ever observe the abort
+  // promise. The race's loser is always observed, so the catch is
+  // only for the "we completed cleanly but the timer hadn't fired
+  // yet" window.
+  let abortReject: ((err: Error) => void) | null = null;
+  const abortPromise = new Promise<never>((_, reject) => {
+    abortReject = reject;
+  });
+  abortPromise.catch(() => void 0);
+
+  const abortExport = (err: Error): void => {
+    if (timedOut) return;
     timedOut = true;
     // Best-effort abort — closing the context cancels in-flight work.
-    // The awaited page.pdf() promise rejects and we surface
-    // ExportTimeoutError below.
+    // Works for late-stage hangs (page.pdf, setContent). For
+    // pre-context hangs, the raced abortPromise is what unblocks
+    // the outer await.
     context?.close().catch(() => void 0);
+    abortReject?.(err);
+  };
+
+  const timer = setTimeout(() => {
+    abortExport(new ExportTimeoutError(Date.now() - started));
   }, config.timeoutMs);
 
   // Mirror the external signal into the same abort path. Caller cancel
   // (e.g. client disconnected) is treated the same as a timeout from
   // the exporter's POV: close the context, reject.
   const onExternalAbort = () => {
-    timedOut = true;
-    context?.close().catch(() => void 0);
+    abortExport(new ExportTimeoutError(Date.now() - started));
   };
   opts.signal?.addEventListener('abort', onExternalAbort);
 
+  /**
+   * Race any promise against the abort signal. Once the abort fires,
+   * every subsequent `race()` call short-circuits to the same
+   * rejection, so the export unwinds as soon as the currently-awaited
+   * step completes (or immediately, if the abort won).
+   */
+  const race = <T>(p: Promise<T>): Promise<T> => Promise.race([p, abortPromise]);
+
   try {
-    const browser = await getBrowser();
-    context = await browser.newContext({
-      // Disable service workers and the default permissions stack —
-      // we never want an export page to persist anything or pop a
-      // permission prompt (even in headless, the UI is absent but the
-      // plumbing still runs).
-      serviceWorkers: 'block',
-    });
-    const page = await context.newPage();
+    const browser = await race(getBrowser());
+    context = await race(
+      browser.newContext({
+        // Disable service workers and the default permissions stack —
+        // we never want an export page to persist anything or pop a
+        // permission prompt (even in headless, the UI is absent but the
+        // plumbing still runs).
+        serviceWorkers: 'block',
+      }),
+    );
+    const page = await race(context.newPage());
 
     // Outbound-request firewall. The rendered document can contain
     // user-authored absolute URLs (e.g. `<img src="http://internal/">`)
@@ -343,7 +373,7 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
     // Local asset refs never reach this layer — they were already
     // inlined as `data:` URLs by inlineImageAssets() in the HTML
     // envelope.
-    await page.route('**/*', (route) => {
+    await race(page.route('**/*', (route) => {
       const url = route.request().url();
       if (url.startsWith('data:') || url.startsWith('about:')) {
         return route.continue();
@@ -360,13 +390,13 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
         // Unparseable URL — fall through to abort.
       }
       return route.abort('blockedbyclient');
-    });
+    }));
 
     // Conditional spread — `mermaidUmd` is only present on the object
     // when we actually loaded it, so `exactOptionalPropertyTypes`
     // doesn't complain about a `string | undefined` slot on a
     // `mermaidUmd?: string` field.
-    const mermaidUmd = opts.hasMermaid ? await loadMermaidUmd() : null;
+    const mermaidUmd = opts.hasMermaid ? await race(loadMermaidUmd()) : null;
     const html = buildExportHtml({
       ...opts,
       ...(mermaidUmd !== null ? { mermaidUmd } : {}),
@@ -381,54 +411,67 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
     //
     // Google Fonts still have to finish loading for print fidelity; we
     // handle those separately via `document.fonts.ready` below.
-    await page.setContent(html, {
-      waitUntil: 'load',
-      timeout: config.timeoutMs,
-    });
+    await race(
+      page.setContent(html, {
+        waitUntil: 'load',
+        timeout: config.timeoutMs,
+      }),
+    );
 
     // Fonts: best-effort, short budget. We don't fail the export if a
     // web font never resolves — it just falls back to the theme's
     // system-font chain. The Promise.race is evaluated INSIDE the
     // page so the AbortController / module-level timer can unwind
     // cleanly if the context is closed mid-wait.
-    await page
-      .evaluate(
-        (ms) =>
-          Promise.race([
-            document.fonts.ready.then(() => true),
-            new Promise<boolean>((r) => setTimeout(() => r(false), ms)),
-          ]),
-        config.fontsWaitMs,
-      )
-      .catch(() => void 0);
+    await race(
+      page
+        .evaluate(
+          (ms) =>
+            Promise.race([
+              document.fonts.ready.then(() => true),
+              new Promise<boolean>((r) => setTimeout(() => r(false), ms)),
+            ]),
+          config.fontsWaitMs,
+        )
+        .catch(() => void 0),
+    );
 
     if (opts.hasMermaid) {
       // Wait up to `mermaidWaitMs` for the bootstrap sentinel. A bad
       // diagram inside the boot script is swallowed (see html-envelope),
       // so this only actually stalls if mermaid itself hangs — cap at
       // 15 s so a pathological doc can't eat the whole export budget.
-      await page.waitForFunction(
-        () =>
-          (window as unknown as { __marginaliaMermaidReady?: boolean }).__marginaliaMermaidReady ===
-          true,
-        undefined,
-        { timeout: config.mermaidWaitMs },
+      await race(
+        page.waitForFunction(
+          () =>
+            (window as unknown as { __marginaliaMermaidReady?: boolean })
+              .__marginaliaMermaidReady === true,
+          undefined,
+          { timeout: config.mermaidWaitMs },
+        ),
       );
     }
 
-    await page.emulateMedia({ media: 'print' });
+    await race(page.emulateMedia({ media: 'print' }));
 
     // `preferCSSPageSize: true` means @page in _print.css wins over the
     // `format` option. `margin: { … 0 }` disables the Chromium default
     // so our @page margins aren't double-applied.
-    const buf = await page.pdf({
-      preferCSSPageSize: true,
-      printBackground: true,
-      margin: { top: '0', right: '0', bottom: '0', left: '0' },
-    });
+    const buf = await race(
+      page.pdf({
+        preferCSSPageSize: true,
+        printBackground: true,
+        margin: { top: '0', right: '0', bottom: '0', left: '0' },
+      }),
+    );
 
     return buf;
   } catch (err) {
+    // A timeout/abort path produces an `ExportTimeoutError` directly
+    // from `abortPromise`, so re-throw it untouched. The second check
+    // covers the narrow window where the timer fired but something
+    // else raced to throw first.
+    if (err instanceof ExportTimeoutError) throw err;
     if (timedOut) throw new ExportTimeoutError(Date.now() - started);
 
     // Chromium crash mid-export: clear the singleton so the next call

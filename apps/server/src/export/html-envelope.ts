@@ -280,7 +280,15 @@ export function loadMermaidUmd(): Promise<string> {
       // 3. Fall back to node_modules (local dev).
       const url = await import.meta.resolve('mermaid/dist/mermaid.min.js');
       return readFile(fileURLToPath(url), 'utf8');
-    })();
+    })().catch((err) => {
+      // Don't let a rejected promise poison the cache: clearing it on
+      // failure means a later export can retry after an operator fixes
+      // the missing file or env var, without requiring a server
+      // restart. Mirrors the `browserPromise = null` reset in pdf.ts
+      // when `chromium.launch()` fails.
+      mermaidUmdCache = null;
+      throw err;
+    });
   }
   return mermaidUmdCache;
 }
