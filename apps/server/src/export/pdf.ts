@@ -1,7 +1,7 @@
 /**
  * PDF export via headless Chromium (Playwright).
  *
- * Architecture (see PROPOSAL_PDF_EXPORT.md §4):
+ * Architecture (see apps/server/PDF_EXPORT.md):
  *   - One long-lived `Browser` instance, started lazily on the first
  *     export and kept alive for the life of the server process.
  *   - Each export runs in its own `BrowserContext` + `Page` so state
