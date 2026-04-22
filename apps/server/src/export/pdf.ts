@@ -274,8 +274,10 @@ function tryAcquireSlot(): (() => void) | null {
  *   1. Acquire a semaphore slot (503 if full).
  *   2. Get the shared browser (lazy-init on first call).
  *   3. Create a fresh `BrowserContext` + `Page`.
- *   4. `page.setContent(html, { waitUntil: 'networkidle' })` — lets
- *      Google-Fonts `@import`s resolve.
+ *   4. `page.setContent(html, { waitUntil: 'load' })` — fires after
+ *      inlined subresources (our CSS + optional mermaid UMD) parse.
+ *      `'networkidle'` would be more thorough on paper but is flaky
+ *      with `setContent()` — we saw 30 s hangs on simple documents.
  *   5. Wait for `document.fonts.ready` (with a short budget).
  *   6. If the doc had mermaid blocks, wait for the bootstrapper's
  *      `window.__marginaliaMermaidReady` sentinel.
@@ -331,10 +333,23 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
   // Mirror the external signal into the same abort path. Caller cancel
   // (e.g. client disconnected) is treated the same as a timeout from
   // the exporter's POV: close the context, reject.
+  //
+  // The `.aborted` pre-check handles the case where the request was
+  // already cancelled before we got here (e.g. client gave up during
+  // the theme CSS read that happens before exportPdf is called).
+  // Without it, the `addEventListener` registers too late and we'd
+  // burn a semaphore slot producing bytes no one will read.
+  //
+  // `once: true` lets the runtime reclaim the listener immediately
+  // after firing — defensive, since we're about to abort anyway.
   const onExternalAbort = () => {
     abortExport(new ExportTimeoutError(Date.now() - started));
   };
-  opts.signal?.addEventListener('abort', onExternalAbort);
+  if (opts.signal?.aborted) {
+    onExternalAbort();
+  } else {
+    opts.signal?.addEventListener('abort', onExternalAbort, { once: true });
+  }
 
   /**
    * Race any promise against the abort signal. Once the abort fires,

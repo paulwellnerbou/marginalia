@@ -19,10 +19,18 @@ import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Matches `@import './file.css';` and `@import "./file.css";` — the
- * leading `./` or `../` is required; bare module specifiers and
- * absolute `url(...)` imports are left alone. */
-const RELATIVE_IMPORT_RE = /@import\s+(['"])((?:\.{1,2}\/)[^'"]+?)\1\s*;/g;
+/** Pattern for `@import './file.css';` and `@import "./file.css";` —
+ * the leading `./` or `../` is required; bare module specifiers and
+ * absolute `url(...)` imports are left alone.
+ *
+ * Stored as a string (not a RegExp) because each `readAndResolve()`
+ * call needs its OWN regex instance. The `g` flag makes `.exec()`
+ * mutate the instance's `lastIndex`, so a single shared regex
+ * corrupts under concurrent exports (two calls interleaving their
+ * `.exec()` loops would read / reset each other's `lastIndex` and
+ * miss imports). Constructing per call is the defensive fix.
+ */
+const RELATIVE_IMPORT_PATTERN = "@import\\s+(['\"])((?:\\.{1,2}/)[^'\"]+?)\\1\\s*;";
 
 /** In-memory cache of resolved theme CSS keyed by theme name. Flipped
  * per-process: the themes package only changes on deploy. */
@@ -109,10 +117,14 @@ async function readAndResolve(filePath: string, visited: Set<string>): Promise<s
   // Replace each relative @import with the inlined file content. We
   // collect the async work up-front, then splice the results in, so
   // the regex's lastIndex isn't invalidated by concurrent replacements.
+  //
+  // Fresh `RegExp` per call so two concurrent `loadThemeCss()` calls
+  // can't interleave and corrupt each other's `lastIndex`. See the
+  // comment on RELATIVE_IMPORT_PATTERN for the reasoning.
   const imports: Array<{ match: string; start: number; end: number; text: Promise<string> }> = [];
-  RELATIVE_IMPORT_RE.lastIndex = 0;
+  const re = new RegExp(RELATIVE_IMPORT_PATTERN, 'g');
   for (;;) {
-    const m = RELATIVE_IMPORT_RE.exec(source);
+    const m = re.exec(source);
     if (!m) break;
     const importPath = m[2]!;
     const target = resolve(baseDir, importPath);

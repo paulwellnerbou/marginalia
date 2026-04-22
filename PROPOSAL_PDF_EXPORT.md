@@ -79,8 +79,11 @@ Retracted: we'd be reinventing what Chromium already does. Instead:
 
 - Renderer keeps `mermaid: 'client'` mode (its default and only working
   mode).
-- The PDF exporter's HTML envelope includes the mermaid runtime via
-  `<script type="module">import mermaid from '…'; await mermaid.run()</script>`.
+- The PDF exporter's HTML envelope **inlines the vendored mermaid UMD
+  bundle** (`mermaid.min.js`, ~3 MB, read via `loadMermaidUmd()`) and
+  initialises it from a second inline `<script>` that calls
+  `mermaid.run()`. No external JS fetch happens during export — the
+  outbound-request firewall would block it anyway (see §7).
 - After `page.setContent(html)`, the exporter awaits a sentinel (a
   `window.__marginaliaMermaidReady` promise the inline script resolves)
   before calling `page.pdf()`.
@@ -169,18 +172,22 @@ The two exporters share: theme resolution (by name), asset resolution
 
 ## 5. Concrete changes
 
+> Updated post-implementation to match what actually shipped.
+
 | File | Change |
 |------|--------|
-| [apps/server/package.json](apps/server/package.json) | Add `"playwright": "^1.59.1"` to `dependencies`. |
-| **new** `apps/server/src/export/pdf.ts` | `exportPdf()`, shared `Browser` lifecycle, semaphore, HTML envelope assembly. |
-| **new** `apps/server/src/export/mermaid-runtime.ts` | Inline `<script type="module">` that imports mermaid from a pinned CDN and resolves the `__marginaliaMermaidReady` sentinel after `mermaid.run()`. |
+| [apps/server/package.json](apps/server/package.json) | Add `playwright`, `mermaid`, and `@marginalia/themes` to `dependencies`. |
+| **new** `apps/server/src/export/pdf.ts` | `exportPdf()`, shared `Browser` lifecycle + semaphore (with generation token), 30 s timeout, outbound-request firewall, typed error classes. |
+| **new** `apps/server/src/export/html-envelope.ts` | `buildExportHtml()`, `inlineImageAssets()`, and `loadMermaidUmd()` (resolves vendored file → `import.meta.resolve` node_modules fallback). Mermaid bootstrap lives here as an inline template, not a separate file. |
+| **new** `apps/server/src/export/theme-css.ts` | `loadThemeCss()` + `loadPrintCss()` with recursive local-`@import` inlining. |
 | [apps/server/src/routes/documents.ts:64](apps/server/src/routes/documents.ts:64) | Register `r.get('/:uid/export.pdf', …)` beside the `.docx` route. New handler `exportDocumentAsPdf()` copies the DOCX handler's auth + load + theme + filename flow. |
-| [apps/server/src/main.ts](apps/server/src/main.ts) | Call `await closeExportBrowser()` on shutdown hook. |
+| [apps/server/src/app.ts](apps/server/src/app.ts) | `App.close()` becomes async and awaits `closeExportBrowser()`. Tests updated to await teardown. (No `apps/server/src/main.ts` change — the process exits on SIGTERM, which kills the Chromium child.) |
 | **new** `packages/themes/css/_print.css` | Print-only stylesheet (see §3.6). |
-| [packages/themes/package.json](packages/themes/package.json) | Export `_print.css` under the `./css/*` subpath so the server can read it via `import.meta.resolve`. |
-| [apps/web/src/lib/api.ts:374](apps/web/src/lib/api.ts:374) | Add `downloadDocumentPdf(uid, theme)` mirroring `downloadDocumentDocx`. |
-| [apps/web/src/components/DownloadMenu.tsx:104](apps/web/src/components/DownloadMenu.tsx:104) | Add a third `DropdownMenu.Item` for "PDF document (.pdf)". |
-| **new** `apps/server/test/export-pdf.test.ts` | Minimum: endpoint returns `%PDF-`, respects theme query, honors auth. |
+| [packages/themes/package.json](packages/themes/package.json) | Export `_print.css` under the `./_print.css` subpath. |
+| [apps/web/src/lib/api.ts](apps/web/src/lib/api.ts) | Add `downloadDocumentPdf(uid, theme)` mirroring `downloadDocumentDocx`. |
+| [apps/web/src/components/DownloadMenu.tsx](apps/web/src/components/DownloadMenu.tsx) | Add a third `DropdownMenu.Item` for "PDF document (.pdf)" with typed toasts for `export-engine-missing` / `busy` / `timeout`. |
+| **new** `apps/server/test/export-pdf.test.ts` | 11 integration tests (headers, filename derivation, 404/401, theme respect, asset inlining + alt-text collision regression, mermaid rendering, path-traversal rejection, SSRF firewall). |
+| [Dockerfile](Dockerfile) | Installs `chromium-headless-shell` (not full Chrome); production-only `bun install` in the runner; vendors `mermaid.min.js` and drops the mermaid package + its transitive graph from the runtime. Final image ~1.29 GB. |
 
 ## 6. Data flow details
 
