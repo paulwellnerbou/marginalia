@@ -275,7 +275,7 @@ describe('openDatabase migrations', () => {
     expect(oldTable).toBeNull();
 
     const migratedComment = db.prepare(
-      `SELECT id, doc_uid, anchor_block_id, anchor_quote, body, status, author_client_id, author_display_name
+      `SELECT id, doc_uid, anchor_block_id, anchor_quote, body, link_status, author_client_id, author_display_name
          FROM comments
         WHERE id = ?`,
     ).get('prop-1') as {
@@ -284,7 +284,7 @@ describe('openDatabase migrations', () => {
       anchor_block_id: string | null;
       anchor_quote: string | null;
       body: string;
-      status: string;
+      link_status: string;
       author_client_id: string;
       author_display_name: string;
     };
@@ -294,7 +294,7 @@ describe('openDatabase migrations', () => {
       anchor_block_id: 'block-1',
       anchor_quote: 'Original block',
       body: 'Why this should change',
-      status: 'active',
+      link_status: 'linked',
       author_client_id: 'client-1',
       author_display_name: 'Alice',
     });
@@ -318,7 +318,7 @@ describe('openDatabase migrations', () => {
       anchor_kind: 'paragraph',
       source_snapshot: 'Original block',
       proposed_text: 'Edited block',
-      status: 'pending',
+      status: 'open',
       accepted_oid: null,
       decided_at: null,
       decided_by_name: null,

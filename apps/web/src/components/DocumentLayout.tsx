@@ -368,7 +368,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         case 'edit_proposal.created': {
           const p = event.edit_proposal as unknown as EditProposal;
           setProposals((prev) => (prev.some((x) => x.id === p.id) ? prev : [...prev, p]));
-          notify('New edit proposal', `${p.author.display_name} proposed a change.`);
+          notify('New edit proposal', `${p.comment.author.display_name} proposed a change.`);
           break;
         }
         case 'edit_proposal.updated': {
@@ -703,7 +703,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       .filter(
         (comment) =>
           comment.parent_id === null &&
-          comment.status === 'active' &&
+          comment.link_status !== 'orphaned' &&
           comment.anchor !== null &&
           comment.anchor.quote &&
           comment.anchor.end_offset > comment.anchor.start_offset,
@@ -718,16 +718,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }));
 
     for (const proposal of proposals) {
-      if (proposal.status !== 'pending') continue;
-      if (!proposal.anchor.block_id || !proposal.anchor.quote) continue;
+      if (proposal.status !== 'open') continue;
+      if (!proposal.comment.anchor?.block_id || !proposal.comment.anchor.quote) continue;
 
       highlights.push({
         scope: 'block',
         threadId: proposal.id,
-        blockId: proposal.anchor.block_id,
-        quote: proposal.anchor.quote,
+        blockId: proposal.comment.anchor.block_id,
+        quote: proposal.comment.anchor.quote,
         startOffset: 0,
-        endOffset: proposal.anchor.quote.length,
+        endOffset: proposal.comment.anchor.quote.length,
       });
     }
 

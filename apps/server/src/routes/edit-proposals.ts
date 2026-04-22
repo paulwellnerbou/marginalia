@@ -1,4 +1,3 @@
-import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
@@ -8,7 +7,8 @@ import {
   locateBlockSource,
   renderDocument,
 } from '@marginalia/renderer';
-import type { CommentRow, DocumentRow, EditProposalRow } from '../db.js';
+import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
+import type { CommentRow, DocumentRow, EditProposalThreadRow } from '../db.js';
 import { reanchor } from '../anchoring.js';
 import {
   authorize,
@@ -20,46 +20,33 @@ import {
 } from '../auth.js';
 import type { Realtime } from '../realtime.js';
 import type { AppDeps } from './documents.js';
+import { toWire as toCommentWire } from './comments.js';
 
-export function editProposalsRouter(deps: AppDeps): Hono {
-  const r = new Hono();
-
-  r.get('/:uid/edit-proposals', async (c) => listProposals(c, deps));
-  r.get('/:uid/edit-proposals/:pid/diff', async (c) => getProposalDiff(c, deps));
-  r.post('/:uid/edit-proposals', async (c) => createProposal(c, deps));
-  r.patch('/:uid/edit-proposals/:pid', async (c) => editProposal(c, deps));
-  r.delete('/:uid/edit-proposals/:pid', async (c) => deleteProposal(c, deps));
-  r.post('/:uid/edit-proposals/:pid/accept', async (c) => acceptProposal(c, deps));
-  r.post('/:uid/edit-proposals/:pid/reject', async (c) => rejectProposal(c, deps));
-
-  return r;
-}
+/**
+ * Shared proposal helpers.
+ *
+ * Proposal routes now live on `threadsRouter`. This module still owns the
+ * proposal-specific DB and reanchoring helpers because document history and
+ * thread workflows reuse them.
+ */
 
 const PROPOSAL_SELECT = `
   SELECT
-    c.id,
-    c.doc_uid,
-    c.anchor_block_id,
-    c.anchor_quote,
+    c.*,
     cep.anchor_kind,
     cep.source_snapshot,
     cep.proposed_text,
-    NULLIF(c.body, '') AS rationale,
-    c.author_client_id,
-    c.author_display_name,
-    cep.status,
+    cep.status AS proposal_status,
     cep.accepted_oid,
     cep.decided_at,
-    cep.decided_by_name,
-    c.created_at,
-    c.updated_at,
-    c.deleted_at
+    cep.decided_by_name
   FROM comments c
   INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
 `;
 
 // --- list ------------------------------------------------------------
 
+/** Lists proposal roots with their embedded root-comment data. */
 async function listProposals(c: Context, deps: AppDeps) {
   const { db } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
@@ -74,13 +61,14 @@ async function listProposals(c: Context, deps: AppDeps) {
        WHERE c.doc_uid = ? AND c.deleted_at IS NULL
        ORDER BY c.created_at ASC`,
     )
-    .all(doc.uid) as EditProposalRow[];
+    .all(doc.uid) as EditProposalThreadRow[];
 
   return c.json({ edit_proposals: rows.map(toWire) });
 }
 
 // --- create ----------------------------------------------------------
 
+/** Creates a proposal root plus its proposal-extension row. */
 async function createProposal(c: Context, deps: AppDeps) {
   const { db, store } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
@@ -123,9 +111,9 @@ async function createProposal(c: Context, deps: AppDeps) {
           anchor_start_offset, anchor_end_offset,
           anchor_heading_path, anchor_section_index, anchor_section_index_path,
           author_client_id, author_display_name,
-          body, status, resolved_at, resolved_by_name,
+          body, link_status, resolved_at, resolved_by_name,
           created_at, updated_at, deleted_at)
-       VALUES (?, ?, NULL, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, 'active', NULL, NULL, ?, ?, NULL)`,
+       VALUES (?, ?, NULL, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, 'linked', NULL, NULL, ?, ?, NULL)`,
     ).run(
       id,
       doc.uid,
@@ -140,7 +128,7 @@ async function createProposal(c: Context, deps: AppDeps) {
     db.prepare(
       `INSERT INTO comments_edit_proposals
          (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid, decided_at, decided_by_name)
-       VALUES (?, ?, ?, ?, 'pending', NULL, NULL, NULL)`,
+       VALUES (?, ?, ?, ?, 'open', NULL, NULL, NULL)`,
     ).run(id, kind, sourceSnapshot, proposed);
     db.exec('COMMIT');
   } catch (err) {
@@ -161,6 +149,7 @@ async function createProposal(c: Context, deps: AppDeps) {
 
 // --- diff ------------------------------------------------------------
 
+/** Returns the before/after text for a proposal. */
 async function getProposalDiff(c: Context, deps: AppDeps) {
   const { db } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
@@ -182,6 +171,7 @@ async function getProposalDiff(c: Context, deps: AppDeps) {
 
 // --- edit (rationale only) ------------------------------------------
 
+/** Edits only the root comment body used as proposal rationale. */
 async function editProposal(c: Context, deps: AppDeps) {
   const { db } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
@@ -228,6 +218,7 @@ async function editProposal(c: Context, deps: AppDeps) {
 
 // --- delete ----------------------------------------------------------
 
+/** Soft-deletes a proposal root. Accepted proposals are admin-delete only. */
 async function deleteProposal(c: Context, deps: AppDeps) {
   const { db } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
@@ -246,8 +237,8 @@ async function deleteProposal(c: Context, deps: AppDeps) {
   const isAdmin = decision.role === 'admin';
   if (!isAuthor && !isAdmin) return c.json({ error: 'forbidden' }, 403);
   // Accepted proposals are part of the audit trail — only admins may remove
-  // them. Authors can delete their own pending/rejected/orphaned proposals.
-  if (row.status === 'accepted' && !isAdmin) {
+  // them. Authors can delete their own open/rejected proposals.
+  if (row.proposal_status === 'accepted' && !isAdmin) {
     return c.json({ error: 'forbidden-accepted' }, 403);
   }
 
@@ -262,6 +253,7 @@ async function deleteProposal(c: Context, deps: AppDeps) {
 
 // --- reject ----------------------------------------------------------
 
+/** Rejects an open proposal without mutating document content. */
 async function rejectProposal(c: Context, deps: AppDeps) {
   const { db } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
@@ -276,7 +268,7 @@ async function rejectProposal(c: Context, deps: AppDeps) {
   if (!pid) return c.json({ error: 'not-found' }, 404);
   const row = loadProposalRow(db, pid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
-  if (row.status !== 'pending') return c.json({ error: 'not-pending' }, 400);
+  if (row.proposal_status !== 'open') return c.json({ error: 'not-open' }, 400);
 
   const now = Date.now();
   db.prepare(
@@ -284,7 +276,11 @@ async function rejectProposal(c: Context, deps: AppDeps) {
         SET status = 'rejected', decided_at = ?, decided_by_name = ?
       WHERE comment_id = ?`,
   ).run(now, decision.identity.displayName, pid);
-  db.prepare('UPDATE comments SET updated_at = ? WHERE id = ?').run(now, pid);
+  db.prepare(
+    `UPDATE comments
+        SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
+      WHERE id = ?`,
+  ).run(now, decision.identity.displayName, now, pid);
 
   const updated = loadProposalRow(db, pid, doc.uid);
   if (!updated) return c.json({ error: 'not-found' }, 404);
@@ -299,6 +295,7 @@ async function rejectProposal(c: Context, deps: AppDeps) {
 
 // --- accept ----------------------------------------------------------
 
+/** Applies an open proposal to the document and records the accepted commit. */
 async function acceptProposal(c: Context, deps: AppDeps) {
   const { db, store, realtime } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
@@ -314,7 +311,7 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   if (!pid) return c.json({ error: 'not-found' }, 404);
   const row = loadProposalRow(db, pid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
-  if (row.status !== 'pending') return c.json({ error: 'not-pending' }, 400);
+  if (row.proposal_status !== 'open') return c.json({ error: 'not-open' }, 400);
   if (!row.anchor_block_id) return c.json({ error: 'proposal-orphaned' }, 409);
 
   const source = store.read(doc.path);
@@ -323,14 +320,13 @@ async function acceptProposal(c: Context, deps: AppDeps) {
       ? (locateAllBlocksAsciidoc(source).get(row.anchor_block_id) ?? null)
       : locateBlockSource(source, row.anchor_block_id);
   if (!range) {
-    // Block no longer present — mark orphaned so the UI reflects reality.
+    // Block no longer present — mark the root comment orphaned so the UI
+    // reflects reality, but keep the proposal open so it can still be
+    // rejected.
     const now = Date.now();
-    db.prepare(`UPDATE comments_edit_proposals SET status = 'orphaned' WHERE comment_id = ?`).run(
-      pid,
-    );
     db.prepare(
       `UPDATE comments
-          SET status = 'orphaned', anchor_block_id = NULL, updated_at = ?
+          SET link_status = 'orphaned', anchor_block_id = NULL, updated_at = ?
         WHERE id = ?`,
     ).run(now, pid);
     const updated = loadProposalRow(db, pid, doc.uid);
@@ -353,6 +349,7 @@ async function acceptProposal(c: Context, deps: AppDeps) {
 
   // Re-anchor comments against the new document.
   const rendered = await renderDocument(nextSource, doc.format);
+  const presentBlocks = locateDocumentBlocks(doc, nextSource);
   const topLevelComments = db
     .prepare(
       `SELECT c.*
@@ -368,30 +365,66 @@ async function acceptProposal(c: Context, deps: AppDeps) {
   const updateCommentStmt = db.prepare(
     `UPDATE comments
         SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-            status = ?, updated_at = ?
+            link_status = ?, updated_at = ?
       WHERE id = ?`,
   );
   for (const comment of topLevelComments) {
     const upd = reanchor(comment, rendered.blocks);
-    updateCommentStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
+    updateCommentStmt.run(
+      upd.blockId,
+      upd.startOffset,
+      upd.endOffset,
+      upd.linkStatus,
+      now,
+      comment.id,
+    );
   }
 
-  // Re-anchor other pending proposals (their block hash may have shifted).
-  // Include sub-block ids (list items / table cells) so fine-grained
-  // proposals don't get orphaned on every save.
-  const knownIds =
-    doc.format === 'asciidoc'
-      ? [...locateAllBlocksAsciidoc(nextSource).keys()]
-      : [...locateAllBlocks(nextSource).keys()];
-  reanchorProposals(db, doc.uid, knownIds, now, realtime, identity.clientId);
+  const acceptedAnchor = locateAcceptedProposalAnchor(
+    presentBlocks,
+    rendered.blocks,
+    range.start,
+    range.start + row.proposed_text.length,
+  );
 
-  // Mark this proposal accepted.
+  // Mark this proposal accepted and move its root comment onto the new block
+  // so the thread stays attached after the block hash changes.
   db.prepare(
     `UPDATE comments_edit_proposals
         SET status = 'accepted', accepted_oid = ?, decided_at = ?, decided_by_name = ?
       WHERE comment_id = ?`,
   ).run(oid, now, identity.displayName, pid);
-  db.prepare('UPDATE comments SET updated_at = ? WHERE id = ?').run(now, pid);
+  db.prepare(
+    `UPDATE comments
+        SET anchor_block_id = ?,
+            anchor_start_offset = ?,
+            anchor_end_offset = ?,
+            anchor_heading_path = ?,
+            anchor_section_index = ?,
+            anchor_section_index_path = ?,
+            link_status = ?,
+            resolved_at = ?,
+            resolved_by_name = ?,
+            updated_at = ?
+      WHERE id = ?`,
+  ).run(
+    acceptedAnchor?.block.id ?? row.anchor_block_id,
+    null,
+    null,
+    acceptedAnchor ? JSON.stringify(acceptedAnchor.block.headingPath) : row.anchor_heading_path,
+    acceptedAnchor?.block.sectionIndex ?? row.anchor_section_index,
+    acceptedAnchor ? JSON.stringify(acceptedAnchor.block.sectionIndexPath) : row.anchor_section_index_path,
+    acceptedAnchor?.linkStatus ?? row.link_status,
+    now,
+    identity.displayName,
+    now,
+    pid,
+  );
+
+  // Re-anchor other open proposals (their block hash may have shifted).
+  // Include sub-block ids (list items / table cells) so fine-grained
+  // proposals don't get orphaned on every save.
+  reanchorProposals(db, doc.uid, [...presentBlocks.keys()], now, realtime, identity.clientId);
 
   const accepted = loadProposalRow(db, pid, doc.uid);
   if (!accepted) return c.json({ error: 'not-found' }, 404);
@@ -414,13 +447,13 @@ async function acceptProposal(c: Context, deps: AppDeps) {
 // --- helpers ---------------------------------------------------------
 
 /**
- * Mark any pending proposal whose anchor block is no longer present as
- * orphaned, null out its `anchor_block_id` so clients stop offering
+ * Mark any open proposal whose root-comment anchor block is no longer present
+ * as orphaned, null out its `anchor_block_id` so clients stop offering
  * jump-to-anchor against a stale id, and broadcast `edit_proposal.updated`
  * for each one so UIs update live. Used after any source edit (proposal
  * acceptance or direct save).
  *
- * Returns the orphaned proposal rows (post-update) for callers that need
+ * Returns the now-orphaned proposal rows (post-update) for callers that need
  * to do more with them.
  */
 export function reanchorProposals(
@@ -430,28 +463,22 @@ export function reanchorProposals(
   now: number,
   realtime?: Realtime,
   exceptClientId?: string,
-): EditProposalRow[] {
+): EditProposalThreadRow[] {
   const present = new Set(presentBlockIds);
-  const pending = db
+  const open = db
     .prepare(
       `${PROPOSAL_SELECT}
-       WHERE c.doc_uid = ? AND cep.status = 'pending' AND c.deleted_at IS NULL`,
+       WHERE c.doc_uid = ? AND cep.status = 'open' AND c.deleted_at IS NULL`,
     )
-    .all(docUid) as EditProposalRow[];
-  const markProposal = db.prepare(
-    `UPDATE comments_edit_proposals
-        SET status = 'orphaned'
-      WHERE comment_id = ?`,
-  );
+    .all(docUid) as EditProposalThreadRow[];
   const markComment = db.prepare(
     `UPDATE comments
-        SET status = 'orphaned', anchor_block_id = NULL, updated_at = ?
+        SET link_status = 'orphaned', anchor_block_id = NULL, updated_at = ?
       WHERE id = ?`,
   );
-  const orphaned: EditProposalRow[] = [];
-  for (const p of pending) {
+  const orphaned: EditProposalThreadRow[] = [];
+  for (const p of open) {
     if (!p.anchor_block_id || !present.has(p.anchor_block_id)) {
-      markProposal.run(p.id);
       markComment.run(now, p.id);
       const fresh = loadProposalRow(db, p.id, docUid);
       if (fresh) {
@@ -503,13 +530,13 @@ export function loadProposalRow(
   db: Database,
   proposalId: string,
   docUid: string,
-): EditProposalRow | undefined {
+): EditProposalThreadRow | undefined {
   return db
     .prepare(
       `${PROPOSAL_SELECT}
       WHERE c.id = ? AND c.doc_uid = ? AND c.deleted_at IS NULL`,
     )
-    .get(proposalId, docUid) as EditProposalRow | undefined;
+    .get(proposalId, docUid) as EditProposalThreadRow | undefined;
 }
 
 export function reopenAcceptedProposal(
@@ -517,29 +544,33 @@ export function reopenAcceptedProposal(
   docUid: string,
   proposalId: string,
   now: number,
-): EditProposalRow | null {
+): EditProposalThreadRow | null {
   const row = loadProposalRow(db, proposalId, docUid);
   if (!row) return null;
-  if (row.status !== 'accepted') return null;
+  if (row.proposal_status !== 'accepted') return null;
 
   db.prepare(
     `UPDATE comments_edit_proposals
-        SET status = 'pending', accepted_oid = NULL, decided_at = NULL, decided_by_name = NULL
+        SET status = 'open', accepted_oid = NULL, decided_at = NULL, decided_by_name = NULL
       WHERE comment_id = ?`,
   ).run(proposalId);
-  db.prepare('UPDATE comments SET updated_at = ? WHERE id = ?').run(now, proposalId);
+  db.prepare(
+    `UPDATE comments
+        SET resolved_at = NULL, resolved_by_name = NULL, updated_at = ?
+      WHERE id = ?`,
+  ).run(now, proposalId);
 
   return loadProposalRow(db, proposalId, docUid) ?? null;
 }
 
-async function resolveProposalDiffBefore(
+export async function resolveProposalDiffBefore(
   doc: DocumentRow,
-  proposal: EditProposalRow,
+  proposal: EditProposalThreadRow,
   deps: AppDeps,
 ): Promise<string> {
   const snapshot = proposal.source_snapshot ?? proposal.anchor_quote ?? '';
 
-  if (proposal.status !== 'accepted') {
+  if (proposal.proposal_status !== 'accepted') {
     const liveSource = deps.store.read(doc.path);
     const liveBlock = readProposalBlockSource(doc, liveSource, proposal.anchor_block_id);
     if (!liveBlock) return snapshot;
@@ -556,7 +587,7 @@ async function resolveProposalDiffBefore(
 
 async function resolveAcceptedProposalSnapshot(
   doc: DocumentRow,
-  proposal: EditProposalRow,
+  proposal: EditProposalThreadRow,
   deps: AppDeps,
 ): Promise<string | null> {
   if (!proposal.anchor_block_id) return null;
@@ -591,16 +622,25 @@ async function resolveAcceptedProposalSnapshot(
 
 async function readAcceptedProposalSnapshotAtCommit(
   doc: DocumentRow,
-  proposal: EditProposalRow,
+  proposal: EditProposalThreadRow,
   acceptedOid: string,
   deps: AppDeps,
 ): Promise<string | null> {
   const diff = await deps.store.diffAt(doc.path, acceptedOid);
   if (!diff) return null;
   const before = readProposalBlockSource(doc, diff.before, proposal.anchor_block_id);
-  if (!before) return null;
+  if (before) {
+    if (!diff.after.includes(proposal.proposed_text)) return null;
+    return before;
+  }
+  const afterRanges = locateDocumentBlocks(doc, diff.after);
+  const afterRange = proposal.anchor_block_id ? afterRanges.get(proposal.anchor_block_id) : null;
+  if (!afterRange) return null;
+  const beforeRanges = locateDocumentBlocks(doc, diff.before);
+  const previousRange = findBlockBySourceSpan(beforeRanges, afterRange.start, afterRange.end);
+  if (!previousRange) return null;
   if (!diff.after.includes(proposal.proposed_text)) return null;
-  return before;
+  return diff.before.slice(previousRange.range.start, previousRange.range.end);
 }
 
 function persistResolvedProposalSnapshot(
@@ -624,28 +664,80 @@ function readProposalBlockSource(
 ): string | null {
   if (!blockId) return null;
   const range =
-    doc.format === 'asciidoc'
-      ? (locateAllBlocksAsciidoc(source).get(blockId) ?? null)
-      : locateBlockSource(source, blockId);
+    locateDocumentBlocks(doc, source).get(blockId) ??
+    (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId));
   return range ? source.slice(range.start, range.end) : null;
 }
 
-export function toWire(row: EditProposalRow): Record<string, unknown> {
+function locateDocumentBlocks(doc: DocumentRow, source: string): Map<string, BlockSourceRange> {
+  return doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
+}
+
+function findBlockBySourceSpan(
+  blocks: Map<string, BlockSourceRange>,
+  start: number,
+  end: number,
+): { id: string; range: BlockSourceRange; confidence: 'linked' | 'low-confidence' } | null {
+  let exact: { id: string; range: BlockSourceRange } | null = null;
+  let sameStart: { id: string; range: BlockSourceRange } | null = null;
+  let container: { id: string; range: BlockSourceRange } | null = null;
+  let overlap:
+    | { id: string; range: BlockSourceRange; amount: number; span: number }
+    | null = null;
+
+  for (const [id, range] of blocks) {
+    if (range.start === start && range.end === end) {
+      exact = { id, range };
+      break;
+    }
+    if (range.start === start) {
+      if (!sameStart || Math.abs(range.end - end) < Math.abs(sameStart.range.end - end)) {
+        sameStart = { id, range };
+      }
+    }
+    if (range.start <= start && range.end >= end) {
+      if (!container || range.end - range.start < container.range.end - container.range.start) {
+        container = { id, range };
+      }
+    }
+    const amount = Math.min(range.end, end) - Math.max(range.start, start);
+    if (amount > 0) {
+      const span = range.end - range.start;
+      if (!overlap || amount > overlap.amount || (amount === overlap.amount && span < overlap.span)) {
+        overlap = { id, range, amount, span };
+      }
+    }
+  }
+
+  if (exact) return { ...exact, confidence: 'linked' };
+  if (sameStart) return { ...sameStart, confidence: 'linked' };
+  if (container) return { ...container, confidence: 'linked' };
+  if (overlap) return { id: overlap.id, range: overlap.range, confidence: 'low-confidence' };
+  return null;
+}
+
+function locateAcceptedProposalAnchor(
+  blocks: Map<string, BlockSourceRange>,
+  renderedBlocks: BlockInfo[],
+  start: number,
+  end: number,
+): { block: BlockInfo; linkStatus: 'linked' | 'low-confidence' } | null {
+  const located = findBlockBySourceSpan(blocks, start, end);
+  if (!located) return null;
+  const rendered = renderedBlocks.find((block) => block.id === located.id);
+  if (!rendered) return null;
+  return { block: rendered, linkStatus: located.confidence };
+}
+
+export function toWire(row: EditProposalThreadRow): Record<string, unknown> {
   return {
     id: row.id,
-    anchor: {
-      block_id: row.anchor_block_id,
-      quote: row.anchor_quote,
-      kind: row.anchor_kind,
-    },
+    comment: toCommentWire(row),
+    anchor_kind: row.anchor_kind,
     source_snapshot: row.source_snapshot,
     proposed_text: row.proposed_text,
-    rationale: row.rationale,
-    author: { client_id: row.author_client_id, display_name: row.author_display_name },
-    status: row.status,
+    status: row.proposal_status,
     decided_at: row.decided_at,
     decided_by_name: row.decided_by_name,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
   };
 }

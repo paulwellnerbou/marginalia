@@ -1,11 +1,11 @@
 import type { BlockInfo } from '@marginalia/renderer';
-import type { CommentRow, CommentStatus } from './db.js';
+import type { CommentLinkStatus, CommentRow } from './db.js';
 
 /**
  * Re-anchor a stored comment against a fresh block map.
  *
  * Outcomes (REQUIREMENTS §3.6):
- * - 'active'          — block with same ID still contains the quote
+ * - 'linked'          — block with same ID still contains the quote
  * - 'low-confidence'  — quote found elsewhere (different block, or shifted
  *                       within the same block); client should flag for confirmation
  * - 'orphaned'        — no match found; comment preserved but surfaces in
@@ -20,7 +20,7 @@ import type { CommentRow, CommentStatus } from './db.js';
  * re-anchor them independently.
  */
 export interface AnchorUpdate {
-  status: CommentStatus;
+  linkStatus: CommentLinkStatus;
   blockId: string | null;
   startOffset: number | null;
   endOffset: number | null;
@@ -44,7 +44,7 @@ export function reanchor(comment: CommentRow, blocks: BlockInfo[]): AnchorUpdate
     const idx = sameBlock.text.indexOf(quote);
     if (idx >= 0) {
       return {
-        status: 'active',
+        linkStatus: 'linked',
         blockId: sameBlock.id,
         startOffset: idx,
         endOffset: idx + quote.length,
@@ -53,7 +53,7 @@ export function reanchor(comment: CommentRow, blocks: BlockInfo[]): AnchorUpdate
     const partial = longestCommonSubstringLength(sameBlock.text, quote);
     if (partial >= quote.length * 0.7) {
       return {
-        status: 'low-confidence',
+        linkStatus: 'low-confidence',
         blockId: sameBlock.id,
         startOffset: null,
         endOffset: null,
@@ -74,7 +74,7 @@ export function reanchor(comment: CommentRow, blocks: BlockInfo[]): AnchorUpdate
     quoteMatches.sort((a, b) => b.score - a.score);
     const best = quoteMatches[0]!;
     return {
-      status: 'low-confidence',
+      linkStatus: 'low-confidence',
       blockId: best.block.id,
       startOffset: best.offset,
       endOffset: best.offset + quote.length,
@@ -98,7 +98,7 @@ export function reanchor(comment: CommentRow, blocks: BlockInfo[]): AnchorUpdate
       const best = ctxMatches[0]!;
       const start = best.offset + (comment.anchor_prefix?.length ?? 0);
       return {
-        status: 'low-confidence',
+        linkStatus: 'low-confidence',
         blockId: best.block.id,
         startOffset: start,
         endOffset: start + quote.length,
@@ -107,12 +107,12 @@ export function reanchor(comment: CommentRow, blocks: BlockInfo[]): AnchorUpdate
   }
 
   // 4. Orphaned — no match.
-  return { status: 'orphaned', blockId: null, startOffset: null, endOffset: null };
+  return { linkStatus: 'orphaned', blockId: null, startOffset: null, endOffset: null };
 }
 
 function noop(comment: CommentRow): AnchorUpdate {
   return {
-    status: comment.status,
+    linkStatus: comment.link_status,
     blockId: comment.anchor_block_id,
     startOffset: comment.anchor_start_offset,
     endOffset: comment.anchor_end_offset,

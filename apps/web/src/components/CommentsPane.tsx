@@ -123,8 +123,6 @@ export function CommentsPane(props: Props) {
     pendingAnchor,
     focusedThread,
     onCancelPending,
-    pendingProposalTarget,
-    onCancelPendingProposal,
     canEdit,
     isDocAdmin,
     viewerClientId,
@@ -133,7 +131,6 @@ export function CommentsPane(props: Props) {
     onEdit,
     onDelete,
     onResolve,
-    onCreateProposal,
     onAcceptProposal,
     onRejectProposal,
     onDeleteProposal,
@@ -536,7 +533,7 @@ function AnchorGroupView({
             onQuote={canComment ? handleQuote : undefined}
           />
         ))}
-        {canComment && !isResolved && (
+        {canComment && (
           <div className="reply-composer">
             <CommentComposer
               ref={composerRef}
@@ -570,7 +567,7 @@ function groupByAnchor(
   const active: AnchorGroup[] = [];
   const orphans: AnchorGroup[] = [];
   for (const g of tops.values()) {
-    if (g.top.status === 'orphaned') orphans.push(g);
+    if (g.top.link_status === 'orphaned') orphans.push(g);
     else active.push(g);
   }
   const sortGroups =
@@ -588,8 +585,9 @@ function groupProposalThreads(
   const orphans: ProposalThread[] = [];
   for (const proposal of proposals) {
     const thread = { proposal, replies: proposalReplies.get(proposal.id) ?? [] };
-    if (proposal.status === 'orphaned') orphans.push(thread);
-    else active.push(thread);
+    if (proposal.comment.link_status === 'orphaned' && proposal.status !== 'accepted') {
+      orphans.push(thread);
+    } else active.push(thread);
   }
   return { active, orphans };
 }
@@ -612,7 +610,7 @@ function combineThreads(
     ...proposalThreads.map((thread) => ({
       kind: 'proposal' as const,
       id: thread.proposal.id,
-      createdAt: thread.proposal.created_at,
+      createdAt: thread.proposal.comment.created_at,
       latestActivityAt: proposalLatestActivityTs(thread),
       anchor: anchorOrderFromProposal(thread.proposal),
       thread,
@@ -721,7 +719,7 @@ function latestActivityTs(group: AnchorGroup): number {
 }
 
 function proposalLatestActivityTs(thread: ProposalThread): number {
-  let latest = thread.proposal.updated_at;
+  let latest = thread.proposal.comment.updated_at;
   for (const reply of thread.replies) {
     if (reply.created_at > latest) latest = reply.created_at;
   }
@@ -730,9 +728,7 @@ function proposalLatestActivityTs(thread: ProposalThread): number {
 
 function shouldThreadAutoCollapse(thread: ThreadListItem): boolean {
   if (thread.kind === 'comment') return thread.group.top.resolved_at !== null;
-  return (
-    thread.thread.proposal.status === 'accepted' || thread.thread.proposal.status === 'rejected'
-  );
+  return thread.thread.proposal.comment.resolved_at !== null;
 }
 
 function anchorOrderFromComment(anchor: CommentAnchor | null): ThreadAnchorOrder {
@@ -746,7 +742,7 @@ function anchorOrderFromComment(anchor: CommentAnchor | null): ThreadAnchorOrder
 
 function anchorOrderFromProposal(proposal: EditProposal): ThreadAnchorOrder {
   return {
-    blockId: proposal.anchor.block_id,
+    blockId: proposal.comment.anchor?.block_id ?? null,
     sectionIndex: null,
     sectionIndexPath: [],
     startOffset: null,

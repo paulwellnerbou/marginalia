@@ -254,13 +254,20 @@ async function updateDocument(c: Context, deps: AppDeps) {
   const updateStmt = db.prepare(
     `UPDATE comments
         SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-            status = ?, updated_at = ?
+            link_status = ?, updated_at = ?
       WHERE id = ?`,
   );
   const now = Date.now();
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
+    updateStmt.run(
+      upd.blockId,
+      upd.startOffset,
+      upd.endOffset,
+      upd.linkStatus,
+      now,
+      comment.id,
+    );
   }
 
   // Include sub-block ids so proposals on list items / table cells don't
@@ -477,7 +484,7 @@ async function exportDocument(c: Context, deps: AppDeps) {
       author_client_id: row.author_client_id,
       author_display_name: row.author_display_name,
       body: row.body,
-      status: row.status,
+      link_status: row.link_status,
       resolved_at: row.resolved_at,
       resolved_by_name: row.resolved_by_name,
       created_at: row.created_at,
@@ -739,7 +746,7 @@ async function importDocument(c: Context, deps: AppDeps) {
         anchor_block_id, anchor_quote, anchor_prefix, anchor_suffix,
         anchor_start_offset, anchor_end_offset,
         anchor_heading_path, anchor_section_index, anchor_section_index_path,
-        author_client_id, author_display_name, body, status,
+        author_client_id, author_display_name, body, link_status,
         resolved_at, resolved_by_name,
         created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -774,7 +781,13 @@ async function importDocument(c: Context, deps: AppDeps) {
       row.author_client_id,
       row.author_display_name,
       row.body,
-      typeof row.status === 'string' ? row.status : 'active',
+      normalizeImportedLinkStatus(
+        typeof row.link_status === 'string'
+          ? row.link_status
+          : typeof row.status === 'string'
+            ? row.status
+            : null,
+      ),
       typeof row.resolved_at === 'number' ? row.resolved_at : null,
       typeof row.resolved_by_name === 'string' ? row.resolved_by_name : null,
       typeof row.created_at === 'number' ? row.created_at : now,
@@ -810,6 +823,11 @@ function parseStringArray(raw: string | null): string[] | null {
   } catch {
     return null;
   }
+}
+
+function normalizeImportedLinkStatus(raw: string | null): 'linked' | 'low-confidence' | 'orphaned' {
+  if (raw === 'low-confidence' || raw === 'orphaned') return raw;
+  return 'linked';
 }
 
 function parseNumberArray(raw: string | null): number[] | null {
@@ -908,12 +926,19 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   const updateStmt = db.prepare(
     `UPDATE comments
         SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-            status = ?, updated_at = ?
+            link_status = ?, updated_at = ?
       WHERE id = ?`,
   );
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
+    updateStmt.run(
+      upd.blockId,
+      upd.startOffset,
+      upd.endOffset,
+      upd.linkStatus,
+      now,
+      comment.id,
+    );
   }
 
   const knownIds =
@@ -976,12 +1001,19 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
   const updateStmt = db.prepare(
     `UPDATE comments
         SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-            status = ?, updated_at = ?
+            link_status = ?, updated_at = ?
       WHERE id = ?`,
   );
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.status, now, comment.id);
+    updateStmt.run(
+      upd.blockId,
+      upd.startOffset,
+      upd.endOffset,
+      upd.linkStatus,
+      now,
+      comment.id,
+    );
   }
 
   const reopenedProposalId =
@@ -997,7 +1029,7 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
 
   if (reopenedProposalId) {
     const reopened = loadProposalRow(db, reopenedProposalId, doc.uid);
-    if (reopened && reopened.status === 'pending') {
+    if (reopened && reopened.proposal_status === 'open') {
       realtime.broadcast(
         doc.uid,
         { type: 'edit_proposal.updated', edit_proposal: toEditProposalWire(reopened) },

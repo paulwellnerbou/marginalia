@@ -575,27 +575,29 @@ describe('documents API', () => {
     expect(bobDocRes.status).toBe(200);
 
     const proposeRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/edit-proposals`, {
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
         headers: bobHeaders,
         body: JSON.stringify({
-          anchor_block_id: blockId,
-          anchor_quote: 'alpha',
-          proposed_text: 'First replacement\nSecond line',
+          anchor: { block_id: blockId, quote: 'alpha' },
+          proposal: {
+            proposed_text: 'First replacement\nSecond line',
+          },
         }),
       }),
     );
     expect(proposeRes.status).toBe(201);
     const proposal = (await proposeRes.json()) as {
-      edit_proposal: { id: string };
+      thread: { id: string };
     };
 
     const acceptRes = await app.hono.fetch(
       new Request(
-        `http://test/api/documents/${created.uid}/edit-proposals/${proposal.edit_proposal.id}/accept`,
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
         {
           method: 'POST',
           headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
         },
       ),
     );
@@ -626,9 +628,82 @@ describe('documents API', () => {
     };
     const accepted = history.find((entry) => entry.action === 'accept-proposal');
     expect(accepted?.proposal).toEqual({
-      id: proposal.edit_proposal.id,
+      id: proposal.thread.id,
       author: { client_id: CLIENT_B.id, display_name: 'Robert' },
       summary: 'First replacement',
+    });
+  });
+
+  test('accepting a proposal reanchors the thread to the updated block when the block id changes', async () => {
+    const source = '## 2. Loesungskonzept & App-Architektur (Q1 - 30 %)\n\nBody.\n';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const currentBlocks = [...locateAllBlocks(source).entries()];
+    const original = currentBlocks.find(
+      ([, range]) => range.kind === 'heading' && range.text.includes('30 %'),
+    );
+    expect(original).toBeDefined();
+    const [blockId, block] = original!;
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: block.text },
+          proposal: {
+            proposed_text: '## 2. Loesungskonzept & App-Architektur (Q1 - 30%)',
+          },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as {
+      thread: { id: string };
+    };
+
+    const acceptedSource = '## 2. Loesungskonzept & App-Architektur (Q1 - 30%)\n\nBody.\n';
+    const expectedAcceptedBlockId = [...locateAllBlocks(acceptedSource).entries()].find(
+      ([, range]) => range.kind === 'heading' && range.text.includes('30%'),
+    )?.[0];
+    expect(expectedAcceptedBlockId).toBeString();
+
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+    const accepted = (await acceptRes.json()) as {
+      thread: {
+        state: string;
+        link_status: string;
+        anchor: { block_id: string | null; quote: string | null } | null;
+      };
+    };
+    expect(accepted.thread.state).toBe('resolved');
+    expect(accepted.thread.link_status).toBe('linked');
+    expect(accepted.thread.anchor?.block_id).toBe(expectedAcceptedBlockId);
+    expect(accepted.thread.anchor?.block_id).not.toBe(blockId);
+    expect(accepted.thread.anchor?.quote).toBe(block.text);
+
+    const stored = app.db
+      .prepare(
+        `SELECT anchor_block_id, link_status
+         FROM comments
+        WHERE id = ?`,
+      )
+      .get(proposal.thread.id) as {
+      anchor_block_id: string | null;
+      link_status: string;
+    };
+    expect(stored).toEqual({
+      anchor_block_id: expectedAcceptedBlockId,
+      link_status: 'linked',
     });
   });
 
@@ -813,27 +888,27 @@ describe('documents API', () => {
     expect(bobDocRes.status).toBe(200);
 
     const proposeRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/edit-proposals`, {
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
         headers: bobHeaders,
         body: JSON.stringify({
-          anchor_block_id: blockId,
-          anchor_quote: 'alpha',
-          proposed_text: 'beta',
+          anchor: { block_id: blockId, quote: 'alpha' },
+          proposal: { proposed_text: 'beta' },
         }),
       }),
     );
     expect(proposeRes.status).toBe(201);
     const proposal = (await proposeRes.json()) as {
-      edit_proposal: { id: string };
+      thread: { id: string };
     };
 
     const acceptRes = await app.hono.fetch(
       new Request(
-        `http://test/api/documents/${created.uid}/edit-proposals/${proposal.edit_proposal.id}/accept`,
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
         {
           method: 'POST',
           headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
         },
       ),
     );
@@ -855,7 +930,7 @@ describe('documents API', () => {
     const latestAccepted = historyBefore.history[0];
     const previousOid = historyBefore.history[1]?.oid;
     expect(latestAccepted?.action).toBe('accept-proposal');
-    expect(latestAccepted?.proposal?.id).toBe(proposal.edit_proposal.id);
+    expect(latestAccepted?.proposal?.id).toBe(proposal.thread.id);
     expect(previousOid).toBeString();
 
     const revertRes = await app.hono.fetch(
@@ -873,7 +948,7 @@ describe('documents API', () => {
       reopened_proposal_id: string | null;
     };
     expect(reverted.oid).toBeString();
-    expect(reverted.reopened_proposal_id).toBe(proposal.edit_proposal.id);
+    expect(reverted.reopened_proposal_id).toBe(proposal.thread.id);
 
     const docRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}`, {
@@ -890,14 +965,14 @@ describe('documents API', () => {
          FROM comments_edit_proposals
         WHERE comment_id = ?`,
       )
-      .get(proposal.edit_proposal.id) as {
+      .get(proposal.thread.id) as {
       status: string;
       accepted_oid: string | null;
       decided_at: number | null;
       decided_by_name: string | null;
     };
     expect(proposalRow).toEqual({
-      status: 'pending',
+      status: 'open',
       accepted_oid: null,
       decided_at: null,
       decided_by_name: null,
@@ -924,7 +999,7 @@ describe('documents API', () => {
     });
     expect(
       historyAfter.history.find((entry) => entry.oid === latestAccepted?.oid)?.proposal?.id,
-    ).toBe(proposal.edit_proposal.id);
+    ).toBe(proposal.thread.id);
   });
 
   test('accepted proposal diff reconstructs the original table-cell source for legacy rows', async () => {
@@ -940,29 +1015,31 @@ describe('documents API', () => {
     expect(blockId).toBeString();
 
     const proposeRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/edit-proposals`, {
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
         body: JSON.stringify({
-          anchor_block_id: blockId,
-          anchor_quote: '5.3',
-          anchor_kind: 'tableCell',
-          proposed_text: '[5.3](#53-hosting-betrieb)',
+          anchor: { block_id: blockId, quote: '5.3' },
+          proposal: {
+            anchor_kind: 'tableCell',
+            proposed_text: '[5.3](#53-hosting-betrieb)',
+          },
         }),
       }),
     );
     expect(proposeRes.status).toBe(201);
     const proposal = (await proposeRes.json()) as {
-      edit_proposal: { id: string; source_snapshot: string | null };
+      thread: { id: string; proposal: { source_snapshot: string | null } };
     };
-    expect(proposal.edit_proposal.source_snapshot).toBe('[5.3](#53-hosting--betrieb)');
+    expect(proposal.thread.proposal.source_snapshot).toBe('[5.3](#53-hosting--betrieb)');
 
     const acceptRes = await app.hono.fetch(
       new Request(
-        `http://test/api/documents/${created.uid}/edit-proposals/${proposal.edit_proposal.id}/accept`,
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
         {
           method: 'POST',
           headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
         },
       ),
     );
@@ -977,11 +1054,11 @@ describe('documents API', () => {
           SET source_snapshot = NULL, accepted_oid = NULL
         WHERE comment_id = ?`,
       )
-      .run(proposal.edit_proposal.id);
+      .run(proposal.thread.id);
 
     const diffRes = await app.hono.fetch(
       new Request(
-        `http://test/api/documents/${created.uid}/edit-proposals/${proposal.edit_proposal.id}/diff`,
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/diff`,
         {
           headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
         },
@@ -1148,21 +1225,22 @@ describe('documents API', () => {
     const doc = (await docRes.json()) as { rendered: { blocks: Array<{ id: string }> } };
     const blockId = doc.rendered.blocks[0]!.id;
     await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/comments`, {
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
         body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Hi' }, body: 'a' }),
       }),
     );
     await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/edit-proposals`, {
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
         body: JSON.stringify({
-          anchor_block_id: blockId,
-          anchor_quote: 'Hi',
-          anchor_kind: 'heading',
-          proposed_text: '# Hello',
+          anchor: { block_id: blockId, quote: 'Hi' },
+          proposal: {
+            anchor_kind: 'heading',
+            proposed_text: '# Hello',
+          },
         }),
       }),
     );
@@ -1296,7 +1374,7 @@ describe('documents API', () => {
 
     async function postComment(token: string) {
       return app.hono.fetch(
-        new Request(`http://test/api/documents/${created.uid}/comments`, {
+        new Request(`http://test/api/documents/${created.uid}/threads`, {
           method: 'POST',
           headers: withInvite(headersFor(CLIENT_B), token),
           body: JSON.stringify({ anchor: { block_id: block, quote: 'Hi' }, body: 'x' }),
@@ -1343,7 +1421,7 @@ describe('documents API', () => {
     };
     const firstBlock = doc.rendered.blocks[0]!;
     await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/comments`, {
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
         body: JSON.stringify({
@@ -1727,14 +1805,14 @@ describe('documents API', () => {
     expect(docBody.display_name).toBeNull();
     const blockId = docBody.rendered.blocks[0]!.id;
 
-    // POST /comments WITHOUT a client-name header → 400 identity-required.
+    // POST /threads WITHOUT a client-name header → 400 identity-required.
     const noName = new Headers({
       'content-type': 'application/json',
       [CLIENT_HEADER]: CLIENT_B.id,
       [INVITE_HEADER]: invite.token,
     });
     const noNameRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/comments`, {
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
         headers: noName,
         body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Hi' }, body: 'x' }),
@@ -1743,20 +1821,20 @@ describe('documents API', () => {
     expect(noNameRes.status).toBe(400);
     expect((await noNameRes.json()).error).toBe('identity-required');
 
-    // POST /comments WITH a client-name header → 201, authored as that name.
+    // POST /threads WITH a client-name header → 201, authored as that name.
     const withName = withInvite(headersFor(CLIENT_B), invite.token);
     const res = await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/comments`, {
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
         headers: withName,
         body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Hi' }, body: 'x' }),
       }),
     );
     expect(res.status).toBe(201);
-    const { comment } = (await res.json()) as {
-      comment: { author: { display_name: string } };
+    const { thread } = (await res.json()) as {
+      thread: { root: { author: { display_name: string } } };
     };
-    expect(comment.author.display_name).toBe(CLIENT_B.name);
+    expect(thread.root.author.display_name).toBe(CLIENT_B.name);
   });
 
   test('admin rotation: old token stops working, new token grants admin', async () => {

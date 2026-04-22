@@ -62,14 +62,19 @@ export function EditProposalItem({
   const [editingRationale, setEditingRationale] = useState(false);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const myId = getClientId();
-  const isAuthor = proposal.author.client_id === myId;
+  const rootComment = proposal.comment;
+  const anchor = rootComment.anchor;
+  const isAuthor = rootComment.author.client_id === myId;
+  const isOpen = proposal.status === 'open';
+  const isOrphaned = rootComment.link_status === 'orphaned';
+  const showOrphanedState = isOrphaned && proposal.status !== 'accepted';
   const composerRef = useRef<ComposerHandle>(null);
 
   const originalSource = useMemo(() => {
     return resolveProposalDiffBefore({ proposal, docSource, blockRanges });
   }, [proposal, docSource, blockRanges]);
 
-  const blockId = proposal.anchor.block_id;
+  const blockId = anchor?.block_id ?? null;
   const jump = blockId ? () => onScrollToAnchor(blockId) : undefined;
   const diffBefore = resolvedDiff?.before ?? originalSource;
   const diffAfter = resolvedDiff?.after ?? proposal.proposed_text;
@@ -87,14 +92,14 @@ export function EditProposalItem({
           Rejected{proposal.decided_by_name ? ` by ${proposal.decided_by_name}` : ''}
         </Badge>
       )}
-      {proposal.status === 'orphaned' && <Badge color="gray" variant="soft">Orphaned</Badge>}
+      {showOrphanedState && <Badge color="gray" variant="soft">Orphaned</Badge>}
     </Flex>
   );
 
   const canDelete =
     (isAuthor || isDocAdmin) &&
     (proposal.status !== 'accepted' || isDocAdmin);
-  const quoteBody = (proposal.rationale ?? proposal.proposed_text).trim();
+  const quoteBody = (rootComment.body || proposal.proposed_text).trim();
   const handleQuote = () => {
     if (!quoteBody) return;
     insertQuotedText(composerRef, quoteBody);
@@ -136,7 +141,7 @@ export function EditProposalItem({
         onClick={() => void handleShowDiff()}
         loading={loadingDiff}
       />
-      {proposal.status === 'pending' && canEdit && (
+      {isOpen && canEdit && (
         <>
           <Button size="1" color="green" variant="soft" onClick={() => onAccept(proposal.id)}>
             Accept
@@ -164,7 +169,7 @@ export function EditProposalItem({
           </IconButton>
         </Tooltip>
       )}
-      {!deleteArmed && isAuthor && proposal.status === 'pending' && !editingRationale && (
+      {!deleteArmed && isAuthor && isOpen && !editingRationale && (
         <Tooltip content="Edit reason">
           <IconButton
             size="1"
@@ -191,16 +196,16 @@ export function EditProposalItem({
   );
   const surface = editingRationale ? (
     <RationaleEditor
-      initial={proposal.rationale ?? ''}
+      initial={rootComment.body}
       onCancel={() => setEditingRationale(false)}
       onSave={async (v) => {
         await onEditRationale(proposal.id, v.trim().length > 0 ? v.trim() : null);
         setEditingRationale(false);
       }}
     />
-  ) : proposal.rationale ? (
+  ) : rootComment.body.trim() ? (
     <Text as="p" className="comment-body proposal-rationale">
-      {proposal.rationale}
+      {rootComment.body}
     </Text>
   ) : (
     <Text as="p" className="comment-body proposal-rationale proposal-rationale-empty">
@@ -212,7 +217,7 @@ export function EditProposalItem({
     <>
       <DiscussionThread
         threadId={proposal.id}
-        quote={proposal.anchor.quote ? `${proposal.anchor.quote.slice(0, 120)}${proposal.anchor.quote.length > 120 ? '…' : ''}` : null}
+        quote={anchor?.quote ? `${anchor.quote.slice(0, 120)}${anchor.quote.length > 120 ? '…' : ''}` : null}
         quoteTitle="Jump to this paragraph"
         onJump={jump}
         summary={formatThreadSummary(replies.length)}
@@ -221,13 +226,13 @@ export function EditProposalItem({
         focused={threadFocused}
         flashPhase={threadFlashPhase}
         collapsed={collapsed}
-        className={`proposal proposal-${proposal.status}`}
+        className={`proposal proposal-${proposal.status}${showOrphanedState ? ' proposal-orphaned' : ''}`}
         onToggleCollapsed={onToggleCollapsed}
       >
         <DiscussionEntry
-          authorName={proposal.author.display_name}
-          authorId={proposal.author.client_id}
-          createdAt={proposal.created_at}
+          authorName={rootComment.author.display_name}
+          authorId={rootComment.author.client_id}
+          createdAt={rootComment.created_at}
           actions={actions}
           surface={surface}
           className="proposal-entry"
@@ -263,7 +268,7 @@ export function EditProposalItem({
         before={diffBefore}
         after={diffAfter}
         actions={
-          proposal.status === 'pending' && canEdit ? (
+          isOpen && canEdit ? (
             <>
               <Button
                 size="2"

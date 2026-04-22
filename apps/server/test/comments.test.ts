@@ -18,7 +18,89 @@ function rawHeadersFor(c: { id: string; name: string }): Headers {
   });
 }
 
-describe('comments API', () => {
+interface ThreadAnchorShape {
+  block_id: string | null;
+  quote: string | null;
+  prefix: string;
+  suffix: string;
+  start_offset: number | null;
+  end_offset: number | null;
+  heading_path: string[] | null;
+  section_index: number | null;
+  section_index_path: number[] | null;
+}
+
+interface ThreadCommentNodeShape {
+  id: string;
+  body: string;
+  author: { client_id: string; display_name: string };
+  created_at: number;
+  updated_at: number;
+}
+
+interface ThreadShape {
+  id: string;
+  state: 'open' | 'resolved';
+  resolution: { kind: 'resolve' | 'accept' | 'reject'; at: number; by_name: string | null } | null;
+  link_status: string;
+  anchor: ThreadAnchorShape;
+  root: ThreadCommentNodeShape;
+  proposal: { proposed_text: string } | null;
+  replies: ThreadCommentNodeShape[];
+}
+
+function threadRootToComment(thread: ThreadShape): Record<string, unknown> {
+  return {
+    id: thread.id,
+    parent_id: null,
+    parent_proposal_id: null,
+    anchor: thread.anchor,
+    author: thread.root.author,
+    body: thread.root.body,
+    link_status: thread.link_status,
+    resolved_at: thread.resolution?.kind === 'resolve' ? thread.resolution.at : null,
+    resolved_by_name: thread.resolution?.kind === 'resolve' ? thread.resolution.by_name : null,
+    created_at: thread.root.created_at,
+    updated_at: thread.root.updated_at,
+  };
+}
+
+function threadReplyToComment(thread: ThreadShape, reply: ThreadCommentNodeShape): Record<string, unknown> {
+  return {
+    id: reply.id,
+    parent_id: thread.proposal ? null : thread.id,
+    parent_proposal_id: thread.proposal ? thread.id : null,
+    anchor: null,
+    author: reply.author,
+    body: reply.body,
+    link_status: null,
+    resolved_at: null,
+    resolved_by_name: null,
+    created_at: reply.created_at,
+    updated_at: reply.updated_at,
+  };
+}
+
+function flattenThreadComments(threads: ThreadShape[]): Array<Record<string, unknown>> {
+  const comments: Array<Record<string, unknown>> = [];
+  for (const thread of threads) {
+    if (!thread.proposal) comments.push(threadRootToComment(thread));
+    for (const reply of thread.replies) comments.push(threadReplyToComment(thread, reply));
+  }
+  comments.sort(
+    (a, b) =>
+      ((a.created_at as number | undefined) ?? 0) - ((b.created_at as number | undefined) ?? 0),
+  );
+  return comments;
+}
+
+function findThreadComment(thread: ThreadShape, commentId: string): Record<string, unknown> | null {
+  if (thread.id === commentId) return threadRootToComment(thread);
+  const reply = thread.replies.find((entry) => entry.id === commentId);
+  return reply ? threadReplyToComment(thread, reply) : null;
+}
+
+describe('threads API', () => {
   let dir: string;
   let app: App;
 
@@ -111,13 +193,33 @@ describe('comments API', () => {
     body: string,
   ) {
     const res = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
         headers: headersFor(who),
         body: JSON.stringify({ anchor, body }),
       }),
     );
-    return { status: res.status, body: await res.json() };
+    const json = (await res.json()) as { thread: ThreadShape };
+    return {
+      status: res.status,
+      body: { comment: threadRootToComment(json.thread) },
+    };
+  }
+
+  async function addReply(uid: string, who: typeof ALICE, threadId: string, body: string) {
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}/respond`, {
+        method: 'POST',
+        headers: headersFor(who),
+        body: JSON.stringify({ body }),
+      }),
+    );
+    const json = (await res.json()) as { thread: ThreadShape; created_reply_id: string | null };
+    const comment = json.created_reply_id ? findThreadComment(json.thread, json.created_reply_id) : null;
+    return {
+      status: res.status,
+      body: { comment },
+    };
   }
 
   /** Like addComment but skips invite attachment — for tests that exercise
@@ -129,7 +231,7 @@ describe('comments API', () => {
     body: string,
   ) {
     const res = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
         headers: rawHeadersFor(who),
         body: JSON.stringify({ anchor, body }),
@@ -140,10 +242,10 @@ describe('comments API', () => {
 
   async function list(uid: string, who: typeof ALICE) {
     const res = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, { headers: headersFor(who) }),
+      new Request(`http://test/api/documents/${uid}/threads`, { headers: headersFor(who) }),
     );
-    const j = (await res.json()) as { comments: Array<Record<string, unknown>> };
-    return j.comments;
+    const j = (await res.json()) as { threads: ThreadShape[] };
+    return flattenThreadComments(j.threads);
   }
 
   test('create, list, and reply', async () => {
@@ -156,14 +258,8 @@ describe('comments API', () => {
     expect(top.parent_id).toBeNull();
 
     // Reply by Bob
-    const r2 = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
-        method: 'POST',
-        headers: headersFor(BOB),
-        body: JSON.stringify({ parent_id: top.id, body: 'Me too' }),
-      }),
-    );
-    expect(r2.status).toBe(201);
+    const r2 = await addReply(uid, BOB, top.id, 'Me too');
+    expect(r2.status).toBe(200);
 
     const comments = await list(uid, ALICE);
     expect(comments).toHaveLength(2);
@@ -177,23 +273,17 @@ describe('comments API', () => {
     const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hi');
     const topId = (r1.body as { comment: { id: string } }).comment.id;
 
-    const r2 = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
-        method: 'POST',
-        headers: headersFor(BOB),
-        body: JSON.stringify({ parent_id: topId, body: 'reply' }),
-      }),
-    );
-    const replyId = ((await r2.json()) as { comment: { id: string } }).comment.id;
+    const r2 = await addReply(uid, BOB, topId, 'reply');
+    const replyId = ((r2.body as { comment: { id: string } }).comment).id;
 
     const r3 = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads/${replyId}/respond`, {
         method: 'POST',
         headers: headersFor(ALICE),
-        body: JSON.stringify({ parent_id: replyId, body: 'nope' }),
+        body: JSON.stringify({ body: 'nope' }),
       }),
     );
-    expect(r3.status).toBe(400);
+    expect(r3.status).toBe(404);
   });
 
   test('author edits own comment; others cannot', async () => {
@@ -203,8 +293,8 @@ describe('comments API', () => {
     const cid = (r1.body as { comment: { id: string } }).comment.id;
 
     const editByBob = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
-        method: 'PUT',
+      new Request(`http://test/api/documents/${uid}/threads/${cid}`, {
+        method: 'PATCH',
         headers: headersFor(BOB),
         body: JSON.stringify({ body: 'hacked' }),
       }),
@@ -212,13 +302,54 @@ describe('comments API', () => {
     expect(editByBob.status).toBe(403);
 
     const editByAlice = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
-        method: 'PUT',
+      new Request(`http://test/api/documents/${uid}/threads/${cid}`, {
+        method: 'PATCH',
         headers: headersFor(ALICE),
         body: JSON.stringify({ body: 'updated' }),
       }),
     );
     expect(editByAlice.status).toBe(200);
+  });
+
+  test('reply author can edit their reply; admin can delete it', async () => {
+    const uid = await newDoc('# Title\n');
+    const blockId = await firstBlockId(uid);
+    const root = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'top');
+    const threadId = (root.body as { comment: { id: string } }).comment.id;
+
+    const reply = await addReply(uid, BOB, threadId, 'reply');
+    expect(reply.status).toBe(200);
+    const replyId = ((reply.body as { comment: { id: string } }).comment).id;
+
+    const editByAlice = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}/comments/${replyId}`, {
+        method: 'PATCH',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ body: 'not allowed' }),
+      }),
+    );
+    expect(editByAlice.status).toBe(403);
+
+    const editByBob = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}/comments/${replyId}`, {
+        method: 'PATCH',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ body: 'updated reply' }),
+      }),
+    );
+    expect(editByBob.status).toBe(200);
+
+    const deleteByAdmin = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}/comments/${replyId}`, {
+        method: 'DELETE',
+        headers: asAdmin(),
+      }),
+    );
+    expect(deleteByAdmin.status).toBe(204);
+
+    const comments = await list(uid, ALICE);
+    expect(comments).toHaveLength(1);
+    expect(comments[0]!.id).toBe(threadId);
   });
 
   test('admin (doc owner) can delete any comment, but not edit others', async () => {
@@ -232,8 +363,8 @@ describe('comments API', () => {
 
     // Alice (admin, via invite) tries to edit — forbidden (can only edit own).
     const editRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
-        method: 'PUT',
+      new Request(`http://test/api/documents/${uid}/threads/${cid}`, {
+        method: 'PATCH',
         headers: asAdmin(),
         body: JSON.stringify({ body: 'admin edit' }),
       }),
@@ -242,7 +373,7 @@ describe('comments API', () => {
 
     // Alice deletes as admin — allowed.
     const delRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
+      new Request(`http://test/api/documents/${uid}/threads/${cid}`, {
         method: 'DELETE',
         headers: asAdmin(),
       }),
@@ -278,7 +409,7 @@ describe('comments API', () => {
     expect(put.status).toBe(200);
 
     const comments = await list(uid, ALICE);
-    expect(comments[0]!.status).toBe('active');
+    expect(comments[0]!.link_status).toBe('linked');
   });
 
   test('re-anchoring: low-confidence when block changes but quote still elsewhere', async () => {
@@ -305,7 +436,7 @@ describe('comments API', () => {
     );
 
     const comments = await list(uid, ALICE);
-    expect(comments[0]!.status).toBe('low-confidence');
+    expect(comments[0]!.link_status).toBe('low-confidence');
   });
 
   test('re-anchoring: orphaned when quote disappears entirely', async () => {
@@ -329,14 +460,14 @@ describe('comments API', () => {
     );
 
     const comments = await list(uid, ALICE);
-    expect(comments[0]!.status).toBe('orphaned');
+    expect(comments[0]!.link_status).toBe('orphaned');
   });
 
   test('identity required to post', async () => {
     const uid = await newDoc('# Hi');
     const blockId = await firstBlockId(uid);
     const res = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Hi' }, body: 'x' }),
@@ -379,7 +510,7 @@ describe('comments API', () => {
     const cid = (created.body as { comment: { id: string } }).comment.id;
 
     const first = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         headers: new Headers({
           [CLIENT_HEADER]: BOB.id,
           [INVITE_HEADER]: bobInvite,
@@ -396,7 +527,7 @@ describe('comments API', () => {
     expect(firstBody.pending_mentions).toEqual([cid]);
 
     const second = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         headers: new Headers({
           [CLIENT_HEADER]: BOB.id,
           [INVITE_HEADER]: bobInvite,
@@ -417,8 +548,8 @@ describe('comments API', () => {
     const cid = (created.body as { comment: { id: string } }).comment.id;
 
     const edit = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
-        method: 'PUT',
+      new Request(`http://test/api/documents/${uid}/threads/${cid}`, {
+        method: 'PATCH',
         headers: headersFor(ALICE),
         body: JSON.stringify({ body: 'hello @Carol' }),
       }),
@@ -426,7 +557,7 @@ describe('comments API', () => {
     expect(edit.status).toBe(200);
 
     const first = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         headers: new Headers({
           [CLIENT_HEADER]: CAROL.id,
           [INVITE_HEADER]: carolInvite,
@@ -437,8 +568,8 @@ describe('comments API', () => {
     expect(firstBody.pending_mentions).toEqual([cid]);
 
     const editAgain = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${cid}`, {
-        method: 'PUT',
+      new Request(`http://test/api/documents/${uid}/threads/${cid}`, {
+        method: 'PATCH',
         headers: headersFor(ALICE),
         body: JSON.stringify({ body: 'hello again @Carol' }),
       }),
@@ -446,7 +577,7 @@ describe('comments API', () => {
     expect(editAgain.status).toBe(200);
 
     const second = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         headers: new Headers({
           [CLIENT_HEADER]: CAROL.id,
           [INVITE_HEADER]: carolInvite,
@@ -473,7 +604,7 @@ describe('comments API', () => {
     const cid = (created.body as { comment: { id: string } }).comment.id;
 
     const bobList = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         headers: new Headers({
           [CLIENT_HEADER]: BOB.id,
           [INVITE_HEADER]: bobInvite,
@@ -484,7 +615,7 @@ describe('comments API', () => {
     expect(bobBody.pending_mentions).toEqual([cid]);
 
     const carolList = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         headers: new Headers({
           [CLIENT_HEADER]: CAROL.id,
           [INVITE_HEADER]: carolInvite,
@@ -502,29 +633,34 @@ describe('comments API', () => {
     const cid = (r1.body as { comment: { id: string } }).comment.id;
 
     const resolveRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${cid}/resolve`, {
+      new Request(`http://test/api/documents/${uid}/threads/${cid}/respond`, {
         method: 'POST',
         headers: headersFor(ALICE),
-        body: JSON.stringify({ resolved: true }),
+        body: JSON.stringify({ action: 'resolve' }),
       }),
     );
     expect(resolveRes.status).toBe(200);
     const resolved = (await resolveRes.json()) as {
-      comment: { resolved_at: number | null; resolved_by_name: string | null };
+      thread: {
+        resolution: { kind: string; at: number; by_name: string | null } | null;
+      };
     };
-    expect(resolved.comment.resolved_at).toBeGreaterThan(0);
-    expect(resolved.comment.resolved_by_name).toBe('Alice');
+    expect(resolved.thread.resolution?.kind).toBe('resolve');
+    expect(resolved.thread.resolution?.at).toBeGreaterThan(0);
+    expect(resolved.thread.resolution?.by_name).toBe('Alice');
 
     const reopenRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${cid}/resolve`, {
+      new Request(`http://test/api/documents/${uid}/threads/${cid}/respond`, {
         method: 'POST',
         headers: headersFor(ALICE),
-        body: JSON.stringify({ resolved: false }),
+        body: JSON.stringify({ action: 'reopen' }),
       }),
     );
     expect(reopenRes.status).toBe(200);
-    const reopened = (await reopenRes.json()) as { comment: { resolved_at: number | null } };
-    expect(reopened.comment.resolved_at).toBeNull();
+    const reopened = (await reopenRes.json()) as {
+      thread: { resolution: { at: number } | null };
+    };
+    expect(reopened.thread.resolution).toBeNull();
   });
 
   test('admin can resolve a top-level thread they did not author', async () => {
@@ -534,18 +670,21 @@ describe('comments API', () => {
     const cid = (r1.body as { comment: { id: string } }).comment.id;
 
     const resolveRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${cid}/resolve`, {
+      new Request(`http://test/api/documents/${uid}/threads/${cid}/respond`, {
         method: 'POST',
         headers: asAdmin(),
-        body: JSON.stringify({ resolved: true }),
+        body: JSON.stringify({ action: 'resolve' }),
       }),
     );
     expect(resolveRes.status).toBe(200);
     const resolved = (await resolveRes.json()) as {
-      comment: { resolved_at: number | null; resolved_by_name: string | null };
+      thread: {
+        resolution: { kind: string; at: number; by_name: string | null } | null;
+      };
     };
-    expect(resolved.comment.resolved_at).toBeGreaterThan(0);
-    expect(resolved.comment.resolved_by_name).toBe('Alice');
+    expect(resolved.thread.resolution?.kind).toBe('resolve');
+    expect(resolved.thread.resolution?.at).toBeGreaterThan(0);
+    expect(resolved.thread.resolution?.by_name).toBe('Alice');
   });
 
   test('non-admins cannot resolve someone else’s top-level thread', async () => {
@@ -555,18 +694,16 @@ describe('comments API', () => {
     const cid = (r1.body as { comment: { id: string } }).comment.id;
 
     const resolveRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${cid}/resolve`, {
+      new Request(`http://test/api/documents/${uid}/threads/${cid}/respond`, {
         method: 'POST',
         headers: headersFor(BOB),
-        body: JSON.stringify({ resolved: true }),
+        body: JSON.stringify({ action: 'resolve' }),
       }),
     );
     expect(resolveRes.status).toBe(403);
   });
 
-  // Role gate matrix for both endpoints touched by ACCESS_CONTROL Step 1:
-  //   POST /comments         (canComment)
-  //   POST /edit-proposals   (canPropose)
+  // Role gate matrix for root thread creation and proposal creation:
   // collaborator must be allowed by both; reader must be rejected by both.
   test('collaborator invite: can comment AND can propose; reader cannot', async () => {
     const uid = await newDoc('# Title\n\nA paragraph.\n');
@@ -580,7 +717,7 @@ describe('comments API', () => {
 
     // Bob (collaborator) can comment.
     const commentRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
         headers: headersFor(BOB),
         body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, body: 'note' }),
@@ -590,14 +727,15 @@ describe('comments API', () => {
 
     // Bob (collaborator) can propose an edit.
     const proposeRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/edit-proposals`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
         headers: headersFor(BOB),
         body: JSON.stringify({
-          anchor_block_id: blockId,
-          anchor_quote: 'Title',
-          anchor_kind: 'heading',
-          proposed_text: '# Better title',
+          anchor: { block_id: blockId, quote: 'Title' },
+          proposal: {
+            anchor_kind: 'heading',
+            proposed_text: '# Better title',
+          },
         }),
       }),
     );
@@ -605,7 +743,7 @@ describe('comments API', () => {
 
     // Carol (reader) cannot comment.
     const carolComment = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
         headers: headersFor(CAROL),
         body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, body: 'no' }),
@@ -615,14 +753,15 @@ describe('comments API', () => {
 
     // Carol (reader) cannot propose.
     const carolPropose = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/edit-proposals`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
         headers: headersFor(CAROL),
         body: JSON.stringify({
-          anchor_block_id: blockId,
-          anchor_quote: 'Title',
-          anchor_kind: 'heading',
-          proposed_text: '# Nope',
+          anchor: { block_id: blockId, quote: 'Title' },
+          proposal: {
+            anchor_kind: 'heading',
+            proposed_text: '# Nope',
+          },
         }),
       }),
     );
@@ -635,23 +774,17 @@ describe('comments API', () => {
     const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'top');
     const topId = (r1.body as { comment: { id: string } }).comment.id;
 
-    const replyRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
-        method: 'POST',
-        headers: headersFor(BOB),
-        body: JSON.stringify({ parent_id: topId, body: 'reply' }),
-      }),
-    );
-    const replyId = ((await replyRes.json()) as { comment: { id: string } }).comment.id;
+    const replyRes = await addReply(uid, BOB, topId, 'reply');
+    const replyId = ((replyRes.body as { comment: { id: string } }).comment).id;
 
     const resolveRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments/${replyId}/resolve`, {
+      new Request(`http://test/api/documents/${uid}/threads/${replyId}/respond`, {
         method: 'POST',
         headers: headersFor(BOB),
-        body: JSON.stringify({ resolved: true }),
+        body: JSON.stringify({ action: 'resolve' }),
       }),
     );
-    expect(resolveRes.status).toBe(400);
+    expect(resolveRes.status).toBe(404);
   });
 
   // --- ACCESS_CONTROL Step 4: per-document users + rename propagation ---
@@ -668,7 +801,7 @@ describe('comments API', () => {
     const h = headersFor(who);
     h.set(CLIENT_NAME_HEADER, newName);
     return app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
         headers: h,
         body: JSON.stringify({ anchor, body }),
@@ -732,7 +865,7 @@ describe('comments API', () => {
     // mention row wasn't rewritten, his GET would see zero pending
     // mentions (because target_display_name='Bob' doesn't match 'Bobby').
     const getRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         headers: (() => {
           const h = headersFor(BOB);
           h.set(CLIENT_NAME_HEADER, 'Bobby');
@@ -776,7 +909,7 @@ describe('comments API', () => {
     // we didn't rewrite target_display_name='Bobby' because Bob was not
     // the sole holder at rename time.
     const carolRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/comments`, {
+      new Request(`http://test/api/documents/${uid}/threads`, {
         headers: (() => {
           const h = headersFor(CAROL);
           h.set(CLIENT_NAME_HEADER, 'Bobby');
