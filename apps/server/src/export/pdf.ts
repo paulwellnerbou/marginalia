@@ -164,6 +164,23 @@ export function configureExport(patch: Partial<Config>): void {
  * CDNs can extend this via `MARGINALIA_PDF_ALLOWED_HOSTS` (comma-
  * separated hostnames). The env override is opt-in so the default
  * posture stays restrictive.
+ *
+ * Security notes for operators adding hosts:
+ *   - Every hostname on this list is reachable from the export
+ *     Chromium. Anything on it expands the SSRF surface — a
+ *     user-authored document that manages to reference an
+ *     allowlisted host can cause a request from the worker's
+ *     network position.
+ *   - Prefer narrowly-scoped hostnames (e.g. `cdn.example.com`)
+ *     over broad ones (e.g. `example.com` — risks allowing any
+ *     subdomain under it once DNS resolves).
+ *   - Only `https:` traffic is ever allowed, even for allowlisted
+ *     hosts — see the firewall in `exportPdf`. Cleartext HTTP
+ *     stays blocked regardless of what's in this list.
+ *   - This is hostname-based; it does NOT protect against
+ *     DNS-rebinding. If that's a concern for your deployment,
+ *     the right place to layer post-resolve IP-range checks is
+ *     the same page.route handler in `exportPdf`.
  */
 export const ALLOWED_EXPORT_HOSTS = new Set<string>(
   ['fonts.googleapis.com', 'fonts.gstatic.com'].concat(
@@ -446,10 +463,12 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
       }
       try {
         const { protocol, hostname } = new URL(url);
-        if (
-          (protocol === 'https:' || protocol === 'http:') &&
-          ALLOWED_EXPORT_HOSTS.has(hostname)
-        ) {
+        // `https:` only — no cleartext HTTP even for allowlisted hosts.
+        // Protects against MITM-triggered content swaps and stops
+        // anyone with network-path access from coaxing the worker
+        // into a downgrade attack via a user-authored `http://…`
+        // asset that happens to resolve to an allowlist hostname.
+        if (protocol === 'https:' && ALLOWED_EXPORT_HOSTS.has(hostname)) {
           return route.continue();
         }
       } catch {

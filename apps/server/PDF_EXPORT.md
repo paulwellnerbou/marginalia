@@ -134,7 +134,7 @@ single-tenant deploy. Tests override via `configureExport()`.
 | `MARGINALIA_PDF_MERMAID_WAIT_MS` | `15000` | Budget for waiting on `__marginaliaMermaidReady`. |
 | `MARGINALIA_PDF_FONTS_WAIT_MS` | `3000` | Budget for `document.fonts.ready`. Exports proceed with fallback fonts if exceeded. |
 | `MARGINALIA_PDF_CHANNEL` | `chromium-headless-shell` | Playwright channel. Set to `chromium` for a local full-Chrome install; empty to let Playwright pick. |
-| `MARGINALIA_PDF_ALLOWED_HOSTS` | (empty) | Comma-separated extra hostnames the export Chromium may reach (on top of the built-in Google Fonts pair). |
+| `MARGINALIA_PDF_ALLOWED_HOSTS` | (empty) | Comma-separated extra hostnames the export Chromium may reach (on top of the built-in Google Fonts pair). **Every host added here expands the SSRF surface** — a crafted document that references an allowlisted host can make the worker fetch from it. Only `https:` traffic is allowed regardless of what's on this list; cleartext `http:` stays blocked for every host. Prefer narrowly-scoped hostnames (`cdn.example.com`) over wildcards. Does NOT protect against DNS rebinding — if that matters to your deployment, layer post-resolve IP-range checks into `page.route` in `src/export/pdf.ts`. |
 | `MARGINALIA_MERMAID_JS_PATH` | (auto) | Absolute path to `mermaid.min.js` if neither the vendored location nor the node_modules fallback works. |
 | `PLAYWRIGHT_BROWSERS_PATH` | (default) | Where Playwright finds Chromium. Docker image sets `/ms-playwright`. |
 

@@ -363,6 +363,36 @@ describe('PDF export', () => {
     expect(elapsed).toBeLessThan(10_000);
   }, 30_000);
 
+  test('firewall blocks http:// even to an allowlisted host', async () => {
+    // Defense-in-depth: the firewall only lets `https:` through,
+    // even for names on ALLOWED_EXPORT_HOSTS. Proves the policy
+    // isn't just hostname-based — a user-authored
+    // `<img src="http://fonts.googleapis.com/…">` can't ride the
+    // Google Fonts allowance to trigger cleartext traffic from
+    // the worker's network position.
+    //
+    // We point at fonts.googleapis.com over http so the hostname
+    // match would succeed under a naïve allowlist; only the
+    // protocol check stops the request. No actual network traffic
+    // reaches Google — Playwright aborts at route.abort() first.
+    const created = await upload(CLIENT_A, {
+      markdown:
+        '# Downgrade attempt\n\n![font](http://fonts.googleapis.com/evil.png)\n\nBody.\n',
+      name: 'Downgrade fixture',
+    });
+    const started = Date.now();
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.pdf`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    const elapsed = Date.now() - started;
+    expect(res.status).toBe(200);
+    const buf = Buffer.from(await res.arrayBuffer());
+    expect(buf.subarray(0, 5).toString('utf8')).toBe('%PDF-');
+    expect(elapsed).toBeLessThan(10_000);
+  }, 30_000);
+
   test('inlineImageAssets targets the src attribute even when alt text shares the ref name', async () => {
     // Regression test for the pre-`d`-flag indexOf-based inliner,
     // which would have targeted the FIRST occurrence of "logo.png"
