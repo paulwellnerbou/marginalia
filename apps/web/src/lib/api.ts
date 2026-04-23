@@ -783,7 +783,31 @@ interface ListThreadsResponse {
 }
 
 const listThreadsInflight = new Map<string, Promise<ListThreadsResponse>>();
+
+// LRU cache of the last-fetched thread list per document uid.
+// Capped at MAX_SNAPSHOT_DOCS entries; evicts the least-recently-used document
+// when the cap is exceeded. Map insertion order is used as the LRU key, so
+// every write deletes-then-reinserts to move the entry to the back.
+const MAX_SNAPSHOT_DOCS = 10;
 const threadSnapshots = new Map<string, Thread[]>();
+
+function snapshotGet(uid: string): Thread[] | undefined {
+  const threads = threadSnapshots.get(uid);
+  if (threads !== undefined) {
+    threadSnapshots.delete(uid);
+    threadSnapshots.set(uid, threads);
+  }
+  return threads;
+}
+
+function snapshotSet(uid: string, threads: Thread[]): void {
+  threadSnapshots.delete(uid);
+  threadSnapshots.set(uid, threads);
+  if (threadSnapshots.size > MAX_SNAPSHOT_DOCS) {
+    const oldest = threadSnapshots.keys().next().value;
+    if (oldest !== undefined) threadSnapshots.delete(oldest);
+  }
+}
 
 function listThreads(
   uid: string,
@@ -803,7 +827,7 @@ function listThreads(
     },
   )
     .then((res) => {
-      threadSnapshots.set(uid, res.threads);
+      snapshotSet(uid, res.threads);
       return res;
     })
     .finally(() => {
@@ -950,18 +974,18 @@ interface CommentLocation {
 }
 
 function rememberThread(uid: string, thread: Thread): void {
-  const current = threadSnapshots.get(uid) ?? [];
+  const current = snapshotGet(uid) ?? [];
   const index = current.findIndex((entry) => entry.id === thread.id);
   const next =
     index >= 0
       ? current.map((entry, idx) => (idx === index ? thread : entry))
       : [...current, thread];
   next.sort((a, b) => a.root.created_at - b.root.created_at);
-  threadSnapshots.set(uid, next);
+  snapshotSet(uid, next);
 }
 
 function forgetComment(uid: string, commentId: string): void {
-  const current = threadSnapshots.get(uid);
+  const current = snapshotGet(uid);
   if (!current) return;
 
   const next = current
@@ -971,7 +995,7 @@ function forgetComment(uid: string, commentId: string): void {
         ? { ...thread, replies: thread.replies.filter((reply) => reply.id !== commentId) }
         : thread,
     );
-  threadSnapshots.set(uid, next);
+  snapshotSet(uid, next);
 }
 
 function findCommentLocationInThreads(threads: Thread[], commentId: string): CommentLocation | null {
@@ -985,7 +1009,7 @@ function findCommentLocationInThreads(threads: Thread[], commentId: string): Com
 }
 
 async function findCommentLocation(uid: string, commentId: string): Promise<CommentLocation> {
-  const cached = threadSnapshots.get(uid);
+  const cached = snapshotGet(uid);
   const inCache = cached ? findCommentLocationInThreads(cached, commentId) : null;
   if (inCache) return inCache;
 
