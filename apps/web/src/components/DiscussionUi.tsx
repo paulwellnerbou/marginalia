@@ -43,6 +43,9 @@ export function DiscussionThread({
   onToggleCollapsed,
   children,
 }: DiscussionThreadProps) {
+  const displayQuote = typeof quote === 'string' && quote.trim().length > 0 ? quote : null;
+  const showAnchor = displayQuote !== null || onJump !== undefined;
+
   return (
     <div
       className={joinClasses(
@@ -54,7 +57,7 @@ export function DiscussionThread({
       data-comment-thread-id={threadId}
     >
       {headerBadge ? <div className="anchor-header-badge">{headerBadge}</div> : null}
-      {quote && (
+      {showAnchor && (
         <button
           type="button"
           className="anchor-quote"
@@ -65,7 +68,7 @@ export function DiscussionThread({
           <span className="jump-icon" aria-hidden>
             ↗
           </span>
-          “{quote}”
+          {displayQuote ? `“${displayQuote}”` : 'Jump to document location'}
         </button>
       )}
 

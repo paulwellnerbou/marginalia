@@ -100,6 +100,7 @@ export function EditProposalItem({
     (isAuthor || isDocAdmin) &&
     (proposal.status !== 'accepted' || isDocAdmin);
   const quoteBody = (rootComment.body || proposal.proposed_text).trim();
+  const anchorLabel = formatAnchorLabel(anchor?.quote, proposal.source_snapshot);
   const handleQuote = () => {
     if (!quoteBody) return;
     insertQuotedText(composerRef, quoteBody);
@@ -217,8 +218,8 @@ export function EditProposalItem({
     <>
       <DiscussionThread
         threadId={proposal.id}
-        quote={anchor?.quote ? `${anchor.quote.slice(0, 120)}${anchor.quote.length > 120 ? '…' : ''}` : null}
-        quoteTitle="Jump to this paragraph"
+        quote={anchorLabel}
+        quoteTitle="Jump to this location in the document"
         onJump={jump}
         summary={formatThreadSummary(replies.length)}
         toolbarActions={toolbarActions}
@@ -308,6 +309,16 @@ function insertQuotedText(
     .map((line) => `> ${line}`)
     .join('\n');
   composerRef.current?.insertText(quoted);
+}
+
+function formatAnchorLabel(
+  quote: string | null | undefined,
+  fallback: string | null | undefined,
+): string | null {
+  const raw = quote && quote.trim().length > 0 ? quote : fallback;
+  const text = raw?.trim();
+  if (!text) return null;
+  return `${text.slice(0, 120)}${text.length > 120 ? '…' : ''}`;
 }
 
 function RationaleEditor({
