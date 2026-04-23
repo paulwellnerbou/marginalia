@@ -58,14 +58,22 @@ evicts the oldest entry when the map exceeds the cap. All four call sites update
 
 ---
 
-### ~~#5 🟡 Three unconditional table scans on every startup~~ ✅ Fixed
+### #5 🟡 Three unconditional table scans on every startup
 
-~~These run on every startup even once the migration is complete.~~
+```ts
+// apps/server/src/db.ts
+db.exec(`UPDATE comments SET link_status = 'linked' WHERE link_status = 'active'`);
+db.exec(`UPDATE comments_edit_proposals SET status = 'open' WHERE status = 'pending'`);
+db.exec(`UPDATE comments_edit_proposals SET status = 'open' WHERE status = 'orphaned'`);
+```
 
-Each normalisation UPDATE is now guarded by a `SELECT 1 … LIMIT 1` existence check.
-The two proposal-status updates share a single combined check (`status IN ('pending',
-'orphaned')`). The `commentor → collaborator` invite migration received the same
-treatment for consistency.
+These run on every startup even once the migration is complete. `renameColumn`
+already guards itself with a column-existence check; these value-normalisation
+updates could do the same (e.g. check for any surviving `'active'` rows before
+running). Harmless at current scale but worth fixing before the dataset grows.
+
+**Intentionally deferred** — keeping these running unconditionally until all
+environments have been migrated.
 
 ---
 
@@ -103,7 +111,7 @@ API independently of the compatibility shim.
 | 2 | 🔴 | `store.read` inside `BEGIN` transaction in `createThread` | ✅ Fixed in 673b224 |
 | 3 | 🟡 | `acceptEditProposal` return type included `oid: string \| null` but always returned `null` | ✅ Fixed in 42a6de2 |
 | 4 | 🟡 | `threadSnapshots` module-level cache is never evicted | ✅ Fixed in 4d6712f |
-| 5 | 🟡 | Three value-normalisation `UPDATE`s run unconditionally on every startup | ✅ Fixed |
+| 5 | 🟡 | Three value-normalisation `UPDATE`s run unconditionally on every startup | Deferred |
 | 6 | ⚪ | `resolveProposalDiffBefore` fallback logic needs an explanatory comment | Open |
 | 7 | ⚪ | `submitAction` in `CommentComposer` clears draft on failure | Open |
 | 8 | ⚪ | Test suite lacks direct assertions on thread-shape responses | Open |

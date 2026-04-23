@@ -337,23 +337,11 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments_edit_proposals', 'accepted_oid', 'TEXT');
   ensureColumn(db, 'sessions', 'persistent', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'document_assets', 'mime', "TEXT NOT NULL DEFAULT 'application/octet-stream'");
-  // Normalise legacy link_status values; skip once all rows are already normalised.
-  if (db.prepare(`SELECT 1 FROM comments WHERE link_status = 'active' LIMIT 1`).get()) {
-    db.exec(`UPDATE comments SET link_status = 'linked' WHERE link_status = 'active'`);
-  }
-  // Normalise legacy proposal status values ('pending'/'orphaned' → 'open').
-  if (
-    db
-      .prepare(`SELECT 1 FROM comments_edit_proposals WHERE status IN ('pending', 'orphaned') LIMIT 1`)
-      .get()
-  ) {
-    db.exec(`UPDATE comments_edit_proposals SET status = 'open' WHERE status = 'pending'`);
-    db.exec(`UPDATE comments_edit_proposals SET status = 'open' WHERE status = 'orphaned'`);
-  }
+  db.exec(`UPDATE comments SET link_status = 'linked' WHERE link_status = 'active'`);
+  db.exec(`UPDATE comments_edit_proposals SET status = 'open' WHERE status = 'pending'`);
+  db.exec(`UPDATE comments_edit_proposals SET status = 'open' WHERE status = 'orphaned'`);
   // Legacy 'commentor' rows → 'collaborator' (same server-side behavior).
-  if (db.prepare(`SELECT 1 FROM invites WHERE role = 'commentor' LIMIT 1`).get()) {
-    db.exec(`UPDATE invites SET role = 'collaborator' WHERE role = 'commentor'`);
-  }
+  db.exec(`UPDATE invites SET role = 'collaborator' WHERE role = 'commentor'`);
   migrateInvitesKind(db);
   migrateEditProposalsToCommentExtensions(db);
   migrateProposalDecisionColumnsToComments(db);
