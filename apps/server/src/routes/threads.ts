@@ -424,7 +424,8 @@ async function editThreadReply(c: Context, deps: AppDeps) {
   }
 
   const body = await safeJson(c);
-  const next = body ? parseOptionalBody(body.body) : { ok: true as const, body: null };
+  if (!body) return c.json({ error: 'invalid-body' }, 400);
+  const next = parseOptionalBody(body.body);
   if (!next.ok) return c.json({ error: 'invalid-body' }, 400);
   if (!next.body) return c.json({ error: 'body-required' }, 400);
 

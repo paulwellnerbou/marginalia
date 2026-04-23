@@ -583,7 +583,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, refreshDoc],
+    [doc.uid, displayName, refreshDoc, refreshThreads],
   );
 
   const onRejectProposal = useCallback(

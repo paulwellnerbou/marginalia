@@ -31,8 +31,13 @@ import type {
   Warning,
 } from './types.js';
 
-const asciidoctor: ReturnType<typeof Asciidoctor> =
-  ((globalThis as any).__asciidoctor ??= Asciidoctor());
+type AsciidoctorInstance = ReturnType<typeof Asciidoctor>;
+
+declare global {
+  var __asciidoctor: AsciidoctorInstance | undefined;
+}
+
+const asciidoctor: AsciidoctorInstance = (globalThis.__asciidoctor ??= Asciidoctor());
 
 interface AdocRenderData {
   anchors?: Anchor[];

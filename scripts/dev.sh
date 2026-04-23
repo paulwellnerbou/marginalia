@@ -26,4 +26,14 @@ fi
 bun --filter @marginalia/server dev &
 server_pid=$!
 
-wait "$web_pid"
+while :; do
+  if ! kill -0 "$web_pid" 2>/dev/null; then
+    wait "$web_pid"
+    exit $?
+  fi
+  if ! kill -0 "$server_pid" 2>/dev/null; then
+    wait "$server_pid"
+    exit $?
+  fi
+  sleep 1
+done
