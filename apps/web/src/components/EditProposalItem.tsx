@@ -9,7 +9,11 @@ import type { BlockSourceRange } from '@marginalia/renderer';
 import { getEditProposalDiff, type Comment, type EditProposal } from '../lib/api.js';
 import { getClientId } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
-import { CommentComposer, type ComposerHandle } from './CommentComposer.js';
+import {
+  CommentComposer,
+  type ComposerFooterContext,
+  type ComposerHandle,
+} from './CommentComposer.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import { CommentItem } from './CommentItem.js';
 import { DiscussionEntry, DiscussionThread } from './DiscussionUi.js';
@@ -33,8 +37,8 @@ interface Props {
   canComment: boolean;
   mentionCandidates: string[];
   isDocAdmin: boolean;
-  onAccept: (id: string) => Promise<void> | void;
-  onReject: (id: string) => Promise<void> | void;
+  onAccept: (id: string, body?: string, name?: string) => Promise<void> | void;
+  onReject: (id: string, body?: string, name?: string) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
   onEditRationale: (id: string, rationale: string | null) => Promise<void> | void;
   onReply: (proposalId: string, body: string, name?: string) => Promise<void> | void;
@@ -62,14 +66,19 @@ export function EditProposalItem({
   const [editingRationale, setEditingRationale] = useState(false);
   const [deleteArmed, setDeleteArmed] = useState(false);
   const myId = getClientId();
-  const isAuthor = proposal.author.client_id === myId;
+  const rootComment = proposal.comment;
+  const anchor = rootComment.anchor;
+  const isAuthor = rootComment.author.client_id === myId;
+  const isOpen = proposal.status === 'open';
+  const isOrphaned = rootComment.link_status === 'orphaned';
+  const showOrphanedState = isOrphaned && proposal.status !== 'accepted';
   const composerRef = useRef<ComposerHandle>(null);
 
   const originalSource = useMemo(() => {
     return resolveProposalDiffBefore({ proposal, docSource, blockRanges });
   }, [proposal, docSource, blockRanges]);
 
-  const blockId = proposal.anchor.block_id;
+  const blockId = anchor?.block_id ?? null;
   const jump = blockId ? () => onScrollToAnchor(blockId) : undefined;
   const diffBefore = resolvedDiff?.before ?? originalSource;
   const diffAfter = resolvedDiff?.after ?? proposal.proposed_text;
@@ -87,14 +96,15 @@ export function EditProposalItem({
           Rejected{proposal.decided_by_name ? ` by ${proposal.decided_by_name}` : ''}
         </Badge>
       )}
-      {proposal.status === 'orphaned' && <Badge color="gray" variant="soft">Orphaned</Badge>}
+      {showOrphanedState && <Badge color="gray" variant="soft">Orphaned</Badge>}
     </Flex>
   );
 
   const canDelete =
     (isAuthor || isDocAdmin) &&
     (proposal.status !== 'accepted' || isDocAdmin);
-  const quoteBody = (proposal.rationale ?? proposal.proposed_text).trim();
+  const quoteBody = (rootComment.body || proposal.proposed_text).trim();
+  const anchorLabel = formatAnchorLabel(anchor?.quote, proposal.source_snapshot);
   const handleQuote = () => {
     if (!quoteBody) return;
     insertQuotedText(composerRef, quoteBody);
@@ -136,19 +146,50 @@ export function EditProposalItem({
         onClick={() => void handleShowDiff()}
         loading={loadingDiff}
       />
-      {proposal.status === 'pending' && canEdit && (
-        <>
-          <Button size="1" color="green" variant="soft" onClick={() => onAccept(proposal.id)}>
-            Accept
-          </Button>
-          <Button size="1" color="red" variant="soft" onClick={() => onReject(proposal.id)}>
-            Reject
-          </Button>
-        </>
-      )}
       {diffError ? <Text size="1" color="red">{diffError}</Text> : null}
     </Flex>
   );
+  const renderWorkflowActions = (context?: ComposerFooterContext) => {
+    if (!isOpen || !canEdit) return null;
+    const disabled = context ? !context.canRunAction : false;
+    const runAction = (action: 'accept' | 'reject') => {
+      if (context) {
+        void context.submitAction((body, name) =>
+          action === 'accept'
+            ? onAccept(proposal.id, body, name)
+            : onReject(proposal.id, body, name),
+        );
+      } else if (action === 'accept') {
+        void onAccept(proposal.id);
+      } else {
+        void onReject(proposal.id);
+      }
+    };
+
+    return (
+      <Flex gap="2" align="center" wrap="wrap" className="thread-workflow-actions">
+        <Button
+          size="1"
+          color="green"
+          variant="soft"
+          disabled={disabled}
+          onClick={() => runAction('accept')}
+        >
+          Accept
+        </Button>
+        <Button
+          size="1"
+          color="red"
+          variant="soft"
+          disabled={disabled}
+          onClick={() => runAction('reject')}
+        >
+          Reject
+        </Button>
+      </Flex>
+    );
+  };
+  const standaloneWorkflowActions = renderWorkflowActions();
   const actions = (
     <Flex gap="1" align="center" wrap="wrap" className="comment-actions comment-actions-inline">
       {!deleteArmed && canComment && quoteBody && (
@@ -164,7 +205,7 @@ export function EditProposalItem({
           </IconButton>
         </Tooltip>
       )}
-      {!deleteArmed && isAuthor && proposal.status === 'pending' && !editingRationale && (
+      {!deleteArmed && isAuthor && isOpen && !editingRationale && (
         <Tooltip content="Edit reason">
           <IconButton
             size="1"
@@ -191,16 +232,16 @@ export function EditProposalItem({
   );
   const surface = editingRationale ? (
     <RationaleEditor
-      initial={proposal.rationale ?? ''}
+      initial={rootComment.body}
       onCancel={() => setEditingRationale(false)}
       onSave={async (v) => {
         await onEditRationale(proposal.id, v.trim().length > 0 ? v.trim() : null);
         setEditingRationale(false);
       }}
     />
-  ) : proposal.rationale ? (
+  ) : rootComment.body.trim() ? (
     <Text as="p" className="comment-body proposal-rationale">
-      {proposal.rationale}
+      {rootComment.body}
     </Text>
   ) : (
     <Text as="p" className="comment-body proposal-rationale proposal-rationale-empty">
@@ -212,8 +253,8 @@ export function EditProposalItem({
     <>
       <DiscussionThread
         threadId={proposal.id}
-        quote={proposal.anchor.quote ? `${proposal.anchor.quote.slice(0, 120)}${proposal.anchor.quote.length > 120 ? '…' : ''}` : null}
-        quoteTitle="Jump to this paragraph"
+        quote={anchorLabel}
+        quoteTitle="Jump to this location in the document"
         onJump={jump}
         summary={formatThreadSummary(replies.length)}
         toolbarActions={toolbarActions}
@@ -221,13 +262,13 @@ export function EditProposalItem({
         focused={threadFocused}
         flashPhase={threadFlashPhase}
         collapsed={collapsed}
-        className={`proposal proposal-${proposal.status}`}
+        className={`proposal proposal-${proposal.status}${showOrphanedState ? ' proposal-orphaned' : ''}`}
         onToggleCollapsed={onToggleCollapsed}
       >
         <DiscussionEntry
-          authorName={proposal.author.display_name}
-          authorId={proposal.author.client_id}
-          createdAt={proposal.created_at}
+          authorName={rootComment.author.display_name}
+          authorId={rootComment.author.client_id}
+          createdAt={rootComment.created_at}
           actions={actions}
           surface={surface}
           className="proposal-entry"
@@ -243,7 +284,7 @@ export function EditProposalItem({
           />
         ))}
 
-        {canComment && (
+        {canComment ? (
           <div className="reply-composer">
             <CommentComposer
               ref={composerRef}
@@ -251,10 +292,15 @@ export function EditProposalItem({
               needsName={needsName}
               placeholder="Reply…"
               rows={2}
+              footerActions={isOpen && canEdit ? renderWorkflowActions : undefined}
               onSubmit={(body, name) => onReply(proposal.id, body, name)}
             />
           </div>
-        )}
+        ) : standaloneWorkflowActions ? (
+          <div className="reply-composer thread-workflow-only">
+            {standaloneWorkflowActions}
+          </div>
+        ) : null}
       </DiscussionThread>
       <DiffDialog
         open={diffOpen}
@@ -263,7 +309,7 @@ export function EditProposalItem({
         before={diffBefore}
         after={diffAfter}
         actions={
-          proposal.status === 'pending' && canEdit ? (
+          isOpen && canEdit ? (
             <>
               <Button
                 size="2"
@@ -303,6 +349,16 @@ function insertQuotedText(
     .map((line) => `> ${line}`)
     .join('\n');
   composerRef.current?.insertText(quoted);
+}
+
+function formatAnchorLabel(
+  quote: string | null | undefined,
+  fallback: string | null | undefined,
+): string | null {
+  const raw = quote && quote.trim().length > 0 ? quote : fallback;
+  const text = raw?.trim();
+  if (!text) return null;
+  return `${text.slice(0, 120)}${text.length > 120 ? '…' : ''}`;
 }
 
 function RationaleEditor({

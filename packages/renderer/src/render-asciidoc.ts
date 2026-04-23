@@ -1,5 +1,6 @@
 import Asciidoctor from '@asciidoctor/core';
 import { unified } from 'unified';
+
 import rehypeParse from 'rehype-parse';
 import rehypeSanitize from 'rehype-sanitize';
 import rehypeStringify from 'rehype-stringify';
@@ -30,6 +31,14 @@ import type {
   Warning,
 } from './types.js';
 
+type AsciidoctorInstance = ReturnType<typeof Asciidoctor>;
+
+declare global {
+  var __asciidoctor: AsciidoctorInstance | undefined;
+}
+
+const asciidoctor: AsciidoctorInstance = (globalThis.__asciidoctor ??= Asciidoctor());
+
 interface AdocRenderData {
   anchors?: Anchor[];
   assets?: AssetRef[];
@@ -51,8 +60,7 @@ export async function renderAsciidoc(
   source: string,
   options: RenderOptions = {},
 ): Promise<RenderResult> {
-  const processor = Asciidoctor();
-  const doc = processor.load(source, {
+  const doc = asciidoctor.load(source, {
     // Keep asciidoctor's own source highlighting out of the way so Shiki
     // runs over the resulting <pre><code> just like on the markdown path.
     // `showtitle` is on so `= My Doc` renders as a visible `<h1>` at the
@@ -379,7 +387,7 @@ function addRole(block: AsciidoctorAbstractBlock, role: string): void {
 let DEFAULT_ATTRS: Set<string> | null = null;
 function defaultAttrKeys(): Set<string> {
   if (DEFAULT_ATTRS) return DEFAULT_ATTRS;
-  const empty = Asciidoctor().load('', { safe: 'safe', standalone: false });
+  const empty = asciidoctor.load('', { safe: 'safe', standalone: false });
   const attrs =
     (empty as { getAttributes?: () => Record<string, unknown> | undefined }).getAttributes?.() ?? {};
   DEFAULT_ATTRS = new Set(Object.keys(attrs));

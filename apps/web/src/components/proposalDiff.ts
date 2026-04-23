@@ -12,7 +12,7 @@ export function resolveProposalDiffBefore({
   docSource,
   blockRanges,
 }: ResolveProposalDiffBeforeArgs): string {
-  const quoteSnapshot = proposal.source_snapshot ?? proposal.anchor.quote ?? '';
+  const quoteSnapshot = proposal.source_snapshot ?? proposal.comment.anchor?.quote ?? '';
 
   // Accepted proposals should keep showing the original snapshot even
   // after the live document has been updated to the proposed text.
@@ -20,7 +20,7 @@ export function resolveProposalDiffBefore({
     return quoteSnapshot;
   }
 
-  const blockId = proposal.anchor.block_id;
+  const blockId = proposal.comment.anchor?.block_id ?? null;
   if (!blockId) return quoteSnapshot;
 
   const range = blockRanges.get(blockId);

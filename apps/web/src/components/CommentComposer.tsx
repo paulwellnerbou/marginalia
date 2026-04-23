@@ -1,9 +1,26 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import {
+  forwardRef,
+  type ReactNode,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Button, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
 import { PaperPlaneIcon } from '@radix-ui/react-icons';
 
 export interface ComposerHandle {
   insertText: (text: string) => void;
+}
+
+export interface ComposerFooterContext {
+  hasDraft: boolean;
+  canRunAction: boolean;
+  submitting: boolean;
+  submitAction: (
+    action: (body?: string, name?: string) => Promise<void> | void,
+  ) => Promise<void>;
 }
 
 interface Props {
@@ -12,11 +29,12 @@ interface Props {
   needsName: boolean;
   rows?: number;
   onCancel?: () => void;
+  footerActions?: ((context: ComposerFooterContext) => ReactNode) | undefined;
   onSubmit: (body: string, name?: string) => Promise<void> | void;
 }
 
 export const CommentComposer = forwardRef<ComposerHandle, Props>(function CommentComposer(
-  { mentionCandidates, placeholder, needsName, rows = 3, onCancel, onSubmit },
+  { mentionCandidates, placeholder, needsName, rows = 3, onCancel, footerActions, onSubmit },
   ref,
 ) {
   const [value, setValue] = useState('');
@@ -25,7 +43,10 @@ export const CommentComposer = forwardRef<ComposerHandle, Props>(function Commen
   const [caret, setCaret] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const textRef = useRef<HTMLTextAreaElement>(null);
-  const hasDraft = value.trim().length > 0;
+  const body = value.trim();
+  const displayName = name.trim();
+  const hasDraft = body.length > 0;
+  const canIdentify = !needsName || displayName.length > 0;
   const pendingCursorRef = useRef<number | null>(null);
   const mentionOptions = useMemo(() => {
     const deduped = new Map<string, string>();
@@ -78,13 +99,26 @@ export const CommentComposer = forwardRef<ComposerHandle, Props>(function Commen
     },
   }));
 
-  const ready = value.trim().length > 0 && (!needsName || name.trim().length > 0);
+  const ready = hasDraft && canIdentify;
+  const canRunAction = canIdentify && !submitting;
 
   async function send() {
     if (!ready) return;
     setSubmitting(true);
     try {
-      await onSubmit(value.trim(), needsName ? name.trim() : undefined);
+      await onSubmit(body, needsName ? displayName : undefined);
+      setValue('');
+      setCaret(0);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submitAction(action: (body?: string, name?: string) => Promise<void> | void) {
+    if (!canRunAction) return;
+    setSubmitting(true);
+    try {
+      await action(hasDraft ? body : undefined, needsName ? displayName : undefined);
       setValue('');
       setCaret(0);
     } finally {
@@ -210,6 +244,7 @@ export const CommentComposer = forwardRef<ComposerHandle, Props>(function Commen
             Cancel
           </Button>
         )}
+        {footerActions?.({ hasDraft, canRunAction, submitting, submitAction })}
         <IconButton size="1" variant="soft" onClick={send} disabled={!ready || submitting}>
           <PaperPlaneIcon />
         </IconButton>

@@ -76,7 +76,6 @@ export function CommentItem({ comment, isDocAdmin, onEdit, onDelete, onQuote }: 
       createdAt={comment.created_at}
       actions={actions}
       surface={surface}
-      className={comment.parent_id ? 'reply' : 'top'}
     />
   );
 }

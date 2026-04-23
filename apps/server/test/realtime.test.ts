@@ -135,7 +135,7 @@ describe('realtime events', () => {
 
     // Alice posts a comment via HTTP (as admin so the role gate lets her
     // comment on the non-editable public doc).
-    const postRes = await fetch(url(`/api/documents/${uid}/comments`), {
+    const postRes = await fetch(url(`/api/documents/${uid}/threads`), {
       method: 'POST',
       headers: asAdmin(),
       body: JSON.stringify({
@@ -162,7 +162,7 @@ describe('realtime events', () => {
     await waitFor(() => events.find((e) => (e as { type: string }).type === 'subscribed'));
 
     // Alice also posts a comment as admin — should NOT get echoed back
-    const postRes = await fetch(url(`/api/documents/${uid}/comments`), {
+    const postRes = await fetch(url(`/api/documents/${uid}/threads`), {
       method: 'POST',
       headers: asAdmin(),
       body: JSON.stringify({
@@ -225,7 +225,7 @@ describe('realtime events', () => {
     const { ws, events } = await openSocket(uid, BOB.id, { inviteToken: bobInvite });
     await waitFor(() => events.find((e) => (e as { type: string }).type === 'subscribed'));
 
-    const postRes = await fetch(url(`/api/documents/${uid}/comments`), {
+    const postRes = await fetch(url(`/api/documents/${uid}/threads`), {
       method: 'POST',
       headers: asAdmin(),
       body: JSON.stringify({

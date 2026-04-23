@@ -11,11 +11,14 @@ import {
 } from '@radix-ui/themes';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Comment, CommentAnchor, EditProposal } from '../lib/api.js';
-import { CommentComposer, type ComposerHandle } from './CommentComposer.js';
+import {
+  CommentComposer,
+  type ComposerFooterContext,
+  type ComposerHandle,
+} from './CommentComposer.js';
 import { CommentItem } from './CommentItem.js';
 import { DiscussionThread } from './DiscussionUi.js';
 import { EditProposalItem } from './EditProposalItem.js';
-import type { ProposalTarget } from './SelectionToolbar.js';
 import { buildThreadCollapseState, reconcileThreadCollapseState } from './threadCollapseState.js';
 
 interface Props {
@@ -36,9 +39,6 @@ interface Props {
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number } | null;
   onCancelPending: () => void;
-  /** Non-null → proposal composer is open. */
-  pendingProposalTarget: ProposalTarget | null;
-  onCancelPendingProposal: () => void;
   /** Viewer has edit rights (admin or editor). */
   canEdit: boolean;
   isDocAdmin: boolean;
@@ -54,14 +54,9 @@ interface Props {
   }) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
-  onResolve: (id: string, resolved: boolean) => Promise<void>;
-  onCreateProposal: (payload: {
-    proposed_text: string;
-    rationale?: string;
-    display_name?: string;
-  }) => Promise<void>;
-  onAcceptProposal: (id: string) => Promise<void>;
-  onRejectProposal: (id: string) => Promise<void>;
+  onResolve: (id: string, resolved: boolean, body?: string, name?: string) => Promise<void>;
+  onAcceptProposal: (id: string, body?: string, name?: string) => Promise<void>;
+  onRejectProposal: (id: string, body?: string, name?: string) => Promise<void>;
   onDeleteProposal: (id: string) => Promise<void>;
   onEditProposalRationale: (id: string, rationale: string | null) => Promise<void>;
   /** Scroll the document pane to a block and flash it. */
@@ -123,8 +118,6 @@ export function CommentsPane(props: Props) {
     pendingAnchor,
     focusedThread,
     onCancelPending,
-    pendingProposalTarget,
-    onCancelPendingProposal,
     canEdit,
     isDocAdmin,
     viewerClientId,
@@ -133,7 +126,6 @@ export function CommentsPane(props: Props) {
     onEdit,
     onDelete,
     onResolve,
-    onCreateProposal,
     onAcceptProposal,
     onRejectProposal,
     onDeleteProposal,
@@ -456,7 +448,7 @@ function AnchorGroupView({
   submitReply: (parentId: string, body: string, name?: string) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
-  onResolve: (id: string, resolved: boolean) => Promise<void>;
+  onResolve: (id: string, resolved: boolean, body?: string, name?: string) => Promise<void>;
   onScrollToAnchor: (blockId: string) => void;
   needsName: boolean;
   threadFocused: boolean;
@@ -482,26 +474,66 @@ function AnchorGroupView({
   // to the commented block.
   const jump = anchorBlockId ? () => onScrollToAnchor(anchorBlockId) : undefined;
   const toolbarActions = isResolved ? (
-    <>
-      <Badge color="green" variant="soft">
-        Resolved{group.top.resolved_by_name ? ` by ${group.top.resolved_by_name}` : ''}
-      </Badge>
-      {canResolve && (
-        <Button size="1" variant="soft" color="gray" onClick={() => onResolve(group.top.id, false)}>
-          Reopen
-        </Button>
-      )}
-    </>
-  ) : canResolve ? (
-    <Button
-      size="1"
-      variant="soft"
-      color="green"
-      className="thread-resolve-button"
-      onClick={() => onResolve(group.top.id, true)}
-    >
-      Resolve thread
-    </Button>
+    <Badge color="green" variant="soft">
+      Resolved{group.top.resolved_by_name ? ` by ${group.top.resolved_by_name}` : ''}
+    </Badge>
+  ) : null;
+  const renderWorkflowActions = (context?: ComposerFooterContext) => {
+    if (!canResolve) return null;
+    const disabled = context ? !context.canRunAction : false;
+    const runResolve = (resolved: boolean) => {
+      if (context) {
+        void context.submitAction((body, name) => onResolve(group.top.id, resolved, body, name));
+      } else {
+        void onResolve(group.top.id, resolved);
+      }
+    };
+
+    return (
+      <Flex gap="2" align="center" wrap="wrap" className="thread-workflow-actions">
+        {isResolved ? (
+          <Button
+            size="1"
+            variant="soft"
+            color="gray"
+            disabled={disabled}
+            onClick={() => runResolve(false)}
+          >
+            Reopen
+          </Button>
+        ) : (
+          <Button
+            size="1"
+            variant="soft"
+            color="green"
+            className="thread-resolve-button"
+            disabled={disabled}
+            onClick={() => runResolve(true)}
+          >
+            Resolve thread
+          </Button>
+        )}
+      </Flex>
+    );
+  };
+  const standaloneWorkflowActions = renderWorkflowActions();
+
+  const replyComposer = canComment ? (
+    <div className="reply-composer">
+      <CommentComposer
+        ref={composerRef}
+        mentionCandidates={mentionCandidates}
+        placeholder="Reply…"
+        needsName={needsName}
+        rows={2}
+        footerActions={canResolve ? renderWorkflowActions : undefined}
+        onSubmit={(body, name) => submitReply(group.top.id, body, name)}
+      />
+    </div>
+  ) : standaloneWorkflowActions ? (
+    <div className="reply-composer thread-workflow-only">
+      {standaloneWorkflowActions}
+    </div>
   ) : null;
 
   return (
@@ -536,18 +568,7 @@ function AnchorGroupView({
             onQuote={canComment ? handleQuote : undefined}
           />
         ))}
-        {canComment && !isResolved && (
-          <div className="reply-composer">
-            <CommentComposer
-              ref={composerRef}
-              mentionCandidates={mentionCandidates}
-              placeholder="Reply…"
-              needsName={needsName}
-              rows={2}
-              onSubmit={(body, name) => submitReply(group.top.id, body, name)}
-            />
-          </div>
-        )}
+        {replyComposer}
       </>
     </DiscussionThread>
   );
@@ -570,7 +591,7 @@ function groupByAnchor(
   const active: AnchorGroup[] = [];
   const orphans: AnchorGroup[] = [];
   for (const g of tops.values()) {
-    if (g.top.status === 'orphaned') orphans.push(g);
+    if (g.top.link_status === 'orphaned') orphans.push(g);
     else active.push(g);
   }
   const sortGroups =
@@ -588,12 +609,12 @@ function groupProposalThreads(
   const orphans: ProposalThread[] = [];
   for (const proposal of proposals) {
     const thread = { proposal, replies: proposalReplies.get(proposal.id) ?? [] };
-    if (proposal.status === 'orphaned') orphans.push(thread);
-    else active.push(thread);
+    if (proposal.comment.link_status === 'orphaned' && proposal.status !== 'accepted') {
+      orphans.push(thread);
+    } else active.push(thread);
   }
   return { active, orphans };
 }
-
 function combineThreads(
   commentGroups: AnchorGroup[],
   proposalThreads: ProposalThread[],
@@ -612,7 +633,7 @@ function combineThreads(
     ...proposalThreads.map((thread) => ({
       kind: 'proposal' as const,
       id: thread.proposal.id,
-      createdAt: thread.proposal.created_at,
+      createdAt: thread.proposal.comment.created_at,
       latestActivityAt: proposalLatestActivityTs(thread),
       anchor: anchorOrderFromProposal(thread.proposal),
       thread,
@@ -721,7 +742,7 @@ function latestActivityTs(group: AnchorGroup): number {
 }
 
 function proposalLatestActivityTs(thread: ProposalThread): number {
-  let latest = thread.proposal.updated_at;
+  let latest = thread.proposal.comment.updated_at;
   for (const reply of thread.replies) {
     if (reply.created_at > latest) latest = reply.created_at;
   }
@@ -730,9 +751,7 @@ function proposalLatestActivityTs(thread: ProposalThread): number {
 
 function shouldThreadAutoCollapse(thread: ThreadListItem): boolean {
   if (thread.kind === 'comment') return thread.group.top.resolved_at !== null;
-  return (
-    thread.thread.proposal.status === 'accepted' || thread.thread.proposal.status === 'rejected'
-  );
+  return thread.thread.proposal.comment.resolved_at !== null;
 }
 
 function anchorOrderFromComment(anchor: CommentAnchor | null): ThreadAnchorOrder {
@@ -746,7 +765,7 @@ function anchorOrderFromComment(anchor: CommentAnchor | null): ThreadAnchorOrder
 
 function anchorOrderFromProposal(proposal: EditProposal): ThreadAnchorOrder {
   return {
-    blockId: proposal.anchor.block_id,
+    blockId: proposal.comment.anchor?.block_id ?? null,
     sectionIndex: null,
     sectionIndexPath: [],
     startOffset: null,

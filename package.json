@@ -7,7 +7,7 @@
   "scripts": {
     "dev:server": "bun --hot apps/server/src/main.ts",
     "dev:web": "bun --filter @marginalia/web dev",
-    "dev": "trap 'kill 0' INT TERM EXIT; bun --filter @marginalia/server dev & bun --filter @marginalia/web dev & wait",
+    "dev": "sh ./scripts/dev.sh",
     "build": "bun --filter @marginalia/web build",
     "start": "bun --bun apps/server/src/main.ts",
     "typecheck": "bun run --filter '*' typecheck",

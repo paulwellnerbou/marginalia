@@ -368,7 +368,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         case 'edit_proposal.created': {
           const p = event.edit_proposal as unknown as EditProposal;
           setProposals((prev) => (prev.some((x) => x.id === p.id) ? prev : [...prev, p]));
-          notify('New edit proposal', `${p.author.display_name} proposed a change.`);
+          notify('New edit proposal', `${p.comment.author.display_name} proposed a change.`);
           break;
         }
         case 'edit_proposal.updated': {
@@ -378,6 +378,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         }
         case 'edit_proposal.deleted': {
           setProposals((prev) => prev.filter((x) => x.id !== event.edit_proposal_id));
+          setComments((prev) =>
+            prev.filter((x) => x.parent_proposal_id !== event.edit_proposal_id),
+          );
           break;
         }
       }
@@ -453,12 +456,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
 
   const onResolve = useCallback(
-    async (id: string, resolved: boolean) => {
-      const identity = resolveIdentity();
+    async (id: string, resolved: boolean, body?: string, name?: string) => {
+      const identity = resolveIdentity(name);
       if (!identity) return;
       try {
-        const res = await apiResolve(doc.uid, id, resolved, identity);
+        const res = await apiResolve(doc.uid, id, resolved, identity, body);
         setComments((prev) => prev.map((c) => (c.id === id ? res.comment : c)));
+        if (body?.trim()) await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.resolveComment', err, { id, resolved });
       }
@@ -561,13 +565,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
 
   const onAcceptProposal = useCallback(
-    async (id: string) => {
-      const identity = resolveIdentity();
+    async (id: string, body?: string, name?: string) => {
+      const identity = resolveIdentity(name);
       if (!identity) return;
       try {
-        const res = await apiAcceptProposal(doc.uid, id, identity);
+        const res = await apiAcceptProposal(doc.uid, id, identity, body);
         setProposals((prev) => prev.map((p) => (p.id === id ? res.edit_proposal : p)));
-        await refreshDoc();
+        if (body?.trim()) {
+          await Promise.all([refreshDoc(), refreshThreads()]);
+        } else {
+          await refreshDoc();
+        }
         setHistoryVersion((v) => v + 1);
       } catch (err) {
         reportError('DocumentLayout.acceptProposal', err, { id });
@@ -575,22 +583,23 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, refreshDoc],
+    [doc.uid, displayName, refreshDoc, refreshThreads],
   );
 
   const onRejectProposal = useCallback(
-    async (id: string) => {
-      const identity = resolveIdentity();
+    async (id: string, body?: string, name?: string) => {
+      const identity = resolveIdentity(name);
       if (!identity) return;
       try {
-        const res = await apiRejectProposal(doc.uid, id, identity);
+        const res = await apiRejectProposal(doc.uid, id, identity, body);
         setProposals((prev) => prev.map((p) => (p.id === id ? res.edit_proposal : p)));
+        if (body?.trim()) await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.rejectProposal', err, { id });
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName],
+    [doc.uid, displayName, effectiveDisplayName, refreshThreads],
   );
 
   const onEditProposalRationale = useCallback(
@@ -703,7 +712,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       .filter(
         (comment) =>
           comment.parent_id === null &&
-          comment.status === 'active' &&
+          comment.link_status === 'linked' &&
           comment.anchor !== null &&
           comment.anchor.quote &&
           comment.anchor.end_offset > comment.anchor.start_offset,
@@ -718,16 +727,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }));
 
     for (const proposal of proposals) {
-      if (proposal.status !== 'pending') continue;
-      if (!proposal.anchor.block_id || !proposal.anchor.quote) continue;
+      if (proposal.status !== 'open') continue;
+      if (proposal.comment.link_status !== 'linked') continue;
+      if (!proposal.comment.anchor?.block_id || !proposal.comment.anchor.quote) continue;
 
       highlights.push({
         scope: 'block',
         threadId: proposal.id,
-        blockId: proposal.anchor.block_id,
-        quote: proposal.anchor.quote,
+        blockId: proposal.comment.anchor.block_id,
+        quote: proposal.comment.anchor.quote,
         startOffset: 0,
-        endOffset: proposal.anchor.quote.length,
+        endOffset: proposal.comment.anchor.quote.length,
       });
     }
 
@@ -1149,8 +1159,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}
                   onCancelPending={() => setPendingAnchor(null)}
-                  pendingProposalTarget={pendingProposalTarget}
-                  onCancelPendingProposal={() => setPendingProposalTarget(null)}
                   canEdit={doc.role === 'admin' || doc.role === 'editor'}
                   isDocAdmin={doc.role === 'admin'}
                   viewerClientId={getClientId()}
@@ -1159,7 +1167,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onEdit={onEdit}
                   onDelete={onDelete}
                   onResolve={onResolve}
-                  onCreateProposal={onCreateProposal}
                   onAcceptProposal={onAcceptProposal}
                   onRejectProposal={onRejectProposal}
                   onDeleteProposal={onDeleteProposal}
