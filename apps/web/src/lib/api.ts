@@ -1175,7 +1175,7 @@ export function acceptEditProposal(
   pid: string,
   identity: Identity,
   body?: string,
-): Promise<{ edit_proposal: EditProposal; oid: string | null }> {
+): Promise<{ edit_proposal: EditProposal }> {
   const replyBody = body?.trim();
   return request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/respond`,
@@ -1190,7 +1190,7 @@ export function acceptEditProposal(
     },
   ).then((res) => {
     rememberThread(uid, res.thread);
-    return { edit_proposal: threadToLegacyProposal(res.thread), oid: null };
+    return { edit_proposal: threadToLegacyProposal(res.thread) };
   });
 }
 

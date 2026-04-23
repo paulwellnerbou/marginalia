@@ -12,7 +12,6 @@ import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
 import {
   type Identity,
-  type Role,
   SESSION_COOKIE,
   authorize,
   canComment,
@@ -29,7 +28,9 @@ import {
 import { toWire as toLegacyCommentWire } from './comments.js';
 import type { AppDeps } from './documents.js';
 import {
+  findBlockBySourceSpan,
   loadProposalRow,
+  locateDocumentBlocks,
   reanchorProposals,
   reopenAcceptedProposal,
   resolveProposalDiffBefore,
@@ -1172,10 +1173,6 @@ function isProposalRow(row: ThreadRow): boolean {
   return row.proposal_status !== null;
 }
 
-function locateDocumentBlocks(doc: DocumentRow, source: string): Map<string, BlockSourceRange> {
-  return doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
-}
-
 function readProposalBlockSource(doc: DocumentRow, source: string, blockId: string): string | null {
   const range =
     locateDocumentBlocks(doc, source).get(blockId) ??
@@ -1194,51 +1191,6 @@ function locateAcceptedProposalAnchor(
   const rendered = renderedBlocks.find((block) => block.id === located.id);
   if (!rendered) return null;
   return { block: rendered, linkStatus: located.confidence };
-}
-
-function findBlockBySourceSpan(
-  blocks: Map<string, BlockSourceRange>,
-  start: number,
-  end: number,
-): { id: string; range: BlockSourceRange; confidence: 'linked' | 'low-confidence' } | null {
-  let exact: { id: string; range: BlockSourceRange } | null = null;
-  let sameStart: { id: string; range: BlockSourceRange } | null = null;
-  let container: { id: string; range: BlockSourceRange } | null = null;
-  let overlap: { id: string; range: BlockSourceRange; amount: number; span: number } | null = null;
-
-  for (const [id, range] of blocks) {
-    if (range.start === start && range.end === end) {
-      exact = { id, range };
-      break;
-    }
-    if (range.start === start) {
-      if (!sameStart || Math.abs(range.end - end) < Math.abs(sameStart.range.end - end)) {
-        sameStart = { id, range };
-      }
-    }
-    if (range.start <= start && range.end >= end) {
-      if (!container || range.end - range.start < container.range.end - container.range.start) {
-        container = { id, range };
-      }
-    }
-    const amount = Math.min(range.end, end) - Math.max(range.start, start);
-    if (amount > 0) {
-      const span = range.end - range.start;
-      if (
-        !overlap ||
-        amount > overlap.amount ||
-        (amount === overlap.amount && span < overlap.span)
-      ) {
-        overlap = { id, range, amount, span };
-      }
-    }
-  }
-
-  if (exact) return { ...exact, confidence: 'linked' };
-  if (sameStart) return { ...sameStart, confidence: 'linked' };
-  if (container) return { ...container, confidence: 'linked' };
-  if (overlap) return { id: overlap.id, range: overlap.range, confidence: 'low-confidence' };
-  return null;
 }
 
 async function safeJson(c: Context): Promise<Record<string, unknown> | null> {

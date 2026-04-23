@@ -225,11 +225,11 @@ function readProposalBlockSource(
   return range ? source.slice(range.start, range.end) : null;
 }
 
-function locateDocumentBlocks(doc: DocumentRow, source: string): Map<string, BlockSourceRange> {
+export function locateDocumentBlocks(doc: DocumentRow, source: string): Map<string, BlockSourceRange> {
   return doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
 }
 
-function findBlockBySourceSpan(
+export function findBlockBySourceSpan(
   blocks: Map<string, BlockSourceRange>,
   start: number,
   end: number,
