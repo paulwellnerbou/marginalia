@@ -1159,8 +1159,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}
                   onCancelPending={() => setPendingAnchor(null)}
-                  pendingProposalTarget={pendingProposalTarget}
-                  onCancelPendingProposal={() => setPendingProposalTarget(null)}
                   canEdit={doc.role === 'admin' || doc.role === 'editor'}
                   isDocAdmin={doc.role === 'admin'}
                   viewerClientId={getClientId()}
@@ -1169,7 +1167,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onEdit={onEdit}
                   onDelete={onDelete}
                   onResolve={onResolve}
-                  onCreateProposal={onCreateProposal}
                   onAcceptProposal={onAcceptProposal}
                   onRejectProposal={onRejectProposal}
                   onDeleteProposal={onDeleteProposal}

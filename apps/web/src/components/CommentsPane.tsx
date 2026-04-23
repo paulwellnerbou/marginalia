@@ -19,7 +19,6 @@ import {
 import { CommentItem } from './CommentItem.js';
 import { DiscussionThread } from './DiscussionUi.js';
 import { EditProposalItem } from './EditProposalItem.js';
-import type { ProposalTarget } from './SelectionToolbar.js';
 import { buildThreadCollapseState, reconcileThreadCollapseState } from './threadCollapseState.js';
 
 interface Props {
@@ -40,9 +39,6 @@ interface Props {
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number } | null;
   onCancelPending: () => void;
-  /** Non-null → proposal composer is open. */
-  pendingProposalTarget: ProposalTarget | null;
-  onCancelPendingProposal: () => void;
   /** Viewer has edit rights (admin or editor). */
   canEdit: boolean;
   isDocAdmin: boolean;
@@ -59,11 +55,6 @@ interface Props {
   onEdit: (id: string, body: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   onResolve: (id: string, resolved: boolean, body?: string, name?: string) => Promise<void>;
-  onCreateProposal: (payload: {
-    proposed_text: string;
-    rationale?: string;
-    display_name?: string;
-  }) => Promise<void>;
   onAcceptProposal: (id: string, body?: string, name?: string) => Promise<void>;
   onRejectProposal: (id: string, body?: string, name?: string) => Promise<void>;
   onDeleteProposal: (id: string) => Promise<void>;
