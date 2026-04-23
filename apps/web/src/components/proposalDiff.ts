@@ -1,26 +1,26 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
-import type { EditProposal } from '../lib/api.js';
+import type { Thread, ThreadProposalData } from '../lib/api.js';
 
 interface ResolveProposalDiffBeforeArgs {
-  proposal: EditProposal;
+  thread: Thread & { proposal: ThreadProposalData };
   docSource: string;
   blockRanges: Map<string, BlockSourceRange>;
 }
 
 export function resolveProposalDiffBefore({
-  proposal,
+  thread,
   docSource,
   blockRanges,
 }: ResolveProposalDiffBeforeArgs): string {
-  const quoteSnapshot = proposal.source_snapshot ?? proposal.comment.anchor?.quote ?? '';
+  const { proposal } = thread;
+  const quoteSnapshot = proposal.source_snapshot ?? thread.anchor.quote ?? '';
 
-  // Accepted proposals should keep showing the original snapshot even
-  // after the live document has been updated to the proposed text.
-  if (proposal.status === 'accepted' && quoteSnapshot.length > 0) {
+  const isAccepted = thread.state === 'resolved' && thread.resolution?.kind === 'accept';
+  if (isAccepted && quoteSnapshot.length > 0) {
     return quoteSnapshot;
   }
 
-  const blockId = proposal.comment.anchor?.block_id ?? null;
+  const blockId = thread.anchor.block_id;
   if (!blockId) return quoteSnapshot;
 
   const range = blockRanges.get(blockId);
@@ -28,8 +28,6 @@ export function resolveProposalDiffBefore({
 
   const liveSource = docSource.slice(range.start, range.end);
 
-  // If the current block already matches the proposal, prefer the saved
-  // snapshot so the diff still shows what changed.
   if (liveSource === proposal.proposed_text && quoteSnapshot !== proposal.proposed_text) {
     return quoteSnapshot;
   }

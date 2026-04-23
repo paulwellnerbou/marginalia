@@ -2,43 +2,40 @@
 
 import { expect, test } from 'bun:test';
 import type { BlockSourceRange } from '@marginalia/renderer';
-import type { EditProposal } from '../lib/api.js';
+import type { Thread } from '../lib/api.js';
 import { resolveProposalDiffBefore } from './proposalDiff.js';
 
-const baseProposal: EditProposal = {
+const baseThread: Thread & { proposal: NonNullable<Thread['proposal']> } = {
   id: 'proposal-1',
-  comment: {
+  state: 'open',
+  resolution: null,
+  link_status: 'linked',
+  anchor: {
+    block_id: 'block-1',
+    quote: '5.3',
+    prefix: '',
+    suffix: '',
+    start_offset: 0,
+    end_offset: 3,
+    heading_path: null,
+    section_index: null,
+    section_index_path: null,
+  },
+  capabilities: { reply: true, resolve: true, accept: false, reject: false, reopen: false },
+  root: {
     id: 'proposal-1',
-    parent_id: null,
-    parent_proposal_id: null,
-    anchor: {
-      block_id: 'block-1',
-      quote: '5.3',
-      prefix: '',
-      suffix: '',
-      start_offset: 0,
-      end_offset: 3,
-      heading_path: null,
-      section_index: null,
-      section_index_path: null,
-    },
-    author: {
-      client_id: 'client-1',
-      display_name: 'Alice',
-    },
     body: '',
-    link_status: 'linked',
-    resolved_at: null,
-    resolved_by_name: null,
+    author: { client_id: 'client-1', display_name: 'Alice' },
+    capabilities: { edit: true, delete: true },
     created_at: 1,
     updated_at: 1,
   },
-  anchor_kind: null,
-  source_snapshot: '[5.3](#53-hosting--betrieb)',
-  proposed_text: '[5.3](#53-hosting-betrieb)',
-  status: 'open',
-  decided_at: null,
-  decided_by_name: null,
+  proposal: {
+    anchor_kind: null,
+    source_snapshot: '[5.3](#53-hosting--betrieb)',
+    proposed_text: '[5.3](#53-hosting-betrieb)',
+  },
+  replies: [],
 };
 
 function makeBlockRanges(source: string): Map<string, BlockSourceRange> {
@@ -57,8 +54,13 @@ function makeBlockRanges(source: string): Map<string, BlockSourceRange> {
 
 test('uses the saved snapshot for accepted proposals so their diff remains visible', () => {
   const source = '[5.3](#53-hosting-betrieb)';
+  const acceptedThread: typeof baseThread = {
+    ...baseThread,
+    state: 'resolved',
+    resolution: { kind: 'accept', at: 2, by_name: 'Alice' },
+  };
   const before = resolveProposalDiffBefore({
-    proposal: { ...baseProposal, status: 'accepted' },
+    thread: acceptedThread,
     docSource: source,
     blockRanges: makeBlockRanges(source),
   });
@@ -69,7 +71,7 @@ test('uses the saved snapshot for accepted proposals so their diff remains visib
 test('uses the live block source for open proposals while the document still differs', () => {
   const source = '5.3';
   const before = resolveProposalDiffBefore({
-    proposal: baseProposal,
+    thread: baseThread,
     docSource: source,
     blockRanges: makeBlockRanges(source),
   });
@@ -80,7 +82,7 @@ test('uses the live block source for open proposals while the document still dif
 test('falls back to the saved snapshot when the live block already matches the proposal', () => {
   const source = '[5.3](#53-hosting-betrieb)';
   const before = resolveProposalDiffBefore({
-    proposal: baseProposal,
+    thread: baseThread,
     docSource: source,
     blockRanges: makeBlockRanges(source),
   });
