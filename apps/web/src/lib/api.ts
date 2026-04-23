@@ -1174,12 +1174,17 @@ export function acceptEditProposal(
   uid: string,
   pid: string,
   identity: Identity,
+  body?: string,
 ): Promise<{ edit_proposal: EditProposal; oid: string | null }> {
+  const replyBody = body?.trim();
   return request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/respond`,
     {
       method: 'POST',
-      body: JSON.stringify({ action: 'accept' }),
+      body: JSON.stringify({
+        action: 'accept',
+        ...(replyBody ? { body: replyBody } : {}),
+      }),
       identity,
       docUid: uid,
     },
@@ -1193,12 +1198,17 @@ export function rejectEditProposal(
   uid: string,
   pid: string,
   identity: Identity,
+  body?: string,
 ): Promise<{ edit_proposal: EditProposal }> {
+  const replyBody = body?.trim();
   return request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/respond`,
     {
       method: 'POST',
-      body: JSON.stringify({ action: 'reject' }),
+      body: JSON.stringify({
+        action: 'reject',
+        ...(replyBody ? { body: replyBody } : {}),
+      }),
       identity,
       docUid: uid,
     },
@@ -1220,17 +1230,22 @@ export async function resolveComment(
   cid: string,
   resolved: boolean,
   identity: Identity,
+  body?: string,
 ): Promise<{ comment: Comment }> {
   const location = await findCommentLocation(uid, cid);
   if (location.kind !== 'root') {
     throw new ApiError(400, 'replies-not-resolvable');
   }
 
+  const replyBody = body?.trim();
   const res = await request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(location.thread.id)}/respond`,
     {
       method: 'POST',
-      body: JSON.stringify({ action: resolved ? 'resolve' : 'reopen' }),
+      body: JSON.stringify({
+        action: resolved ? 'resolve' : 'reopen',
+        ...(replyBody ? { body: replyBody } : {}),
+      }),
       identity,
       docUid: uid,
     },

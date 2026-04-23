@@ -453,12 +453,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
 
   const onResolve = useCallback(
-    async (id: string, resolved: boolean) => {
-      const identity = resolveIdentity();
+    async (id: string, resolved: boolean, body?: string, name?: string) => {
+      const identity = resolveIdentity(name);
       if (!identity) return;
       try {
-        const res = await apiResolve(doc.uid, id, resolved, identity);
+        const res = await apiResolve(doc.uid, id, resolved, identity, body);
         setComments((prev) => prev.map((c) => (c.id === id ? res.comment : c)));
+        if (body?.trim()) await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.resolveComment', err, { id, resolved });
       }
@@ -561,13 +562,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
 
   const onAcceptProposal = useCallback(
-    async (id: string) => {
-      const identity = resolveIdentity();
+    async (id: string, body?: string, name?: string) => {
+      const identity = resolveIdentity(name);
       if (!identity) return;
       try {
-        const res = await apiAcceptProposal(doc.uid, id, identity);
+        const res = await apiAcceptProposal(doc.uid, id, identity, body);
         setProposals((prev) => prev.map((p) => (p.id === id ? res.edit_proposal : p)));
-        await refreshDoc();
+        if (body?.trim()) {
+          await Promise.all([refreshDoc(), refreshThreads()]);
+        } else {
+          await refreshDoc();
+        }
         setHistoryVersion((v) => v + 1);
       } catch (err) {
         reportError('DocumentLayout.acceptProposal', err, { id });
@@ -579,18 +584,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
 
   const onRejectProposal = useCallback(
-    async (id: string) => {
-      const identity = resolveIdentity();
+    async (id: string, body?: string, name?: string) => {
+      const identity = resolveIdentity(name);
       if (!identity) return;
       try {
-        const res = await apiRejectProposal(doc.uid, id, identity);
+        const res = await apiRejectProposal(doc.uid, id, identity, body);
         setProposals((prev) => prev.map((p) => (p.id === id ? res.edit_proposal : p)));
+        if (body?.trim()) await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.rejectProposal', err, { id });
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName],
+    [doc.uid, displayName, effectiveDisplayName, refreshThreads],
   );
 
   const onEditProposalRationale = useCallback(

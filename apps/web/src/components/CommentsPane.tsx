@@ -11,7 +11,11 @@ import {
 } from '@radix-ui/themes';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Comment, CommentAnchor, EditProposal } from '../lib/api.js';
-import { CommentComposer, type ComposerHandle } from './CommentComposer.js';
+import {
+  CommentComposer,
+  type ComposerFooterContext,
+  type ComposerHandle,
+} from './CommentComposer.js';
 import { CommentItem } from './CommentItem.js';
 import { DiscussionThread } from './DiscussionUi.js';
 import { EditProposalItem } from './EditProposalItem.js';
@@ -54,14 +58,14 @@ interface Props {
   }) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
-  onResolve: (id: string, resolved: boolean) => Promise<void>;
+  onResolve: (id: string, resolved: boolean, body?: string, name?: string) => Promise<void>;
   onCreateProposal: (payload: {
     proposed_text: string;
     rationale?: string;
     display_name?: string;
   }) => Promise<void>;
-  onAcceptProposal: (id: string) => Promise<void>;
-  onRejectProposal: (id: string) => Promise<void>;
+  onAcceptProposal: (id: string, body?: string, name?: string) => Promise<void>;
+  onRejectProposal: (id: string, body?: string, name?: string) => Promise<void>;
   onDeleteProposal: (id: string) => Promise<void>;
   onEditProposalRationale: (id: string, rationale: string | null) => Promise<void>;
   /** Scroll the document pane to a block and flash it. */
@@ -453,7 +457,7 @@ function AnchorGroupView({
   submitReply: (parentId: string, body: string, name?: string) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
-  onResolve: (id: string, resolved: boolean) => Promise<void>;
+  onResolve: (id: string, resolved: boolean, body?: string, name?: string) => Promise<void>;
   onScrollToAnchor: (blockId: string) => void;
   needsName: boolean;
   threadFocused: boolean;
@@ -479,26 +483,66 @@ function AnchorGroupView({
   // to the commented block.
   const jump = anchorBlockId ? () => onScrollToAnchor(anchorBlockId) : undefined;
   const toolbarActions = isResolved ? (
-    <>
-      <Badge color="green" variant="soft">
-        Resolved{group.top.resolved_by_name ? ` by ${group.top.resolved_by_name}` : ''}
-      </Badge>
-      {canResolve && (
-        <Button size="1" variant="soft" color="gray" onClick={() => onResolve(group.top.id, false)}>
-          Reopen
-        </Button>
-      )}
-    </>
-  ) : canResolve ? (
-    <Button
-      size="1"
-      variant="soft"
-      color="green"
-      className="thread-resolve-button"
-      onClick={() => onResolve(group.top.id, true)}
-    >
-      Resolve thread
-    </Button>
+    <Badge color="green" variant="soft">
+      Resolved{group.top.resolved_by_name ? ` by ${group.top.resolved_by_name}` : ''}
+    </Badge>
+  ) : null;
+  const renderWorkflowActions = (context?: ComposerFooterContext) => {
+    if (!canResolve) return null;
+    const disabled = context ? !context.canRunAction : false;
+    const runResolve = (resolved: boolean) => {
+      if (context) {
+        void context.submitAction((body, name) => onResolve(group.top.id, resolved, body, name));
+      } else {
+        void onResolve(group.top.id, resolved);
+      }
+    };
+
+    return (
+      <Flex gap="2" align="center" wrap="wrap" className="thread-workflow-actions">
+        {isResolved ? (
+          <Button
+            size="1"
+            variant="soft"
+            color="gray"
+            disabled={disabled}
+            onClick={() => runResolve(false)}
+          >
+            Reopen
+          </Button>
+        ) : (
+          <Button
+            size="1"
+            variant="soft"
+            color="green"
+            className="thread-resolve-button"
+            disabled={disabled}
+            onClick={() => runResolve(true)}
+          >
+            Resolve thread
+          </Button>
+        )}
+      </Flex>
+    );
+  };
+  const standaloneWorkflowActions = renderWorkflowActions();
+
+  const replyComposer = canComment ? (
+    <div className="reply-composer">
+      <CommentComposer
+        ref={composerRef}
+        mentionCandidates={mentionCandidates}
+        placeholder="Reply…"
+        needsName={needsName}
+        rows={2}
+        footerActions={canResolve ? renderWorkflowActions : undefined}
+        onSubmit={(body, name) => submitReply(group.top.id, body, name)}
+      />
+    </div>
+  ) : standaloneWorkflowActions ? (
+    <div className="reply-composer thread-workflow-only">
+      {standaloneWorkflowActions}
+    </div>
   ) : null;
 
   return (
@@ -533,18 +577,7 @@ function AnchorGroupView({
             onQuote={canComment ? handleQuote : undefined}
           />
         ))}
-        {canComment && (
-          <div className="reply-composer">
-            <CommentComposer
-              ref={composerRef}
-              mentionCandidates={mentionCandidates}
-              placeholder="Reply…"
-              needsName={needsName}
-              rows={2}
-              onSubmit={(body, name) => submitReply(group.top.id, body, name)}
-            />
-          </div>
-        )}
+        {replyComposer}
       </>
     </DiscussionThread>
   );
@@ -591,7 +624,6 @@ function groupProposalThreads(
   }
   return { active, orphans };
 }
-
 function combineThreads(
   commentGroups: AnchorGroup[],
   proposalThreads: ProposalThread[],

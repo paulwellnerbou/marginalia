@@ -17,7 +17,10 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
   const range = sel.getRangeAt(0);
   if (!root.contains(range.commonAncestorContainer)) return null;
 
-  const blockEl = closestBlock(range.commonAncestorContainer);
+  const blockEl =
+    closestBlock(range.commonAncestorContainer) ??
+    closestBlock(range.startContainer) ??
+    blockAtElementOffset(range.startContainer, range.startOffset);
   if (!blockEl) return null;
   const blockId = blockEl.dataset.block;
   if (!blockId) return null;
@@ -130,6 +133,12 @@ function closestBlock(node: Node): HTMLElement | null {
     n = n.parentNode;
   }
   return null;
+}
+
+function blockAtElementOffset(container: Node, offset: number): HTMLElement | null {
+  if (!(container instanceof Element)) return null;
+  const child = container.childNodes[offset] ?? container.childNodes[offset - 1];
+  return child ? closestBlock(child) : null;
 }
 
 function normalizeWs(s: string): string {

@@ -9,7 +9,11 @@ import type { BlockSourceRange } from '@marginalia/renderer';
 import { getEditProposalDiff, type Comment, type EditProposal } from '../lib/api.js';
 import { getClientId } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
-import { CommentComposer, type ComposerHandle } from './CommentComposer.js';
+import {
+  CommentComposer,
+  type ComposerFooterContext,
+  type ComposerHandle,
+} from './CommentComposer.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import { CommentItem } from './CommentItem.js';
 import { DiscussionEntry, DiscussionThread } from './DiscussionUi.js';
@@ -33,8 +37,8 @@ interface Props {
   canComment: boolean;
   mentionCandidates: string[];
   isDocAdmin: boolean;
-  onAccept: (id: string) => Promise<void> | void;
-  onReject: (id: string) => Promise<void> | void;
+  onAccept: (id: string, body?: string, name?: string) => Promise<void> | void;
+  onReject: (id: string, body?: string, name?: string) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
   onEditRationale: (id: string, rationale: string | null) => Promise<void> | void;
   onReply: (proposalId: string, body: string, name?: string) => Promise<void> | void;
@@ -142,19 +146,50 @@ export function EditProposalItem({
         onClick={() => void handleShowDiff()}
         loading={loadingDiff}
       />
-      {isOpen && canEdit && (
-        <>
-          <Button size="1" color="green" variant="soft" onClick={() => onAccept(proposal.id)}>
-            Accept
-          </Button>
-          <Button size="1" color="red" variant="soft" onClick={() => onReject(proposal.id)}>
-            Reject
-          </Button>
-        </>
-      )}
       {diffError ? <Text size="1" color="red">{diffError}</Text> : null}
     </Flex>
   );
+  const renderWorkflowActions = (context?: ComposerFooterContext) => {
+    if (!isOpen || !canEdit) return null;
+    const disabled = context ? !context.canRunAction : false;
+    const runAction = (action: 'accept' | 'reject') => {
+      if (context) {
+        void context.submitAction((body, name) =>
+          action === 'accept'
+            ? onAccept(proposal.id, body, name)
+            : onReject(proposal.id, body, name),
+        );
+      } else if (action === 'accept') {
+        void onAccept(proposal.id);
+      } else {
+        void onReject(proposal.id);
+      }
+    };
+
+    return (
+      <Flex gap="2" align="center" wrap="wrap" className="thread-workflow-actions">
+        <Button
+          size="1"
+          color="green"
+          variant="soft"
+          disabled={disabled}
+          onClick={() => runAction('accept')}
+        >
+          Accept
+        </Button>
+        <Button
+          size="1"
+          color="red"
+          variant="soft"
+          disabled={disabled}
+          onClick={() => runAction('reject')}
+        >
+          Reject
+        </Button>
+      </Flex>
+    );
+  };
+  const standaloneWorkflowActions = renderWorkflowActions();
   const actions = (
     <Flex gap="1" align="center" wrap="wrap" className="comment-actions comment-actions-inline">
       {!deleteArmed && canComment && quoteBody && (
@@ -249,7 +284,7 @@ export function EditProposalItem({
           />
         ))}
 
-        {canComment && (
+        {canComment ? (
           <div className="reply-composer">
             <CommentComposer
               ref={composerRef}
@@ -257,10 +292,15 @@ export function EditProposalItem({
               needsName={needsName}
               placeholder="Reply…"
               rows={2}
+              footerActions={isOpen && canEdit ? renderWorkflowActions : undefined}
               onSubmit={(body, name) => onReply(proposal.id, body, name)}
             />
           </div>
-        )}
+        ) : standaloneWorkflowActions ? (
+          <div className="reply-composer thread-workflow-only">
+            {standaloneWorkflowActions}
+          </div>
+        ) : null}
       </DiscussionThread>
       <DiffDialog
         open={diffOpen}
