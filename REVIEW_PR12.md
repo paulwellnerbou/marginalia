@@ -93,13 +93,25 @@ success or failure. If an accept/reject/reopen network call fails, the user's dr
 reply is lost. The `send()` path doesn't have this problem because it clears inside
 the `try` block before `finally`. Consider the same pattern for `submitAction`.
 
-### #8 ⚪ Test suite lacks direct assertions on thread-shape responses
+### ~~#8 ⚪ Test suite lacks direct assertions on thread-shape responses~~ ✅ Fixed
 
-`flattenThreadComments` in `comments.test.ts` reconstructs the old flat-comment
-shape and tests against it. This validates the mapping logic, which is valuable,
-but the test suite has no direct assertions on the raw thread-shape responses.
-Adding a small set of thread-first assertions would catch regressions in the new
-API independently of the compatibility shim.
+~~The test suite had no direct assertions on the raw thread-shape responses.~~
+
+Five new tests in `comments.test.ts` assert directly on the wire shape returned
+by the API, independent of the `flattenThreadComments` shim:
+
+- **comment creation** — verifies all top-level fields (`state`, `resolution`,
+  `link_status`, `anchor.*`, `capabilities.*`, `root.*`, `proposal`, `replies`)
+- **proposal creation** — verifies `proposal.proposed_text`, `proposal.anchor_kind`,
+  and capability flags (`accept`/`reject`) based on the requester's role
+- **reply** — verifies `thread.replies[0]` shape including `capabilities.edit/delete`
+- **resolve/reopen** — verifies `state`, `resolution.kind/by_name/at`, and that
+  `capabilities.resolve`/`reopen` toggle correctly
+- **GET /threads envelope** — verifies `threads`, `mention_candidates`, and
+  `pending_mentions` arrays, and that each thread in the list has the expected fields
+
+The `ThreadCommentNodeShape` and `ThreadShape` interfaces were also updated to
+include the previously missing `capabilities` fields and the full `proposal` shape.
 
 ---
 
@@ -114,4 +126,4 @@ API independently of the compatibility shim.
 | 5 | 🟡 | Three value-normalisation `UPDATE`s run unconditionally on every startup | Deferred |
 | 6 | ⚪ | `resolveProposalDiffBefore` fallback logic needs an explanatory comment | Open |
 | 7 | ⚪ | `submitAction` in `CommentComposer` clears draft on failure | Open |
-| 8 | ⚪ | Test suite lacks direct assertions on thread-shape responses | Open |
+| 8 | ⚪ | Test suite lacks direct assertions on thread-shape responses | ✅ Fixed |

@@ -34,6 +34,7 @@ interface ThreadCommentNodeShape {
   id: string;
   body: string;
   author: { client_id: string; display_name: string };
+  capabilities: { edit: boolean; delete: boolean };
   created_at: number;
   updated_at: number;
 }
@@ -44,8 +45,15 @@ interface ThreadShape {
   resolution: { kind: 'resolve' | 'accept' | 'reject'; at: number; by_name: string | null } | null;
   link_status: string;
   anchor: ThreadAnchorShape;
+  capabilities: {
+    reply: boolean;
+    resolve: boolean;
+    accept: boolean;
+    reject: boolean;
+    reopen: boolean;
+  };
   root: ThreadCommentNodeShape;
-  proposal: { proposed_text: string } | null;
+  proposal: { anchor_kind: string | null; source_snapshot: string | null; proposed_text: string } | null;
   replies: ThreadCommentNodeShape[];
 }
 
@@ -1048,6 +1056,228 @@ describe('threads API', () => {
     ]);
     // Original comment id stays; only its author_display_name changed.
     expect(byBob.find((c) => c.id === firstId)).toBeDefined();
+  });
+
+  // --- Direct thread-shape assertions ---
+  //
+  // The helpers above (flattenThreadComments, addComment, list, …) map thread
+  // responses back to the legacy flat-comment shape. The tests below skip that
+  // mapping entirely and assert directly on the wire shape returned by the API,
+  // so regressions in the new thread structure are caught independently of the
+  // compatibility shim.
+
+  test('thread shape: comment creation response matches expected wire shape', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          body: 'First comment',
+        }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { thread } = (await res.json()) as { thread: ThreadShape };
+
+    // Top-level identity and state
+    expect(typeof thread.id).toBe('string');
+    expect(thread.state).toBe('open');
+    expect(thread.resolution).toBeNull();
+    expect(thread.link_status).toBe('linked');
+
+    // Anchor shape
+    expect(thread.anchor.block_id).toBe(blockId);
+    expect(thread.anchor.quote).toBe('Title');
+    expect(thread.anchor.prefix).toBe('');
+    expect(thread.anchor.suffix).toBe('');
+
+    // Thread-level capabilities (Alice is the root author and also admin here)
+    expect(thread.capabilities.reply).toBe(true);
+    expect(thread.capabilities.resolve).toBe(true);   // author may resolve
+    expect(thread.capabilities.accept).toBe(false);   // not a proposal
+    expect(thread.capabilities.reject).toBe(false);   // not a proposal
+    expect(thread.capabilities.reopen).toBe(false);   // not yet resolved
+
+    // Root comment node
+    expect(thread.root.id).toBe(thread.id);
+    expect(thread.root.body).toBe('First comment');
+    expect(thread.root.author.client_id).toBe(ALICE.id);
+    expect(thread.root.author.display_name).toBe('Alice');
+    expect(typeof thread.root.created_at).toBe('number');
+    expect(typeof thread.root.updated_at).toBe('number');
+    expect(thread.root.capabilities.edit).toBe(true);   // own comment
+    expect(thread.root.capabilities.delete).toBe(true); // own comment
+
+    // No proposal, no replies on creation
+    expect(thread.proposal).toBeNull();
+    expect(thread.replies).toHaveLength(0);
+  });
+
+  test('thread shape: proposal field is populated for proposal threads', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          body: 'Please rename',
+          proposal: { anchor_kind: 'heading', proposed_text: '# Better title' },
+        }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { thread } = (await res.json()) as { thread: ThreadShape };
+
+    expect(thread.state).toBe('open');
+    expect(thread.resolution).toBeNull();
+    expect(thread.proposal).not.toBeNull();
+    expect(thread.proposal!.proposed_text).toBe('# Better title');
+    expect(thread.proposal!.anchor_kind).toBe('heading');
+
+    // Capabilities: Bob is collaborator → can propose/reject own, but not accept (needs editor)
+    expect(thread.capabilities.accept).toBe(false); // collaborator cannot accept
+    expect(thread.capabilities.reject).toBe(true);  // root author may reject
+
+    expect(thread.replies).toHaveLength(0);
+  });
+
+  test('thread shape: replies appear in thread.replies with correct shape', async () => {
+    const uid = await newDoc('# Title\n');
+    const blockId = await firstBlockId(uid);
+
+    const createRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, body: 'top' }),
+      }),
+    );
+    const { thread: created } = (await createRes.json()) as { thread: ThreadShape };
+
+    const replyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${created.id}/respond`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ body: 'my reply' }),
+      }),
+    );
+    expect(replyRes.status).toBe(200);
+    const { thread } = (await replyRes.json()) as { thread: ThreadShape; created_reply_id: string };
+
+    expect(thread.state).toBe('open');
+    expect(thread.replies).toHaveLength(1);
+
+    const reply = thread.replies[0]!;
+    expect(reply.body).toBe('my reply');
+    expect(reply.author.client_id).toBe(BOB.id);
+    expect(reply.author.display_name).toBe('Bob');
+    expect(typeof reply.created_at).toBe('number');
+    // Response is for Bob's request → he owns the reply
+    expect(reply.capabilities.edit).toBe(true);
+    expect(reply.capabilities.delete).toBe(true);
+  });
+
+  test('thread shape: resolve sets state and resolution; reopen restores open state', async () => {
+    const uid = await newDoc('# Title\n');
+    const blockId = await firstBlockId(uid);
+
+    const createRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, body: 'question' }),
+      }),
+    );
+    const { thread: created } = (await createRes.json()) as { thread: ThreadShape };
+
+    const resolveRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${created.id}/respond`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ action: 'resolve' }),
+      }),
+    );
+    expect(resolveRes.status).toBe(200);
+    const { thread: resolved } = (await resolveRes.json()) as { thread: ThreadShape };
+
+    expect(resolved.state).toBe('resolved');
+    expect(resolved.resolution).not.toBeNull();
+    expect(resolved.resolution!.kind).toBe('resolve');
+    expect(resolved.resolution!.by_name).toBe('Alice');
+    expect(resolved.resolution!.at).toBeGreaterThan(0);
+    // Resolve gone; reopen now available to author/admin
+    expect(resolved.capabilities.resolve).toBe(false);
+    expect(resolved.capabilities.reopen).toBe(true);
+
+    const reopenRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${created.id}/respond`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ action: 'reopen' }),
+      }),
+    );
+    expect(reopenRes.status).toBe(200);
+    const { thread: reopened } = (await reopenRes.json()) as { thread: ThreadShape };
+
+    expect(reopened.state).toBe('open');
+    expect(reopened.resolution).toBeNull();
+    expect(reopened.capabilities.resolve).toBe(true);
+    expect(reopened.capabilities.reopen).toBe(false);
+  });
+
+  test('thread shape: GET /threads response envelope', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, body: 'first' }),
+      }),
+    );
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, body: 'second' }),
+      }),
+    );
+
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, { headers: headersFor(ALICE) }),
+    );
+    expect(listRes.status).toBe(200);
+    const json = (await listRes.json()) as {
+      threads: ThreadShape[];
+      mention_candidates: string[];
+      pending_mentions: string[];
+    };
+
+    // Envelope
+    expect(Array.isArray(json.threads)).toBe(true);
+    expect(json.threads).toHaveLength(2);
+    expect(Array.isArray(json.mention_candidates)).toBe(true);
+    expect(Array.isArray(json.pending_mentions)).toBe(true);
+
+    // Each thread in the list has the required top-level fields
+    for (const thread of json.threads) {
+      expect(typeof thread.id).toBe('string');
+      expect(['open', 'resolved']).toContain(thread.state);
+      expect(thread.anchor).toBeDefined();
+      expect(thread.anchor.block_id).toBe(blockId);
+      expect(thread.root).toBeDefined();
+      expect(typeof thread.root.body).toBe('string');
+      expect(thread.capabilities).toBeDefined();
+      expect(Array.isArray(thread.replies)).toBe(true);
+    }
   });
 
   test('rename propagation: unambiguous @mentions get rewritten; duplicated ones are left alone', async () => {
