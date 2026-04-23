@@ -196,7 +196,7 @@ function ProposalThreadItem({
   uid,
   thread,
   canComment,
-  canEdit,
+  canEdit: _canEdit,
   isDocAdmin: _isDocAdmin,
   mentionCandidates,
   docSource,
@@ -300,8 +300,11 @@ function ProposalThreadItem({
     </Flex>
   );
 
+  const canAccept = thread.capabilities.accept;
+  const canReject = thread.capabilities.reject;
+
   const renderWorkflowActions = (context?: ComposerFooterContext) => {
-    if (!isOpen || !canEdit) return null;
+    if (!canAccept && !canReject) return null;
     const disabled = context ? !context.canRunAction : false;
     const runAction = (kind: 'accept' | 'reject') => {
       if (context) {
@@ -312,24 +315,28 @@ function ProposalThreadItem({
     };
     return (
       <Flex gap="2" align="center" wrap="wrap" className="thread-workflow-actions">
-        <Button
-          size="1"
-          color="green"
-          variant="soft"
-          disabled={disabled}
-          onClick={() => runAction('accept')}
-        >
-          Accept
-        </Button>
-        <Button
-          size="1"
-          color="red"
-          variant="soft"
-          disabled={disabled}
-          onClick={() => runAction('reject')}
-        >
-          Reject
-        </Button>
+        {canAccept && (
+          <Button
+            size="1"
+            color="green"
+            variant="soft"
+            disabled={disabled}
+            onClick={() => runAction('accept')}
+          >
+            Accept
+          </Button>
+        )}
+        {canReject && (
+          <Button
+            size="1"
+            color="red"
+            variant="soft"
+            disabled={disabled}
+            onClick={() => runAction('reject')}
+          >
+            Reject
+          </Button>
+        )}
       </Flex>
     );
   };
@@ -437,7 +444,7 @@ function ProposalThreadItem({
               needsName={needsName}
               placeholder="Reply…"
               rows={2}
-              footerActions={isOpen && canEdit ? renderWorkflowActions : undefined}
+              footerActions={canAccept || canReject ? renderWorkflowActions : undefined}
               onSubmit={(body, name) => onReply(thread.id, body, name)}
             />
           </div>
@@ -453,29 +460,33 @@ function ProposalThreadItem({
         before={diffBefore}
         after={diffAfter}
         actions={
-          isOpen && canEdit ? (
+          canAccept || canReject ? (
             <>
-              <Button
-                size="2"
-                color="green"
-                onClick={async () => {
-                  await onResolveThread(thread.id, 'accept');
-                  setDiffOpen(false);
-                }}
-              >
-                Accept
-              </Button>
-              <Button
-                size="2"
-                color="red"
-                variant="soft"
-                onClick={async () => {
-                  await onResolveThread(thread.id, 'reject');
-                  setDiffOpen(false);
-                }}
-              >
-                Reject
-              </Button>
+              {canAccept && (
+                <Button
+                  size="2"
+                  color="green"
+                  onClick={async () => {
+                    await onResolveThread(thread.id, 'accept');
+                    setDiffOpen(false);
+                  }}
+                >
+                  Accept
+                </Button>
+              )}
+              {canReject && (
+                <Button
+                  size="2"
+                  color="red"
+                  variant="soft"
+                  onClick={async () => {
+                    await onResolveThread(thread.id, 'reject');
+                    setDiffOpen(false);
+                  }}
+                >
+                  Reject
+                </Button>
+              )}
             </>
           ) : null
         }

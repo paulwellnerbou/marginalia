@@ -10,7 +10,7 @@ import {
   Text,
 } from '@radix-ui/themes';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CommentAnchor, Thread, ThreadProposalData } from '../lib/api.js';
+import type { CommentAnchor, Thread } from '../lib/api.js';
 import { isProposal, proposalStatus } from '../lib/api.js';
 import {
   CommentComposer,
@@ -434,9 +434,9 @@ function compareNullableNumber(a: number | null, b: number | null): number {
 }
 
 function threadLatestActivityTs(thread: Thread): number {
-  let latest = thread.root.created_at;
+  let latest = thread.root.updated_at;
   for (const reply of thread.replies) {
-    if (reply.created_at > latest) latest = reply.created_at;
+    if (reply.updated_at > latest) latest = reply.updated_at;
   }
   return latest;
 }
