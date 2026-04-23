@@ -942,18 +942,22 @@ function threadReplyToLegacyComment(
   };
 }
 
-function threadAnchorToLegacyAnchor(anchor: ThreadAnchor): CommentAnchor {
+function threadAnchorToLegacyAnchor(anchor: ThreadAnchor): CommentAnchor | null {
+  // block_id and quote are the minimum required fields for a usable anchor.
+  // Threads created before these were reliably stored (or with a null anchor_block_id
+  // after orphaning) would have null values; treat those as anchor-less.
+  if (anchor.block_id === null || anchor.quote === null) return null;
   return {
     block_id: anchor.block_id,
     quote: anchor.quote,
     prefix: anchor.prefix,
     suffix: anchor.suffix,
-    start_offset: anchor.start_offset,
-    end_offset: anchor.end_offset,
+    start_offset: anchor.start_offset ?? 0,
+    end_offset: anchor.end_offset ?? 0,
     heading_path: anchor.heading_path,
     section_index: anchor.section_index,
     section_index_path: anchor.section_index_path,
-  } as CommentAnchor;
+  };
 }
 
 function threadToLegacyProposal(thread: Thread): EditProposal {

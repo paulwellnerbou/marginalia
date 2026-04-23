@@ -184,11 +184,23 @@ async function readAcceptedProposalSnapshotAtCommit(
 ): Promise<string | null> {
   const diff = await deps.store.diffAt(doc.path, acceptedOid);
   if (!diff) return null;
+
+  // Fast path: block ID is stable across the accept — find the pre-accept source
+  // directly by the same block ID in the before-snapshot.
   const before = readProposalBlockSource(doc, diff.before, proposal.anchor_block_id);
   if (before) {
     if (!diff.after.includes(proposal.proposed_text)) return null;
     return before;
   }
+
+  // Fallback: the block ID changed across the accept commit (block IDs are
+  // derived from content, so replacing content changes the ID). We recover the
+  // pre-accept text by locating the accepted block in the *after* snapshot to
+  // get its character span, then using findBlockBySourceSpan to find whichever
+  // block occupied that same span in the *before* snapshot. This works because
+  // accepting a proposal replaces a block's content in-place: the byte offsets
+  // of the surrounding blocks are unchanged, so the pre-accept block sits at
+  // exactly the position the post-accept block now occupies.
   const afterRanges = locateDocumentBlocks(doc, diff.after);
   const afterRange = proposal.anchor_block_id ? afterRanges.get(proposal.anchor_block_id) : null;
   if (!afterRange) return null;
