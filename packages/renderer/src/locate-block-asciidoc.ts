@@ -1,9 +1,13 @@
 import Asciidoctor from '@asciidoctor/core';
 import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
-
-const asciidoctor: ReturnType<typeof Asciidoctor> =
-  ((globalThis as any).__asciidoctor ??= Asciidoctor());
 import type { BlockSourceRange } from './locate-block.js';
+
+declare global {
+  var __asciidoctor: ReturnType<typeof Asciidoctor> | undefined;
+}
+
+const asciidoctor = globalThis.__asciidoctor ?? Asciidoctor();
+globalThis.__asciidoctor = asciidoctor;
 
 /**
  * AsciiDoc twin of `locateAllBlocks` — resolve block IDs back to source
@@ -30,11 +34,7 @@ export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSource
  * ranges. IDs use `computeSubBlockId('listItem', text, counts)` with a
  * fresh counts Map, matching the renderer's state exactly.
  */
-function walkSubBlocks(
-  block: Any,
-  source: string,
-  out: Map<string, BlockSourceRange>,
-): void {
+function walkSubBlocks(block: Any, source: string, out: Map<string, BlockSourceRange>): void {
   const counts = new Map<string, number>();
   visit(block);
 
@@ -64,7 +64,7 @@ function recordSubBlockRange(
   // Mirror the renderer: pull the item's own text from getText()
   // (getContent() yields nested-block HTML and is empty for leaf items).
   const fn = (item as { getText?: () => string | undefined }).getText;
-  const raw = typeof fn === 'function' ? fn.call(item) ?? '' : '';
+  const raw = typeof fn === 'function' ? (fn.call(item) ?? '') : '';
   const text = normalizeBlockText(stripTags(raw));
   if (!text) return;
   const id = computeSubBlockId('listItem', text, counts);
@@ -85,10 +85,7 @@ function recordSubBlockRange(
  * list items, and asciidoctor's own source map for items is
  * line-accurate at the start.
  */
-function listItemSourceRange(
-  item: Any,
-  source: string,
-): { start: number; end: number } | null {
+function listItemSourceRange(item: Any, source: string): { start: number; end: number } | null {
   const lineNoFn = (item as { getLineNumber?: () => number | undefined }).getLineNumber;
   const startLine = typeof lineNoFn === 'function' ? lineNoFn.call(item) : undefined;
   if (!startLine) return null;
@@ -129,11 +126,7 @@ function getLineIndex(source: string): LineIndex {
   return idx;
 }
 
-function walkTopLevel(
-  block: Any,
-  source: string,
-  out: Map<string, BlockSourceRange>,
-): void {
+function walkTopLevel(block: Any, source: string, out: Map<string, BlockSourceRange>): void {
   const ctx = (block as { getContext(): string }).getContext?.();
   if (ctx === 'document' || ctx === 'preamble') {
     for (const child of getChildren(block)) walkTopLevel(child, source, out);
@@ -232,8 +225,9 @@ function sourceRange(
   titleOnly: boolean,
 ): { start: number; end: number } | null {
   const lineNoFn = (block as { getLineNumber?: () => number | undefined }).getLineNumber;
-  const sourceLocFn = (block as { getSourceLocation?: () => { getLineNumber?: () => number } | undefined })
-    .getSourceLocation;
+  const sourceLocFn = (
+    block as { getSourceLocation?: () => { getLineNumber?: () => number } | undefined }
+  ).getSourceLocation;
   let startLine: number | undefined;
   if (typeof lineNoFn === 'function') startLine = lineNoFn.call(block);
   if (!startLine && typeof sourceLocFn === 'function') {
@@ -252,7 +246,7 @@ function sourceRange(
   }
 
   const linesFn = (block as { getSourceLines?: () => string[] | undefined }).getSourceLines;
-  const lines = typeof linesFn === 'function' ? linesFn.call(block) ?? [] : [];
+  const lines = typeof linesFn === 'function' ? (linesFn.call(block) ?? []) : [];
   const lineCount = Array.isArray(lines) ? lines.length : 0;
 
   if (lineCount > 0) {

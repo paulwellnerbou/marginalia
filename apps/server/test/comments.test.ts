@@ -701,6 +701,33 @@ describe('threads API', () => {
     expect(reopened.thread.resolution).toBeNull();
   });
 
+  test('invalid reply body rejects a combined response without changing state', async () => {
+    const uid = await newDoc('# Title');
+    const blockId = await firstBlockId(uid);
+    const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'question');
+    const cid = (r1.body as { comment: { id: string } }).comment.id;
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${cid}/respond`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ action: 'resolve', body: 'x'.repeat(5001) }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid-body' });
+
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        headers: headersFor(ALICE),
+      }),
+    );
+    const listed = (await listRes.json()) as { threads: ThreadShape[] };
+    const thread = listed.threads.find((entry) => entry.id === cid);
+    expect(thread?.state).toBe('open');
+    expect(thread?.replies).toEqual([]);
+  });
+
   test('admin can resolve a top-level thread they did not author', async () => {
     const uid = await newDoc('# Title');
     const blockId = await firstBlockId(uid);
@@ -822,6 +849,28 @@ describe('threads API', () => {
     );
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'proposal-text-required' });
+  });
+
+  test('invalid proposal rationale is rejected instead of silently dropped', async () => {
+    const uid = await newDoc('# Title');
+    const blockId = await firstBlockId(uid);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          body: 'x'.repeat(5001),
+          proposal: {
+            anchor_kind: 'heading',
+            proposed_text: '# Better title',
+          },
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid-body' });
   });
 
   test('proposal replies are stored with parent_proposal_id', async () => {

@@ -153,14 +153,15 @@ async function createThread(c: Context, deps: AppDeps) {
   const anchor = asAnchor(body.anchor);
   if (!anchor) return c.json({ error: 'anchor-required' }, 400);
 
-  const rootBody = asOptionalBody(body.body);
+  const rootBody = parseOptionalBody(body.body);
+  if (!rootBody.ok) return c.json({ error: 'invalid-body' }, 400);
   const parsedProposal = asProposal(body.proposal);
   if (!parsedProposal.ok) return c.json({ error: parsedProposal.error }, 400);
   const proposal = parsedProposal.proposal;
 
   if (!proposal) {
     if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
-    if (!rootBody) return c.json({ error: 'body-required' }, 400);
+    if (!rootBody.body) return c.json({ error: 'body-required' }, 400);
   } else {
     if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
   }
@@ -193,7 +194,7 @@ async function createThread(c: Context, deps: AppDeps) {
       anchor.sectionIndexPath ? JSON.stringify(anchor.sectionIndexPath) : null,
       identity.clientId,
       identity.displayName,
-      proposal ? (rootBody ?? '') : rootBody,
+      proposal ? (rootBody.body ?? '') : rootBody.body,
       now,
       now,
     );
@@ -298,11 +299,12 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
 
-  const next = asThreadRootBody(body.body, isProposalRow(row));
-  if (next === undefined) return c.json({ error: 'body-required' }, 400);
+  const next = parseThreadRootBody(body.body, isProposalRow(row));
+  if (!next.ok) return c.json({ error: 'invalid-body' }, 400);
+  if (next.body === undefined) return c.json({ error: 'body-required' }, 400);
 
   const now = Date.now();
-  db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(next, now, tid);
+  db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(next.body, now, tid);
 
   const updated = loadThreadRow(db, tid, doc.uid);
   if (!updated) return c.json({ error: 'not-found' }, 404);
@@ -422,11 +424,12 @@ async function editThreadReply(c: Context, deps: AppDeps) {
   }
 
   const body = await safeJson(c);
-  const next = body ? asOptionalBody(body.body) : null;
-  if (!next) return c.json({ error: 'body-required' }, 400);
+  const next = body ? parseOptionalBody(body.body) : { ok: true as const, body: null };
+  if (!next.ok) return c.json({ error: 'invalid-body' }, 400);
+  if (!next.body) return c.json({ error: 'body-required' }, 400);
 
   const now = Date.now();
-  db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(next, now, cid);
+  db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(next.body, now, cid);
 
   const updatedReply = loadReplyRow(db, doc.uid, tid, cid);
   if (!updatedReply) return c.json({ error: 'not-found' }, 404);
@@ -521,12 +524,13 @@ async function respondToThread(c: Context, deps: AppDeps) {
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
-  const replyBody = asOptionalBody(body.body);
+  const replyBody = parseOptionalBody(body.body);
+  if (!replyBody.ok) return c.json({ error: 'invalid-body' }, 400);
   const action = asRespondAction(body.action);
-  if (!replyBody && !action) return c.json({ error: 'empty-response' }, 400);
   if (body.action !== undefined && action === null) return c.json({ error: 'invalid-body' }, 400);
+  if (!replyBody.body && !action) return c.json({ error: 'empty-response' }, 400);
 
-  if (replyBody && !canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
+  if (replyBody.body && !canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   const resolution = threadResolution(row);
   const state = threadState(row);
@@ -635,7 +639,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
       }
     }
 
-    if (replyBody) {
+    if (replyBody.body) {
       const now = Date.now();
       createdReplyId = newCommentId();
       db.prepare(
@@ -651,7 +655,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
         isProposal ? tid : null,
         identity.clientId,
         identity.displayName,
-        replyBody,
+        replyBody.body,
         now,
         now,
       );
@@ -1249,20 +1253,27 @@ function asString(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
-function asOptionalBody(v: unknown): string | null {
-  if (typeof v !== 'string') return null;
+type OptionalBodyParse = { ok: true; body: string | null } | { ok: false };
+
+function parseOptionalBody(v: unknown): OptionalBodyParse {
+  if (v === undefined || v === null) return { ok: true, body: null };
+  if (typeof v !== 'string') return { ok: false };
   const trimmed = v.trim();
-  if (trimmed.length === 0) return null;
-  return trimmed.length <= 5000 ? trimmed : null;
+  if (trimmed.length === 0) return { ok: true, body: null };
+  if (trimmed.length > 5000) return { ok: false };
+  return { ok: true, body: trimmed };
 }
 
-function asThreadRootBody(v: unknown, allowEmpty: boolean): string | undefined {
-  if (v === null && allowEmpty) return '';
-  if (typeof v !== 'string') return undefined;
+type ThreadRootBodyParse = { ok: true; body: string | undefined } | { ok: false };
+
+function parseThreadRootBody(v: unknown, allowEmpty: boolean): ThreadRootBodyParse {
+  if (v === null && allowEmpty) return { ok: true, body: '' };
+  if (v === undefined || v === null) return { ok: true, body: undefined };
+  if (typeof v !== 'string') return { ok: false };
   const trimmed = v.trim();
-  if (trimmed.length === 0) return allowEmpty ? '' : undefined;
-  if (trimmed.length > 5000) return undefined;
-  return trimmed;
+  if (trimmed.length === 0) return { ok: true, body: allowEmpty ? '' : undefined };
+  if (trimmed.length > 5000) return { ok: false };
+  return { ok: true, body: trimmed };
 }
 
 function asRespondAction(v: unknown): RespondAction | null {
