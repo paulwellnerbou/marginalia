@@ -1390,11 +1390,6 @@ button.anchor-quote:hover {
 .comment:focus-within {
   background: var(--gray-a2);
 }
-.comment.reply {
-  margin-left: 0.85rem;
-  padding-left: calc(0.6rem + 0.6rem);
-  border-left: 2px solid var(--gray-5);
-}
 .comment-avatar {
   flex-shrink: 0;
   width: 26px;
