@@ -167,6 +167,14 @@ async function createThread(c: Context, deps: AppDeps) {
     if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
   }
 
+  // Read file source before opening the transaction so we don't hold a
+  // SQLite write lock during filesystem I/O (consistent with the accept/reopen
+  // paths in prepareAcceptProposalThread / prepareReopenAcceptedProposalThread).
+  const currentSource = proposal ? store.read(doc.path) : null;
+  const sourceSnapshot = currentSource
+    ? (readProposalBlockSource(doc, currentSource, anchor.blockId) ?? anchor.quote)
+    : null;
+
   const id = newCommentId();
   const now = Date.now();
   db.exec('BEGIN');
@@ -201,14 +209,11 @@ async function createThread(c: Context, deps: AppDeps) {
     );
 
     if (proposal) {
-      const currentSource = store.read(doc.path);
-      const sourceSnapshot =
-        readProposalBlockSource(doc, currentSource, anchor.blockId) ?? anchor.quote;
       db.prepare(
         `INSERT INTO comments_edit_proposals
            (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid)
          VALUES (?, ?, ?, ?, 'open', NULL)`,
-      ).run(id, proposal.anchorKind, sourceSnapshot, proposal.proposedText);
+      ).run(id, proposal.anchorKind, sourceSnapshot ?? anchor.quote, proposal.proposedText);
     }
     db.exec('COMMIT');
   } catch (err) {
