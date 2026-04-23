@@ -1,5 +1,3 @@
-import { Hono } from 'hono';
-import type { Context } from 'hono';
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import {
@@ -9,32 +7,34 @@ import {
   renderDocument,
 } from '@marginalia/renderer';
 import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
-import type { CommentRow, DocumentRow, EditProposalStatus } from '../db.js';
+import { Hono } from 'hono';
+import type { Context } from 'hono';
+import { reanchor } from '../anchoring.js';
 import {
+  type Identity,
+  type Role,
+  SESSION_COOKIE,
   authorize,
   canComment,
   canEdit,
   canPropose,
   parseCookie,
-  SESSION_COOKIE,
-  type Identity,
-  type Role,
 } from '../auth.js';
+import type { CommentRow, DocumentRow, EditProposalStatus, EditProposalThreadRow } from '../db.js';
 import {
   consumePendingMentions,
   listMentionCandidates,
   storeMentionsForComment,
 } from '../mentions.js';
-import { reanchor } from '../anchoring.js';
+import { toWire as toLegacyCommentWire } from './comments.js';
 import type { AppDeps } from './documents.js';
 import {
   loadProposalRow,
-  reopenAcceptedProposal,
   reanchorProposals,
+  reopenAcceptedProposal,
   resolveProposalDiffBefore,
   toWire as toProposalWire,
 } from './edit-proposals.js';
-import { toWire as toLegacyCommentWire } from './comments.js';
 
 interface ThreadRow extends CommentRow {
   anchor_kind: string | null;
@@ -49,6 +49,11 @@ interface ThreadRow extends CommentRow {
 type ThreadState = 'open' | 'resolved';
 type ResolutionKind = 'resolve' | 'accept' | 'reject';
 type RespondAction = 'resolve' | 'accept' | 'reject' | 'reopen';
+
+interface PreparedThreadWorkflow {
+  oid: string;
+  applyDb: () => EditProposalThreadRow[];
+}
 
 const THREAD_SELECT = `
   SELECT
@@ -195,7 +200,8 @@ async function createThread(c: Context, deps: AppDeps) {
 
     if (proposal) {
       const currentSource = store.read(doc.path);
-      const sourceSnapshot = readProposalBlockSource(doc, currentSource, anchor.blockId) ?? anchor.quote;
+      const sourceSnapshot =
+        readProposalBlockSource(doc, currentSource, anchor.blockId) ?? anchor.quote;
       db.prepare(
         `INSERT INTO comments_edit_proposals
            (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid)
@@ -286,7 +292,8 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const row = loadThreadRow(db, tid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
-  if (row.author_client_id !== decision.identity.clientId) return c.json({ error: 'forbidden' }, 403);
+  if (row.author_client_id !== decision.identity.clientId)
+    return c.json({ error: 'forbidden' }, 403);
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
@@ -363,7 +370,14 @@ async function deleteThread(c: Context, deps: AppDeps) {
     return c.json({ error: 'forbidden-accepted' }, 403);
   }
 
-  db.prepare('UPDATE comments SET deleted_at = ? WHERE id = ?').run(Date.now(), tid);
+  const now = Date.now();
+  db.prepare(
+    `UPDATE comments
+        SET deleted_at = ?, updated_at = ?
+      WHERE doc_uid = ?
+        AND deleted_at IS NULL
+        AND (id = ? OR parent_id = ? OR parent_proposal_id = ?)`,
+  ).run(now, now, doc.uid, tid, tid, tid);
   if (isProposalRow(row)) {
     realtime.broadcast(
       doc.uid,
@@ -551,9 +565,24 @@ async function respondToThread(c: Context, deps: AppDeps) {
   }
 
   let documentOid: string | null = null;
+  let preparedWorkflow: PreparedThreadWorkflow | null = null;
   let createdReplyId: string | null = null;
   let createdReply: CommentRow | null = null;
   let createdReplyMentionTargets: string[] = [];
+  let reanchoredProposalUpdates: EditProposalThreadRow[] = [];
+
+  try {
+    if (action === 'accept') {
+      preparedWorkflow = await prepareAcceptProposalThread(doc, row, deps, identity);
+    } else if (action === 'reopen' && resolution?.kind === 'accept') {
+      preparedWorkflow = await prepareReopenAcceptedProposalThread(doc, row, deps, identity);
+    }
+  } catch (err) {
+    if (err instanceof ThreadActionError) {
+      return c.json({ error: err.code }, err.status);
+    }
+    throw err;
+  }
 
   db.exec('BEGIN');
   try {
@@ -577,7 +606,9 @@ async function respondToThread(c: Context, deps: AppDeps) {
           WHERE id = ?`,
       ).run(now, identity.displayName, now, tid);
     } else if (action === 'accept') {
-      documentOid = await acceptProposalThread(doc, row, deps, identity);
+      if (!preparedWorkflow) throw new ThreadActionError(409, 'proposal-orphaned');
+      documentOid = preparedWorkflow.oid;
+      reanchoredProposalUpdates = preparedWorkflow.applyDb();
     } else if (action === 'reopen') {
       const now = Date.now();
       if (!isProposal) {
@@ -598,7 +629,9 @@ async function respondToThread(c: Context, deps: AppDeps) {
             WHERE id = ?`,
         ).run(now, tid);
       } else if (resolution?.kind === 'accept') {
-        documentOid = await reopenAcceptedProposalThread(doc, row, deps, identity);
+        if (!preparedWorkflow) throw new ThreadActionError(409, 'not-reopenable');
+        documentOid = preparedWorkflow.oid;
+        reanchoredProposalUpdates = preparedWorkflow.applyDb();
       }
     }
 
@@ -623,7 +656,9 @@ async function respondToThread(c: Context, deps: AppDeps) {
         now,
       );
 
-      createdReply = db.prepare('SELECT * FROM comments WHERE id = ?').get(createdReplyId) as CommentRow;
+      createdReply = db
+        .prepare('SELECT * FROM comments WHERE id = ?')
+        .get(createdReplyId) as CommentRow;
       createdReplyMentionTargets = storeMentionsForComment(
         db,
         doc.uid,
@@ -635,10 +670,6 @@ async function respondToThread(c: Context, deps: AppDeps) {
 
     db.exec('COMMIT');
   } catch (err) {
-    if (err instanceof ThreadActionError && err.commitPartial) {
-      db.exec('COMMIT');
-      return c.json({ error: err.code }, err.status);
-    }
     db.exec('ROLLBACK');
     if (err instanceof ThreadActionError) {
       return c.json({ error: err.code }, err.status);
@@ -660,6 +691,13 @@ async function respondToThread(c: Context, deps: AppDeps) {
         identity.clientId,
       );
     }
+  }
+  for (const proposal of reanchoredProposalUpdates) {
+    realtime.broadcast(
+      doc.uid,
+      { type: 'edit_proposal.updated', edit_proposal: toProposalWire(proposal) },
+      identity.clientId,
+    );
   }
 
   const updated = loadThreadRow(db, tid, doc.uid);
@@ -696,12 +734,12 @@ async function respondToThread(c: Context, deps: AppDeps) {
   });
 }
 
-async function acceptProposalThread(
+async function prepareAcceptProposalThread(
   doc: DocumentRow,
   row: ThreadRow,
   deps: AppDeps,
   identity: Identity,
-): Promise<string> {
+): Promise<PreparedThreadWorkflow> {
   if (!row.anchor_block_id || !row.proposed_text) {
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
@@ -728,15 +766,20 @@ async function acceptProposalThread(
         identity.clientId,
       );
     }
-    throw new ThreadActionError(409, 'proposal-orphaned', true);
+    throw new ThreadActionError(409, 'proposal-orphaned');
   }
 
   const nextSource = source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
-  const { oid } = await deps.store.write(doc.uid, doc.format, nextSource, identity, 'accept-proposal', {
-    proposalId: row.id,
-  });
-  const now = Date.now();
-  deps.db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
+  const { oid } = await deps.store.write(
+    doc.uid,
+    doc.format,
+    nextSource,
+    identity,
+    'accept-proposal',
+    {
+      proposalId: row.id,
+    },
+  );
 
   const rendered = await renderDocument(nextSource, doc.format);
   const presentBlocks = locateDocumentBlocks(doc, nextSource);
@@ -752,23 +795,10 @@ async function acceptProposalThread(
           AND cep.comment_id IS NULL`,
     )
     .all(doc.uid) as CommentRow[];
-  const updateCommentStmt = deps.db.prepare(
-    `UPDATE comments
-        SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-            link_status = ?, updated_at = ?
-      WHERE id = ?`,
-  );
-  for (const comment of topLevelComments) {
+  const commentAnchorUpdates = topLevelComments.map((comment) => {
     const upd = reanchor(comment, rendered.blocks);
-    updateCommentStmt.run(
-      upd.blockId,
-      upd.startOffset,
-      upd.endOffset,
-      upd.linkStatus,
-      now,
-      comment.id,
-    );
-  }
+    return { commentId: comment.id, ...upd };
+  });
 
   const acceptedAnchor = locateAcceptedProposalAnchor(
     presentBlocks,
@@ -776,48 +806,81 @@ async function acceptProposalThread(
     range.start,
     range.start + row.proposed_text.length,
   );
-  deps.db.prepare(
-    `UPDATE comments_edit_proposals
-        SET status = 'accepted', accepted_oid = ?
-      WHERE comment_id = ?`,
-  ).run(oid, row.id);
-  deps.db.prepare(
-    `UPDATE comments
-        SET anchor_block_id = ?,
-            anchor_start_offset = ?,
-            anchor_end_offset = ?,
-            anchor_heading_path = ?,
-            anchor_section_index = ?,
-            anchor_section_index_path = ?,
-            link_status = ?,
-            resolved_at = ?,
-            resolved_by_name = ?,
-            updated_at = ?
-      WHERE id = ?`,
-  ).run(
-    acceptedAnchor?.block.id ?? row.anchor_block_id,
-    null,
-    null,
-    acceptedAnchor ? JSON.stringify(acceptedAnchor.block.headingPath) : row.anchor_heading_path,
-    acceptedAnchor?.block.sectionIndex ?? row.anchor_section_index,
-    acceptedAnchor ? JSON.stringify(acceptedAnchor.block.sectionIndexPath) : row.anchor_section_index_path,
-    acceptedAnchor?.linkStatus ?? row.link_status,
-    now,
-    identity.displayName,
-    now,
-    row.id,
-  );
 
-  reanchorProposals(deps.db, doc.uid, [...presentBlocks.keys()], now, deps.realtime, identity.clientId);
-  return oid;
+  return {
+    oid,
+    applyDb: () => {
+      const now = Date.now();
+      deps.db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
+
+      const updateCommentStmt = deps.db.prepare(
+        `UPDATE comments
+            SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
+                link_status = ?, updated_at = ?
+          WHERE id = ?`,
+      );
+      for (const upd of commentAnchorUpdates) {
+        updateCommentStmt.run(
+          upd.blockId,
+          upd.startOffset,
+          upd.endOffset,
+          upd.linkStatus,
+          now,
+          upd.commentId,
+        );
+      }
+
+      deps.db
+        .prepare(
+          `UPDATE comments_edit_proposals
+            SET status = 'accepted', accepted_oid = ?
+          WHERE comment_id = ?`,
+        )
+        .run(oid, row.id);
+      deps.db
+        .prepare(
+          `UPDATE comments
+            SET anchor_block_id = ?,
+                anchor_start_offset = ?,
+                anchor_end_offset = ?,
+                anchor_heading_path = ?,
+                anchor_section_index = ?,
+                anchor_section_index_path = ?,
+                link_status = ?,
+                resolved_at = ?,
+                resolved_by_name = ?,
+                updated_at = ?
+          WHERE id = ?`,
+        )
+        .run(
+          acceptedAnchor?.block.id ?? row.anchor_block_id,
+          null,
+          null,
+          acceptedAnchor
+            ? JSON.stringify(acceptedAnchor.block.headingPath)
+            : row.anchor_heading_path,
+          acceptedAnchor?.block.sectionIndex ?? row.anchor_section_index,
+          acceptedAnchor
+            ? JSON.stringify(acceptedAnchor.block.sectionIndexPath)
+            : row.anchor_section_index_path,
+          acceptedAnchor?.linkStatus ?? row.link_status,
+          now,
+          identity.displayName,
+          now,
+          row.id,
+        );
+
+      return reanchorProposals(deps.db, doc.uid, [...presentBlocks.keys()], now);
+    },
+  };
 }
 
-async function reopenAcceptedProposalThread(
+async function prepareReopenAcceptedProposalThread(
   doc: DocumentRow,
   row: ThreadRow,
   deps: AppDeps,
   identity: Identity,
-): Promise<string> {
+): Promise<PreparedThreadWorkflow> {
   if (!row.accepted_oid) throw new ThreadActionError(409, 'not-reopenable');
 
   const history = await deps.store.history(doc.path);
@@ -830,16 +893,9 @@ async function reopenAcceptedProposalThread(
   const diff = await deps.store.diffAt(doc.path, row.accepted_oid);
   if (!diff) throw new ThreadActionError(409, 'not-reopenable');
 
-  const { oid } = await deps.store.write(
-    doc.uid,
-    doc.format,
-    diff.before,
-    identity,
-    'restore',
-    { restoredFromOid: parent.oid },
-  );
-  const now = Date.now();
-  deps.db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
+  const { oid } = await deps.store.write(doc.uid, doc.format, diff.before, identity, 'restore', {
+    restoredFromOid: parent.oid,
+  });
 
   const rendered = await renderDocument(diff.before, doc.format);
   const topLevel = deps.db
@@ -848,30 +904,41 @@ async function reopenAcceptedProposalThread(
          WHERE doc_uid = ? AND parent_id IS NULL AND deleted_at IS NULL`,
     )
     .all(doc.uid) as CommentRow[];
-  const updateStmt = deps.db.prepare(
-    `UPDATE comments
-        SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-            link_status = ?, updated_at = ?
-      WHERE id = ?`,
-  );
-  for (const comment of topLevel) {
+  const commentAnchorUpdates = topLevel.map((comment) => {
     const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(
-      upd.blockId,
-      upd.startOffset,
-      upd.endOffset,
-      upd.linkStatus,
-      now,
-      comment.id,
-    );
-  }
-
-  const reopened = reopenAcceptedProposal(deps.db, doc.uid, row.id, now);
-  if (!reopened) throw new ThreadActionError(409, 'not-reopenable');
+    return { commentId: comment.id, ...upd };
+  });
 
   const knownIds = [...locateDocumentBlocks(doc, diff.before).keys()];
-  reanchorProposals(deps.db, doc.uid, knownIds, now, deps.realtime, identity.clientId);
-  return oid;
+  return {
+    oid,
+    applyDb: () => {
+      const now = Date.now();
+      deps.db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
+
+      const updateStmt = deps.db.prepare(
+        `UPDATE comments
+            SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
+                link_status = ?, updated_at = ?
+          WHERE id = ?`,
+      );
+      for (const upd of commentAnchorUpdates) {
+        updateStmt.run(
+          upd.blockId,
+          upd.startOffset,
+          upd.endOffset,
+          upd.linkStatus,
+          now,
+          upd.commentId,
+        );
+      }
+
+      const reopened = reopenAcceptedProposal(deps.db, doc.uid, row.id, now);
+      if (!reopened) throw new ThreadActionError(409, 'not-reopenable');
+
+      return reanchorProposals(deps.db, doc.uid, knownIds, now);
+    },
+  };
 }
 
 function loadDoc(db: Database, uid: string | undefined): DocumentRow | null {
@@ -970,11 +1037,7 @@ async function loadReopenableAcceptedThreadIds(
   const parent = history[1];
   if (!latest || !parent) return new Set<string>();
 
-  return new Set(
-    accepted
-      .filter((row) => row.accepted_oid === latest.oid)
-      .map((row) => row.id),
-  );
+  return new Set(accepted.filter((row) => row.accepted_oid === latest.oid).map((row) => row.id));
 }
 
 function toThreadWire(
@@ -1012,10 +1075,7 @@ function toThreadWire(
     },
     capabilities: {
       reply: canReply,
-      resolve:
-        !proposal &&
-        state === 'open' &&
-        (isRootAuthor || isAdmin),
+      resolve: !proposal && state === 'open' && (isRootAuthor || isAdmin),
       accept:
         proposal &&
         state === 'open' &&
@@ -1024,10 +1084,7 @@ function toThreadWire(
         row.link_status !== 'orphaned' &&
         row.anchor_block_id !== null,
       reject:
-        proposal &&
-        state === 'open' &&
-        decision.ok &&
-        (canEdit(decision.role) || isRootAuthor),
+        proposal && state === 'open' && decision.ok && (canEdit(decision.role) || isRootAuthor),
       reopen:
         state === 'resolved' &&
         (!proposal
@@ -1068,8 +1125,7 @@ function toThreadWire(
       },
       capabilities: {
         edit: viewerId !== null && viewerId === reply.author_client_id,
-        delete:
-          (viewerId !== null && viewerId === reply.author_client_id) || isAdmin,
+        delete: (viewerId !== null && viewerId === reply.author_client_id) || isAdmin,
       },
       created_at: reply.created_at,
       updated_at: reply.updated_at,
@@ -1082,7 +1138,9 @@ function threadState(row: ThreadRow): ThreadState {
   return row.resolved_at === null ? 'open' : 'resolved';
 }
 
-function threadResolution(row: ThreadRow): { kind: ResolutionKind; at: number; by_name: string | null } | null {
+function threadResolution(
+  row: ThreadRow,
+): { kind: ResolutionKind; at: number; by_name: string | null } | null {
   if (!isProposalRow(row)) {
     return row.resolved_at === null
       ? null
@@ -1113,11 +1171,7 @@ function locateDocumentBlocks(doc: DocumentRow, source: string): Map<string, Blo
   return doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
 }
 
-function readProposalBlockSource(
-  doc: DocumentRow,
-  source: string,
-  blockId: string,
-): string | null {
+function readProposalBlockSource(doc: DocumentRow, source: string, blockId: string): string | null {
   const range =
     locateDocumentBlocks(doc, source).get(blockId) ??
     (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId));
@@ -1145,9 +1199,7 @@ function findBlockBySourceSpan(
   let exact: { id: string; range: BlockSourceRange } | null = null;
   let sameStart: { id: string; range: BlockSourceRange } | null = null;
   let container: { id: string; range: BlockSourceRange } | null = null;
-  let overlap:
-    | { id: string; range: BlockSourceRange; amount: number; span: number }
-    | null = null;
+  let overlap: { id: string; range: BlockSourceRange; amount: number; span: number } | null = null;
 
   for (const [id, range] of blocks) {
     if (range.start === start && range.end === end) {
@@ -1167,7 +1219,11 @@ function findBlockBySourceSpan(
     const amount = Math.min(range.end, end) - Math.max(range.start, start);
     if (amount > 0) {
       const span = range.end - range.start;
-      if (!overlap || amount > overlap.amount || (amount === overlap.amount && span < overlap.span)) {
+      if (
+        !overlap ||
+        amount > overlap.amount ||
+        (amount === overlap.amount && span < overlap.span)
+      ) {
         overlap = { id, range, amount, span };
       }
     }
@@ -1297,7 +1353,6 @@ class ThreadActionError extends Error {
   constructor(
     readonly status: 400 | 409,
     readonly code: string,
-    readonly commitPartial = false,
   ) {
     super(code);
   }

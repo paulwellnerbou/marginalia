@@ -37,9 +37,9 @@ export function toWire(row: CommentRow): Record<string, unknown> {
     anchor: hasAnchor
       ? {
           block_id: row.anchor_block_id,
-          quote: row.anchor_quote,
-          prefix: row.anchor_prefix,
-          suffix: row.anchor_suffix,
+          quote: row.anchor_quote ?? '',
+          prefix: row.anchor_prefix ?? '',
+          suffix: row.anchor_suffix ?? '',
           start_offset: row.anchor_start_offset,
           end_offset: row.anchor_end_offset,
           heading_path: parseHeadingPath(row.anchor_heading_path),

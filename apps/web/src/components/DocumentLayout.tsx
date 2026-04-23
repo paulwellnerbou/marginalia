@@ -378,6 +378,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         }
         case 'edit_proposal.deleted': {
           setProposals((prev) => prev.filter((x) => x.id !== event.edit_proposal_id));
+          setComments((prev) =>
+            prev.filter((x) => x.parent_proposal_id !== event.edit_proposal_id),
+          );
           break;
         }
       }

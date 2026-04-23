@@ -504,9 +504,10 @@ Replies for thread `:tid` are every row in `comments` where:
 For the public API, both forms are equivalent: they are replies to the root
 thread.
 
-New writes for the unified API should use `parent_id = :tid` only.
-`parent_proposal_id` is legacy storage that should not leak into the new wire
-format.
+New writes for the unified API may currently persist replies using either
+`parent_id = :tid` or `parent_proposal_id = :tid`, depending on thread type.
+`parent_proposal_id` remains legacy storage and should not leak into the new
+wire format.
 
 ### 3. Proposal extension lookup
 
