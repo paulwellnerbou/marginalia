@@ -1,5 +1,8 @@
 import Asciidoctor from '@asciidoctor/core';
 import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
+
+const asciidoctor: ReturnType<typeof Asciidoctor> =
+  ((globalThis as any).__asciidoctor ??= Asciidoctor());
 import type { BlockSourceRange } from './locate-block.js';
 
 /**
@@ -9,8 +12,7 @@ import type { BlockSourceRange } from './locate-block.js';
  * `hashBlock(kind, normalizedText)` recipe on the same AST.
  */
 export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSourceRange> {
-  const processor = Asciidoctor();
-  const doc = processor.load(source, {
+  const doc = asciidoctor.load(source, {
     safe: 'safe',
     standalone: false,
     sourcemap: true,
