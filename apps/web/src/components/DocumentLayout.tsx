@@ -703,7 +703,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       .filter(
         (comment) =>
           comment.parent_id === null &&
-          comment.link_status !== 'orphaned' &&
+          comment.link_status === 'linked' &&
           comment.anchor !== null &&
           comment.anchor.quote &&
           comment.anchor.end_offset > comment.anchor.start_offset,
@@ -719,6 +719,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
     for (const proposal of proposals) {
       if (proposal.status !== 'open') continue;
+      if (proposal.comment.link_status !== 'linked') continue;
       if (!proposal.comment.anchor?.block_id || !proposal.comment.anchor.quote) continue;
 
       highlights.push({

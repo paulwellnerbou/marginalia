@@ -785,12 +785,18 @@ interface ListThreadsResponse {
 const listThreadsInflight = new Map<string, Promise<ListThreadsResponse>>();
 const threadSnapshots = new Map<string, Thread[]>();
 
-function listThreads(uid: string): Promise<ListThreadsResponse> {
-  const existing = listThreadsInflight.get(uid);
+function listThreads(
+  uid: string,
+  opts: { consumeMentions?: boolean } = {},
+): Promise<ListThreadsResponse> {
+  const consumeMentions = opts.consumeMentions !== false;
+  const cacheKey = `${uid}:${consumeMentions ? 'consume' : 'peek'}`;
+  const existing = listThreadsInflight.get(cacheKey);
   if (existing) return existing;
 
+  const suffix = consumeMentions ? '' : '?consume_mentions=false';
   const promise = request<ListThreadsResponse>(
-    `/api/documents/${encodeURIComponent(uid)}/threads`,
+    `/api/documents/${encodeURIComponent(uid)}/threads${suffix}`,
     {
       method: 'GET',
       docUid: uid,
@@ -801,10 +807,10 @@ function listThreads(uid: string): Promise<ListThreadsResponse> {
       return res;
     })
     .finally(() => {
-      listThreadsInflight.delete(uid);
+      listThreadsInflight.delete(cacheKey);
     });
 
-  listThreadsInflight.set(uid, promise);
+  listThreadsInflight.set(cacheKey, promise);
   return promise;
 }
 
@@ -983,7 +989,7 @@ async function findCommentLocation(uid: string, commentId: string): Promise<Comm
   const inCache = cached ? findCommentLocationInThreads(cached, commentId) : null;
   if (inCache) return inCache;
 
-  const fresh = await listThreads(uid);
+  const fresh = await listThreads(uid, { consumeMentions: false });
   const location = findCommentLocationInThreads(fresh.threads, commentId);
   if (location) return location;
   throw new ApiError(404, 'not-found');

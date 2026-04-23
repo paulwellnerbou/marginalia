@@ -119,7 +119,10 @@ async function listThreads(c: Context, deps: AppDeps) {
       toThreadWire(root, repliesByThread.get(root.id) ?? [], decision, reopenableAccepted),
     ),
     mention_candidates: listMentionCandidates(db, doc.uid),
-    pending_mentions: consumePendingMentions(db, doc.uid, decision.identity?.displayName ?? null),
+    pending_mentions:
+      c.req.query('consume_mentions') === 'false'
+        ? []
+        : consumePendingMentions(db, doc.uid, decision.identity?.displayName ?? null),
   });
 }
 
@@ -146,7 +149,9 @@ async function createThread(c: Context, deps: AppDeps) {
   if (!anchor) return c.json({ error: 'anchor-required' }, 400);
 
   const rootBody = asOptionalBody(body.body);
-  const proposal = asProposal(body.proposal);
+  const parsedProposal = asProposal(body.proposal);
+  if (!parsedProposal.ok) return c.json({ error: parsedProposal.error }, 400);
+  const proposal = parsedProposal.proposal;
 
   if (!proposal) {
     if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
@@ -546,95 +551,112 @@ async function respondToThread(c: Context, deps: AppDeps) {
   }
 
   let documentOid: string | null = null;
-  if (action === 'resolve') {
-    const now = Date.now();
-    db.prepare(
-      `UPDATE comments
-          SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
-        WHERE id = ?`,
-    ).run(now, identity.displayName, now, tid);
-  } else if (action === 'reject') {
-    const now = Date.now();
-    db.prepare(
-      `UPDATE comments_edit_proposals
-          SET status = 'rejected'
-        WHERE comment_id = ?`,
-    ).run(tid);
-    db.prepare(
-      `UPDATE comments
-          SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
-        WHERE id = ?`,
-    ).run(now, identity.displayName, now, tid);
-  } else if (action === 'accept') {
-    try {
-      documentOid = await acceptProposalThread(doc, row, deps, identity);
-    } catch (err) {
-      if (err instanceof ThreadActionError) {
-        return c.json({ error: err.code }, err.status);
-      }
-      throw err;
-    }
-  } else if (action === 'reopen') {
-    const now = Date.now();
-    if (!isProposal) {
+  let createdReplyId: string | null = null;
+  let createdReply: CommentRow | null = null;
+  let createdReplyMentionTargets: string[] = [];
+
+  db.exec('BEGIN');
+  try {
+    if (action === 'resolve') {
+      const now = Date.now();
       db.prepare(
         `UPDATE comments
-            SET resolved_at = NULL, resolved_by_name = NULL, updated_at = ?
+            SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
           WHERE id = ?`,
-      ).run(now, tid);
-    } else if (resolution?.kind === 'reject') {
+      ).run(now, identity.displayName, now, tid);
+    } else if (action === 'reject') {
+      const now = Date.now();
       db.prepare(
         `UPDATE comments_edit_proposals
-            SET status = 'open', accepted_oid = NULL
+            SET status = 'rejected'
           WHERE comment_id = ?`,
       ).run(tid);
       db.prepare(
         `UPDATE comments
-            SET resolved_at = NULL, resolved_by_name = NULL, updated_at = ?
+            SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
           WHERE id = ?`,
-      ).run(now, tid);
-    } else if (resolution?.kind === 'accept') {
-      try {
+      ).run(now, identity.displayName, now, tid);
+    } else if (action === 'accept') {
+      documentOid = await acceptProposalThread(doc, row, deps, identity);
+    } else if (action === 'reopen') {
+      const now = Date.now();
+      if (!isProposal) {
+        db.prepare(
+          `UPDATE comments
+              SET resolved_at = NULL, resolved_by_name = NULL, updated_at = ?
+            WHERE id = ?`,
+        ).run(now, tid);
+      } else if (resolution?.kind === 'reject') {
+        db.prepare(
+          `UPDATE comments_edit_proposals
+              SET status = 'open', accepted_oid = NULL
+            WHERE comment_id = ?`,
+        ).run(tid);
+        db.prepare(
+          `UPDATE comments
+              SET resolved_at = NULL, resolved_by_name = NULL, updated_at = ?
+            WHERE id = ?`,
+        ).run(now, tid);
+      } else if (resolution?.kind === 'accept') {
         documentOid = await reopenAcceptedProposalThread(doc, row, deps, identity);
-      } catch (err) {
-        if (err instanceof ThreadActionError) {
-          return c.json({ error: err.code }, err.status);
-        }
-        throw err;
       }
     }
+
+    if (replyBody) {
+      const now = Date.now();
+      createdReplyId = newCommentId();
+      db.prepare(
+        `INSERT INTO comments
+           (id, doc_uid, parent_id, parent_proposal_id,
+            author_client_id, author_display_name,
+            body, link_status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'linked', ?, ?)`,
+      ).run(
+        createdReplyId,
+        doc.uid,
+        isProposal ? null : tid,
+        isProposal ? tid : null,
+        identity.clientId,
+        identity.displayName,
+        replyBody,
+        now,
+        now,
+      );
+
+      createdReply = db.prepare('SELECT * FROM comments WHERE id = ?').get(createdReplyId) as CommentRow;
+      createdReplyMentionTargets = storeMentionsForComment(
+        db,
+        doc.uid,
+        createdReply.id,
+        createdReply.body,
+        createdReply.author_display_name,
+      );
+    }
+
+    db.exec('COMMIT');
+  } catch (err) {
+    if (err instanceof ThreadActionError && err.commitPartial) {
+      db.exec('COMMIT');
+      return c.json({ error: err.code }, err.status);
+    }
+    db.exec('ROLLBACK');
+    if (err instanceof ThreadActionError) {
+      return c.json({ error: err.code }, err.status);
+    }
+    throw err;
   }
 
-  let createdReplyId: string | null = null;
-  if (replyBody) {
-    const now = Date.now();
-    createdReplyId = newCommentId();
-    db.prepare(
-      `INSERT INTO comments
-         (id, doc_uid, parent_id, parent_proposal_id,
-          author_client_id, author_display_name,
-          body, link_status, created_at, updated_at)
-       VALUES (?, ?, ?, NULL, ?, ?, ?, 'linked', ?, ?)`,
-    ).run(createdReplyId, doc.uid, tid, identity.clientId, identity.displayName, replyBody, now, now);
-
-    const reply = db.prepare('SELECT * FROM comments WHERE id = ?').get(createdReplyId) as CommentRow;
-    const mentionTargets = storeMentionsForComment(
-      db,
-      doc.uid,
-      reply.id,
-      reply.body,
-      reply.author_display_name,
-    );
+  if (createdReply) {
     realtime.broadcast(
       doc.uid,
-      { type: 'comment.created', comment: toLegacyCommentWire(reply) },
+      { type: 'comment.created', comment: toLegacyCommentWire(createdReply) },
       identity.clientId,
     );
-    if (mentionTargets.length > 0) {
+    if (createdReplyMentionTargets.length > 0) {
       realtime.broadcastToDisplayNames(
         doc.uid,
-        mentionTargets,
-        { type: 'mention.created', comment: toLegacyCommentWire(reply) },
+        createdReplyMentionTargets,
+        { type: 'mention.created', comment: toLegacyCommentWire(createdReply) },
         identity.clientId,
       );
     }
@@ -706,7 +728,7 @@ async function acceptProposalThread(
         identity.clientId,
       );
     }
-    throw new ThreadActionError(409, 'proposal-orphaned');
+    throw new ThreadActionError(409, 'proposal-orphaned', true);
   }
 
   const nextSource = source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
@@ -1025,7 +1047,7 @@ function toThreadWire(
       },
       capabilities: {
         edit: canRootEdit,
-        delete: canRootDelete,
+        delete: row.proposal_status === 'accepted' ? isAdmin : canRootDelete,
       },
       created_at: row.created_at,
       updated_at: row.updated_at,
@@ -1226,15 +1248,24 @@ function asAnchor(v: unknown): {
   };
 }
 
-function asProposal(v: unknown): { anchorKind: string | null; proposedText: string } | null {
-  if (v === null || v === undefined) return null;
-  if (typeof v !== 'object') return null;
+function asProposal(
+  v: unknown,
+):
+  | { ok: true; proposal: { anchorKind: string | null; proposedText: string } | null }
+  | { ok: false; error: 'proposal-text-required' } {
+  if (v === null || v === undefined) return { ok: true, proposal: null };
+  if (typeof v !== 'object') return { ok: false, error: 'proposal-text-required' };
   const proposal = v as Record<string, unknown>;
   const proposedText = typeof proposal.proposed_text === 'string' ? proposal.proposed_text : null;
-  if (proposedText === null || proposedText.length === 0 || proposedText.length > 20000) return null;
+  if (proposedText === null || proposedText.length === 0 || proposedText.length > 20000) {
+    return { ok: false, error: 'proposal-text-required' };
+  }
   return {
-    anchorKind: typeof proposal.anchor_kind === 'string' ? proposal.anchor_kind : null,
-    proposedText,
+    ok: true,
+    proposal: {
+      anchorKind: typeof proposal.anchor_kind === 'string' ? proposal.anchor_kind : null,
+      proposedText,
+    },
   };
 }
 
@@ -1264,8 +1295,9 @@ function newCommentId(): string {
 
 class ThreadActionError extends Error {
   constructor(
-    readonly status: number,
+    readonly status: 400 | 409,
     readonly code: string,
+    readonly commitPartial = false,
   ) {
     super(code);
   }

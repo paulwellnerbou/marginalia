@@ -664,7 +664,7 @@ describe('documents API', () => {
     const acceptedSource = '## 2. Loesungskonzept & App-Architektur (Q1 - 30%)\n\nBody.\n';
     const expectedAcceptedBlockId = [...locateAllBlocks(acceptedSource).entries()].find(
       ([, range]) => range.kind === 'heading' && range.text.includes('30%'),
-    )?.[0];
+    )?.[0] ?? null;
     expect(expectedAcceptedBlockId).toBeString();
 
     const acceptRes = await app.hono.fetch(

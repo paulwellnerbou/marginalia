@@ -538,6 +538,44 @@ describe('threads API', () => {
     expect(secondBody.pending_mentions).toEqual([]);
   });
 
+  test('thread list can skip consuming pending mentions', async () => {
+    const uid = await newDoc('# Title');
+    const bobInvite = await createInvite(uid, 'Bob', 'collaborator');
+    const blockId = await firstBlockId(uid);
+
+    const created = await addComment(
+      uid,
+      ALICE,
+      { block_id: blockId, quote: 'Title' },
+      'hello @Bob',
+    );
+    expect(created.status).toBe(201);
+    const cid = (created.body as { comment: { id: string } }).comment.id;
+
+    const peek = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?consume_mentions=false`, {
+        headers: new Headers({
+          [CLIENT_HEADER]: BOB.id,
+          [INVITE_HEADER]: bobInvite,
+        }),
+      }),
+    );
+    expect(peek.status).toBe(200);
+    const peekBody = (await peek.json()) as { pending_mentions: string[] };
+    expect(peekBody.pending_mentions).toEqual([]);
+
+    const consume = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        headers: new Headers({
+          [CLIENT_HEADER]: BOB.id,
+          [INVITE_HEADER]: bobInvite,
+        }),
+      }),
+    );
+    const consumeBody = (await consume.json()) as { pending_mentions: string[] };
+    expect(consumeBody.pending_mentions).toEqual([cid]);
+  });
+
   test('editing a comment only creates a mention notification once per person', async () => {
     const uid = await newDoc('# Title');
     const carolInvite = await createInvite(uid, 'Carol', 'collaborator');
@@ -766,6 +804,125 @@ describe('threads API', () => {
       }),
     );
     expect(carolPropose.status).toBe(403);
+  });
+
+  test('invalid proposal payload returns proposal validation error', async () => {
+    const uid = await newDoc('# Title');
+    const blockId = await firstBlockId(uid);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          proposal: { anchor_kind: 'heading' },
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'proposal-text-required' });
+  });
+
+  test('proposal replies are stored with parent_proposal_id', async () => {
+    const uid = await newDoc('# Title');
+    const blockId = await firstBlockId(uid);
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          proposal: {
+            anchor_kind: 'heading',
+            proposed_text: '# Better title',
+          },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
+
+    const replyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ body: 'Looks good' }),
+      }),
+    );
+    expect(replyRes.status).toBe(200);
+    const replyBody = (await replyRes.json()) as {
+      created_reply_id: string;
+    };
+    const row = app.db
+      .prepare(
+        `SELECT parent_id, parent_proposal_id
+           FROM comments
+          WHERE id = ?`,
+      )
+      .get(replyBody.created_reply_id) as {
+      parent_id: string | null;
+      parent_proposal_id: string | null;
+    };
+    expect(row).toEqual({
+      parent_id: null,
+      parent_proposal_id: proposed.thread.id,
+    });
+  });
+
+  test('accepted proposal authors cannot delete unless they are admin', async () => {
+    const uid = await newDoc('# Title');
+    const blockId = await firstBlockId(uid);
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          proposal: {
+            anchor_kind: 'heading',
+            proposed_text: '# Better title',
+          },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
+
+    const acceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    const bobList = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        headers: headersFor(BOB),
+      }),
+    );
+    const bobBody = (await bobList.json()) as {
+      threads: Array<{ id: string; root: { capabilities: { delete: boolean } } }>;
+    };
+    expect(
+      bobBody.threads.find((thread) => thread.id === proposed.thread.id)?.root.capabilities.delete,
+    ).toBe(false);
+
+    const adminList = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        headers: asAdmin(),
+      }),
+    );
+    const adminBody = (await adminList.json()) as {
+      threads: Array<{ id: string; root: { capabilities: { delete: boolean } } }>;
+    };
+    expect(
+      adminBody.threads.find((thread) => thread.id === proposed.thread.id)?.root.capabilities.delete,
+    ).toBe(true);
   });
 
   test('resolving a reply is rejected', async () => {
