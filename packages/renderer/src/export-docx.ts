@@ -490,7 +490,9 @@ const pt2twip = (pt: number): number => Math.round(pt * 20);
 /** Shared left indent used by the Blockquote style. */
 const BLOCKQUOTE_INDENT_PT = 18;
 /** Word body copy reads too airy above 1.5; keep DOCX body/list spacing fixed. */
-const DOCX_BODY_LINE_HEIGHT = 1.5;
+const DOCX_MAX_BODY_LINE_HEIGHT = 1.5;
+const DOCX_BODY_LINE_SPACING = Math.round(DOCX_MAX_BODY_LINE_HEIGHT * 240);
+const DOCX_LIST_ITEM_SPACING_PT = 3;
 
 /** Strip leading '#' and validate — defensive; we control token hex strings. */
 const hex = (c: string): string => c.replace(/^#/, '').toLowerCase();
@@ -971,7 +973,7 @@ function buildStyles(
         paragraph: {
           spacing: {
             after: pt2twip(tokens.spacing.blockEm * base * 0.5),
-            line: Math.round(DOCX_BODY_LINE_HEIGHT * 240),
+            line: DOCX_BODY_LINE_SPACING,
           },
           // `bidirectional: true` flips the paragraph direction to
           // right-to-left; combined with the `lang` hint above, Word
@@ -1011,6 +1013,7 @@ function buildStyles(
           spacing: {
             before: pt2twip(tokens.spacing.blockEm * base * 0.3),
             after: pt2twip(tokens.spacing.blockEm * base * 0.3),
+            line: DOCX_BODY_LINE_SPACING,
           },
         },
       },
@@ -1199,7 +1202,7 @@ function hastToDocxChildren(
     const node = topLevel[i] as HastNode;
     convertBlock(node, ctx, out, { listDepth: 0, blockquoteDepth: 0, afterTable });
     if (!isIgnorableBlockWhitespace(node)) {
-      afterTable = isElement(node) && node.tagName === 'table';
+      afterTable = blockEndsWithTable(node);
     }
     if (i === injectAt && options.injectedBlocks) {
       out.push(...options.injectedBlocks);
@@ -1278,12 +1281,38 @@ function tableLeadSpacingTwip(tokens: ThemeTokens): number {
   return pt2twip(tokens.spacing.blockEm * tokens.fontSize.basePt * 0.5);
 }
 
+function blockquoteSpacingTwip(tokens: ThemeTokens): { before: number; after: number } {
+  const spacing = pt2twip(tokens.spacing.blockEm * tokens.fontSize.basePt * 0.3);
+  return { before: spacing, after: spacing };
+}
+
+function blockquoteBorder(tokens: ThemeTokens): ParagraphOptions['border'] {
+  return tokens.blockquote.hasBar
+    ? {
+        left: {
+          style: BorderStyle.SINGLE,
+          size: 24,
+          color: hex(tokens.colors.quoteBar),
+          space: 8,
+        },
+      }
+    : undefined;
+}
+
 function withParagraphContext(
   options: ParagraphOptions,
   ctx: BuildCtx,
   walk: WalkCtx,
 ): ParagraphOptions {
   let next = { ...options };
+
+  next = {
+    ...next,
+    spacing: {
+      ...(next.spacing ?? {}),
+      line: next.spacing?.line ?? DOCX_BODY_LINE_SPACING,
+    },
+  };
 
   if (walk.afterTable) {
     next = {
@@ -1297,12 +1326,21 @@ function withParagraphContext(
 
   if (walk.blockquoteDepth > 0) {
     const quoteIndent = pt2twip(BLOCKQUOTE_INDENT_PT * walk.blockquoteDepth);
+    const quoteSpacing = blockquoteSpacingTwip(ctx.tokens);
+    const border = blockquoteBorder(ctx.tokens);
     next = {
       ...next,
       style: next.style ?? 'Blockquote',
+      ...(border ? { border: { ...(next.border ?? {}), ...border } } : {}),
       indent: {
         ...(next.indent ?? {}),
         left: (typeof next.indent?.left === 'number' ? next.indent.left : 0) + quoteIndent,
+      },
+      spacing: {
+        ...(next.spacing ?? {}),
+        before: next.spacing?.before ?? quoteSpacing.before,
+        after: next.spacing?.after ?? quoteSpacing.after,
+        line: next.spacing?.line ?? DOCX_BODY_LINE_SPACING,
       },
     };
   }
@@ -1312,6 +1350,26 @@ function withParagraphContext(
 
 function isIgnorableBlockWhitespace(node: HastNode): boolean {
   return isText(node) && node.value.trim() === '';
+}
+
+function blockEndsWithTable(node: HastNode): boolean {
+  if (isIgnorableBlockWhitespace(node)) return false;
+  if (!isElement(node)) return false;
+  if (node.tagName === 'table') return true;
+  if (
+    node.tagName === 'blockquote' ||
+    node.tagName === 'figure' ||
+    node.tagName === 'section' ||
+    node.tagName === 'article' ||
+    node.tagName === 'div'
+  ) {
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = node.children[i] as HastNode;
+      if (isIgnorableBlockWhitespace(child)) continue;
+      return blockEndsWithTable(child);
+    }
+  }
+  return false;
 }
 
 function convertBlock(
@@ -1362,7 +1420,7 @@ function convertBlock(
             afterTable,
           });
           if (!isIgnorableBlockWhitespace(child)) {
-            afterTable = isElement(child) && child.tagName === 'table';
+            afterTable = blockEndsWithTable(child);
           }
         }
       }
@@ -1409,7 +1467,7 @@ function convertBlock(
         for (const child of node.children as HastNode[]) {
           convertBlock(child, ctx, out, { ...walk, afterTable });
           if (!isIgnorableBlockWhitespace(child)) {
-            afterTable = isElement(child) && child.tagName === 'table';
+            afterTable = blockEndsWithTable(child);
           }
         }
       }
@@ -1468,7 +1526,7 @@ function convertBlock(
         for (const child of node.children as HastNode[]) {
           convertBlock(child, ctx, out, { ...walk, afterTable });
           if (!isIgnorableBlockWhitespace(child)) {
-            afterTable = isElement(child) && child.tagName === 'table';
+            afterTable = blockEndsWithTable(child);
           }
         }
       }
@@ -1675,6 +1733,7 @@ function convertList(
                 ...(walk.blockquoteDepth > 0
                   ? { indent: { left: continuationIndent, hanging: hangingIndent } }
                   : {}),
+                spacing: { after: pt2twip(DOCX_LIST_ITEM_SPACING_PT) },
                 children,
               },
               ctx,
@@ -1687,7 +1746,11 @@ function convertList(
         out.push(
           new Paragraph(
             withParagraphContext(
-              { indent: { left: continuationIndent }, children },
+              {
+                indent: { left: continuationIndent },
+                spacing: { after: pt2twip(DOCX_LIST_ITEM_SPACING_PT) },
+                children,
+              },
               ctx,
               { ...walk, afterTable },
             ),
@@ -1707,7 +1770,7 @@ function convertList(
           blockquoteDepth: walk.blockquoteDepth,
           afterTable,
         });
-        afterTable = false;
+        afterTable = blockEndsWithTable(c);
       } else if (isElement(c) && c.tagName === 'p') {
         // A `<p>` is its own paragraph. Flush anything we've been
         // accumulating (turns into the previous paragraph), then put
@@ -1736,6 +1799,7 @@ function convertList(
               ...(walk.blockquoteDepth > 0
                 ? { indent: { left: continuationIndent, hanging: hangingIndent } }
                 : {}),
+              spacing: { after: pt2twip(DOCX_LIST_ITEM_SPACING_PT) },
               children: [],
             },
             ctx,
@@ -1868,6 +1932,7 @@ function buildTable(node: Element, ctx: BuildCtx): Table {
               new Paragraph({
                 ...(isHeaderCell ? { style: 'TableHeader' } : {}),
                 ...(align ? { alignment: align } : {}),
+                spacing: { line: DOCX_BODY_LINE_SPACING },
                 children: collectInline(cell, ctx, { bold: isHeaderCell }),
               }),
             ],
