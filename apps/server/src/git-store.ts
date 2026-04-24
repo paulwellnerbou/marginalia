@@ -55,7 +55,7 @@ export class GitStore {
     content: string,
     author: { displayName: string; clientId: string },
     action: 'upload' | 'update' | 'restore' | 'accept-proposal',
-    meta: { proposalId?: string; restoredFromOid?: string } = {},
+    meta: { proposalId?: string; restoredFromOid?: string; commitMessage?: string } = {},
   ): Promise<{ oid: string; path: string }> {
     const path = this.docPath(uid, format);
     writeFileSync(this.absPath(path), content);
@@ -67,10 +67,11 @@ export class GitStore {
       meta.proposalId ? `X-Marginalia-Proposal-ID: ${meta.proposalId}` : null,
       meta.restoredFromOid ? `X-Marginalia-Restored-From: ${meta.restoredFromOid}` : null,
     ].filter((line): line is string => Boolean(line));
+    const bodyParts = meta.commitMessage ? [meta.commitMessage, trailers.join('\n')] : [trailers.join('\n')];
     const oid = await git.commit({
       fs,
       dir: this.repoDir,
-      message: `${subject}\n\n${trailers.join('\n')}\n`,
+      message: `${subject}\n\n${bodyParts.join('\n\n')}\n`,
       author: {
         name: author.clientId,
         email: `${author.clientId}@marginalia.local`,

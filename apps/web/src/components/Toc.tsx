@@ -127,7 +127,7 @@ function TocItem({
           <span className="toc-toggle-spacer" aria-hidden />
         )}
         <a ref={linkRef} href={`#${node.id}`} className={isActive ? 'active' : undefined}>
-          {renderHighlightedText(node.text, query)}
+          {renderHighlightedText(stripHtml(node.text), query)}
         </a>
       </div>
       {hasChildren && effectiveOpen && (
@@ -141,6 +141,10 @@ function TocItem({
   );
 }
 
+function stripHtml(html: string): string {
+  return html.replace(/<[^>]+>/g, '');
+}
+
 function filterNodes(nodes: TocNode[], query: string): TocNode[] {
   if (!query) return nodes;
   const queryLower = query.toLocaleLowerCase();
@@ -148,7 +152,7 @@ function filterNodes(nodes: TocNode[], query: string): TocNode[] {
 
   for (const node of nodes) {
     const children = filterNodes(node.children, query);
-    if (node.text.toLocaleLowerCase().includes(queryLower) || children.length > 0) {
+    if (stripHtml(node.text).toLocaleLowerCase().includes(queryLower) || children.length > 0) {
       filtered.push({ ...node, children });
     }
   }
