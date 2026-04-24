@@ -1780,9 +1780,11 @@ function convertList(
         pendingInline = [...(c.children as HastNode[])];
         flushPending();
       } else {
+        // Skip whitespace-only text nodes — they are HAST formatting
+        // artifacts between block-level <p> children and carry no content.
+        if (isIgnorableBlockWhitespace(c)) continue;
         // Loose inline (tight-list text, inline elements between
-        // paragraphs, stray whitespace). Accumulate and flush with
-        // the next block boundary.
+        // paragraphs). Accumulate and flush with the next block boundary.
         pendingInline.push(c);
       }
     }
