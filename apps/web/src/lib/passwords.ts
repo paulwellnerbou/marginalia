@@ -81,7 +81,8 @@ export function useSavedPassword(docUid: string | undefined): string | null {
 }
 
 function credentialIdForDoc(docUid: string, docName?: string | null): string {
-  return docName ? `document:${docUid} — ${docName}` : `document:${docUid}`;
+  const name = docName?.trim();
+  return name ? `document:${docUid} — ${name}` : `document:${docUid}`;
 }
 
 type WindowWithPasswordCredential = Window & {
@@ -104,7 +105,7 @@ export async function storePasswordInBrowserPasswordManager(
   if (!ctor || typeof navigator.credentials?.store !== 'function') return false;
   const credential = new ctor({
     id: credentialIdForDoc(docUid, docName),
-    name: docName ? `Marginalia — ${docName}` : `Marginalia document ${docUid}`,
+    name: docName?.trim() ? `Marginalia — ${docName.trim()}` : `Marginalia document ${docUid}`,
     password,
   });
   await navigator.credentials.store(credential);
