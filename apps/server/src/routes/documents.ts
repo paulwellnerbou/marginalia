@@ -233,6 +233,11 @@ async function updateDocument(c: Context, deps: AppDeps) {
   if (typeof nextSource !== 'string') {
     return c.json({ error: 'source-required' }, 400);
   }
+  const rawCommitMessage = typeof body?.commit_message === 'string' ? body.commit_message : '';
+  const commitMessage = rawCommitMessage
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    .trim()
+    .slice(0, 1000) || undefined;
 
   let previousSource = '';
   try {
@@ -241,7 +246,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
     /* new doc */
   }
 
-  const { oid } = await store.write(doc.uid, doc.format, nextSource, decision.identity, 'update');
+  const { oid } = await store.write(doc.uid, doc.format, nextSource, decision.identity, 'update', { commitMessage });
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
   const rendered = await renderDocument(nextSource, doc.format);

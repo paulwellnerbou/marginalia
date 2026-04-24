@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { saveInviteToken } from '../lib/invite.js';
-import { Button, Container, Text } from '@radix-ui/themes';
-import { Cross2Icon } from '@radix-ui/react-icons';
+import { Button, Container, Flex, Select, Slider, Text } from '@radix-ui/themes';
 import type { RenderResult } from '@marginalia/renderer';
 import type { EditorView } from 'codemirror';
+import type { Extension } from '@codemirror/state';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import {
   getDocument,
@@ -17,16 +17,34 @@ import {
 } from '../lib/api.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { reportError } from '../lib/log.js';
+import {
+  applyTheme,
+  BUILT_IN_THEMES,
+  getUserThemeOverride,
+  setUserThemeOverride,
+} from '../lib/themes.js';
 import { RenderedDoc } from '../components/RenderedDoc.js';
 import { AssetsPanel } from '../components/AssetsPanel.js';
 import { AppBar } from '../components/AppBar.js';
+import { EditToolbar } from '../components/EditToolbar.js';
+import { MarkdownToolbar } from '../components/MarkdownToolbar.js';
+import { ResizeHandle } from '../components/ResizeHandle.js';
 import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
+
+const ASSETS_COLLAPSED_WIDTH = 36;
+const LS_ASSETS_OPEN = 'marginalia.editAssetsOpen';
+const LS_ASSETS_WIDTH = 'marginalia.editAssetsWidth';
+const LS_EDITOR_WIDTH = 'marginalia.editEditorWidth';
+const LS_TEXT_ZOOM = 'marginalia.textZoom';
+const LS_WORD_WRAP = 'marginalia.editWordWrap';
 
 type EditorDeps = {
   EditorState: typeof import('@codemirror/state').EditorState;
+  Compartment: typeof import('@codemirror/state').Compartment;
   EditorView: typeof import('codemirror').EditorView;
   basicSetup: typeof import('codemirror').basicSetup;
   markdown: typeof import('@codemirror/lang-markdown').markdown;
+  lineWrapping: Extension;
 };
 
 let editorDepsPromise: Promise<EditorDeps> | null = null;
@@ -71,9 +89,11 @@ function loadEditorDeps(): Promise<EditorDeps> {
       import('@codemirror/lang-markdown'),
     ]).then(([state, view, markdown]) => ({
       EditorState: state.EditorState,
+      Compartment: state.Compartment,
       EditorView: view.EditorView,
       basicSetup: view.basicSetup,
       markdown: markdown.markdown,
+      lineWrapping: view.EditorView.lineWrapping,
     }));
   }
   return editorDepsPromise;
@@ -94,15 +114,51 @@ export function EditPage() {
   const navigate = useNavigate();
   const [doc, setDoc] = useState<Document | null>(null);
   const [source, setSource] = useState('');
+  const [savedSource, setSavedSource] = useState('');
   const [rendered, setRendered] = useState<RenderResult | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attached, setAttached] = useState<AttachedAsset[]>([]);
   const displayName = useDisplayName();
 
+  const [wordWrap, setWordWrap] = useState<boolean>(() => {
+    const saved = localStorage.getItem(LS_WORD_WRAP);
+    return saved === null ? true : saved === 'true';
+  });
+  const wordWrapRef = useRef(wordWrap);
+  useEffect(() => { wordWrapRef.current = wordWrap; }, [wordWrap]);
+
+  const [assetsOpen, setAssetsOpen] = useState<boolean>(() => {
+    const saved = localStorage.getItem(LS_ASSETS_OPEN);
+    return saved === null ? true : saved === 'true';
+  });
+  const [assetsWidth, setAssetsWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(LS_ASSETS_WIDTH));
+    return Number.isFinite(saved) && saved >= 180 ? saved : 260;
+  });
+  const [editorWidth, setEditorWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(LS_EDITOR_WIDTH));
+    return Number.isFinite(saved) && saved >= 200 ? saved : 500;
+  });
+
+  const [textZoom, setTextZoom] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(LS_TEXT_ZOOM));
+    return Number.isFinite(saved) && saved >= 80 && saved <= 140 ? saved : 100;
+  });
+  const [theme, setTheme] = useState('default');
+
+  useEffect(() => { localStorage.setItem(LS_ASSETS_OPEN, String(assetsOpen)); }, [assetsOpen]);
+  useEffect(() => { localStorage.setItem(LS_ASSETS_WIDTH, String(assetsWidth)); }, [assetsWidth]);
+  useEffect(() => { localStorage.setItem(LS_EDITOR_WIDTH, String(editorWidth)); }, [editorWidth]);
+  useEffect(() => { localStorage.setItem(LS_TEXT_ZOOM, String(textZoom)); }, [textZoom]);
+  useEffect(() => { localStorage.setItem(LS_WORD_WRAP, String(wordWrap)); }, [wordWrap]);
+  useEffect(() => { void applyTheme(theme); }, [theme]);
+
   const editorEl = useRef<HTMLDivElement>(null);
   const previewEl = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const editorDepsRef = useRef<EditorDeps | null>(null);
+  const wrapCompartmentRef = useRef<import('@codemirror/state').Compartment | null>(null);
   const previewRequestRef = useRef(0);
 
   const canEdit = useMemo(() => {
@@ -131,11 +187,17 @@ export function EditPage() {
   }, [doc]);
 
   useEffect(() => {
+    if (!doc) return;
+    setTheme(getUserThemeOverride(doc.uid) ?? doc.default_theme);
+  }, [doc?.uid, doc?.default_theme]);
+
+  useEffect(() => {
     if (!uid) return;
     getDocument(uid).then(
       (d) => {
         setDoc(d);
         setSource(d.source);
+        setSavedSource(d.source);
         setAttached(d.attached_assets ?? []);
       },
       (err) => {
@@ -160,8 +222,12 @@ export function EditPage() {
     if (!editorEl.current || doc === null || viewRef.current) return;
     let disposed = false;
     void loadEditorDeps().then(
-      ({ EditorState, EditorView, basicSetup, markdown }) => {
+      (deps) => {
         if (disposed || !editorEl.current || viewRef.current) return;
+        editorDepsRef.current = deps;
+        const { EditorState, Compartment, EditorView, basicSetup, markdown, lineWrapping } = deps;
+        const wrapCompartment = new Compartment();
+        wrapCompartmentRef.current = wrapCompartment;
         const state = EditorState.create({
           doc: doc.source,
           extensions: [
@@ -174,6 +240,7 @@ export function EditPage() {
               '&': { height: '100%', fontSize: '14px' },
               '.cm-scroller': { fontFamily: 'ui-monospace, SFMono-Regular, monospace' },
             }),
+            wrapCompartment.of(wordWrapRef.current ? [lineWrapping] : []),
           ],
         });
         viewRef.current = new EditorView({ state, parent: editorEl.current });
@@ -187,8 +254,20 @@ export function EditPage() {
       disposed = true;
       viewRef.current?.destroy();
       viewRef.current = null;
+      wrapCompartmentRef.current = null;
     };
   }, [doc, uid]);
+
+  // Toggle line wrapping without destroying the editor
+  useEffect(() => {
+    const view = viewRef.current;
+    const compartment = wrapCompartmentRef.current;
+    const deps = editorDepsRef.current;
+    if (!view || !compartment || !deps) return;
+    view.dispatch({
+      effects: compartment.reconfigure(wordWrap ? deps.lineWrapping : []),
+    });
+  }, [wordWrap]);
 
   useEffect(() => {
     previewRequestRef.current += 1;
@@ -361,7 +440,7 @@ export function EditPage() {
     return () => root.removeEventListener('paste', handler as EventListener);
   }, [canEdit, uid, uploadAndAttach, doc?.format]);
 
-  async function handleSave() {
+  async function handleSave(opts?: { commitMessage?: string; closeAfter?: boolean }) {
     if (!uid) return;
     const resolved = displayName.trim();
     if (!resolved) {
@@ -373,8 +452,9 @@ export function EditPage() {
     setSaving(true);
     setError(null);
     try {
-      await updateDocument(uid, source, identity);
-      navigate(`/d/${uid}`);
+      await updateDocument(uid, source, identity, opts?.commitMessage);
+      setSavedSource(source);
+      if (opts?.closeAfter) navigate(`/d/${uid}`);
     } catch (err) {
       reportError('EditPage.save', err, { uid });
       if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
@@ -384,9 +464,8 @@ export function EditPage() {
     }
   }
 
-  // Kept as a named alias for the existing disabled-gate below; canEdit
-  // already computes the same thing above.
   const canSave = canEdit;
+  const hasChanges = source !== savedSource;
 
   if (error && !doc) {
     return (
@@ -411,6 +490,11 @@ export function EditPage() {
     );
   }
 
+  const assetsPx = canEdit ? (assetsOpen ? assetsWidth : ASSETS_COLLAPSED_WIDTH) : 0;
+  const gridColumns = canEdit
+    ? `${assetsPx}px ${editorWidth}px 1fr`
+    : `${editorWidth}px 1fr`;
+
   return (
     <div className="edit-page">
       <PasswordPromptDialog docUid={doc.uid} />
@@ -421,43 +505,8 @@ export function EditPage() {
         passwordProtected={doc.password_protected}
         onLogout={() => window.location.reload()}
         showUserName
-        trailing={
-          <>
-            <Button variant="soft" color="gray" size="2" asChild>
-              <Link to={`/d/${doc.uid}`} aria-label="Cancel editing">
-                <Cross2Icon /> Cancel
-              </Link>
-            </Button>
-            {error && (
-              <Text size="1" color="red">
-                {error}
-              </Text>
-            )}
-            <Button
-              size="2"
-              disabled={!canSave || saving || !displayName.trim()}
-              onClick={handleSave}
-              variant={canSave ? 'solid' : 'soft'}
-            >
-              {saving ? 'Saving…' : canSave ? 'Save' : 'Read-only'}
-            </Button>
-          </>
-        }
       />
-      <div className={`edit-body${canEdit ? ' edit-body--with-assets' : ''}`}>
-        <div className="edit-source" ref={editorEl} />
-        <div className="edit-preview" ref={previewEl}>
-          {rendered ? (
-            <RenderedDoc
-              rendered={rendered}
-              onMissingAssetUpload={canEdit ? uploadAndAttach : undefined}
-            />
-          ) : (
-            <Text color="gray" size="2" as="p" mx="4" mt="4">
-              Preview…
-            </Text>
-          )}
-        </div>
+      <div className="edit-body" style={{ gridTemplateColumns: gridColumns }}>
         {canEdit && (
           <AssetsPanel
             docUid={doc.uid}
@@ -466,8 +515,88 @@ export function EditPage() {
             canEdit={canEdit}
             onReplace={uploadAndAttach}
             onDelete={handleDeleteAsset}
+            open={assetsOpen}
+            onToggle={() => setAssetsOpen((v) => !v)}
+            width={assetsWidth}
+            onResize={setAssetsWidth}
           />
         )}
+        <div className="edit-source">
+          {canEdit && (
+            <MarkdownToolbar
+              viewRef={viewRef}
+              format={doc.format}
+              wordWrap={wordWrap}
+              onWordWrapToggle={() => setWordWrap((w) => !w)}
+            />
+          )}
+          <div className="edit-source__editor" ref={editorEl} />
+          <EditToolbar
+            docUid={doc.uid}
+            canSave={canSave}
+            hasChanges={hasChanges}
+            saving={saving}
+            displayName={displayName}
+            error={error}
+            onSave={() => handleSave()}
+            onSaveAndClose={() => handleSave({ closeAfter: true })}
+            onSaveWithComment={(comment) => handleSave({ commitMessage: comment })}
+          />
+          <ResizeHandle side="left" width={editorWidth} onResize={setEditorWidth} min={200} max={1800} label="Resize editor panel" />
+        </div>
+        <div className="edit-preview-pane">
+          <div className="edit-preview-chrome">
+            <Flex align="center" gap="2">
+              <Text size="1" color="gray">Text size</Text>
+              <Slider
+                size="1"
+                style={{ width: 80 }}
+                min={80}
+                max={140}
+                step={1}
+                value={[textZoom]}
+                onValueChange={(v) => setTextZoom(v[0] ?? textZoom)}
+              />
+              <Text size="1" color="gray" style={{ minWidth: '3.5ch', flexShrink: 0 }}>
+                {textZoom}%
+              </Text>
+              <Button size="1" variant="ghost" onClick={() => setTextZoom(100)} disabled={textZoom === 100}>
+                Reset
+              </Button>
+            </Flex>
+            <Flex align="center" gap="2">
+              <Text size="1" color="gray" as="label" htmlFor="edit-theme-select">Theme</Text>
+              <Select.Root
+                value={theme}
+                size="1"
+                onValueChange={(next) => {
+                  setTheme(next);
+                  setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
+                }}
+              >
+                <Select.Trigger id="edit-theme-select" variant="soft" />
+                <Select.Content position="popper" style={{ maxHeight: 360 }}>
+                  {BUILT_IN_THEMES.map((t) => (
+                    <Select.Item key={t.id} value={t.id}>{t.label}</Select.Item>
+                  ))}
+                </Select.Content>
+              </Select.Root>
+            </Flex>
+          </div>
+          <div className="edit-preview" ref={previewEl}>
+            {rendered ? (
+              <RenderedDoc
+                rendered={rendered}
+                textZoom={textZoom / 100}
+                onMissingAssetUpload={canEdit ? uploadAndAttach : undefined}
+              />
+            ) : (
+              <Text color="gray" size="2" as="p" mx="4" mt="4">
+                Preview…
+              </Text>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

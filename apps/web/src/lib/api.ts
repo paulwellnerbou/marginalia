@@ -416,10 +416,11 @@ export function updateDocument(
   uid: string,
   source: string,
   identity: Identity,
+  commitMessage?: string,
 ): Promise<{ oid: string }> {
   return request<{ oid: string }>(`/api/documents/${encodeURIComponent(uid)}`, {
     method: 'PUT',
-    body: JSON.stringify({ source }),
+    body: JSON.stringify({ source, ...(commitMessage ? { commit_message: commitMessage } : {}) }),
     identity,
     docUid: uid,
   });
