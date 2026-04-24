@@ -233,7 +233,11 @@ async function updateDocument(c: Context, deps: AppDeps) {
   if (typeof nextSource !== 'string') {
     return c.json({ error: 'source-required' }, 400);
   }
-  const commitMessage = typeof body?.commit_message === 'string' ? body.commit_message.trim() || undefined : undefined;
+  const rawCommitMessage = typeof body?.commit_message === 'string' ? body.commit_message : '';
+  const commitMessage = rawCommitMessage
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+    .trim()
+    .slice(0, 1000) || undefined;
 
   let previousSource = '';
   try {

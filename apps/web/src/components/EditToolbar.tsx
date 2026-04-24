@@ -79,7 +79,7 @@ export function EditToolbar({
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
+                  if (e.key === 'Enter' && !e.shiftKey && comment.trim() && !saveDisabled) {
                     e.preventDefault();
                     handleSaveWithComment();
                   }

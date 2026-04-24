@@ -67,7 +67,14 @@ export class GitStore {
       meta.proposalId ? `X-Marginalia-Proposal-ID: ${meta.proposalId}` : null,
       meta.restoredFromOid ? `X-Marginalia-Restored-From: ${meta.restoredFromOid}` : null,
     ].filter((line): line is string => Boolean(line));
-    const bodyParts = meta.commitMessage ? [meta.commitMessage, trailers.join('\n')] : [trailers.join('\n')];
+    const sanitizedCommitMessage = meta.commitMessage
+      ? meta.commitMessage
+          .split('\n')
+          .filter((line) => !line.startsWith('X-Marginalia-'))
+          .join('\n')
+          .trim() || undefined
+      : undefined;
+    const bodyParts = sanitizedCommitMessage ? [sanitizedCommitMessage, trailers.join('\n')] : [trailers.join('\n')];
     const oid = await git.commit({
       fs,
       dir: this.repoDir,

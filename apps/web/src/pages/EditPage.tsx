@@ -36,6 +36,7 @@ const LS_ASSETS_OPEN = 'marginalia.editAssetsOpen';
 const LS_ASSETS_WIDTH = 'marginalia.editAssetsWidth';
 const LS_EDITOR_WIDTH = 'marginalia.editEditorWidth';
 const LS_TEXT_ZOOM = 'marginalia.textZoom';
+const LS_WORD_WRAP = 'marginalia.editWordWrap';
 
 type EditorDeps = {
   EditorState: typeof import('@codemirror/state').EditorState;
@@ -120,7 +121,12 @@ export function EditPage() {
   const [attached, setAttached] = useState<AttachedAsset[]>([]);
   const displayName = useDisplayName();
 
-  const [wordWrap, setWordWrap] = useState(true);
+  const [wordWrap, setWordWrap] = useState<boolean>(() => {
+    const saved = localStorage.getItem(LS_WORD_WRAP);
+    return saved === null ? true : saved === 'true';
+  });
+  const wordWrapRef = useRef(wordWrap);
+  useEffect(() => { wordWrapRef.current = wordWrap; }, [wordWrap]);
 
   const [assetsOpen, setAssetsOpen] = useState<boolean>(() => {
     const saved = localStorage.getItem(LS_ASSETS_OPEN);
@@ -145,6 +151,7 @@ export function EditPage() {
   useEffect(() => { localStorage.setItem(LS_ASSETS_WIDTH, String(assetsWidth)); }, [assetsWidth]);
   useEffect(() => { localStorage.setItem(LS_EDITOR_WIDTH, String(editorWidth)); }, [editorWidth]);
   useEffect(() => { localStorage.setItem(LS_TEXT_ZOOM, String(textZoom)); }, [textZoom]);
+  useEffect(() => { localStorage.setItem(LS_WORD_WRAP, String(wordWrap)); }, [wordWrap]);
   useEffect(() => { void applyTheme(theme); }, [theme]);
 
   const editorEl = useRef<HTMLDivElement>(null);
@@ -233,7 +240,7 @@ export function EditPage() {
               '&': { height: '100%', fontSize: '14px' },
               '.cm-scroller': { fontFamily: 'ui-monospace, SFMono-Regular, monospace' },
             }),
-            wrapCompartment.of(wordWrap ? [lineWrapping] : []),
+            wrapCompartment.of(wordWrapRef.current ? [lineWrapping] : []),
           ],
         });
         viewRef.current = new EditorView({ state, parent: editorEl.current });
