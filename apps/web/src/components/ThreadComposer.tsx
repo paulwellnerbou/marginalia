@@ -266,7 +266,7 @@ export const CommentComposer = forwardRef<ComposerHandle, CommentComposerProps>(
             </Button>
           )}
           {footerActions?.({ hasDraft, canRunAction, submitting, submitAction })}
-          <IconButton size="1" variant="soft" onClick={send} disabled={!ready || submitting}>
+          <IconButton size="1" variant="soft" onClick={send} disabled={!ready || submitting} aria-label="Post comment">
             <PaperPlaneIcon />
           </IconButton>
         </Flex>

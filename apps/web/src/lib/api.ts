@@ -1093,7 +1093,7 @@ export function getEditProposalDiff(uid: string, pid: string): Promise<HistoryDi
   );
 }
 
-export async function resolveComment(
+export async function resolveThread(
   uid: string,
   threadId: string,
   resolved: boolean,

@@ -39,7 +39,7 @@ import {
   createComment as apiCreate,
   deleteComment as apiDelete,
   listThreads,
-  resolveComment as apiResolve,
+  resolveThread as apiResolve,
   updateComment as apiUpdate,
   createEditProposal as apiCreateProposal,
   deleteEditProposal as apiDeleteProposal,
