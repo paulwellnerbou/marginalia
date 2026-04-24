@@ -1,8 +1,6 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
 import { DotsHorizontalIcon } from '@radix-ui/react-icons';
 import {
-  Badge,
-  Button,
   DropdownMenu,
   Flex,
   IconButton,
@@ -12,10 +10,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CommentAnchor, Thread } from '../lib/api.js';
 import { isProposal, proposalStatus } from '../lib/api.js';
-import {
-  CommentComposer,
-  type ComposerHandle,
-} from './ThreadComposer.js';
+import { CommentComposer } from './ThreadComposer.js';
 import { ThreadItem } from './ThreadItem.js';
 import { buildThreadCollapseState, reconcileThreadCollapseState } from './threadCollapseState.js';
 

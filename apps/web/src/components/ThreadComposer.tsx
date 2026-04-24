@@ -354,6 +354,11 @@ function ProposalComposerBody({
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    setValue(originalSource);
+    setRationale('');
+  }, [target.block_id, originalSource]);
+
   const changed = value !== originalSource && value.trim().length > 0;
   const ready = changed && (!needsName || name.trim().length > 0);
 
