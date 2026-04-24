@@ -34,6 +34,16 @@ async function inspectDocx(buf: Buffer): Promise<{
   return { documentXml, relsXml, mediaFiles };
 }
 
+function documentParagraphs(documentXml: string): string[] {
+  return documentXml.match(/<w:p\b[\s\S]*?<\/w:p>/g) ?? [];
+}
+
+function paragraphContaining(documentXml: string, text: string): string {
+  const paragraph = documentParagraphs(documentXml).find((p) => p.includes(text));
+  expect(paragraph).toBeDefined();
+  return paragraph!;
+}
+
 // A DOCX is a ZIP with a `[Content_Types].xml` entry and a
 // `word/document.xml` that holds the body. We sniff the bytes rather
 // than re-parse the zip: the ZIP local-file header magic is `PK\x03\x04`
@@ -88,6 +98,18 @@ const x: number = 1;
   test('empty input still yields a valid DOCX', async () => {
     const buf = await exportDocx('');
     expect(hasZipMagic(buf)).toBe(true);
+  });
+
+  test('markdown hard breaks stay inside one DOCX paragraph', async () => {
+    const buf = await exportDocx('first line  \nsecond line\n', { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    const matchingParagraphs = documentParagraphs(documentXml).filter(
+      (p) => p.includes('first line') || p.includes('second line'),
+    );
+    expect(matchingParagraphs.length).toBe(1);
+    expect(matchingParagraphs[0]).toContain('first line');
+    expect(matchingParagraphs[0]).toContain('second line');
+    expect(matchingParagraphs[0]).toMatch(/<w:br\b/);
   });
 
   test('core properties populated from options', async () => {
@@ -642,6 +664,30 @@ describe('exportDocx — base font size calibration', () => {
     expect(listParagraphStyle).not.toBeNull();
     expect(listParagraphStyle![1]).not.toContain('<w:spacing');
   });
+
+  test('normal, list, and table-cell paragraphs never exceed 1.5 line spacing', async () => {
+    const md = [
+      'Normal paragraph.',
+      '',
+      '- List item.',
+      '',
+      '| Column |',
+      '|--------|',
+      '| Cell text |',
+    ].join('\n');
+    const buf = await exportDocx(md, { theme: 'beautiful', includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+
+    for (const text of ['Normal paragraph.', 'List item.', 'Cell text']) {
+      expect(paragraphContaining(documentXml, text)).toMatch(/<w:spacing[^>]*w:line="360"/);
+    }
+
+    const lineValues = [...documentXml.matchAll(/w:line="(\d+)"/g)].map((m) =>
+      Number(m[1]),
+    );
+    expect(lineValues.length).toBeGreaterThanOrEqual(3);
+    expect(Math.max(...lineValues)).toBeLessThanOrEqual(360);
+  });
 });
 
 describe('exportDocx — footnotes (M3c)', () => {
@@ -873,6 +919,34 @@ describe('exportDocx — blockquote nesting', () => {
     expect(documentXml).not.toContain('<w:pStyle w:val="ListParagraph"/>');
   });
 
+  test('blockquote list paragraphs carry explicit quote context in source order', async () => {
+    const md = [
+      '> Quoted preamble.',
+      '>',
+      '> - quoted item one',
+      '> - quoted item two',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    const preamble = paragraphContaining(documentXml, 'Quoted preamble.');
+    const firstItem = paragraphContaining(documentXml, 'quoted item one');
+    const secondItem = paragraphContaining(documentXml, 'quoted item two');
+
+    expect(documentXml.indexOf('Quoted preamble.')).toBeLessThan(
+      documentXml.indexOf('quoted item one'),
+    );
+    expect(documentXml.indexOf('quoted item one')).toBeLessThan(
+      documentXml.indexOf('quoted item two'),
+    );
+    for (const paragraph of [preamble, firstItem, secondItem]) {
+      expect(paragraph).toMatch(/<w:pStyle w:val="Blockquote"/);
+      expect(paragraph).toMatch(/<w:left[^>]*w:val="single"/);
+      expect(paragraph).toMatch(/<w:ind[^>]*w:left="\d+"/);
+    }
+    expect(firstItem).toMatch(/<w:numPr>/);
+    expect(secondItem).toMatch(/<w:numPr>/);
+  });
+
   test('blockquote with a nested code block keeps CodeBlock styling', async () => {
     const md = [
       '> Quoted prose.',
@@ -981,6 +1055,27 @@ describe('exportDocx — list items', () => {
     // Four list items → four numbered paragraphs.
     const numPrMatches = documentXml.match(/<w:numPr\b/g) ?? [];
     expect(numPrMatches.length).toBe(4);
+  });
+
+  test('list item and continuation paragraphs use 3pt after spacing', async () => {
+    const md = [
+      '- First paragraph.',
+      '',
+      '  Continuation paragraph.',
+      '',
+      '- Second item.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(paragraphContaining(documentXml, 'First paragraph.')).toMatch(
+      /<w:spacing[^>]*w:after="60"/,
+    );
+    expect(paragraphContaining(documentXml, 'Continuation paragraph.')).toMatch(
+      /<w:spacing[^>]*w:after="60"/,
+    );
+    expect(paragraphContaining(documentXml, 'Second item.')).toMatch(
+      /<w:spacing[^>]*w:after="60"/,
+    );
   });
 });
 
@@ -1095,7 +1190,37 @@ describe('exportDocx — tables (Copilot review follow-ups)', () => {
     // paragraph after the table must carry a `before` spacing so Word
     // leaves a visible gap instead of collapsing the blocks together.
     expect(documentXml).toMatch(
-      /<w:tbl>[\s\S]*?<\/w:tbl>[\s\S]*?<w:p>[\s\S]*?<w:spacing[^>]*w:before="\d+"[\s\S]*?Next paragraph\./,
+      /<w:tbl>[\s\S]*?<\/w:tbl>[\s\S]*?<w:p>[\s\S]*?<w:spacing[^>]*w:before="144"[\s\S]*?Next paragraph\./,
+    );
+  });
+
+  test('paragraph after a table inside a transparent container gets normal top spacing', async () => {
+    const md = [
+      '<div>',
+      '<table><tbody><tr><td>1</td></tr></tbody></table>',
+      '</div>',
+      '',
+      'Next paragraph.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(paragraphContaining(documentXml, 'Next paragraph.')).toMatch(
+      /<w:spacing[^>]*w:before="144"/,
+    );
+  });
+
+  test('paragraph after a quoted table gets normal top spacing', async () => {
+    const md = [
+      '> | A | B |',
+      '> |---|---|',
+      '> | 1 | 2 |',
+      '>',
+      '> Next quoted paragraph.',
+    ].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+    expect(paragraphContaining(documentXml, 'Next quoted paragraph.')).toMatch(
+      /<w:spacing[^>]*w:before="144"/,
     );
   });
 });

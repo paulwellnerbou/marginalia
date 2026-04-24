@@ -116,7 +116,7 @@ export function CommentsPane(props: Props) {
       const item: ThreadListItem = {
         kind,
         id: t.id,
-        createdAt: t.root.created_at,
+        createdAt: t.comments[0].created_at,
         latestActivityAt: threadLatestActivityTs(t),
         anchor: anchorOrderFromThread(t),
         thread: t,
@@ -420,9 +420,9 @@ function compareNullableNumber(a: number | null, b: number | null): number {
 }
 
 function threadLatestActivityTs(thread: Thread): number {
-  let latest = thread.root.updated_at;
-  for (const reply of thread.replies) {
-    if (reply.updated_at > latest) latest = reply.updated_at;
+  let latest = thread.comments[0].updated_at;
+  for (const c of thread.comments) {
+    if (c.updated_at > latest) latest = c.updated_at;
   }
   return latest;
 }

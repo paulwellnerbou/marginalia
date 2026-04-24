@@ -2011,9 +2011,9 @@ describe('documents API', () => {
     );
     expect(res.status).toBe(201);
     const { thread } = (await res.json()) as {
-      thread: { root: { author: { display_name: string } } };
+      thread: { comments: [{ author: { display_name: string } }] };
     };
-    expect(thread.root.author.display_name).toBe(CLIENT_B.name);
+    expect(thread.comments[0].author.display_name).toBe(CLIENT_B.name);
   });
 
   test('admin rotation: old token stops working, new token grants admin', async () => {
