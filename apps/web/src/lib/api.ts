@@ -883,14 +883,11 @@ function forgetComment(uid: string, commentId: string): void {
 
   const next = current
     .filter((thread) => thread.id !== commentId)
-    .map((thread) =>
-      thread.comments.some((c) => c.id === commentId)
-        ? {
-            ...thread,
-            comments: thread.comments.filter((c) => c.id !== commentId) as [Comment, ...Comment[]],
-          }
-        : thread,
-    );
+    .map((thread) => {
+      if (!thread.comments.some((c) => c.id === commentId)) return thread;
+      const [head, ...tail] = thread.comments;
+      return { ...thread, comments: [head, ...tail.filter((c) => c.id !== commentId)] as [Comment, ...Comment[]] };
+    });
   snapshotSet(uid, next);
 }
 

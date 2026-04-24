@@ -614,11 +614,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       try {
         await apiDelete(doc.uid, nodeId, identity);
         setThreads((prev) =>
-          prev.map((t) =>
-            t.comments.slice(1).some((r) => r.id === nodeId)
-              ? { ...t, comments: t.comments.filter((c) => c.id !== nodeId) as [Comment, ...Comment[]] }
-              : t,
-          ),
+          prev.map((t) => {
+            if (!t.comments.slice(1).some((r) => r.id === nodeId)) return t;
+            const [head, ...tail] = t.comments;
+            return { ...t, comments: [head, ...tail.filter((c) => c.id !== nodeId)] as [Comment, ...Comment[]] };
+          }),
         );
       } catch (err) {
         reportError('DocumentLayout.deleteNode', err, { nodeId });
