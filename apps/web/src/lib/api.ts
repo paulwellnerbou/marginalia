@@ -758,7 +758,7 @@ export interface Thread {
   replies: ThreadCommentNode[];
 }
 
-interface ListThreadsResponse {
+export interface ListThreadsResponse {
   threads: Thread[];
   mention_candidates: string[];
   pending_mentions: string[];
