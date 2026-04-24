@@ -17,7 +17,6 @@ interface Props {
 export function CommentItem({ node, onEdit, onDelete, onQuote }: Props) {
   const [editing, setEditing] = useState(false);
   const [deleteArmed, setDeleteArmed] = useState(false);
-  const [draft, setDraft] = useState(node.body);
   const actions = !editing ? (
     <Flex gap="1" align="center" wrap="wrap" className="comment-actions comment-actions-inline">
       {!deleteArmed && onQuote && (
@@ -61,14 +60,10 @@ export function CommentItem({ node, onEdit, onDelete, onQuote }: Props) {
 
   const surface = editing ? (
     <EditForm
-      initial={draft}
-      onCancel={() => {
-        setEditing(false);
-        setDraft(node.body);
-      }}
+      initial={node.body}
+      onCancel={() => setEditing(false)}
       onSave={async (v) => {
         await onEdit(node.id, v);
-        setDraft(v);
         setEditing(false);
       }}
     />
