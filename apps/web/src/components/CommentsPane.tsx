@@ -421,8 +421,8 @@ function compareNullableNumber(a: number | null, b: number | null): number {
 
 function threadLatestActivityTs(thread: Thread): number {
   let latest = thread.comments[0].updated_at;
-  for (let i = 1; i < thread.comments.length; i += 1) {
-    if (thread.comments[i].updated_at > latest) latest = thread.comments[i].updated_at;
+  for (const c of thread.comments) {
+    if (c.updated_at > latest) latest = c.updated_at;
   }
   return latest;
 }
