@@ -52,24 +52,24 @@ interface ThreadShape {
     reject: boolean;
     reopen: boolean;
   };
-  root: ThreadCommentNodeShape;
+  comments: [ThreadCommentNodeShape, ...ThreadCommentNodeShape[]];
   proposal: { anchor_kind: string | null; source_snapshot: string | null; proposed_text: string } | null;
-  replies: ThreadCommentNodeShape[];
 }
 
 function threadRootToComment(thread: ThreadShape): Record<string, unknown> {
+  const opener = thread.comments[0];
   return {
     id: thread.id,
     parent_id: null,
     parent_proposal_id: null,
     anchor: thread.anchor,
-    author: thread.root.author,
-    body: thread.root.body,
+    author: opener.author,
+    body: opener.body,
     link_status: thread.link_status,
     resolved_at: thread.resolution?.kind === 'resolve' ? thread.resolution.at : null,
     resolved_by_name: thread.resolution?.kind === 'resolve' ? thread.resolution.by_name : null,
-    created_at: thread.root.created_at,
-    updated_at: thread.root.updated_at,
+    created_at: opener.created_at,
+    updated_at: opener.updated_at,
   };
 }
 
@@ -93,7 +93,7 @@ function flattenThreadComments(threads: ThreadShape[]): Array<Record<string, unk
   const comments: Array<Record<string, unknown>> = [];
   for (const thread of threads) {
     if (!thread.proposal) comments.push(threadRootToComment(thread));
-    for (const reply of thread.replies) comments.push(threadReplyToComment(thread, reply));
+    for (const reply of thread.comments.slice(1)) comments.push(threadReplyToComment(thread, reply));
   }
   comments.sort(
     (a, b) =>
@@ -104,7 +104,7 @@ function flattenThreadComments(threads: ThreadShape[]): Array<Record<string, unk
 
 function findThreadComment(thread: ThreadShape, commentId: string): Record<string, unknown> | null {
   if (thread.id === commentId) return threadRootToComment(thread);
-  const reply = thread.replies.find((entry) => entry.id === commentId);
+  const reply = thread.comments.slice(1).find((entry) => entry.id === commentId);
   return reply ? threadReplyToComment(thread, reply) : null;
 }
 
@@ -733,7 +733,7 @@ describe('threads API', () => {
     const listed = (await listRes.json()) as { threads: ThreadShape[] };
     const thread = listed.threads.find((entry) => entry.id === cid);
     expect(thread?.state).toBe('open');
-    expect(thread?.replies).toEqual([]);
+    expect(thread?.comments.slice(1)).toEqual([]);
   });
 
   test('admin can resolve a top-level thread they did not author', async () => {
@@ -963,10 +963,10 @@ describe('threads API', () => {
       }),
     );
     const bobBody = (await bobList.json()) as {
-      threads: Array<{ id: string; root: { capabilities: { delete: boolean } } }>;
+      threads: Array<{ id: string; comments: [{ capabilities: { delete: boolean } }] }>;
     };
     expect(
-      bobBody.threads.find((thread) => thread.id === proposed.thread.id)?.root.capabilities.delete,
+      bobBody.threads.find((thread) => thread.id === proposed.thread.id)?.comments[0].capabilities.delete,
     ).toBe(false);
 
     const adminList = await app.hono.fetch(
@@ -975,10 +975,10 @@ describe('threads API', () => {
       }),
     );
     const adminBody = (await adminList.json()) as {
-      threads: Array<{ id: string; root: { capabilities: { delete: boolean } } }>;
+      threads: Array<{ id: string; comments: [{ capabilities: { delete: boolean } }] }>;
     };
     expect(
-      adminBody.threads.find((thread) => thread.id === proposed.thread.id)?.root.capabilities.delete,
+      adminBody.threads.find((thread) => thread.id === proposed.thread.id)?.comments[0].capabilities.delete,
     ).toBe(true);
   });
 
@@ -1102,19 +1102,19 @@ describe('threads API', () => {
     expect(thread.capabilities.reject).toBe(false);   // not a proposal
     expect(thread.capabilities.reopen).toBe(false);   // not yet resolved
 
-    // Root comment node
-    expect(thread.root.id).toBe(thread.id);
-    expect(thread.root.body).toBe('First comment');
-    expect(thread.root.author.client_id).toBe(ALICE.id);
-    expect(thread.root.author.display_name).toBe('Alice');
-    expect(typeof thread.root.created_at).toBe('number');
-    expect(typeof thread.root.updated_at).toBe('number');
-    expect(thread.root.capabilities.edit).toBe(true);   // own comment
-    expect(thread.root.capabilities.delete).toBe(true); // own comment
+    // Opener comment node (comments[0])
+    expect(thread.comments[0].id).toBe(thread.id);
+    expect(thread.comments[0].body).toBe('First comment');
+    expect(thread.comments[0].author.client_id).toBe(ALICE.id);
+    expect(thread.comments[0].author.display_name).toBe('Alice');
+    expect(typeof thread.comments[0].created_at).toBe('number');
+    expect(typeof thread.comments[0].updated_at).toBe('number');
+    expect(thread.comments[0].capabilities.edit).toBe(true);   // own comment
+    expect(thread.comments[0].capabilities.delete).toBe(true); // own comment
 
     // No proposal, no replies on creation
     expect(thread.proposal).toBeNull();
-    expect(thread.replies).toHaveLength(0);
+    expect(thread.comments).toHaveLength(1);
   });
 
   test('thread shape: proposal field is populated for proposal threads', async () => {
@@ -1145,10 +1145,10 @@ describe('threads API', () => {
     expect(thread.capabilities.accept).toBe(false); // collaborator cannot accept
     expect(thread.capabilities.reject).toBe(true);  // root author may reject
 
-    expect(thread.replies).toHaveLength(0);
+    expect(thread.comments).toHaveLength(1);
   });
 
-  test('thread shape: replies appear in thread.replies with correct shape', async () => {
+  test('thread shape: replies appear in thread.comments with correct shape', async () => {
     const uid = await newDoc('# Title\n');
     const blockId = await firstBlockId(uid);
 
@@ -1172,9 +1172,9 @@ describe('threads API', () => {
     const { thread } = (await replyRes.json()) as { thread: ThreadShape; created_reply_id: string };
 
     expect(thread.state).toBe('open');
-    expect(thread.replies).toHaveLength(1);
+    expect(thread.comments).toHaveLength(2);
 
-    const reply = thread.replies[0]!;
+    const reply = thread.comments[1]!;
     expect(reply.body).toBe('my reply');
     expect(reply.author.client_id).toBe(BOB.id);
     expect(reply.author.display_name).toBe('Bob');
@@ -1273,10 +1273,10 @@ describe('threads API', () => {
       expect(['open', 'resolved']).toContain(thread.state);
       expect(thread.anchor).toBeDefined();
       expect(thread.anchor.block_id).toBe(blockId);
-      expect(thread.root).toBeDefined();
-      expect(typeof thread.root.body).toBe('string');
+      expect(Array.isArray(thread.comments)).toBe(true);
+      expect(thread.comments.length).toBeGreaterThan(0);
+      expect(typeof thread.comments[0].body).toBe('string');
       expect(thread.capabilities).toBeDefined();
-      expect(Array.isArray(thread.replies)).toBe(true);
     }
   });
 
