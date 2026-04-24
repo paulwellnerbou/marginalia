@@ -1654,25 +1654,28 @@ describe('documents API', () => {
       threads: Array<{
         state: string;
         resolution: { kind: string } | null;
-        root: { body: string };
+        comments: [{ body: string }, ...Array<{ body: string }>];
         proposal: { proposed_text: string; source_snapshot: string | null } | null;
-        replies: Array<{ body: string }>;
       }>;
     };
     expect(importedThreads.threads).toHaveLength(2);
     const importedCommentThread = importedThreads.threads.find(
-      (thread) => thread.root.body === 'export me',
+      (thread) => thread.comments[0].body === 'export me',
     )!;
     expect(importedCommentThread.proposal).toBeNull();
-    expect(importedCommentThread.replies.map((reply) => reply.body)).toEqual(['plain reply']);
+    expect(importedCommentThread.comments.slice(1).map((reply) => reply.body)).toEqual([
+      'plain reply',
+    ]);
     const importedProposalThread = importedThreads.threads.find(
-      (thread) => thread.root.body === 'please improve this heading',
+      (thread) => thread.comments[0].body === 'please improve this heading',
     )!;
     expect(importedProposalThread.proposal?.proposed_text).toBe('# Better Hi');
     expect(importedProposalThread.proposal?.source_snapshot).toBe('# Hi');
     expect(importedProposalThread.state).toBe('resolved');
     expect(importedProposalThread.resolution?.kind).toBe('reject');
-    expect(importedProposalThread.replies.map((reply) => reply.body)).toEqual(['proposal reply']);
+    expect(importedProposalThread.comments.slice(1).map((reply) => reply.body)).toEqual([
+      'proposal reply',
+    ]);
   });
 
   test('GET /:uid/export.docx returns a themed Word document (binary)', async () => {
