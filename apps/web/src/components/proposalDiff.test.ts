@@ -22,20 +22,21 @@ const baseThread: Thread & { proposal: NonNullable<Thread['proposal']> } = {
     section_index_path: null,
   },
   capabilities: { reply: true, resolve: true, accept: false, reject: false, reopen: false },
-  root: {
-    id: 'proposal-1',
-    body: '',
-    author: { client_id: 'client-1', display_name: 'Alice' },
-    capabilities: { edit: true, delete: true },
-    created_at: 1,
-    updated_at: 1,
-  },
+  comments: [
+    {
+      id: 'proposal-1',
+      body: '',
+      author: { client_id: 'client-1', display_name: 'Alice' },
+      capabilities: { edit: true, delete: true },
+      created_at: 1,
+      updated_at: 1,
+    },
+  ],
   proposal: {
     anchor_kind: null,
     source_snapshot: '[5.3](#53-hosting--betrieb)',
     proposed_text: '[5.3](#53-hosting-betrieb)',
   },
-  replies: [],
 };
 
 function makeBlockRanges(source: string): Map<string, BlockSourceRange> {

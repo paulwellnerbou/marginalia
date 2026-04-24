@@ -732,7 +732,7 @@ export interface ThreadAnchor {
   section_index_path: number[] | null;
 }
 
-export interface ThreadCommentNode {
+export interface Comment {
   id: string;
   body: string;
   author: { client_id: string; display_name: string };
@@ -754,9 +754,9 @@ export interface Thread {
   link_status: ThreadLinkStatus;
   anchor: ThreadAnchor;
   capabilities: ThreadCapabilities;
-  root: ThreadCommentNode;
+  /** Ordered oldest-first. comments[0] is the opener; remaining are replies. */
+  comments: [Comment, ...Comment[]];
   proposal: ThreadProposalData | null;
-  replies: ThreadCommentNode[];
 }
 
 export interface ListThreadsResponse {
@@ -792,8 +792,12 @@ export function isResolved(t: Thread): boolean {
   return t.state === 'resolved';
 }
 
-export function rootAuthor(t: Thread): { client_id: string; display_name: string } {
-  return t.root.author;
+export function threadAuthor(t: Thread): { client_id: string; display_name: string } {
+  return t.comments[0].author;
+}
+
+export function threadCreatedAt(t: Thread): number {
+  return t.comments[0].created_at;
 }
 
 const listThreadsInflight = new Map<string, Promise<ListThreadsResponse>>();
@@ -860,7 +864,6 @@ interface ThreadMutationResponse {
 
 interface CommentLocation {
   thread: Thread;
-  kind: 'root' | 'reply';
 }
 
 function rememberThread(uid: string, thread: Thread): void {
@@ -870,7 +873,7 @@ function rememberThread(uid: string, thread: Thread): void {
     index >= 0
       ? current.map((entry, idx) => (idx === index ? thread : entry))
       : [...current, thread];
-  next.sort((a, b) => a.root.created_at - b.root.created_at);
+  next.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
   snapshotSet(uid, next);
 }
 
@@ -881,8 +884,11 @@ function forgetComment(uid: string, commentId: string): void {
   const next = current
     .filter((thread) => thread.id !== commentId)
     .map((thread) =>
-      thread.replies.some((reply) => reply.id === commentId)
-        ? { ...thread, replies: thread.replies.filter((reply) => reply.id !== commentId) }
+      thread.comments.some((c) => c.id === commentId)
+        ? {
+            ...thread,
+            comments: thread.comments.filter((c) => c.id !== commentId) as [Comment, ...Comment[]],
+          }
         : thread,
     );
   snapshotSet(uid, next);
@@ -890,10 +896,7 @@ function forgetComment(uid: string, commentId: string): void {
 
 function findCommentLocationInThreads(threads: Thread[], commentId: string): CommentLocation | null {
   for (const thread of threads) {
-    if (thread.id === commentId) return { thread, kind: 'root' };
-    if (thread.replies.some((reply) => reply.id === commentId)) {
-      return { thread, kind: 'reply' };
-    }
+    if (thread.comments.some((c) => c.id === commentId)) return { thread };
   }
   return null;
 }
@@ -953,10 +956,11 @@ export async function updateComment(
   identity: Identity,
 ): Promise<void> {
   const location = await findCommentLocation(uid, cid);
-  const path =
-    location.kind === 'root'
-      ? `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(location.thread.id)}`
-      : `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(location.thread.id)}/comments/${encodeURIComponent(cid)}`;
+  const tid = location.thread.id;
+  const isOpener = location.thread.comments[0].id === cid;
+  const path = isOpener
+    ? `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(tid)}`
+    : `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(tid)}/comments/${encodeURIComponent(cid)}`;
   const res = await request<ThreadMutationResponse>(path, {
     method: 'PATCH',
     body: JSON.stringify({ body }),
@@ -968,10 +972,11 @@ export async function updateComment(
 
 export async function deleteComment(uid: string, cid: string, identity: Identity): Promise<void> {
   const location = await findCommentLocation(uid, cid);
-  const path =
-    location.kind === 'root'
-      ? `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(location.thread.id)}`
-      : `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(location.thread.id)}/comments/${encodeURIComponent(cid)}`;
+  const tid = location.thread.id;
+  const isOpener = location.thread.comments[0].id === cid;
+  const path = isOpener
+    ? `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(tid)}`
+    : `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(tid)}/comments/${encodeURIComponent(cid)}`;
   await request<void>(path, {
     method: 'DELETE',
     identity,

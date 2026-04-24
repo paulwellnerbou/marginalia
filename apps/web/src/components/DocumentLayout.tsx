@@ -54,7 +54,7 @@ import {
   ApiError,
   isProposal,
   type HistoryEntry,
-  type ThreadCommentNode,
+  type Comment,
 } from '../lib/api.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
@@ -384,8 +384,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     const names = new Map<string, string>();
     for (const name of mentionSeedNames) addMentionName(names, name);
     for (const thread of threads) {
-      addMentionName(names, thread.root.author.display_name);
-      for (const reply of thread.replies) addMentionName(names, reply.author.display_name);
+      for (const c of thread.comments) addMentionName(names, c.author.display_name);
     }
     if (doc.display_name) addMentionName(names, doc.display_name);
     return Array.from(names.values()).sort((a, b) =>
@@ -597,7 +596,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       if (!identity) return;
       try {
         await apiDeleteThread(doc.uid, threadId, identity);
-        setThreads((prev) => prev.filter((t) => t.id !== threadId && t.root.id !== threadId));
+        setThreads((prev) => prev.filter((t) => t.id !== threadId));
       } catch (err) {
         reportError('DocumentLayout.deleteThread', err, { threadId });
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Delete failed');
@@ -616,8 +615,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         await apiDelete(doc.uid, nodeId, identity);
         setThreads((prev) =>
           prev.map((t) =>
-            t.replies.some((r) => r.id === nodeId)
-              ? { ...t, replies: t.replies.filter((r) => r.id !== nodeId) }
+            t.comments.slice(1).some((r) => r.id === nodeId)
+              ? { ...t, comments: t.comments.filter((c) => c.id !== nodeId) as [Comment, ...Comment[]] }
               : t,
           ),
         );
@@ -1208,10 +1207,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
 function notifyPendingMentions(threads: Thread[], pendingMentionIds: string[]): void {
   if (pendingMentionIds.length === 0) return;
-  const byId = new Map<string, ThreadCommentNode>();
+  const byId = new Map<string, Comment>();
   for (const t of threads) {
-    byId.set(t.root.id, t.root);
-    for (const r of t.replies) byId.set(r.id, r);
+    for (const c of t.comments) byId.set(c.id, c);
   }
   for (const id of pendingMentionIds) {
     const node = byId.get(id);

@@ -3,12 +3,12 @@ import { Button, Flex, IconButton, TextArea, Tooltip } from '@radix-ui/themes';
 import { Pencil2Icon, QuoteIcon } from '@radix-ui/react-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ThreadCommentNode } from '../lib/api.js';
+import type { Comment } from '../lib/api.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import { DiscussionEntry } from './DiscussionUi.js';
 
 interface Props {
-  node: ThreadCommentNode;
+  node: Comment;
   onEdit: (id: string, body: string) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
   onQuote?: ((text: string) => void) | undefined;

@@ -1106,20 +1106,6 @@ function toThreadWire(
               ? decision.ok && canEdit(decision.role) && reopenableAccepted.has(row.id)
               : false),
     },
-    root: {
-      id: row.id,
-      body: row.body,
-      author: {
-        client_id: row.author_client_id,
-        display_name: row.author_display_name,
-      },
-      capabilities: {
-        edit: canRootEdit,
-        delete: row.proposal_status === 'accepted' ? isAdmin : canRootDelete,
-      },
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-    },
     proposal: proposal
       ? {
           anchor_kind: row.anchor_kind,
@@ -1127,20 +1113,36 @@ function toThreadWire(
           proposed_text: row.proposed_text,
         }
       : null,
-    replies: replies.map((reply) => ({
-      id: reply.id,
-      body: reply.body,
-      author: {
-        client_id: reply.author_client_id,
-        display_name: reply.author_display_name,
+    comments: [
+      {
+        id: row.id,
+        body: row.body,
+        author: {
+          client_id: row.author_client_id,
+          display_name: row.author_display_name,
+        },
+        capabilities: {
+          edit: canRootEdit,
+          delete: row.proposal_status === 'accepted' ? isAdmin : canRootDelete,
+        },
+        created_at: row.created_at,
+        updated_at: row.updated_at,
       },
-      capabilities: {
-        edit: viewerId !== null && viewerId === reply.author_client_id,
-        delete: (viewerId !== null && viewerId === reply.author_client_id) || isAdmin,
-      },
-      created_at: reply.created_at,
-      updated_at: reply.updated_at,
-    })),
+      ...replies.map((reply) => ({
+        id: reply.id,
+        body: reply.body,
+        author: {
+          client_id: reply.author_client_id,
+          display_name: reply.author_display_name,
+        },
+        capabilities: {
+          edit: viewerId !== null && viewerId === reply.author_client_id,
+          delete: (viewerId !== null && viewerId === reply.author_client_id) || isAdmin,
+        },
+        created_at: reply.created_at,
+        updated_at: reply.updated_at,
+      })),
+    ],
   };
 }
 

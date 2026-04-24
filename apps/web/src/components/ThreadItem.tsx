@@ -156,7 +156,7 @@ export function ThreadItem(props: Props) {
       quote={thread.anchor.quote}
       quoteTitle="Jump to this location in the document"
       onJump={jump}
-      summary={`${thread.replies.length + 1} comment${thread.replies.length === 0 ? '' : 's'}`}
+      summary={`${thread.comments.length} comment${thread.comments.length === 1 ? '' : 's'}`}
       toolbarActions={toolbarActions}
       focused={threadFocused}
       flashPhase={threadFlashPhase}
@@ -166,12 +166,12 @@ export function ThreadItem(props: Props) {
     >
       <>
         <CommentItem
-          node={thread.root}
+          node={thread.comments[0]}
           onEdit={onEditBody}
           onDelete={() => onDeleteThread(thread.id)}
           onQuote={canComment ? handleQuote : undefined}
         />
-        {thread.replies.map((r) => (
+        {thread.comments.slice(1).map((r) => (
           <CommentItem
             key={r.id}
             node={r}
@@ -238,11 +238,11 @@ function ProposalThreadItem({
   const diffBefore = resolvedDiff?.before ?? originalSource;
   const diffAfter = resolvedDiff?.after ?? proposal.proposed_text;
 
-  const canDelete = thread.root.capabilities.delete && status !== 'accepted';
-  const canEditRationale = thread.root.capabilities.edit && isOpen && !editingRationale;
+  const canDelete = thread.comments[0].capabilities.delete && status !== 'accepted';
+  const canEditRationale = thread.comments[0].capabilities.edit && isOpen && !editingRationale;
 
   const anchorLabel = formatAnchorLabel(thread.anchor.quote, proposal.source_snapshot);
-  const quoteBody = (thread.root.body.trim() || proposal.proposed_text).trim();
+  const quoteBody = (thread.comments[0].body.trim() || proposal.proposed_text).trim();
   const handleReplyQuote = canComment ? (text: string) => handleQuote(text) : undefined;
 
   async function handleShowDiff(): Promise<void> {
@@ -381,16 +381,16 @@ function ProposalThreadItem({
 
   const rootSurface = editingRationale ? (
     <RationaleEditor
-      initial={thread.root.body}
+      initial={thread.comments[0].body}
       onCancel={() => setEditingRationale(false)}
       onSave={async (v) => {
         await onEditRationale(thread.id, v.trim().length > 0 ? v.trim() : null);
         setEditingRationale(false);
       }}
     />
-  ) : thread.root.body.trim() ? (
+  ) : thread.comments[0].body.trim() ? (
     <Text as="p" className="comment-body proposal-rationale">
-      {thread.root.body}
+      {thread.comments[0].body}
     </Text>
   ) : (
     <Text as="p" className="comment-body proposal-rationale proposal-rationale-empty">
@@ -405,7 +405,7 @@ function ProposalThreadItem({
         quote={anchorLabel}
         quoteTitle="Jump to this location in the document"
         onJump={jump}
-        summary={formatThreadSummary(thread.replies.length)}
+        summary={formatThreadSummary(thread.comments.length - 1)}
         toolbarActions={toolbarActions}
         headerBadge={headerBadges}
         focused={threadFocused}
@@ -415,14 +415,14 @@ function ProposalThreadItem({
         onToggleCollapsed={onToggleCollapsed}
       >
         <DiscussionEntry
-          authorName={thread.root.author.display_name}
-          authorId={thread.root.author.client_id}
-          createdAt={thread.root.created_at}
+          authorName={thread.comments[0].author.display_name}
+          authorId={thread.comments[0].author.client_id}
+          createdAt={thread.comments[0].created_at}
           actions={rootActions}
           surface={rootSurface}
           className="proposal-entry"
         />
-        {thread.replies.map((r) => (
+        {thread.comments.slice(1).map((r) => (
           <CommentItem
             key={r.id}
             node={r}
