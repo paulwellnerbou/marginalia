@@ -341,16 +341,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           break;
         }
         case 'mention.created': {
-          void refreshThreads();
-          const raw = event.comment as Record<string, unknown>;
-          const author = raw.author as { display_name?: string } | undefined;
-          const body = typeof raw.body === 'string' ? raw.body : '';
-          if (author?.display_name) {
-            notify(
-              'Mentioned in a comment',
-              `${author.display_name}: ${body.slice(0, 120)}`,
-            );
-          }
+          void listThreads(doc.uid).then((res) => {
+            setThreads(res.threads);
+            setMentionSeedNames(res.mention_candidates);
+            notifyPendingMentions(res.threads, res.pending_mentions);
+          });
           break;
         }
         case 'edit_proposal.created': {
