@@ -774,9 +774,9 @@ export function isComment(t: Thread): boolean {
   return t.proposal === null;
 }
 
-export type EditProposalStatus = 'open' | 'accepted' | 'rejected';
+export type ProposalStatus = 'open' | 'accepted' | 'rejected';
 
-export function proposalStatus(t: Thread): EditProposalStatus {
+export function proposalStatus(t: Thread): ProposalStatus {
   if (t.state === 'open') return 'open';
   if (t.resolution?.kind === 'accept') return 'accepted';
   if (t.resolution?.kind === 'reject') return 'rejected';
@@ -1037,6 +1037,15 @@ export function deleteEditProposal(uid: string, pid: string, identity: Identity)
     { method: 'DELETE', identity, docUid: uid },
   ).then(() => {
     forgetComment(uid, pid);
+  });
+}
+
+export function deleteThread(uid: string, threadId: string, identity: Identity): Promise<void> {
+  return request<void>(
+    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(threadId)}`,
+    { method: 'DELETE', identity, docUid: uid },
+  ).then(() => {
+    forgetComment(uid, threadId);
   });
 }
 

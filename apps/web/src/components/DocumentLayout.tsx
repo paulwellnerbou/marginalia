@@ -38,11 +38,11 @@ import type {
 import {
   createComment as apiCreate,
   deleteComment as apiDelete,
+  deleteThread as apiDeleteThread,
   listThreads,
   resolveThread as apiResolve,
   updateComment as apiUpdate,
   createEditProposal as apiCreateProposal,
-  deleteEditProposal as apiDeleteProposal,
   updateEditProposal as apiUpdateProposal,
   acceptEditProposal as apiAcceptProposal,
   rejectEditProposal as apiRejectProposal,
@@ -595,13 +595,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     async (threadId: string) => {
       const identity = resolveIdentity();
       if (!identity) return;
-      const thread = threads.find((t) => t.id === threadId);
       try {
-        if (thread && isProposal(thread)) {
-          await apiDeleteProposal(doc.uid, threadId, identity);
-        } else {
-          await apiDelete(doc.uid, threadId, identity);
-        }
+        await apiDeleteThread(doc.uid, threadId, identity);
         setThreads((prev) => prev.filter((t) => t.id !== threadId && t.root.id !== threadId));
       } catch (err) {
         reportError('DocumentLayout.deleteThread', err, { threadId });
@@ -610,7 +605,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName, threads],
+    [doc.uid, displayName, effectiveDisplayName],
   );
 
   const onDeleteNode = useCallback(
