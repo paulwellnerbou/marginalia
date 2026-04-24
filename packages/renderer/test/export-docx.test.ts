@@ -1045,18 +1045,16 @@ describe('exportDocx — list items', () => {
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
 
-    // The bold text must be in the first (and only) numbered paragraph.
-    const boldIdx = documentXml.indexOf('Einfachheit vor Komplexit');
-    expect(boldIdx).toBeGreaterThan(-1);
+    const boldParagraph = paragraphContaining(documentXml, 'Einfachheit vor Komplexit');
+    const continuationParagraph = paragraphContaining(documentXml, 'Beschreibungstext');
+
     // Exactly one numPr entry — only the bulleted paragraph.
     const numPrMatches = documentXml.match(/<w:numPr\b/g) ?? [];
     expect(numPrMatches.length).toBe(1);
     // The bold text paragraph must contain the numPr.
-    const numPrIdx = documentXml.indexOf('<w:numPr');
-    expect(numPrIdx).toBeLessThan(boldIdx);
-    // The continuation paragraph must appear after the numPr paragraph closes.
-    const descIdx = documentXml.indexOf('Beschreibungstext');
-    expect(descIdx).toBeGreaterThan(boldIdx);
+    expect(boldParagraph).toContain('<w:numPr');
+    // The continuation paragraph must remain a non-bulleted paragraph.
+    expect(continuationParagraph).not.toContain('<w:numPr');
   });
 
   test('list item with a nested list preserves the nesting', async () => {
