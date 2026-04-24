@@ -605,6 +605,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         setThreads((prev) => prev.filter((t) => t.id !== threadId && t.root.id !== threadId));
       } catch (err) {
         reportError('DocumentLayout.deleteThread', err, { threadId });
+        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Delete failed');
+        await refreshThreads();
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

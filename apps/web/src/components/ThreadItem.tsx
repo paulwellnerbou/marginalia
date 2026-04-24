@@ -238,7 +238,7 @@ function ProposalThreadItem({
   const diffBefore = resolvedDiff?.before ?? originalSource;
   const diffAfter = resolvedDiff?.after ?? proposal.proposed_text;
 
-  const canDelete = thread.root.capabilities.delete;
+  const canDelete = thread.root.capabilities.delete && status !== 'accepted';
   const canEditRationale = thread.root.capabilities.edit && isOpen && !editingRationale;
 
   const anchorLabel = formatAnchorLabel(thread.anchor.quote, proposal.source_snapshot);
