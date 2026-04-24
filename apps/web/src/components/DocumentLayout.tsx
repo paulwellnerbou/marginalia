@@ -31,20 +31,18 @@ import {
 import type {
   CommentAnchor,
   Document,
-  Comment,
   DocumentSettingsResponse,
-  EditProposal,
+  Thread,
   TocNode,
 } from '../lib/api.js';
 import {
   createComment as apiCreate,
   deleteComment as apiDelete,
-  listComments,
-  resolveComment as apiResolve,
+  deleteThread as apiDeleteThread,
+  listThreads,
+  resolveThread as apiResolve,
   updateComment as apiUpdate,
-  listEditProposals,
   createEditProposal as apiCreateProposal,
-  deleteEditProposal as apiDeleteProposal,
   updateEditProposal as apiUpdateProposal,
   acceptEditProposal as apiAcceptProposal,
   rejectEditProposal as apiRejectProposal,
@@ -54,13 +52,14 @@ import {
   revertHistoryVersion as apiRevertHistoryVersion,
   uploadAsset,
   ApiError,
+  isProposal,
   type HistoryEntry,
+  type ThreadCommentNode,
 } from '../lib/api.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { ensureNotificationPermission, notify } from '../lib/notifications.js';
-import type { Comment as CommentT } from '../lib/api.js';
 import {
   applyTheme,
   BUILT_IN_THEMES,
@@ -74,7 +73,7 @@ import { Toc } from './Toc.js';
 import { SelectionToolbar, type ProposalTarget } from './SelectionToolbar.js';
 import { BlockActions } from './BlockActions.js';
 import { CommentsPane } from './CommentsPane.js';
-import { EditProposalComposer } from './EditProposalComposer.js';
+import { ProposalComposer } from './ThreadComposer.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { AppBar } from './AppBar.js';
 import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
@@ -105,6 +104,10 @@ interface ThreadFocusTarget {
   threadId: string;
   nonce: number;
 }
+
+type PendingDraft =
+  | { mode: 'comment'; anchor: CommentAnchor }
+  | { mode: 'proposal'; target: ProposalTarget };
 
 export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const navigate = useNavigate();
@@ -142,11 +145,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return Number.isFinite(saved) && saved >= 160 ? saved : 320;
   });
 
-  const [comments, setComments] = useState<Comment[]>([]);
-  const [proposals, setProposals] = useState<EditProposal[]>([]);
+  const [threads, setThreads] = useState<Thread[]>([]);
   const [mentionSeedNames, setMentionSeedNames] = useState<string[]>([]);
-  const [pendingAnchor, setPendingAnchor] = useState<CommentAnchor | null>(null);
-  const [pendingProposalTarget, setPendingProposalTarget] = useState<ProposalTarget | null>(null);
+  const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
+  const pendingAnchor = pendingDraft?.mode === 'comment' ? pendingDraft.anchor : null;
+  const pendingProposalTarget = pendingDraft?.mode === 'proposal' ? pendingDraft.target : null;
   const [focusedThread, setFocusedThread] = useState<ThreadFocusTarget | null>(null);
   /** Mirror of `doc.source` and `doc.rendered`, mutated when a proposal is
    *  accepted (auto-merged) so the displayed doc stays fresh without a reload. */
@@ -156,10 +159,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   /*
    * Per-block source ranges for the live document. Shared by the
-   * EditProposalComposer (extracts the clicked block's source into
-   * the textarea) and the CommentsPane (same map, passed down to its
-   * EditProposalItems). Recomputed only when the source or format
-   * changes, so editors don't pay the parse cost on unrelated re-renders.
+   * ProposalComposer (extracts the clicked block's source into
+   * the textarea) and CommentsPane (passed down to ThreadItems for diff
+   * display). Recomputed only when the source or format changes, so editors
+   * don't pay the parse cost on unrelated re-renders.
    */
   const blockRanges = useMemo(
     () =>
@@ -222,7 +225,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [doc.uid, doc.default_theme]);
 
   useEffect(() => {
-    if (!canComment) setPendingAnchor(null);
+    if (!canComment) setPendingDraft(null);
   }, [canComment]);
 
   const headingIds = useMemo(() => flattenTocIds(liveRendered.toc), [liveRendered.toc]);
@@ -311,20 +314,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    listComments(doc.uid).then(
+    listThreads(doc.uid).then(
       (r) => {
         if (cancelled) return;
-        setComments(r.comments);
+        setThreads(r.threads);
         setMentionSeedNames(r.mention_candidates);
-        notifyPendingMentions(r.comments, r.pending_mentions);
+        notifyPendingMentions(r.threads, r.pending_mentions);
       },
-      (err) => reportError('DocumentLayout.listComments', err, { uid: doc.uid }),
-    );
-    listEditProposals(doc.uid).then(
-      (r) => {
-        if (!cancelled) setProposals(r.edit_proposals);
-      },
-      (err) => reportError('DocumentLayout.listEditProposals', err, { uid: doc.uid }),
+      (err) => reportError('DocumentLayout.listThreads', err, { uid: doc.uid }),
     );
     return () => {
       cancelled = true;
@@ -332,28 +329,40 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [doc.uid]);
 
   useEffect(() => {
+    let cancelled = false;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    function scheduleRefresh() {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => { void refreshThreads(); }, 300);
+    }
     void ensureNotificationPermission();
     const sub = subscribeToDocumentEvents(doc.uid, (event) => {
       switch (event.type) {
-        case 'comment.created': {
-          const c = event.comment as unknown as CommentT;
-          setComments((prev) => (prev.some((x) => x.id === c.id) ? prev : [...prev, c]));
-          break;
-        }
-        case 'comment.updated': {
-          const c = event.comment as unknown as CommentT;
-          setComments((prev) => prev.map((x) => (x.id === c.id ? c : x)));
+        case 'comment.created':
+        case 'comment.updated':
+        case 'comment.deleted':
+        case 'edit_proposal.updated':
+        case 'edit_proposal.deleted': {
+          scheduleRefresh();
           break;
         }
         case 'mention.created': {
-          const c = event.comment as unknown as CommentT;
-          setComments((prev) => (prev.some((x) => x.id === c.id) ? prev : [...prev, c]));
-          notifyMention(c);
+          void listThreads(doc.uid).then((res) => {
+            if (cancelled) return;
+            setThreads(res.threads);
+            setMentionSeedNames(res.mention_candidates);
+            notifyPendingMentions(res.threads, res.pending_mentions);
+          }).catch((err) => reportError('DocumentLayout.mention.created', err, { uid: doc.uid }));
           break;
         }
-        case 'comment.deleted': {
-          setComments((prev) =>
-            prev.filter((x) => x.id !== event.comment_id && x.parent_id !== event.comment_id),
+        case 'edit_proposal.created': {
+          void refreshThreads();
+          const raw = event.edit_proposal as Record<string, unknown>;
+          const comment = raw.comment as Record<string, unknown> | undefined;
+          const author = comment?.author as { display_name?: string } | undefined;
+          notify(
+            'New edit proposal',
+            `${author?.display_name ?? 'Someone'} proposed a change.`,
           );
           break;
         }
@@ -365,38 +374,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           });
           break;
         }
-        case 'edit_proposal.created': {
-          const p = event.edit_proposal as unknown as EditProposal;
-          setProposals((prev) => (prev.some((x) => x.id === p.id) ? prev : [...prev, p]));
-          notify('New edit proposal', `${p.comment.author.display_name} proposed a change.`);
-          break;
-        }
-        case 'edit_proposal.updated': {
-          const p = event.edit_proposal as unknown as EditProposal;
-          setProposals((prev) => prev.map((x) => (x.id === p.id ? p : x)));
-          break;
-        }
-        case 'edit_proposal.deleted': {
-          setProposals((prev) => prev.filter((x) => x.id !== event.edit_proposal_id));
-          setComments((prev) =>
-            prev.filter((x) => x.parent_proposal_id !== event.edit_proposal_id),
-          );
-          break;
-        }
       }
     });
-    return () => sub.close();
+    return () => { cancelled = true; if (refreshTimer) clearTimeout(refreshTimer); sub.close(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.uid]);
 
   const mentionCandidates = useMemo(() => {
     const names = new Map<string, string>();
     for (const name of mentionSeedNames) addMentionName(names, name);
-    for (const comment of comments) addMentionName(names, comment.author.display_name);
+    for (const thread of threads) {
+      addMentionName(names, thread.root.author.display_name);
+      for (const reply of thread.replies) addMentionName(names, reply.author.display_name);
+    }
     if (doc.display_name) addMentionName(names, doc.display_name);
     return Array.from(names.values()).sort((a, b) =>
       a.localeCompare(b, undefined, { sensitivity: 'base' }),
     );
-  }, [comments, doc.display_name, mentionSeedNames]);
+  }, [threads, doc.display_name, mentionSeedNames]);
 
   function resolveIdentity(providedName?: string) {
     const name = providedName?.trim() || effectiveDisplayName;
@@ -423,13 +418,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, []);
 
   const onCreate = useCallback(
-    async (payload: {
-      anchor?: CommentAnchor;
-      parent_id?: string;
-      parent_proposal_id?: string;
-      body: string;
-      display_name?: string;
-    }) => {
+    async (payload: { anchor: CommentAnchor; body: string; display_name?: string }) => {
       if (!canComment) {
         setError('You have read-only access to this document.');
         return;
@@ -440,12 +429,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         return;
       }
       try {
-        const { display_name, ...rest } = payload;
-        void display_name;
-        const res = await apiCreate(doc.uid, rest, identity);
-        setComments((prev) => [...prev, res.comment]);
-        setPendingAnchor(null);
+        await apiCreate(doc.uid, { anchor: payload.anchor, body: payload.body }, identity);
+        setPendingDraft(null);
         setError(null);
+        await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.createComment', err, { uid: doc.uid });
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to post');
@@ -455,16 +442,46 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [canComment, doc.uid, displayName, effectiveDisplayName],
   );
 
-  const onResolve = useCallback(
-    async (id: string, resolved: boolean, body?: string, name?: string) => {
+  const onReply = useCallback(
+    async (threadId: string, body: string, name?: string) => {
       const identity = resolveIdentity(name);
       if (!identity) return;
       try {
-        const res = await apiResolve(doc.uid, id, resolved, identity, body);
-        setComments((prev) => prev.map((c) => (c.id === id ? res.comment : c)));
-        if (body?.trim()) await refreshThreads();
+        await apiCreate(doc.uid, { parent_id: threadId, body }, identity);
+        await refreshThreads();
       } catch (err) {
-        reportError('DocumentLayout.resolveComment', err, { id, resolved });
+        reportError('DocumentLayout.replyToThread', err, { uid: doc.uid, threadId });
+        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to reply');
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName, effectiveDisplayName],
+  );
+
+  const onResolveThread = useCallback(
+    async (
+      id: string,
+      kind: 'resolve' | 'reopen' | 'accept' | 'reject',
+      body?: string,
+      name?: string,
+    ) => {
+      const identity = resolveIdentity(name);
+      if (!identity) return;
+      try {
+        if (kind === 'resolve' || kind === 'reopen') {
+          await apiResolve(doc.uid, id, kind === 'resolve', identity, body);
+          await refreshThreads();
+        } else if (kind === 'accept') {
+          await apiAcceptProposal(doc.uid, id, identity, body);
+          await Promise.all([refreshDoc(), refreshThreads()]);
+          setHistoryVersion((v) => v + 1);
+        } else {
+          await apiRejectProposal(doc.uid, id, identity, body);
+          await refreshThreads();
+        }
+      } catch (err) {
+        reportError('DocumentLayout.resolveThread', err, { id, kind });
+        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : `${kind} failed`);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -476,8 +493,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       const identity = resolveIdentity();
       if (!identity) return;
       try {
-        const res = await apiUpdate(doc.uid, id, body, identity);
-        setComments((prev) => prev.map((c) => (c.id === id ? res.comment : c)));
+        await apiUpdate(doc.uid, id, body, identity);
+        await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.editComment', err, { commentId: id });
       }
@@ -498,14 +515,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   const refreshThreads = useCallback(async () => {
     try {
-      const [commentsRes, proposalsRes] = await Promise.all([
-        listComments(doc.uid),
-        listEditProposals(doc.uid),
-      ]);
-      setComments(commentsRes.comments);
-      setMentionSeedNames(commentsRes.mention_candidates);
-      notifyPendingMentions(commentsRes.comments, commentsRes.pending_mentions);
-      setProposals(proposalsRes.edit_proposals);
+      const res = await listThreads(doc.uid, { consumeMentions: false });
+      setThreads(res.threads);
+      setMentionSeedNames(res.mention_candidates);
     } catch (err) {
       reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
     }
@@ -551,10 +563,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           proposed_text: payload.proposed_text,
         };
         if (payload.rationale) req.rationale = payload.rationale;
-        const res = await apiCreateProposal(doc.uid, req, identity);
-        setProposals((prev) => [...prev, res.edit_proposal]);
-        setPendingProposalTarget(null);
+        await apiCreateProposal(doc.uid, req, identity);
+        setPendingDraft(null);
         setError(null);
+        await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.createProposal', err, { uid: doc.uid });
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to propose');
@@ -564,51 +576,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [doc.uid, displayName, pendingProposalTarget],
   );
 
-  const onAcceptProposal = useCallback(
-    async (id: string, body?: string, name?: string) => {
-      const identity = resolveIdentity(name);
-      if (!identity) return;
-      try {
-        const res = await apiAcceptProposal(doc.uid, id, identity, body);
-        setProposals((prev) => prev.map((p) => (p.id === id ? res.edit_proposal : p)));
-        if (body?.trim()) {
-          await Promise.all([refreshDoc(), refreshThreads()]);
-        } else {
-          await refreshDoc();
-        }
-        setHistoryVersion((v) => v + 1);
-      } catch (err) {
-        reportError('DocumentLayout.acceptProposal', err, { id });
-        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Accept failed');
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, refreshDoc, refreshThreads],
-  );
-
-  const onRejectProposal = useCallback(
-    async (id: string, body?: string, name?: string) => {
-      const identity = resolveIdentity(name);
-      if (!identity) return;
-      try {
-        const res = await apiRejectProposal(doc.uid, id, identity, body);
-        setProposals((prev) => prev.map((p) => (p.id === id ? res.edit_proposal : p)));
-        if (body?.trim()) await refreshThreads();
-      } catch (err) {
-        reportError('DocumentLayout.rejectProposal', err, { id });
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName, refreshThreads],
-  );
-
   const onEditProposalRationale = useCallback(
     async (id: string, rationale: string | null) => {
       const identity = resolveIdentity();
       if (!identity) return;
       try {
-        const res = await apiUpdateProposal(doc.uid, id, { rationale }, identity);
-        setProposals((prev) => prev.map((p) => (p.id === id ? res.edit_proposal : p)));
+        await apiUpdateProposal(doc.uid, id, { rationale }, identity);
+        await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.editProposalRationale', err, { id });
       }
@@ -617,30 +591,38 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [doc.uid, displayName],
   );
 
-  const onDeleteProposal = useCallback(
-    async (id: string) => {
+  const onDeleteThread = useCallback(
+    async (threadId: string) => {
       const identity = resolveIdentity();
       if (!identity) return;
       try {
-        await apiDeleteProposal(doc.uid, id, identity);
-        setProposals((prev) => prev.filter((p) => p.id !== id));
+        await apiDeleteThread(doc.uid, threadId, identity);
+        setThreads((prev) => prev.filter((t) => t.id !== threadId && t.root.id !== threadId));
       } catch (err) {
-        reportError('DocumentLayout.deleteProposal', err, { id });
+        reportError('DocumentLayout.deleteThread', err, { threadId });
+        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Delete failed');
+        await refreshThreads();
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName],
+    [doc.uid, displayName, effectiveDisplayName],
   );
 
-  const onDelete = useCallback(
-    async (id: string) => {
+  const onDeleteNode = useCallback(
+    async (nodeId: string) => {
       const identity = resolveIdentity();
       if (!identity) return;
       try {
-        await apiDelete(doc.uid, id, identity);
-        setComments((prev) => prev.filter((c) => c.id !== id && c.parent_id !== id));
+        await apiDelete(doc.uid, nodeId, identity);
+        setThreads((prev) =>
+          prev.map((t) =>
+            t.replies.some((r) => r.id === nodeId)
+              ? { ...t, replies: t.replies.filter((r) => r.id !== nodeId) }
+              : t,
+          ),
+        );
       } catch (err) {
-        reportError('DocumentLayout.deleteComment', err, { commentId: id });
+        reportError('DocumentLayout.deleteNode', err, { nodeId });
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -696,10 +678,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   };
 
   const title = documentTitle(doc);
-  const threadCount = useMemo(
-    () => comments.filter((c) => c.parent_id === null).length,
-    [comments],
-  );
+  const threadCount = useMemo(() => threads.length, [threads]);
+
   const commentHighlights = useMemo(() => {
     const highlights: Array<{
       scope: 'range' | 'block';
@@ -708,37 +688,35 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       quote: string;
       startOffset: number;
       endOffset: number;
-    }> = comments
-      .filter(
-        (comment) =>
-          comment.parent_id === null &&
-          comment.link_status === 'linked' &&
-          comment.anchor !== null &&
-          comment.anchor.quote &&
-          comment.anchor.end_offset > comment.anchor.start_offset,
-      )
-      .map((comment) => ({
-        scope: 'range' as const,
-        threadId: comment.id,
-        blockId: comment.anchor!.block_id,
-        quote: comment.anchor!.quote,
-        startOffset: comment.anchor!.start_offset,
-        endOffset: comment.anchor!.end_offset,
-      }));
+    }> = [];
 
-    for (const proposal of proposals) {
-      if (proposal.status !== 'open') continue;
-      if (proposal.comment.link_status !== 'linked') continue;
-      if (!proposal.comment.anchor?.block_id || !proposal.comment.anchor.quote) continue;
+    for (const thread of threads) {
+      if (thread.link_status !== 'linked') continue;
+      if (!thread.anchor.block_id || !thread.anchor.quote) continue;
 
-      highlights.push({
-        scope: 'block',
-        threadId: proposal.id,
-        blockId: proposal.comment.anchor.block_id,
-        quote: proposal.comment.anchor.quote,
-        startOffset: 0,
-        endOffset: proposal.comment.anchor.quote.length,
-      });
+      if (!isProposal(thread)) {
+        const start = thread.anchor.start_offset ?? 0;
+        const end = thread.anchor.end_offset ?? 0;
+        if (end > start) {
+          highlights.push({
+            scope: 'range',
+            threadId: thread.id,
+            blockId: thread.anchor.block_id,
+            quote: thread.anchor.quote,
+            startOffset: start,
+            endOffset: end,
+          });
+        }
+      } else if (thread.state === 'open') {
+        highlights.push({
+          scope: 'block',
+          threadId: thread.id,
+          blockId: thread.anchor.block_id,
+          quote: thread.anchor.quote,
+          startOffset: 0,
+          endOffset: thread.anchor.quote.length,
+        });
+      }
     }
 
     if (
@@ -757,7 +735,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     }
 
     return highlights;
-  }, [canComment, comments, pendingAnchor, proposals]);
+  }, [canComment, threads, pendingAnchor]);
 
   const openCommentThread = useCallback((threadId: string) => {
     setCommentsOpen(true);
@@ -1098,11 +1076,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             {canComment && (
               <SelectionToolbar
                 rootRef={docRef}
-                onAdd={setPendingAnchor}
-                onPropose={setPendingProposalTarget}
+                onAdd={(anchor) => setPendingDraft({ mode: 'comment', anchor })}
+                onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
               />
             )}
-            {canComment && <BlockActions rootRef={docRef} onPropose={setPendingProposalTarget} />}
+            {canComment && (
+              <BlockActions
+                rootRef={docRef}
+                onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+              />
+            )}
           </div>
         </main>
 
@@ -1150,26 +1133,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               <Tabs.Content value="comments" className="right-tab-panel">
                 <CommentsPane
                   uid={doc.uid}
-                  comments={comments}
-                  proposals={proposals}
+                  threads={threads}
                   docSource={liveSource}
                   blockRanges={blockRanges}
                   mentionCandidates={mentionCandidates}
                   canComment={canComment}
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}
-                  onCancelPending={() => setPendingAnchor(null)}
-                  canEdit={doc.role === 'admin' || doc.role === 'editor'}
-                  isDocAdmin={doc.role === 'admin'}
-                  viewerClientId={getClientId()}
+                  onCancelPending={() => setPendingDraft(null)}
                   displayName={effectiveDisplayName}
                   onCreate={onCreate}
+                  onReply={onReply}
                   onEdit={onEdit}
-                  onDelete={onDelete}
-                  onResolve={onResolve}
-                  onAcceptProposal={onAcceptProposal}
-                  onRejectProposal={onRejectProposal}
-                  onDeleteProposal={onDeleteProposal}
+                  onDeleteNode={onDeleteNode}
+                  onDeleteThread={onDeleteThread}
+                  onResolveThread={onResolveThread}
                   onEditProposalRationale={onEditProposalRationale}
                   onScrollToAnchor={scrollToAnchor}
                 />
@@ -1215,30 +1193,35 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         actual overlay to the body, so its DOM position here doesn't
         affect rendering.
       */}
-      <EditProposalComposer
+      <ProposalComposer
         target={pendingProposalTarget}
         docSource={liveSource}
         docFormat={doc.format}
         blockRanges={blockRanges}
         needsName={!displayName}
-        onCancel={() => setPendingProposalTarget(null)}
+        onCancel={() => setPendingDraft(null)}
         onSubmit={onCreateProposal}
       />
     </div>
   );
 }
 
-function notifyPendingMentions(comments: CommentT[], pendingMentionIds: string[]): void {
+function notifyPendingMentions(threads: Thread[], pendingMentionIds: string[]): void {
   if (pendingMentionIds.length === 0) return;
-  const byId = new Map(comments.map((comment) => [comment.id, comment]));
-  for (const id of pendingMentionIds) {
-    const comment = byId.get(id);
-    if (comment) notifyMention(comment);
+  const byId = new Map<string, ThreadCommentNode>();
+  for (const t of threads) {
+    byId.set(t.root.id, t.root);
+    for (const r of t.replies) byId.set(r.id, r);
   }
-}
-
-function notifyMention(comment: CommentT): void {
-  notify('Mentioned in a comment', `${comment.author.display_name}: ${comment.body.slice(0, 120)}`);
+  for (const id of pendingMentionIds) {
+    const node = byId.get(id);
+    if (node) {
+      notify(
+        'Mentioned in a comment',
+        `${node.author.display_name}: ${node.body.slice(0, 120)}`,
+      );
+    }
+  }
 }
 
 function addMentionName(map: Map<string, string>, name: string | null | undefined): void {

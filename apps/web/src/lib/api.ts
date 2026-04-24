@@ -695,36 +695,18 @@ export interface CommentAnchor {
 
 export type CommentLinkStatus = 'linked' | 'low-confidence' | 'orphaned';
 
-export interface Comment {
-  id: string;
-  parent_id: string | null;
-  parent_proposal_id: string | null;
-  anchor: CommentAnchor | null;
-  author: { client_id: string; display_name: string };
-  body: string;
-  link_status: CommentLinkStatus | null;
-  resolved_at: number | null;
-  resolved_by_name: string | null;
-  created_at: number;
-  updated_at: number;
-}
 
-export interface ListCommentsResponse {
-  comments: Comment[];
-  mention_candidates: string[];
-  pending_mentions: string[];
-}
+export type ThreadState = 'open' | 'resolved';
+export type ThreadResolutionKind = 'resolve' | 'accept' | 'reject';
+export type ThreadLinkStatus = CommentLinkStatus;
 
-type ThreadState = 'open' | 'resolved';
-type ThreadResolutionKind = 'resolve' | 'accept' | 'reject';
-
-interface ThreadResolution {
+export interface ThreadResolution {
   kind: ThreadResolutionKind;
   at: number;
   by_name: string | null;
 }
 
-interface ThreadCapabilities {
+export interface ThreadCapabilities {
   reply: boolean;
   resolve: boolean;
   accept: boolean;
@@ -732,12 +714,12 @@ interface ThreadCapabilities {
   reopen: boolean;
 }
 
-interface ThreadNodeCapabilities {
+export interface ThreadNodeCapabilities {
   edit: boolean;
   delete: boolean;
 }
 
-interface ThreadAnchor {
+export interface ThreadAnchor {
   block_id: string | null;
   quote: string | null;
   prefix: string;
@@ -749,7 +731,7 @@ interface ThreadAnchor {
   section_index_path: number[] | null;
 }
 
-interface ThreadCommentNode {
+export interface ThreadCommentNode {
   id: string;
   body: string;
   author: { client_id: string; display_name: string };
@@ -758,17 +740,17 @@ interface ThreadCommentNode {
   updated_at: number;
 }
 
-interface ThreadProposalData {
+export interface ThreadProposalData {
   anchor_kind: string | null;
   source_snapshot: string | null;
   proposed_text: string;
 }
 
-interface Thread {
+export interface Thread {
   id: string;
   state: ThreadState;
   resolution: ThreadResolution | null;
-  link_status: CommentLinkStatus;
+  link_status: ThreadLinkStatus;
   anchor: ThreadAnchor;
   capabilities: ThreadCapabilities;
   root: ThreadCommentNode;
@@ -776,10 +758,41 @@ interface Thread {
   replies: ThreadCommentNode[];
 }
 
-interface ListThreadsResponse {
+export interface ListThreadsResponse {
   threads: Thread[];
   mention_candidates: string[];
   pending_mentions: string[];
+}
+
+// --- Thread view helpers ---------------------------------------------------
+
+export function isProposal(t: Thread): t is Thread & { proposal: ThreadProposalData } {
+  return t.proposal !== null;
+}
+
+export function isComment(t: Thread): boolean {
+  return t.proposal === null;
+}
+
+export type ProposalStatus = 'open' | 'accepted' | 'rejected';
+
+export function proposalStatus(t: Thread): ProposalStatus {
+  if (t.state === 'open') return 'open';
+  if (t.resolution?.kind === 'accept') return 'accepted';
+  if (t.resolution?.kind === 'reject') return 'rejected';
+  return 'open';
+}
+
+export function isOrphan(t: Thread): boolean {
+  return t.link_status === 'orphaned';
+}
+
+export function isResolved(t: Thread): boolean {
+  return t.state === 'resolved';
+}
+
+export function rootAuthor(t: Thread): { client_id: string; display_name: string } {
+  return t.root.author;
 }
 
 const listThreadsInflight = new Map<string, Promise<ListThreadsResponse>>();
@@ -809,7 +822,7 @@ function snapshotSet(uid: string, threads: Thread[]): void {
   }
 }
 
-function listThreads(
+export function listThreads(
   uid: string,
   opts: { consumeMentions?: boolean } = {},
 ): Promise<ListThreadsResponse> {
@@ -838,134 +851,6 @@ function listThreads(
   return promise;
 }
 
-export function listComments(uid: string): Promise<ListCommentsResponse> {
-  return listThreads(uid).then((res) => ({
-    comments: threadsToLegacyComments(res.threads),
-    mention_candidates: res.mention_candidates,
-    pending_mentions: res.pending_mentions,
-  }));
-}
-
-function threadsToLegacyComments(threads: Thread[]): Comment[] {
-  const comments: Comment[] = [];
-
-  for (const thread of threads) {
-    if (!thread.proposal) {
-      comments.push(threadRootToLegacyComment(thread));
-      for (const reply of thread.replies) {
-        comments.push(threadReplyToLegacyComment(reply, thread.id, null));
-      }
-      continue;
-    }
-
-    for (const reply of thread.replies) {
-      comments.push(threadReplyToLegacyComment(reply, null, thread.id));
-    }
-  }
-
-  comments.sort((a, b) => a.created_at - b.created_at);
-  return comments;
-}
-
-function threadsToLegacyProposals(threads: Thread[]): EditProposal[] {
-  return threads
-    .filter((thread): thread is Thread & { proposal: ThreadProposalData } => thread.proposal !== null)
-    .map((thread) => ({
-      id: thread.id,
-      comment: threadRootToLegacyComment(thread),
-      anchor_kind: thread.proposal.anchor_kind,
-      source_snapshot: thread.proposal.source_snapshot,
-      proposed_text: thread.proposal.proposed_text,
-      status: threadToLegacyProposalStatus(thread),
-      decided_at: thread.resolution?.kind === 'accept' || thread.resolution?.kind === 'reject'
-        ? thread.resolution.at
-        : null,
-      decided_by_name:
-        thread.resolution?.kind === 'accept' || thread.resolution?.kind === 'reject'
-          ? thread.resolution.by_name
-          : null,
-    }))
-    .sort((a, b) => a.comment.created_at - b.comment.created_at);
-}
-
-function threadToLegacyProposalStatus(thread: Thread): EditProposalStatus {
-  if (thread.state === 'open') return 'open';
-  if (thread.resolution?.kind === 'accept') return 'accepted';
-  if (thread.resolution?.kind === 'reject') return 'rejected';
-  return 'open';
-}
-
-function threadRootToLegacyComment(thread: Thread): Comment {
-  const resolved =
-    thread.state === 'resolved' && thread.resolution
-      ? {
-          resolved_at: thread.resolution.at,
-          resolved_by_name: thread.resolution.by_name,
-        }
-      : {
-          resolved_at: null,
-          resolved_by_name: null,
-        };
-
-  return {
-    id: thread.id,
-    parent_id: null,
-    parent_proposal_id: null,
-    anchor: threadAnchorToLegacyAnchor(thread.anchor),
-    author: thread.root.author,
-    body: thread.root.body,
-    link_status: thread.link_status,
-    resolved_at: resolved.resolved_at,
-    resolved_by_name: resolved.resolved_by_name,
-    created_at: thread.root.created_at,
-    updated_at: thread.root.updated_at,
-  };
-}
-
-function threadReplyToLegacyComment(
-  reply: ThreadCommentNode,
-  parentId: string | null,
-  parentProposalId: string | null,
-): Comment {
-  return {
-    id: reply.id,
-    parent_id: parentId,
-    parent_proposal_id: parentProposalId,
-    anchor: null,
-    author: reply.author,
-    body: reply.body,
-    link_status: null,
-    resolved_at: null,
-    resolved_by_name: null,
-    created_at: reply.created_at,
-    updated_at: reply.updated_at,
-  };
-}
-
-function threadAnchorToLegacyAnchor(anchor: ThreadAnchor): CommentAnchor | null {
-  // block_id and quote are the minimum required fields for a usable anchor.
-  // Threads created before these were reliably stored (or with a null anchor_block_id
-  // after orphaning) would have null values; treat those as anchor-less.
-  if (anchor.block_id === null || anchor.quote === null) return null;
-  return {
-    block_id: anchor.block_id,
-    quote: anchor.quote,
-    prefix: anchor.prefix,
-    suffix: anchor.suffix,
-    start_offset: anchor.start_offset ?? 0,
-    end_offset: anchor.end_offset ?? 0,
-    heading_path: anchor.heading_path,
-    section_index: anchor.section_index,
-    section_index_path: anchor.section_index_path,
-  };
-}
-
-function threadToLegacyProposal(thread: Thread): EditProposal {
-  if (!thread.proposal) {
-    throw new Error(`Thread ${thread.id} does not carry proposal data`);
-  }
-  return threadsToLegacyProposals([thread])[0]!;
-}
 
 interface ThreadMutationResponse {
   thread: Thread;
@@ -1023,43 +908,19 @@ async function findCommentLocation(uid: string, commentId: string): Promise<Comm
   throw new ApiError(404, 'not-found');
 }
 
-function threadToLegacyCommentById(thread: Thread, commentId: string): Comment {
-  if (thread.id === commentId) return threadRootToLegacyComment(thread);
-
-  const reply = thread.replies.find((entry) => entry.id === commentId);
-  if (!reply) throw new Error(`Thread ${thread.id} does not contain comment ${commentId}`);
-
-  return threadReplyToLegacyComment(
-    reply,
-    thread.proposal ? null : thread.id,
-    thread.proposal ? thread.id : null,
-  );
-}
-
-export function listEditProposals(uid: string): Promise<{ edit_proposals: EditProposal[] }> {
-  return listThreads(uid).then((res) => ({
-    edit_proposals: threadsToLegacyProposals(res.threads),
-  }));
-}
 
 export function createComment(
   uid: string,
   payload: {
     anchor?: CommentAnchor;
     parent_id?: string;
-    parent_proposal_id?: string;
     body: string;
   },
   identity: Identity,
-): Promise<{ comment: Comment }> {
-  if (payload.parent_id && payload.parent_proposal_id) {
-    throw new ApiError(400, 'parent-conflict');
-  }
-
-  const parentId = payload.parent_id ?? payload.parent_proposal_id;
-  if (parentId) {
+): Promise<void> {
+  if (payload.parent_id) {
     return request<ThreadMutationResponse>(
-      `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(parentId)}/respond`,
+      `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(payload.parent_id)}/respond`,
       {
         method: 'POST',
         body: JSON.stringify({ body: payload.body }),
@@ -1068,9 +929,6 @@ export function createComment(
       },
     ).then((res) => {
       rememberThread(uid, res.thread);
-      const createdId = res.created_reply_id;
-      if (!createdId) throw new Error(`Missing created_reply_id for thread ${res.thread.id}`);
-      return { comment: threadToLegacyCommentById(res.thread, createdId) };
     });
   }
 
@@ -1084,7 +942,6 @@ export function createComment(
     docUid: uid,
   }).then((res) => {
     rememberThread(uid, res.thread);
-    return { comment: threadRootToLegacyComment(res.thread) };
   });
 }
 
@@ -1093,7 +950,7 @@ export async function updateComment(
   cid: string,
   body: string,
   identity: Identity,
-): Promise<{ comment: Comment }> {
+): Promise<void> {
   const location = await findCommentLocation(uid, cid);
   const path =
     location.kind === 'root'
@@ -1106,7 +963,6 @@ export async function updateComment(
     docUid: uid,
   });
   rememberThread(uid, res.thread);
-  return { comment: threadToLegacyCommentById(res.thread, cid) };
 }
 
 export async function deleteComment(uid: string, cid: string, identity: Identity): Promise<void> {
@@ -1125,18 +981,6 @@ export async function deleteComment(uid: string, cid: string, identity: Identity
 
 // --- edit proposals --------------------------------------------------
 
-export type EditProposalStatus = 'open' | 'accepted' | 'rejected';
-
-export interface EditProposal {
-  id: string;
-  comment: Comment;
-  anchor_kind: string | null;
-  source_snapshot: string | null;
-  proposed_text: string;
-  status: EditProposalStatus;
-  decided_at: number | null;
-  decided_by_name: string | null;
-}
 export function createEditProposal(
   uid: string,
   payload: {
@@ -1147,7 +991,7 @@ export function createEditProposal(
     rationale?: string | null;
   },
   identity: Identity,
-): Promise<{ edit_proposal: EditProposal }> {
+): Promise<void> {
   return request<ThreadMutationResponse>(`/api/documents/${encodeURIComponent(uid)}/threads`, {
     method: 'POST',
     body: JSON.stringify({
@@ -1165,7 +1009,6 @@ export function createEditProposal(
     docUid: uid,
   }).then((res) => {
     rememberThread(uid, res.thread);
-    return { edit_proposal: threadToLegacyProposal(res.thread) };
   });
 }
 
@@ -1174,7 +1017,7 @@ export function updateEditProposal(
   pid: string,
   patch: { rationale: string | null },
   identity: Identity,
-): Promise<{ edit_proposal: EditProposal }> {
+): Promise<void> {
   return request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}`,
     {
@@ -1185,7 +1028,6 @@ export function updateEditProposal(
     },
   ).then((res) => {
     rememberThread(uid, res.thread);
-    return { edit_proposal: threadToLegacyProposal(res.thread) };
   });
 }
 
@@ -1198,12 +1040,21 @@ export function deleteEditProposal(uid: string, pid: string, identity: Identity)
   });
 }
 
+export function deleteThread(uid: string, threadId: string, identity: Identity): Promise<void> {
+  return request<void>(
+    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(threadId)}`,
+    { method: 'DELETE', identity, docUid: uid },
+  ).then(() => {
+    forgetComment(uid, threadId);
+  });
+}
+
 export function acceptEditProposal(
   uid: string,
   pid: string,
   identity: Identity,
   body?: string,
-): Promise<{ edit_proposal: EditProposal }> {
+): Promise<void> {
   const replyBody = body?.trim();
   return request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/respond`,
@@ -1218,7 +1069,6 @@ export function acceptEditProposal(
     },
   ).then((res) => {
     rememberThread(uid, res.thread);
-    return { edit_proposal: threadToLegacyProposal(res.thread) };
   });
 }
 
@@ -1227,7 +1077,7 @@ export function rejectEditProposal(
   pid: string,
   identity: Identity,
   body?: string,
-): Promise<{ edit_proposal: EditProposal }> {
+): Promise<void> {
   const replyBody = body?.trim();
   return request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/respond`,
@@ -1242,7 +1092,6 @@ export function rejectEditProposal(
     },
   ).then((res) => {
     rememberThread(uid, res.thread);
-    return { edit_proposal: threadToLegacyProposal(res.thread) };
   });
 }
 
@@ -1253,21 +1102,16 @@ export function getEditProposalDiff(uid: string, pid: string): Promise<HistoryDi
   );
 }
 
-export async function resolveComment(
+export async function resolveThread(
   uid: string,
-  cid: string,
+  threadId: string,
   resolved: boolean,
   identity: Identity,
   body?: string,
-): Promise<{ comment: Comment }> {
-  const location = await findCommentLocation(uid, cid);
-  if (location.kind !== 'root') {
-    throw new ApiError(400, 'replies-not-resolvable');
-  }
-
+): Promise<void> {
   const replyBody = body?.trim();
   const res = await request<ThreadMutationResponse>(
-    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(location.thread.id)}/respond`,
+    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(threadId)}/respond`,
     {
       method: 'POST',
       body: JSON.stringify({
@@ -1279,5 +1123,4 @@ export async function resolveComment(
     },
   );
   rememberThread(uid, res.thread);
-  return { comment: threadRootToLegacyComment(res.thread) };
 }

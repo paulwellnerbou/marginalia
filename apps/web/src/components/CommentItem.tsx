@@ -3,77 +3,81 @@ import { Button, Flex, IconButton, TextArea, Tooltip } from '@radix-ui/themes';
 import { Pencil2Icon, QuoteIcon } from '@radix-ui/react-icons';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { Comment } from '../lib/api.js';
-import { getClientId } from '../lib/identity.js';
+import type { ThreadCommentNode } from '../lib/api.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import { DiscussionEntry } from './DiscussionUi.js';
 
 interface Props {
-  comment: Comment;
-  isDocAdmin: boolean;
+  node: ThreadCommentNode;
   onEdit: (id: string, body: string) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
   onQuote?: ((text: string) => void) | undefined;
 }
 
-export function CommentItem({ comment, isDocAdmin, onEdit, onDelete, onQuote }: Props) {
+export function CommentItem({ node, onEdit, onDelete, onQuote }: Props) {
   const [editing, setEditing] = useState(false);
   const [deleteArmed, setDeleteArmed] = useState(false);
-  const [draft, setDraft] = useState(comment.body);
-  const myId = getClientId();
-  const isAuthor = comment.author.client_id === myId;
   const actions = !editing ? (
     <Flex gap="1" align="center" wrap="wrap" className="comment-actions comment-actions-inline">
       {!deleteArmed && onQuote && (
         <Tooltip content="Quote">
-          <IconButton size="1" variant="ghost" color="gray" aria-label="Quote" onClick={() => onQuote(comment.body)}>
+          <IconButton
+            size="1"
+            variant="ghost"
+            color="gray"
+            aria-label="Quote"
+            onClick={() => onQuote(node.body)}
+          >
             <QuoteIcon />
           </IconButton>
         </Tooltip>
       )}
-      {!deleteArmed && isAuthor && (
+      {!deleteArmed && node.capabilities.edit && (
         <Tooltip content="Edit">
-          <IconButton size="1" variant="ghost" color="gray" aria-label="Edit" onClick={() => setEditing(true)}>
+          <IconButton
+            size="1"
+            variant="ghost"
+            color="gray"
+            aria-label="Edit"
+            onClick={() => setEditing(true)}
+          >
             <Pencil2Icon />
           </IconButton>
         </Tooltip>
       )}
-      {(isAuthor || isDocAdmin) && (
+      {node.capabilities.delete && (
         <ConfirmButton
           label="Delete"
           confirmLabel="Confirm delete"
           ariaLabel="Delete"
           reserveWidth={false}
           onArmedChange={setDeleteArmed}
-          onConfirm={() => onDelete(comment.id)}
+          onConfirm={() => onDelete(node.id)}
         />
       )}
     </Flex>
   ) : undefined;
+
   const surface = editing ? (
     <EditForm
-      initial={draft}
-      onCancel={() => {
-        setEditing(false);
-        setDraft(comment.body);
-      }}
+      initial={node.body}
+      onCancel={() => setEditing(false)}
       onSave={async (v) => {
-        await onEdit(comment.id, v);
-        setDraft(v);
+        await onEdit(node.id, v);
         setEditing(false);
       }}
     />
   ) : (
     <div className="comment-body">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{comment.body}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{node.body}</ReactMarkdown>
     </div>
   );
 
   return (
     <DiscussionEntry
-      authorName={comment.author.display_name}
-      authorId={comment.author.client_id}
-      createdAt={comment.created_at}
+      authorName={node.author.display_name}
+      authorId={node.author.client_id}
+      createdAt={node.created_at}
       actions={actions}
       surface={surface}
     />
@@ -107,8 +111,15 @@ function EditForm({
         wrap="wrap"
         className="comment-actions comment-edit-actions"
       >
-        <Button size="1" variant="soft" color="gray" onClick={onCancel}>Cancel</Button>
-        <Button size="1" variant="soft" disabled={!value.trim()} onClick={() => onSave(value.trim())}>
+        <Button size="1" variant="soft" color="gray" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
+          size="1"
+          variant="soft"
+          disabled={!value.trim()}
+          onClick={() => onSave(value.trim())}
+        >
           Save
         </Button>
       </Flex>
