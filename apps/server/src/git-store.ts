@@ -70,7 +70,7 @@ export class GitStore {
     const sanitizedCommitMessage = meta.commitMessage
       ? meta.commitMessage
           .split('\n')
-          .filter((line) => !line.startsWith('X-Marginalia-'))
+          .filter((line) => !line.trim().startsWith('X-Marginalia-'))
           .join('\n')
           .trim() || undefined
       : undefined;

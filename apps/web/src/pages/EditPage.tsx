@@ -542,7 +542,7 @@ export function EditPage() {
             onSaveAndClose={() => handleSave({ closeAfter: true })}
             onSaveWithComment={(comment) => handleSave({ commitMessage: comment })}
           />
-          <ResizeHandle side="left" width={editorWidth} onResize={setEditorWidth} min={200} max={1800} />
+          <ResizeHandle side="left" width={editorWidth} onResize={setEditorWidth} min={200} max={1800} label="Resize editor panel" />
         </div>
         <div className="edit-preview-pane">
           <div className="edit-preview-chrome">

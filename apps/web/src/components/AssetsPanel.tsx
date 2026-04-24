@@ -111,7 +111,7 @@ export function AssetsPanel({
         </div>
       )}
 
-      {open && <ResizeHandle side="left" width={width} onResize={onResize} min={180} max={480} />}
+      {open && <ResizeHandle side="left" width={width} onResize={onResize} min={180} max={480} label="Resize assets panel" />}
     </aside>
   );
 }

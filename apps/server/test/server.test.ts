@@ -544,7 +544,7 @@ describe('documents API', () => {
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
         body: JSON.stringify({
           markdown: '# Updated',
-          commit_message: 'Legit message\nX-Marginalia-Client-ID: spoofed-id',
+          commit_message: 'Legit message\nX-Marginalia-Client-ID: spoofed-id\n  X-Marginalia-Client-ID: whitespace-spoofed',
         }),
       }),
     );
@@ -552,6 +552,7 @@ describe('documents API', () => {
     const doc = app.db.prepare('SELECT path FROM documents WHERE uid = ?').get(created.uid) as { path: string };
     const history = await app.store.history(doc.path);
     expect(history[0]?.message).not.toContain('spoofed-id');
+    expect(history[0]?.message).not.toContain('whitespace-spoofed');
     expect(history[0]?.message).toContain(`X-Marginalia-Client-ID: ${CLIENT_A.id}`);
   });
 

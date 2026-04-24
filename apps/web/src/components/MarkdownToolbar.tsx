@@ -40,12 +40,13 @@ function setHeadingWithPattern(view: EditorView, prefix: string, existingRe: Reg
   const { from } = view.state.selection.main;
   const line = view.state.doc.lineAt(from);
   const existingMatch = line.text.match(existingRe);
-  if (existingMatch) {
+  const existingPrefix = existingMatch?.[1];
+  if (existingPrefix !== undefined) {
     if (line.text.startsWith(prefix)) {
       view.dispatch({ changes: { from: line.from, to: line.from + prefix.length, insert: '' } });
     } else {
       view.dispatch({
-        changes: { from: line.from, to: line.from + existingMatch[1].length, insert: prefix },
+        changes: { from: line.from, to: line.from + existingPrefix.length, insert: prefix },
       });
     }
   } else {
