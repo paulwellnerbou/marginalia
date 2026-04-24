@@ -688,6 +688,7 @@ function UploadDialog({
                   docUid={createdUid}
                   password={createdPassword}
                   label="Password"
+                  docName={createdTitle}
                 />
               )}
             </Flex>

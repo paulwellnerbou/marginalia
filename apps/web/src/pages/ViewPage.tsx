@@ -137,7 +137,7 @@ export function ViewPage() {
 
   return (
     <>
-      <PasswordPromptDialog docUid={doc.uid} />
+      <PasswordPromptDialog docUid={doc.uid} docName={doc.name} />
       <DocumentLayout doc={doc} onDocSettingsChanged={handleSettingsChanged}>
         {(doc.role === 'admin' || doc.role === 'editor') && (
           <Button variant="soft" asChild>
