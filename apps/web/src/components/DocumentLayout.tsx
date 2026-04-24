@@ -330,6 +330,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   useEffect(() => {
     let cancelled = false;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    function scheduleRefresh() {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => { void refreshThreads(); }, 300);
+    }
     void ensureNotificationPermission();
     const sub = subscribeToDocumentEvents(doc.uid, (event) => {
       switch (event.type) {
@@ -338,7 +343,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         case 'comment.deleted':
         case 'edit_proposal.updated':
         case 'edit_proposal.deleted': {
-          void refreshThreads();
+          scheduleRefresh();
           break;
         }
         case 'mention.created': {
@@ -371,7 +376,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         }
       }
     });
-    return () => { cancelled = true; sub.close(); };
+    return () => { cancelled = true; if (refreshTimer) clearTimeout(refreshTimer); sub.close(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.uid]);
 

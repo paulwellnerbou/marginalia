@@ -242,7 +242,7 @@ function ProposalThreadItem({
   const canEditRationale = thread.root.capabilities.edit && isOpen && !editingRationale;
 
   const anchorLabel = formatAnchorLabel(thread.anchor.quote, proposal.source_snapshot);
-  const quoteBody = (thread.root.body || proposal.proposed_text).trim();
+  const quoteBody = (thread.root.body.trim() || proposal.proposed_text).trim();
   const handleReplyQuote = canComment ? (text: string) => handleQuote(text) : undefined;
 
   async function handleShowDiff(): Promise<void> {
