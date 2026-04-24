@@ -11,13 +11,18 @@ interface Props {
   /** Allowed range. */
   min?: number;
   max?: number;
+  /** Accessible label, e.g. "Resize assets panel". */
+  label?: string;
 }
 
+const STEP = 16;
+const STEP_LARGE = 48;
+
 /**
- * Vertical drag handle used to resize a side pane. No dependencies — pure
- * mouse events + document listeners while dragging.
+ * Vertical drag handle used to resize a side pane. Supports mouse drag and
+ * keyboard (Arrow keys, Shift+Arrow for larger steps).
  */
-export function ResizeHandle({ side, width, onResize, min = 160, max = 640 }: Props) {
+export function ResizeHandle({ side, width, onResize, min = 160, max = 640, label = 'Resize pane' }: Props) {
   const dragging = useRef<{ startX: number; startWidth: number } | null>(null);
 
   useEffect(() => {
@@ -43,16 +48,33 @@ export function ResizeHandle({ side, width, onResize, min = 160, max = 640 }: Pr
     };
   }, [side, onResize, min, max]);
 
+  function clamp(v: number) { return Math.max(min, Math.min(max, v)); }
+
   return (
     <div
       className={`resize-handle resize-handle-${side}`}
       role="separator"
       aria-orientation="vertical"
+      aria-valuenow={width}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-label={label}
+      tabIndex={0}
       onMouseDown={(e) => {
         e.preventDefault();
         dragging.current = { startX: e.clientX, startWidth: width };
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
+      }}
+      onKeyDown={(e) => {
+        const step = e.shiftKey ? STEP_LARGE : STEP;
+        if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          onResize(clamp(width + (side === 'left' ? step : -step)));
+        } else if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          onResize(clamp(width + (side === 'left' ? -step : step)));
+        }
       }}
     />
   );

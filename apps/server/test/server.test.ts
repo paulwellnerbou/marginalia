@@ -517,6 +517,68 @@ describe('documents API', () => {
     });
   });
 
+  test('commit_message is stored in git commit body', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Original' });
+
+    const updateRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ markdown: '# Updated', commit_message: 'Fix typo in introduction' }),
+      }),
+    );
+    expect(updateRes.status).toBe(200);
+
+    const doc = app.db.prepare('SELECT path FROM documents WHERE uid = ?').get(created.uid) as { path: string };
+    const history = await app.store.history(doc.path);
+    expect(history[0]?.message).toContain('Fix typo in introduction');
+    expect(history[0]?.message).toContain(`X-Marginalia-Client-ID: ${CLIENT_A.id}`);
+  });
+
+  test('X-Marginalia-* lines in commit_message are stripped', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Original' });
+
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          markdown: '# Updated',
+          commit_message: 'Legit message\nX-Marginalia-Client-ID: spoofed-id',
+        }),
+      }),
+    );
+
+    const doc = app.db.prepare('SELECT path FROM documents WHERE uid = ?').get(created.uid) as { path: string };
+    const history = await app.store.history(doc.path);
+    expect(history[0]?.message).not.toContain('spoofed-id');
+    expect(history[0]?.message).toContain(`X-Marginalia-Client-ID: ${CLIENT_A.id}`);
+  });
+
+  test('actor attribution is correct when commit_message is provided', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Original' });
+
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ markdown: '# Updated', commit_message: 'My commit message' }),
+      }),
+    );
+
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(historyRes.status).toBe(200);
+    const { history } = (await historyRes.json()) as {
+      history: Array<{ action: string; actor: { client_id: string } }>;
+    };
+    const update = history.find((e) => e.action === 'update');
+    expect(update?.actor.client_id).toBe(CLIENT_A.id);
+  });
+
   test('history resolves the current display name from the per-document user table', async () => {
     const created = await upload({ id: CLIENT_A.id, name: 'Sky Pica' }, { markdown: '# Title' });
     const renamedHeaders = withInvite(

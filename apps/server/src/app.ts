@@ -19,6 +19,8 @@ export interface App {
   websocket: ReturnType<typeof createBunWebSocket<ServerWebSocket>>['websocket'];
   /** Exposed for tests that need to assert direct DB state. */
   db: Database;
+  /** Exposed for tests that need to inspect raw git history. */
+  store: GitStore;
   /**
    * Tears down the app's long-lived resources: the SQLite handle and
    * the shared PDF export Chromium (if it was ever started).
@@ -57,6 +59,7 @@ export async function createApp(config: ServerConfig): Promise<App> {
     hono,
     websocket,
     db,
+    store,
     async close() {
       db.close();
       // The PDF export browser is a module-level singleton shared

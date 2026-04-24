@@ -1777,6 +1777,11 @@ button.primary.small {
   background: var(--ui-accent);
   opacity: 0.25;
 }
+.resize-handle:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 0;
+  opacity: 0.5;
+}
 .resize-handle-left {
   right: 0;
 }
