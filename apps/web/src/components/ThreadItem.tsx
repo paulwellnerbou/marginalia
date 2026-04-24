@@ -21,8 +21,6 @@ interface Props {
   uid: string;
   thread: Thread;
   canComment: boolean;
-  canEdit: boolean;
-  isDocAdmin: boolean;
   mentionCandidates: string[];
   docSource: string;
   blockRanges: Map<string, BlockSourceRange>;
@@ -196,8 +194,6 @@ function ProposalThreadItem({
   uid,
   thread,
   canComment,
-  canEdit: _canEdit,
-  isDocAdmin: _isDocAdmin,
   mentionCandidates,
   docSource,
   blockRanges,

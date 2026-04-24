@@ -36,10 +36,6 @@ interface Props {
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number } | null;
   onCancelPending: () => void;
-  /** Viewer has edit rights (admin or editor). */
-  canEdit: boolean;
-  isDocAdmin: boolean;
-  viewerClientId: string;
   /** Null if the viewer hasn't set a display name yet — Composer will ask. */
   displayName: string | null;
   onCreate: (payload: { anchor: CommentAnchor; body: string; display_name?: string }) => Promise<void>;
@@ -93,9 +89,6 @@ export function CommentsPane(props: Props) {
     pendingAnchor,
     focusedThread,
     onCancelPending,
-    canEdit,
-    isDocAdmin,
-    viewerClientId: _viewerClientId,
     displayName,
     onCreate,
     onReply,
@@ -246,8 +239,6 @@ export function CommentsPane(props: Props) {
         uid={uid}
         thread={thread}
         canComment={canComment}
-        canEdit={canEdit}
-        isDocAdmin={isDocAdmin}
         mentionCandidates={mentionCandidates}
         docSource={docSource}
         blockRanges={blockRanges}

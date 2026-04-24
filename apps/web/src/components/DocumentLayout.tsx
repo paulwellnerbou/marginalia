@@ -329,6 +329,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [doc.uid]);
 
   useEffect(() => {
+    let cancelled = false;
     void ensureNotificationPermission();
     const sub = subscribeToDocumentEvents(doc.uid, (event) => {
       switch (event.type) {
@@ -342,10 +343,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         }
         case 'mention.created': {
           void listThreads(doc.uid).then((res) => {
+            if (cancelled) return;
             setThreads(res.threads);
             setMentionSeedNames(res.mention_candidates);
             notifyPendingMentions(res.threads, res.pending_mentions);
-          });
+          }).catch((err) => reportError('DocumentLayout.mention.created', err, { uid: doc.uid }));
           break;
         }
         case 'edit_proposal.created': {
@@ -369,7 +371,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         }
       }
     });
-    return () => sub.close();
+    return () => { cancelled = true; sub.close(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.uid]);
 
@@ -1137,9 +1139,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}
                   onCancelPending={() => setPendingDraft(null)}
-                  canEdit={doc.role === 'admin' || doc.role === 'editor'}
-                  isDocAdmin={doc.role === 'admin'}
-                  viewerClientId={getClientId()}
                   displayName={effectiveDisplayName}
                   onCreate={onCreate}
                   onReply={onReply}
