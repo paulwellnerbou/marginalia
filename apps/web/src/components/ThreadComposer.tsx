@@ -54,6 +54,7 @@ export const CommentComposer = forwardRef<ComposerHandle, CommentComposerProps>(
     const [submitting, setSubmitting] = useState(false);
     const [caret, setCaret] = useState(0);
     const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+    const [mentionDismissed, setMentionDismissed] = useState(false);
     const textRef = useRef<HTMLTextAreaElement>(null);
     const body = value.trim();
     const displayName = name.trim();
@@ -73,7 +74,7 @@ export const CommentComposer = forwardRef<ComposerHandle, CommentComposerProps>(
     }, [mentionCandidates]);
     const activeMention = useMemo(() => getActiveMention(value, caret), [value, caret]);
     const filteredMentionOptions = useMemo(() => {
-      if (!activeMention) return [];
+      if (!activeMention || mentionDismissed) return [];
       const query = normalizeMentionQuery(activeMention.query);
       if (!query) return mentionOptions.slice(0, 8);
       return mentionOptions
@@ -82,7 +83,7 @@ export const CommentComposer = forwardRef<ComposerHandle, CommentComposerProps>(
           return normalized.startsWith(query) || normalized.includes(query);
         })
         .slice(0, 8);
-    }, [activeMention, mentionOptions]);
+    }, [activeMention, mentionDismissed, mentionOptions]);
 
     useEffect(() => {
       if (activeMentionIndex < filteredMentionOptions.length) return;
@@ -166,7 +167,7 @@ export const CommentComposer = forwardRef<ComposerHandle, CommentComposerProps>(
         }
         if (e.key === 'Escape') {
           e.preventDefault();
-          setCaret(-1);
+          setMentionDismissed(true);
           return;
         }
       }
@@ -223,6 +224,7 @@ export const CommentComposer = forwardRef<ComposerHandle, CommentComposerProps>(
           onChange={(e) => {
             setValue(e.target.value);
             updateCaret(e.target);
+            setMentionDismissed(false);
           }}
           onKeyDown={handleKey}
           onClick={(e) => updateCaret(e.currentTarget)}
