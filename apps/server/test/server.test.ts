@@ -1457,7 +1457,7 @@ describe('documents API', () => {
     expect((await editAs(editorToken)).status).toBe(200);
   });
 
-  test('export + import roundtrip preserves source, name, theme, comments', async () => {
+  test('export + import roundtrip preserves source, name, theme, threads, and proposals', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Hi\n\nOriginal.\n',
       name: 'Original Name',
@@ -1479,7 +1479,7 @@ describe('documents API', () => {
       };
     };
     const firstBlock = doc.rendered.blocks[0]!;
-    await app.hono.fetch(
+    const commentRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
@@ -1495,6 +1495,67 @@ describe('documents API', () => {
         }),
       }),
     );
+    expect(commentRes.status).toBe(201);
+    const commentThread = (await commentRes.json()) as { thread: { id: string } };
+
+    const commentReplyRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${commentThread.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ body: 'plain reply' }),
+        },
+      ),
+    );
+    expect(commentReplyRes.status).toBe(200);
+
+    const proposalRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: {
+            block_id: firstBlock.id,
+            quote: 'Hi',
+            heading_path: firstBlock.headingPath,
+            section_index: firstBlock.sectionIndex,
+            section_index_path: firstBlock.sectionIndexPath,
+          },
+          body: 'please improve this heading',
+          proposal: {
+            anchor_kind: 'heading',
+            proposed_text: '# Better Hi',
+          },
+        }),
+      }),
+    );
+    expect(proposalRes.status).toBe(201);
+    const proposalThread = (await proposalRes.json()) as { thread: { id: string } };
+
+    const proposalReplyRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposalThread.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ body: 'proposal reply' }),
+        },
+      ),
+    );
+    expect(proposalReplyRes.status).toBe(200);
+
+    const rejectRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposalThread.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'reject' }),
+        },
+      ),
+    );
+    expect(rejectRes.status).toBe(200);
 
     const exportRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}/export`, {
@@ -1511,23 +1572,50 @@ describe('documents API', () => {
         anchors: Array<{ id: string; text: string }>;
       };
       comments: Array<{
+        id: string;
         body: string;
+        parent_id: string | null;
+        parent_proposal_id: string | null;
         anchor_heading_path: string[] | null;
         anchor_section_index: number | null;
         anchor_section_index_path: number[] | null;
+        edit_proposal: {
+          anchor_kind: string | null;
+          source_snapshot: string | null;
+          proposed_text: string;
+          status: string;
+          accepted_oid: string | null;
+        } | null;
       }>;
     };
     expect(bundle.kind).toBe('marginalia.document-bundle');
-    expect(bundle.version).toBe(3);
+    expect(bundle.version).toBe(4);
     expect(bundle.document.name).toBe('Original Name');
     expect(bundle.document.source).toContain('Original.');
     expect(bundle.document.default_theme).toBe('book');
     expect(bundle.representation.blocks[0]!.text).toBe('Hi');
     expect(bundle.representation.anchors[0]!.id).toBe('hi');
-    expect(bundle.comments).toHaveLength(1);
-    expect(bundle.comments[0]!.anchor_heading_path).toEqual(firstBlock.headingPath);
-    expect(bundle.comments[0]!.anchor_section_index).toBe(firstBlock.sectionIndex);
-    expect(bundle.comments[0]!.anchor_section_index_path).toEqual(firstBlock.sectionIndexPath);
+    expect(bundle.comments).toHaveLength(4);
+    const exportedComment = bundle.comments.find((comment) => comment.body === 'export me')!;
+    expect(exportedComment.anchor_heading_path).toEqual(firstBlock.headingPath);
+    expect(exportedComment.anchor_section_index).toBe(firstBlock.sectionIndex);
+    expect(exportedComment.anchor_section_index_path).toEqual(firstBlock.sectionIndexPath);
+    expect(bundle.comments.find((comment) => comment.body === 'plain reply')!.parent_id).toBe(
+      exportedComment.id,
+    );
+    const exportedProposal = bundle.comments.find(
+      (comment) => comment.body === 'please improve this heading',
+    )!;
+    expect(exportedProposal.edit_proposal).toEqual({
+      anchor_kind: 'heading',
+      source_snapshot: '# Hi',
+      proposed_text: '# Better Hi',
+      status: 'rejected',
+      accepted_oid: null,
+    });
+    expect(
+      bundle.comments.find((comment) => comment.body === 'proposal reply')!.parent_proposal_id,
+    ).toBe(exportedProposal.id);
 
     // Import: anonymous-ish (Carol) creates a new doc from the bundle.
     const importRes = await app.hono.fetch(
@@ -1542,8 +1630,10 @@ describe('documents API', () => {
       uid: string;
       admin_invite: { token: string };
       imported_comments: number;
+      imported_edit_proposals: number;
     };
-    expect(imported.imported_comments).toBe(1);
+    expect(imported.imported_comments).toBe(4);
+    expect(imported.imported_edit_proposals).toBe(1);
 
     const getRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${imported.uid}`, {
@@ -1553,6 +1643,36 @@ describe('documents API', () => {
     const dupe = (await getRes.json()) as { source: string; name: string | null };
     expect(dupe.source).toContain('Original.');
     expect(dupe.name).toBe('Original Name');
+
+    const threadsRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/threads`, {
+        headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
+      }),
+    );
+    expect(threadsRes.status).toBe(200);
+    const importedThreads = (await threadsRes.json()) as {
+      threads: Array<{
+        state: string;
+        resolution: { kind: string } | null;
+        root: { body: string };
+        proposal: { proposed_text: string; source_snapshot: string | null } | null;
+        replies: Array<{ body: string }>;
+      }>;
+    };
+    expect(importedThreads.threads).toHaveLength(2);
+    const importedCommentThread = importedThreads.threads.find(
+      (thread) => thread.root.body === 'export me',
+    )!;
+    expect(importedCommentThread.proposal).toBeNull();
+    expect(importedCommentThread.replies.map((reply) => reply.body)).toEqual(['plain reply']);
+    const importedProposalThread = importedThreads.threads.find(
+      (thread) => thread.root.body === 'please improve this heading',
+    )!;
+    expect(importedProposalThread.proposal?.proposed_text).toBe('# Better Hi');
+    expect(importedProposalThread.proposal?.source_snapshot).toBe('# Hi');
+    expect(importedProposalThread.state).toBe('resolved');
+    expect(importedProposalThread.resolution?.kind).toBe('reject');
+    expect(importedProposalThread.replies.map((reply) => reply.body)).toEqual(['proposal reply']);
   });
 
   test('GET /:uid/export.docx returns a themed Word document (binary)', async () => {
@@ -2184,7 +2304,7 @@ describe('documents API', () => {
       version: number;
       document: { format?: string; source: string };
     };
-    expect(bundle.version).toBe(3);
+    expect(bundle.version).toBe(4);
     expect(bundle.document.format).toBe('asciidoc');
 
     const importRes = await app.hono.fetch(

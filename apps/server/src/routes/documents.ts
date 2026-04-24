@@ -39,6 +39,7 @@ import type {
   CommentRow,
   DocumentFormat,
   DocumentRow,
+  EditProposalStatus,
   InviteKind,
   InviteRole,
   InviteRow,
@@ -63,6 +64,14 @@ export interface AppDeps {
   blobs: BlobStore;
   config: ServerConfig;
   realtime: Realtime;
+}
+
+interface BundleCommentRow extends CommentRow {
+  anchor_kind: string | null;
+  source_snapshot: string | null;
+  proposed_text: string | null;
+  proposal_status: EditProposalStatus | null;
+  accepted_oid: string | null;
 }
 
 export function documentsRouter(deps: AppDeps): Hono {
@@ -246,7 +255,15 @@ async function updateDocument(c: Context, deps: AppDeps) {
     /* new doc */
   }
 
-  const { oid } = await store.write(doc.uid, doc.format, nextSource, decision.identity, 'update', { commitMessage });
+  const writeOptions = commitMessage ? { commitMessage } : undefined;
+  const { oid } = await store.write(
+    doc.uid,
+    doc.format,
+    nextSource,
+    decision.identity,
+    'update',
+    writeOptions,
+  );
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
   const rendered = await renderDocument(nextSource, doc.format);
@@ -444,16 +461,22 @@ async function exportDocument(c: Context, deps: AppDeps) {
   const rendered = await renderDocument(source, doc.format);
   const comments = db
     .prepare(
-      `SELECT c.*
+      `SELECT
+         c.*,
+         cep.anchor_kind,
+         cep.source_snapshot,
+         cep.proposed_text,
+         cep.status AS proposal_status,
+         cep.accepted_oid
          FROM comments c
          LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
-        WHERE c.doc_uid = ? AND c.deleted_at IS NULL AND cep.comment_id IS NULL
+        WHERE c.doc_uid = ? AND c.deleted_at IS NULL
          ORDER BY created_at ASC`,
     )
-    .all(doc.uid) as CommentRow[];
+    .all(doc.uid) as BundleCommentRow[];
 
   const bundle = {
-    version: 3 as const,
+    version: 4 as const,
     kind: 'marginalia.document-bundle',
     exported_at: Date.now(),
     document: {
@@ -477,6 +500,7 @@ async function exportDocument(c: Context, deps: AppDeps) {
     comments: comments.map((row) => ({
       id: row.id,
       parent_id: row.parent_id,
+      parent_proposal_id: row.parent_proposal_id,
       anchor_block_id: row.anchor_block_id,
       anchor_quote: row.anchor_quote,
       anchor_prefix: row.anchor_prefix,
@@ -494,6 +518,16 @@ async function exportDocument(c: Context, deps: AppDeps) {
       resolved_by_name: row.resolved_by_name,
       created_at: row.created_at,
       updated_at: row.updated_at,
+      edit_proposal:
+        row.proposal_status === null
+          ? null
+          : {
+              anchor_kind: row.anchor_kind,
+              source_snapshot: row.source_snapshot,
+              proposed_text: row.proposed_text,
+              status: row.proposal_status,
+              accepted_oid: row.accepted_oid,
+            },
     })),
   };
 
@@ -737,6 +771,7 @@ async function importDocument(c: Context, deps: AppDeps) {
   // key — the original and the re-import can easily coexist in the same DB.
   // Parent_ids get remapped through the same translation table.
   let importedComments = 0;
+  let importedEditProposals = 0;
   const commentRows = Array.isArray(bundle.comments) ? bundle.comments : [];
   const idMap = new Map<string, string>();
   for (const raw of commentRows) {
@@ -747,14 +782,19 @@ async function importDocument(c: Context, deps: AppDeps) {
   }
   const insertComment = db.prepare(
     `INSERT INTO comments
-       (id, doc_uid, parent_id,
+       (id, doc_uid, parent_id, parent_proposal_id,
         anchor_block_id, anchor_quote, anchor_prefix, anchor_suffix,
         anchor_start_offset, anchor_end_offset,
         anchor_heading_path, anchor_section_index, anchor_section_index_path,
         author_client_id, author_display_name, body, link_status,
         resolved_at, resolved_by_name,
         created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertEditProposal = db.prepare(
+    `INSERT INTO comments_edit_proposals
+       (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid)
+     VALUES (?, ?, ?, ?, ?, ?)`,
   );
   for (const raw of commentRows) {
     const row = raw as Record<string, unknown>;
@@ -770,10 +810,16 @@ async function importDocument(c: Context, deps: AppDeps) {
     if (!newId) continue;
     const parentOldId = typeof row.parent_id === 'string' ? row.parent_id : null;
     const newParentId = parentOldId ? (idMap.get(parentOldId) ?? null) : null;
+    const parentProposalOldId =
+      typeof row.parent_proposal_id === 'string' ? row.parent_proposal_id : null;
+    const newParentProposalId = parentProposalOldId
+      ? (idMap.get(parentProposalOldId) ?? null)
+      : null;
     insertComment.run(
       newId,
       uid,
       newParentId,
+      newParentProposalId,
       typeof row.anchor_block_id === 'string' ? row.anchor_block_id : null,
       typeof row.anchor_quote === 'string' ? row.anchor_quote : null,
       typeof row.anchor_prefix === 'string' ? row.anchor_prefix : null,
@@ -799,6 +845,24 @@ async function importDocument(c: Context, deps: AppDeps) {
       typeof row.updated_at === 'number' ? row.updated_at : now,
     );
     importedComments += 1;
+
+    const proposal =
+      row.edit_proposal && typeof row.edit_proposal === 'object'
+        ? (row.edit_proposal as Record<string, unknown>)
+        : null;
+    if (proposal && typeof proposal.proposed_text === 'string') {
+      insertEditProposal.run(
+        newId,
+        typeof proposal.anchor_kind === 'string' ? proposal.anchor_kind : null,
+        typeof proposal.source_snapshot === 'string' ? proposal.source_snapshot : null,
+        proposal.proposed_text,
+        normalizeImportedProposalStatus(
+          typeof proposal.status === 'string' ? proposal.status : null,
+        ),
+        typeof proposal.accepted_oid === 'string' ? proposal.accepted_oid : null,
+      );
+      importedEditProposals += 1;
+    }
   }
 
   return c.json(
@@ -811,13 +875,14 @@ async function importDocument(c: Context, deps: AppDeps) {
         display_name: adminInvite.display_name,
       },
       imported_comments: importedComments,
+      imported_edit_proposals: importedEditProposals,
     },
     201,
   );
 }
 
-function isBundleVersion(v: unknown): v is 1 | 2 | 3 {
-  return v === 1 || v === 2 || v === 3;
+function isBundleVersion(v: unknown): v is 1 | 2 | 3 | 4 {
+  return v === 1 || v === 2 || v === 3 || v === 4;
 }
 
 function parseStringArray(raw: string | null): string[] | null {
@@ -833,6 +898,11 @@ function parseStringArray(raw: string | null): string[] | null {
 function normalizeImportedLinkStatus(raw: string | null): 'linked' | 'low-confidence' | 'orphaned' {
   if (raw === 'low-confidence' || raw === 'orphaned') return raw;
   return 'linked';
+}
+
+function normalizeImportedProposalStatus(raw: string | null): EditProposalStatus {
+  if (raw === 'accepted' || raw === 'rejected') return raw;
+  return 'open';
 }
 
 function parseNumberArray(raw: string | null): number[] | null {
