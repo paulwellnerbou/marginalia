@@ -147,6 +147,23 @@ export interface DocxExportOptions {
   resolveAsset?: (src: string) => Promise<ResolvedAsset | null>;
 
   /**
+   * Rasterize a mermaid block's source to image bytes for embedding.
+   * The exporter calls this once per mermaid block (in parallel with
+   * other blocks) before walking the HAST. Return `null` (or throw —
+   * caught and swallowed) to fall back to the labeled-code-block
+   * stopgap so the diagram source is still readable in the doc.
+   *
+   * `index` is the 0-based mermaid block index recorded by
+   * `remarkMermaid` — useful for caching or logging which diagram
+   * failed without re-extracting the source.
+   *
+   * The server route wires this against the native `mmdr` Rust CLI;
+   * other callers (CLI / library) can supply their own resolver or
+   * leave it unset to get the labeled-code-block fallback.
+   */
+  resolveMermaid?: (source: string, index: number) => Promise<ResolvedAsset | null>;
+
+  /**
    * Include a native Word Table of Contents field at the top of the
    * document. The TOC is populated by Word when the user opens the
    * file (the export marks it dirty, so Word prompts to update on
@@ -203,7 +220,16 @@ export async function exportDocx(
   // Resolve images up-front in parallel so the HAST walker can stay
   // synchronous. docx construction is CPU-bound and sync; doing the
   // async I/O here keeps the walker tidy.
-  const images = await resolveAllImages(hast, options.resolveAsset);
+  //
+  // Mermaid blocks resolve through the same machinery: each
+  // `<div class="mermaid" data-mermaid-index="N">` is handed to
+  // `options.resolveMermaid()` and the resulting bytes are probed
+  // exactly like an `<img>` (same image-size + ImageRun path), keyed
+  // by the numeric index from `remarkMermaid`.
+  const [images, mermaidImages] = await Promise.all([
+    resolveAllImages(hast, options.resolveAsset),
+    resolveAllMermaid(hast, options.resolveMermaid),
+  ]);
 
   // Pull GFM footnotes out of the body: build their DOCX paragraphs,
   // assign each a numeric id, and remove the `<section>` so it won't
@@ -213,6 +239,7 @@ export async function exportDocx(
   const ctxWithoutFootnotes: BuildCtx = {
     tokens,
     images,
+    mermaidImages,
     pageWidthPx: contentWidthPx(effectivePageSize, tokens.page.marginPt),
     footnoteIds: new Map(),
   };
@@ -553,6 +580,59 @@ async function resolveAllImages(
       } catch {
         // Swallow: a broken image should never break the whole export.
         return [src, null];
+      }
+    }),
+  );
+  return new Map(entries);
+}
+
+/**
+ * Walk the HAST for mermaid blocks (`<div class="mermaid"
+ * data-mermaid-index="N">…source…</div>` from `remarkMermaid`),
+ * resolve each through the caller's `resolveMermaid` callback in
+ * parallel, and return a Map keyed by the numeric index.
+ *
+ * Why index-keyed and not source-text-keyed: a document can legitimately
+ * contain two identical diagrams (copy-paste) and we want each to render
+ * independently — keying by source would dedupe them. The index is what
+ * `remarkMermaid` already emits as `data-mermaid-index`, and is unique
+ * per block by construction.
+ *
+ * No callback → empty map; the walker reads that as "no resolved
+ * mermaid available" and falls back to the existing labeled-code-block
+ * stopgap. Same swallow-on-error policy as `resolveAllImages`: a single
+ * broken diagram never breaks the whole export.
+ */
+async function resolveAllMermaid(
+  root: HastRoot,
+  resolve: DocxExportOptions['resolveMermaid'],
+): Promise<Map<number, ResolvedImage | null>> {
+  if (!resolve) return new Map();
+  interface Block {
+    index: number;
+    source: string;
+  }
+  const blocks: Block[] = [];
+  visit(root, 'element', (node: Element) => {
+    if (node.tagName !== 'div') return;
+    const cls = node.properties?.className;
+    if (!Array.isArray(cls) || !(cls as unknown[]).includes('mermaid')) return;
+    const idxRaw = node.properties?.['dataMermaidIndex'];
+    const idx = typeof idxRaw === 'string' ? Number.parseInt(idxRaw, 10) : NaN;
+    if (!Number.isInteger(idx) || idx < 0) return;
+    blocks.push({ index: idx, source: hastTextContent(node) });
+  });
+  const entries = await Promise.all(
+    blocks.map(async ({ index, source }): Promise<[number, ResolvedImage | null]> => {
+      try {
+        const asset = await resolve(source, index);
+        if (!asset) return [index, null];
+        const img = probeImage(asset.bytes, asset.mime);
+        return [index, img];
+      } catch {
+        // Swallow: a broken diagram should fall back to the
+        // code-block stopgap, not blow up the whole export.
+        return [index, null];
       }
     }),
   );
@@ -1126,6 +1206,16 @@ function buildNumbering(): NonNullable<
 interface BuildCtx {
   readonly tokens: ThemeTokens;
   readonly images: Map<string, ResolvedImage | null>;
+  /**
+   * Pre-resolved mermaid renders, keyed by the numeric index that
+   * `remarkMermaid` writes onto each `<div class="mermaid"
+   * data-mermaid-index="N">`. `null` means we tried but the renderer
+   * couldn't produce usable bytes — the walker falls back to the
+   * labeled-code-block stopgap. Empty map means the caller didn't
+   * supply `resolveMermaid` (CLI / library callers); the walker also
+   * falls back in that case.
+   */
+  readonly mermaidImages: Map<number, ResolvedImage | null>;
   readonly pageWidthPx: number;
   /**
    * GFM footnote slug → numeric DOCX footnote id (1-based). Populated
@@ -1490,14 +1580,27 @@ function convertBlock(
         }
         return;
       }
-      // `<div class="mermaid">` carries the diagram source. Real
-      // rasterization (SVG → PNG → ImageRun) is M4b territory and
-      // depends on headless Chromium — until that lands, render the
-      // source as a labeled code block so readers at least get a
-      // legible record of the diagram instead of a stray inline run.
+      // `<div class="mermaid">` carries the diagram source. If the
+      // caller wired up `resolveMermaid` and the renderer produced
+      // bytes, embed it as a real image. Otherwise fall back to a
+      // labeled code block so the diagram source is still readable
+      // in the doc.
       const isMermaid =
         Array.isArray(cls) && (cls as unknown[]).includes('mermaid');
       if (isMermaid) {
+        const idxRaw = node.properties?.['dataMermaidIndex'];
+        const idx = typeof idxRaw === 'string' ? Number.parseInt(idxRaw, 10) : NaN;
+        const resolved = Number.isInteger(idx) ? ctx.mermaidImages.get(idx) : null;
+        if (resolved) {
+          const run = buildMermaidImageRun(resolved, ctx);
+          out.push(
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [run],
+            }),
+          );
+          return;
+        }
         const source = hastTextContent(node);
         out.push(
           new Paragraph({
@@ -1670,6 +1773,36 @@ function maybeBuildImageRun(node: Element, ctx: BuildCtx): ImageRun | null {
   // Narrowed through the union; docx requires `as` here because
   // TypeScript can't infer the discriminated constructor overload.
   return new ImageRun(opts as ConstructorParameters<typeof ImageRun>[0]);
+}
+
+/**
+ * Build an ImageRun for a pre-resolved mermaid render. Same scaling
+ * rule as a normal block image (fit content column width, preserve
+ * aspect ratio) — the diagram's natural dimensions came from probing
+ * the rendered PNG, so the maths is identical to `maybeBuildImageRun`.
+ *
+ * Kept separate from `maybeBuildImageRun` because there's no source
+ * `<img>` element here — width/height/alt all derive from the render
+ * itself, not from author-supplied attributes.
+ */
+function buildMermaidImageRun(img: ResolvedImage, ctx: BuildCtx): ImageRun {
+  let { width, height } = img;
+  const maxW = ctx.pageWidthPx;
+  if (width > maxW) {
+    const scale = maxW / width;
+    width = maxW;
+    height = Math.round(height * scale);
+  }
+  return new ImageRun({
+    type: img.type,
+    data: img.bytes,
+    transformation: { width, height },
+    altText: {
+      title: 'Mermaid diagram',
+      description: 'Mermaid diagram',
+      name: 'mermaid-diagram',
+    },
+  } as ConstructorParameters<typeof ImageRun>[0]);
 }
 
 function headingLevelOf(level: number): (typeof HeadingLevel)[keyof typeof HeadingLevel] {

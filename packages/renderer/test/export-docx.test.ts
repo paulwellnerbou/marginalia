@@ -1331,3 +1331,112 @@ describe('exportDocx — mermaid fallback (M4b stopgap)', () => {
     expect(documentXml).toContain('After.');
   });
 });
+
+describe('exportDocx — mermaid resolveMermaid', () => {
+  test('embeds rendered PNG when resolveMermaid returns bytes', async () => {
+    const md = [
+      '# Diagrams',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  A --> B',
+      '```',
+      '',
+      'After.',
+    ].join('\n');
+    let calls = 0;
+    let calledIndex = -1;
+    let calledSource = '';
+    const buf = await exportDocx(md, {
+      includeToc: false,
+      resolveMermaid: async (source, index) => {
+        calls += 1;
+        calledIndex = index;
+        calledSource = source;
+        return { bytes: PNG_1x1_BYTES, mime: 'image/png' };
+      },
+    });
+    const { documentXml, mediaFiles } = await inspectDocx(buf);
+    // Resolver got the right index and source.
+    expect(calls).toBe(1);
+    expect(calledIndex).toBe(0);
+    expect(calledSource).toContain('graph TD');
+    // The PNG landed in word/media/ — proves it was embedded as a
+    // real image part, not stringified into document.xml.
+    expect(mediaFiles.length).toBe(1);
+    // No fallback placeholder, since we resolved successfully.
+    expect(documentXml).not.toContain('mermaid diagram');
+    expect(documentXml).not.toContain('graph TD');
+    // Surrounding content still flows.
+    expect(documentXml).toContain('After.');
+  });
+
+  test('falls back to placeholder when resolveMermaid returns null', async () => {
+    const md = ['```mermaid', 'graph TD', '  A --> B', '```'].join('\n');
+    const buf = await exportDocx(md, {
+      includeToc: false,
+      resolveMermaid: async () => null,
+    });
+    const { documentXml, mediaFiles } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBe(0);
+    expect(documentXml).toContain('mermaid diagram');
+    expect(documentXml).toContain('graph TD');
+  });
+
+  test('falls back to placeholder when resolveMermaid throws', async () => {
+    const md = ['```mermaid', 'graph TD', '  A --> B', '```'].join('\n');
+    const buf = await exportDocx(md, {
+      includeToc: false,
+      resolveMermaid: async () => {
+        throw new Error('renderer crashed');
+      },
+    });
+    const { documentXml, mediaFiles } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBe(0);
+    expect(documentXml).toContain('mermaid diagram');
+  });
+
+  test('renders multiple diagrams independently with distinct indices', async () => {
+    const md = [
+      '```mermaid',
+      'graph TD',
+      'A --> B',
+      '```',
+      '',
+      'Between.',
+      '',
+      '```mermaid',
+      'graph LR',
+      'X --> Y',
+      '```',
+    ].join('\n');
+    const seenIndices: number[] = [];
+    const buf = await exportDocx(md, {
+      includeToc: false,
+      resolveMermaid: async (_source, index) => {
+        seenIndices.push(index);
+        // Return per-index distinct bytes so the docx packer can't
+        // dedupe identical media into a single part — that would
+        // hide the case where only one of the two diagrams actually
+        // got resolved. We mutate a single byte; image-size still
+        // probes a 1x1 PNG either way (the IHDR header is intact).
+        const tagged = new Uint8Array(PNG_1x1_BYTES);
+        tagged[tagged.length - 1] = index;
+        return { bytes: tagged, mime: 'image/png' };
+      },
+    });
+    const { mediaFiles } = await inspectDocx(buf);
+    // Both diagrams resolved with distinct indices.
+    expect(seenIndices.sort()).toEqual([0, 1]);
+    // Two PNGs embedded — confirms each block is its own image part.
+    expect(mediaFiles.length).toBe(2);
+  });
+
+  test('falls back to placeholder when no resolveMermaid is provided', async () => {
+    const md = ['```mermaid', 'graph TD', 'A --> B', '```'].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml, mediaFiles } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBe(0);
+    expect(documentXml).toContain('mermaid diagram');
+  });
+});

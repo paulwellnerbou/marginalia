@@ -55,6 +55,10 @@ import {
   exportPdf,
 } from '../export/pdf.js';
 import { inlineImageAssets } from '../export/html-envelope.js';
+import {
+  MermaidRenderEngineMissingError,
+  renderMermaidToPng,
+} from '../export/mermaid-rust.js';
 import { loadPrintCss, loadThemeCss } from '../export/theme-css.js';
 
 export interface AppDeps {
@@ -562,6 +566,27 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
       } catch {
         // Blob missing on disk (rare — shouldn't happen without a GC
         // bug). Swallow so the export still succeeds with a placeholder.
+        return null;
+      }
+    },
+    // Rasterize mermaid blocks via the native `mmdr` Rust CLI so the
+    // DOCX gets a real embedded image. If the binary isn't installed
+    // (or any individual render fails) we return null and the
+    // exporter falls back to a labeled code block — mermaid in DOCX
+    // is a nice-to-have, not a hard requirement, so we don't surface
+    // the engine-missing case as an error here (unlike PDF).
+    resolveMermaid: async (source) => {
+      try {
+        const png = await renderMermaidToPng(source);
+        return png ? { bytes: png.bytes, mime: png.mime } : null;
+      } catch (err) {
+        if (err instanceof MermaidRenderEngineMissingError) {
+          // Log once so operators see the install hint, but don't
+          // fail the export — code-block fallback is acceptable.
+          console.warn('[docx-export]', err.message);
+          return null;
+        }
+        // Render / timeout errors fall back to placeholder too.
         return null;
       }
     },
