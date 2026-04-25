@@ -1,8 +1,21 @@
-import { forwardRef, useImperativeHandle, useRef, useState } from 'react';
+import { type ReactNode, forwardRef, useImperativeHandle, useRef, useState } from 'react';
 
 export interface InlineComposerHandle {
   insertText: (text: string) => void;
   focus: () => void;
+}
+
+export interface InlineComposerLeftActionsContext {
+  /** True when the textarea has a non-empty trimmed body. */
+  hasDraft: boolean;
+  /** True when a submit (post or workflow action) is in flight. */
+  submitting: boolean;
+  /**
+   * Run an action that may optionally consume the current draft body /
+   * display name. The composer clears the textarea on success and
+   * mirrors the submitting state.
+   */
+  runAction: (action: (body?: string, name?: string) => Promise<void> | void) => Promise<void>;
 }
 
 interface Props {
@@ -13,6 +26,8 @@ interface Props {
   showCancel?: boolean;
   onCancel?: () => void;
   onSubmit: (body: string, name?: string) => Promise<void> | void;
+  /** Rendered on the left of the action row, before Cancel/Submit. */
+  leftActions?: ((ctx: InlineComposerLeftActionsContext) => ReactNode) | undefined;
 }
 
 export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function InlineComposer(
@@ -24,6 +39,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
     showCancel = false,
     onCancel,
     onSubmit,
+    leftActions,
   },
   ref,
 ) {
@@ -53,13 +69,27 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
   }));
 
   const body = value.trim();
-  const ready = body.length > 0 && (!needsName || name.trim().length > 0) && !submitting;
+  const displayName = name.trim();
+  const hasDraft = body.length > 0;
+  const canIdentify = !needsName || displayName.length > 0;
+  const ready = hasDraft && canIdentify && !submitting;
 
   async function send() {
     if (!ready) return;
     setSubmitting(true);
     try {
-      await onSubmit(body, needsName ? name.trim() : undefined);
+      await onSubmit(body, needsName ? displayName : undefined);
+      setValue('');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function runAction(action: (body?: string, name?: string) => Promise<void> | void) {
+    if (submitting || (needsName && !displayName)) return;
+    setSubmitting(true);
+    try {
+      await action(hasDraft ? body : undefined, needsName ? displayName : undefined);
       setValue('');
     } finally {
       setSubmitting(false);
@@ -103,6 +133,11 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
       />
       <div className="ic-composer-actions">
         <span className="ic-composer-hint">⌘/Ctrl+Enter</span>
+        {leftActions && (
+          <div className="ic-composer-left-actions">
+            {leftActions({ hasDraft, submitting, runAction })}
+          </div>
+        )}
         {(showCancel || onCancel) && (
           <button
             type="button"

@@ -1,13 +1,13 @@
+import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import {
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
-import { useNavigate } from 'react-router-dom';
+  ChatBubbleIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  Cross2Icon,
+  LetterCaseToggleIcon,
+  MagnifyingGlassIcon,
+  TokensIcon,
+} from '@radix-ui/react-icons';
 import {
   Badge,
   Button,
@@ -21,14 +21,15 @@ import {
   Tooltip,
 } from '@radix-ui/themes';
 import {
-  ChatBubbleIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
-  Cross2Icon,
-  LetterCaseToggleIcon,
-  MagnifyingGlassIcon,
-  TokensIcon,
-} from '@radix-ui/react-icons';
+  type ReactNode,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { useNavigate } from 'react-router-dom';
 import type {
   CommentAnchor,
   Document,
@@ -37,57 +38,56 @@ import type {
   TocNode,
 } from '../lib/api.js';
 import {
+  ApiError,
+  type Comment,
+  type HistoryEntry,
+  acceptEditProposal as apiAcceptProposal,
   createComment as apiCreate,
+  createEditProposal as apiCreateProposal,
   deleteComment as apiDelete,
   deleteThread as apiDeleteThread,
-  listThreads,
-  resolveThread as apiResolve,
-  updateComment as apiUpdate,
-  createEditProposal as apiCreateProposal,
-  updateEditProposal as apiUpdateProposal,
-  acceptEditProposal as apiAcceptProposal,
   rejectEditProposal as apiRejectProposal,
-  getDocument,
-  getHistoryDiff,
+  resolveThread as apiResolve,
   restoreHistoryVersion as apiRestoreHistoryVersion,
   revertHistoryVersion as apiRevertHistoryVersion,
-  uploadAsset,
-  ApiError,
+  updateComment as apiUpdate,
+  updateEditProposal as apiUpdateProposal,
+  getDocument,
+  getHistoryDiff,
   isProposal,
-  type HistoryEntry,
-  type Comment,
+  listThreads,
+  uploadAsset,
 } from '../lib/api.js';
+import { documentTitle } from '../lib/doc-title.js';
+import { subscribeToDocumentEvents } from '../lib/events.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
-import { subscribeToDocumentEvents } from '../lib/events.js';
+import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
 import { ensureNotificationPermission, notify } from '../lib/notifications.js';
 import {
-  applyTheme,
   BUILT_IN_THEMES,
+  applyTheme,
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
-import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
-import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
-import { RenderedDoc, type DocumentSearchOptions } from './RenderedDoc.js';
-import { Toc } from './Toc.js';
-import { SelectionToolbar, type ProposalTarget } from './SelectionToolbar.js';
+import { APP_ACCENT_COLOR } from '../styles/theme.js';
+import { AccessControlDialog } from './AccessControlDialog.js';
+import { AppBar } from './AppBar.js';
 import { BlockActions } from './BlockActions.js';
 import { CommentsPane } from './CommentsPane.js';
-import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
-import { ProposalComposer } from './ThreadComposer.js';
-import { ResizeHandle } from './ResizeHandle.js';
-import { AppBar } from './AppBar.js';
+import {
+  type DocumentSearchResult,
+  DocumentSearchResultsPane,
+} from './DocumentSearchResultsPane.js';
 import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
 import { DownloadMenu } from './DownloadMenu.js';
-import { AccessControlDialog } from './AccessControlDialog.js';
-import {
-  DocumentSearchResultsPane,
-  type DocumentSearchResult,
-} from './DocumentSearchResultsPane.js';
 import { HistoryList } from './HistoryList.js';
-import { documentTitle } from '../lib/doc-title.js';
-import { APP_ACCENT_COLOR } from '../styles/theme.js';
+import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
+import { ResizeHandle } from './ResizeHandle.js';
+import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
+import { ProposalComposer } from './ThreadComposer.js';
+import { Toc } from './Toc.js';
+import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
 
 const MAX_WIDTH_KEY = 'marginalia.maxWidth';
 const TEXT_ZOOM_KEY = 'marginalia.textZoom';
@@ -344,7 +344,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     function scheduleRefresh() {
       if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => { void refreshThreads(); }, 300);
+      refreshTimer = setTimeout(() => {
+        void refreshThreads();
+      }, 300);
     }
     void ensureNotificationPermission();
     const sub = subscribeToDocumentEvents(doc.uid, (event) => {
@@ -358,12 +360,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           break;
         }
         case 'mention.created': {
-          void listThreads(doc.uid).then((res) => {
-            if (cancelled) return;
-            setThreads(res.threads);
-            setMentionSeedNames(res.mention_candidates);
-            notifyPendingMentions(res.threads, res.pending_mentions);
-          }).catch((err) => reportError('DocumentLayout.mention.created', err, { uid: doc.uid }));
+          void listThreads(doc.uid)
+            .then((res) => {
+              if (cancelled) return;
+              setThreads(res.threads);
+              setMentionSeedNames(res.mention_candidates);
+              notifyPendingMentions(res.threads, res.pending_mentions);
+            })
+            .catch((err) => reportError('DocumentLayout.mention.created', err, { uid: doc.uid }));
           break;
         }
         case 'edit_proposal.created': {
@@ -371,10 +375,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           const raw = event.edit_proposal as Record<string, unknown>;
           const comment = raw.comment as Record<string, unknown> | undefined;
           const author = comment?.author as { display_name?: string } | undefined;
-          notify(
-            'New edit proposal',
-            `${author?.display_name ?? 'Someone'} proposed a change.`,
-          );
+          notify('New edit proposal', `${author?.display_name ?? 'Someone'} proposed a change.`);
           break;
         }
         case 'document.updated': {
@@ -387,7 +388,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         }
       }
     });
-    return () => { cancelled = true; if (refreshTimer) clearTimeout(refreshTimer); sub.close(); };
+    return () => {
+      cancelled = true;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      sub.close();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.uid]);
 
@@ -628,7 +633,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           prev.map((t) => {
             if (!t.comments.slice(1).some((r) => r.id === nodeId)) return t;
             const [head, ...tail] = t.comments;
-            return { ...t, comments: [head, ...tail.filter((c) => c.id !== nodeId)] as [Comment, ...Comment[]] };
+            return {
+              ...t,
+              comments: [head, ...tail.filter((c) => c.id !== nodeId)] as [Comment, ...Comment[]],
+            };
           }),
         );
       } catch (err) {
@@ -958,10 +966,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </>
             )}
             <IconButton
-              variant={inlineCommentsOpen ? 'soft' : 'ghost'}
-              color={inlineCommentsOpen ? APP_ACCENT_COLOR : 'gray'}
+              variant="soft"
+              color={APP_ACCENT_COLOR}
               size="2"
               className={`inline-comments-trigger ${inlineCommentsOpen ? 'active' : ''}`}
+              aria-pressed={inlineCommentsOpen}
               onClick={() => setInlineCommentsOpen((v) => !v)}
               aria-label={inlineCommentsOpen ? 'Hide inline comments' : 'Show inline comments'}
               title={inlineCommentsOpen ? 'Hide inline comments' : 'Show inline comments'}
@@ -1271,10 +1280,7 @@ function notifyPendingMentions(threads: Thread[], pendingMentionIds: string[]): 
   for (const id of pendingMentionIds) {
     const node = byId.get(id);
     if (node) {
-      notify(
-        'Mentioned in a comment',
-        `${node.author.display_name}: ${node.body.slice(0, 120)}`,
-      );
+      notify('Mentioned in a comment', `${node.author.display_name}: ${node.body.slice(0, 120)}`);
     }
   }
 }

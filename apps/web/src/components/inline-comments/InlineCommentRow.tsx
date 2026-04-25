@@ -1,3 +1,4 @@
+import { Pencil2Icon, QuoteIcon, TrashIcon } from '@radix-ui/react-icons';
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -54,6 +55,10 @@ export function InlineCommentRow({
     }
   }
 
+  const showQuote = !editing && !confirmingDelete && canQuote && onQuote;
+  const showEdit = !editing && !confirmingDelete && node.capabilities.edit;
+  const showDelete = !editing && !confirmingDelete && node.capabilities.delete;
+
   return (
     <div className={`ic-row ic-row-${variant}`}>
       <InlineAvatar
@@ -67,6 +72,67 @@ export function InlineCommentRow({
           <span className="ic-row-ts" title={inlineFormatTimestampLong(node.created_at)}>
             {inlineFormatTimestamp(node.created_at)}
           </span>
+          {!editing && (
+            <div className="ic-row-meta-actions">
+              {confirmingDelete ? (
+                <>
+                  <span className="ic-confirm-prompt">Delete?</span>
+                  <button
+                    type="button"
+                    className="ic-btn ic-btn-link"
+                    onClick={() => setConfirmingDelete(false)}
+                    disabled={saving}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="ic-btn ic-btn-link ic-btn-danger"
+                    onClick={() => void confirmDelete()}
+                    disabled={saving}
+                  >
+                    Yes, delete
+                  </button>
+                </>
+              ) : (
+                <>
+                  {showQuote && (
+                    <button
+                      type="button"
+                      className="ic-icon-btn"
+                      title="Quote"
+                      aria-label="Quote"
+                      onClick={() => onQuote?.(node.body)}
+                    >
+                      <QuoteIcon />
+                    </button>
+                  )}
+                  {showEdit && (
+                    <button
+                      type="button"
+                      className="ic-icon-btn"
+                      title="Edit"
+                      aria-label="Edit"
+                      onClick={startEdit}
+                    >
+                      <Pencil2Icon />
+                    </button>
+                  )}
+                  {showDelete && (
+                    <button
+                      type="button"
+                      className="ic-icon-btn ic-icon-btn-danger"
+                      title="Delete"
+                      aria-label="Delete"
+                      onClick={() => setConfirmingDelete(true)}
+                    >
+                      <TrashIcon />
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {editing ? (
@@ -100,55 +166,6 @@ export function InlineCommentRow({
         ) : (
           <div className="ic-row-body">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{node.body}</ReactMarkdown>
-          </div>
-        )}
-
-        {!editing && (
-          <div className="ic-row-actions">
-            {canQuote && onQuote && !confirmingDelete && (
-              <button
-                type="button"
-                className="ic-btn ic-btn-link"
-                onClick={() => onQuote(node.body)}
-              >
-                Quote
-              </button>
-            )}
-            {!confirmingDelete && node.capabilities.edit && (
-              <button type="button" className="ic-btn ic-btn-link" onClick={startEdit}>
-                Edit
-              </button>
-            )}
-            {node.capabilities.delete && !confirmingDelete && (
-              <button
-                type="button"
-                className="ic-btn ic-btn-link ic-btn-danger"
-                onClick={() => setConfirmingDelete(true)}
-              >
-                Delete
-              </button>
-            )}
-            {confirmingDelete && (
-              <>
-                <span className="ic-confirm-prompt">Delete?</span>
-                <button
-                  type="button"
-                  className="ic-btn ic-btn-link"
-                  onClick={() => setConfirmingDelete(false)}
-                  disabled={saving}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  className="ic-btn ic-btn-link ic-btn-danger"
-                  onClick={() => void confirmDelete()}
-                  disabled={saving}
-                >
-                  Yes, delete
-                </button>
-              </>
-            )}
           </div>
         )}
       </div>

@@ -455,6 +455,24 @@ button.primary:disabled {
   color: var(--accent-12);
 }
 
+/* Toolbar toggle for the inline comments column. The button keeps its
+   size and surface color regardless of state; the pressed state is
+   communicated via an inset ring + accent icon instead of switching
+   variant (which would change padding / metrics). */
+.inline-comments-trigger {
+  flex-shrink: 0;
+  opacity: 0.7;
+  box-shadow: inset 0 0 0 1px transparent;
+}
+.inline-comments-trigger:hover {
+  opacity: 1;
+}
+.inline-comments-trigger.active {
+  opacity: 1;
+  color: var(--accent-12);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-a7) 55%, transparent);
+}
+
 .doc-search-option {
   flex-shrink: 0;
 }
@@ -2387,6 +2405,25 @@ button.primary.small {
   margin-bottom: 0.45rem;
 }
 
+.ic-card-header-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ic-card-show-diff {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 0.74rem;
+  font-weight: 500;
+  color: #1d4ed8;
+}
+.ic-card-show-diff:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+
 .ic-card-badges {
   display: flex;
   flex-wrap: wrap;
@@ -2460,9 +2497,9 @@ button.primary.small {
 
 .ic-row-meta {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 0.5rem;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .ic-row-author {
@@ -2473,6 +2510,50 @@ button.primary.small {
 .ic-row-ts {
   font-size: 0.7rem;
   color: var(--ui-fg-muted);
+}
+
+.ic-row-meta-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+/* Per-row reveal: only the row being hovered/focused shows its actions. */
+.ic-row:hover .ic-row-meta-actions,
+.ic-row:focus-within .ic-row-meta-actions {
+  opacity: 1;
+}
+/* Confirm prompts always visible regardless of hover state. */
+.ic-row-meta-actions:has(.ic-confirm-prompt) {
+  opacity: 1;
+}
+
+.ic-icon-btn {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0.18rem;
+  border-radius: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ui-fg-muted);
+  cursor: pointer;
+  line-height: 1;
+}
+.ic-icon-btn:hover {
+  background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
+  color: var(--ui-fg);
+}
+.ic-icon-btn-danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+.ic-icon-btn svg {
+  width: 13px;
+  height: 13px;
 }
 
 .ic-row-body {
@@ -2501,16 +2582,6 @@ button.primary.small {
   flex-wrap: wrap;
   gap: 0.4rem;
   margin-top: 0.15rem;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-.ic-card:hover .ic-row-actions,
-.ic-card:focus-within .ic-row-actions {
-  opacity: 1;
-}
-.ic-workflow-actions {
-  opacity: 1;
-  margin-top: 0.4rem;
 }
 
 .ic-confirm-prompt {
@@ -2647,11 +2718,18 @@ button.primary.small {
   align-items: center;
   justify-content: flex-end;
   gap: 0.4rem;
+  flex-wrap: wrap;
 }
 .ic-composer-hint {
   margin-right: auto;
   font-size: 0.68rem;
   color: var(--ui-fg-muted);
+}
+.ic-composer-left-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
 }
 
 .ic-edit { display: flex; flex-direction: column; gap: 0.35rem; }
@@ -2684,4 +2762,9 @@ button.primary.small {
   display: flex;
   gap: 0.4rem;
   padding-top: 0.3rem;
+}
+.ic-card-workflow-standalone {
+  justify-content: flex-end;
+  border-top: 1px dashed var(--ui-border);
+  margin-top: 0.2rem;
 }
