@@ -1443,6 +1443,46 @@ describe('exportDocx — mermaid resolveMermaid', () => {
     expect(documentXml).toContain('mermaid diagram');
   });
 
+  test('embeds mermaid PNG for AsciiDoc-format input', async () => {
+    // The asciidoc plugin (`rehypeAsciidocMermaid`) builds hast
+    // Elements directly with `'data-mermaid-index'` (hyphenated) as
+    // the property key — different from the markdown path's
+    // `dataMermaidIndex` (camelCase, normalised by `rehypeRaw`).
+    // Both spellings must reach the resolver and the walker so the
+    // diagram embeds end-to-end on either format.
+    const adoc = [
+      '= Title',
+      '',
+      '[mermaid]',
+      '----',
+      'graph TD',
+      'A --> B',
+      '----',
+    ].join('\n');
+    let calls = 0;
+    let calledIndex = -1;
+    let calledSource = '';
+    const buf = await exportDocx(adoc, {
+      format: 'asciidoc',
+      includeToc: false,
+      resolveMermaid: async (source, index) => {
+        calls += 1;
+        calledIndex = index;
+        calledSource = source;
+        return { bytes: PNG_1x1_BYTES, mime: 'image/png' };
+      },
+    });
+    const { documentXml, mediaFiles } = await inspectDocx(buf);
+    // Resolver got the AsciiDoc-emitted index + source.
+    expect(calls).toBe(1);
+    expect(calledIndex).toBe(0);
+    expect(calledSource).toContain('graph TD');
+    // The PNG was embedded as a real image part — no fallback.
+    expect(mediaFiles.length).toBe(1);
+    expect(documentXml).not.toContain('mermaid diagram');
+    expect(documentXml).not.toContain('graph TD');
+  });
+
   test('bounds parallelism via mermaidConcurrency', async () => {
     // 5 mermaid blocks, concurrency limit 2 → at no point should
     // more than 2 resolves be in flight simultaneously. Each

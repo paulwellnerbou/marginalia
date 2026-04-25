@@ -609,15 +609,44 @@ async function resolveAllImages(
 const DEFAULT_MERMAID_CONCURRENCY = 4;
 
 /**
+ * Read the mermaid-block index off a HAST `<div class="mermaid">`.
+ * Returns -1 when no usable index is present.
+ *
+ * Two property-key spellings are accepted because the two upstream
+ * plugins write hast differently:
+ *   - `remarkMermaid` (markdown) emits raw HTML `<div data-mermaid-index="N">`
+ *     which `rehypeRaw` parses; HTML attributes get normalised to
+ *     camelCase property keys, so we see `dataMermaidIndex`.
+ *   - `rehypeAsciidocMermaid` builds hast Elements directly with the
+ *     hyphenated key (`'data-mermaid-index'`) and never round-trips
+ *     through HTML, so the camelCase normaliser never fires.
+ *
+ * Both string and number values are tolerated; the asciidoc plugin
+ * stringifies, but a future plugin might pass a bare number.
+ */
+function readMermaidIndex(node: Element): number {
+  const props = node.properties ?? {};
+  const raw =
+    (props as Record<string, unknown>)['dataMermaidIndex'] ??
+    (props as Record<string, unknown>)['data-mermaid-index'];
+  let idx: number;
+  if (typeof raw === 'number') idx = raw;
+  else if (typeof raw === 'string') idx = Number.parseInt(raw, 10);
+  else return -1;
+  return Number.isInteger(idx) && idx >= 0 ? idx : -1;
+}
+
+/**
  * Walk the HAST for mermaid blocks (`<div class="mermaid"
- * data-mermaid-index="N">…source…</div>` from `remarkMermaid`),
- * resolve each through the caller's `resolveMermaid` callback with
- * bounded parallelism, and return a Map keyed by the numeric index.
+ * data-mermaid-index="N">…source…</div>` from `remarkMermaid` or
+ * `rehypeAsciidocMermaid`), resolve each through the caller's
+ * `resolveMermaid` callback with bounded parallelism, and return a
+ * Map keyed by the numeric index.
  *
  * Why index-keyed and not source-text-keyed: a document can legitimately
  * contain two identical diagrams (copy-paste) and we want each to render
  * independently — keying by source would dedupe them. The index is what
- * `remarkMermaid` already emits as `data-mermaid-index`, and is unique
+ * the upstream plugins emit as `data-mermaid-index`, and is unique
  * per block by construction.
  *
  * Why bounded: the typical server-side resolver spawns an `mmdr`
@@ -646,9 +675,8 @@ async function resolveAllMermaid(
     if (node.tagName !== 'div') return;
     const cls = node.properties?.className;
     if (!Array.isArray(cls) || !(cls as unknown[]).includes('mermaid')) return;
-    const idxRaw = node.properties?.['dataMermaidIndex'];
-    const idx = typeof idxRaw === 'string' ? Number.parseInt(idxRaw, 10) : NaN;
-    if (!Number.isInteger(idx) || idx < 0) return;
+    const idx = readMermaidIndex(node);
+    if (idx < 0) return;
     blocks.push({ index: idx, source: hastTextContent(node) });
   });
   const limit = Math.max(
@@ -1654,9 +1682,11 @@ function convertBlock(
       const isMermaid =
         Array.isArray(cls) && (cls as unknown[]).includes('mermaid');
       if (isMermaid) {
-        const idxRaw = node.properties?.['dataMermaidIndex'];
-        const idx = typeof idxRaw === 'string' ? Number.parseInt(idxRaw, 10) : NaN;
-        const resolved = Number.isInteger(idx) ? ctx.mermaidImages.get(idx) : null;
+        // Use the same index reader as `resolveAllMermaid` so the
+        // walker and resolver agree on which key spelling carries the
+        // index (markdown → camelCase, asciidoc → hyphenated).
+        const idx = readMermaidIndex(node);
+        const resolved = idx >= 0 ? ctx.mermaidImages.get(idx) : null;
         if (resolved) {
           const run = buildMermaidImageRun(resolved, ctx);
           out.push(
