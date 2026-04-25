@@ -11,6 +11,7 @@ import {
 import {
   Badge,
   Button,
+  DropdownMenu,
   Flex,
   IconButton,
   Select,
@@ -94,6 +95,7 @@ const TEXT_ZOOM_KEY = 'marginalia.textZoom';
 const TOC_WIDTH_KEY = 'marginalia.tocWidth';
 const COMMENTS_WIDTH_KEY = 'marginalia.commentsWidth';
 const INLINE_COMMENTS_OPEN_KEY = 'marginalia.inlineCommentsOpen';
+const INLINE_COMMENTS_STACKING_KEY = 'marginalia.inlineCommentsStacking';
 const COLLAPSED_WIDTH = 36;
 
 interface Props {
@@ -119,6 +121,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [inlineCommentsOpen, setInlineCommentsOpen] = useState<boolean>(() => {
     const saved = localStorage.getItem(INLINE_COMMENTS_OPEN_KEY);
+    return saved === null ? true : saved === 'true';
+  });
+  const [inlineCommentsStacking, setInlineCommentsStacking] = useState<boolean>(() => {
+    const saved = localStorage.getItem(INLINE_COMMENTS_STACKING_KEY);
     return saved === null ? true : saved === 'true';
   });
   const [rightTab, setRightTab] = useState<'comments' | 'history' | 'search'>('comments');
@@ -227,6 +233,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(INLINE_COMMENTS_OPEN_KEY, String(inlineCommentsOpen));
   }, [inlineCommentsOpen]);
+  useEffect(() => {
+    localStorage.setItem(INLINE_COMMENTS_STACKING_KEY, String(inlineCommentsStacking));
+  }, [inlineCommentsStacking]);
   useEffect(() => {
     void applyTheme(theme);
   }, [theme]);
@@ -965,18 +974,37 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 <AccessControlDialog doc={doc} onChange={onDocSettingsChanged} />
               </>
             )}
-            <IconButton
-              variant="soft"
-              color={APP_ACCENT_COLOR}
-              size="2"
-              className={`inline-comments-trigger ${inlineCommentsOpen ? 'active' : ''}`}
-              aria-pressed={inlineCommentsOpen}
-              onClick={() => setInlineCommentsOpen((v) => !v)}
-              aria-label={inlineCommentsOpen ? 'Hide inline comments' : 'Show inline comments'}
-              title={inlineCommentsOpen ? 'Hide inline comments' : 'Show inline comments'}
-            >
-              <ChatBubbleIcon />
-            </IconButton>
+            <DropdownMenu.Root>
+              {/* Radix Tooltip wrap would break the DropdownMenu trigger;
+                  use the plain HTML `title` attribute on the icon. */}
+              <DropdownMenu.Trigger>
+                <IconButton
+                  variant="soft"
+                  color={APP_ACCENT_COLOR}
+                  size="2"
+                  className={`inline-comments-trigger ${inlineCommentsOpen ? 'active' : ''}`}
+                  aria-label="Comment view options"
+                  title="Comment view options"
+                >
+                  <ChatBubbleIcon />
+                </IconButton>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Content align="end">
+                <DropdownMenu.CheckboxItem
+                  checked={inlineCommentsOpen}
+                  onCheckedChange={(v) => setInlineCommentsOpen(Boolean(v))}
+                >
+                  Show comments
+                </DropdownMenu.CheckboxItem>
+                <DropdownMenu.CheckboxItem
+                  checked={inlineCommentsStacking}
+                  disabled={!inlineCommentsOpen}
+                  onCheckedChange={(v) => setInlineCommentsStacking(Boolean(v))}
+                >
+                  Stack at top while scrolling
+                </DropdownMenu.CheckboxItem>
+              </DropdownMenu.Content>
+            </DropdownMenu.Root>
             <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
               <IconButton
                 variant="soft"
@@ -1139,6 +1167,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   scrollContainerRef={docScrollRef}
                   blockRanges={blockRanges}
                   canComment={canComment}
+                  stackingEnabled={inlineCommentsStacking}
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}
                   displayName={effectiveDisplayName}

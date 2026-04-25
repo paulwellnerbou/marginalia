@@ -23,6 +23,13 @@ interface Props {
   scrollContainerRef: RefObject<HTMLDivElement | null>;
   blockRanges: Map<string, BlockSourceRange>;
   canComment: boolean;
+  /**
+   * When true, cards whose anchor is below the viewport pin to the top of
+   * the column in document order and travel with the scroll until their
+   * anchor catches up. When false, cards sit at their anchor and scroll
+   * with it; if two cards collide they stack downward from the upper one.
+   */
+  stackingEnabled: boolean;
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number } | null;
   displayName: string | null;
@@ -75,6 +82,7 @@ export function InlineCommentsLayer({
   scrollContainerRef,
   blockRanges,
   canComment,
+  stackingEnabled,
   pendingAnchor,
   focusedThread,
   displayName,
@@ -188,7 +196,11 @@ export function InlineCommentsLayer({
       const scroll = scrollContainerRef.current;
       if (!scroll) return;
       const scrollTop = scroll.scrollTop;
-      let cursor = scrollTop + TOP_PAD_PX;
+      // When stacking is on, cursor starts at the viewport top so cards
+      // whose anchor is below the viewport pin in a stack from there.
+      // When stacking is off, cursor starts at -∞ so cards never pin —
+      // they only collide downward against the previous card.
+      let cursor = stackingEnabled ? scrollTop + TOP_PAD_PX : Number.NEGATIVE_INFINITY;
 
       for (const item of renderItems) {
         const id = item.id;
@@ -196,16 +208,17 @@ export function InlineCommentsLayer({
         const height = cardHeights.current.get(id) ?? 96;
 
         let finalTop: number;
-        if (naturalTop <= cursor) {
-          // Anchor has scrolled into (or above) the pinned cursor — card
-          // lands at its natural rest and stays bound to the document.
-          finalTop = naturalTop;
-          cursor = Math.max(cursor, naturalTop + height + CARD_GAP_PX);
-        } else {
-          // Anchor is still below; card stays pinned at the cursor and
-          // travels with the viewport.
+        if (stackingEnabled && naturalTop > cursor) {
+          // Anchor is still below the pinned cursor — card stays pinned
+          // at the cursor and travels with the viewport.
           finalTop = cursor;
           cursor = cursor + height + CARD_GAP_PX;
+        } else {
+          // Anchor has scrolled into (or above) the pinned cursor — card
+          // lands at its natural rest and stays bound to the document.
+          // (When stacking is off this branch always runs.)
+          finalTop = Math.max(naturalTop, cursor);
+          cursor = finalTop + height + CARD_GAP_PX;
         }
 
         const wrapper = wrapperEls.current.get(id);
@@ -220,7 +233,7 @@ export function InlineCommentsLayer({
         }
       }
     },
-    [renderItems, scrollContainerRef],
+    [renderItems, scrollContainerRef, stackingEnabled],
   );
 
   /** Re-measure each card's anchor position from the rendered doc. */
@@ -269,7 +282,11 @@ export function InlineCommentsLayer({
         const el = entry.target as HTMLElement;
         const id = el.dataset.cardId;
         if (!id) continue;
-        const h = entry.contentRect.height;
+        // Use offsetHeight rather than contentRect: contentRect omits
+        // border (and would also omit padding for box-sizing:content-box
+        // children) which can leave the layout pass thinking the card is
+        // smaller than it really is and overlapping it with the next.
+        const h = el.offsetHeight;
         const prev = cardHeights.current.get(id);
         if (prev === undefined || Math.abs(prev - h) > 0.5) {
           cardHeights.current.set(id, h);
@@ -286,20 +303,30 @@ export function InlineCommentsLayer({
     };
   }, [requestRemeasure]);
 
-  const setWrapperRef = useCallback((id: string, el: HTMLDivElement | null) => {
-    const map = wrapperEls.current;
-    const prev = map.get(id);
-    if (prev && prev !== el) observerRef.current?.unobserve(prev);
-    if (el) {
-      el.dataset.cardId = id;
-      map.set(id, el);
-      observerRef.current?.observe(el);
-    } else {
-      map.delete(id);
-      cardHeights.current.delete(id);
-      lastAppliedTops.current.delete(id);
-    }
-  }, []);
+  const setWrapperRef = useCallback(
+    (id: string, el: HTMLDivElement | null) => {
+      const map = wrapperEls.current;
+      const prev = map.get(id);
+      if (prev && prev !== el) observerRef.current?.unobserve(prev);
+      if (el) {
+        el.dataset.cardId = id;
+        map.set(id, el);
+        // Seed the height synchronously so the very first layout pass
+        // already uses real values. Without this, the pass would default
+        // to a stub height and cards would overlap on first paint until
+        // the ResizeObserver fired.
+        const h = el.offsetHeight;
+        if (h > 0) cardHeights.current.set(id, h);
+        observerRef.current?.observe(el);
+        requestRemeasure();
+      } else {
+        map.delete(id);
+        cardHeights.current.delete(id);
+        lastAppliedTops.current.delete(id);
+      }
+    },
+    [requestRemeasure],
+  );
 
   // Window resize → re-measure.
   useEffect(() => {
