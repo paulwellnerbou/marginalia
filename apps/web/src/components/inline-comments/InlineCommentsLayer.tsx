@@ -1,5 +1,13 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import { InlineComposer } from './InlineComposer.js';
@@ -9,6 +17,10 @@ interface Props {
   uid: string;
   threads: Thread[];
   docSource: string;
+  /** Used as a re-measure trigger: bumps when the rendered HTML swaps. */
+  docHtml: string;
+  docElementRef: RefObject<HTMLElement | null>;
+  scrollContainerRef: RefObject<HTMLDivElement | null>;
   blockRanges: Map<string, BlockSourceRange>;
   canComment: boolean;
   pendingAnchor: CommentAnchor | null;
@@ -41,6 +53,8 @@ interface OrderItem {
   createdAt: number;
 }
 
+const PENDING_ID = '__pending__';
+const CARD_GAP_PX = 8;
 const FLASH_MS = 760;
 const FOCUS_MS = 1800;
 
@@ -48,6 +62,9 @@ export function InlineCommentsLayer({
   uid,
   threads,
   docSource,
+  docHtml,
+  docElementRef,
+  scrollContainerRef,
   blockRanges,
   canComment,
   pendingAnchor,
@@ -85,7 +102,6 @@ export function InlineCommentsLayer({
           next.add(t.id);
         }
       }
-      // Drop entries for threads that no longer exist.
       const ids = new Set(threads.map((t) => t.id));
       for (const id of next) {
         if (!ids.has(id)) next.delete(id);
@@ -117,7 +133,146 @@ export function InlineCommentsLayer({
     return items;
   }, [threads, blockOrder]);
 
-  // Focus from the document's highlight click — uncollapse, scroll to, flash.
+  // ----- anchor-aligned positioning -----
+
+  const cardEls = useRef<Map<string, HTMLDivElement>>(new Map());
+  const cardHeights = useRef<Map<string, number>>(new Map());
+  const observerRef = useRef<ResizeObserver | null>(null);
+  const [positions, setPositions] = useState<Map<string, number>>(new Map());
+  const [columnHeight, setColumnHeight] = useState<number>(0);
+  const [measureNonce, setMeasureNonce] = useState(0);
+
+  const requestMeasure = useCallback(() => {
+    setMeasureNonce((n) => n + 1);
+  }, []);
+
+  // Wire a single ResizeObserver that watches every card's wrapper.
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return;
+    const obs = new ResizeObserver((entries) => {
+      let changed = false;
+      for (const entry of entries) {
+        const el = entry.target as HTMLElement;
+        const id = el.dataset.cardId;
+        if (!id) continue;
+        const next = entry.contentRect.height;
+        const prev = cardHeights.current.get(id);
+        if (prev === undefined || Math.abs(prev - next) > 0.5) {
+          cardHeights.current.set(id, next);
+          changed = true;
+        }
+      }
+      if (changed) requestMeasure();
+    });
+    observerRef.current = obs;
+    for (const el of cardEls.current.values()) obs.observe(el);
+    return () => {
+      obs.disconnect();
+      observerRef.current = null;
+    };
+  }, [requestMeasure]);
+
+  const setCardRef = useCallback((id: string, el: HTMLDivElement | null) => {
+    const map = cardEls.current;
+    const prev = map.get(id);
+    if (prev && prev !== el) {
+      observerRef.current?.unobserve(prev);
+    }
+    if (el) {
+      el.dataset.cardId = id;
+      map.set(id, el);
+      observerRef.current?.observe(el);
+    } else {
+      map.delete(id);
+      cardHeights.current.delete(id);
+    }
+  }, []);
+
+  // React to viewport resize.
+  useEffect(() => {
+    const handler = () => requestMeasure();
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, [requestMeasure]);
+
+  // React to DOM mutations inside the rendered article (block reflow,
+  // mermaid SVG injection, image loads, etc).
+  useEffect(() => {
+    const doc = docElementRef.current;
+    if (!doc || typeof MutationObserver === 'undefined') return;
+    const obs = new MutationObserver(() => requestMeasure());
+    obs.observe(doc, { childList: true, subtree: true, characterData: true });
+    return () => obs.disconnect();
+  }, [docElementRef, requestMeasure, docHtml]);
+
+  // The actual measurement pass. Runs synchronously after layout so the
+  // first paint already has the right `top` values — no flash.
+  useLayoutEffect(() => {
+    const doc = docElementRef.current;
+    const scroll = scrollContainerRef.current;
+    if (!doc || !scroll) return;
+
+    const scrollRect = scroll.getBoundingClientRect();
+    const scrollTop = scroll.scrollTop;
+
+    type Measured = { id: string; anchorTop: number; height: number };
+    const measured: Measured[] = [];
+
+    function anchorTopFor(blockId: string | null): number {
+      if (!blockId) return 0;
+      const escaped = CSS.escape(blockId);
+      const el = doc!.querySelector<HTMLElement>(
+        `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
+      );
+      if (!el) return 0;
+      return el.getBoundingClientRect().top - scrollRect.top + scrollTop;
+    }
+
+    if (canComment && pendingAnchor) {
+      measured.push({
+        id: PENDING_ID,
+        anchorTop: anchorTopFor(pendingAnchor.block_id),
+        height: cardHeights.current.get(PENDING_ID) ?? 140,
+      });
+    }
+
+    for (const item of sorted) {
+      measured.push({
+        id: item.thread.id,
+        anchorTop: anchorTopFor(item.thread.anchor.block_id),
+        height: cardHeights.current.get(item.thread.id) ?? 96,
+      });
+    }
+
+    measured.sort((a, b) => a.anchorTop - b.anchorTop);
+
+    const next = new Map<string, number>();
+    let cursor = 0;
+    for (const m of measured) {
+      const top = Math.max(m.anchorTop, cursor);
+      next.set(m.id, top);
+      cursor = top + m.height + CARD_GAP_PX;
+    }
+
+    setPositions((prev) => {
+      if (prev.size === next.size) {
+        let same = true;
+        for (const [k, v] of next) {
+          const pv = prev.get(k);
+          if (pv === undefined || Math.abs(pv - v) > 0.5) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return prev;
+      }
+      return next;
+    });
+    setColumnHeight((prev) => (Math.abs(prev - cursor) > 0.5 ? cursor : prev));
+  }, [sorted, pendingAnchor, canComment, docElementRef, scrollContainerRef, measureNonce, docHtml]);
+
+  // ----- focus animation -----
+
   useEffect(() => {
     if (!focusedThread) return;
     if (lastNonce.current === focusedThread.nonce) return;
@@ -174,53 +329,74 @@ export function InlineCommentsLayer({
     return onCreate(payload);
   }
 
+  const showEmpty = sorted.length === 0 && !pendingAnchor;
+  const minHeight = Math.max(columnHeight, 0);
+
   return (
-    <aside ref={rootRef} className="ic-column" aria-label="Inline comments">
-      {canComment && pendingAnchor && (
-        <div className="ic-card ic-card-pending">
-          <div className="ic-pending-quote">"{truncate(pendingAnchor.quote, 160)}"</div>
-          <InlineComposer
-            placeholder="Your comment…"
-            needsName={!displayName}
-            rows={3}
-            submitLabel="Post"
-            showCancel
-            onCancel={onCancelPending}
-            onSubmit={submitNew}
-          />
+    <aside
+      ref={rootRef}
+      className="ic-column"
+      aria-label="Inline comments"
+      style={{ minHeight: `${minHeight}px` }}
+    >
+      {showEmpty && (
+        <div className="ic-empty-state">
+          {canComment ? 'Select text in the document to comment.' : 'No comments yet.'}
         </div>
       )}
 
-      {sorted.length === 0 && !pendingAnchor && (
-        <div className="ic-empty-state">
-          {canComment ? 'Select text in the document to comment.' : 'No comments yet.'}
+      {canComment && pendingAnchor && (
+        <div
+          ref={(el) => setCardRef(PENDING_ID, el)}
+          className="ic-anchor-wrapper"
+          style={{ top: `${positions.get(PENDING_ID) ?? 0}px` }}
+        >
+          <div className="ic-card ic-card-pending">
+            <div className="ic-pending-quote">"{truncate(pendingAnchor.quote, 160)}"</div>
+            <InlineComposer
+              placeholder="Your comment…"
+              needsName={!displayName}
+              rows={3}
+              submitLabel="Post"
+              showCancel
+              onCancel={onCancelPending}
+              onSubmit={submitNew}
+            />
+          </div>
         </div>
       )}
 
       {sorted.map((item) => {
         const blockId = item.thread.anchor.block_id;
         const onJump = blockId ? () => onScrollToAnchor(blockId) : undefined;
+        const id = item.thread.id;
         return (
-          <InlineThreadCard
-            key={item.thread.id}
-            uid={uid}
-            thread={item.thread}
-            canComment={canComment}
-            needsName={!displayName}
-            docSource={docSource}
-            blockRanges={blockRanges}
-            focused={focusedId === item.thread.id}
-            flashPhase={flash?.id === item.thread.id ? flash.phase : null}
-            collapsed={collapsed.has(item.thread.id)}
-            onToggleCollapsed={() => toggle(item.thread.id)}
-            onJump={onJump}
-            onReply={onReply}
-            onEdit={onEdit}
-            onDeleteNode={onDeleteNode}
-            onDeleteThread={onDeleteThread}
-            onResolveThread={onResolveThread}
-            onEditProposalRationale={onEditProposalRationale}
-          />
+          <div
+            key={id}
+            ref={(el) => setCardRef(id, el)}
+            className="ic-anchor-wrapper"
+            style={{ top: `${positions.get(id) ?? 0}px` }}
+          >
+            <InlineThreadCard
+              uid={uid}
+              thread={item.thread}
+              canComment={canComment}
+              needsName={!displayName}
+              docSource={docSource}
+              blockRanges={blockRanges}
+              focused={focusedId === id}
+              flashPhase={flash?.id === id ? flash.phase : null}
+              collapsed={collapsed.has(id)}
+              onToggleCollapsed={() => toggle(id)}
+              onJump={onJump}
+              onReply={onReply}
+              onEdit={onEdit}
+              onDeleteNode={onDeleteNode}
+              onDeleteThread={onDeleteThread}
+              onResolveThread={onResolveThread}
+              onEditProposalRationale={onEditProposalRationale}
+            />
+          </div>
         );
       })}
     </aside>

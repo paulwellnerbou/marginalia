@@ -2338,12 +2338,39 @@ button.primary.small {
   flex: 0 0 clamp(280px, calc((100% - var(--md-max-width, 72ch)) / 2), 380px);
   align-self: stretch;
   min-width: 0;
-  padding: 1.6rem 0.9rem 4rem 0.6rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
+  /* Cards are positioned absolutely against this column so they can
+     align with their anchored block in the document. Padding stays at
+     0 so `top: <px>` matches the document's coordinate space exactly;
+     each card-wrapper inset its own horizontal margins via left/right. */
+  position: relative;
   font-size: 0.85rem;
   color: var(--ui-fg);
+}
+
+/* Each card lives inside a wrapper that owns the absolute positioning.
+   The `top` value is recalculated whenever a card resizes, the doc
+   reflows, or the viewport changes; the transition makes those moves
+   read as a smooth shuffle rather than a jump. */
+.ic-anchor-wrapper {
+  position: absolute;
+  left: 0.6rem;
+  right: 0.9rem;
+  transition: top 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+/* Honor the user's reduced-motion preference. */
+@media (prefers-reduced-motion: reduce) {
+  .ic-anchor-wrapper {
+    transition: none;
+  }
+}
+
+.ic-empty-state {
+  position: absolute;
+  top: 1rem;
+  left: 0.6rem;
+  right: 0.9rem;
+  color: var(--ui-fg-muted);
+  font-size: 0.85rem;
 }
 
 /* When the available pane width is too narrow to fit reading column +
@@ -2352,12 +2379,6 @@ button.primary.small {
   .ic-column {
     display: none;
   }
-}
-
-.ic-empty-state {
-  padding: 0.5rem 0.4rem;
-  color: var(--ui-fg-muted);
-  font-size: 0.85rem;
 }
 
 /* ---------- Card ---------- */
