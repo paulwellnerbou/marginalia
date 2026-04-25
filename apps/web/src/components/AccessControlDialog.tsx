@@ -238,6 +238,7 @@ export function AccessControlDialog({
               docUid={doc.uid}
               password={disclosedPassword.value}
               label={disclosedPassword.label}
+              docName={doc.name}
             />
           )}
 

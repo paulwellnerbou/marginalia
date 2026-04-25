@@ -493,6 +493,7 @@ function UploadDialog({
   const [createdUid, setCreatedUid] = useState<string | null>(null);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [createdTitle, setCreatedTitle] = useState<string>('Untitled');
+  const [createdDocName, setCreatedDocName] = useState<string | null>(null);
   // Snapshot of the created doc's format, taken at upload/import time so
   // `openCreated()` writes the correct value into recent-docs even for
   // paths where the dialog's `format` state is stale (e.g. JSON bundle
@@ -559,6 +560,7 @@ function UploadDialog({
       setCreatedAdminUrl(adminUrl);
       setCreatedPassword(null);
       setCreatedTitle(res.name ?? bundle.document?.name ?? 'Untitled');
+      setCreatedDocName(res.name ?? null);
       // The import response carries the server's format; fall back to
       // the bundle's own field when talking to older servers that don't
       // echo it back.
@@ -606,6 +608,7 @@ function UploadDialog({
       setCreatedToken(res.admin_invite.token);
       setCreatedAdminUrl(adminUrl);
       setCreatedTitle((res.name ?? effectiveDocName) || 'Untitled');
+      setCreatedDocName(res.name ?? null);
       setCreatedFormat(res.format ?? format);
       if (res.password) setCreatedPassword(res.password);
     } catch (err) {
@@ -634,6 +637,7 @@ function UploadDialog({
     setCreatedUid(null);
     setCreatedToken(null);
     setCreatedTitle('Untitled');
+    setCreatedDocName(null);
     setCreatedFormat(nextDraft?.format ?? 'markdown');
   }
 
@@ -688,6 +692,7 @@ function UploadDialog({
                   docUid={createdUid}
                   password={createdPassword}
                   label="Password"
+                  docName={createdDocName}
                 />
               )}
             </Flex>

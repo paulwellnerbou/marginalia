@@ -497,7 +497,7 @@ export function EditPage() {
 
   return (
     <div className="edit-page">
-      <PasswordPromptDialog docUid={doc.uid} />
+      <PasswordPromptDialog docUid={doc.uid} docName={doc.name} />
       <AppBar
         docTitle={`Editing: ${documentTitle(doc)}`}
         role={doc.role}

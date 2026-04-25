@@ -80,8 +80,9 @@ export function useSavedPassword(docUid: string | undefined): string | null {
   return password;
 }
 
-function credentialIdForDoc(docUid: string): string {
-  return `document:${docUid}`;
+function credentialIdForDoc(docUid: string, docName?: string | null): string {
+  const name = docName?.trim();
+  return name ? `document:${docUid} — ${name}` : `document:${docUid}`;
 }
 
 type WindowWithPasswordCredential = Window & {
@@ -97,19 +98,20 @@ export function supportsBrowserPasswordManager(): boolean {
 export async function storePasswordInBrowserPasswordManager(
   docUid: string,
   password: string,
+  docName?: string | null,
 ): Promise<boolean> {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
   const ctor = (window as WindowWithPasswordCredential).PasswordCredential;
   if (!ctor || typeof navigator.credentials?.store !== 'function') return false;
   const credential = new ctor({
-    id: credentialIdForDoc(docUid),
-    name: `Marginalia document ${docUid}`,
+    id: credentialIdForDoc(docUid, docName),
+    name: docName?.trim() ? `Marginalia — ${docName.trim()}` : `Marginalia document ${docUid}`,
     password,
   });
   await navigator.credentials.store(credential);
   return true;
 }
 
-export function browserPasswordManagerUsername(docUid: string): string {
-  return credentialIdForDoc(docUid);
+export function browserPasswordManagerUsername(docUid: string, docName?: string | null): string {
+  return credentialIdForDoc(docUid, docName);
 }

@@ -27,7 +27,13 @@ import { PasswordField } from './PasswordField.js';
  * `marginalia:auth-resolved`; on cancel fires `marginalia:auth-cancelled`
  * so queued requests reject instead of hanging. Mount once per doc view.
  */
-export function PasswordPromptDialog({ docUid }: { docUid: string }) {
+export function PasswordPromptDialog({
+  docUid,
+  docName,
+}: {
+  docUid: string;
+  docName?: string | null;
+}) {
   const [open, setOpen] = useState(false);
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -177,7 +183,7 @@ export function PasswordPromptDialog({ docUid }: { docUid: string }) {
               autoComplete="username"
               name="username"
               readOnly
-              value={browserPasswordManagerUsername(docUid)}
+              value={browserPasswordManagerUsername(docUid, docName)}
             />
             <PasswordField
               value={password}

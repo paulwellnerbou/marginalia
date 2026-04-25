@@ -14,10 +14,12 @@ export function PasswordDisclosureCard({
   docUid,
   password,
   label,
+  docName,
 }: {
   docUid: string;
   password: string;
   label: string;
+  docName?: string | null;
 }) {
   const savedPassword = useSavedPassword(docUid);
   const savedOnDevice = savedPassword === password;
@@ -30,7 +32,7 @@ export function PasswordDisclosureCard({
     setManagerStatus(null);
     setStoringInManager(true);
     try {
-      const stored = await storePasswordInBrowserPasswordManager(docUid, password);
+      const stored = await storePasswordInBrowserPasswordManager(docUid, password, docName);
       setManagerStatus(
         stored ? 'Saved in the browser password manager.' : 'Password manager not available here.',
       );
