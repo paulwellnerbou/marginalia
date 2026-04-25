@@ -79,4 +79,27 @@ describe('renderMermaidToPng', () => {
     expect(cfg.bin).toBe('mmdr');
     expect(cfg.timeoutMs).toBe(10_000);
   });
+
+  test('survives broken-pipe when binary exits before stdin write completes', async () => {
+    // Point the wrapper at `/bin/true`: it exits immediately without
+    // consuming stdin. Without an `'error'` handler on `child.stdin`,
+    // ending the pipe after the child is gone surfaces an unhandled
+    // EPIPE/ERR_STREAM_DESTROYED stream error and crashes the
+    // process. With the handler in place, the test simply observes a
+    // graceful rejection (we don't care which kind — the point is
+    // "process didn't crash, promise settled").
+    configureMermaidRenderer({ bin: '/bin/true' });
+    // Big payload makes the broken-pipe race easier to hit: the
+    // pipe's internal buffer gets a real chance to be inactive by
+    // the time we end the stream.
+    const big = 'graph TD\n' + 'A --> B\n'.repeat(100_000);
+    let settled = false;
+    try {
+      await renderMermaidToPng(big);
+      settled = true;
+    } catch {
+      settled = true;
+    }
+    expect(settled).toBe(true);
+  });
 });

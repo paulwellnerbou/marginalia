@@ -209,6 +209,18 @@ function runRenderer(source: string, outPath: string): Promise<void> {
       );
     });
 
+    // If the renderer dies before we finish writing the source (early
+    // crash, ENOENT, kill from the timeout above), the next stdin
+    // write surfaces as an unhandled 'error' event on the pipe and
+    // takes down the Node process. Swallow the broken-pipe variants
+    // and let the existing 'error' / 'close' handlers above produce
+    // the intended rejection. Anything else is a genuine
+    // unexpected stream error and gets propagated.
+    child.stdin.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EPIPE' || err.code === 'ERR_STREAM_DESTROYED') return;
+      reject(err);
+    });
+
     child.stdin.end(source);
   });
 }
