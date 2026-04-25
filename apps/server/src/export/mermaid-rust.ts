@@ -111,8 +111,9 @@ export interface RenderedMermaidPng {
  * of failing the whole export.
  *
  * The engine-missing case still throws — that's an operator
- * configuration problem, not per-document data, and the route should
- * surface it as a 500 with the install hint.
+ * configuration problem, not per-document data. Callers may either
+ * surface it (for a strict export path, e.g. as a 500 with the
+ * install hint) or catch it and fall back (as the DOCX path does).
  */
 export async function renderMermaidToPng(source: string): Promise<RenderedMermaidPng | null> {
   // Each call gets its own temp dir so concurrent renders don't
@@ -129,7 +130,9 @@ export async function renderMermaidToPng(source: string): Promise<RenderedMermai
     if (err instanceof MermaidRenderEngineMissingError) throw err;
     if (err instanceof MermaidRenderTimeoutError) throw err;
     // Parse / render errors → null so the export degrades gracefully.
-    console.warn('[mermaid-rust] render failed:', (err as Error).message);
+    // No log here on purpose: callers (DOCX) want silent fallback per
+    // diagram. If a structured diagnostic surface is needed later,
+    // return the error instead of swallowing it.
     return null;
   } finally {
     // Best-effort cleanup. `recursive: true` so a partially-written

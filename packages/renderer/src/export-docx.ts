@@ -1211,9 +1211,10 @@ interface BuildCtx {
    * `remarkMermaid` writes onto each `<div class="mermaid"
    * data-mermaid-index="N">`. `null` means we tried but the renderer
    * couldn't produce usable bytes — the walker falls back to the
-   * labeled-code-block stopgap. Empty map means the caller didn't
-   * supply `resolveMermaid` (CLI / library callers); the walker also
-   * falls back in that case.
+   * labeled-code-block stopgap. An empty map can mean the caller
+   * didn't supply `resolveMermaid`, or simply that the document had
+   * no mermaid blocks to resolve; the walker falls back whenever no
+   * usable rendered image is available for a mermaid block.
    */
   readonly mermaidImages: Map<number, ResolvedImage | null>;
   readonly pageWidthPx: number;

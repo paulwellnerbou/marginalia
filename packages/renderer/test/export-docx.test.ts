@@ -1418,10 +1418,13 @@ describe('exportDocx — mermaid resolveMermaid', () => {
         // Return per-index distinct bytes so the docx packer can't
         // dedupe identical media into a single part — that would
         // hide the case where only one of the two diagrams actually
-        // got resolved. We mutate a single byte; image-size still
-        // probes a 1x1 PNG either way (the IHDR header is intact).
-        const tagged = new Uint8Array(PNG_1x1_BYTES);
-        tagged[tagged.length - 1] = index;
+        // got resolved. Keep the PNG bytes intact and append a
+        // trailing byte after IEND so each payload is distinct
+        // without corrupting the image (mutating an in-stream byte
+        // would invalidate the IEND CRC).
+        const tagged = new Uint8Array(PNG_1x1_BYTES.length + 1);
+        tagged.set(PNG_1x1_BYTES);
+        tagged[PNG_1x1_BYTES.length] = index;
         return { bytes: tagged, mime: 'image/png' };
       },
     });

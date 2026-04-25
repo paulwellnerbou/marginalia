@@ -552,6 +552,12 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
   // the opaque uid. Matches what a human would expect the file to be
   // called when they open it.
   const derivedTitle = doc.name ?? extractDocumentTitle(source, doc.format);
+  // Closed over by `resolveMermaid` below. The engine-missing
+  // condition is per-export (the binary is either on PATH or not, for
+  // the lifetime of this request), so warn once even if the document
+  // contains many mermaid blocks — otherwise a 10-diagram doc would
+  // produce 10 identical install-hint lines on every export.
+  let mermaidEngineWarned = false;
   const buf = await exportDocx(source, {
     theme,
     format: doc.format,
@@ -581,9 +587,12 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
         return png ? { bytes: png.bytes, mime: png.mime } : null;
       } catch (err) {
         if (err instanceof MermaidRenderEngineMissingError) {
-          // Log once so operators see the install hint, but don't
-          // fail the export — code-block fallback is acceptable.
-          console.warn('[docx-export]', err.message);
+          // Operators only need the install hint once per export, not
+          // once per mermaid block.
+          if (!mermaidEngineWarned) {
+            mermaidEngineWarned = true;
+            console.warn('[docx-export]', err.message);
+          }
           return null;
         }
         // Render / timeout errors fall back to placeholder too.
