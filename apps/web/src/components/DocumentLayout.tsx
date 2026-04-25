@@ -21,6 +21,7 @@ import {
   Tooltip,
 } from '@radix-ui/themes';
 import {
+  ChatBubbleIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   Cross2Icon,
@@ -73,6 +74,7 @@ import { Toc } from './Toc.js';
 import { SelectionToolbar, type ProposalTarget } from './SelectionToolbar.js';
 import { BlockActions } from './BlockActions.js';
 import { CommentsPane } from './CommentsPane.js';
+import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
 import { ProposalComposer } from './ThreadComposer.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { AppBar } from './AppBar.js';
@@ -91,6 +93,7 @@ const MAX_WIDTH_KEY = 'marginalia.maxWidth';
 const TEXT_ZOOM_KEY = 'marginalia.textZoom';
 const TOC_WIDTH_KEY = 'marginalia.tocWidth';
 const COMMENTS_WIDTH_KEY = 'marginalia.commentsWidth';
+const INLINE_COMMENTS_OPEN_KEY = 'marginalia.inlineCommentsOpen';
 const COLLAPSED_WIDTH = 36;
 
 interface Props {
@@ -113,7 +116,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const navigate = useNavigate();
   const canComment = doc.role !== 'reader';
   const [tocOpen, setTocOpen] = useState(true);
-  const [commentsOpen, setCommentsOpen] = useState(true);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [inlineCommentsOpen, setInlineCommentsOpen] = useState<boolean>(() => {
+    const saved = localStorage.getItem(INLINE_COMMENTS_OPEN_KEY);
+    return saved === null ? true : saved === 'true';
+  });
   const [rightTab, setRightTab] = useState<'comments' | 'history' | 'search'>('comments');
   const [historyVersion, setHistoryVersion] = useState(0);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
@@ -202,6 +209,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   const docRef = useRef<HTMLElement>(null);
   const docBodyRef = useRef<HTMLDivElement>(null);
+  const docScrollRef = useRef<HTMLDivElement>(null);
   const docSearchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -216,6 +224,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(COMMENTS_WIDTH_KEY, String(commentsWidth));
   }, [commentsWidth]);
+  useEffect(() => {
+    localStorage.setItem(INLINE_COMMENTS_OPEN_KEY, String(inlineCommentsOpen));
+  }, [inlineCommentsOpen]);
   useEffect(() => {
     void applyTheme(theme);
   }, [theme]);
@@ -232,7 +243,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const headingIdsKey = useMemo(() => headingIds.join('\u0000'), [headingIds]);
 
   useEffect(() => {
-    const container = docBodyRef.current;
+    const container = docScrollRef.current;
     const root = docRef.current;
     if (!container || !root || headingIds.length === 0) {
       setActiveHeadingId(null);
@@ -736,11 +747,18 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return highlights;
   }, [canComment, threads, pendingAnchor]);
 
-  const openCommentThread = useCallback((threadId: string) => {
-    setCommentsOpen(true);
-    setRightTab('comments');
-    setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1 }));
-  }, []);
+  const openCommentThread = useCallback(
+    (threadId: string) => {
+      // Prefer the inline column if it's open; otherwise fall back to the
+      // right pane (and open it if it's collapsed).
+      if (!inlineCommentsOpen) {
+        setCommentsOpen(true);
+        setRightTab('comments');
+      }
+      setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1 }));
+    },
+    [inlineCommentsOpen],
+  );
 
   const onRevertLatestHistoryVersion = useCallback(
     async (entry: HistoryEntry) => {
@@ -939,6 +957,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 <AccessControlDialog doc={doc} onChange={onDocSettingsChanged} />
               </>
             )}
+            <IconButton
+              variant={inlineCommentsOpen ? 'soft' : 'ghost'}
+              color={inlineCommentsOpen ? APP_ACCENT_COLOR : 'gray'}
+              size="2"
+              className={`inline-comments-trigger ${inlineCommentsOpen ? 'active' : ''}`}
+              onClick={() => setInlineCommentsOpen((v) => !v)}
+              aria-label={inlineCommentsOpen ? 'Hide inline comments' : 'Show inline comments'}
+              title={inlineCommentsOpen ? 'Hide inline comments' : 'Show inline comments'}
+            >
+              <ChatBubbleIcon />
+            </IconButton>
             <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
               <IconButton
                 variant="soft"
@@ -1057,34 +1086,62 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </Flex>
             </div>
           )}
-          <div className="doc-body" ref={docBodyRef}>
-            <RenderedDoc
-              rendered={liveRendered}
-              elRef={docRef}
-              maxWidthCh={maxWidth}
-              textZoom={textZoom / 100}
-              highlights={commentHighlights}
-              searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}
-              searchOptions={docSearchOptions}
-              activeSearchResultId={activeSearchTarget?.id ?? null}
-              activeSearchVersion={activeSearchTarget?.nonce ?? 0}
-              onSearchResultsChange={updateSearchResults}
-              onHighlightClick={openCommentThread}
-              onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
-            />
-            {canComment && (
-              <SelectionToolbar
-                rootRef={docRef}
-                onAdd={(anchor) => setPendingDraft({ mode: 'comment', anchor })}
-                onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
-              />
-            )}
-            {canComment && (
-              <BlockActions
-                rootRef={docRef}
-                onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
-              />
-            )}
+          <div className="doc-scroll" ref={docScrollRef}>
+            <div
+              className={`doc-row${inlineCommentsOpen ? ' doc-row-with-inline' : ''}`}
+              style={{ ['--md-max-width' as string]: `${maxWidth}ch` }}
+            >
+              <div className="doc-body" ref={docBodyRef}>
+                <RenderedDoc
+                  rendered={liveRendered}
+                  elRef={docRef}
+                  maxWidthCh={maxWidth}
+                  textZoom={textZoom / 100}
+                  highlights={commentHighlights}
+                  searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}
+                  searchOptions={docSearchOptions}
+                  activeSearchResultId={activeSearchTarget?.id ?? null}
+                  activeSearchVersion={activeSearchTarget?.nonce ?? 0}
+                  onSearchResultsChange={updateSearchResults}
+                  onHighlightClick={openCommentThread}
+                  onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
+                />
+                {canComment && (
+                  <SelectionToolbar
+                    rootRef={docRef}
+                    onAdd={(anchor) => setPendingDraft({ mode: 'comment', anchor })}
+                    onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+                  />
+                )}
+                {canComment && (
+                  <BlockActions
+                    rootRef={docRef}
+                    onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+                  />
+                )}
+              </div>
+              {inlineCommentsOpen && (
+                <InlineCommentsLayer
+                  uid={doc.uid}
+                  threads={threads}
+                  docSource={liveSource}
+                  blockRanges={blockRanges}
+                  canComment={canComment}
+                  pendingAnchor={canComment ? pendingAnchor : null}
+                  focusedThread={focusedThread}
+                  displayName={effectiveDisplayName}
+                  onCancelPending={() => setPendingDraft(null)}
+                  onCreate={onCreate}
+                  onReply={onReply}
+                  onEdit={onEdit}
+                  onDeleteNode={onDeleteNode}
+                  onDeleteThread={onDeleteThread}
+                  onResolveThread={onResolveThread}
+                  onEditProposalRationale={onEditProposalRationale}
+                  onScrollToAnchor={scrollToAnchor}
+                />
+              )}
+            </div>
           </div>
         </main>
 

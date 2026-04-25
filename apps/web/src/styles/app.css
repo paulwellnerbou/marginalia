@@ -337,10 +337,22 @@ button.primary:disabled {
   overflow: hidden;
   position: relative;
 }
-.pane-doc .doc-body {
+.pane-doc .doc-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  container-type: inline-size;
+}
+.pane-doc .doc-row {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  min-height: 100%;
+}
+.pane-doc .doc-body {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .pane-header {
@@ -548,7 +560,6 @@ button.primary:disabled {
 
 .doc-body {
   flex: 1;
-  overflow-y: auto;
 }
 
 /* ============================================================
@@ -2295,4 +2306,382 @@ button.primary.small {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.18);
   pointer-events: none;
   z-index: 2;
+}
+
+/* ============================================================
+ * Inline comments column (lives in .doc-row, scrolls with the document)
+ * Fresh layout — does not share classes with .anchor-group / .comment.
+ * ============================================================ */
+
+.ic-column {
+  /* Claim the right gutter between the centered reading column and the
+     pane edge. Half of the leftover space, clamped to a comfortable card
+     width. Falls back to a fixed minimum if the gutter is too small. */
+  flex: 0 0 clamp(280px, calc((100% - var(--md-max-width, 72ch)) / 2), 380px);
+  align-self: stretch;
+  min-width: 0;
+  padding: 1.6rem 0.9rem 4rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--ui-fg);
+}
+
+/* When the available pane width is too narrow to fit reading column +
+   inline column comfortably, hide the column rather than crowd the doc. */
+@container (max-width: 700px) {
+  .ic-column {
+    display: none;
+  }
+}
+
+.ic-empty-state {
+  padding: 0.5rem 0.4rem;
+  color: var(--ui-fg-muted);
+  font-size: 0.85rem;
+}
+
+/* ---------- Card ---------- */
+
+.ic-card {
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  padding: 0.7rem 0.75rem 0.6rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  position: relative;
+  scroll-margin-top: 1rem;
+  scroll-margin-bottom: 1rem;
+  transition: box-shadow 160ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.ic-card-resolved {
+  opacity: 0.78;
+}
+
+.ic-card-focused {
+  border-color: var(--ui-accent, #3b82f6);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+
+@keyframes ic-flash {
+  0% { background: rgba(59, 130, 246, 0.16); }
+  100% { background: var(--ui-surface); }
+}
+.ic-card-flash-a,
+.ic-card-flash-b {
+  animation: ic-flash 760ms ease-out;
+}
+
+.ic-card-orphaned {
+  border-style: dashed;
+}
+
+/* ---------- Header ---------- */
+
+.ic-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.45rem;
+}
+
+.ic-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.ic-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  line-height: 1.4;
+  background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
+  color: var(--ui-fg);
+}
+.ic-badge-proposal { background: rgba(59, 130, 246, 0.12); color: #1d4ed8; }
+.ic-badge-accepted { background: rgba(34, 197, 94, 0.14); color: #15803d; }
+.ic-badge-rejected { background: rgba(239, 68, 68, 0.14); color: #b91c1c; }
+.ic-badge-resolved { background: rgba(34, 197, 94, 0.14); color: #15803d; }
+.ic-badge-orphan { background: rgba(15, 23, 42, 0.08); color: var(--ui-fg-muted); }
+
+.ic-card-anchor {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  font-size: 0.74rem;
+  color: var(--ui-fg-muted);
+  font-style: italic;
+  cursor: pointer;
+  line-height: 1.3;
+}
+.ic-card-anchor:disabled { cursor: default; }
+.ic-card-anchor:hover:not(:disabled) { color: var(--ui-fg); }
+
+.ic-card-collapse {
+  align-self: flex-start;
+  font-size: 0.72rem;
+}
+
+/* ---------- Rows (comments / replies) ---------- */
+
+.ic-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.ic-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+}
+
+.ic-row-reply {
+  padding-left: 0.55rem;
+  border-left: 2px solid var(--ui-border);
+  margin-left: 0.4rem;
+}
+
+.ic-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.ic-row-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.ic-row-author {
+  font-weight: 600;
+  font-size: 0.82rem;
+}
+
+.ic-row-ts {
+  font-size: 0.7rem;
+  color: var(--ui-fg-muted);
+}
+
+.ic-row-body {
+  font-size: 0.85rem;
+  line-height: 1.45;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+}
+.ic-row-body p { margin: 0 0 0.3rem; }
+.ic-row-body p:last-child { margin: 0; }
+.ic-row-body code {
+  font-size: 0.78rem;
+  padding: 0 0.25rem;
+  border-radius: 3px;
+  background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
+}
+.ic-row-body blockquote {
+  margin: 0.3rem 0;
+  padding: 0 0.6rem;
+  border-left: 3px solid var(--ui-border);
+  color: var(--ui-fg-muted);
+}
+
+.ic-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.ic-card:hover .ic-row-actions,
+.ic-card:focus-within .ic-row-actions {
+  opacity: 1;
+}
+.ic-workflow-actions {
+  opacity: 1;
+  margin-top: 0.4rem;
+}
+
+.ic-confirm-prompt {
+  font-size: 0.72rem;
+  color: var(--ui-fg-muted);
+  align-self: center;
+}
+
+.ic-error {
+  font-size: 0.72rem;
+  color: #b91c1c;
+}
+
+/* ---------- Avatar ---------- */
+
+.ic-avatar {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  color: white;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+.ic-avatar-md { width: 28px; height: 28px; }
+.ic-avatar-sm { width: 22px; height: 22px; font-size: 0.6rem; }
+
+/* ---------- Buttons ---------- */
+
+.ic-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.74rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 6px;
+  color: var(--ui-fg);
+  line-height: 1.3;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.ic-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+
+.ic-btn-link {
+  padding: 0.1rem 0.35rem;
+  color: var(--ui-fg-muted);
+}
+.ic-btn-link:hover:not(:disabled) {
+  background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
+  color: var(--ui-fg);
+}
+.ic-btn-danger { color: #b91c1c; }
+.ic-btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.1);
+  color: #b91c1c;
+}
+
+.ic-btn-ghost {
+  border-color: var(--ui-border);
+}
+.ic-btn-ghost:hover:not(:disabled) {
+  background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
+}
+
+.ic-btn-primary {
+  background: var(--ui-accent, #3b82f6);
+  color: white;
+  border-color: transparent;
+  font-weight: 500;
+}
+.ic-btn-primary:hover:not(:disabled) { filter: brightness(0.95); }
+
+.ic-btn-resolve {
+  background: rgba(34, 197, 94, 0.14);
+  color: #15803d;
+  border-color: rgba(34, 197, 94, 0.2);
+}
+.ic-btn-resolve:hover:not(:disabled) { background: rgba(34, 197, 94, 0.2); }
+
+.ic-btn-accept {
+  background: rgba(34, 197, 94, 0.14);
+  color: #15803d;
+  border-color: rgba(34, 197, 94, 0.25);
+  font-weight: 500;
+}
+.ic-btn-accept:hover:not(:disabled) { background: rgba(34, 197, 94, 0.22); }
+
+.ic-btn-reject {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+  border-color: rgba(239, 68, 68, 0.25);
+  font-weight: 500;
+}
+.ic-btn-reject:hover:not(:disabled) { background: rgba(239, 68, 68, 0.18); }
+
+/* ---------- Composer ---------- */
+
+.ic-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px dashed var(--ui-border);
+}
+.ic-card-pending .ic-composer { border-top: 0; padding-top: 0; }
+
+.ic-composer-name,
+.ic-composer-body {
+  width: 100%;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.35rem 0.45rem;
+  background: var(--ui-bg);
+  color: var(--ui-fg);
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  box-sizing: border-box;
+  resize: vertical;
+}
+.ic-composer-body { min-height: 2.4rem; line-height: 1.4; }
+.ic-composer-name:focus,
+.ic-composer-body:focus {
+  outline: none;
+  border-color: var(--ui-accent, #3b82f6);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.ic-composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
+.ic-composer-hint {
+  margin-right: auto;
+  font-size: 0.68rem;
+  color: var(--ui-fg-muted);
+}
+
+.ic-edit { display: flex; flex-direction: column; gap: 0.35rem; }
+
+.ic-card-pending {
+  background: var(--ui-bg-muted, rgba(59, 130, 246, 0.04));
+  border-color: rgba(59, 130, 246, 0.4);
+}
+.ic-pending-quote {
+  font-size: 0.78rem;
+  font-style: italic;
+  color: var(--ui-fg-muted);
+  margin-bottom: 0.4rem;
+  padding-left: 0.5rem;
+  border-left: 2px solid var(--ui-border);
+}
+
+/* ---------- Proposal-specific ---------- */
+
+.ic-proposal-rationale {
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+.ic-proposal-rationale.ic-empty {
+  color: var(--ui-fg-muted);
+  font-style: italic;
+}
+
+.ic-card-workflow {
+  display: flex;
+  gap: 0.4rem;
+  padding-top: 0.3rem;
 }
