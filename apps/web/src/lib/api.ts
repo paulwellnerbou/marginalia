@@ -40,6 +40,7 @@ export interface ExportedDocumentRepresentation {
 export interface ExportedComment {
   id: string;
   parent_id: string | null;
+  parent_proposal_id?: string | null;
   anchor_block_id: string | null;
   anchor_quote: string | null;
   anchor_prefix: string | null;
@@ -57,6 +58,13 @@ export interface ExportedComment {
   resolved_by_name: string | null;
   created_at: number;
   updated_at: number;
+  edit_proposal?: {
+    anchor_kind: string | null;
+    source_snapshot: string | null;
+    proposed_text: string;
+    status: ProposalStatus;
+    accepted_oid: string | null;
+  } | null;
 }
 
 export type DocumentFormat = 'markdown' | 'asciidoc';
@@ -505,12 +513,15 @@ export function recoverCurrentPassword(uid: string): Promise<{ password: string 
 export function importDocumentBundle(
   bundle: DocumentBundle,
   identity: Identity,
-): Promise<UploadResponse & { imported_comments: number }> {
-  return request<UploadResponse & { imported_comments: number }>('/api/documents/import', {
-    method: 'POST',
-    body: JSON.stringify(bundle),
-    identity,
-  });
+): Promise<UploadResponse & { imported_comments: number; imported_edit_proposals?: number }> {
+  return request<UploadResponse & { imported_comments: number; imported_edit_proposals?: number }>(
+    '/api/documents/import',
+    {
+      method: 'POST',
+      body: JSON.stringify(bundle),
+      identity,
+    },
+  );
 }
 
 // --- assets ----------------------------------------------------------
