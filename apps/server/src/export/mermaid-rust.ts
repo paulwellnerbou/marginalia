@@ -189,7 +189,12 @@ function runRenderer(source: string, outPath: string): Promise<void> {
       reject(err);
     });
 
-    child.on('exit', (code, signal) => {
+    // 'close' fires AFTER the child exits AND its stdio streams have
+    // drained — using 'exit' here would risk a truncated `stderr`
+    // (the buffer is filled on 'data' callbacks that haven't all
+    // flushed by the time 'exit' fires), which makes
+    // MermaidRenderError.stderr unreliable for diagnostics.
+    child.on('close', (code, signal) => {
       clearTimeout(timer);
       if (signal === 'SIGKILL') return; // already rejected by the timer
       if (code === 0) {

@@ -1442,4 +1442,40 @@ describe('exportDocx — mermaid resolveMermaid', () => {
     expect(mediaFiles.length).toBe(0);
     expect(documentXml).toContain('mermaid diagram');
   });
+
+  test('bounds parallelism via mermaidConcurrency', async () => {
+    // 5 mermaid blocks, concurrency limit 2 → at no point should
+    // more than 2 resolves be in flight simultaneously. Each
+    // resolver call sleeps briefly while another peek can race
+    // through; the high-watermark counter catches violations.
+    const md = Array.from({ length: 5 }, (_, i) =>
+      ['```mermaid', `graph TD`, `A${i} --> B${i}`, '```'].join('\n'),
+    ).join('\n\n');
+    let inFlight = 0;
+    let highWatermark = 0;
+    const buf = await exportDocx(md, {
+      includeToc: false,
+      mermaidConcurrency: 2,
+      resolveMermaid: async (_source, _index) => {
+        inFlight += 1;
+        highWatermark = Math.max(highWatermark, inFlight);
+        // Yield twice so concurrent calls really do overlap when
+        // allowed; without this the awaits would all settle in the
+        // same microtask and inFlight would never exceed 1.
+        await new Promise((r) => setTimeout(r, 5));
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        return { bytes: PNG_1x1_BYTES, mime: 'image/png' };
+      },
+    });
+    const { mediaFiles } = await inspectDocx(buf);
+    // All five diagrams resolved (single dedup'd media file is fine —
+    // we're testing the pool bound, not the embed semantics).
+    expect(mediaFiles.length).toBeGreaterThanOrEqual(1);
+    // Pool actually limited concurrency.
+    expect(highWatermark).toBeLessThanOrEqual(2);
+    // Sanity: pool actually achieved >1 in flight (so the test is
+    // exercising the path, not just sequentializing by accident).
+    expect(highWatermark).toBeGreaterThan(1);
+  });
 });

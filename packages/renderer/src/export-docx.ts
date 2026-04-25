@@ -148,10 +148,11 @@ export interface DocxExportOptions {
 
   /**
    * Rasterize a mermaid block's source to image bytes for embedding.
-   * The exporter calls this once per mermaid block (in parallel with
-   * other blocks) before walking the HAST. Return `null` (or throw —
-   * caught and swallowed) to fall back to the labeled-code-block
-   * stopgap so the diagram source is still readable in the doc.
+   * The exporter calls this once per mermaid block (with bounded
+   * parallelism — see `mermaidConcurrency`) before walking the HAST.
+   * Return `null` (or throw — caught and swallowed) to fall back to
+   * the labeled-code-block stopgap so the diagram source is still
+   * readable in the doc.
    *
    * `index` is the 0-based mermaid block index recorded by
    * `remarkMermaid` — useful for caching or logging which diagram
@@ -162,6 +163,17 @@ export interface DocxExportOptions {
    * leave it unset to get the labeled-code-block fallback.
    */
   resolveMermaid?: (source: string, index: number) => Promise<ResolvedAsset | null>;
+
+  /**
+   * Maximum number of mermaid blocks to resolve concurrently.
+   * Default: 4. Each `resolveMermaid` call may spawn a subprocess
+   * (the server's mmdr path does), so unbounded `Promise.all` over
+   * a 20-diagram doc would fan out into 20 simultaneous renderer
+   * processes and starve the host. Bound it. Set higher for cheap
+   * resolvers (in-memory cache) or lower if the host is constrained.
+   * Values < 1 are clamped to 1.
+   */
+  mermaidConcurrency?: number;
 
   /**
    * Include a native Word Table of Contents field at the top of the
@@ -228,7 +240,7 @@ export async function exportDocx(
   // by the numeric index from `remarkMermaid`.
   const [images, mermaidImages] = await Promise.all([
     resolveAllImages(hast, options.resolveAsset),
-    resolveAllMermaid(hast, options.resolveMermaid),
+    resolveAllMermaid(hast, options.resolveMermaid, options.mermaidConcurrency),
   ]);
 
   // Pull GFM footnotes out of the body: build their DOCX paragraphs,
@@ -587,16 +599,30 @@ async function resolveAllImages(
 }
 
 /**
+ * Default ceiling on simultaneous `resolveMermaid` calls. Picked
+ * empirically: the typical resolver (mmdr subprocess) is CPU-bound
+ * and 4 concurrent renders saturate a small server's cores without
+ * starving anything else. Override via `DocxExportOptions.mermaidConcurrency`.
+ */
+const DEFAULT_MERMAID_CONCURRENCY = 4;
+
+/**
  * Walk the HAST for mermaid blocks (`<div class="mermaid"
  * data-mermaid-index="N">…source…</div>` from `remarkMermaid`),
- * resolve each through the caller's `resolveMermaid` callback in
- * parallel, and return a Map keyed by the numeric index.
+ * resolve each through the caller's `resolveMermaid` callback with
+ * bounded parallelism, and return a Map keyed by the numeric index.
  *
  * Why index-keyed and not source-text-keyed: a document can legitimately
  * contain two identical diagrams (copy-paste) and we want each to render
  * independently — keying by source would dedupe them. The index is what
  * `remarkMermaid` already emits as `data-mermaid-index`, and is unique
  * per block by construction.
+ *
+ * Why bounded: the typical server-side resolver spawns an `mmdr`
+ * subprocess per call. An unbounded `Promise.all` over a 20-diagram
+ * doc would fork 20 simultaneous renderer processes and starve the
+ * host. The pool size is configurable via `mermaidConcurrency` so
+ * cheap resolvers (in-memory cache) can opt back into wider parallelism.
  *
  * No callback → empty map; the walker reads that as "no resolved
  * mermaid available" and falls back to the existing labeled-code-block
@@ -606,6 +632,7 @@ async function resolveAllImages(
 async function resolveAllMermaid(
   root: HastRoot,
   resolve: DocxExportOptions['resolveMermaid'],
+  concurrencyOption?: number,
 ): Promise<Map<number, ResolvedImage | null>> {
   if (!resolve) return new Map();
   interface Block {
@@ -622,8 +649,16 @@ async function resolveAllMermaid(
     if (!Number.isInteger(idx) || idx < 0) return;
     blocks.push({ index: idx, source: hastTextContent(node) });
   });
-  const entries = await Promise.all(
-    blocks.map(async ({ index, source }): Promise<[number, ResolvedImage | null]> => {
+  const limit = Math.max(
+    1,
+    typeof concurrencyOption === 'number' && Number.isFinite(concurrencyOption)
+      ? Math.floor(concurrencyOption)
+      : DEFAULT_MERMAID_CONCURRENCY,
+  );
+  const entries = await mapWithConcurrency(
+    blocks,
+    limit,
+    async ({ index, source }): Promise<[number, ResolvedImage | null]> => {
       try {
         const asset = await resolve(source, index);
         if (!asset) return [index, null];
@@ -634,9 +669,37 @@ async function resolveAllMermaid(
         // code-block stopgap, not blow up the whole export.
         return [index, null];
       }
-    }),
+    },
   );
   return new Map(entries);
+}
+
+/**
+ * Tiny worker-pool helper: map `items` through `fn` with at most
+ * `limit` calls in flight at once. Output order matches input order.
+ *
+ * Implemented as N "worker" coroutines that pull the next index off
+ * a shared cursor — simpler than a queue + drain, and correct for
+ * our use (no per-item priority, no early termination).
+ */
+async function mapWithConcurrency<T, U>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<U>,
+): Promise<U[]> {
+  if (items.length === 0) return [];
+  const out = new Array<U>(items.length);
+  let cursor = 0;
+  const workerCount = Math.min(limit, items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i] as T);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 function decodeDataUrl(url: string): ResolvedAsset | null {
