@@ -7,7 +7,7 @@
  * there. The DOCX export's fallback path is covered by unit tests in
  * `packages/renderer/test/export-docx.test.ts` regardless.
  */
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 
 import {
@@ -18,11 +18,13 @@ import {
 } from '../src/export/mermaid-rust.js';
 
 function which(bin: string): boolean {
-  // Equivalent to POSIX `command -v`. spawnSync with `shell: false`
-  // is enough — `which` itself is a shell builtin / external command
-  // depending on platform.
-  const r = spawnSync('sh', ['-lc', `command -v ${bin}`], { encoding: 'utf8' });
-  return r.status === 0 && r.stdout.trim().length > 0;
+  // Shell-free availability probe: try to execute the binary directly
+  // and treat ENOENT as "not found on PATH". Anything else (e.g.
+  // EACCES, or a non-zero exit because the binary doesn't recognise
+  // `--version`) means the binary IS on PATH; we only care about
+  // resolvability here, not exit status.
+  const r = spawnSync(bin, ['--version'], { encoding: 'utf8' });
+  return r.error == null || ('code' in r.error && r.error.code !== 'ENOENT');
 }
 
 const PNG_MAGIC = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -40,6 +42,21 @@ const SAMPLE_FLOWCHART = `flowchart LR
   B -->|No| D[Stop]`;
 
 describe('renderMermaidToPng', () => {
+  // Snapshot the module-level config at suite start so individual
+  // tests can mutate it freely (`configureMermaidRenderer({ bin: ... })`)
+  // without leaking into sibling test files. `getMermaidRendererConfig`
+  // returns a Readonly view of the live object — capture the field
+  // values, not the reference, since the module reassigns `config` on
+  // every patch.
+  const originalConfig = getMermaidRendererConfig();
+  const restoreConfig = {
+    bin: originalConfig.bin,
+    timeoutMs: originalConfig.timeoutMs,
+  };
+  afterAll(() => {
+    configureMermaidRenderer(restoreConfig);
+  });
+
   test.if(MMDR_AVAILABLE)('produces a PNG via mmdr', async () => {
     configureMermaidRenderer({ bin: 'mmdr' });
     const result = await renderMermaidToPng(SAMPLE_FLOWCHART);
