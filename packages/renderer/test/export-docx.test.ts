@@ -1037,6 +1037,26 @@ describe('exportDocx — list items', () => {
     expect(numPrMatches.length).toBe(2);
   });
 
+  test('list item starting with bold paragraph has bullet on same line as bold text', async () => {
+    // Regression: whitespace text nodes between <p> children in a loose <li>
+    // were accumulating in pendingInline and flushing as an empty bulleted
+    // paragraph, pushing the bold text into a continuation paragraph (no bullet).
+    const md = ['- **Einfachheit vor Komplexität**', '', '  Beschreibungstext.', ''].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml } = await inspectDocx(buf);
+
+    const boldParagraph = paragraphContaining(documentXml, 'Einfachheit vor Komplexit');
+    const continuationParagraph = paragraphContaining(documentXml, 'Beschreibungstext');
+
+    // Exactly one numPr entry — only the bulleted paragraph.
+    const numPrMatches = documentXml.match(/<w:numPr\b/g) ?? [];
+    expect(numPrMatches.length).toBe(1);
+    // The bold text paragraph must contain the numPr.
+    expect(boldParagraph).toContain('<w:numPr');
+    // The continuation paragraph must remain a non-bulleted paragraph.
+    expect(continuationParagraph).not.toContain('<w:numPr');
+  });
+
   test('list item with a nested list preserves the nesting', async () => {
     // Regression: the rewrite must keep nested lists working and
     // place them at the correct depth (level + 1).

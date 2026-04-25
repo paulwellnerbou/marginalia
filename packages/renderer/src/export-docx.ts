@@ -1780,9 +1780,14 @@ function convertList(
         pendingInline = [...(c.children as HastNode[])];
         flushPending();
       } else {
+        // Skip whitespace-only text nodes only when they occur at a
+        // block boundary with no accumulated inline content. This still
+        // drops HAST formatting artifacts between block-level children,
+        // but preserves meaningful inline spacing in tight list items
+        // such as `<strong>foo</strong> <em>bar</em>`.
+        if (isIgnorableBlockWhitespace(c) && pendingInline.length === 0) continue;
         // Loose inline (tight-list text, inline elements between
-        // paragraphs, stray whitespace). Accumulate and flush with
-        // the next block boundary.
+        // paragraphs). Accumulate and flush with the next block boundary.
         pendingInline.push(c);
       }
     }
