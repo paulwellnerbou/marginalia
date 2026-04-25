@@ -1,5 +1,6 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
 import {
+  type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
@@ -27,7 +28,8 @@ interface Props {
    * When true, cards whose anchor is below the viewport pin to the top of
    * the column in document order and travel with the scroll until their
    * anchor catches up. When false, cards sit at their anchor and scroll
-   * with it; if two cards collide they stack downward from the upper one.
+   * with the document; if two cards collide they stack downward from the
+   * upper one.
    */
   stackingEnabled: boolean;
   pendingAnchor: CommentAnchor | null;
@@ -149,14 +151,12 @@ export function InlineCommentsLayer({
     return items;
   }, [threads, blockOrder]);
 
-  /**
-   * Render order — used by the layout pass. The pending composer sits at
-   * the head if present so its block-anchor is processed before the
-   * thread anchors that follow it (cards process in document order, then
-   * pin-stack any that haven't reached their anchor yet).
-   */
+  /** Render order — pending composer trails the threads in doc order. */
   const renderItems = useMemo<RenderItem[]>(() => {
-    const items: RenderItem[] = sorted.map((s) => ({ id: s.thread.id, blockId: s.thread.anchor.block_id }));
+    const items: RenderItem[] = sorted.map((s) => ({
+      id: s.thread.id,
+      blockId: s.thread.anchor.block_id,
+    }));
     if (canComment && pendingAnchor) {
       items.push({ id: PENDING_ID, blockId: pendingAnchor.block_id });
     }
@@ -164,15 +164,27 @@ export function InlineCommentsLayer({
   }, [sorted, canComment, pendingAnchor]);
 
   // ----- positioning state -----
-  // Cards' visual `top` is managed via direct DOM writes (not React style)
-  // so scroll-driven updates can run at 60fps without rerendering, and so
-  // that we can selectively disable the CSS transition during scroll.
+  // Two-tier rendering:
+  //   - Sticky overlay holds currently-pinned cards. The browser
+  //     compositor moves the overlay 1:1 with scroll, so there's no
+  //     lag between scroll and visual update.
+  //   - Landed cards are absolutely positioned at their natural anchor
+  //     and scroll naturally with the document.
+  // The scroll handler only fires React updates at landing moments
+  // (when a card crosses its threshold) — pure scrolling between those
+  // is browser-native and free.
 
-  const wrapperEls = useRef<Map<string, HTMLDivElement>>(new Map());
+  const cardEls = useRef<Map<string, HTMLDivElement>>(new Map());
   const cardHeights = useRef<Map<string, number>>(new Map());
   const naturalTops = useRef<Map<string, number>>(new Map());
-  const lastAppliedTops = useRef<Map<string, number>>(new Map());
   const observerRef = useRef<ResizeObserver | null>(null);
+
+  const [pinnedIds, setPinnedIds] = useState<string[]>([]);
+  const [landedTops, setLandedTops] = useState<Map<string, number>>(new Map());
+  const lastSplit = useRef<{ pinned: string[]; landed: Map<string, number> }>({
+    pinned: [],
+    landed: new Map(),
+  });
   const [columnHeight, setColumnHeight] = useState<number>(0);
   const [measureNonce, setMeasureNonce] = useState(0);
 
@@ -181,67 +193,56 @@ export function InlineCommentsLayer({
   }, []);
 
   /**
-   * Walk render items in document order and write each card's `top`.
-   * Each card has a "natural rest" position (its anchor in the doc) and
-   * a "pinned" position (stacked from the viewport top alongside any
-   * earlier cards whose anchors haven't scrolled into view yet). A card
-   * lands at its natural rest the moment scroll catches up to it.
-   *
-   * `animated` controls whether the change interpolates via the CSS
-   * transition. False for scroll-driven frames (cards must track the
-   * viewport without lag), true for height/insert reflows.
+   * Walk render items in document order, classify each as pinned or
+   * landed against the current scroll position, and only push the new
+   * split to React state if it actually changed (so pure scrolling
+   * between landing moments doesn't trigger any rerenders).
    */
-  const applyPositions = useCallback(() => {
+  const recomputeSplit = useCallback(() => {
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
     const scrollTop = scroll.scrollTop;
-    // When stacking is on, cursor starts at the viewport top so cards
-    // whose anchor is below the viewport pin in a stack from there.
-    // When stacking is off, cursor starts at -∞ so cards never pin —
-    // they only collide downward against the previous card.
-    let cursor = stackingEnabled ? scrollTop + TOP_PAD_PX : Number.NEGATIVE_INFINITY;
+    // When stacking is on, anything whose anchor is below
+    // (scrollTop + topPad) belongs in the pinned overlay. When stacking
+    // is off, the threshold is +∞ so every card lands at its anchor.
+    const threshold = stackingEnabled ? scrollTop + TOP_PAD_PX : Number.POSITIVE_INFINITY;
+
+    const newPinned: string[] = [];
+    const newLanded = new Map<string, number>();
+    let cursor = Number.NEGATIVE_INFINITY;
 
     for (const item of renderItems) {
       const id = item.id;
       const naturalTop = naturalTops.current.get(id) ?? 0;
       const height = cardHeights.current.get(id) ?? 96;
 
-      let finalTop: number;
-      if (stackingEnabled && naturalTop > cursor) {
-        // Anchor is still below the pinned cursor — card stays pinned
-        // at the cursor and travels with the viewport.
-        finalTop = cursor;
-        cursor = cursor + height + CARD_GAP_PX;
+      if (naturalTop > threshold) {
+        newPinned.push(id);
       } else {
-        // Anchor has scrolled into (or above) the pinned cursor — card
-        // lands at its natural rest and stays bound to the document.
-        // (When stacking is off this branch always runs.)
-        finalTop = Math.max(naturalTop, cursor);
-        cursor = finalTop + height + CARD_GAP_PX;
-      }
-
-      const wrapper = wrapperEls.current.get(id);
-      if (!wrapper) continue;
-      const last = lastAppliedTops.current.get(id);
-      if (last === undefined || Math.abs(last - finalTop) > 0.5) {
-        wrapper.style.top = `${finalTop}px`;
-        lastAppliedTops.current.set(id, finalTop);
+        // Landed — collide downward against the previous landed card
+        // so two threads on the same block don't overlap.
+        const top = Math.max(naturalTop, cursor);
+        newLanded.set(id, top);
+        cursor = top + height + CARD_GAP_PX;
       }
     }
-  }, [renderItems, scrollContainerRef, stackingEnabled]);
 
-  /**
-   * Briefly enable the CSS `top` transition for one reflow cycle.
-   * Used by the layout effect when a height change or insert moves
-   * cards relative to each other; not used by the scroll handler so
-   * scroll-driven moves stay 1:1 with the viewport.
-   */
-  const animateNextLayout = useCallback(() => {
-    for (const el of wrapperEls.current.values()) el.classList.add('animating');
-    return window.setTimeout(() => {
-      for (const el of wrapperEls.current.values()) el.classList.remove('animating');
-    }, 260);
-  }, []);
+    const last = lastSplit.current;
+    const pinnedSame =
+      newPinned.length === last.pinned.length &&
+      newPinned.every((id, i) => id === last.pinned[i]);
+    const landedSame =
+      newLanded.size === last.landed.size &&
+      [...newLanded.entries()].every(([id, top]) => {
+        const prev = last.landed.get(id);
+        return prev !== undefined && Math.abs(prev - top) < 0.5;
+      });
+    if (pinnedSame && landedSame) return;
+
+    lastSplit.current = { pinned: newPinned, landed: newLanded };
+    setPinnedIds(newPinned);
+    setLandedTops(newLanded);
+  }, [renderItems, scrollContainerRef, stackingEnabled]);
 
   /** Re-measure each card's anchor position from the rendered doc. */
   const measureNaturalTops = useCallback(() => {
@@ -272,15 +273,13 @@ export function InlineCommentsLayer({
       if (!live.has(id)) {
         naturalTops.current.delete(id);
         cardHeights.current.delete(id);
-        lastAppliedTops.current.delete(id);
       }
     }
     setColumnHeight((prev) => (Math.abs(prev - maxBottom) > 0.5 ? maxBottom : prev));
   }, [renderItems, docElementRef, scrollContainerRef]);
 
-  // ResizeObserver — detect card-height changes (composer expands, replies
-  // added, etc.) and re-flow other cards to match, with the animated
-  // transition.
+  // ResizeObserver — detect card-height changes (composer expands,
+  // replies added, etc.) and bump the measure nonce to recompute.
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return;
     const obs = new ResizeObserver((entries) => {
@@ -289,10 +288,6 @@ export function InlineCommentsLayer({
         const el = entry.target as HTMLElement;
         const id = el.dataset.cardId;
         if (!id) continue;
-        // Use offsetHeight rather than contentRect: contentRect omits
-        // border (and would also omit padding for box-sizing:content-box
-        // children) which can leave the layout pass thinking the card is
-        // smaller than it really is and overlapping it with the next.
         const h = el.offsetHeight;
         const prev = cardHeights.current.get(id);
         if (prev === undefined || Math.abs(prev - h) > 0.5) {
@@ -303,23 +298,21 @@ export function InlineCommentsLayer({
       if (changed) requestRemeasure();
     });
     observerRef.current = obs;
-    for (const el of wrapperEls.current.values()) obs.observe(el);
+    for (const el of cardEls.current.values()) obs.observe(el);
     return () => {
       obs.disconnect();
       observerRef.current = null;
     };
   }, [requestRemeasure]);
 
-  // Stable ref callback per id. Without memoization, an inline arrow in
-  // JSX is a fresh function each render, so React detaches+reattaches the
-  // ref every render — which would then re-run the observer wiring and
-  // any state updates inside it on every render.
+  // Stable per-id ref callbacks. Inline arrow refs would be a fresh
+  // function each render and cause React to detach+reattach every time.
   const refCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map());
   const getRefCallback = useCallback((id: string) => {
     let cb = refCallbacks.current.get(id);
     if (cb) return cb;
     cb = (el: HTMLDivElement | null) => {
-      const map = wrapperEls.current;
+      const map = cardEls.current;
       const prev = map.get(id);
       if (prev && prev !== el) observerRef.current?.unobserve(prev);
       if (el) {
@@ -329,14 +322,13 @@ export function InlineCommentsLayer({
       } else {
         map.delete(id);
         cardHeights.current.delete(id);
-        lastAppliedTops.current.delete(id);
       }
     };
     refCallbacks.current.set(id, cb);
     return cb;
   }, []);
 
-  // Window resize → re-measure.
+  // Window resize → re-measure (the gutter width depends on viewport).
   useEffect(() => {
     const handler = () => requestRemeasure();
     window.addEventListener('resize', handler);
@@ -353,42 +345,29 @@ export function InlineCommentsLayer({
     return () => obs.disconnect();
   }, [docElementRef, requestRemeasure, docHtml]);
 
-  // Scroll listener — runs synchronously inside the scroll event so the
-  // DOM write lands in the same paint as the scroll itself. Wrapping it
-  // in requestAnimationFrame would defer the write to the *next* paint,
-  // making cards visibly trail the scroll by one frame (the flicker we
-  // saw before). The work per call is bounded — one loop over
-  // renderItems with an early-exit when positions haven't changed —
-  // and modern browsers throttle scroll events to roughly one per frame.
+  // Scroll listener — synchronous, no rAF wrapper. The work is one
+  // pass over renderItems with an early-out when the split is
+  // unchanged, which is the common case (cards only transition between
+  // pinned/landed at discrete scroll positions).
   useEffect(() => {
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
-    const onScroll = () => applyPositions();
+    const onScroll = () => recomputeSplit();
     scroll.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      scroll.removeEventListener('scroll', onScroll);
-    };
-  }, [applyPositions, scrollContainerRef]);
+    return () => scroll.removeEventListener('scroll', onScroll);
+  }, [recomputeSplit, scrollContainerRef]);
 
-  // The layout pass: re-runs when natural positions or render items
-  // change. Wraps the position update in a transient "animating" class
-  // so cross-card reflows ease into place via the CSS transition,
-  // while scroll-driven updates (which never set the class) remain
-  // instant.
+  // Layout effect: re-measure when threads, docHtml, or heights change.
   useLayoutEffect(() => {
     // Refresh heights from offsetHeight before the layout pass so the
-    // very first paint uses real values rather than a stub default.
-    // (The ResizeObserver covers ongoing changes; this seeds the
-    // initial frame and any new cards added between observer ticks.)
-    for (const [id, el] of wrapperEls.current) {
+    // very first paint uses real values rather than the stub default.
+    for (const [id, el] of cardEls.current) {
       const h = el.offsetHeight;
       if (h > 0) cardHeights.current.set(id, h);
     }
     measureNaturalTops();
-    const t = animateNextLayout();
-    applyPositions();
-    return () => window.clearTimeout(t);
-  }, [measureNaturalTops, applyPositions, animateNextLayout, measureNonce, docHtml]);
+    recomputeSplit();
+  }, [measureNaturalTops, recomputeSplit, measureNonce, docHtml]);
 
   // ----- focus animation -----
 
@@ -448,24 +427,11 @@ export function InlineCommentsLayer({
     return onCreate(payload);
   }
 
-  const showEmpty = sorted.length === 0 && !pendingAnchor;
-  const minHeight = Math.max(columnHeight, 0);
-
-  return (
-    <aside
-      ref={rootRef}
-      className="ic-column"
-      aria-label="Inline comments"
-      style={{ minHeight: `${minHeight}px` }}
-    >
-      {showEmpty && (
-        <div className="ic-empty-state">
-          {canComment ? 'Select text in the document to comment.' : 'No comments yet.'}
-        </div>
-      )}
-
-      {canComment && pendingAnchor && (
-        <div ref={getRefCallback(PENDING_ID)} className="ic-anchor-wrapper">
+  const renderCardById = useCallback(
+    (id: string): ReactNode => {
+      if (id === PENDING_ID) {
+        if (!pendingAnchor || !canComment) return null;
+        return (
           <div className="ic-card ic-card-pending">
             <div className="ic-pending-quote">"{truncate(pendingAnchor.quote, 160)}"</div>
             <InlineComposer
@@ -478,37 +444,89 @@ export function InlineCommentsLayer({
               onSubmit={submitNew}
             />
           </div>
+        );
+      }
+      const item = sorted.find((s) => s.thread.id === id);
+      if (!item) return null;
+      const blockId = item.thread.anchor.block_id;
+      const onJump = blockId ? () => onScrollToAnchor(blockId) : undefined;
+      return (
+        <InlineThreadCard
+          uid={uid}
+          thread={item.thread}
+          canComment={canComment}
+          needsName={!displayName}
+          docSource={docSource}
+          blockRanges={blockRanges}
+          focused={focusedId === id}
+          flashPhase={flash?.id === id ? flash.phase : null}
+          collapsed={collapsed.has(id)}
+          onToggleCollapsed={() => toggle(id)}
+          onJump={onJump}
+          onReply={onReply}
+          onEdit={onEdit}
+          onDeleteNode={onDeleteNode}
+          onDeleteThread={onDeleteThread}
+          onResolveThread={onResolveThread}
+          onEditProposalRationale={onEditProposalRationale}
+        />
+      );
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      sorted,
+      pendingAnchor,
+      canComment,
+      displayName,
+      blockRanges,
+      docSource,
+      focusedId,
+      flash,
+      collapsed,
+      uid,
+    ],
+  );
+
+  const showEmpty = sorted.length === 0 && !pendingAnchor;
+  const minHeight = Math.max(columnHeight, 0);
+
+  return (
+    <aside
+      ref={rootRef}
+      className="ic-column"
+      aria-label="Inline comments"
+      style={{ minHeight: `${minHeight}px` }}
+    >
+      {/* Pinned cards live here. The sticky positioning is the whole
+          point of the refactor: the browser keeps this overlay glued
+          to the viewport top in sync with the compositor scroll, so
+          there's no JS-induced lag during pure scrolling. */}
+      <div className="ic-pinned-overlay">
+        {pinnedIds.map((id) => (
+          <div key={id} ref={getRefCallback(id)} className="ic-pinned-card">
+            {renderCardById(id)}
+          </div>
+        ))}
+      </div>
+
+      {/* Landed cards — absolutely positioned at their anchors, scroll
+          naturally with the document. */}
+      {Array.from(landedTops.entries()).map(([id, top]) => (
+        <div
+          key={id}
+          ref={getRefCallback(id)}
+          className="ic-landed-card"
+          style={{ top: `${top}px` }}
+        >
+          {renderCardById(id)}
+        </div>
+      ))}
+
+      {showEmpty && (
+        <div className="ic-empty-state">
+          {canComment ? 'Select text in the document to comment.' : 'No comments yet.'}
         </div>
       )}
-
-      {sorted.map((item) => {
-        const blockId = item.thread.anchor.block_id;
-        const onJump = blockId ? () => onScrollToAnchor(blockId) : undefined;
-        const id = item.thread.id;
-        return (
-          <div key={id} ref={getRefCallback(id)} className="ic-anchor-wrapper">
-            <InlineThreadCard
-              uid={uid}
-              thread={item.thread}
-              canComment={canComment}
-              needsName={!displayName}
-              docSource={docSource}
-              blockRanges={blockRanges}
-              focused={focusedId === id}
-              flashPhase={flash?.id === id ? flash.phase : null}
-              collapsed={collapsed.has(id)}
-              onToggleCollapsed={() => toggle(id)}
-              onJump={onJump}
-              onReply={onReply}
-              onEdit={onEdit}
-              onDeleteNode={onDeleteNode}
-              onDeleteThread={onDeleteThread}
-              onResolveThread={onResolveThread}
-              onEditProposalRationale={onEditProposalRationale}
-            />
-          </div>
-        );
-      })}
     </aside>
   );
 }

@@ -2337,24 +2337,28 @@ button.primary.small {
   color: var(--ui-fg);
 }
 
-/* Each card lives inside a wrapper that owns the absolute positioning.
-   Default has no transition so scroll-driven `top` writes track the
-   viewport 1:1 with no lag. The layout effect briefly adds .animating
-   when cards reflow due to a height change or insert, so cross-card
-   shuffles still ease into place. */
-.ic-anchor-wrapper {
+/* Currently-pinned cards stack here. The browser composites the
+   sticky position on the same thread that drives scroll, so the
+   overlay tracks the viewport 1:1 with no JS in the loop. */
+.ic-pinned-overlay {
+  position: sticky;
+  top: 4px;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-left: 0.6rem;
+  margin-right: 0.9rem;
+}
+.ic-pinned-card {
+  /* Normal flow inside the sticky flex column — no positioning. */
+}
+
+/* Landed cards sit at their natural anchor and scroll with the doc. */
+.ic-landed-card {
   position: absolute;
   left: 0.6rem;
   right: 0.9rem;
-}
-.ic-anchor-wrapper.animating {
-  transition: top 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
-}
-/* Honor the user's reduced-motion preference. */
-@media (prefers-reduced-motion: reduce) {
-  .ic-anchor-wrapper.animating {
-    transition: none;
-  }
 }
 
 .ic-empty-state {
