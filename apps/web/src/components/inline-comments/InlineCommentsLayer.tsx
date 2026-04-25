@@ -53,8 +53,16 @@ interface OrderItem {
   createdAt: number;
 }
 
+interface RenderItem {
+  /** Stable key — thread id, or PENDING_ID for the new-comment composer. */
+  id: string;
+  /** Block to anchor against. */
+  blockId: string | null;
+}
+
 const PENDING_ID = '__pending__';
 const CARD_GAP_PX = 8;
+const TOP_PAD_PX = 4;
 const FLASH_MS = 760;
 const FOCUS_MS = 1800;
 
@@ -133,20 +141,126 @@ export function InlineCommentsLayer({
     return items;
   }, [threads, blockOrder]);
 
-  // ----- anchor-aligned positioning -----
+  /**
+   * Render order — used by the layout pass. The pending composer sits at
+   * the head if present so its block-anchor is processed before the
+   * thread anchors that follow it (cards process in document order, then
+   * pin-stack any that haven't reached their anchor yet).
+   */
+  const renderItems = useMemo<RenderItem[]>(() => {
+    const items: RenderItem[] = sorted.map((s) => ({ id: s.thread.id, blockId: s.thread.anchor.block_id }));
+    if (canComment && pendingAnchor) {
+      items.push({ id: PENDING_ID, blockId: pendingAnchor.block_id });
+    }
+    return items;
+  }, [sorted, canComment, pendingAnchor]);
 
-  const cardEls = useRef<Map<string, HTMLDivElement>>(new Map());
+  // ----- positioning state -----
+  // Cards' visual `top` is managed via direct DOM writes (not React style)
+  // so scroll-driven updates can run at 60fps without rerendering, and so
+  // that we can selectively disable the CSS transition during scroll.
+
+  const wrapperEls = useRef<Map<string, HTMLDivElement>>(new Map());
   const cardHeights = useRef<Map<string, number>>(new Map());
+  const naturalTops = useRef<Map<string, number>>(new Map());
+  const lastAppliedTops = useRef<Map<string, number>>(new Map());
   const observerRef = useRef<ResizeObserver | null>(null);
-  const [positions, setPositions] = useState<Map<string, number>>(new Map());
   const [columnHeight, setColumnHeight] = useState<number>(0);
   const [measureNonce, setMeasureNonce] = useState(0);
 
-  const requestMeasure = useCallback(() => {
+  const requestRemeasure = useCallback(() => {
     setMeasureNonce((n) => n + 1);
   }, []);
 
-  // Wire a single ResizeObserver that watches every card's wrapper.
+  /**
+   * Walk render items in document order and write each card's `top`.
+   * Each card has a "natural rest" position (its anchor in the doc) and
+   * a "pinned" position (stacked from the viewport top alongside any
+   * earlier cards whose anchors haven't scrolled into view yet). A card
+   * lands at its natural rest the moment scroll catches up to it.
+   *
+   * `animated` controls whether the change interpolates via the CSS
+   * transition. False for scroll-driven frames (cards must track the
+   * viewport without lag), true for height/insert reflows.
+   */
+  const applyPositions = useCallback(
+    (animated: boolean) => {
+      const scroll = scrollContainerRef.current;
+      if (!scroll) return;
+      const scrollTop = scroll.scrollTop;
+      let cursor = scrollTop + TOP_PAD_PX;
+
+      for (const item of renderItems) {
+        const id = item.id;
+        const naturalTop = naturalTops.current.get(id) ?? 0;
+        const height = cardHeights.current.get(id) ?? 96;
+
+        let finalTop: number;
+        if (naturalTop <= cursor) {
+          // Anchor has scrolled into (or above) the pinned cursor — card
+          // lands at its natural rest and stays bound to the document.
+          finalTop = naturalTop;
+          cursor = Math.max(cursor, naturalTop + height + CARD_GAP_PX);
+        } else {
+          // Anchor is still below; card stays pinned at the cursor and
+          // travels with the viewport.
+          finalTop = cursor;
+          cursor = cursor + height + CARD_GAP_PX;
+        }
+
+        const wrapper = wrapperEls.current.get(id);
+        if (!wrapper) continue;
+        const last = lastAppliedTops.current.get(id);
+        if (last === undefined || Math.abs(last - finalTop) > 0.5) {
+          // `transition: ''` falls back to the CSS rule (animated).
+          // `transition: 'none'` overrides it (scroll-driven).
+          wrapper.style.transition = animated ? '' : 'none';
+          wrapper.style.top = `${finalTop}px`;
+          lastAppliedTops.current.set(id, finalTop);
+        }
+      }
+    },
+    [renderItems, scrollContainerRef],
+  );
+
+  /** Re-measure each card's anchor position from the rendered doc. */
+  const measureNaturalTops = useCallback(() => {
+    const doc = docElementRef.current;
+    const scroll = scrollContainerRef.current;
+    if (!doc || !scroll) return;
+    const scrollRect = scroll.getBoundingClientRect();
+    const scrollTop = scroll.scrollTop;
+    let maxBottom = 0;
+    for (const item of renderItems) {
+      let nat = 0;
+      if (item.blockId) {
+        const escaped = CSS.escape(item.blockId);
+        const el = doc.querySelector<HTMLElement>(
+          `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
+        );
+        if (el) {
+          nat = el.getBoundingClientRect().top - scrollRect.top + scrollTop;
+        }
+      }
+      naturalTops.current.set(item.id, nat);
+      const height = cardHeights.current.get(item.id) ?? 96;
+      if (nat + height > maxBottom) maxBottom = nat + height;
+    }
+    // Drop entries for items that no longer exist.
+    const live = new Set(renderItems.map((i) => i.id));
+    for (const id of Array.from(naturalTops.current.keys())) {
+      if (!live.has(id)) {
+        naturalTops.current.delete(id);
+        cardHeights.current.delete(id);
+        lastAppliedTops.current.delete(id);
+      }
+    }
+    setColumnHeight((prev) => (Math.abs(prev - maxBottom) > 0.5 ? maxBottom : prev));
+  }, [renderItems, docElementRef, scrollContainerRef]);
+
+  // ResizeObserver — detect card-height changes (composer expands, replies
+  // added, etc.) and re-flow other cards to match, with the animated
+  // transition.
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return;
     const obs = new ResizeObserver((entries) => {
@@ -155,29 +269,27 @@ export function InlineCommentsLayer({
         const el = entry.target as HTMLElement;
         const id = el.dataset.cardId;
         if (!id) continue;
-        const next = entry.contentRect.height;
+        const h = entry.contentRect.height;
         const prev = cardHeights.current.get(id);
-        if (prev === undefined || Math.abs(prev - next) > 0.5) {
-          cardHeights.current.set(id, next);
+        if (prev === undefined || Math.abs(prev - h) > 0.5) {
+          cardHeights.current.set(id, h);
           changed = true;
         }
       }
-      if (changed) requestMeasure();
+      if (changed) requestRemeasure();
     });
     observerRef.current = obs;
-    for (const el of cardEls.current.values()) obs.observe(el);
+    for (const el of wrapperEls.current.values()) obs.observe(el);
     return () => {
       obs.disconnect();
       observerRef.current = null;
     };
-  }, [requestMeasure]);
+  }, [requestRemeasure]);
 
-  const setCardRef = useCallback((id: string, el: HTMLDivElement | null) => {
-    const map = cardEls.current;
+  const setWrapperRef = useCallback((id: string, el: HTMLDivElement | null) => {
+    const map = wrapperEls.current;
     const prev = map.get(id);
-    if (prev && prev !== el) {
-      observerRef.current?.unobserve(prev);
-    }
+    if (prev && prev !== el) observerRef.current?.unobserve(prev);
     if (el) {
       el.dataset.cardId = id;
       map.set(id, el);
@@ -185,91 +297,57 @@ export function InlineCommentsLayer({
     } else {
       map.delete(id);
       cardHeights.current.delete(id);
+      lastAppliedTops.current.delete(id);
     }
   }, []);
 
-  // React to viewport resize.
+  // Window resize → re-measure.
   useEffect(() => {
-    const handler = () => requestMeasure();
+    const handler = () => requestRemeasure();
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
-  }, [requestMeasure]);
+  }, [requestRemeasure]);
 
-  // React to DOM mutations inside the rendered article (block reflow,
-  // mermaid SVG injection, image loads, etc).
+  // Article DOM mutations (mermaid SVG injection, image loads, doc
+  // reflow on width slider) → re-measure.
   useEffect(() => {
     const doc = docElementRef.current;
     if (!doc || typeof MutationObserver === 'undefined') return;
-    const obs = new MutationObserver(() => requestMeasure());
+    const obs = new MutationObserver(() => requestRemeasure());
     obs.observe(doc, { childList: true, subtree: true, characterData: true });
     return () => obs.disconnect();
-  }, [docElementRef, requestMeasure, docHtml]);
+  }, [docElementRef, requestRemeasure, docHtml]);
 
-  // The actual measurement pass. Runs synchronously after layout so the
-  // first paint already has the right `top` values — no flash.
-  useLayoutEffect(() => {
-    const doc = docElementRef.current;
+  // Scroll listener — pure DOM writes, no React state, throttled to one
+  // run per animation frame.
+  useEffect(() => {
     const scroll = scrollContainerRef.current;
-    if (!doc || !scroll) return;
-
-    const scrollRect = scroll.getBoundingClientRect();
-    const scrollTop = scroll.scrollTop;
-
-    type Measured = { id: string; anchorTop: number; height: number };
-    const measured: Measured[] = [];
-
-    function anchorTopFor(blockId: string | null): number {
-      if (!blockId) return 0;
-      const escaped = CSS.escape(blockId);
-      const el = doc!.querySelector<HTMLElement>(
-        `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-      );
-      if (!el) return 0;
-      return el.getBoundingClientRect().top - scrollRect.top + scrollTop;
-    }
-
-    if (canComment && pendingAnchor) {
-      measured.push({
-        id: PENDING_ID,
-        anchorTop: anchorTopFor(pendingAnchor.block_id),
-        height: cardHeights.current.get(PENDING_ID) ?? 140,
+    if (!scroll) return;
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        applyPositions(false);
       });
-    }
+    };
+    scroll.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      scroll.removeEventListener('scroll', onScroll);
+    };
+  }, [applyPositions, scrollContainerRef]);
 
-    for (const item of sorted) {
-      measured.push({
-        id: item.thread.id,
-        anchorTop: anchorTopFor(item.thread.anchor.block_id),
-        height: cardHeights.current.get(item.thread.id) ?? 96,
-      });
-    }
-
-    measured.sort((a, b) => a.anchorTop - b.anchorTop);
-
-    const next = new Map<string, number>();
-    let cursor = 0;
-    for (const m of measured) {
-      const top = Math.max(m.anchorTop, cursor);
-      next.set(m.id, top);
-      cursor = top + m.height + CARD_GAP_PX;
-    }
-
-    setPositions((prev) => {
-      if (prev.size === next.size) {
-        let same = true;
-        for (const [k, v] of next) {
-          const pv = prev.get(k);
-          if (pv === undefined || Math.abs(pv - v) > 0.5) {
-            same = false;
-            break;
-          }
-        }
-        if (same) return prev;
-      }
-      return next;
-    });
-    setColumnHeight((prev) => (Math.abs(prev - cursor) > 0.5 ? cursor : prev));
-  }, [sorted, pendingAnchor, canComment, docElementRef, scrollContainerRef, measureNonce, docHtml]);
+  // The animated layout pass: re-runs when natural positions or render
+  // items change. Updates inline `top` via the CSS transition.
+  useLayoutEffect(() => {
+    measureNaturalTops();
+    applyPositions(true);
+    // After the transition completes, re-snap to the right place — handles
+    // the case where scroll happens during the animation.
+    const t = window.setTimeout(() => applyPositions(false), 260);
+    return () => window.clearTimeout(t);
+  }, [measureNaturalTops, applyPositions, measureNonce, docHtml]);
 
   // ----- focus animation -----
 
@@ -346,11 +424,7 @@ export function InlineCommentsLayer({
       )}
 
       {canComment && pendingAnchor && (
-        <div
-          ref={(el) => setCardRef(PENDING_ID, el)}
-          className="ic-anchor-wrapper"
-          style={{ top: `${positions.get(PENDING_ID) ?? 0}px` }}
-        >
+        <div ref={(el) => setWrapperRef(PENDING_ID, el)} className="ic-anchor-wrapper">
           <div className="ic-card ic-card-pending">
             <div className="ic-pending-quote">"{truncate(pendingAnchor.quote, 160)}"</div>
             <InlineComposer
@@ -373,9 +447,8 @@ export function InlineCommentsLayer({
         return (
           <div
             key={id}
-            ref={(el) => setCardRef(id, el)}
+            ref={(el) => setWrapperRef(id, el)}
             className="ic-anchor-wrapper"
-            style={{ top: `${positions.get(id) ?? 0}px` }}
           >
             <InlineThreadCard
               uid={uid}
