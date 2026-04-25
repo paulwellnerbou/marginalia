@@ -111,14 +111,9 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
   }, [open, renderLineKeys, renderedLines]);
 
   const overviewViewport = useMemo(() => getDiffOverviewViewport(scrollMetrics), [scrollMetrics]);
-  const overviewTrackHeight = Math.max(scrollMetrics.clientHeight, 0);
-  const hasMeasuredOverviewTrack = overviewTrackHeight > 0;
   const overviewCenterRatio = overviewViewport
     ? overviewViewport.topPercent / 100 + overviewViewport.heightPercent / 200
     : 0;
-  const overviewTrackStyle = hasMeasuredOverviewTrack
-    ? { height: `${overviewTrackHeight}px` }
-    : undefined;
 
   function scrollToOverviewPosition(ratio: number) {
     const scroller = scrollRef.current;
@@ -218,29 +213,26 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
               <button
                 type="button"
                 className="diff-overview-track"
-                style={overviewTrackStyle}
                 onClick={handleOverviewClick}
                 onKeyDown={handleOverviewKeyDown}
                 aria-label="Jump through diff overview"
               >
-                {hasMeasuredOverviewTrack
-                  ? overviewMarkers.map((marker) => (
-                      <span
-                        key={`${marker.op}-${marker.startLine}-${marker.lineCount}`}
-                        className={`diff-overview-marker diff-overview-marker-${marker.op}`}
-                        style={{
-                          top: `${(marker.topPercent / 100) * overviewTrackHeight}px`,
-                          height: `${Math.max((marker.heightPercent / 100) * overviewTrackHeight, 3)}px`,
-                        }}
-                      />
-                    ))
-                  : null}
-                {overviewViewport && hasMeasuredOverviewTrack ? (
+                {overviewMarkers.map((marker) => (
+                  <span
+                    key={`${marker.op}-${marker.startLine}-${marker.lineCount}`}
+                    className={`diff-overview-marker diff-overview-marker-${marker.op}`}
+                    style={{
+                      top: `${marker.topPercent}%`,
+                      height: `${marker.heightPercent}%`,
+                    }}
+                  />
+                ))}
+                {overviewViewport ? (
                   <div
                     className="diff-overview-viewport"
                     style={{
-                      top: `${(overviewViewport.topPercent / 100) * overviewTrackHeight}px`,
-                      height: `${Math.max((overviewViewport.heightPercent / 100) * overviewTrackHeight, 16)}px`,
+                      top: `${overviewViewport.topPercent}%`,
+                      height: `${overviewViewport.heightPercent}%`,
                     }}
                   />
                 ) : null}
