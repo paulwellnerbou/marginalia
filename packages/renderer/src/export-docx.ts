@@ -23,11 +23,13 @@
  *   callback yields bytes; `data:` URLs decode inline without a
  *   callback. Unsupported or unresolvable images fall back to a muted
  *   italic placeholder so the doc still reads.
+ * - M4b: mermaid blocks rasterize to PNG when the caller wires up
+ *   `resolveMermaid` (the server route shells out to the native Rust
+ *   `mmdr` CLI). Resolution runs with bounded parallelism — see
+ *   `mermaidConcurrency`. When the resolver is absent or returns
+ *   null/throws, the block falls back to the labeled-code-block
+ *   stopgap so the diagram source is still readable.
  * - M5: BCP-47 language tag + `<w:bidi/>` for RTL frontmatter.
- *
- * Out of scope (future milestones): real Mermaid rasterization (blocks
- * currently fall back to a labeled code block until a headless-browser
- * backend is wired up).
  */
 
 import rehypeParse from 'rehype-parse';

@@ -12,7 +12,7 @@
     "start": "bun --bun apps/server/src/main.ts",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test",
-    "test:ci": "bun test apps/server/test/server.test.ts apps/server/test/comments.test.ts packages/renderer/test packages/cli/test",
+    "test:ci": "bun test apps/server/test/server.test.ts apps/server/test/comments.test.ts apps/server/test/mermaid-rust.test.ts packages/renderer/test packages/cli/test",
     "test:realtime": "bun test apps/server/test/realtime.test.ts",
     "lint": "biome check .",
     "format": "biome format --write ."
