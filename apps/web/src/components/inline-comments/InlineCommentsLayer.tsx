@@ -191,50 +191,57 @@ export function InlineCommentsLayer({
    * transition. False for scroll-driven frames (cards must track the
    * viewport without lag), true for height/insert reflows.
    */
-  const applyPositions = useCallback(
-    (animated: boolean) => {
-      const scroll = scrollContainerRef.current;
-      if (!scroll) return;
-      const scrollTop = scroll.scrollTop;
-      // When stacking is on, cursor starts at the viewport top so cards
-      // whose anchor is below the viewport pin in a stack from there.
-      // When stacking is off, cursor starts at -∞ so cards never pin —
-      // they only collide downward against the previous card.
-      let cursor = stackingEnabled ? scrollTop + TOP_PAD_PX : Number.NEGATIVE_INFINITY;
+  const applyPositions = useCallback(() => {
+    const scroll = scrollContainerRef.current;
+    if (!scroll) return;
+    const scrollTop = scroll.scrollTop;
+    // When stacking is on, cursor starts at the viewport top so cards
+    // whose anchor is below the viewport pin in a stack from there.
+    // When stacking is off, cursor starts at -∞ so cards never pin —
+    // they only collide downward against the previous card.
+    let cursor = stackingEnabled ? scrollTop + TOP_PAD_PX : Number.NEGATIVE_INFINITY;
 
-      for (const item of renderItems) {
-        const id = item.id;
-        const naturalTop = naturalTops.current.get(id) ?? 0;
-        const height = cardHeights.current.get(id) ?? 96;
+    for (const item of renderItems) {
+      const id = item.id;
+      const naturalTop = naturalTops.current.get(id) ?? 0;
+      const height = cardHeights.current.get(id) ?? 96;
 
-        let finalTop: number;
-        if (stackingEnabled && naturalTop > cursor) {
-          // Anchor is still below the pinned cursor — card stays pinned
-          // at the cursor and travels with the viewport.
-          finalTop = cursor;
-          cursor = cursor + height + CARD_GAP_PX;
-        } else {
-          // Anchor has scrolled into (or above) the pinned cursor — card
-          // lands at its natural rest and stays bound to the document.
-          // (When stacking is off this branch always runs.)
-          finalTop = Math.max(naturalTop, cursor);
-          cursor = finalTop + height + CARD_GAP_PX;
-        }
-
-        const wrapper = wrapperEls.current.get(id);
-        if (!wrapper) continue;
-        const last = lastAppliedTops.current.get(id);
-        if (last === undefined || Math.abs(last - finalTop) > 0.5) {
-          // `transition: ''` falls back to the CSS rule (animated).
-          // `transition: 'none'` overrides it (scroll-driven).
-          wrapper.style.transition = animated ? '' : 'none';
-          wrapper.style.top = `${finalTop}px`;
-          lastAppliedTops.current.set(id, finalTop);
-        }
+      let finalTop: number;
+      if (stackingEnabled && naturalTop > cursor) {
+        // Anchor is still below the pinned cursor — card stays pinned
+        // at the cursor and travels with the viewport.
+        finalTop = cursor;
+        cursor = cursor + height + CARD_GAP_PX;
+      } else {
+        // Anchor has scrolled into (or above) the pinned cursor — card
+        // lands at its natural rest and stays bound to the document.
+        // (When stacking is off this branch always runs.)
+        finalTop = Math.max(naturalTop, cursor);
+        cursor = finalTop + height + CARD_GAP_PX;
       }
-    },
-    [renderItems, scrollContainerRef, stackingEnabled],
-  );
+
+      const wrapper = wrapperEls.current.get(id);
+      if (!wrapper) continue;
+      const last = lastAppliedTops.current.get(id);
+      if (last === undefined || Math.abs(last - finalTop) > 0.5) {
+        wrapper.style.top = `${finalTop}px`;
+        lastAppliedTops.current.set(id, finalTop);
+      }
+    }
+  }, [renderItems, scrollContainerRef, stackingEnabled]);
+
+  /**
+   * Briefly enable the CSS `top` transition for one reflow cycle.
+   * Used by the layout effect when a height change or insert moves
+   * cards relative to each other; not used by the scroll handler so
+   * scroll-driven moves stay 1:1 with the viewport.
+   */
+  const animateNextLayout = useCallback(() => {
+    for (const el of wrapperEls.current.values()) el.classList.add('animating');
+    return window.setTimeout(() => {
+      for (const el of wrapperEls.current.values()) el.classList.remove('animating');
+    }, 260);
+  }, []);
 
   /** Re-measure each card's anchor position from the rendered doc. */
   const measureNaturalTops = useCallback(() => {
@@ -346,28 +353,28 @@ export function InlineCommentsLayer({
     return () => obs.disconnect();
   }, [docElementRef, requestRemeasure, docHtml]);
 
-  // Scroll listener — pure DOM writes, no React state, throttled to one
-  // run per animation frame.
+  // Scroll listener — runs synchronously inside the scroll event so the
+  // DOM write lands in the same paint as the scroll itself. Wrapping it
+  // in requestAnimationFrame would defer the write to the *next* paint,
+  // making cards visibly trail the scroll by one frame (the flicker we
+  // saw before). The work per call is bounded — one loop over
+  // renderItems with an early-exit when positions haven't changed —
+  // and modern browsers throttle scroll events to roughly one per frame.
   useEffect(() => {
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
-    let raf = 0;
-    const onScroll = () => {
-      if (raf) return;
-      raf = window.requestAnimationFrame(() => {
-        raf = 0;
-        applyPositions(false);
-      });
-    };
+    const onScroll = () => applyPositions();
     scroll.addEventListener('scroll', onScroll, { passive: true });
     return () => {
-      if (raf) window.cancelAnimationFrame(raf);
       scroll.removeEventListener('scroll', onScroll);
     };
   }, [applyPositions, scrollContainerRef]);
 
-  // The animated layout pass: re-runs when natural positions or render
-  // items change. Updates inline `top` via the CSS transition.
+  // The layout pass: re-runs when natural positions or render items
+  // change. Wraps the position update in a transient "animating" class
+  // so cross-card reflows ease into place via the CSS transition,
+  // while scroll-driven updates (which never set the class) remain
+  // instant.
   useLayoutEffect(() => {
     // Refresh heights from offsetHeight before the layout pass so the
     // very first paint uses real values rather than a stub default.
@@ -378,12 +385,10 @@ export function InlineCommentsLayer({
       if (h > 0) cardHeights.current.set(id, h);
     }
     measureNaturalTops();
-    applyPositions(true);
-    // After the transition completes, re-snap to the right place — handles
-    // the case where scroll happens during the animation.
-    const t = window.setTimeout(() => applyPositions(false), 260);
+    const t = animateNextLayout();
+    applyPositions();
     return () => window.clearTimeout(t);
-  }, [measureNaturalTops, applyPositions, measureNonce, docHtml]);
+  }, [measureNaturalTops, applyPositions, animateNextLayout, measureNonce, docHtml]);
 
   // ----- focus animation -----
 

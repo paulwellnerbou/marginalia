@@ -982,7 +982,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   variant="soft"
                   color={APP_ACCENT_COLOR}
                   size="2"
-                  className={`inline-comments-trigger ${inlineCommentsOpen ? 'active' : ''}`}
+                  className="inline-comments-trigger"
                   aria-label="Comment view options"
                   title="Comment view options"
                 >

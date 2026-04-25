@@ -455,22 +455,12 @@ button.primary:disabled {
   color: var(--accent-12);
 }
 
-/* Toolbar toggle for the inline comments column. The button keeps its
-   size and surface color regardless of state; the pressed state is
-   communicated via an inset ring + accent icon instead of switching
-   variant (which would change padding / metrics). */
+/* Trigger for the inline-comments view-options dropdown. Keeps the
+   same `variant="soft"` rendering as the neighboring search/download
+   buttons; no extra opacity or pressed-state ring (the menu's
+   checkbox items convey the current state). */
 .inline-comments-trigger {
   flex-shrink: 0;
-  opacity: 0.7;
-  box-shadow: inset 0 0 0 1px transparent;
-}
-.inline-comments-trigger:hover {
-  opacity: 1;
-}
-.inline-comments-trigger.active {
-  opacity: 1;
-  color: var(--accent-12);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-a7) 55%, transparent);
 }
 
 .doc-search-option {
@@ -2348,18 +2338,21 @@ button.primary.small {
 }
 
 /* Each card lives inside a wrapper that owns the absolute positioning.
-   The `top` value is recalculated whenever a card resizes, the doc
-   reflows, or the viewport changes; the transition makes those moves
-   read as a smooth shuffle rather than a jump. */
+   Default has no transition so scroll-driven `top` writes track the
+   viewport 1:1 with no lag. The layout effect briefly adds .animating
+   when cards reflow due to a height change or insert, so cross-card
+   shuffles still ease into place. */
 .ic-anchor-wrapper {
   position: absolute;
   left: 0.6rem;
   right: 0.9rem;
+}
+.ic-anchor-wrapper.animating {
   transition: top 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 /* Honor the user's reduced-motion preference. */
 @media (prefers-reduced-motion: reduce) {
-  .ic-anchor-wrapper {
+  .ic-anchor-wrapper.animating {
     transition: none;
   }
 }
