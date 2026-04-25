@@ -303,30 +303,31 @@ export function InlineCommentsLayer({
     };
   }, [requestRemeasure]);
 
-  const setWrapperRef = useCallback(
-    (id: string, el: HTMLDivElement | null) => {
+  // Stable ref callback per id. Without memoization, an inline arrow in
+  // JSX is a fresh function each render, so React detaches+reattaches the
+  // ref every render — which would then re-run the observer wiring and
+  // any state updates inside it on every render.
+  const refCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map());
+  const getRefCallback = useCallback((id: string) => {
+    let cb = refCallbacks.current.get(id);
+    if (cb) return cb;
+    cb = (el: HTMLDivElement | null) => {
       const map = wrapperEls.current;
       const prev = map.get(id);
       if (prev && prev !== el) observerRef.current?.unobserve(prev);
       if (el) {
         el.dataset.cardId = id;
         map.set(id, el);
-        // Seed the height synchronously so the very first layout pass
-        // already uses real values. Without this, the pass would default
-        // to a stub height and cards would overlap on first paint until
-        // the ResizeObserver fired.
-        const h = el.offsetHeight;
-        if (h > 0) cardHeights.current.set(id, h);
         observerRef.current?.observe(el);
-        requestRemeasure();
       } else {
         map.delete(id);
         cardHeights.current.delete(id);
         lastAppliedTops.current.delete(id);
       }
-    },
-    [requestRemeasure],
-  );
+    };
+    refCallbacks.current.set(id, cb);
+    return cb;
+  }, []);
 
   // Window resize → re-measure.
   useEffect(() => {
@@ -368,6 +369,14 @@ export function InlineCommentsLayer({
   // The animated layout pass: re-runs when natural positions or render
   // items change. Updates inline `top` via the CSS transition.
   useLayoutEffect(() => {
+    // Refresh heights from offsetHeight before the layout pass so the
+    // very first paint uses real values rather than a stub default.
+    // (The ResizeObserver covers ongoing changes; this seeds the
+    // initial frame and any new cards added between observer ticks.)
+    for (const [id, el] of wrapperEls.current) {
+      const h = el.offsetHeight;
+      if (h > 0) cardHeights.current.set(id, h);
+    }
     measureNaturalTops();
     applyPositions(true);
     // After the transition completes, re-snap to the right place — handles
@@ -451,7 +460,7 @@ export function InlineCommentsLayer({
       )}
 
       {canComment && pendingAnchor && (
-        <div ref={(el) => setWrapperRef(PENDING_ID, el)} className="ic-anchor-wrapper">
+        <div ref={getRefCallback(PENDING_ID)} className="ic-anchor-wrapper">
           <div className="ic-card ic-card-pending">
             <div className="ic-pending-quote">"{truncate(pendingAnchor.quote, 160)}"</div>
             <InlineComposer
@@ -472,11 +481,7 @@ export function InlineCommentsLayer({
         const onJump = blockId ? () => onScrollToAnchor(blockId) : undefined;
         const id = item.thread.id;
         return (
-          <div
-            key={id}
-            ref={(el) => setWrapperRef(id, el)}
-            className="ic-anchor-wrapper"
-          >
+          <div key={id} ref={getRefCallback(id)} className="ic-anchor-wrapper">
             <InlineThreadCard
               uid={uid}
               thread={item.thread}
