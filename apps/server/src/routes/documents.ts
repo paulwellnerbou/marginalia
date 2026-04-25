@@ -809,9 +809,11 @@ async function importDocument(c: Context, deps: AppDeps) {
     const newId = idMap.get(row.id);
     if (!newId) continue;
     const parentOldId = typeof row.parent_id === 'string' ? row.parent_id : null;
-    const newParentId = parentOldId ? (idMap.get(parentOldId) ?? null) : null;
     const parentProposalOldId =
       typeof row.parent_proposal_id === 'string' ? row.parent_proposal_id : null;
+    if (parentOldId && parentProposalOldId) continue;
+    const isRootComment = !parentOldId && !parentProposalOldId;
+    const newParentId = parentOldId ? (idMap.get(parentOldId) ?? null) : null;
     const newParentProposalId = parentProposalOldId
       ? (idMap.get(parentProposalOldId) ?? null)
       : null;
@@ -850,7 +852,7 @@ async function importDocument(c: Context, deps: AppDeps) {
       row.edit_proposal && typeof row.edit_proposal === 'object'
         ? (row.edit_proposal as Record<string, unknown>)
         : null;
-    if (proposal && typeof proposal.proposed_text === 'string') {
+    if (isRootComment && proposal && typeof proposal.proposed_text === 'string') {
       insertEditProposal.run(
         newId,
         typeof proposal.anchor_kind === 'string' ? proposal.anchor_kind : null,

@@ -1880,6 +1880,96 @@ describe('documents API', () => {
     expect(doc.default_theme).toBe('technical');
   });
 
+  test('import ignores malformed proposal relationships in bundles', async () => {
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: headersFor(CLIENT_C),
+        body: JSON.stringify({
+          version: 4,
+          kind: 'marginalia.document-bundle',
+          exported_at: Date.now(),
+          document: {
+            name: 'Malformed bundle',
+            source: '# Imported\n',
+            format: 'markdown',
+            default_theme: 'default',
+          },
+          comments: [
+            {
+              id: 'root',
+              parent_id: null,
+              parent_proposal_id: null,
+              author_client_id: CLIENT_A.id,
+              author_display_name: CLIENT_A.name,
+              body: 'root comment',
+              link_status: 'linked',
+              created_at: 1,
+              updated_at: 1,
+            },
+            {
+              id: 'reply-with-proposal',
+              parent_id: 'root',
+              parent_proposal_id: null,
+              author_client_id: CLIENT_B.id,
+              author_display_name: CLIENT_B.name,
+              body: 'reply should not become a proposal',
+              link_status: 'linked',
+              created_at: 2,
+              updated_at: 2,
+              edit_proposal: {
+                anchor_kind: 'heading',
+                source_snapshot: '# Imported',
+                proposed_text: '# Changed',
+                status: 'open',
+                accepted_oid: null,
+              },
+            },
+            {
+              id: 'dual-parent',
+              parent_id: 'root',
+              parent_proposal_id: 'root',
+              author_client_id: CLIENT_A.id,
+              author_display_name: CLIENT_A.name,
+              body: 'invalid dual parent',
+              link_status: 'linked',
+              created_at: 3,
+              updated_at: 3,
+            },
+          ],
+        }),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as {
+      uid: string;
+      admin_invite: { token: string };
+      imported_comments: number;
+      imported_edit_proposals: number;
+    };
+    expect(imported.imported_comments).toBe(2);
+    expect(imported.imported_edit_proposals).toBe(0);
+
+    const threadsRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/threads`, {
+        headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
+      }),
+    );
+    expect(threadsRes.status).toBe(200);
+    const importedThreads = (await threadsRes.json()) as {
+      threads: Array<{
+        proposal: unknown;
+        comments: [{ body: string }, ...Array<{ body: string }>];
+      }>;
+    };
+    expect(importedThreads.threads).toHaveLength(1);
+    expect(importedThreads.threads[0]!.proposal).toBeNull();
+    expect(importedThreads.threads[0]!.comments.map((comment) => comment.body)).toEqual([
+      'root comment',
+      'reply should not become a proposal',
+    ]);
+  });
+
   // --- ACCESS_CONTROL Step 3: invite kinds + admin rotation ----------
 
   test('POST /invites: named-kind requires display_name; generic-kind forbids granting admin', async () => {
