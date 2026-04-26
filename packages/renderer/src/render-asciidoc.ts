@@ -158,6 +158,7 @@ function walkBlocks(doc: AsciidoctorAbstractBlock): {
     counter: 0,
     entries: [],
     blocks: [],
+    headingStack: [],
   };
   walkSubBlocks(doc, subState);
   // Append sub-blocks to the main BlockInfo list so server-side
@@ -173,6 +174,14 @@ interface SubBlockState {
   counter: number;
   entries: SubBlockEntry[];
   blocks: BlockInfo[];
+  /**
+   * Mirrors `WalkState.headingStack`, maintained independently as
+   * walkSubBlocks descends so each emitted sub-block BlockInfo can
+   * carry the enclosing section's headingPath. Without this,
+   * fallback re-anchoring scoring would have no section affinity to
+   * work with for sub-blocks (Copilot review feedback on PR #22).
+   */
+  headingStack: Array<{ level: number; text: string }>;
 }
 
 /**
@@ -184,6 +193,22 @@ interface SubBlockState {
  */
 function walkSubBlocks(block: AsciidoctorAbstractBlock, state: SubBlockState): void {
   const ctx = (block as { getContext?: () => string | undefined }).getContext?.();
+  // Mirror walkTopLevel's heading-stack maintenance so sub-blocks
+  // inherit the enclosing section's headingPath.
+  if (ctx === 'section') {
+    const level = getLevel(block);
+    const title = getTitle(block) ?? '';
+    const text = normalizeBlockText(title);
+    while (
+      state.headingStack.length > 0 &&
+      state.headingStack[state.headingStack.length - 1]!.level >= level
+    ) {
+      state.headingStack.pop();
+    }
+    state.headingStack.push({ level, text });
+    for (const child of getChildren(block)) walkSubBlocks(child, state);
+    return;
+  }
   if (ctx === 'ulist' || ctx === 'olist') {
     const items =
       (block as { getItems?: () => AsciidoctorAbstractBlock[] | undefined }).getItems?.() ?? [];
@@ -211,13 +236,20 @@ function recordSubBlock(item: AsciidoctorAbstractBlock, state: SubBlockState): v
   const id = computeSubBlockId('listItem', text, state.counts);
   state.entries.push({ id });
   // Also expose as a BlockInfo so reanchor can find a comment anchored
-  // to this list item by id. Heading context is left empty — see the
-  // matching note in plugins/block-ids.ts.
+  // to this list item by id. The headingPath is taken from the live
+  // heading stack maintained by walkSubBlocks so fallback scoring
+  // ranks list-item candidates under the same section first.
+  // sectionIndex / sectionIndexPath stay at the no-info default —
+  // walkSubBlocks doesn't have a separate per-section counter for
+  // sub-blocks (those would need to share state with walkTopLevel
+  // to avoid double-counting), and heading affinity alone already
+  // covers the main case Copilot raised.
+  const headingPath = state.headingStack.map((s) => s.text);
   state.blocks.push({
     id,
     kind: 'listItem',
     text,
-    headingPath: [],
+    headingPath,
     sectionIndex: 0,
     sectionIndexPath: [0],
   });

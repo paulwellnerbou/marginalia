@@ -173,6 +173,13 @@ export function InlineCommentsLayer({
     return items;
   }, [threads, blockOrder]);
 
+  /** O(1) lookup of thread by id — avoids `sorted.find(...)` per render in renderCardById. */
+  const sortedById = useMemo<Map<string, OrderItem>>(() => {
+    const map = new Map<string, OrderItem>();
+    for (const item of sorted) map.set(item.thread.id, item);
+    return map;
+  }, [sorted]);
+
   /** Render order — pending composer trails the threads in doc order. */
   const renderItems = useMemo<RenderItem[]>(() => {
     const items: RenderItem[] = sorted.map((s) => ({
@@ -271,9 +278,15 @@ export function InlineCommentsLayer({
     if (!doc || !scroll) return;
     const scrollRect = scroll.getBoundingClientRect();
     const scrollTop = scroll.scrollTop;
+    // First pass: anchored items get their measured natural top.
+    // Track which items have no resolvable anchor so we can place
+    // them after everything else (otherwise multiple null-anchor
+    // items all measure to top:0 and overlap).
     let maxBottom = 0;
+    const unanchored: { id: string; height: number }[] = [];
     for (const item of renderItems) {
-      let nat = 0;
+      const cardHeight = cardHeights.current.get(item.id) ?? 96;
+      let nat: number | null = null;
       if (item.blockId) {
         const escaped = CSS.escape(item.blockId);
         const el = doc.querySelector<HTMLElement>(
@@ -283,9 +296,21 @@ export function InlineCommentsLayer({
           nat = el.getBoundingClientRect().top - scrollRect.top + scrollTop;
         }
       }
+      if (nat === null) {
+        unanchored.push({ id: item.id, height: cardHeight });
+        continue;
+      }
       naturalTops.current.set(item.id, nat);
-      const height = cardHeights.current.get(item.id) ?? 96;
-      if (nat + height > maxBottom) maxBottom = nat + height;
+      if (nat + cardHeight > maxBottom) maxBottom = nat + cardHeight;
+    }
+    // Second pass: stack any unanchored / orphaned items beneath the
+    // last anchored card in document order, so they don't all collide
+    // at scroll-y=0 with each other or with anchored content.
+    let orphanY = maxBottom + STACK_GAP_PX;
+    for (const { id, height } of unanchored) {
+      naturalTops.current.set(id, orphanY);
+      orphanY += height + STACK_GAP_PX;
+      if (orphanY > maxBottom) maxBottom = orphanY;
     }
     const live = new Set(renderItems.map((i) => i.id));
     for (const id of Array.from(naturalTops.current.keys())) {
@@ -354,9 +379,23 @@ export function InlineCommentsLayer({
   useEffect(() => {
     const doc = docElementRef.current;
     if (!doc || typeof MutationObserver === 'undefined') return;
-    const obs = new MutationObserver(() => requestRemeasure());
+    // Coalesce bursts of mutations (e.g. when applyCommentHighlights
+    // wraps many text nodes in a single pass) into one remeasure per
+    // animation frame so we don't trigger a render + layout pass per
+    // mutation record.
+    let raf = 0;
+    const obs = new MutationObserver(() => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        requestRemeasure();
+      });
+    });
     obs.observe(doc, { childList: true, subtree: true, characterData: true });
-    return () => obs.disconnect();
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      obs.disconnect();
+    };
   }, [docElementRef, requestRemeasure, docHtml]);
 
   // Scroll listener — only setStates when the (epoch, isSticky) tuple
@@ -451,13 +490,14 @@ export function InlineCommentsLayer({
               rows={3}
               submitLabel="Post"
               showCancel
+              autoFocus
               onCancel={onCancelPending}
               onSubmit={submitNew}
             />
           </div>
         );
       }
-      const item = sorted.find((s) => s.thread.id === id);
+      const item = sortedById.get(id);
       if (!item) return null;
       const blockId = item.thread.anchor.block_id;
       const onJump = blockId
@@ -487,7 +527,7 @@ export function InlineCommentsLayer({
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
-      sorted,
+      sortedById,
       pendingAnchor,
       canComment,
       displayName,

@@ -797,17 +797,30 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return highlights;
   }, [canComment, threads, pendingAnchor]);
 
+  /**
+   * The inline column can be off-screen even when `inlineCommentsOpen`
+   * is true: the `@container (max-width: 700px)` rule on `.doc-scroll`
+   * hides it on narrow viewports. In that case fall back to the right
+   * pane so highlight clicks still surface the selected thread.
+   */
+  const inlineCommentsVisible = useCallback((): boolean => {
+    if (!inlineCommentsOpen) return false;
+    const scroll = docScrollRef.current;
+    if (!scroll) return true;
+    return scroll.clientWidth > 700;
+  }, [inlineCommentsOpen]);
+
   const openCommentThread = useCallback(
     (threadId: string) => {
-      // Prefer the inline column if it's open; otherwise fall back to the
-      // right pane (and open it if it's collapsed).
-      if (!inlineCommentsOpen) {
+      // Prefer the inline column when it's actually visible; otherwise
+      // fall back to the right pane (and open it if it's collapsed).
+      if (!inlineCommentsVisible()) {
         setCommentsOpen(true);
         setRightTab('comments');
       }
       setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1 }));
     },
-    [inlineCommentsOpen],
+    [inlineCommentsVisible],
   );
 
   const onRevertLatestHistoryVersion = useCallback(

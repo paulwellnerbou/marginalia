@@ -24,6 +24,15 @@ interface Props {
   rows?: number;
   submitLabel?: string;
   showCancel?: boolean;
+  /**
+   * When true, the textarea (or display-name input, if present) takes
+   * focus on mount. Off by default — every expanded thread card
+   * renders a reply composer, and auto-focusing them all on page
+   * mount would steal focus and scroll the viewport unpredictably.
+   * Turn it on for the pending/new-comment composer or any composer
+   * the user explicitly opened.
+   */
+  autoFocus?: boolean;
   onCancel?: () => void;
   onSubmit: (body: string, name?: string) => Promise<void> | void;
   /** Rendered on the left of the action row, before Cancel/Submit. */
@@ -37,6 +46,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
     rows = 2,
     submitLabel = 'Post',
     showCancel = false,
+    autoFocus = false,
     onCancel,
     onSubmit,
     leftActions,
@@ -118,7 +128,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
           value={name}
           maxLength={80}
           onChange={(e) => setName(e.target.value)}
-          autoFocus
+          autoFocus={autoFocus}
         />
       )}
       <textarea
@@ -129,7 +139,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKey}
-        autoFocus={!needsName}
+        autoFocus={autoFocus && !needsName}
       />
       <div className="ic-composer-actions">
         <span className="ic-composer-hint">⌘/Ctrl+Enter</span>
