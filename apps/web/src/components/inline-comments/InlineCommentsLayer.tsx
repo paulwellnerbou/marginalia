@@ -301,7 +301,14 @@ export function InlineCommentsLayer({
         continue;
       }
       naturalTops.current.set(item.id, nat);
-      if (nat + cardHeight > maxBottom) maxBottom = nat + cardHeight;
+      // Landed cards sit at scroll-y = nat + STICKY_TOP_PAD_PX (see
+      // the LANDED branch in the layout pass); count that into the
+      // bottom so the column's min-height covers their full extent.
+      // Otherwise, when the column is the only thing extending the
+      // scrollable area, the trailing cards lose STICKY_TOP_PAD_PX
+      // worth of scroll range.
+      const cardBottom = nat + STICKY_TOP_PAD_PX + cardHeight;
+      if (cardBottom > maxBottom) maxBottom = cardBottom;
     }
     // Second pass: stack any unanchored / orphaned items beneath the
     // last anchored card in document order, so they don't all collide
