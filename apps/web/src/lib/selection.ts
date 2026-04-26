@@ -22,7 +22,10 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
     closestBlock(range.startContainer) ??
     blockAtElementOffset(range.startContainer, range.startOffset);
   if (!blockEl) return null;
-  const blockId = blockEl.dataset.block;
+  // Prefer the more specific sub-block id (list item, table cell, …)
+  // over the enclosing block id, so a comment on one list item anchors
+  // to that item rather than to the entire list.
+  const blockId = blockEl.dataset.subblock ?? blockEl.dataset.block;
   if (!blockId) return null;
 
   const blockText = normalizeWs(blockEl.textContent ?? '');
@@ -50,7 +53,13 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
   const suffix = blockText.slice(endOffset, Math.min(blockText.length, endOffset + CONTEXT_LEN));
 
   void rawEnd; // currently unused; kept for future highlight rendering
-  const section = computeSectionContext(root, blockEl);
+  // Section context is computed against the enclosing top-level block
+  // even when the comment is anchored to a sub-block — heading path /
+  // section index are properties of the section the block lives in.
+  const sectionTarget = blockEl.dataset.block ? blockEl : closestTopBlock(blockEl);
+  const section = sectionTarget
+    ? computeSectionContext(root, sectionTarget)
+    : { headingPath: [] as string[], sectionIndex: 0, sectionIndexPath: [0] };
   return {
     block_id: blockId,
     quote,
@@ -127,6 +136,19 @@ export function selectionRect(): DOMRect | null {
 }
 
 function closestBlock(node: Node): HTMLElement | null {
+  // Returns the nearest commentable ancestor — either a top-level block
+  // (`data-block`) or a fine-grained sub-block (`data-subblock` on list
+  // items / table cells). Mirrors the proposal toolbar's resolution so
+  // a comment on a list-item anchors to the `<li>`, not the `<ul>`.
+  let n: Node | null = node;
+  while (n) {
+    if (n instanceof HTMLElement && (n.dataset.subblock || n.dataset.block)) return n;
+    n = n.parentNode;
+  }
+  return null;
+}
+
+function closestTopBlock(node: Node): HTMLElement | null {
   let n: Node | null = node;
   while (n) {
     if (n instanceof HTMLElement && n.dataset.block) return n;

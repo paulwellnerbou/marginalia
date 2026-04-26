@@ -24,13 +24,14 @@ interface Props {
   blockRanges: Map<string, BlockSourceRange>;
   canComment: boolean;
   /**
-   * When true: at scroll=0 every card is sticky-stacked at the top in
-   * doc order. Once scroll reaches the first card's anchor, all cards
-   * unstick and scroll with the document together. As each card scrolls
-   * out of view, the next card re-engages sticky alone at the top.
+   * When true: all cards are sticky-stacked at the top initially. As
+   * scroll reaches each card's anchor in turn, all currently-stacked
+   * cards unstick and scroll with the doc together; once the lead card
+   * fully leaves the viewport, the remaining cards re-engage as a
+   * stack from the top. This repeats for cards 2, 3, ...
    *
-   * When false: cards sit at their anchor and scroll with the document
-   * with no sticky behavior.
+   * When false: cards sit at their anchors and scroll with the doc;
+   * no sticky behaviour.
    */
   stackingEnabled: boolean;
   pendingAnchor: CommentAnchor | null;
@@ -75,26 +76,22 @@ const FLASH_MS = 760;
 const FOCUS_MS = 1800;
 
 /**
- * Each card has two CSS sticky configurations and JS flips between them
- * exactly once per card.
+ * Global state shared by all cards.
  *
- *   Config 'A' covers Phase 1 (initial stack) and Phase 2 (post-unstick
- *   landed at stack offset). Container spans [0, anchor1 + T_n + h_n];
- *   inner is sticky;top:T_n. While scroll is in [0, anchor1] the card
- *   sticks at viewport-y=T_n; while scroll is in [anchor1, anchor1+T_n]
- *   it sits at scroll-y=anchor1+T_n and rides up with the document.
+ * `epoch` = number of cards that have already passed their anchor and
+ * scrolled fully out of view. Cards [0..epoch-1] are landed at their
+ * own anchors; cards [epoch..N-1] are the "current stack."
  *
- *   Config 'B' covers Phase 3 (solo sticky) and Phase 4 (landed at own
- *   anchor). Container spans [anchor1 + T_n, anchor_n + h_n]; inner is
- *   sticky;top:0. While scroll is in [anchor1+T_n, anchor_n] the card
- *   sticks at viewport-y=0; once scroll passes anchor_n it lands at
- *   scroll-y=anchor_n.
- *
- * The flip happens at scrollTop = anchor1 + T_n. Visual continuity is
- * preserved at the flip because both configs put the card at viewport
- * y=0 at that exact scroll position.
+ * `isSticky` = whether the current stack is in its sticky phase
+ * (pinned at the viewport top in document order) or its scrolling
+ * phase (riding the document with their stacked offsets after the
+ * lead card's anchor was reached but before it fully left the
+ * viewport).
  */
-type StickyConfig = 'A' | 'B';
+interface GlobalState {
+  epoch: number;
+  isSticky: boolean;
+}
 
 export function InlineCommentsLayer({
   uid,
@@ -131,7 +128,6 @@ export function InlineCommentsLayer({
   const [flash, setFlash] = useState<{ id: string; phase: 'a' | 'b' } | null>(null);
   const lastNonce = useRef<number | null>(null);
 
-  // Reconcile auto-collapse defaults when threads are added or change state.
   useEffect(() => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -184,8 +180,6 @@ export function InlineCommentsLayer({
     return items;
   }, [sorted, canComment, pendingAnchor]);
 
-  // ----- measurement state -----
-
   const cardEls = useRef<Map<string, HTMLDivElement>>(new Map());
   const cardHeights = useRef<Map<string, number>>(new Map());
   const naturalTops = useRef<Map<string, number>>(new Map());
@@ -193,53 +187,74 @@ export function InlineCommentsLayer({
 
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [columnHeight, setColumnHeight] = useState<number>(0);
-  const [configs, setConfigs] = useState<Map<string, StickyConfig>>(new Map());
+  const [globalState, setGlobalState] = useState<GlobalState>({ epoch: 0, isSticky: true });
 
   const requestRemeasure = useCallback(() => {
     setLayoutVersion((n) => n + 1);
   }, []);
 
-  /**
-   * Stack offset T_n for each card: cumulative height (incl. gap) of the
-   * cards above it in document order. Used as the sticky `top:` value
-   * during Config A so cards stack vertically from the viewport top.
-   */
-  const stackOffsets = useMemo(() => {
-    const map = new Map<string, number>();
-    let cumulative = STICKY_TOP_PAD_PX;
+  /** Anchors and heights as flat arrays in render order (for the state machine). */
+  const orderedMetrics = useMemo(() => {
+    const anchors: number[] = [];
+    const heights: number[] = [];
     for (const item of renderItems) {
-      map.set(item.id, cumulative);
-      const h = cardHeights.current.get(item.id) ?? 96;
-      cumulative += h + STACK_GAP_PX;
+      anchors.push(naturalTops.current.get(item.id) ?? 0);
+      heights.push(cardHeights.current.get(item.id) ?? 96);
     }
-    return map;
-    // layoutVersion in deps so the recompute fires when heights update
+    return { anchors, heights };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderItems, layoutVersion]);
 
-  /** First card's anchor position — the global "all unstick" trigger. */
-  const firstAnchor = useMemo(() => {
-    if (renderItems.length === 0) return 0;
-    const first = renderItems[0];
-    if (!first) return 0;
-    return naturalTops.current.get(first.id) ?? 0;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderItems, layoutVersion]);
+  /** Stack offset for card_k inside the stack of cards [epoch..N-1]. */
+  const stackOffset = useCallback(
+    (k: number, epoch: number): number => {
+      if (k <= epoch) return 0;
+      let sum = STICKY_TOP_PAD_PX;
+      for (let i = epoch; i < k; i++) {
+        sum += (orderedMetrics.heights[i] ?? 96) + STACK_GAP_PX;
+      }
+      return sum;
+    },
+    [orderedMetrics],
+  );
 
   /**
-   * scrollTop at which card_n flips from Config A to Config B.
-   * = first_anchor + T_n. Chosen so the card's viewport-y is exactly 0
-   * at the flip in both configs (no visual jump).
+   * Walk through the global lifecycle to find the current
+   * (epoch, isSticky) for the given scrollTop.
+   *
+   *   while there are still cards in the current stack:
+   *     if scrollTop hasn't reached anchor[epoch] → STACKED at this epoch
+   *     elif scrollTop is in the (h_epoch + gap) "scrolling" window after
+   *          anchor[epoch] → SCROLLING at this epoch
+   *     else                  → epoch + 1, repeat
    */
-  const flipPoints = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const item of renderItems) {
-      map.set(item.id, firstAnchor + (stackOffsets.get(item.id) ?? 0));
-    }
-    return map;
-  }, [renderItems, firstAnchor, stackOffsets]);
+  const computeGlobalState = useCallback(
+    (scrollTop: number): GlobalState => {
+      const { anchors, heights } = orderedMetrics;
+      const N = anchors.length;
+      let e = 0;
+      while (e < N) {
+        const a_e = anchors[e] ?? 0;
+        if (scrollTop < a_e) return { epoch: e, isSticky: true };
+        const leaveAt = a_e + (heights[e] ?? 96) + STACK_GAP_PX;
+        if (scrollTop < leaveAt) return { epoch: e, isSticky: false };
+        e++;
+      }
+      return { epoch: N, isSticky: true };
+    },
+    [orderedMetrics],
+  );
 
-  /** Recompute each card's anchor position from the rendered doc. */
+  const recomputeGlobalState = useCallback(() => {
+    const scroll = scrollContainerRef.current;
+    if (!scroll) return;
+    const next = computeGlobalState(scroll.scrollTop);
+    setGlobalState((prev) =>
+      prev.epoch === next.epoch && prev.isSticky === next.isSticky ? prev : next,
+    );
+  }, [computeGlobalState, scrollContainerRef]);
+
+  /** Re-measure each card's anchor position from the rendered doc. */
   const measureNaturalTops = useCallback(() => {
     const doc = docElementRef.current;
     const scroll = scrollContainerRef.current;
@@ -272,28 +287,8 @@ export function InlineCommentsLayer({
     setColumnHeight((prev) => (Math.abs(prev - maxBottom) > 0.5 ? maxBottom : prev));
   }, [renderItems, docElementRef, scrollContainerRef]);
 
-  /** Compute each card's current Config from scrollTop; only setState if any flipped. */
-  const recomputeConfigs = useCallback(() => {
-    const scroll = scrollContainerRef.current;
-    if (!scroll) return;
-    const scrollTop = scroll.scrollTop;
-    setConfigs((prev) => {
-      let changed = false;
-      const next = new Map<string, StickyConfig>();
-      for (const item of renderItems) {
-        const flip = flipPoints.get(item.id) ?? 0;
-        const cfg: StickyConfig = scrollTop >= flip ? 'B' : 'A';
-        next.set(item.id, cfg);
-        if (prev.get(item.id) !== cfg) changed = true;
-      }
-      if (!changed && next.size === prev.size) return prev;
-      return next;
-    });
-  }, [renderItems, flipPoints, scrollContainerRef]);
-
-  // Stable per-id ref callbacks. Inline arrow refs would re-attach every
-  // render; this preserves identity so the ResizeObserver and stable DOM
-  // remain in sync.
+  // Stable per-id ref callbacks — see the prior sticky-overlay version
+  // for why inline arrows would re-attach every render.
   const refCallbacks = useRef<Map<string, (el: HTMLDivElement | null) => void>>(new Map());
   const getRefCallback = useCallback((id: string) => {
     let cb = refCallbacks.current.get(id);
@@ -315,8 +310,6 @@ export function InlineCommentsLayer({
     return cb;
   }, []);
 
-  // ResizeObserver — track each card's actual rendered height so the
-  // stack offsets and slot heights stay accurate when a card expands.
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return;
     const obs = new ResizeObserver((entries) => {
@@ -342,14 +335,12 @@ export function InlineCommentsLayer({
     };
   }, [requestRemeasure]);
 
-  // Window resize → re-measure (gutter width depends on viewport).
   useEffect(() => {
     const handler = () => requestRemeasure();
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
   }, [requestRemeasure]);
 
-  // Article DOM mutations → re-measure.
   useEffect(() => {
     const doc = docElementRef.current;
     if (!doc || typeof MutationObserver === 'undefined') return;
@@ -358,28 +349,26 @@ export function InlineCommentsLayer({
     return () => obs.disconnect();
   }, [docElementRef, requestRemeasure, docHtml]);
 
-  // Scroll listener — pure config-flip detection, no per-frame DOM
-  // writes. setState short-circuits when nothing flipped, so common-case
-  // scrolling triggers zero React work and zero JS DOM writes.
+  // Scroll listener — only setStates when the (epoch, isSticky) tuple
+  // actually flips, which is at most 2N events for the whole document.
+  // Pure scrolling between transitions is browser-native CSS sticky.
   useEffect(() => {
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
-    const onScroll = () => recomputeConfigs();
+    const onScroll = () => recomputeGlobalState();
     scroll.addEventListener('scroll', onScroll, { passive: true });
     return () => scroll.removeEventListener('scroll', onScroll);
-  }, [recomputeConfigs, scrollContainerRef]);
+  }, [recomputeGlobalState, scrollContainerRef]);
 
-  // Layout effect: refresh heights from offsetHeight before measuring
-  // naturals so the very first paint uses real values.
   useLayoutEffect(() => {
     for (const [id, el] of cardEls.current) {
       const h = el.offsetHeight;
       if (h > 0) cardHeights.current.set(id, h);
     }
     measureNaturalTops();
-    recomputeConfigs();
+    recomputeGlobalState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [measureNaturalTops, recomputeConfigs, layoutVersion, docHtml]);
+  }, [measureNaturalTops, recomputeGlobalState, layoutVersion, docHtml]);
 
   // ----- focus animation -----
 
@@ -509,35 +498,53 @@ export function InlineCommentsLayer({
       aria-label="Inline comments"
       style={{ minHeight: `${minHeight}px` }}
     >
-      {renderItems.map((item) => {
-        const naturalTop = naturalTops.current.get(item.id) ?? 0;
-        const cardHeight = cardHeights.current.get(item.id) ?? 96;
-        const T = stackOffsets.get(item.id) ?? 0;
-        const cfg = configs.get(item.id) ?? 'A';
+      {renderItems.map((item, k) => {
+        const naturalTop = orderedMetrics.anchors[k] ?? 0;
+        const cardHeight = orderedMetrics.heights[k] ?? 96;
+        const { epoch, isSticky } = globalState;
 
         let containerTop: number;
         let containerHeight: number;
-        let stickyTop: number;
         let useSticky: boolean;
+        let stickyTop = 0;
 
         if (!stackingEnabled) {
+          // No sticky behaviour: card sits at its anchor and scrolls
+          // with the document.
           containerTop = naturalTop;
           containerHeight = cardHeight;
-          stickyTop = 0;
           useSticky = false;
-        } else if (cfg === 'A') {
-          // Phase 1 + 2: sticky-stacked at top, then lands at stack offset.
-          containerTop = 0;
-          containerHeight = Math.max(firstAnchor + T + cardHeight, cardHeight);
+        } else if (k < epoch) {
+          // Card has already passed its anchor and landed.
+          containerTop = naturalTop;
+          containerHeight = cardHeight;
+          useSticky = false;
+        } else if (isSticky) {
+          // Stacked phase for the current stack [epoch..N-1].
+          //   container.top    = phaseStart + T
+          //   container.height = phaseEnd  - phaseStart + cardHeight
+          // chosen so the inner sticks at viewport-y = T from
+          // scrollTop=phaseStart and disengages at scrollTop=phaseEnd.
+          const T = stackOffset(k, epoch);
+          const phaseStart =
+            epoch === 0
+              ? 0
+              : (orderedMetrics.anchors[epoch - 1] ?? 0) +
+                (orderedMetrics.heights[epoch - 1] ?? 96) +
+                STACK_GAP_PX;
+          const phaseEnd = orderedMetrics.anchors[epoch] ?? naturalTop;
+          containerTop = phaseStart + T;
+          containerHeight = Math.max(phaseEnd - phaseStart + cardHeight, cardHeight);
           stickyTop = T;
           useSticky = true;
         } else {
-          // Phase 3 + 4: solo sticky at viewport top, then lands at own anchor.
-          containerTop = firstAnchor + T;
-          const target = naturalTop + cardHeight - containerTop;
-          containerHeight = Math.max(target, cardHeight);
-          stickyTop = STICKY_TOP_PAD_PX;
-          useSticky = true;
+          // Scrolling phase: cards in [epoch..N-1] ride the document
+          // with their stacked offsets between anchor[epoch] and the
+          // moment card_epoch leaves the viewport.
+          const T = stackOffset(k, epoch);
+          containerTop = (orderedMetrics.anchors[epoch] ?? 0) + T;
+          containerHeight = cardHeight;
+          useSticky = false;
         }
 
         return (
