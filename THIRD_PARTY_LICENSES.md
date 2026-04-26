@@ -41,8 +41,11 @@ Apache-2.0, or MIT/Apache-2.0 dual-licensed). No copyleft licenses
 Per the MIT terms, the upstream copyright notice and license text are
 preserved. The full text of the MIT license is bundled with the
 mermaid-rs-renderer source distribution on crates.io and at the
-GitHub repository linked above. A copy is reproduced here for the
-runtime image:
+GitHub repository linked above. A copy is reproduced below in this
+file, which ships in both the source repository and the runtime
+container image (`COPY ... THIRD_PARTY_LICENSES.md` in the
+Dockerfile's runner stage), so the attribution travels with the
+redistributed `mmdr` binary:
 
 ```
 MIT License

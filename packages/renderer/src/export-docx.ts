@@ -630,9 +630,19 @@ function readMermaidIndex(node: Element): number {
     (props as Record<string, unknown>)['dataMermaidIndex'] ??
     (props as Record<string, unknown>)['data-mermaid-index'];
   let idx: number;
-  if (typeof raw === 'number') idx = raw;
-  else if (typeof raw === 'string') idx = Number.parseInt(raw, 10);
-  else return -1;
+  if (typeof raw === 'number') {
+    idx = raw;
+  } else if (typeof raw === 'string') {
+    // Strict integer match. `parseInt` would silently accept '1.5'
+    // (→ 1) or '0abc' (→ 0) and mis-key the resolved-images map —
+    // the upstream plugins always stringify a known integer, so any
+    // string that doesn't pass this check is a malformed input we
+    // shouldn't try to coerce.
+    if (!/^\d+$/.test(raw)) return -1;
+    idx = Number(raw);
+  } else {
+    return -1;
+  }
   return Number.isInteger(idx) && idx >= 0 ? idx : -1;
 }
 

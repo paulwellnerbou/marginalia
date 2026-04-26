@@ -78,6 +78,10 @@ COPY --from=builder /app/package.json /app/bun.lock ./
 COPY --from=builder /app/apps ./apps
 COPY --from=builder /app/packages ./packages
 COPY deploy-scripts/container-entrypoint.sh /app/entrypoint.sh
+# Ship the third-party-license attribution alongside the binary it
+# documents (mmdr / mermaid-rs-renderer is MIT — the license text
+# travels with the redistributed binary).
+COPY --from=builder /app/THIRD_PARTY_LICENSES.md /app/THIRD_PARTY_LICENSES.md
 
 # Re-install, production-only, without mermaid (which we vendored
 # above). Using `--trust` with an empty list is fine; the key is
