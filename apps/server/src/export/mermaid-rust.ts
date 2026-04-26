@@ -60,16 +60,66 @@ export function getMermaidRendererConfig(): Readonly<Config> {
 // Errors
 // ---------------------------------------------------------------------
 
+/**
+ * Catch-all for spawn-time setup failures that mean "the configured
+ * renderer can't be invoked": ENOENT (binary missing), EACCES (found
+ * but not executable), ENOTDIR / EISDIR (bad path), EPERM (e.g.
+ * sandbox / no-exec mount). All of these are operator configuration
+ * problems, not per-document data, so the route maps them to a
+ * once-per-export warning + code-block fallback rather than failing
+ * silently.
+ *
+ * Kept as a single class (rather than a hierarchy per code) because
+ * the route's `instanceof` check + the ergonomic upgrade story
+ * doesn't benefit from a finer split — operators get the underlying
+ * `errno` code in the message and on `cause`.
+ */
 export class MermaidRenderEngineMissingError extends Error {
   readonly code = 'mermaid-engine-missing';
-  constructor(bin: string, cause?: unknown) {
+  /** Underlying spawn errno (ENOENT, EACCES, …) when known. */
+  readonly errno: string | undefined;
+  constructor(bin: string, cause?: NodeJS.ErrnoException) {
+    const errno = cause?.code;
+    const reason = describeSpawnFailure(errno);
     super(
-      `Mermaid renderer "${bin}" is not installed or not on PATH. ` +
+      `Mermaid renderer "${bin}" ${reason}. ` +
         `Install via \`cargo install mermaid-rs-renderer\`, ` +
         `or set MARGINALIA_MERMAID_BIN to a fully-qualified path.`,
       cause !== undefined ? { cause } : undefined,
     );
     this.name = 'MermaidRenderEngineMissingError';
+    this.errno = errno;
+  }
+}
+
+/**
+ * Spawn-time errno codes the wrapper treats as
+ * `MermaidRenderEngineMissingError`. Anything outside this set
+ * propagates as a raw error (genuinely unexpected — e.g. EMFILE
+ * "too many open files" is a host problem, not an engine problem).
+ */
+const ENGINE_MISSING_ERRNOS = new Set([
+  'ENOENT', // binary not found
+  'EACCES', // found but not executable
+  'EPERM', // operation not permitted (sandbox / SELinux / noexec mount)
+  'ENOTDIR', // a path component isn't a directory
+  'EISDIR', // configured bin is a directory
+]);
+
+function describeSpawnFailure(errno: string | undefined): string {
+  switch (errno) {
+    case 'ENOENT':
+      return 'is not installed or not on PATH';
+    case 'EACCES':
+      return 'is not executable (check file permissions)';
+    case 'EPERM':
+      return 'cannot be executed (operation not permitted — sandbox or noexec mount?)';
+    case 'ENOTDIR':
+      return 'has an invalid path (a directory component does not exist)';
+    case 'EISDIR':
+      return 'points to a directory, not a binary';
+    default:
+      return 'cannot be invoked';
   }
 }
 
@@ -179,10 +229,13 @@ function runRenderer(source: string, outPath: string): Promise<void> {
 
     child.on('error', (err: NodeJS.ErrnoException) => {
       clearTimeout(timer);
-      // ENOENT → binary missing. spawn surfaces it via the 'error'
-      // event, not via exit code; map to the typed error so the
-      // route can return a useful message.
-      if (err.code === 'ENOENT') {
+      // Spawn-time setup failures (ENOENT, EACCES, EPERM, ENOTDIR,
+      // EISDIR) all surface here rather than via exit code. Map them
+      // to the typed error so the DOCX route's once-per-export
+      // operator warning fires for every "engine unusable" cause —
+      // not just "binary missing". Anything outside the set (EMFILE,
+      // EAGAIN, …) is a host-level problem and propagates raw.
+      if (err.code && ENGINE_MISSING_ERRNOS.has(err.code)) {
         reject(new MermaidRenderEngineMissingError(config.bin, err));
         return;
       }

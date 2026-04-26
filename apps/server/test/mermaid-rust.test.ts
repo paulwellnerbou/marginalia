@@ -9,6 +9,9 @@
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   configureMermaidRenderer,
@@ -71,6 +74,41 @@ describe('renderMermaidToPng', () => {
     await expect(renderMermaidToPng(SAMPLE_FLOWCHART)).rejects.toBeInstanceOf(
       MermaidRenderEngineMissingError,
     );
+  });
+
+  test('throws engine-missing error when binary is not executable (EACCES)', async () => {
+    // Create a non-executable file and point the wrapper at it.
+    // Spawn surfaces this as EACCES on Linux/macOS; the wrapper
+    // should map it to the same typed error as ENOENT so the DOCX
+    // route's once-per-export operator warning still fires.
+    const dir = mkdtempSync(join(tmpdir(), 'mdn-mermaid-eacces-'));
+    const path = join(dir, 'not-executable');
+    writeFileSync(path, '#!/bin/sh\necho hi\n');
+    chmodSync(path, 0o644); // explicitly NOT +x
+    try {
+      configureMermaidRenderer({ bin: path });
+      const err = await renderMermaidToPng(SAMPLE_FLOWCHART).catch((e) => e);
+      expect(err).toBeInstanceOf(MermaidRenderEngineMissingError);
+      // The errno was preserved on the typed error so operators can
+      // tell "permissions" apart from "missing" in logs.
+      expect((err as MermaidRenderEngineMissingError).errno).toBe('EACCES');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('throws engine-missing error when bin path is a directory (EISDIR/EACCES)', async () => {
+    // A directory passed as `bin` triggers EISDIR or EACCES depending
+    // on platform; both are in the engine-missing set, so either
+    // outcome produces the typed error.
+    const dir = mkdtempSync(join(tmpdir(), 'mdn-mermaid-isdir-'));
+    try {
+      configureMermaidRenderer({ bin: dir });
+      const err = await renderMermaidToPng(SAMPLE_FLOWCHART).catch((e) => e);
+      expect(err).toBeInstanceOf(MermaidRenderEngineMissingError);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('config snapshot reflects defaults', () => {
