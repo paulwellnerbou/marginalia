@@ -46,7 +46,7 @@ interface Props {
   ) => Promise<void>;
   onEditProposalRationale: (id: string, rationale: string | null) => Promise<void>;
   /** Scroll the document pane to a block and flash it. */
-  onScrollToAnchor: (blockId: string) => void;
+  onScrollToAnchor: (blockId: string, quote?: string | null) => void;
 }
 
 interface ThreadAnchorOrder {

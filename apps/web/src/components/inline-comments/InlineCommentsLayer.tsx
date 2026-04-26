@@ -54,7 +54,7 @@ interface Props {
     name?: string,
   ) => Promise<void>;
   onEditProposalRationale: (id: string, rationale: string | null) => Promise<void>;
-  onScrollToAnchor: (blockId: string) => void;
+  onScrollToAnchor: (blockId: string, quote?: string | null) => void;
 }
 
 interface OrderItem {
@@ -210,10 +210,15 @@ export function InlineCommentsLayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderItems, layoutVersion]);
 
-  /** Stack offset for card_k inside the stack of cards [epoch..N-1]. */
+  /**
+   * Stack offset for card_k inside the stack of cards [epoch..N-1].
+   * The lead card (k === epoch) sits at STICKY_TOP_PAD_PX so it
+   * doesn't touch the doc-chrome's bottom border; subsequent cards
+   * stack below with the gap between them.
+   */
   const stackOffset = useCallback(
     (k: number, epoch: number): number => {
-      if (k <= epoch) return 0;
+      if (k < epoch) return 0;
       let sum = STICKY_TOP_PAD_PX;
       for (let i = epoch; i < k; i++) {
         sum += (orderedMetrics.heights[i] ?? 96) + STACK_GAP_PX;
@@ -455,7 +460,9 @@ export function InlineCommentsLayer({
       const item = sorted.find((s) => s.thread.id === id);
       if (!item) return null;
       const blockId = item.thread.anchor.block_id;
-      const onJump = blockId ? () => onScrollToAnchor(blockId) : undefined;
+      const onJump = blockId
+        ? () => onScrollToAnchor(blockId, item.thread.anchor.quote)
+        : undefined;
       return (
         <InlineThreadCard
           uid={uid}
@@ -520,8 +527,12 @@ export function InlineCommentsLayer({
           containerHeight = cardHeight;
           useSticky = false;
         } else if (k < epoch) {
-          // Card has already passed its anchor and landed.
-          containerTop = naturalTop;
+          // Card has already passed its anchor and landed. We add the
+          // sticky top-pad to the landed scroll-y so the transition
+          // out of the SCROLLING phase is continuous (the card sat at
+          // viewport-y=STICKY_TOP_PAD_PX while sticky and stays at
+          // the same screen position when it lands).
+          containerTop = naturalTop + STICKY_TOP_PAD_PX;
           containerHeight = cardHeight;
           useSticky = false;
         } else if (isSticky) {

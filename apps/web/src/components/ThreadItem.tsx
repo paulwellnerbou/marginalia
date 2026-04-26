@@ -40,7 +40,7 @@ interface Props {
     name?: string,
   ) => Promise<void>;
   onEditRationale: (id: string, rationale: string | null) => Promise<void>;
-  onScrollToAnchor: (blockId: string) => void;
+  onScrollToAnchor: (blockId: string, quote?: string | null) => void;
 }
 
 export function ThreadItem(props: Props) {
@@ -56,7 +56,9 @@ export function ThreadItem(props: Props) {
   };
 
   const blockId = thread.anchor.block_id;
-  const jump = blockId ? () => onScrollToAnchor(blockId) : undefined;
+  const jump = blockId
+    ? () => onScrollToAnchor(blockId, thread.anchor.quote)
+    : undefined;
 
   if (isProposal(thread)) {
     return (

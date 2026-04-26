@@ -428,14 +428,34 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return { clientId: getClientId(), displayName: name };
   }
 
-  const scrollToAnchor = useCallback((blockId: string) => {
+  const scrollToAnchor = useCallback((blockId: string, quote?: string | null) => {
     const root = docRef.current;
     if (!root) return;
     const escaped = CSS.escape(blockId);
-    const target = root.querySelector<HTMLElement>(
+    let target = root.querySelector<HTMLElement>(
       `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
     );
     if (!target) return;
+    // Recovery for comments anchored before sub-block-aware capture
+    // landed: their stored block_id points at the enclosing top-level
+    // block. If the quote uniquely identifies one sub-block, flash
+    // that one instead of the whole container.
+    if (target.dataset.block && quote) {
+      const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
+      let narrowed: HTMLElement | null = null;
+      let unique = true;
+      for (const sub of subEls) {
+        const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
+        if (text.includes(quote)) {
+          if (narrowed) {
+            unique = false;
+            break;
+          }
+          narrowed = sub;
+        }
+      }
+      if (unique && narrowed) target = narrowed;
+    }
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     target.classList.add('anchor-flash');
     window.setTimeout(() => target.classList.remove('anchor-flash'), 1600);
