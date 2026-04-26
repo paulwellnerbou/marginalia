@@ -2337,28 +2337,28 @@ button.primary.small {
   color: var(--ui-fg);
 }
 
-/* Currently-pinned cards stack here. The browser composites the
-   sticky position on the same thread that drives scroll, so the
-   overlay tracks the viewport 1:1 with no JS in the loop. */
-.ic-pinned-overlay {
-  position: sticky;
-  top: 4px;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-left: 0.6rem;
-  margin-right: 0.9rem;
-}
-.ic-pinned-card {
-  /* Normal flow inside the sticky flex column — no positioning. */
-}
+/* Each card lives inside its own absolutely-positioned slot anchored
+   at the comment's block. The slot's height spans up to the next
+   card's anchor; the card itself has `position: sticky; top: <pad>`,
+   so the browser handles all the scroll-time behavior natively:
 
-/* Landed cards sit at their natural anchor and scroll with the doc. */
-.ic-landed-card {
+     - viewport above slot → card sits at slot top (= its anchor)
+     - viewport inside slot → card sticks to viewport top
+     - viewport at slot bottom → card is pushed up by slot end and
+       scrolls out, just as the next card's anchor arrives at top
+
+   Pure CSS — no JS in the scroll loop, no compositor-vs-main race. */
+.ic-anchor-slot {
   position: absolute;
   left: 0.6rem;
   right: 0.9rem;
+}
+.ic-sticky-card {
+  position: sticky;
+  top: 4px;
+}
+.ic-column-no-stacking .ic-sticky-card {
+  position: static;
 }
 
 .ic-empty-state {
