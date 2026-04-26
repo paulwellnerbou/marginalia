@@ -180,17 +180,38 @@ export function InlineCommentsLayer({
     return map;
   }, [sorted]);
 
-  /** Render order — pending composer trails the threads in doc order. */
+  /**
+   * Render order — same document ordering as `sorted`, plus the
+   * pending composer (if any) inserted at its anchor's position.
+   * The sticky/epoch state machine assumes monotonically increasing
+   * anchors, so a pending composer with an earlier anchor than some
+   * existing thread MUST go in front of those threads or the epoch
+   * transitions misfire.
+   */
   const renderItems = useMemo<RenderItem[]>(() => {
     const items: RenderItem[] = sorted.map((s) => ({
       id: s.thread.id,
       blockId: s.thread.anchor.block_id,
     }));
     if (canComment && pendingAnchor) {
-      items.push({ id: PENDING_ID, blockId: pendingAnchor.block_id });
+      const pendingBlockIndex = pendingAnchor.block_id
+        ? (blockOrder.get(pendingAnchor.block_id) ?? Number.MAX_SAFE_INTEGER)
+        : Number.MAX_SAFE_INTEGER;
+      const pendingStartOffset = pendingAnchor.start_offset ?? 0;
+      const insertAt = sorted.findIndex(
+        (s) =>
+          pendingBlockIndex < s.blockIndex ||
+          (pendingBlockIndex === s.blockIndex && pendingStartOffset < s.startOffset),
+      );
+      const pendingItem: RenderItem = {
+        id: PENDING_ID,
+        blockId: pendingAnchor.block_id,
+      };
+      if (insertAt === -1) items.push(pendingItem);
+      else items.splice(insertAt, 0, pendingItem);
     }
     return items;
-  }, [sorted, canComment, pendingAnchor]);
+  }, [sorted, canComment, pendingAnchor, blockOrder]);
 
   const cardEls = useRef<Map<string, HTMLDivElement>>(new Map());
   const cardHeights = useRef<Map<string, number>>(new Map());

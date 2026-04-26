@@ -124,18 +124,27 @@ export async function renderAsciidoc(
 type AsciidoctorAbstractBlock = ReturnType<ReturnType<typeof Asciidoctor>['load']>;
 
 interface WalkState {
+  /**
+   * Top-level blocks ONLY. `rehypeAsciidocBlockIds` resolves
+   * `__marginalia-block-<idx>` markers via `blocks[idx]`, so this
+   * array's indices must stay aligned with `counter`. Sub-block
+   * BlockInfos go in `subBlockInfos` and are concatenated onto
+   * `blocks` after the walk completes (so the exported BlockMap
+   * still includes them for server-side reanchor).
+   */
   blocks: BlockMap;
   counter: number;
   headingStack: Array<{ level: number; text: string }>;
   sectionCounts: Map<string, number>;
-  // Sub-block emission folded into the same walk so each emitted
-  // sub-block BlockInfo can inherit its enclosing list's full
-  // section context (headingPath + sectionIndex + sectionIndexPath).
-  // A separate second walk would have no way to recover the
-  // top-level list's section context after the fact.
   subBlockCounts: Map<string, number>;
   subBlockCounter: number;
   subBlockEntries: SubBlockEntry[];
+  /**
+   * BlockInfo entries for sub-blocks. Kept separate from `blocks`
+   * during the walk so positional marker lookups stay correct;
+   * concatenated to the exported BlockMap at the end.
+   */
+  subBlockInfos: BlockInfo[];
 }
 
 /**
@@ -161,9 +170,17 @@ function walkBlocks(doc: AsciidoctorAbstractBlock): {
     subBlockCounts: new Map(),
     subBlockCounter: 0,
     subBlockEntries: [],
+    subBlockInfos: [],
   };
   walkTopLevel(doc, state);
-  return { blocks: state.blocks, subBlocks: state.subBlockEntries };
+  return {
+    // Top-level entries first, then sub-block infos. Marker-index
+    // lookups in `rehypeAsciidocBlockIds` only touch the top-level
+    // prefix; reanchor's id-based lookup walks the whole array, so
+    // sub-blocks at the tail are still discoverable.
+    blocks: [...state.blocks, ...state.subBlockInfos],
+    subBlocks: state.subBlockEntries,
+  };
 }
 
 /**
@@ -217,8 +234,9 @@ function recordSubBlock(
   state.subBlockEntries.push({ id });
   // Inherit the enclosing list's section context so reanchor's
   // section-affinity scoring lines up with what the client computed
-  // when the comment was created.
-  state.blocks.push({
+  // when the comment was created. Push to `subBlockInfos` rather
+  // than `state.blocks` to keep positional marker indices intact.
+  state.subBlockInfos.push({
     id,
     kind: 'listItem',
     text,
@@ -314,7 +332,10 @@ function synthesizeParent(state: WalkState, kind: string): BlockInfo {
   const headingPath = state.headingStack.map((s) => s.text);
   const sectionIndexPath: number[] = [];
   for (let k = 0; k <= headingPath.length; k++) {
-    const prefixKey = headingPath.slice(0, k).join(' ');
+    // Same delimiter as recordBlock (NUL) so sectionCounts lookups
+    // actually hit. A different separator here would silently miss
+    // and force every entry to 0.
+    const prefixKey = headingPath.slice(0, k).join(' ');
     sectionIndexPath.push(state.sectionCounts.get(prefixKey) ?? 0);
   }
   const sectionIndex = sectionIndexPath[sectionIndexPath.length - 1] ?? 0;
