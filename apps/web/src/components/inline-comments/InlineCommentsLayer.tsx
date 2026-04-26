@@ -71,7 +71,12 @@ interface RenderItem {
 
 const PENDING_ID = '__pending__';
 const STACK_GAP_PX = 8;
-const STICKY_TOP_PAD_PX = 4;
+/**
+ * Pixels of breathing room between the document chrome's bottom border
+ * and the topmost sticky comment card. Doubles as the sticky `top:`
+ * value for the lead card and the offset everything else stacks below.
+ */
+const STICKY_TOP_PAD_PX = 12;
 const FLASH_MS = 760;
 const FOCUS_MS = 1800;
 

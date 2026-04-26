@@ -9,10 +9,14 @@ import { computeSubBlockId, hashBlock, normalizeBlockText } from '../block-ids-s
  * Attach a stable content-hash ID to every top-level block, and a secondary
  * id to every sub-block that an edit proposal can target individually
  * (`listItem`, `tableCell`). Top-level ids are written as
- * `data-block="<id>"` and feed the comment-anchoring system; sub-block ids
- * are written as `data-subblock="<id>"` and are used by proposal capture
- * only — they do NOT participate in the exported `blocks` map, so existing
- * comment behavior is unchanged.
+ * `data-block="<id>"`, sub-block ids as `data-subblock="<id>"`.
+ *
+ * Both kinds of ids participate in the exported `blocks` map so the
+ * server's re-anchoring pass can find a comment anchored to a list item
+ * (or table cell) by id and keep its `link_status` as `'linked'` — the
+ * map is used by `reanchor()` after every save. Sub-blocks are appended
+ * after all top-level entries so existing callers that index `blocks[0]`
+ * etc. still see top-level blocks at the front.
  */
 export const remarkBlockIds: Plugin<[], Root> = () => {
   return (tree, file) => {
@@ -68,6 +72,13 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
     // suffixes duplicates `#2`, `#3`, …. The `counts` map is shared
     // across the whole document so `locateAllBlocks`, walking the same
     // tree in the same order, produces identical ids.
+    //
+    // Sub-block entries are also appended to `blocks` so server-side
+    // re-anchoring can find a comment by sub-block id. Heading context
+    // is left empty — the id-based lookup is the primary path; the
+    // fuzzy section-affinity scoring only kicks in when the id is no
+    // longer present (which for sub-blocks usually means the list item
+    // was edited and the comment becomes orphaned regardless).
     const counts = new Map<string, number>();
     visit(tree, (node) => {
       if (node.type !== 'listItem' && node.type !== 'tableCell') return;
@@ -75,6 +86,14 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
       if (!text) return;
       const id = computeSubBlockId(node.type, text, counts);
       attachDataAttr(node as RootContent, 'data-subblock', id);
+      blocks.push({
+        id,
+        kind: node.type,
+        text,
+        headingPath: [],
+        sectionIndex: 0,
+        sectionIndexPath: [0],
+      });
     });
   };
 };

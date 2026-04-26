@@ -153,15 +153,26 @@ function walkBlocks(doc: AsciidoctorAbstractBlock): {
     sectionCounts: new Map(),
   };
   walkTopLevel(doc, state);
-  const subState: SubBlockState = { counts: new Map(), counter: 0, entries: [] };
+  const subState: SubBlockState = {
+    counts: new Map(),
+    counter: 0,
+    entries: [],
+    blocks: [],
+  };
   walkSubBlocks(doc, subState);
-  return { blocks: state.blocks, subBlocks: subState.entries };
+  // Append sub-blocks to the main BlockInfo list so server-side
+  // re-anchoring can find a comment anchored to a list item by id.
+  // Sub-blocks come after all top-level entries so existing tests /
+  // callers that index `blocks[0]` etc. still see top-level blocks
+  // at the front.
+  return { blocks: [...state.blocks, ...subState.blocks], subBlocks: subState.entries };
 }
 
 interface SubBlockState {
   counts: Map<string, number>;
   counter: number;
   entries: SubBlockEntry[];
+  blocks: BlockInfo[];
 }
 
 /**
@@ -199,6 +210,17 @@ function recordSubBlock(item: AsciidoctorAbstractBlock, state: SubBlockState): v
   // derivation identical across formats, simplifying debugging.
   const id = computeSubBlockId('listItem', text, state.counts);
   state.entries.push({ id });
+  // Also expose as a BlockInfo so reanchor can find a comment anchored
+  // to this list item by id. Heading context is left empty — see the
+  // matching note in plugins/block-ids.ts.
+  state.blocks.push({
+    id,
+    kind: 'listItem',
+    text,
+    headingPath: [],
+    sectionIndex: 0,
+    sectionIndexPath: [0],
+  });
   const markerRole = `${MARGINALIA_SUBBLOCK_MARKER_PREFIX}${state.counter}`;
   state.counter += 1;
   addRole(item, markerRole);
