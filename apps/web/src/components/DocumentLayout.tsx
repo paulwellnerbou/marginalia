@@ -738,7 +738,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     }> = [];
 
     for (const thread of threads) {
-      if (thread.link_status !== 'linked') continue;
+      // Orphaned threads have no anchor at all; skip them. Linked and
+      // low-confidence threads both still carry a block_id + quote and
+      // can drive a highlight — the renderer's `findHighlightBlock`
+      // narrowing pass recovers the right element regardless of which
+      // confidence band the server assigned.
+      if (thread.link_status === 'orphaned') continue;
       if (!thread.anchor.block_id || !thread.anchor.quote) continue;
 
       if (!isProposal(thread)) {
