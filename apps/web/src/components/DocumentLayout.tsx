@@ -747,8 +747,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       if (!thread.anchor.block_id || !thread.anchor.quote) continue;
 
       if (!isProposal(thread)) {
+        // Low-confidence threads come back from the server's
+        // partial-match reanchor branch with null offsets — the
+        // server knows the quote is *roughly* in this block but
+        // doesn't know exactly where any more. Falling back to
+        // [0, quote.length] lets the renderer's resolveNormalizedRange
+        // walk into its "find quote anywhere in the block" branch
+        // instead of dropping the highlight entirely.
+        const quoteLen = thread.anchor.quote.length;
         const start = thread.anchor.start_offset ?? 0;
-        const end = thread.anchor.end_offset ?? 0;
+        const end = thread.anchor.end_offset ?? quoteLen;
         if (end > start) {
           highlights.push({
             scope: 'range',
