@@ -12,3 +12,4 @@ var/
 tsconfig.tsbuildinfo
 **/*.tsbuildinfo
 .data/
+out/

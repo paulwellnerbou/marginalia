@@ -56,6 +56,10 @@ import {
   exportPdf,
 } from '../export/pdf.js';
 import { inlineImageAssets } from '../export/html-envelope.js';
+import {
+  MermaidRenderEngineMissingError,
+  renderMermaidToPng,
+} from '../export/mermaid-rust.js';
 import { loadPrintCss, loadThemeCss } from '../export/theme-css.js';
 
 export interface AppDeps {
@@ -582,6 +586,12 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
   // the opaque uid. Matches what a human would expect the file to be
   // called when they open it.
   const derivedTitle = doc.name ?? extractDocumentTitle(source, doc.format);
+  // Closed over by `resolveMermaid` below. The engine-missing
+  // condition is per-export (the binary is either on PATH or not, for
+  // the lifetime of this request), so warn once even if the document
+  // contains many mermaid blocks — otherwise a 10-diagram doc would
+  // produce 10 identical install-hint lines on every export.
+  let mermaidEngineWarned = false;
   const buf = await exportDocx(source, {
     theme,
     format: doc.format,
@@ -596,6 +606,30 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
       } catch {
         // Blob missing on disk (rare — shouldn't happen without a GC
         // bug). Swallow so the export still succeeds with a placeholder.
+        return null;
+      }
+    },
+    // Rasterize mermaid blocks via the native `mmdr` Rust CLI so the
+    // DOCX gets a real embedded image. If the binary isn't installed
+    // (or any individual render fails) we return null and the
+    // exporter falls back to a labeled code block — mermaid in DOCX
+    // is a nice-to-have, not a hard requirement, so we don't surface
+    // the engine-missing case as an error here (unlike PDF).
+    resolveMermaid: async (source) => {
+      try {
+        const png = await renderMermaidToPng(source);
+        return png ? { bytes: png.bytes, mime: png.mime } : null;
+      } catch (err) {
+        if (err instanceof MermaidRenderEngineMissingError) {
+          // Operators only need the install hint once per export, not
+          // once per mermaid block.
+          if (!mermaidEngineWarned) {
+            mermaidEngineWarned = true;
+            console.warn('[docx-export]', err.message);
+          }
+          return null;
+        }
+        // Render / timeout errors fall back to placeholder too.
         return null;
       }
     },

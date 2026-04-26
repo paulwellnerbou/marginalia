@@ -1351,3 +1351,191 @@ describe('exportDocx — mermaid fallback (M4b stopgap)', () => {
     expect(documentXml).toContain('After.');
   });
 });
+
+describe('exportDocx — mermaid resolveMermaid', () => {
+  test('embeds rendered PNG when resolveMermaid returns bytes', async () => {
+    const md = [
+      '# Diagrams',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  A --> B',
+      '```',
+      '',
+      'After.',
+    ].join('\n');
+    let calls = 0;
+    let calledIndex = -1;
+    let calledSource = '';
+    const buf = await exportDocx(md, {
+      includeToc: false,
+      resolveMermaid: async (source, index) => {
+        calls += 1;
+        calledIndex = index;
+        calledSource = source;
+        return { bytes: PNG_1x1_BYTES, mime: 'image/png' };
+      },
+    });
+    const { documentXml, mediaFiles } = await inspectDocx(buf);
+    // Resolver got the right index and source.
+    expect(calls).toBe(1);
+    expect(calledIndex).toBe(0);
+    expect(calledSource).toContain('graph TD');
+    // The PNG landed in word/media/ — proves it was embedded as a
+    // real image part, not stringified into document.xml.
+    expect(mediaFiles.length).toBe(1);
+    // No fallback placeholder, since we resolved successfully.
+    expect(documentXml).not.toContain('mermaid diagram');
+    expect(documentXml).not.toContain('graph TD');
+    // Surrounding content still flows.
+    expect(documentXml).toContain('After.');
+  });
+
+  test('falls back to placeholder when resolveMermaid returns null', async () => {
+    const md = ['```mermaid', 'graph TD', '  A --> B', '```'].join('\n');
+    const buf = await exportDocx(md, {
+      includeToc: false,
+      resolveMermaid: async () => null,
+    });
+    const { documentXml, mediaFiles } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBe(0);
+    expect(documentXml).toContain('mermaid diagram');
+    expect(documentXml).toContain('graph TD');
+  });
+
+  test('falls back to placeholder when resolveMermaid throws', async () => {
+    const md = ['```mermaid', 'graph TD', '  A --> B', '```'].join('\n');
+    const buf = await exportDocx(md, {
+      includeToc: false,
+      resolveMermaid: async () => {
+        throw new Error('renderer crashed');
+      },
+    });
+    const { documentXml, mediaFiles } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBe(0);
+    expect(documentXml).toContain('mermaid diagram');
+  });
+
+  test('renders multiple diagrams independently with distinct indices', async () => {
+    const md = [
+      '```mermaid',
+      'graph TD',
+      'A --> B',
+      '```',
+      '',
+      'Between.',
+      '',
+      '```mermaid',
+      'graph LR',
+      'X --> Y',
+      '```',
+    ].join('\n');
+    const seenIndices: number[] = [];
+    const buf = await exportDocx(md, {
+      includeToc: false,
+      resolveMermaid: async (_source, index) => {
+        seenIndices.push(index);
+        // Return per-index distinct bytes so the docx packer can't
+        // dedupe identical media into a single part — that would
+        // hide the case where only one of the two diagrams actually
+        // got resolved. Keep the PNG bytes intact and append a
+        // trailing byte after IEND so each payload is distinct
+        // without corrupting the image (mutating an in-stream byte
+        // would invalidate the IEND CRC).
+        const tagged = new Uint8Array(PNG_1x1_BYTES.length + 1);
+        tagged.set(PNG_1x1_BYTES);
+        tagged[PNG_1x1_BYTES.length] = index;
+        return { bytes: tagged, mime: 'image/png' };
+      },
+    });
+    const { mediaFiles } = await inspectDocx(buf);
+    // Both diagrams resolved with distinct indices.
+    expect(seenIndices.sort()).toEqual([0, 1]);
+    // Two PNGs embedded — confirms each block is its own image part.
+    expect(mediaFiles.length).toBe(2);
+  });
+
+  test('falls back to placeholder when no resolveMermaid is provided', async () => {
+    const md = ['```mermaid', 'graph TD', 'A --> B', '```'].join('\n');
+    const buf = await exportDocx(md, { includeToc: false });
+    const { documentXml, mediaFiles } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBe(0);
+    expect(documentXml).toContain('mermaid diagram');
+  });
+
+  test('embeds mermaid PNG for AsciiDoc-format input', async () => {
+    // The asciidoc plugin (`rehypeAsciidocMermaid`) builds hast
+    // Elements directly with `'data-mermaid-index'` (hyphenated) as
+    // the property key — different from the markdown path's
+    // `dataMermaidIndex` (camelCase, normalised by `rehypeRaw`).
+    // Both spellings must reach the resolver and the walker so the
+    // diagram embeds end-to-end on either format.
+    const adoc = [
+      '= Title',
+      '',
+      '[mermaid]',
+      '----',
+      'graph TD',
+      'A --> B',
+      '----',
+    ].join('\n');
+    let calls = 0;
+    let calledIndex = -1;
+    let calledSource = '';
+    const buf = await exportDocx(adoc, {
+      format: 'asciidoc',
+      includeToc: false,
+      resolveMermaid: async (source, index) => {
+        calls += 1;
+        calledIndex = index;
+        calledSource = source;
+        return { bytes: PNG_1x1_BYTES, mime: 'image/png' };
+      },
+    });
+    const { documentXml, mediaFiles } = await inspectDocx(buf);
+    // Resolver got the AsciiDoc-emitted index + source.
+    expect(calls).toBe(1);
+    expect(calledIndex).toBe(0);
+    expect(calledSource).toContain('graph TD');
+    // The PNG was embedded as a real image part — no fallback.
+    expect(mediaFiles.length).toBe(1);
+    expect(documentXml).not.toContain('mermaid diagram');
+    expect(documentXml).not.toContain('graph TD');
+  });
+
+  test('bounds parallelism via mermaidConcurrency', async () => {
+    // 5 mermaid blocks, concurrency limit 2 → at no point should
+    // more than 2 resolves be in flight simultaneously. Each
+    // resolver call sleeps briefly while another peek can race
+    // through; the high-watermark counter catches violations.
+    const md = Array.from({ length: 5 }, (_, i) =>
+      ['```mermaid', `graph TD`, `A${i} --> B${i}`, '```'].join('\n'),
+    ).join('\n\n');
+    let inFlight = 0;
+    let highWatermark = 0;
+    const buf = await exportDocx(md, {
+      includeToc: false,
+      mermaidConcurrency: 2,
+      resolveMermaid: async (_source, _index) => {
+        inFlight += 1;
+        highWatermark = Math.max(highWatermark, inFlight);
+        // Yield twice so concurrent calls really do overlap when
+        // allowed; without this the awaits would all settle in the
+        // same microtask and inFlight would never exceed 1.
+        await new Promise((r) => setTimeout(r, 5));
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        return { bytes: PNG_1x1_BYTES, mime: 'image/png' };
+      },
+    });
+    const { mediaFiles } = await inspectDocx(buf);
+    // All five diagrams resolved (single dedup'd media file is fine —
+    // we're testing the pool bound, not the embed semantics).
+    expect(mediaFiles.length).toBeGreaterThanOrEqual(1);
+    // Pool actually limited concurrency.
+    expect(highWatermark).toBeLessThanOrEqual(2);
+    // Sanity: pool actually achieved >1 in flight (so the test is
+    // exercising the path, not just sequentializing by accident).
+    expect(highWatermark).toBeGreaterThan(1);
+  });
+});

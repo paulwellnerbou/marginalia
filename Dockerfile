@@ -15,6 +15,33 @@ ARG IMPRINT_MD
 ENV VITE_IMPRINT_MD=$IMPRINT_MD
 RUN bun run build
 
+# ---------------------------------------------------------------------
+# Mermaid → PNG renderer (mmdr)
+# ---------------------------------------------------------------------
+# `mmdr` is the CLI from the `mermaid-rs-renderer` crate — a pure-Rust,
+# Chromium-free mermaid renderer. The DOCX export pipeline shells out
+# to it per diagram (see apps/server/src/export/mermaid-rust.ts) so the
+# embedded image is real bytes, not a labeled-code-block stopgap.
+#
+# We compile from source rather than pulling the upstream release
+# tarball: only x86_64-linux prebuilts are published, and Marginalia's
+# image already builds for both linux/amd64 and linux/arm64. `cargo
+# install` picks the right target automatically. The Rust toolchain
+# stays in this throw-away stage — only the final ~10 MB binary is
+# copied into the runner.
+#
+# Licensing: mermaid-rs-renderer is MIT; transitive deps (resvg, usvg,
+# clap, fontdb, ttf-parser, …) are MIT or Apache-2.0 / dual-licensed.
+# No copyleft. See THIRD_PARTY_LICENSES.md at the repo root for
+# attribution.
+# ---------------------------------------------------------------------
+FROM rust:1.94-slim-bookworm AS mermaid-builder
+# `--locked` consumes the Cargo.lock published with the crate so the
+# binary is reproducible; bumping ${MMDR_VERSION} is the only knob
+# that should change the resulting bytes.
+ARG MMDR_VERSION=0.2.2
+RUN cargo install mermaid-rs-renderer --version ${MMDR_VERSION} --locked --root /out
+
 FROM oven/bun:1.3.12-debian AS runner
 WORKDIR /app
 
@@ -51,6 +78,10 @@ COPY --from=builder /app/package.json /app/bun.lock ./
 COPY --from=builder /app/apps ./apps
 COPY --from=builder /app/packages ./packages
 COPY deploy-scripts/container-entrypoint.sh /app/entrypoint.sh
+# Ship the third-party-license attribution alongside the binary it
+# documents (mmdr / mermaid-rs-renderer is MIT — the license text
+# travels with the redistributed binary).
+COPY --from=builder /app/THIRD_PARTY_LICENSES.md /app/THIRD_PARTY_LICENSES.md
 
 # Re-install, production-only, without mermaid (which we vendored
 # above). Using `--trust` with an empty list is fine; the key is
@@ -101,6 +132,13 @@ RUN bunx playwright install-deps chromium-headless-shell \
   && bunx playwright install chromium-headless-shell \
   && chown -R marginalia:marginalia /ms-playwright \
   && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Drop the `mmdr` binary onto PATH so the DOCX exporter's subprocess
+# wrapper finds it without needing MARGINALIA_MERMAID_BIN to be set.
+# Static binary — just `+x` and we're done. Chmod is owned by root
+# but readable by `marginalia` after the chown sweep below.
+COPY --from=mermaid-builder /out/bin/mmdr /usr/local/bin/mmdr
+RUN chmod 0755 /usr/local/bin/mmdr
 
 RUN chmod +x /app/entrypoint.sh \
   && mkdir -p /app/.data \

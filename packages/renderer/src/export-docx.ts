@@ -23,11 +23,13 @@
  *   callback yields bytes; `data:` URLs decode inline without a
  *   callback. Unsupported or unresolvable images fall back to a muted
  *   italic placeholder so the doc still reads.
+ * - M4b: mermaid blocks rasterize to PNG when the caller wires up
+ *   `resolveMermaid` (the server route shells out to the native Rust
+ *   `mmdr` CLI). Resolution runs with bounded parallelism — see
+ *   `mermaidConcurrency`. When the resolver is absent or returns
+ *   null/throws, the block falls back to the labeled-code-block
+ *   stopgap so the diagram source is still readable.
  * - M5: BCP-47 language tag + `<w:bidi/>` for RTL frontmatter.
- *
- * Out of scope (future milestones): real Mermaid rasterization (blocks
- * currently fall back to a labeled code block until a headless-browser
- * backend is wired up).
  */
 
 import rehypeParse from 'rehype-parse';
@@ -147,6 +149,35 @@ export interface DocxExportOptions {
   resolveAsset?: (src: string) => Promise<ResolvedAsset | null>;
 
   /**
+   * Rasterize a mermaid block's source to image bytes for embedding.
+   * The exporter calls this once per mermaid block (with bounded
+   * parallelism — see `mermaidConcurrency`) before walking the HAST.
+   * Return `null` (or throw — caught and swallowed) to fall back to
+   * the labeled-code-block stopgap so the diagram source is still
+   * readable in the doc.
+   *
+   * `index` is the 0-based mermaid block index recorded by
+   * `remarkMermaid` — useful for caching or logging which diagram
+   * failed without re-extracting the source.
+   *
+   * The server route wires this against the native `mmdr` Rust CLI;
+   * other callers (CLI / library) can supply their own resolver or
+   * leave it unset to get the labeled-code-block fallback.
+   */
+  resolveMermaid?: (source: string, index: number) => Promise<ResolvedAsset | null>;
+
+  /**
+   * Maximum number of mermaid blocks to resolve concurrently.
+   * Default: 4. Each `resolveMermaid` call may spawn a subprocess
+   * (the server's mmdr path does), so unbounded `Promise.all` over
+   * a 20-diagram doc would fan out into 20 simultaneous renderer
+   * processes and starve the host. Bound it. Set higher for cheap
+   * resolvers (in-memory cache) or lower if the host is constrained.
+   * Values < 1 are clamped to 1.
+   */
+  mermaidConcurrency?: number;
+
+  /**
    * Include a native Word Table of Contents field at the top of the
    * document. The TOC is populated by Word when the user opens the
    * file (the export marks it dirty, so Word prompts to update on
@@ -203,7 +234,16 @@ export async function exportDocx(
   // Resolve images up-front in parallel so the HAST walker can stay
   // synchronous. docx construction is CPU-bound and sync; doing the
   // async I/O here keeps the walker tidy.
-  const images = await resolveAllImages(hast, options.resolveAsset);
+  //
+  // Mermaid blocks resolve through the same machinery: each
+  // `<div class="mermaid" data-mermaid-index="N">` is handed to
+  // `options.resolveMermaid()` and the resulting bytes are probed
+  // exactly like an `<img>` (same image-size + ImageRun path), keyed
+  // by the numeric index from `remarkMermaid`.
+  const [images, mermaidImages] = await Promise.all([
+    resolveAllImages(hast, options.resolveAsset),
+    resolveAllMermaid(hast, options.resolveMermaid, options.mermaidConcurrency),
+  ]);
 
   // Pull GFM footnotes out of the body: build their DOCX paragraphs,
   // assign each a numeric id, and remove the `<section>` so it won't
@@ -213,6 +253,7 @@ export async function exportDocx(
   const ctxWithoutFootnotes: BuildCtx = {
     tokens,
     images,
+    mermaidImages,
     pageWidthPx: contentWidthPx(effectivePageSize, tokens.page.marginPt),
     footnoteIds: new Map(),
   };
@@ -557,6 +598,148 @@ async function resolveAllImages(
     }),
   );
   return new Map(entries);
+}
+
+/**
+ * Default ceiling on simultaneous `resolveMermaid` calls. Picked
+ * empirically: the typical resolver (mmdr subprocess) is CPU-bound
+ * and 4 concurrent renders saturate a small server's cores without
+ * starving anything else. Override via `DocxExportOptions.mermaidConcurrency`.
+ */
+const DEFAULT_MERMAID_CONCURRENCY = 4;
+
+/**
+ * Read the mermaid-block index off a HAST `<div class="mermaid">`.
+ * Returns -1 when no usable index is present.
+ *
+ * Two property-key spellings are accepted because the two upstream
+ * plugins write hast differently:
+ *   - `remarkMermaid` (markdown) emits raw HTML `<div data-mermaid-index="N">`
+ *     which `rehypeRaw` parses; HTML attributes get normalised to
+ *     camelCase property keys, so we see `dataMermaidIndex`.
+ *   - `rehypeAsciidocMermaid` builds hast Elements directly with the
+ *     hyphenated key (`'data-mermaid-index'`) and never round-trips
+ *     through HTML, so the camelCase normaliser never fires.
+ *
+ * Both string and number values are tolerated; the asciidoc plugin
+ * stringifies, but a future plugin might pass a bare number.
+ */
+function readMermaidIndex(node: Element): number {
+  const props = node.properties ?? {};
+  const raw =
+    (props as Record<string, unknown>)['dataMermaidIndex'] ??
+    (props as Record<string, unknown>)['data-mermaid-index'];
+  let idx: number;
+  if (typeof raw === 'number') {
+    idx = raw;
+  } else if (typeof raw === 'string') {
+    // Strict integer match. `parseInt` would silently accept '1.5'
+    // (→ 1) or '0abc' (→ 0) and mis-key the resolved-images map —
+    // the upstream plugins always stringify a known integer, so any
+    // string that doesn't pass this check is a malformed input we
+    // shouldn't try to coerce.
+    if (!/^\d+$/.test(raw)) return -1;
+    idx = Number(raw);
+  } else {
+    return -1;
+  }
+  return Number.isInteger(idx) && idx >= 0 ? idx : -1;
+}
+
+/**
+ * Walk the HAST for mermaid blocks (`<div class="mermaid"
+ * data-mermaid-index="N">…source…</div>` from `remarkMermaid` or
+ * `rehypeAsciidocMermaid`), resolve each through the caller's
+ * `resolveMermaid` callback with bounded parallelism, and return a
+ * Map keyed by the numeric index.
+ *
+ * Why index-keyed and not source-text-keyed: a document can legitimately
+ * contain two identical diagrams (copy-paste) and we want each to render
+ * independently — keying by source would dedupe them. The index is what
+ * the upstream plugins emit as `data-mermaid-index`, and is unique
+ * per block by construction.
+ *
+ * Why bounded: the typical server-side resolver spawns an `mmdr`
+ * subprocess per call. An unbounded `Promise.all` over a 20-diagram
+ * doc would fork 20 simultaneous renderer processes and starve the
+ * host. The pool size is configurable via `mermaidConcurrency` so
+ * cheap resolvers (in-memory cache) can opt back into wider parallelism.
+ *
+ * No callback → empty map; the walker reads that as "no resolved
+ * mermaid available" and falls back to the existing labeled-code-block
+ * stopgap. Same swallow-on-error policy as `resolveAllImages`: a single
+ * broken diagram never breaks the whole export.
+ */
+async function resolveAllMermaid(
+  root: HastRoot,
+  resolve: DocxExportOptions['resolveMermaid'],
+  concurrencyOption?: number,
+): Promise<Map<number, ResolvedImage | null>> {
+  if (!resolve) return new Map();
+  interface Block {
+    index: number;
+    source: string;
+  }
+  const blocks: Block[] = [];
+  visit(root, 'element', (node: Element) => {
+    if (node.tagName !== 'div') return;
+    const cls = node.properties?.className;
+    if (!Array.isArray(cls) || !(cls as unknown[]).includes('mermaid')) return;
+    const idx = readMermaidIndex(node);
+    if (idx < 0) return;
+    blocks.push({ index: idx, source: hastTextContent(node) });
+  });
+  const limit = Math.max(
+    1,
+    typeof concurrencyOption === 'number' && Number.isFinite(concurrencyOption)
+      ? Math.floor(concurrencyOption)
+      : DEFAULT_MERMAID_CONCURRENCY,
+  );
+  const entries = await mapWithConcurrency(
+    blocks,
+    limit,
+    async ({ index, source }): Promise<[number, ResolvedImage | null]> => {
+      try {
+        const asset = await resolve(source, index);
+        if (!asset) return [index, null];
+        const img = probeImage(asset.bytes, asset.mime);
+        return [index, img];
+      } catch {
+        // Swallow: a broken diagram should fall back to the
+        // code-block stopgap, not blow up the whole export.
+        return [index, null];
+      }
+    },
+  );
+  return new Map(entries);
+}
+
+/**
+ * Tiny worker-pool helper: map `items` through `fn` with at most
+ * `limit` calls in flight at once. Output order matches input order.
+ *
+ * Implemented as N "worker" coroutines that pull the next index off
+ * a shared cursor — simpler than a queue + drain, and correct for
+ * our use (no per-item priority, no early termination).
+ */
+async function mapWithConcurrency<T, U>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<U>,
+): Promise<U[]> {
+  if (items.length === 0) return [];
+  const out = new Array<U>(items.length);
+  let cursor = 0;
+  const workerCount = Math.min(limit, items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i] as T);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 function decodeDataUrl(url: string): ResolvedAsset | null {
@@ -1126,6 +1309,17 @@ function buildNumbering(): NonNullable<
 interface BuildCtx {
   readonly tokens: ThemeTokens;
   readonly images: Map<string, ResolvedImage | null>;
+  /**
+   * Pre-resolved mermaid renders, keyed by the numeric index that
+   * `remarkMermaid` writes onto each `<div class="mermaid"
+   * data-mermaid-index="N">`. `null` means we tried but the renderer
+   * couldn't produce usable bytes — the walker falls back to the
+   * labeled-code-block stopgap. An empty map can mean the caller
+   * didn't supply `resolveMermaid`, or simply that the document had
+   * no mermaid blocks to resolve; the walker falls back whenever no
+   * usable rendered image is available for a mermaid block.
+   */
+  readonly mermaidImages: Map<number, ResolvedImage | null>;
   readonly pageWidthPx: number;
   /**
    * GFM footnote slug → numeric DOCX footnote id (1-based). Populated
@@ -1490,14 +1684,29 @@ function convertBlock(
         }
         return;
       }
-      // `<div class="mermaid">` carries the diagram source. Real
-      // rasterization (SVG → PNG → ImageRun) is M4b territory and
-      // depends on headless Chromium — until that lands, render the
-      // source as a labeled code block so readers at least get a
-      // legible record of the diagram instead of a stray inline run.
+      // `<div class="mermaid">` carries the diagram source. If the
+      // caller wired up `resolveMermaid` and the renderer produced
+      // bytes, embed it as a real image. Otherwise fall back to a
+      // labeled code block so the diagram source is still readable
+      // in the doc.
       const isMermaid =
         Array.isArray(cls) && (cls as unknown[]).includes('mermaid');
       if (isMermaid) {
+        // Use the same index reader as `resolveAllMermaid` so the
+        // walker and resolver agree on which key spelling carries the
+        // index (markdown → camelCase, asciidoc → hyphenated).
+        const idx = readMermaidIndex(node);
+        const resolved = idx >= 0 ? ctx.mermaidImages.get(idx) : null;
+        if (resolved) {
+          const run = buildMermaidImageRun(resolved, ctx);
+          out.push(
+            new Paragraph({
+              alignment: AlignmentType.CENTER,
+              children: [run],
+            }),
+          );
+          return;
+        }
         const source = hastTextContent(node);
         out.push(
           new Paragraph({
@@ -1670,6 +1879,36 @@ function maybeBuildImageRun(node: Element, ctx: BuildCtx): ImageRun | null {
   // Narrowed through the union; docx requires `as` here because
   // TypeScript can't infer the discriminated constructor overload.
   return new ImageRun(opts as ConstructorParameters<typeof ImageRun>[0]);
+}
+
+/**
+ * Build an ImageRun for a pre-resolved mermaid render. Same scaling
+ * rule as a normal block image (fit content column width, preserve
+ * aspect ratio) — the diagram's natural dimensions came from probing
+ * the rendered PNG, so the maths is identical to `maybeBuildImageRun`.
+ *
+ * Kept separate from `maybeBuildImageRun` because there's no source
+ * `<img>` element here — width/height/alt all derive from the render
+ * itself, not from author-supplied attributes.
+ */
+function buildMermaidImageRun(img: ResolvedImage, ctx: BuildCtx): ImageRun {
+  let { width, height } = img;
+  const maxW = ctx.pageWidthPx;
+  if (width > maxW) {
+    const scale = maxW / width;
+    width = maxW;
+    height = Math.round(height * scale);
+  }
+  return new ImageRun({
+    type: img.type,
+    data: img.bytes,
+    transformation: { width, height },
+    altText: {
+      title: 'Mermaid diagram',
+      description: 'Mermaid diagram',
+      name: 'mermaid-diagram',
+    },
+  } as ConstructorParameters<typeof ImageRun>[0]);
 }
 
 function headingLevelOf(level: number): (typeof HeadingLevel)[keyof typeof HeadingLevel] {

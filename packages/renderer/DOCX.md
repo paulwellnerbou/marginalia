@@ -46,7 +46,7 @@ consumes only tokens, never CSS.
 | Heading-anchor sigil (`<a class="heading-anchor">`) | Stripped — UI chrome, not content. |
 | TOC | Real Word `TableOfContents` field with `hyperlink:true`, `headingStyleRange:'1-6'`, `beginDirty:true` (so Word prompts to populate on first open). Placement: an explicit `[TOC]` or `[[_TOC_]]` marker in the source wins; otherwise auto-emitted after the leading heading when the doc has ≥ 2 headings. Controlled by `options.includeToc` (`'auto' \| true \| false`). |
 | Footnotes (GFM) | Native DOCX footnotes. Refs become `FootnoteReferenceRun`s; bodies land in `word/footnotes.xml` with multi-block content (paragraphs, lists, code, blockquotes) preserved. |
-| Mermaid block | **Stopgap:** rendered as a labeled code block. Real SVG → PNG rasterization is deferred; it needs a headless Chromium backend. |
+| Mermaid block | When the caller supplies `resolveMermaid`, the diagram is rasterized to PNG and embedded as a centered `ImageRun` (sized to the content column, aspect ratio preserved). The server route wires this to the native `mmdr` Rust CLI (`cargo install mermaid-rs-renderer`). If the binary is absent or any render fails, falls back to a labeled code block so the source is still readable. |
 | Horizontal rule | `Paragraph` with a `top` border styled from `tokens.colors.border`. |
 | Frontmatter | Skipped in the body. `lang:` / `language:` / `locale:` drives document-wide `<w:lang>` and `<w:bidi/>` for RTL scripts. `options.title` / `options.author` flow to DOCX core properties. |
 
@@ -120,6 +120,14 @@ sidebar remains the accessible navigation.
 - **RTL / non-Latin scripts.** `bidi` and the BCP-47 lang tag both
   apply when frontmatter declares an RTL language (`ar`, `he`, `fa`,
   `ur`, `ps`, `ug`, etc.) or when `options.language` forces one.
+- **Mermaid rendering.** The server route rasterizes mermaid blocks
+  via the native `mmdr` Rust CLI (`cargo install
+  mermaid-rs-renderer`) — no Chromium needed, ~15 ms per diagram.
+  Override the binary path with `MARGINALIA_MERMAID_BIN`; cap the
+  per-diagram budget with `MARGINALIA_MERMAID_TIMEOUT_MS` (default
+  10000 ms). When the binary is missing, every mermaid block falls
+  back to a labeled code block — the export still succeeds and the
+  operator gets one warning line per export.
 
 ## Why this approach
 
