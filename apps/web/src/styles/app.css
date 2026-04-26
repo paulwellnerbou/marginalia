@@ -2349,10 +2349,16 @@ button.primary.small {
   position: absolute;
   left: 0.6rem;
   right: 0.9rem;
+  /* Slots overlap each other (Config A puts every slot at top:0 with
+     a different height). Making the slot itself transparent to pointer
+     events — and only the inner sticky card opaque — keeps later
+     slots from intercepting clicks/hover meant for earlier cards. */
+  pointer-events: none;
 }
 .ic-sticky-card {
   /* `position` and `top` set inline per phase (sticky | static). */
   width: 100%;
+  pointer-events: auto;
 }
 
 .ic-empty-state {
