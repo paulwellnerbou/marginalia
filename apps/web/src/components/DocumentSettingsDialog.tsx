@@ -11,7 +11,7 @@ import {
   TextField,
 } from '@radix-ui/themes';
 import { useState } from 'react';
-import type { Document } from '../lib/api.js';
+import type { Document, MermaidRenderer } from '../lib/api.js';
 import {
   type DocumentSettingsResponse,
   exportDocumentBundle,
@@ -40,6 +40,12 @@ export function DocumentSettingsDialog({
   const [open, setOpen] = useState(false);
   const [docName, setDocName] = useState(doc.name ?? '');
   const [defaultTheme, setDefaultTheme] = useState(doc.default_theme);
+  // Sentinel for "follow the server default" — Select needs a non-null
+  // value, and translating at the API boundary is cleaner than
+  // teaching the dropdown to render `null`.
+  const [mermaidChoice, setMermaidChoice] = useState<MermaidRenderer | typeof DEFAULT_RENDERER_VALUE>(
+    doc.mermaid_renderer ?? DEFAULT_RENDERER_VALUE,
+  );
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -59,6 +65,8 @@ export function DocumentSettingsDialog({
       const patch: Parameters<typeof updateDocumentSettings>[1] = {
         name: docName.trim() ? docName.trim() : null,
         default_theme: defaultTheme,
+        mermaid_renderer:
+          mermaidChoice === DEFAULT_RENDERER_VALUE ? null : mermaidChoice,
       };
       const result = await updateDocumentSettings(doc.uid, patch, identity);
       onChange(result);
@@ -151,6 +159,34 @@ export function DocumentSettingsDialog({
 
           <Separator size="4" />
 
+          <Flex direction="column" gap="1">
+            <Text size="2" weight="medium">
+              Mermaid renderer (exports only)
+            </Text>
+            <Text size="1" color="gray">
+              Affects PDF and Word downloads only — the viewer always uses
+              mermaid.js. "Default" follows the server setting. Pick "High
+              fidelity" if some diagrams render incorrectly under "Fast".
+            </Text>
+            <Select.Root
+              value={mermaidChoice}
+              onValueChange={(v) =>
+                setMermaidChoice(v as MermaidRenderer | typeof DEFAULT_RENDERER_VALUE)
+              }
+            >
+              <Select.Trigger />
+              <Select.Content position="popper">
+                <Select.Item value={DEFAULT_RENDERER_VALUE}>Default</Select.Item>
+                <Select.Item value="mmdr">Fast (native, lower fidelity)</Select.Item>
+                <Select.Item value="chromium">
+                  High fidelity (Chromium, slower)
+                </Select.Item>
+              </Select.Content>
+            </Select.Root>
+          </Flex>
+
+          <Separator size="4" />
+
           <Flex direction="column" gap="2">
             <Text size="2" weight="medium">
               JSON bundle
@@ -189,6 +225,13 @@ export function DocumentSettingsDialog({
     </Dialog.Root>
   );
 }
+
+/**
+ * Sentinel string used for the "follow server default" option in the
+ * mermaid-renderer Select. Translates to `null` at the API boundary
+ * — the Select component itself can't render a `null` value.
+ */
+const DEFAULT_RENDERER_VALUE = '__default__' as const;
 
 function sanitizeFilename(name: string): string {
   const trimmed = name.trim();

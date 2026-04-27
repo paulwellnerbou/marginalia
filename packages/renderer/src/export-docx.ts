@@ -111,6 +111,25 @@ export interface ResolvedAsset {
   readonly bytes: Uint8Array;
   /** MIME type; used to pick the DOCX image type. */
   readonly mime: string;
+  /**
+   * Intended display dimensions in CSS pixels (96 DPI). Optional —
+   * when omitted, the exporter probes the bytes and uses the raw
+   * pixel count as the display size (correct for 1× raster
+   * sources like user-uploaded images).
+   *
+   * Use this to ship a HIGH-RESOLUTION raster while telling Word to
+   * display at the smaller natural size: the chromium mermaid
+   * resolver renders at deviceScaleFactor=4 so the PNG holds 4× the
+   * pixels, but `width`/`height` here carry the original CSS-pixel
+   * size of the diagram. Word then displays at the natural size and
+   * has 4× the pixels to draw on at high zoom or print resolution.
+   *
+   * Without this, embedding a 4×-resolution PNG would scale the
+   * diagram up by 4× visually, which is the opposite of what we
+   * want.
+   */
+  readonly width?: number;
+  readonly height?: number;
 }
 
 export interface DocxExportOptions {
@@ -589,7 +608,7 @@ async function resolveAllImages(
             ? await resolve(src)
             : null;
         if (!asset) return [src, null];
-        const img = probeImage(asset.bytes, asset.mime);
+        const img = probeImage(asset.bytes, asset.mime, asset.width, asset.height);
         return [src, img];
       } catch {
         // Swallow: a broken image should never break the whole export.
@@ -702,7 +721,7 @@ async function resolveAllMermaid(
       try {
         const asset = await resolve(source, index);
         if (!asset) return [index, null];
-        const img = probeImage(asset.bytes, asset.mime);
+        const img = probeImage(asset.bytes, asset.mime, asset.width, asset.height);
         return [index, img];
       } catch {
         // Swallow: a broken diagram should fall back to the
@@ -764,13 +783,32 @@ function decodeDataUrl(url: string): ResolvedAsset | null {
   }
 }
 
-function probeImage(bytes: Uint8Array, mime: string): ResolvedImage | null {
+/**
+ * Probe an asset for the dimensions docx should display it at.
+ *
+ * If the caller passed `displayWidth` / `displayHeight` explicitly
+ * (set on `ResolvedAsset` — used by the chromium mermaid resolver
+ * to ship a high-resolution PNG without enlarging the diagram on
+ * the page), those win. Otherwise we read the raw pixel size from
+ * the bytes — correct for 1× sources like user uploads or the mmdr
+ * raster output where actual pixels equal natural CSS pixels.
+ */
+function probeImage(
+  bytes: Uint8Array,
+  mime: string,
+  displayWidth?: number,
+  displayHeight?: number,
+): ResolvedImage | null {
   const type = mimeToDocxType(mime);
   if (!type) return null; // SVG and others unsupported for now (see M4b).
   try {
     const info = imageSize(bytes);
     if (!info.width || !info.height) return null;
-    return { bytes, mime, width: info.width, height: info.height, type };
+    const width =
+      displayWidth && displayWidth > 0 ? Math.round(displayWidth) : info.width;
+    const height =
+      displayHeight && displayHeight > 0 ? Math.round(displayHeight) : info.height;
+    return { bytes, mime, width, height, type };
   } catch {
     return null;
   }

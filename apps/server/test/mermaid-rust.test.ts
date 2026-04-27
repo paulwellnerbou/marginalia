@@ -17,6 +17,7 @@ import {
   configureMermaidRenderer,
   getMermaidRendererConfig,
   MermaidRenderEngineMissingError,
+  renderMermaidToImage,
   renderMermaidToPng,
 } from '../src/export/mermaid-rust.js';
 
@@ -65,8 +66,26 @@ describe('renderMermaidToPng', () => {
     const result = await renderMermaidToPng(SAMPLE_FLOWCHART);
     expect(result).not.toBeNull();
     expect(result!.mime).toBe('image/png');
+    expect(result!.format).toBe('png');
     expect(result!.bytes.length).toBeGreaterThan(1000);
     expect(hasPngMagic(result!.bytes)).toBe(true);
+  });
+
+  test.if(MMDR_AVAILABLE)('produces SVG via mmdr when format=svg', async () => {
+    configureMermaidRenderer({ bin: 'mmdr' });
+    const result = await renderMermaidToImage(SAMPLE_FLOWCHART, 'svg');
+    expect(result).not.toBeNull();
+    expect(result!.mime).toBe('image/svg+xml');
+    expect(result!.format).toBe('svg');
+    const text = new TextDecoder().decode(result!.bytes);
+    // SVG output starts with `<svg` (after any optional XML prolog).
+    // Just check the magic substring is present near the start; the
+    // exact prolog presence varies between mmdr versions.
+    expect(text).toContain('<svg');
+    // Body of the diagram should mention something we recognise from
+    // the source (a node label) — guards against a degenerate empty
+    // SVG getting silently accepted.
+    expect(text).toMatch(/Start|Decision|OK|Stop/);
   });
 
   test('throws engine-missing error when binary is absent', async () => {

@@ -100,6 +100,7 @@ export function ViewPage() {
       ...doc,
       name: s.name,
       default_theme: s.default_theme,
+      mermaid_renderer: s.mermaid_renderer,
       password_protected: s.password_protected,
     });
   }

@@ -69,6 +69,19 @@ export interface ExportedComment {
 
 export type DocumentFormat = 'markdown' | 'asciidoc';
 
+/**
+ * Mermaid renderer used for DOCX/PDF exports.
+ *
+ *   'mmdr'     — native Rust subprocess (fast, lower fidelity)
+ *   'chromium' — real mermaid.js inside headless Chromium (slow,
+ *                pixel-identical to the viewer)
+ *
+ * The viewer always uses mermaid.js; this only affects exports.
+ */
+export type MermaidRenderer = 'mmdr' | 'chromium';
+
+export const MERMAID_RENDERERS: readonly MermaidRenderer[] = ['mmdr', 'chromium'] as const;
+
 export function isDocumentFormat(v: unknown): v is DocumentFormat {
   return v === 'markdown' || v === 'asciidoc';
 }
@@ -85,6 +98,8 @@ export interface DocumentBundle {
     /** @deprecated Accepted for back-compat with old bundles; ignored. */
     editable_by_anyone?: boolean;
     default_theme: string;
+    /** Bundle v4+ carries the per-document mermaid renderer override. */
+    mermaid_renderer?: MermaidRenderer | null;
   };
   representation?: ExportedDocumentRepresentation;
   comments: ExportedComment[];
@@ -114,6 +129,12 @@ export interface Document {
   attached_assets: AttachedAsset[];
   format: DocumentFormat;
   default_theme: string;
+  /**
+   * Per-document override for the mermaid renderer used by DOCX/PDF
+   * exports. `null` means "use server default" (typically `'mmdr'`).
+   * The viewer is unaffected by this — it always uses mermaid.js.
+   */
+  mermaid_renderer: MermaidRenderer | null;
   password_protected: boolean;
   role: Role;
   /** Server-forced display name (from the invite), or null if no invite. */
@@ -157,6 +178,8 @@ export interface UploadResponse {
   name: string | null;
   admin_invite: { token: string; url: string; display_name: string };
   default_theme: string;
+  /** New documents always start at `null` (= use server default). */
+  mermaid_renderer: MermaidRenderer | null;
   format: DocumentFormat;
   password?: string;
 }
@@ -588,11 +611,18 @@ export interface DocumentSettingsPatch {
   /** Rename the document. `null` clears it (→ derive from content). */
   name?: string | null;
   default_theme?: string;
+  /**
+   * Per-document mermaid renderer override. Pass `null` to clear the
+   * override and fall back to the server default. Anything outside
+   * the typed values is rejected by the server with 400.
+   */
+  mermaid_renderer?: MermaidRenderer | null;
   password?: null | 'rotate';
 }
 export interface DocumentSettingsResponse {
   name: string | null;
   default_theme: string;
+  mermaid_renderer: MermaidRenderer | null;
   password_protected: boolean;
   password?: string;
 }
