@@ -18,20 +18,24 @@ export function inlineAvatarHue(seed: string): number {
   return Math.abs(h) % 360;
 }
 
-const SHORT_MONTHS = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-];
+// Cached `Intl.DateTimeFormat` instances. Constructing one on every
+// call shows up in tight loops (each timestamp on the inline column
+// re-renders is one call); the formatter object is heavy enough that
+// the standard advice is to memoize per locale + options.
+const sameDayFormatter = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+});
+const olderFormatter = new Intl.DateTimeFormat(undefined, {
+  day: 'numeric',
+  month: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+const longFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+});
 
 export function inlineFormatTimestamp(ts: number): string {
   const d = new Date(ts);
@@ -40,15 +44,9 @@ export function inlineFormatTimestamp(ts: number): string {
     d.getFullYear() === now.getFullYear() &&
     d.getMonth() === now.getMonth() &&
     d.getDate() === now.getDate();
-  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  if (sameDay) return time;
-  const month = SHORT_MONTHS[d.getMonth()] ?? '';
-  return `${d.getDate()} ${month}, ${time}`;
+  return sameDay ? sameDayFormatter.format(d) : olderFormatter.format(d);
 }
 
 export function inlineFormatTimestampLong(ts: number): string {
-  return new Date(ts).toLocaleString([], {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
+  return longFormatter.format(new Date(ts));
 }
