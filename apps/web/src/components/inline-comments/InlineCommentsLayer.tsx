@@ -560,68 +560,59 @@ export function InlineCommentsLayer({
     return onCreate(payload);
   }
 
-  const renderCardById = useCallback(
-    (id: string): ReactNode => {
-      if (id === PENDING_ID) {
-        if (!pendingAnchor || !canComment) return null;
-        return (
-          <div className="ic-card ic-card-pending">
-            <div className="ic-pending-quote">"{truncate(pendingAnchor.quote, 160)}"</div>
-            <InlineComposer
-              placeholder="Your comment…"
-              needsName={!displayName}
-              rows={3}
-              submitLabel="Post"
-              showCancel
-              autoFocus
-              onCancel={onCancelPending}
-              onSubmit={submitNew}
-            />
-          </div>
-        );
-      }
-      const item = sortedById.get(id);
-      if (!item) return null;
-      const blockId = item.thread.anchor.block_id;
-      const onJump = blockId
-        ? () => onScrollToAnchor(blockId, item.thread.anchor.quote)
-        : undefined;
+  // Plain function (not useCallback). The result is used inline in
+  // the JSX render loop, never passed as a prop, so memoization
+  // would buy nothing — and the previous useCallback omitted several
+  // changing handler props (onReply / onEdit / on… / onScrollToAnchor),
+  // which risked stale closures after identity / displayName updates
+  // re-bind the parent's callbacks.
+  function renderCardById(id: string): ReactNode {
+    if (id === PENDING_ID) {
+      if (!pendingAnchor || !canComment) return null;
       return (
-        <InlineThreadCard
-          uid={uid}
-          thread={item.thread}
-          canComment={canComment}
-          needsName={!displayName}
-          docSource={docSource}
-          blockRanges={blockRanges}
-          focused={focusedId === id}
-          flashPhase={flash?.id === id ? flash.phase : null}
-          collapsed={collapsed.has(id)}
-          onToggleCollapsed={() => toggle(id)}
-          onJump={onJump}
-          onReply={onReply}
-          onEdit={onEdit}
-          onDeleteNode={onDeleteNode}
-          onDeleteThread={onDeleteThread}
-          onResolveThread={onResolveThread}
-          onEditProposalRationale={onEditProposalRationale}
-        />
+        <div className="ic-card ic-card-pending">
+          <div className="ic-pending-quote">"{truncate(pendingAnchor.quote, 160)}"</div>
+          <InlineComposer
+            placeholder="Your comment…"
+            needsName={!displayName}
+            rows={3}
+            submitLabel="Post"
+            showCancel
+            autoFocus
+            onCancel={onCancelPending}
+            onSubmit={submitNew}
+          />
+        </div>
       );
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [
-      sortedById,
-      pendingAnchor,
-      canComment,
-      displayName,
-      blockRanges,
-      docSource,
-      focusedId,
-      flash,
-      collapsed,
-      uid,
-    ],
-  );
+    }
+    const item = sortedById.get(id);
+    if (!item) return null;
+    const blockId = item.thread.anchor.block_id;
+    const onJump = blockId
+      ? () => onScrollToAnchor(blockId, item.thread.anchor.quote)
+      : undefined;
+    return (
+      <InlineThreadCard
+        uid={uid}
+        thread={item.thread}
+        canComment={canComment}
+        needsName={!displayName}
+        docSource={docSource}
+        blockRanges={blockRanges}
+        focused={focusedId === id}
+        flashPhase={flash?.id === id ? flash.phase : null}
+        collapsed={collapsed.has(id)}
+        onToggleCollapsed={() => toggle(id)}
+        onJump={onJump}
+        onReply={onReply}
+        onEdit={onEdit}
+        onDeleteNode={onDeleteNode}
+        onDeleteThread={onDeleteThread}
+        onResolveThread={onResolveThread}
+        onEditProposalRationale={onEditProposalRationale}
+      />
+    );
+  }
 
   const showEmpty = sorted.length === 0 && !pendingAnchor;
   const minHeight = Math.max(columnHeight, 0);
