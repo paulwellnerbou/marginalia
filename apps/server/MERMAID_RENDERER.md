@@ -50,7 +50,13 @@ mid-implementation.
       a PNG fallback in the same picture element (older Word
       ignores the SVG part), which doubles per-diagram cost and the
       embed path complexity for negligible benefit. Re-evaluate if
-      anyone asks.
+      anyone asks. To keep DOCX diagrams sharp at zoom and print
+      resolution, the chromium resolver renders at
+      `deviceScaleFactor=4` (env `MARGINALIA_MERMAID_CHROMIUM_PNG_SCALE`)
+      and the resolver result carries explicit natural display
+      dimensions in CSS px so docx tells Word "display at the
+      natural size" while the PNG bytes hold 4× more pixels for
+      the renderer to draw on.
 3. **No caching in v1.** A per-export re-render is acceptable.
    Cache (content-addressed by `(source, theme, renderer-version)`)
    is a Phase C follow-up if it becomes a bottleneck.

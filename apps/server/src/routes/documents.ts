@@ -677,7 +677,20 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
     // don't surface engine-missing as an error here (unlike PDF).
     resolveMermaid: async (source) => {
       const img = await renderMermaidPng(source);
-      return img ? { bytes: img.bytes, mime: img.mime } : null;
+      if (!img) return null;
+      // Forward natural display dimensions (CSS px) when the
+      // resolver supplied them. The chromium path renders at
+      // deviceScaleFactor=4 so the PNG carries 4× more pixels than
+      // the diagram's natural size; without these dims, the
+      // exporter would tell Word to display at the bigger pixel
+      // count and inflate the diagram 4× visually.
+      const asset: { bytes: Uint8Array; mime: string; width?: number; height?: number } = {
+        bytes: img.bytes,
+        mime: img.mime,
+      };
+      if (img.naturalWidth !== undefined) asset.width = img.naturalWidth;
+      if (img.naturalHeight !== undefined) asset.height = img.naturalHeight;
+      return asset;
     },
   });
 

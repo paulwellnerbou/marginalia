@@ -42,9 +42,19 @@ interface Config {
    */
   timeoutMs: number;
   /**
-   * Image scale (device pixel ratio) for PNG output. 2× is a
-   * reasonable default — sharp on retina displays and inside
-   * Word's "100% zoom" view, without bloating bytes too much.
+   * Image scale (device pixel ratio) for PNG output. 4× by default
+   * so embedded diagrams stay sharp at high zoom in Word and at
+   * print resolution (Word renders at 96 DPI by default; printers
+   * typically run at 300+ DPI, ~3.1× the screen density). The
+   * resolver pairs the high-res raster with explicit display CSS-
+   * pixel dimensions, so Word displays the diagram at its natural
+   * size with a 4× pixel reservoir to draw on.
+   *
+   * Tradeoff: PNG bytes grow ~16× vs 1×. For typical diagrams that
+   * means tens of KB → hundreds of KB; still small enough that
+   * docx file size stays reasonable on documents with a handful
+   * of diagrams. Lower this knob (e.g. to 2 or 3) on memory-
+   * constrained hosts.
    */
   pngScale: number;
 }
@@ -56,7 +66,7 @@ function readConfigFromEnv(): Config {
   const timeoutMs =
     t && Number.isInteger(Number(t)) && Number(t) >= 100 ? Number(t) : 15_000;
   const s = process.env.MARGINALIA_MERMAID_CHROMIUM_PNG_SCALE;
-  const pngScale = s && Number.isFinite(Number(s)) && Number(s) > 0 ? Number(s) : 2;
+  const pngScale = s && Number.isFinite(Number(s)) && Number(s) > 0 ? Number(s) : 4;
   return { timeoutMs, pngScale };
 }
 
@@ -242,12 +252,31 @@ export async function renderMermaidWithChromium(
       return null;
     }
 
+    // Read the host's CSS-pixel bounding box BEFORE we take the
+    // screenshot. This is the natural display size of the diagram
+    // (independent of `deviceScaleFactor`); we hand it back so the
+    // DOCX exporter can tell Word "display at this size" while the
+    // PNG bytes carry `deviceScaleFactor`× more actual pixels.
+    // Without this hand-off, a 4×-resolution PNG would scale up the
+    // diagram visually 4× — wrong direction.
+    const naturalSize = await page.evaluate(() => {
+      const el = document.getElementById('host');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { width: r.width, height: r.height };
+    });
+
     if (format === 'svg') {
-      return {
+      const svgResult: RenderedMermaidImage = {
         bytes: new TextEncoder().encode(probe.svg),
         mime: 'image/svg+xml',
         format: 'svg',
       };
+      if (naturalSize) {
+        svgResult.naturalWidth = naturalSize.width;
+        svgResult.naturalHeight = naturalSize.height;
+      }
+      return svgResult;
     }
 
     // PNG: screenshot the host div at the configured scale. The host
@@ -255,7 +284,16 @@ export async function renderMermaidWithChromium(
     // screenshot crops to the SVG bounding box without odd margins.
     const host = page.locator('#host');
     const png = await host.screenshot({ type: 'png', omitBackground: false });
-    return { bytes: png, mime: 'image/png', format: 'png' };
+    const pngResult: RenderedMermaidImage = {
+      bytes: png,
+      mime: 'image/png',
+      format: 'png',
+    };
+    if (naturalSize) {
+      pngResult.naturalWidth = naturalSize.width;
+      pngResult.naturalHeight = naturalSize.height;
+    }
+    return pngResult;
   } catch (err) {
     if (err instanceof MermaidRenderEngineMissingError) throw err;
     if (err instanceof MermaidRenderTimeoutError) throw err;

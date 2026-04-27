@@ -58,6 +58,45 @@ function hasZipMagic(buf: Buffer): boolean {
   return true;
 }
 
+/**
+ * Build a tiny valid PNG with a custom IHDR width/height. Used to
+ * test the natural-display-dimensions hand-off without pulling a
+ * real raster library: `image-size` only reads IHDR for PNG, so a
+ * minimal IHDR + IEND is enough to make `probeImage` report the
+ * right pixel count.
+ *
+ * Bytes produced are real PNG (signature + IHDR + IEND), but
+ * contain no image data. That's fine for the docx-export path
+ * which doesn't decode pixels.
+ */
+function makePng(width: number, height: number): Uint8Array {
+  // 8-byte signature + IHDR (4 length + 4 type + 13 data + 4 CRC) + IEND (4+4+0+4)
+  const out = new Uint8Array(8 + 25 + 12);
+  // Signature
+  out.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  // IHDR length (13)
+  out.set([0, 0, 0, 13], 8);
+  // IHDR type
+  out.set([0x49, 0x48, 0x44, 0x52], 12);
+  // width
+  const dv = new DataView(out.buffer);
+  dv.setUint32(16, width);
+  dv.setUint32(20, height);
+  // bit depth, color type, compression, filter, interlace (8, 2, 0, 0, 0)
+  out.set([8, 2, 0, 0, 0], 24);
+  // IHDR CRC (computed off the IHDR type+data span). image-size
+  // doesn't validate CRCs, so we can leave zeros — but emit them
+  // anyway in case some other reader picks the file up.
+  // (Skip CRC computation; tests that read back via image-size
+  //  don't need it. Pad with zeros.)
+  out.set([0, 0, 0, 0], 29);
+  // IEND length (0) + type + CRC
+  out.set([0, 0, 0, 0], 33);
+  out.set([0x49, 0x45, 0x4e, 0x44], 37);
+  out.set([0xae, 0x42, 0x60, 0x82], 41); // canonical IEND CRC
+  return out;
+}
+
 describe('exportDocx', () => {
   test('produces a valid DOCX (ZIP) for a basic markdown doc', async () => {
     const buf = await exportDocx(`# Hello
@@ -1433,6 +1472,53 @@ describe('exportDocx — mermaid resolveMermaid', () => {
     expect(seenIndices.sort()).toEqual([0, 1]);
     // Two PNGs embedded — confirms each block is its own image part.
     expect(mediaFiles.length).toBe(2);
+  });
+
+  test('uses ResolvedAsset width/height for display when supplied (hi-res PNG)', async () => {
+    // The chromium resolver renders at deviceScaleFactor>1 so PNG
+    // bytes carry more actual pixels than the natural CSS-px size.
+    // It returns `width`/`height` to tell the exporter which is the
+    // natural display size; without that, docx would tell Word to
+    // display at the inflated pixel count and enlarge the diagram.
+    //
+    // This test simulates a 4× hi-res PNG by handing the resolver
+    // a bytes-level fixture of one size while declaring a 4×-smaller
+    // natural display size. The resulting docx extent must match
+    // the natural size, not the bytes' actual pixels.
+    //
+    // Construct a 100×100 PNG fixture (1×1 source upscaled by data
+    // URL would do, but we just synthesise an IHDR with the right
+    // dims so `image-size` reports 100×100). The image-size library
+    // only reads IHDR for PNG; the rest can be junk for this test.
+    const png100 = makePng(100, 100);
+    const buf = await exportDocx(
+      ['```mermaid', 'graph TD\nA --> B', '```'].join('\n'),
+      {
+        includeToc: false,
+        resolveMermaid: async () => ({
+          bytes: png100,
+          mime: 'image/png',
+          // Declare natural display as 25×25 — 4× smaller than the
+          // bytes' actual 100×100. docx must honour these.
+          width: 25,
+          height: 25,
+        }),
+      },
+    );
+    const { documentXml } = await inspectDocx(buf);
+    // docx ImageRun emits extent in EMU (914400 = 1 inch, 9525 = 1
+    // px at 96 DPI). 25 px → 25 * 9525 = 238125 EMU.
+    const ext = documentXml.match(/<wp:extent\s+cx="(\d+)"\s+cy="(\d+)"/);
+    expect(ext).not.toBeNull();
+    const cx = Number(ext![1]);
+    const cy = Number(ext![2]);
+    // 25 CSS px → ~238125 EMU. Allow a small rounding window.
+    expect(cx).toBeGreaterThan(220_000);
+    expect(cx).toBeLessThan(260_000);
+    expect(cy).toBeGreaterThan(220_000);
+    expect(cy).toBeLessThan(260_000);
+    // Sanity: if we'd used the 100×100 byte dimensions, extent would
+    // be ~952500 EMU — well outside the window above.
   });
 
   test('falls back to placeholder when no resolveMermaid is provided', async () => {

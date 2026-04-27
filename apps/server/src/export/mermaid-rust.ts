@@ -158,6 +158,16 @@ export interface RenderedMermaidImage {
   mime: 'image/svg+xml' | 'image/png';
   /** Format actually emitted — always matches the requested format on success. */
   format: MermaidImageFormat;
+  /**
+   * Natural display dimensions in CSS pixels (96 DPI), when known.
+   * The chromium resolver renders at deviceScaleFactor>1 so the PNG
+   * bytes hold more pixels than the diagram's natural size; the
+   * route forwards these onto `ResolvedAsset.width` / `.height` so
+   * Word displays at the natural CSS size with the high-res raster
+   * as a zoom/print reservoir. Omitted by mmdr (its raster is 1×).
+   */
+  naturalWidth?: number;
+  naturalHeight?: number;
 }
 
 /** @deprecated Prefer {@link RenderedMermaidImage}. Kept for backwards compat. */

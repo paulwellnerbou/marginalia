@@ -83,6 +83,37 @@ describe('renderMermaidWithChromium', () => {
     expect(result!.bytes[3]).toBe(0x47);
   }, 60_000);
 
+  test.if(CHROMIUM_AVAILABLE)('PNG resolution scales with pngScale; natural dims stay fixed', async () => {
+    // Two renders of the same source at different scales: PNG actual
+    // pixel count grows with `pngScale`, but `naturalWidth/Height`
+    // (the CSS-px display size we hand back to docx) stays the same.
+    // Without this, a hi-res raster would inflate the diagram on the
+    // Word page — see `mermaid-chromium.ts` for the full rationale.
+    function pngDims(b: Uint8Array): { w: number; h: number } {
+      const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+      return { w: dv.getUint32(16), h: dv.getUint32(20) };
+    }
+
+    configureMermaidChromium({ pngScale: 2, timeoutMs: 30_000 });
+    const at2x = await renderMermaidWithChromium(SAMPLE, 'png');
+    expect(at2x).not.toBeNull();
+    const dims2 = pngDims(at2x!.bytes);
+
+    configureMermaidChromium({ pngScale: 4, timeoutMs: 30_000 });
+    const at4x = await renderMermaidWithChromium(SAMPLE, 'png');
+    expect(at4x).not.toBeNull();
+    const dims4 = pngDims(at4x!.bytes);
+
+    // 4× actual pixels at twice the device scale.
+    expect(dims4.w).toBeCloseTo(dims2.w * 2, 0);
+    expect(dims4.h).toBeCloseTo(dims2.h * 2, 0);
+    // Same natural CSS-px display size at both scales.
+    expect(at4x!.naturalWidth).toBeCloseTo(at2x!.naturalWidth ?? 0, 0);
+    expect(at4x!.naturalHeight).toBeCloseTo(at2x!.naturalHeight ?? 0, 0);
+    // And natural is materially smaller than the 4× actual pixels.
+    expect(at4x!.naturalWidth).toBeLessThan(dims4.w);
+  }, 90_000);
+
   test.if(CHROMIUM_AVAILABLE)('returns null on parse failure (graceful degrade)', async () => {
     // Garbage source — mermaid.render() rejects, the bootstrap
     // sets `__marginaliaMermaidError`, and we return null so the
