@@ -300,13 +300,17 @@ export function InlineCommentsLayer({
   );
 
   const recomputeGlobalState = useCallback(() => {
+    // The non-stacking branch of the layout pass ignores `globalState`
+    // entirely (cards just sit at their anchors), so don't churn React
+    // with epoch/isSticky transitions while scrolling.
+    if (!stackingEnabled) return;
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
     const next = computeGlobalState(scroll.scrollTop);
     setGlobalState((prev) =>
       prev.epoch === next.epoch && prev.isSticky === next.isSticky ? prev : next,
     );
-  }, [computeGlobalState, scrollContainerRef]);
+  }, [computeGlobalState, scrollContainerRef, stackingEnabled]);
 
   /**
    * Re-measure each card's anchor position from the rendered doc.
@@ -464,13 +468,16 @@ export function InlineCommentsLayer({
   // Scroll listener — only setStates when the (epoch, isSticky) tuple
   // actually flips, which is at most 2N events for the whole document.
   // Pure scrolling between transitions is browser-native CSS sticky.
+  // Only attached when stacking is on; the non-stacking layout has no
+  // scroll-driven state to update.
   useEffect(() => {
+    if (!stackingEnabled) return;
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
     const onScroll = () => recomputeGlobalState();
     scroll.addEventListener('scroll', onScroll, { passive: true });
     return () => scroll.removeEventListener('scroll', onScroll);
-  }, [recomputeGlobalState, scrollContainerRef]);
+  }, [recomputeGlobalState, scrollContainerRef, stackingEnabled]);
 
   useLayoutEffect(() => {
     let heightsChanged = false;
