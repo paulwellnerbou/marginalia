@@ -124,23 +124,44 @@ export async function renderAsciidoc(
 type AsciidoctorAbstractBlock = ReturnType<ReturnType<typeof Asciidoctor>['load']>;
 
 interface WalkState {
+  /**
+   * Top-level blocks ONLY. `rehypeAsciidocBlockIds` resolves
+   * `__marginalia-block-<idx>` markers via `blocks[idx]`, so this
+   * array's indices must stay aligned with `counter`. Sub-block
+   * BlockInfos go in `subBlockInfos` and are concatenated onto
+   * `blocks` after the walk completes (so the exported BlockMap
+   * still includes them for server-side reanchor).
+   */
   blocks: BlockMap;
   counter: number;
   headingStack: Array<{ level: number; text: string }>;
   sectionCounts: Map<string, number>;
+  subBlockCounts: Map<string, number>;
+  subBlockCounter: number;
+  subBlockEntries: SubBlockEntry[];
+  /**
+   * BlockInfo entries for sub-blocks. Kept separate from `blocks`
+   * during the walk so positional marker lookups stay correct;
+   * concatenated to the exported BlockMap at the end.
+   */
+  subBlockInfos: BlockInfo[];
 }
 
 /**
- * Walk the asciidoctor AST and emit a BlockMap mirroring what remark-block-ids
- * produces for markdown. Side-effect: attaches a marker role
- * (`__marginalia-block-<idx>`) on each block so the post-render hast pass
- * can find the corresponding HTML element and set data-block.
+ * Walk the asciidoctor AST and emit a BlockMap mirroring what
+ * remark-block-ids produces for markdown. Side-effect: attaches a marker
+ * role (`__marginalia-block-<idx>`) on each top-level block and
+ * `__marginalia-subblock-<idx>` on each list item, so the post-render
+ * hast pass can find the corresponding HTML element and set
+ * `data-block` / `data-subblock`.
  *
- * After the top-level pass, a second walk visits `ulist` / `olist` items
- * and tags each with a `__marginalia-subblock-<idx>` marker so the hast
- * pass can attach `data-subblock` — the same mechanism the markdown
- * pipeline uses to let "Propose edit" target individual list items
- * instead of forcing the user to edit the whole list.
+ * Sub-block BlockInfo entries are collected into a separate
+ * `subBlockInfos` buffer during the walk so that positional marker
+ * lookups (`blocks[idx]` in `rehypeAsciidocBlockIds`) only touch
+ * top-level entries; they're appended to the exported `BlockMap`
+ * after all top-level blocks have been recorded, preserving their
+ * own relative order and inheriting their enclosing list's section
+ * context.
  */
 function walkBlocks(doc: AsciidoctorAbstractBlock): {
   blocks: BlockMap;
@@ -151,44 +172,61 @@ function walkBlocks(doc: AsciidoctorAbstractBlock): {
     counter: 0,
     headingStack: [],
     sectionCounts: new Map(),
+    subBlockCounts: new Map(),
+    subBlockCounter: 0,
+    subBlockEntries: [],
+    subBlockInfos: [],
   };
   walkTopLevel(doc, state);
-  const subState: SubBlockState = { counts: new Map(), counter: 0, entries: [] };
-  walkSubBlocks(doc, subState);
-  return { blocks: state.blocks, subBlocks: subState.entries };
-}
-
-interface SubBlockState {
-  counts: Map<string, number>;
-  counter: number;
-  entries: SubBlockEntry[];
+  return {
+    // Top-level entries first, then sub-block infos. Marker-index
+    // lookups in `rehypeAsciidocBlockIds` only touch the top-level
+    // prefix; reanchor's id-based lookup walks the whole array, so
+    // sub-blocks at the tail are still discoverable.
+    blocks: [...state.blocks, ...state.subBlockInfos],
+    subBlocks: state.subBlockEntries,
+  };
 }
 
 /**
- * Descend into the AST and tag every ulist/olist list item with a
- * sub-block marker role. `dlist` items and `table_cell`s are skipped:
- * asciidoctor's default converter hard-codes their `<dt>`/`<dd>`/`<td>`
- * class list and drops any author-set role, so the marker wouldn't
- * survive into the HTML for the hast pass to find.
+ * Walk a list's items and emit sub-block BlockInfo for each, then
+ * recurse into the items' descendants to find nested lists. All
+ * descendants share the enclosing top-level list's section context.
  */
-function walkSubBlocks(block: AsciidoctorAbstractBlock, state: SubBlockState): void {
-  const ctx = (block as { getContext?: () => string | undefined }).getContext?.();
-  if (ctx === 'ulist' || ctx === 'olist') {
-    const items =
-      (block as { getItems?: () => AsciidoctorAbstractBlock[] | undefined }).getItems?.() ?? [];
-    for (const item of items) {
-      recordSubBlock(item, state);
-      walkSubBlocks(item, state);
-    }
-    return;
-  }
-  for (const child of getChildren(block)) {
-    if (!child || typeof (child as { getContext?: unknown }).getContext !== 'function') continue;
-    walkSubBlocks(child, state);
+function emitListSubBlocks(
+  list: AsciidoctorAbstractBlock,
+  parent: BlockInfo,
+  state: WalkState,
+): void {
+  const items =
+    (list as { getItems?: () => AsciidoctorAbstractBlock[] | undefined }).getItems?.() ?? [];
+  for (const item of items) {
+    recordSubBlock(item, parent, state);
+    descendForNestedLists(item, parent, state);
   }
 }
 
-function recordSubBlock(item: AsciidoctorAbstractBlock, state: SubBlockState): void {
+function descendForNestedLists(
+  block: AsciidoctorAbstractBlock,
+  parent: BlockInfo,
+  state: WalkState,
+): void {
+  for (const child of getChildren(block)) {
+    if (!child || typeof (child as { getContext?: unknown }).getContext !== 'function') continue;
+    const ctx = (child as { getContext: () => string }).getContext();
+    if (ctx === 'ulist' || ctx === 'olist') {
+      emitListSubBlocks(child, parent, state);
+    } else {
+      descendForNestedLists(child, parent, state);
+    }
+  }
+}
+
+function recordSubBlock(
+  item: AsciidoctorAbstractBlock,
+  parent: BlockInfo,
+  state: WalkState,
+): void {
   // list_item's own text lives in `getText()`, not `getContent()` (the
   // latter returns nested sub-block HTML and is empty for leaf items).
   const text = normalizeBlockText(getItemText(item));
@@ -197,10 +235,22 @@ function recordSubBlock(item: AsciidoctorAbstractBlock, state: SubBlockState): v
   // collide when the same text appears under the same kind. Not strictly
   // necessary (ids are local to one document) but keeps the block-id
   // derivation identical across formats, simplifying debugging.
-  const id = computeSubBlockId('listItem', text, state.counts);
-  state.entries.push({ id });
-  const markerRole = `${MARGINALIA_SUBBLOCK_MARKER_PREFIX}${state.counter}`;
-  state.counter += 1;
+  const id = computeSubBlockId('listItem', text, state.subBlockCounts);
+  state.subBlockEntries.push({ id });
+  // Inherit the enclosing list's section context so reanchor's
+  // section-affinity scoring lines up with what the client computed
+  // when the comment was created. Push to `subBlockInfos` rather
+  // than `state.blocks` to keep positional marker indices intact.
+  state.subBlockInfos.push({
+    id,
+    kind: 'listItem',
+    text,
+    headingPath: [...parent.headingPath],
+    sectionIndex: parent.sectionIndex,
+    sectionIndexPath: [...parent.sectionIndexPath],
+  });
+  const markerRole = `${MARGINALIA_SUBBLOCK_MARKER_PREFIX}${state.subBlockCounter}`;
+  state.subBlockCounter += 1;
   addRole(item, markerRole);
 }
 
@@ -240,7 +290,7 @@ function emitSectionHeading(block: AsciidoctorAbstractBlock, state: WalkState): 
   }
   state.headingStack.push({ level, text });
 
-  recordBlock(block, 'heading', text, state);
+  void recordBlock(block, 'heading', text, state);
 }
 
 function emitLeafBlock(
@@ -257,12 +307,54 @@ function emitLeafBlock(
     if (style === 'mermaid') addRole(block, 'mermaid');
   }
   if (ctx === 'thematic_break' || ctx === 'page_break') {
-    recordBlock(block, ctx, '', state);
+    void recordBlock(block, ctx, '', state);
     return;
   }
   const text = normalizeBlockText(extractBlockText(block));
-  if (!text) return;
-  recordBlock(block, ctx, text, state);
+  let info: BlockInfo | null = null;
+  if (text) {
+    info = recordBlock(block, ctx, text, state);
+  }
+  // Lists also get sub-block BlockInfo + marker roles for each item.
+  // Even when the ulist itself doesn't yield useful text (asciidoctor
+  // returns the children array, not a string, from getContent() on a
+  // list), its items still need marker roles so the rehype pass can
+  // attach data-subblock — fall back to a synthesized parent carrying
+  // the current section context so sub-blocks inherit it.
+  if (ctx === 'ulist' || ctx === 'olist') {
+    const parent = info ?? synthesizeParent(state, ctx);
+    emitListSubBlocks(block, parent, state);
+    return;
+  }
+  // Other container leaf blocks (admonitions, sidebars, examples,
+  // open/quote blocks, etc.) can hold lists too. walkTopLevel only
+  // recurses into sections/preamble/document, so without descending
+  // through their children here, sub-block markers wouldn't be
+  // emitted for items inside `[NOTE] ==== * a * b ====` and friends.
+  // Sub-block infos inherit the container's section context (the
+  // recorded info if it was non-empty, else a synthesized one).
+  const containerParent = info ?? synthesizeParent(state, ctx);
+  descendForNestedLists(block, containerParent, state);
+}
+
+/**
+ * Build a transient BlockInfo that carries the current section
+ * context without mutating sectionCounts. Used as the inherited
+ * parent for sub-blocks of a list whose own text couldn't be
+ * extracted (and therefore wasn't recorded as a top-level block).
+ */
+function synthesizeParent(state: WalkState, kind: string): BlockInfo {
+  const headingPath = state.headingStack.map((s) => s.text);
+  const sectionIndexPath: number[] = [];
+  for (let k = 0; k <= headingPath.length; k++) {
+    // Same delimiter as recordBlock (NUL) so sectionCounts lookups
+    // actually hit. A different separator here would silently miss
+    // and force every entry to 0.
+    const prefixKey = headingPath.slice(0, k).join('\u0000');
+    sectionIndexPath.push(state.sectionCounts.get(prefixKey) ?? 0);
+  }
+  const sectionIndex = sectionIndexPath[sectionIndexPath.length - 1] ?? 0;
+  return { id: '', kind, text: '', headingPath, sectionIndex, sectionIndexPath };
 }
 
 function getStyle(block: AsciidoctorAbstractBlock): string | null {
@@ -276,7 +368,7 @@ function recordBlock(
   kind: string,
   text: string,
   state: WalkState,
-): void {
+): BlockInfo {
   const headingPath = state.headingStack.map((s) => s.text);
   const sectionIndexPath: number[] = [];
   for (let k = 0; k <= headingPath.length; k++) {
@@ -301,6 +393,7 @@ function recordBlock(
   const markerRole = `${MARGINALIA_BLOCK_MARKER_PREFIX}${state.counter}`;
   state.counter += 1;
   addRole(block, markerRole);
+  return info;
 }
 
 function getChildren(block: AsciidoctorAbstractBlock): AsciidoctorAbstractBlock[] {

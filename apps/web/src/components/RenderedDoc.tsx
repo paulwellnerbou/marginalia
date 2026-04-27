@@ -463,12 +463,12 @@ function applyCommentHighlights(
   }>,
 ): void {
   const rangesByBlock = new Map<
-    string,
+    HTMLElement,
     Array<{ rawStart: number; rawEnd: number; threadIds: string[] }>
   >();
 
   for (const highlight of highlights) {
-    const block = findHighlightBlock(root, highlight.blockId);
+    const block = findHighlightBlock(root, highlight.blockId, highlight.quote);
     if (!block) continue;
 
     const map = buildBlockTextMap(block);
@@ -504,19 +504,16 @@ function applyCommentHighlights(
       rawEnd = rawEndChar + 1;
     }
 
-    const blockRanges = rangesByBlock.get(highlight.blockId) ?? [];
+    const blockRanges = rangesByBlock.get(block) ?? [];
     blockRanges.push({
       rawStart,
       rawEnd,
       threadIds: highlight.threadId ? [highlight.threadId] : [],
     });
-    rangesByBlock.set(highlight.blockId, blockRanges);
+    rangesByBlock.set(block, blockRanges);
   }
 
-  for (const [blockId, ranges] of rangesByBlock) {
-    const block = findHighlightBlock(root, blockId);
-    if (!block) continue;
-
+  for (const [block, ranges] of rangesByBlock) {
     const merged = mergeRanges(ranges);
     if (merged.length === 0) continue;
 
@@ -688,11 +685,32 @@ function buildBlockTextMap(block: HTMLElement): {
   return { normalizedText, normalizedToRaw, rawLength: rawText.length };
 }
 
-function findHighlightBlock(root: HTMLElement, blockId: string): HTMLElement | null {
+function findHighlightBlock(
+  root: HTMLElement,
+  blockId: string,
+  quote?: string | null,
+): HTMLElement | null {
   const escaped = CSS.escape(blockId);
-  return root.querySelector<HTMLElement>(
+  const block = root.querySelector<HTMLElement>(
     `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
   );
+  if (!block || !quote || block.dataset.subblock) return block;
+  // Recovery for comments anchored before sub-block-aware capture
+  // landed: their stored block_id points at the enclosing top-level
+  // block (a list, table, …) rather than the specific sub-block they
+  // were on. If the quote uniquely identifies one descendant
+  // sub-block, narrow to it so the highlight + click-flash hit the
+  // right element instead of the whole container.
+  const subEls = block.querySelectorAll<HTMLElement>('[data-subblock]');
+  let narrowed: HTMLElement | null = null;
+  for (const sub of subEls) {
+    const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
+    if (text.includes(quote)) {
+      if (narrowed) return block; // quote appears in multiple sub-blocks — leave on the parent
+      narrowed = sub;
+    }
+  }
+  return narrowed ?? block;
 }
 
 function collectTextNodes(root: HTMLElement): Array<{ node: Text; start: number; end: number }> {

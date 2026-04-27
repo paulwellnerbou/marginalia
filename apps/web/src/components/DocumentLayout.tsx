@@ -1,16 +1,17 @@
+import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import {
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
-import { useNavigate } from 'react-router-dom';
+  ChatBubbleIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  Cross2Icon,
+  LetterCaseToggleIcon,
+  MagnifyingGlassIcon,
+  TokensIcon,
+} from '@radix-ui/react-icons';
 import {
   Badge,
   Button,
+  DropdownMenu,
   Flex,
   IconButton,
   Select,
@@ -21,13 +22,15 @@ import {
   Tooltip,
 } from '@radix-ui/themes';
 import {
-  ChevronLeftIcon,
-  ChevronRightIcon,
-  Cross2Icon,
-  LetterCaseToggleIcon,
-  MagnifyingGlassIcon,
-  TokensIcon,
-} from '@radix-ui/react-icons';
+  type ReactNode,
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { useNavigate } from 'react-router-dom';
 import type {
   CommentAnchor,
   Document,
@@ -36,61 +39,63 @@ import type {
   TocNode,
 } from '../lib/api.js';
 import {
+  ApiError,
+  type Comment,
+  type HistoryEntry,
+  acceptEditProposal as apiAcceptProposal,
   createComment as apiCreate,
+  createEditProposal as apiCreateProposal,
   deleteComment as apiDelete,
   deleteThread as apiDeleteThread,
-  listThreads,
-  resolveThread as apiResolve,
-  updateComment as apiUpdate,
-  createEditProposal as apiCreateProposal,
-  updateEditProposal as apiUpdateProposal,
-  acceptEditProposal as apiAcceptProposal,
   rejectEditProposal as apiRejectProposal,
-  getDocument,
-  getHistoryDiff,
+  resolveThread as apiResolve,
   restoreHistoryVersion as apiRestoreHistoryVersion,
   revertHistoryVersion as apiRevertHistoryVersion,
-  uploadAsset,
-  ApiError,
+  updateComment as apiUpdate,
+  updateEditProposal as apiUpdateProposal,
+  getDocument,
+  getHistoryDiff,
   isProposal,
-  type HistoryEntry,
-  type Comment,
+  listThreads,
+  uploadAsset,
 } from '../lib/api.js';
+import { documentTitle } from '../lib/doc-title.js';
+import { subscribeToDocumentEvents } from '../lib/events.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
-import { subscribeToDocumentEvents } from '../lib/events.js';
+import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
 import { ensureNotificationPermission, notify } from '../lib/notifications.js';
 import {
-  applyTheme,
   BUILT_IN_THEMES,
+  applyTheme,
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
-import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
-import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
-import { RenderedDoc, type DocumentSearchOptions } from './RenderedDoc.js';
-import { Toc } from './Toc.js';
-import { SelectionToolbar, type ProposalTarget } from './SelectionToolbar.js';
-import { BlockActions } from './BlockActions.js';
-import { CommentsPane } from './CommentsPane.js';
-import { ProposalComposer } from './ThreadComposer.js';
-import { ResizeHandle } from './ResizeHandle.js';
+import { APP_ACCENT_COLOR } from '../styles/theme.js';
+import { AccessControlDialog } from './AccessControlDialog.js';
 import { AppBar } from './AppBar.js';
+import { BlockActions } from './BlockActions.js';
+import {
+  type DocumentSearchResult,
+  DocumentSearchResultsPane,
+} from './DocumentSearchResultsPane.js';
 import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
 import { DownloadMenu } from './DownloadMenu.js';
-import { AccessControlDialog } from './AccessControlDialog.js';
-import {
-  DocumentSearchResultsPane,
-  type DocumentSearchResult,
-} from './DocumentSearchResultsPane.js';
 import { HistoryList } from './HistoryList.js';
-import { documentTitle } from '../lib/doc-title.js';
-import { APP_ACCENT_COLOR } from '../styles/theme.js';
+import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
+import { ResizeHandle } from './ResizeHandle.js';
+import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
+import { ProposalComposer } from './ThreadComposer.js';
+import { Toc } from './Toc.js';
+import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
+import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
 
 const MAX_WIDTH_KEY = 'marginalia.maxWidth';
 const TEXT_ZOOM_KEY = 'marginalia.textZoom';
 const TOC_WIDTH_KEY = 'marginalia.tocWidth';
 const COMMENTS_WIDTH_KEY = 'marginalia.commentsWidth';
+const INLINE_COMMENTS_OPEN_KEY = 'marginalia.inlineCommentsOpen';
+const INLINE_COMMENTS_STACKING_KEY = 'marginalia.inlineCommentsStacking';
 const COLLAPSED_WIDTH = 36;
 
 interface Props {
@@ -113,7 +118,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const navigate = useNavigate();
   const canComment = doc.role !== 'reader';
   const [tocOpen, setTocOpen] = useState(true);
-  const [commentsOpen, setCommentsOpen] = useState(true);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [inlineCommentsOpen, setInlineCommentsOpen] = useState<boolean>(() => {
+    const saved = localStorage.getItem(INLINE_COMMENTS_OPEN_KEY);
+    return saved === null ? true : saved === 'true';
+  });
+  const [inlineCommentsStacking, setInlineCommentsStacking] = useState<boolean>(() => {
+    const saved = localStorage.getItem(INLINE_COMMENTS_STACKING_KEY);
+    return saved === null ? true : saved === 'true';
+  });
   const [rightTab, setRightTab] = useState<'comments' | 'history' | 'search'>('comments');
   const [historyVersion, setHistoryVersion] = useState(0);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
@@ -146,7 +159,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   });
 
   const [threads, setThreads] = useState<Thread[]>([]);
-  const [mentionSeedNames, setMentionSeedNames] = useState<string[]>([]);
   const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
   const pendingAnchor = pendingDraft?.mode === 'comment' ? pendingDraft.anchor : null;
   const pendingProposalTarget = pendingDraft?.mode === 'proposal' ? pendingDraft.target : null;
@@ -201,7 +213,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
 
   const docRef = useRef<HTMLElement>(null);
-  const docBodyRef = useRef<HTMLDivElement>(null);
+  const docScrollRef = useRef<HTMLDivElement>(null);
   const docSearchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -216,6 +228,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(COMMENTS_WIDTH_KEY, String(commentsWidth));
   }, [commentsWidth]);
+  useEffect(() => {
+    localStorage.setItem(INLINE_COMMENTS_OPEN_KEY, String(inlineCommentsOpen));
+  }, [inlineCommentsOpen]);
+  useEffect(() => {
+    localStorage.setItem(INLINE_COMMENTS_STACKING_KEY, String(inlineCommentsStacking));
+  }, [inlineCommentsStacking]);
   useEffect(() => {
     void applyTheme(theme);
   }, [theme]);
@@ -232,7 +250,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const headingIdsKey = useMemo(() => headingIds.join('\u0000'), [headingIds]);
 
   useEffect(() => {
-    const container = docBodyRef.current;
+    const container = docScrollRef.current;
     const root = docRef.current;
     if (!container || !root || headingIds.length === 0) {
       setActiveHeadingId(null);
@@ -318,7 +336,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       (r) => {
         if (cancelled) return;
         setThreads(r.threads);
-        setMentionSeedNames(r.mention_candidates);
         notifyPendingMentions(r.threads, r.pending_mentions);
       },
       (err) => reportError('DocumentLayout.listThreads', err, { uid: doc.uid }),
@@ -333,7 +350,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
     function scheduleRefresh() {
       if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => { void refreshThreads(); }, 300);
+      refreshTimer = setTimeout(() => {
+        void refreshThreads();
+      }, 300);
     }
     void ensureNotificationPermission();
     const sub = subscribeToDocumentEvents(doc.uid, (event) => {
@@ -347,12 +366,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           break;
         }
         case 'mention.created': {
-          void listThreads(doc.uid).then((res) => {
-            if (cancelled) return;
-            setThreads(res.threads);
-            setMentionSeedNames(res.mention_candidates);
-            notifyPendingMentions(res.threads, res.pending_mentions);
-          }).catch((err) => reportError('DocumentLayout.mention.created', err, { uid: doc.uid }));
+          void listThreads(doc.uid)
+            .then((res) => {
+              if (cancelled) return;
+              setThreads(res.threads);
+              notifyPendingMentions(res.threads, res.pending_mentions);
+            })
+            .catch((err) => reportError('DocumentLayout.mention.created', err, { uid: doc.uid }));
           break;
         }
         case 'edit_proposal.created': {
@@ -360,10 +380,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           const raw = event.edit_proposal as Record<string, unknown>;
           const comment = raw.comment as Record<string, unknown> | undefined;
           const author = comment?.author as { display_name?: string } | undefined;
-          notify(
-            'New edit proposal',
-            `${author?.display_name ?? 'Someone'} proposed a change.`,
-          );
+          notify('New edit proposal', `${author?.display_name ?? 'Someone'} proposed a change.`);
           break;
         }
         case 'document.updated': {
@@ -376,21 +393,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         }
       }
     });
-    return () => { cancelled = true; if (refreshTimer) clearTimeout(refreshTimer); sub.close(); };
+    return () => {
+      cancelled = true;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      sub.close();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.uid]);
-
-  const mentionCandidates = useMemo(() => {
-    const names = new Map<string, string>();
-    for (const name of mentionSeedNames) addMentionName(names, name);
-    for (const thread of threads) {
-      for (const c of thread.comments) addMentionName(names, c.author.display_name);
-    }
-    if (doc.display_name) addMentionName(names, doc.display_name);
-    return Array.from(names.values()).sort((a, b) =>
-      a.localeCompare(b, undefined, { sensitivity: 'base' }),
-    );
-  }, [threads, doc.display_name, mentionSeedNames]);
 
   function resolveIdentity(providedName?: string) {
     const name = providedName?.trim() || effectiveDisplayName;
@@ -403,14 +412,34 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return { clientId: getClientId(), displayName: name };
   }
 
-  const scrollToAnchor = useCallback((blockId: string) => {
+  const scrollToAnchor = useCallback((blockId: string, quote?: string | null) => {
     const root = docRef.current;
     if (!root) return;
     const escaped = CSS.escape(blockId);
-    const target = root.querySelector<HTMLElement>(
+    let target = root.querySelector<HTMLElement>(
       `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
     );
     if (!target) return;
+    // Recovery for comments anchored before sub-block-aware capture
+    // landed: their stored block_id points at the enclosing top-level
+    // block. If the quote uniquely identifies one sub-block, flash
+    // that one instead of the whole container.
+    if (target.dataset.block && quote) {
+      const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
+      let narrowed: HTMLElement | null = null;
+      let unique = true;
+      for (const sub of subEls) {
+        const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
+        if (text.includes(quote)) {
+          if (narrowed) {
+            unique = false;
+            break;
+          }
+          narrowed = sub;
+        }
+      }
+      if (unique && narrowed) target = narrowed;
+    }
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     target.classList.add('anchor-flash');
     window.setTimeout(() => target.classList.remove('anchor-flash'), 1600);
@@ -516,7 +545,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     try {
       const res = await listThreads(doc.uid, { consumeMentions: false });
       setThreads(res.threads);
-      setMentionSeedNames(res.mention_candidates);
     } catch (err) {
       reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
     }
@@ -617,7 +645,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           prev.map((t) => {
             if (!t.comments.slice(1).some((r) => r.id === nodeId)) return t;
             const [head, ...tail] = t.comments;
-            return { ...t, comments: [head, ...tail.filter((c) => c.id !== nodeId)] as [Comment, ...Comment[]] };
+            return {
+              ...t,
+              comments: [head, ...tail.filter((c) => c.id !== nodeId)] as [Comment, ...Comment[]],
+            };
           }),
         );
       } catch (err) {
@@ -690,12 +721,25 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     }> = [];
 
     for (const thread of threads) {
-      if (thread.link_status !== 'linked') continue;
+      // Orphaned threads have no anchor at all; skip them. Linked and
+      // low-confidence threads both still carry a block_id + quote and
+      // can drive a highlight — the renderer's `findHighlightBlock`
+      // narrowing pass recovers the right element regardless of which
+      // confidence band the server assigned.
+      if (thread.link_status === 'orphaned') continue;
       if (!thread.anchor.block_id || !thread.anchor.quote) continue;
 
       if (!isProposal(thread)) {
+        // Low-confidence threads come back from the server's
+        // partial-match reanchor branch with null offsets — the
+        // server knows the quote is *roughly* in this block but
+        // doesn't know exactly where any more. Falling back to
+        // [0, quote.length] lets the renderer's resolveNormalizedRange
+        // walk into its "find quote anywhere in the block" branch
+        // instead of dropping the highlight entirely.
+        const quoteLen = thread.anchor.quote.length;
         const start = thread.anchor.start_offset ?? 0;
-        const end = thread.anchor.end_offset ?? 0;
+        const end = thread.anchor.end_offset ?? quoteLen;
         if (end > start) {
           highlights.push({
             scope: 'range',
@@ -736,11 +780,36 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return highlights;
   }, [canComment, threads, pendingAnchor]);
 
-  const openCommentThread = useCallback((threadId: string) => {
-    setCommentsOpen(true);
-    setRightTab('comments');
-    setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1 }));
-  }, []);
+  /**
+   * The inline column can be off-screen even when `inlineCommentsOpen`
+   * is true: the container query on `.doc-scroll` hides `.ic-column`
+   * on narrow viewports. Detect the rendered visibility of the column
+   * directly so this stays in sync with CSS — duplicating the
+   * breakpoint in JS would drift the moment someone tweaks the rule.
+   */
+  const inlineCommentsVisible = useCallback((): boolean => {
+    if (!inlineCommentsOpen) return false;
+    const scroll = docScrollRef.current;
+    if (!scroll) return true;
+    const column = scroll.querySelector<HTMLElement>('.ic-column');
+    if (!column) return false;
+    const style = window.getComputedStyle(column);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    return column.getClientRects().length > 0;
+  }, [inlineCommentsOpen]);
+
+  const openCommentThread = useCallback(
+    (threadId: string) => {
+      // Prefer the inline column when it's actually visible; otherwise
+      // fall back to the right pane (and open it if it's collapsed).
+      if (!inlineCommentsVisible()) {
+        setCommentsOpen(true);
+        setRightTab('comments');
+      }
+      setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1 }));
+    },
+    [inlineCommentsVisible],
+  );
 
   const onRevertLatestHistoryVersion = useCallback(
     async (entry: HistoryEntry) => {
@@ -939,6 +1008,37 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 <AccessControlDialog doc={doc} onChange={onDocSettingsChanged} />
               </>
             )}
+            <DropdownMenu.Root>
+              {/* Radix Tooltip wrap would break the DropdownMenu trigger;
+                  use the plain HTML `title` attribute on the icon. */}
+              <DropdownMenu.Trigger>
+                <IconButton
+                  variant="soft"
+                  color={APP_ACCENT_COLOR}
+                  size="2"
+                  className="inline-comments-trigger"
+                  aria-label="Comment view options"
+                  title="Comment view options"
+                >
+                  <ChatBubbleIcon />
+                </IconButton>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Content align="end">
+                <DropdownMenu.CheckboxItem
+                  checked={inlineCommentsOpen}
+                  onCheckedChange={(v) => setInlineCommentsOpen(Boolean(v))}
+                >
+                  Show comments
+                </DropdownMenu.CheckboxItem>
+                <DropdownMenu.CheckboxItem
+                  checked={inlineCommentsStacking}
+                  disabled={!inlineCommentsOpen}
+                  onCheckedChange={(v) => setInlineCommentsStacking(Boolean(v))}
+                >
+                  Stack at top while scrolling
+                </DropdownMenu.CheckboxItem>
+              </DropdownMenu.Content>
+            </DropdownMenu.Root>
             <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
               <IconButton
                 variant="soft"
@@ -1057,34 +1157,71 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </Flex>
             </div>
           )}
-          <div className="doc-body" ref={docBodyRef}>
-            <RenderedDoc
-              rendered={liveRendered}
-              elRef={docRef}
-              maxWidthCh={maxWidth}
-              textZoom={textZoom / 100}
-              highlights={commentHighlights}
-              searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}
-              searchOptions={docSearchOptions}
-              activeSearchResultId={activeSearchTarget?.id ?? null}
-              activeSearchVersion={activeSearchTarget?.nonce ?? 0}
-              onSearchResultsChange={updateSearchResults}
-              onHighlightClick={openCommentThread}
-              onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
-            />
-            {canComment && (
-              <SelectionToolbar
-                rootRef={docRef}
-                onAdd={(anchor) => setPendingDraft({ mode: 'comment', anchor })}
-                onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
-              />
-            )}
-            {canComment && (
-              <BlockActions
-                rootRef={docRef}
-                onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
-              />
-            )}
+          {/* `marginalia-theme` is applied here (not just inside the
+              article) so the inline comments column inherits the
+              document's themed background — otherwise it would sit on
+              the surrounding pane-doc background and look like a
+              different surface. */}
+          <div className="doc-scroll marginalia-theme" ref={docScrollRef}>
+            <div
+              className={`doc-row${inlineCommentsOpen ? ' doc-row-with-inline' : ''}`}
+              style={{ ['--md-max-width' as string]: `${maxWidth}ch` }}
+            >
+              <div className="doc-body">
+                <RenderedDoc
+                  rendered={liveRendered}
+                  elRef={docRef}
+                  maxWidthCh={maxWidth}
+                  textZoom={textZoom / 100}
+                  highlights={commentHighlights}
+                  searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}
+                  searchOptions={docSearchOptions}
+                  activeSearchResultId={activeSearchTarget?.id ?? null}
+                  activeSearchVersion={activeSearchTarget?.nonce ?? 0}
+                  onSearchResultsChange={updateSearchResults}
+                  onHighlightClick={openCommentThread}
+                  onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
+                />
+                {canComment && (
+                  <SelectionToolbar
+                    rootRef={docRef}
+                    onAdd={(anchor) => setPendingDraft({ mode: 'comment', anchor })}
+                    onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+                  />
+                )}
+                {canComment && (
+                  <BlockActions
+                    rootRef={docRef}
+                    onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+                  />
+                )}
+              </div>
+              {inlineCommentsOpen && (
+                <InlineCommentsLayer
+                  uid={doc.uid}
+                  threads={threads}
+                  docSource={liveSource}
+                  docHtml={liveRendered.html}
+                  docElementRef={docRef}
+                  scrollContainerRef={docScrollRef}
+                  blockRanges={blockRanges}
+                  canComment={canComment}
+                  stackingEnabled={inlineCommentsStacking}
+                  pendingAnchor={canComment ? pendingAnchor : null}
+                  focusedThread={focusedThread}
+                  displayName={effectiveDisplayName}
+                  onCancelPending={() => setPendingDraft(null)}
+                  onCreate={onCreate}
+                  onReply={onReply}
+                  onEdit={onEdit}
+                  onDeleteNode={onDeleteNode}
+                  onDeleteThread={onDeleteThread}
+                  onResolveThread={onResolveThread}
+                  onEditProposalRationale={onEditProposalRationale}
+                  onScrollToAnchor={scrollToAnchor}
+                />
+              )}
+            </div>
           </div>
         </main>
 
@@ -1130,12 +1267,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 </Tooltip>
               </Flex>
               <Tabs.Content value="comments" className="right-tab-panel">
-                <CommentsPane
+                <InlineCommentsList
                   uid={doc.uid}
                   threads={threads}
                   docSource={liveSource}
                   blockRanges={blockRanges}
-                  mentionCandidates={mentionCandidates}
                   canComment={canComment}
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}
@@ -1214,19 +1350,9 @@ function notifyPendingMentions(threads: Thread[], pendingMentionIds: string[]): 
   for (const id of pendingMentionIds) {
     const node = byId.get(id);
     if (node) {
-      notify(
-        'Mentioned in a comment',
-        `${node.author.display_name}: ${node.body.slice(0, 120)}`,
-      );
+      notify('Mentioned in a comment', `${node.author.display_name}: ${node.body.slice(0, 120)}`);
     }
   }
-}
-
-function addMentionName(map: Map<string, string>, name: string | null | undefined): void {
-  const trimmed = name?.trim();
-  if (!trimmed) return;
-  const key = trimmed.toLowerCase();
-  if (!map.has(key)) map.set(key, trimmed);
 }
 
 function flattenTocIds(nodes: readonly TocNode[]): string[] {
