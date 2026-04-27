@@ -150,10 +150,21 @@ export function InlineCommentsLayer({
     });
   }, [threads]);
 
+  /**
+   * Document-order rank for each block id. `blockRanges`'s iteration
+   * order puts top-level blocks first and sub-blocks afterwards, so a
+   * thread anchored to a sub-block would otherwise sort after every
+   * top-level block — breaking the monotonic-anchors assumption the
+   * sticky/epoch state machine relies on. Sort by source offset
+   * instead so list-item-anchored threads land in the right place.
+   */
   const blockOrder = useMemo(() => {
+    const ranked = Array.from(blockRanges.entries()).sort(
+      ([, a], [, b]) => a.start - b.start,
+    );
     const order = new Map<string, number>();
     let i = 0;
-    for (const id of blockRanges.keys()) order.set(id, i++);
+    for (const [id] of ranked) order.set(id, i++);
     return order;
   }, [blockRanges]);
 
@@ -292,11 +303,19 @@ export function InlineCommentsLayer({
     );
   }, [computeGlobalState, scrollContainerRef]);
 
-  /** Re-measure each card's anchor position from the rendered doc. */
-  const measureNaturalTops = useCallback(() => {
+  /**
+   * Re-measure each card's anchor position from the rendered doc.
+   *
+   * Returns true if any anchor changed (or an entry was added or
+   * removed). Callers can use this to decide whether to bump
+   * `layoutVersion` so the orderedMetrics memo re-derives — without
+   * the bump, refs can update but the memoized derivative stays
+   * stale until something else triggers a rerender.
+   */
+  const measureNaturalTops = useCallback((): boolean => {
     const doc = docElementRef.current;
     const scroll = scrollContainerRef.current;
-    if (!doc || !scroll) return;
+    if (!doc || !scroll) return false;
     const scrollRect = scroll.getBoundingClientRect();
     const scrollTop = scroll.scrollTop;
     // First pass: anchored items get their measured natural top.
@@ -304,6 +323,7 @@ export function InlineCommentsLayer({
     // them after everything else (otherwise multiple null-anchor
     // items all measure to top:0 and overlap).
     let maxBottom = 0;
+    let changed = false;
     const unanchored: { id: string; height: number }[] = [];
     for (const item of renderItems) {
       const cardHeight = cardHeights.current.get(item.id) ?? 96;
@@ -321,7 +341,11 @@ export function InlineCommentsLayer({
         unanchored.push({ id: item.id, height: cardHeight });
         continue;
       }
-      naturalTops.current.set(item.id, nat);
+      const prev = naturalTops.current.get(item.id);
+      if (prev === undefined || Math.abs(prev - nat) > 0.5) {
+        naturalTops.current.set(item.id, nat);
+        changed = true;
+      }
       // Landed cards sit at scroll-y = nat + STICKY_TOP_PAD_PX (see
       // the LANDED branch in the layout pass); count that into the
       // bottom so the column's min-height covers their full extent.
@@ -336,7 +360,11 @@ export function InlineCommentsLayer({
     // at scroll-y=0 with each other or with anchored content.
     let orphanY = maxBottom + STACK_GAP_PX;
     for (const { id, height } of unanchored) {
-      naturalTops.current.set(id, orphanY);
+      const prev = naturalTops.current.get(id);
+      if (prev === undefined || Math.abs(prev - orphanY) > 0.5) {
+        naturalTops.current.set(id, orphanY);
+        changed = true;
+      }
       orphanY += height + STACK_GAP_PX;
       if (orphanY > maxBottom) maxBottom = orphanY;
     }
@@ -345,9 +373,11 @@ export function InlineCommentsLayer({
       if (!live.has(id)) {
         naturalTops.current.delete(id);
         cardHeights.current.delete(id);
+        changed = true;
       }
     }
     setColumnHeight((prev) => (Math.abs(prev - maxBottom) > 0.5 ? maxBottom : prev));
+    return changed;
   }, [renderItems, docElementRef, scrollContainerRef]);
 
   // Stable per-id ref callbacks — see the prior sticky-overlay version
@@ -438,12 +468,25 @@ export function InlineCommentsLayer({
   }, [recomputeGlobalState, scrollContainerRef]);
 
   useLayoutEffect(() => {
+    let heightsChanged = false;
     for (const [id, el] of cardEls.current) {
       const h = el.offsetHeight;
-      if (h > 0) cardHeights.current.set(id, h);
+      if (h <= 0) continue;
+      const prev = cardHeights.current.get(id);
+      if (prev === undefined || Math.abs(prev - h) > 0.5) {
+        cardHeights.current.set(id, h);
+        heightsChanged = true;
+      }
     }
-    measureNaturalTops();
+    const naturalsChanged = measureNaturalTops();
     recomputeGlobalState();
+    // If refs changed but layoutVersion is the value that triggered
+    // THIS effect, the orderedMetrics memo is still keyed on the
+    // pre-update layoutVersion and would skip re-derivation. Bump
+    // it so the next render reads fresh metrics. The bump is a
+    // no-op on the next pass because measurements are stable, so no
+    // infinite loop.
+    if (heightsChanged || naturalsChanged) requestRemeasure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [measureNaturalTops, recomputeGlobalState, layoutVersion, docHtml]);
 

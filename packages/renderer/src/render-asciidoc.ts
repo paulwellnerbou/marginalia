@@ -155,8 +155,13 @@ interface WalkState {
  * hast pass can find the corresponding HTML element and set
  * `data-block` / `data-subblock`.
  *
- * Sub-block BlockInfo entries are appended to `blocks` immediately
- * after their enclosing list, inheriting that list's section context.
+ * Sub-block BlockInfo entries are collected into a separate
+ * `subBlockInfos` buffer during the walk so that positional marker
+ * lookups (`blocks[idx]` in `rehypeAsciidocBlockIds`) only touch
+ * top-level entries; they're concatenated onto the exported
+ * `BlockMap` after all top-level blocks have been recorded, in
+ * document order, and inherit their enclosing list's section
+ * context.
  */
 function walkBlocks(doc: AsciidoctorAbstractBlock): {
   blocks: BlockMap;
@@ -335,7 +340,7 @@ function synthesizeParent(state: WalkState, kind: string): BlockInfo {
     // Same delimiter as recordBlock (NUL) so sectionCounts lookups
     // actually hit. A different separator here would silently miss
     // and force every entry to 0.
-    const prefixKey = headingPath.slice(0, k).join(' ');
+    const prefixKey = headingPath.slice(0, k).join('\u0000');
     sectionIndexPath.push(state.sectionCounts.get(prefixKey) ?? 0);
   }
   const sectionIndex = sectionIndexPath[sectionIndexPath.length - 1] ?? 0;
