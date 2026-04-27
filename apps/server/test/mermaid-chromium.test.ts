@@ -20,24 +20,46 @@ import {
  * like a chromium-headless-shell install. Cheaper than launching the
  * browser just to find out it's missing — and matches what
  * `pdf.ts:getBrowser()` will do at runtime.
+ *
+ * Default cache locations differ per platform:
+ *   - macOS:   ~/Library/Caches/ms-playwright
+ *   - Linux:   ~/.cache/ms-playwright
+ *   - Windows: %LOCALAPPDATA%/ms-playwright
+ *
+ * `PLAYWRIGHT_BROWSERS_PATH` overrides all three (and that's what
+ * the production Dockerfile sets — see `apps/server/PDF_EXPORT.md`
+ * + the `mermaid-builder` stage). We check it first, then fall
+ * back to every per-OS default so the gating works consistently
+ * across dev machines and CI.
  */
 function chromiumAvailable(): boolean {
-  // Playwright's `PLAYWRIGHT_BROWSERS_PATH` env var, or the default
-  // user-cache path. We don't need to be exact — if there's any
-  // matching directory we'll let Playwright handle launch.
-  const root =
-    process.env.PLAYWRIGHT_BROWSERS_PATH ??
-    `${process.env.HOME ?? ''}/Library/Caches/ms-playwright`;
-  if (!existsSync(root)) return false;
-  // The shell directories are named like `chromium_headless_shell-*`.
-  // A loose `existsSync` is enough — `getBrowser()` will surface a
-  // typed error if the install is incomplete.
-  try {
-    const entries = require('node:fs').readdirSync(root) as string[];
-    return entries.some((e) => e.startsWith('chromium_headless_shell'));
-  } catch {
-    return false;
+  const candidates: string[] = [];
+  if (process.env.PLAYWRIGHT_BROWSERS_PATH) {
+    candidates.push(process.env.PLAYWRIGHT_BROWSERS_PATH);
   }
+  const home = process.env.HOME ?? '';
+  if (home) {
+    candidates.push(`${home}/Library/Caches/ms-playwright`); // macOS
+    candidates.push(`${home}/.cache/ms-playwright`); // Linux / WSL
+  }
+  if (process.env.LOCALAPPDATA) {
+    candidates.push(`${process.env.LOCALAPPDATA}/ms-playwright`); // Windows
+  }
+  for (const root of candidates) {
+    if (!existsSync(root)) continue;
+    try {
+      const entries = require('node:fs').readdirSync(root) as string[];
+      // Shell directories are named like `chromium_headless_shell-*`.
+      // A loose match is enough — `getBrowser()` surfaces a typed
+      // error if the install is incomplete.
+      if (entries.some((e) => e.startsWith('chromium_headless_shell'))) {
+        return true;
+      }
+    } catch {
+      // unreadable directory → keep looking
+    }
+  }
+  return false;
 }
 
 const CHROMIUM_AVAILABLE = chromiumAvailable();

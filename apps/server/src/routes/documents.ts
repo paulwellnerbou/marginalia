@@ -799,7 +799,17 @@ async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
       return img ? { bytes: img.bytes, mime: img.mime } : null;
     };
     const beforeLen = bodyHtml.length;
-    bodyHtml = await prerasterizeMermaid(bodyHtml, prerasterizer);
+    // Bound the per-export fan-out the same way the DOCX path does
+    // — each `prerasterizer` call may spawn a subprocess (mmdr) or
+    // open a Chromium context (chromium), and an unbounded
+    // Promise.all over a 20-diagram doc would starve the host.
+    // The env knob mirrors the DOCX one for consistency.
+    const concurrencyEnv = process.env.MARGINALIA_PDF_MERMAID_CONCURRENCY;
+    const concurrency =
+      concurrencyEnv && Number.isInteger(Number(concurrencyEnv)) && Number(concurrencyEnv) > 0
+        ? Number(concurrencyEnv)
+        : 4;
+    bodyHtml = await prerasterizeMermaid(bodyHtml, prerasterizer, { concurrency });
     // Heuristic for "did we render every diagram out of process?":
     // count how many `<div class="mermaid"` divs survived. If zero,
     // the runtime is unnecessary on the export page.

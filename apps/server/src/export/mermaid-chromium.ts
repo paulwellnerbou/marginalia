@@ -104,9 +104,10 @@ async function loadUmd(): Promise<string> {
  * Chromium's outbound-request firewall would block them anyway).
  */
 function buildPageHtml(umd: string, source: string): string {
-  // Caller passes `source` already JSON-stringified, so it survives
-  // any character — we don't have to worry about closing-script
-  // tags or HTML entities in mermaid source.
+  // `source` is the raw mermaid text. We JSON-stringify it here
+  // before embedding into the inline script so arbitrary characters
+  // (including closing `</script>` sequences in user diagrams)
+  // survive into the page as a plain string literal.
   return `<!doctype html>
 <html lang="en">
 <head>

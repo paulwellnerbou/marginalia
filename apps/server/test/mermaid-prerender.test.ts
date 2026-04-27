@@ -134,4 +134,34 @@ describe('prerasterizeMermaid', () => {
     expect(calls).toBe(0);
     expect(out).toBe(html);
   });
+
+  test('bounds parallelism via the concurrency option', async () => {
+    // Five diagrams + concurrency 2 → high-watermark ≤ 2 inflight.
+    // Without a bound, all five would resolve simultaneously and
+    // fan out into five subprocesses / browser contexts.
+    const html = Array.from({ length: 5 }, (_, i) =>
+      MD_DIV(i, `graph TD\nA${i} --&gt; B${i}`),
+    ).join('\n');
+    let inFlight = 0;
+    let highWatermark = 0;
+    await prerasterizeMermaid(
+      html,
+      async () => {
+        inFlight += 1;
+        highWatermark = Math.max(highWatermark, inFlight);
+        // Yield twice so concurrent calls really overlap when
+        // allowed; without this every await would settle in the
+        // same microtask and inFlight would never exceed 1.
+        await new Promise((r) => setTimeout(r, 5));
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        return { bytes: new TextEncoder().encode('<svg/>'), mime: 'image/svg+xml' };
+      },
+      { concurrency: 2 },
+    );
+    expect(highWatermark).toBeLessThanOrEqual(2);
+    // Sanity floor: pool actually achieved >1 in flight (otherwise
+    // the test passes trivially via accidental sequentialisation).
+    expect(highWatermark).toBeGreaterThan(1);
+  });
 });

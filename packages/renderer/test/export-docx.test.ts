@@ -59,17 +59,19 @@ function hasZipMagic(buf: Buffer): boolean {
 }
 
 /**
- * Build a tiny valid PNG with a custom IHDR width/height. Used to
- * test the natural-display-dimensions hand-off without pulling a
- * real raster library: `image-size` only reads IHDR for PNG, so a
- * minimal IHDR + IEND is enough to make `probeImage` report the
- * right pixel count.
+ * Build an IHDR-only PNG fixture with a custom width/height. NOT a
+ * spec-valid PNG — there is no IDAT (no image data) and the IHDR's
+ * CRC is left as zeros — but it's enough to make `image-size` (which
+ * only reads IHDR for PNG and doesn't validate CRCs) report the
+ * declared pixel count, which is all the docx-export tests below
+ * need. Pixels are never decoded on the export path.
  *
- * Bytes produced are real PNG (signature + IHDR + IEND), but
- * contain no image data. That's fine for the docx-export path
- * which doesn't decode pixels.
+ * If you need a spec-valid PNG for a different test, generate one
+ * with a real raster library or hand-craft IHDR + IDAT + IEND with
+ * correct CRCs — this helper is deliberately a fixture, not a
+ * fully-formed image.
  */
-function makePng(width: number, height: number): Uint8Array {
+function makeIhdrOnlyPngFixture(width: number, height: number): Uint8Array {
   // 8-byte signature + IHDR (4 length + 4 type + 13 data + 4 CRC) + IEND (4+4+0+4)
   const out = new Uint8Array(8 + 25 + 12);
   // Signature
@@ -84,13 +86,10 @@ function makePng(width: number, height: number): Uint8Array {
   dv.setUint32(20, height);
   // bit depth, color type, compression, filter, interlace (8, 2, 0, 0, 0)
   out.set([8, 2, 0, 0, 0], 24);
-  // IHDR CRC (computed off the IHDR type+data span). image-size
-  // doesn't validate CRCs, so we can leave zeros — but emit them
-  // anyway in case some other reader picks the file up.
-  // (Skip CRC computation; tests that read back via image-size
-  //  don't need it. Pad with zeros.)
+  // IHDR CRC — left as zeros. image-size doesn't validate, and we
+  // don't decode pixels. A real reader would reject; we don't care.
   out.set([0, 0, 0, 0], 29);
-  // IEND length (0) + type + CRC
+  // IEND length (0) + type + canonical CRC.
   out.set([0, 0, 0, 0], 33);
   out.set([0x49, 0x45, 0x4e, 0x44], 37);
   out.set([0xae, 0x42, 0x60, 0x82], 41); // canonical IEND CRC
@@ -1490,7 +1489,7 @@ describe('exportDocx — mermaid resolveMermaid', () => {
     // URL would do, but we just synthesise an IHDR with the right
     // dims so `image-size` reports 100×100). The image-size library
     // only reads IHDR for PNG; the rest can be junk for this test.
-    const png100 = makePng(100, 100);
+    const png100 = makeIhdrOnlyPngFixture(100, 100);
     const buf = await exportDocx(
       ['```mermaid', 'graph TD\nA --> B', '```'].join('\n'),
       {

@@ -168,9 +168,24 @@ export type MermaidPrerasterResolver = (
   index: number,
 ) => Promise<PrerasterizedMermaidBlock | null>;
 
+export interface PrerasterizeMermaidOptions {
+  /**
+   * Maximum concurrent `resolve()` calls in flight. The PDF mmdr
+   * path spawns a subprocess per diagram and the chromium path
+   * opens a BrowserContext per diagram — neither is free. Default
+   * 4 is the same ceiling `exportDocx` uses (see
+   * `DocxExportOptions.mermaidConcurrency`).
+   */
+  concurrency?: number;
+}
+
+/** Default ceiling — kept in sync with `export-docx.ts`'s default. */
+const DEFAULT_PRERASTER_CONCURRENCY = 4;
+
 export async function prerasterizeMermaid(
   html: string,
   resolve: MermaidPrerasterResolver,
+  options: PrerasterizeMermaidOptions = {},
 ): Promise<string> {
   // Match the entire mermaid div including its inner content. The
   // `s` flag lets `.` cross newlines (mermaid sources are
@@ -197,20 +212,26 @@ export async function prerasterizeMermaid(
   }
   if (hits.length === 0) return html;
 
-  // Resolve in parallel — the helper trusts the resolver to bound
-  // its own concurrency (the server route's resolver does, mirroring
-  // the DOCX path's `mermaidConcurrency`). Failure of an individual
-  // diagram surfaces as `null`; we leave that block untouched so it
-  // falls back to the in-page mermaid runtime.
-  const resolved = await Promise.all(
-    hits.map(async (h) => {
-      try {
-        return await resolve(h.source, h.index);
-      } catch {
-        return null;
-      }
-    }),
+  // Resolve with bounded parallelism. Without the cap, a 20-diagram
+  // doc would fan out into 20 simultaneous renderer subprocesses /
+  // BrowserContexts and starve the host — same failure mode the
+  // DOCX path already mitigates via `DocxExportOptions
+  // .mermaidConcurrency`. Failure of an individual diagram surfaces
+  // as `null`; we leave that block untouched so it falls back to
+  // the in-page mermaid runtime.
+  const limit = Math.max(
+    1,
+    typeof options.concurrency === 'number' && Number.isFinite(options.concurrency)
+      ? Math.floor(options.concurrency)
+      : DEFAULT_PRERASTER_CONCURRENCY,
   );
+  const resolved = await mapWithConcurrency(hits, limit, async (h) => {
+    try {
+      return await resolve(h.source, h.index);
+    } catch {
+      return null;
+    }
+  });
 
   let out = '';
   let cursor = 0;
@@ -226,9 +247,37 @@ export async function prerasterizeMermaid(
   return out;
 }
 
+/**
+ * Worker-pool helper — same shape as `export-docx.ts`'s
+ * `mapWithConcurrency`, kept private to this module so the server
+ * package doesn't depend on the renderer for a 10-line utility.
+ */
+async function mapWithConcurrency<T, U>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<U>,
+): Promise<U[]> {
+  if (items.length === 0) return [];
+  const out = new Array<U>(items.length);
+  let cursor = 0;
+  const workerCount = Math.min(limit, items.length);
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i] as T);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 function renderImageMarkup(r: PrerasterizedMermaidBlock): string {
-  const decoded = new TextDecoder().decode(r.bytes);
   if (r.mime === 'image/svg+xml') {
+    // Decode only on this branch — the PNG path doesn't need the
+    // text form and TextDecoder over a multi-MB raster on a doc
+    // with many diagrams isn't free.
+    const decoded = new TextDecoder().decode(r.bytes);
     // Strip a leading XML prolog if present — inline SVG inside HTML
     // doesn't want one. Keep everything from the `<svg ...>` tag on.
     const svgStart = decoded.indexOf('<svg');
