@@ -56,6 +56,7 @@ import {
   exportPdf,
 } from '../export/pdf.js';
 import {
+  countLiveMermaidBlocks,
   inlineImageAssets,
   type MermaidPrerasterResolver,
   prerasterizeMermaid,
@@ -810,10 +811,14 @@ async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
         ? Number(concurrencyEnv)
         : 4;
     bodyHtml = await prerasterizeMermaid(bodyHtml, prerasterizer, { concurrency });
-    // Heuristic for "did we render every diagram out of process?":
-    // count how many `<div class="mermaid"` divs survived. If zero,
-    // the runtime is unnecessary on the export page.
-    const survived = (bodyHtml.match(/<div class="mermaid"/g) ?? []).length;
+    // Did we render every diagram out of process? Count blocks that
+    // still need the in-page mermaid runtime — `countLiveMermaidBlocks`
+    // matches on the renderer's `data-mermaid-(index|mode)` attribute,
+    // not on the `mermaid` class (which the prerasterized wrapper
+    // also carries for styling), so a successful pre-rasterization
+    // correctly reports zero survivors and lets the envelope skip
+    // the UMD.
+    const survived = countLiveMermaidBlocks(bodyHtml);
     hasMermaidLive = survived > 0;
     if (process.env.MARGINALIA_DEBUG_EXPORT) {
       console.log(

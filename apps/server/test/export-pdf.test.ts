@@ -323,9 +323,11 @@ describe('PDF export', () => {
     // approximately-the-same SVG), so we just assert the export succeeded
     // and produced a non-empty PDF.
     //
-    // Skipped if mmdr isn't on PATH — same gating as the dedicated
-    // mermaid-rust suite.
-    if (!process.env.PATH?.split(':').some(() => true)) return; // pacify ts
+    // Skipped if mmdr isn't available — same gating as the dedicated
+    // mermaid-rust suite. `spawnSync` lets `node:child_process`
+    // resolve `mmdr` against PATH for us, and ENOENT is the
+    // canonical "binary not found" signal across platforms (no need
+    // to hand-split PATH ourselves).
     const { spawnSync } = await import('node:child_process');
     const probe = spawnSync('mmdr', ['--version'], { encoding: 'utf8' });
     if (probe.error && (probe.error as NodeJS.ErrnoException).code === 'ENOENT') return;

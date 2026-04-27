@@ -5,7 +5,10 @@
  */
 import { describe, expect, test } from 'bun:test';
 
-import { prerasterizeMermaid } from '../src/export/html-envelope.js';
+import {
+  countLiveMermaidBlocks,
+  prerasterizeMermaid,
+} from '../src/export/html-envelope.js';
 
 const MD_DIV = (idx: number, body: string): string =>
   `<div class="mermaid" data-block-kind="mermaid" data-mermaid-index="${idx}" data-mermaid-mode="client">${body}</div>`;
@@ -133,6 +136,40 @@ describe('prerasterizeMermaid', () => {
     });
     expect(calls).toBe(0);
     expect(out).toBe(html);
+  });
+
+  test('countLiveMermaidBlocks ignores prerendered wrappers', async () => {
+    // The PDF route uses this to decide whether the export envelope
+    // needs the mermaid UMD inlined. A naive `class="mermaid"`
+    // count would report > 0 even after every block was
+    // prerasterized (the wrapper retains the class for styling),
+    // negating the optimisation. The helper must instead key on
+    // `data-mermaid-(index|mode)`, which only un-prerendered blocks
+    // carry.
+    const bodyBefore =
+      '<h1>Doc</h1>\n' +
+      MD_DIV(0, 'graph TD\nA --&gt; B') +
+      '\n<p>Mid.</p>\n' +
+      MD_DIV(1, 'graph LR\nX --&gt; Y') +
+      '\n<p>End.</p>';
+    expect(countLiveMermaidBlocks(bodyBefore)).toBe(2);
+
+    const allResolved = await prerasterizeMermaid(bodyBefore, async () => ({
+      bytes: new TextEncoder().encode('<svg/>'),
+      mime: 'image/svg+xml',
+    }));
+    // Both diagrams pre-rasterized → no live blocks remain even
+    // though the `mermaid` class survives on the wrapper for styling.
+    expect(allResolved).toContain('mermaid-prerendered');
+    expect(allResolved).toContain('class="mermaid mermaid-prerendered"');
+    expect(countLiveMermaidBlocks(allResolved)).toBe(0);
+
+    // Mixed: index 0 resolves, index 1 falls through. One live
+    // block remains → the envelope still needs the mermaid runtime.
+    const partial = await prerasterizeMermaid(bodyBefore, async (_s, idx) =>
+      idx === 0 ? { bytes: new TextEncoder().encode('<svg/>'), mime: 'image/svg+xml' } : null,
+    );
+    expect(countLiveMermaidBlocks(partial)).toBe(1);
   });
 
   test('bounds parallelism via the concurrency option', async () => {

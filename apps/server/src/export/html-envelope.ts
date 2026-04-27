@@ -187,11 +187,10 @@ export async function prerasterizeMermaid(
   resolve: MermaidPrerasterResolver,
   options: PrerasterizeMermaidOptions = {},
 ): Promise<string> {
-  // Match the entire mermaid div including its inner content. The
-  // `s` flag lets `.` cross newlines (mermaid sources are
-  // multi-line). The capture groups are: (1) the whole tag-attrs
-  // chunk we'll discard, (2) the data-mermaid-index value, (3) the
-  // inner (escaped) source text.
+  // Match the entire mermaid div including its inner content.
+  // `[\s\S]*?` lets the inner source span newlines without needing
+  // the `s` flag. The capture groups are: (1) the data-mermaid-index
+  // value, (2) the inner (escaped) source text.
   const re = /<div\b[^>]*\bclass="mermaid"[^>]*\bdata-mermaid-index="(\d+)"[^>]*>([\s\S]*?)<\/div>/g;
   interface Hit {
     start: number;
@@ -270,6 +269,32 @@ async function mapWithConcurrency<T, U>(
   });
   await Promise.all(workers);
   return out;
+}
+
+/**
+ * Count mermaid blocks in `html` that still need the in-page mermaid
+ * runtime to render — i.e. blocks the prerasterizer didn't touch.
+ *
+ * Naively counting `<div class="mermaid">` would over-report:
+ * `prerasterizeMermaid` emits `<div class="mermaid mermaid-
+ * prerendered">…inline svg…</div>` (the `mermaid` class survives so
+ * the print stylesheet still targets the diagram). The right marker
+ * for "live" blocks is the renderer's own `data-mermaid-index` /
+ * `data-mermaid-mode` attribute — only the unprocessed divs carry
+ * those, since the prerendered wrapper drops them.
+ *
+ * Used by the PDF route to decide whether the export envelope needs
+ * to inline the ~3 MB mermaid UMD: zero live blocks → skip the UMD
+ * entirely (fast path); ≥ 1 → keep the UMD so leftover blocks fall
+ * back to client-side rendering.
+ */
+export function countLiveMermaidBlocks(html: string): number {
+  // Match `<div class="…mermaid…">` with a `data-mermaid-(index|mode)=`
+  // attribute somewhere in the tag. The lookahead doesn't anchor
+  // attribute order — both upstream plugins emit different orderings
+  // and we shouldn't depend on either.
+  const re = /<div\b[^>]*\bclass="[^"]*\bmermaid\b[^"]*"(?=[^>]*\bdata-mermaid-(?:index|mode)=)[^>]*>/g;
+  return (html.match(re) ?? []).length;
 }
 
 function renderImageMarkup(r: PrerasterizedMermaidBlock): string {
