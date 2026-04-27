@@ -11,9 +11,18 @@ export interface InlineComposerLeftActionsContext {
   /** True when a submit (post or workflow action) is in flight. */
   submitting: boolean;
   /**
+   * False while a submit is in flight or while the composer still needs
+   * a display name (`needsName=true` and the name input is empty).
+   * Callers should use this to disable left-side action buttons —
+   * `runAction` itself silently no-ops when `canRunAction` is false,
+   * so a button rendered without honoring this flag would look
+   * clickable but do nothing.
+   */
+  canRunAction: boolean;
+  /**
    * Run an action that may optionally consume the current draft body /
    * display name. The composer clears the textarea on success and
-   * mirrors the submitting state.
+   * mirrors the submitting state. No-op when `canRunAction` is false.
    */
   runAction: (action: (body?: string, name?: string) => Promise<void> | void) => Promise<void>;
 }
@@ -83,6 +92,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
   const hasDraft = body.length > 0;
   const canIdentify = !needsName || displayName.length > 0;
   const ready = hasDraft && canIdentify && !submitting;
+  const canRunAction = canIdentify && !submitting;
 
   async function send() {
     if (!ready) return;
@@ -96,7 +106,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
   }
 
   async function runAction(action: (body?: string, name?: string) => Promise<void> | void) {
-    if (submitting || (needsName && !displayName)) return;
+    if (!canRunAction) return;
     setSubmitting(true);
     try {
       await action(hasDraft ? body : undefined, needsName ? displayName : undefined);
@@ -145,7 +155,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
         <span className="ic-composer-hint">⌘/Ctrl+Enter</span>
         {leftActions && (
           <div className="ic-composer-left-actions">
-            {leftActions({ hasDraft, submitting, runAction })}
+            {leftActions({ hasDraft, submitting, canRunAction, runAction })}
           </div>
         )}
         {(showCancel || onCancel) && (

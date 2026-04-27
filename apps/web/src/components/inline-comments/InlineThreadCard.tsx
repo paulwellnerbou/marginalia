@@ -180,15 +180,17 @@ export function InlineThreadCard({
           )}
         </div>
         {diffError && <span className="ic-error">{diffError}</span>}
-        {thread.anchor.quote && (
+        {onJump && (
           <button
             type="button"
             className="ic-card-anchor"
             title="Jump to this location in the document"
             onClick={onJump}
-            disabled={!onJump}
           >
-            <span aria-hidden>↗</span> "{truncate(thread.anchor.quote, 80)}"
+            <span aria-hidden>↗</span>{' '}
+            {thread.anchor.quote
+              ? `"${truncate(thread.anchor.quote, 80)}"`
+              : 'Jump to anchor'}
           </button>
         )}
         <button
@@ -242,8 +244,12 @@ export function InlineThreadCard({
               onSubmit={(body, name) => onReply(thread.id, body, name)}
               leftActions={
                 canAccept || canReject || canResolve || canReopen
-                  ? ({ submitting, runAction }) => {
-                      const disabled = submitting || busy;
+                  ? ({ canRunAction, runAction }) => {
+                      // `canRunAction` is false while submitting OR
+                      // while the composer still needs a display name
+                      // — disable the workflow buttons in both cases
+                      // so they don't look clickable but silently no-op.
+                      const disabled = !canRunAction || busy;
                       return (
                         <>
                           {canAccept && (
