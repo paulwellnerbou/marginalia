@@ -368,13 +368,11 @@ export function InlineCommentsLayer({
         naturalTops.current.set(item.id, nat);
         changed = true;
       }
-      // Landed cards sit at scroll-y = nat + STICKY_TOP_PAD_PX (see
-      // the LANDED branch in the layout pass); count that into the
-      // bottom so the column's min-height covers their full extent.
-      // Otherwise, when the column is the only thing extending the
-      // scrollable area, the trailing cards lose STICKY_TOP_PAD_PX
-      // worth of scroll range.
-      const cardBottom = nat + STICKY_TOP_PAD_PX + cardHeight;
+      // Keep bottom measurement aligned with the render pass: stacked
+      // cards land at nat + STICKY_TOP_PAD_PX, while non-stacking
+      // cards render directly at nat.
+      const cardBottom =
+        nat + (stackingEnabled ? STICKY_TOP_PAD_PX : 0) + cardHeight;
       if (cardBottom > maxBottom) maxBottom = cardBottom;
     }
     // Second pass: stack any unanchored / orphaned items beneath the
