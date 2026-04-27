@@ -782,15 +782,20 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   /**
    * The inline column can be off-screen even when `inlineCommentsOpen`
-   * is true: the `@container (max-width: 700px)` rule on `.doc-scroll`
-   * hides it on narrow viewports. In that case fall back to the right
-   * pane so highlight clicks still surface the selected thread.
+   * is true: the container query on `.doc-scroll` hides `.ic-column`
+   * on narrow viewports. Detect the rendered visibility of the column
+   * directly so this stays in sync with CSS — duplicating the
+   * breakpoint in JS would drift the moment someone tweaks the rule.
    */
   const inlineCommentsVisible = useCallback((): boolean => {
     if (!inlineCommentsOpen) return false;
     const scroll = docScrollRef.current;
     if (!scroll) return true;
-    return scroll.clientWidth > 700;
+    const column = scroll.querySelector<HTMLElement>('.ic-column');
+    if (!column) return false;
+    const style = window.getComputedStyle(column);
+    if (style.display === 'none' || style.visibility === 'hidden') return false;
+    return column.getClientRects().length > 0;
   }, [inlineCommentsOpen]);
 
   const openCommentThread = useCallback(
