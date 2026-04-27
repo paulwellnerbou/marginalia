@@ -339,6 +339,10 @@ button.primary:disabled {
 }
 .pane-doc .doc-scroll {
   flex: 1;
+  /* The marginalia-theme rule (applied alongside .doc-scroll so the
+     inline comments column shares the document's themed background)
+     sets `min-height: 100%`, which fights flex sizing inside the pane.
+     Override it back to 0 so flex's height calculation isn't pinned. */
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -2381,7 +2385,17 @@ button.primary.small {
 /* ---------- Card ---------- */
 
 .ic-card {
-  background: var(--ui-surface);
+  /* A very subtle tint over the document's themed background — a 5%
+     mix of the theme's foreground into its background. In light
+     themes this lands as a near-white grey; in dark themes the same
+     formula produces a slightly lighter dark grey, the visual
+     opposite. Falls back to the Radix surface color outside the
+     marginalia-theme scope. */
+  background: color-mix(
+    in srgb,
+    var(--md-color-fg, currentColor) 5%,
+    var(--md-color-bg, var(--ui-surface))
+  );
   border: 1px solid var(--ui-border);
   border-radius: 10px;
   padding: 0.7rem 0.75rem 0.6rem;

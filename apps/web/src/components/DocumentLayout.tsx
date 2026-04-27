@@ -1168,7 +1168,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </Flex>
             </div>
           )}
-          <div className="doc-scroll" ref={docScrollRef}>
+          {/* `marginalia-theme` is applied here (not just inside the
+              article) so the inline comments column inherits the
+              document's themed background — otherwise it would sit on
+              the surrounding pane-doc background and look like a
+              different surface. */}
+          <div className="doc-scroll marginalia-theme" ref={docScrollRef}>
             <div
               className={`doc-row${inlineCommentsOpen ? ' doc-row-with-inline' : ''}`}
               style={{ ['--md-max-width' as string]: `${maxWidth}ch` }}
