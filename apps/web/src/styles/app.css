@@ -2194,6 +2194,7 @@ button.primary.small {
   max-height: 60vh;
   min-width: 0;
   overflow: auto;
+  position: relative;
 }
 .diff-scroll-empty {
   padding: 0.5rem;

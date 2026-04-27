@@ -1,5 +1,5 @@
 import { Button, Dialog, Flex, Text } from '@radix-ui/themes';
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type DiffOverviewLineLayout,
   buildDiffOverviewMarkers,
@@ -26,6 +26,11 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
   const contentRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [scroller, setScroller] = useState<HTMLDivElement | null>(null);
+  const setScrollNode = useCallback((node: HTMLDivElement | null) => {
+    scrollRef.current = node;
+    setScroller(node);
+  }, []);
   const [scrollMetrics, setScrollMetrics] = useState({
     scrollTop: 0,
     scrollHeight: 0,
@@ -52,9 +57,7 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
   }, [lineLayoutState, lines, renderLineKeys, scrollMetrics.scrollHeight]);
 
   useLayoutEffect(() => {
-    if (!open) return;
-    const scroller = scrollRef.current;
-    if (!scroller) return;
+    if (!open || !scroller) return;
 
     const syncScrollMetrics = () => {
       setScrollMetrics((prev) => {
@@ -108,7 +111,7 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
       window.removeEventListener('resize', syncLayoutState);
       observer?.disconnect();
     };
-  }, [open, renderLineKeys, renderedLines]);
+  }, [open, scroller, renderLineKeys, renderedLines]);
 
   const overviewViewport = useMemo(() => getDiffOverviewViewport(scrollMetrics), [scrollMetrics]);
   const overviewCenterRatio = overviewViewport
@@ -183,7 +186,7 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
         </Dialog.Description>
 
         <section className="diff-view" aria-label="Diff">
-          <div ref={scrollRef} className={`diff-scroll${hasChanges ? '' : ' diff-scroll-empty'}`}>
+          <div ref={setScrollNode} className={`diff-scroll${hasChanges ? '' : ' diff-scroll-empty'}`}>
             <div ref={contentRef}>
               {hasChanges ? (
                 renderedLines.map(({ key, line }) => (
@@ -289,12 +292,21 @@ function measureDiffLineLayout(
   line: HTMLDivElement | null | undefined,
   scroller: HTMLDivElement,
 ): DiffOverviewLineLayout | null {
-  if (!line) return null;
+  if (!line || !scroller.contains(line)) return null;
 
-  const scrollerRect = scroller.getBoundingClientRect();
-  const lineRect = line.getBoundingClientRect();
-  const top = lineRect.top - scrollerRect.top + scroller.scrollTop;
-  const bottom = lineRect.bottom - scrollerRect.top + scroller.scrollTop;
+  // Use offsetTop walked up to the scroller. Layout-based offsets are immune
+  // to ancestor CSS transforms (Radix Dialog scales during its open animation),
+  // unlike getBoundingClientRect which returns transformed coordinates and
+  // would mix incompatibly with scroller.scrollTop.
+  let top = 0;
+  let el: HTMLElement | null = line;
+  while (el && el !== scroller) {
+    top += el.offsetTop;
+    el = el.offsetParent as HTMLElement | null;
+  }
+  if (el !== scroller) return null;
+
+  const bottom = top + line.offsetHeight;
   if (bottom <= top) return null;
 
   return { top, bottom };
