@@ -183,6 +183,20 @@ const x = 1;
     expect(new Set(matches).size).toBe(3);
   });
 
+  test('attaches data-subblock to list items nested inside container blocks', async () => {
+    // Lists living inside admonitions / example blocks / open blocks
+    // are NOT direct children of preamble or section, so the top-level
+    // walk treats the container as a leaf. We still need to descend
+    // into their children for sub-block tagging; this test pins that.
+    const r = await renderAsciidoc(
+      `[NOTE]\n====\n* admonition item one\n* admonition item two\n====\n\n` +
+        `[example]\n====\n* example item one\n* example item two\n====\n`,
+    );
+    const matches = [...r.html.matchAll(/data-subblock="([^"]+)"/g)].map((m) => m[1]);
+    expect(matches).toHaveLength(4);
+    expect(new Set(matches).size).toBe(4);
+  });
+
   test('`:experimental:` is on by default — kbd/btn/menu macros resolve', async () => {
     const r = await renderAsciidoc(
       `Press kbd:[Ctrl+S]. Click btn:[Submit]. Use menu:File[Open].`,

@@ -158,9 +158,9 @@ interface WalkState {
  * Sub-block BlockInfo entries are collected into a separate
  * `subBlockInfos` buffer during the walk so that positional marker
  * lookups (`blocks[idx]` in `rehypeAsciidocBlockIds`) only touch
- * top-level entries; they're concatenated onto the exported
- * `BlockMap` after all top-level blocks have been recorded, in
- * document order, and inherit their enclosing list's section
+ * top-level entries; they're appended to the exported `BlockMap`
+ * after all top-level blocks have been recorded, preserving their
+ * own relative order and inheriting their enclosing list's section
  * context.
  */
 function walkBlocks(doc: AsciidoctorAbstractBlock): {
@@ -324,7 +324,17 @@ function emitLeafBlock(
   if (ctx === 'ulist' || ctx === 'olist') {
     const parent = info ?? synthesizeParent(state, ctx);
     emitListSubBlocks(block, parent, state);
+    return;
   }
+  // Other container leaf blocks (admonitions, sidebars, examples,
+  // open/quote blocks, etc.) can hold lists too. walkTopLevel only
+  // recurses into sections/preamble/document, so without descending
+  // through their children here, sub-block markers wouldn't be
+  // emitted for items inside `[NOTE] ==== * a * b ====` and friends.
+  // Sub-block infos inherit the container's section context (the
+  // recorded info if it was non-empty, else a synthesized one).
+  const containerParent = info ?? synthesizeParent(state, ctx);
+  descendForNestedLists(block, containerParent, state);
 }
 
 /**

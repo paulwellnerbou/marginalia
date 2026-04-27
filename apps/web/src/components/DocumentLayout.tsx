@@ -214,7 +214,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
 
   const docRef = useRef<HTMLElement>(null);
-  const docBodyRef = useRef<HTMLDivElement>(null);
   const docScrollRef = useRef<HTMLDivElement>(null);
   const docSearchInputRef = useRef<HTMLInputElement>(null);
 
@@ -1174,7 +1173,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               className={`doc-row${inlineCommentsOpen ? ' doc-row-with-inline' : ''}`}
               style={{ ['--md-max-width' as string]: `${maxWidth}ch` }}
             >
-              <div className="doc-body" ref={docBodyRef}>
+              <div className="doc-body">
                 <RenderedDoc
                   rendered={liveRendered}
                   elRef={docRef}

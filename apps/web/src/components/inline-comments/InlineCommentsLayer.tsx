@@ -11,6 +11,11 @@ import {
 } from 'react';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
+import {
+  buildThreadCollapseState,
+  reconcileThreadCollapseState,
+  type ThreadCollapseState,
+} from '../threadCollapseState.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 
@@ -122,33 +127,33 @@ export function InlineCommentsLayer({
   onScrollToAnchor,
 }: Props) {
   const rootRef = useRef<HTMLElement>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => {
-    const initial = new Set<string>();
-    for (const t of threads) {
-      if (shouldAutoCollapse(t)) initial.add(t.id);
-    }
-    return initial;
-  });
+
+  /**
+   * Auto-collapse defaults derived from the current thread list.
+   * Threads start collapsed when they're already resolved or accepted/
+   * rejected proposals. The shared reconciler tracks "auto-collapse
+   * just activated" so a thread the user manually expanded doesn't
+   * snap back to collapsed when something else triggers a re-render.
+   */
+  const collapseDefaults = useMemo(
+    () =>
+      threads.map((t) => ({
+        id: t.id,
+        autoCollapse: shouldAutoCollapse(t),
+      })),
+    [threads],
+  );
+  const [collapseState, setCollapseState] = useState<ThreadCollapseState>(() =>
+    buildThreadCollapseState(collapseDefaults),
+  );
+  const collapsed = collapseState.collapsed;
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; phase: 'a' | 'b' } | null>(null);
   const lastNonce = useRef<number | null>(null);
 
   useEffect(() => {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      const known = new Set(prev);
-      for (const t of threads) {
-        if (!known.has(t.id) && shouldAutoCollapse(t)) {
-          next.add(t.id);
-        }
-      }
-      const ids = new Set(threads.map((t) => t.id));
-      for (const id of next) {
-        if (!ids.has(id)) next.delete(id);
-      }
-      return next.size === prev.size && [...next].every((id) => prev.has(id)) ? prev : next;
-    });
-  }, [threads]);
+    setCollapseState((prev) => reconcileThreadCollapseState(prev, collapseDefaults));
+  }, [collapseDefaults]);
 
   /**
    * Document-order rank for each block id. `blockRanges`'s iteration
@@ -501,11 +506,11 @@ export function InlineCommentsLayer({
     if (!exists) return;
 
     if (collapsed.has(focusedThread.threadId)) {
-      setCollapsed((prev) => {
-        if (!prev.has(focusedThread.threadId)) return prev;
-        const next = new Set(prev);
+      setCollapseState((prev) => {
+        if (!prev.collapsed.has(focusedThread.threadId)) return prev;
+        const next = new Set(prev.collapsed);
         next.delete(focusedThread.threadId);
-        return next;
+        return { ...prev, collapsed: next };
       });
     }
 
@@ -533,11 +538,11 @@ export function InlineCommentsLayer({
   }, [focusedThread, threads, collapsed]);
 
   function toggle(id: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
+    setCollapseState((prev) => {
+      const next = new Set(prev.collapsed);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      return next;
+      return { ...prev, collapsed: next };
     });
   }
 
