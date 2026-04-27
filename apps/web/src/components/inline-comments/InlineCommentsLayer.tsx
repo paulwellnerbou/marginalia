@@ -40,7 +40,7 @@ interface Props {
    */
   stackingEnabled: boolean;
   pendingAnchor: CommentAnchor | null;
-  focusedThread: { threadId: string; nonce: number } | null;
+  focusedThread: { threadId: string; nonce: number; scroll: boolean } | null;
   displayName: string | null;
   onCancelPending: () => void;
   onCreate: (payload: {
@@ -549,12 +549,14 @@ export function InlineCommentsLayer({
     setFocusedId(focusedThread.threadId);
     setFlash({ id: focusedThread.threadId, phase });
 
-    const raf = window.requestAnimationFrame(() => {
-      const el = rootRef.current?.querySelector<HTMLElement>(
-        `[data-comment-thread-id="${CSS.escape(focusedThread.threadId)}"]`,
-      );
-      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
+    const raf = focusedThread.scroll
+      ? window.requestAnimationFrame(() => {
+          const el = rootRef.current?.querySelector<HTMLElement>(
+            `[data-comment-thread-id="${CSS.escape(focusedThread.threadId)}"]`,
+          );
+          el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        })
+      : -1;
     const flashT = window.setTimeout(() => {
       setFlash((cur) => (cur?.id === focusedThread.threadId && cur.phase === phase ? null : cur));
     }, FLASH_MS);

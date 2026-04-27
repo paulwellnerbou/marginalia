@@ -108,6 +108,7 @@ interface Props {
 interface ThreadFocusTarget {
   threadId: string;
   nonce: number;
+  scroll: boolean;
 }
 
 type PendingDraft =
@@ -799,14 +800,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [inlineCommentsOpen]);
 
   const openCommentThread = useCallback(
-    (threadId: string) => {
+    (threadId: string, scroll = true) => {
       // Prefer the inline column when it's actually visible; otherwise
       // fall back to the right pane (and open it if it's collapsed).
       if (!inlineCommentsVisible()) {
         setCommentsOpen(true);
         setRightTab('comments');
       }
-      setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1 }));
+      setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1, scroll }));
     },
     [inlineCommentsVisible],
   );
@@ -1179,7 +1180,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   activeSearchResultId={activeSearchTarget?.id ?? null}
                   activeSearchVersion={activeSearchTarget?.nonce ?? 0}
                   onSearchResultsChange={updateSearchResults}
-                  onHighlightClick={openCommentThread}
+                  onHighlightClick={(threadId) => openCommentThread(threadId, false)}
                   onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
                 />
                 {canComment && (
