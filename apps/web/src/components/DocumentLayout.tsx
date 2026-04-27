@@ -75,7 +75,6 @@ import { APP_ACCENT_COLOR } from '../styles/theme.js';
 import { AccessControlDialog } from './AccessControlDialog.js';
 import { AppBar } from './AppBar.js';
 import { BlockActions } from './BlockActions.js';
-import { CommentsPane } from './CommentsPane.js';
 import {
   type DocumentSearchResult,
   DocumentSearchResultsPane,
@@ -89,6 +88,7 @@ import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
 import { ProposalComposer } from './ThreadComposer.js';
 import { Toc } from './Toc.js';
 import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
+import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
 
 const MAX_WIDTH_KEY = 'marginalia.maxWidth';
 const TEXT_ZOOM_KEY = 'marginalia.textZoom';
@@ -159,7 +159,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   });
 
   const [threads, setThreads] = useState<Thread[]>([]);
-  const [mentionSeedNames, setMentionSeedNames] = useState<string[]>([]);
   const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
   const pendingAnchor = pendingDraft?.mode === 'comment' ? pendingDraft.anchor : null;
   const pendingProposalTarget = pendingDraft?.mode === 'proposal' ? pendingDraft.target : null;
@@ -337,7 +336,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       (r) => {
         if (cancelled) return;
         setThreads(r.threads);
-        setMentionSeedNames(r.mention_candidates);
         notifyPendingMentions(r.threads, r.pending_mentions);
       },
       (err) => reportError('DocumentLayout.listThreads', err, { uid: doc.uid }),
@@ -372,7 +370,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             .then((res) => {
               if (cancelled) return;
               setThreads(res.threads);
-              setMentionSeedNames(res.mention_candidates);
               notifyPendingMentions(res.threads, res.pending_mentions);
             })
             .catch((err) => reportError('DocumentLayout.mention.created', err, { uid: doc.uid }));
@@ -403,18 +400,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.uid]);
-
-  const mentionCandidates = useMemo(() => {
-    const names = new Map<string, string>();
-    for (const name of mentionSeedNames) addMentionName(names, name);
-    for (const thread of threads) {
-      for (const c of thread.comments) addMentionName(names, c.author.display_name);
-    }
-    if (doc.display_name) addMentionName(names, doc.display_name);
-    return Array.from(names.values()).sort((a, b) =>
-      a.localeCompare(b, undefined, { sensitivity: 'base' }),
-    );
-  }, [threads, doc.display_name, mentionSeedNames]);
 
   function resolveIdentity(providedName?: string) {
     const name = providedName?.trim() || effectiveDisplayName;
@@ -560,7 +545,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     try {
       const res = await listThreads(doc.uid, { consumeMentions: false });
       setThreads(res.threads);
-      setMentionSeedNames(res.mention_candidates);
     } catch (err) {
       reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
     }
@@ -1278,12 +1262,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 </Tooltip>
               </Flex>
               <Tabs.Content value="comments" className="right-tab-panel">
-                <CommentsPane
+                <InlineCommentsList
                   uid={doc.uid}
                   threads={threads}
                   docSource={liveSource}
                   blockRanges={blockRanges}
-                  mentionCandidates={mentionCandidates}
                   canComment={canComment}
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}
@@ -1365,13 +1348,6 @@ function notifyPendingMentions(threads: Thread[], pendingMentionIds: string[]): 
       notify('Mentioned in a comment', `${node.author.display_name}: ${node.body.slice(0, 120)}`);
     }
   }
-}
-
-function addMentionName(map: Map<string, string>, name: string | null | undefined): void {
-  const trimmed = name?.trim();
-  if (!trimmed) return;
-  const key = trimmed.toLowerCase();
-  if (!map.has(key)) map.set(key, trimmed);
 }
 
 function flattenTocIds(nodes: readonly TocNode[]): string[] {
