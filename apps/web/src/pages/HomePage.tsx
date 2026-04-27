@@ -43,6 +43,7 @@ import {
   isDocumentFormat,
   uploadDocument,
 } from '../lib/api.js';
+import { formatTimestampLong } from '../lib/format-time.js';
 import { deriveDisplayName, getClientId, getDisplayName, setDisplayName } from '../lib/identity.js';
 import { saveInviteToken } from '../lib/invite.js';
 import { reportError } from '../lib/log.js';
@@ -453,7 +454,7 @@ function RecentCard({
           </Badge>
         )}
       </Flex>
-      <Text size="1" color="gray" mt="3" as="div" title={formatFullTs(doc.visited_at)}>
+      <Text size="1" color="gray" mt="3" as="div" title={formatTimestampLong(doc.visited_at)}>
         Last opened {formatRelative(doc.visited_at)}
       </Text>
     </Card>
@@ -1037,9 +1038,3 @@ function formatRelative(ts: number): string {
   return new Date(ts).toLocaleDateString();
 }
 
-function formatFullTs(ts: number): string {
-  return new Date(ts).toLocaleString([], {
-    dateStyle: 'full',
-    timeStyle: 'medium',
-  });
-}

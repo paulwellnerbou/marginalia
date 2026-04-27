@@ -3,7 +3,7 @@ import { useState } from 'react';
 import type { Thread, ThreadProposalData } from '../../lib/api.js';
 import { proposalStatus } from '../../lib/api.js';
 import { InlineAvatar } from './InlineAvatar.js';
-import { inlineFormatTimestamp, inlineFormatTimestampLong } from './inlineUtils.js';
+import { formatTimestamp, formatTimestampLong } from '../../lib/format-time.js';
 
 interface Props {
   thread: Thread & { proposal: ThreadProposalData };
@@ -55,8 +55,8 @@ export function InlineProposalEntry({ thread, onEditRationale, onDeleteThread }:
       <div className="ic-row-main">
         <div className="ic-row-meta">
           <span className="ic-row-author">{opener.author.display_name}</span>
-          <span className="ic-row-ts" title={inlineFormatTimestampLong(opener.created_at)}>
-            {inlineFormatTimestamp(opener.created_at)}
+          <span className="ic-row-ts" title={formatTimestampLong(opener.created_at)}>
+            {formatTimestamp(opener.created_at)}
           </span>
           {!editingRationale && (
             <div className="ic-row-meta-actions">

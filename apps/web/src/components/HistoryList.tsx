@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertDialog, Box, Button, Code, Flex, Text } from '@radix-ui/themes';
 import { getDocument, getHistory, getHistoryDiff, type HistoryEntry } from '../lib/api.js';
+import { formatTimestamp, formatTimestampLong } from '../lib/format-time.js';
 import { reportError } from '../lib/log.js';
 import { DiffDialog } from './DiffDialog.js';
 import { ShowDiffButton } from './ShowDiffButton.js';
@@ -269,8 +270,8 @@ export function HistoryList({
                     <Text size="2" weight="medium">
                       {describeEntry(entry)}
                     </Text>
-                    <Text size="1" color="gray" title={formatFullTs(entry.timestamp)}>
-                      {formatTs(entry.timestamp)}
+                    <Text size="1" color="gray" title={formatTimestampLong(entry.timestamp)}>
+                      {formatTimestamp(entry.timestamp)}
                     </Text>
                   </Flex>
                   <Text size="1" color="gray">
@@ -462,20 +463,3 @@ function historyActorLabel(displayName: string | null, clientId: string | null):
   return 'Unknown user';
 }
 
-function formatTs(ts: number): string {
-  const d = new Date(ts);
-  const now = new Date();
-  const sameDay =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleString();
-}
-
-function formatFullTs(ts: number): string {
-  return new Date(ts).toLocaleString([], {
-    dateStyle: 'full',
-    timeStyle: 'medium',
-  });
-}

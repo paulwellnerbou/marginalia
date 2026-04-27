@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Comment } from '../../lib/api.js';
 import { InlineAvatar } from './InlineAvatar.js';
-import { inlineFormatTimestamp, inlineFormatTimestampLong } from './inlineUtils.js';
+import { formatTimestamp, formatTimestampLong } from '../../lib/format-time.js';
 
 interface Props {
   node: Comment;
@@ -69,8 +69,8 @@ export function InlineCommentRow({
       <div className="ic-row-main">
         <div className="ic-row-meta">
           <span className="ic-row-author">{node.author.display_name}</span>
-          <span className="ic-row-ts" title={inlineFormatTimestampLong(node.created_at)}>
-            {inlineFormatTimestamp(node.created_at)}
+          <span className="ic-row-ts" title={formatTimestampLong(node.created_at)}>
+            {formatTimestamp(node.created_at)}
           </span>
           {!editing && (
             <div className="ic-row-meta-actions">

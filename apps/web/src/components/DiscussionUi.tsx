@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { ChevronDownIcon, ChevronRightIcon } from '@radix-ui/react-icons';
 import { Button, Flex, Text } from '@radix-ui/themes';
+import { formatTimestamp, formatTimestampLong } from '../lib/format-time.js';
 
 interface DiscussionThreadProps {
   threadId: string;
@@ -113,8 +114,13 @@ export function DiscussionEntry({
         {badge ? <div className="comment-badge-row">{badge}</div> : null}
       </div>
       <div className="comment-aside">
-        <Text size="1" color="gray" className="comment-ts" title={`${authorName} · ${formatFullTs(createdAt)}`}>
-          {formatTs(createdAt)}
+        <Text
+          size="1"
+          color="gray"
+          className="comment-ts"
+          title={`${authorName} · ${formatTimestampLong(createdAt)}`}
+        >
+          {formatTimestamp(createdAt)}
         </Text>
         {actions}
       </div>
@@ -152,24 +158,6 @@ function hashHue(s: string): number {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return Math.abs(h) % 360;
-}
-
-export function formatTs(ts: number): string {
-  const d = new Date(ts);
-  const today = new Date();
-  const sameDay =
-    d.getFullYear() === today.getFullYear() &&
-    d.getMonth() === today.getMonth() &&
-    d.getDate() === today.getDate();
-  if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleDateString();
-}
-
-export function formatFullTs(ts: number): string {
-  return new Date(ts).toLocaleString([], {
-    dateStyle: 'full',
-    timeStyle: 'medium',
-  });
 }
 
 function joinClasses(...values: Array<string | null | undefined | false>): string {
