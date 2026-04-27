@@ -2049,9 +2049,15 @@ button.primary:disabled {
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
 }
 
+/* Flash via box-shadow rather than `background` — .ic-card's normal
+   background is a color-mix() of theme fg/bg, and animating
+   `background` would snap to whatever the keyframe ends at instead
+   of the card's real default, causing a visible color pop at the
+   end of the flash. A box-shadow overlay leaves the card's own
+   background untouched. */
 @keyframes ic-flash {
-  0% { background: rgba(59, 130, 246, 0.16); }
-  100% { background: var(--ui-surface); }
+  0% { box-shadow: inset 0 0 0 9999px rgba(59, 130, 246, 0.16); }
+  100% { box-shadow: inset 0 0 0 9999px rgba(59, 130, 246, 0); }
 }
 .ic-card-flash-a,
 .ic-card-flash-b {
@@ -2194,6 +2200,13 @@ button.primary:disabled {
 /* Confirm prompts always visible regardless of hover state. */
 .ic-row-meta-actions:has(.ic-confirm-prompt) {
   opacity: 1;
+}
+/* Touch / coarse-pointer devices don't have hover — keep the row
+   actions always visible there so they're reachable. */
+@media (hover: none), (pointer: coarse) {
+  .ic-row-meta-actions {
+    opacity: 1;
+  }
 }
 
 .ic-icon-btn {
