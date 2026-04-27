@@ -260,16 +260,29 @@ export function InlineCommentsLayer({
    * doesn't touch the doc-chrome's bottom border; subsequent cards
    * stack below with the gap between them.
    */
+  /**
+   * Prefix sums of (cardHeight + gap) so stackOffset() is O(1) per
+   * call. `stackPrefix[i]` = sum of `(heights[0..i-1] + STACK_GAP_PX)`.
+   * The render pass calls stackOffset() once per card, and without
+   * this precomputation that loop becomes O(N²) in thread count —
+   * cheap for a few cards, noticeable on long docs.
+   */
+  const stackPrefix = useMemo(() => {
+    const heights = orderedMetrics.heights;
+    const arr = new Array<number>(heights.length + 1);
+    arr[0] = 0;
+    for (let i = 0; i < heights.length; i++) {
+      arr[i + 1] = (arr[i] ?? 0) + (heights[i] ?? 96) + STACK_GAP_PX;
+    }
+    return arr;
+  }, [orderedMetrics]);
+
   const stackOffset = useCallback(
     (k: number, epoch: number): number => {
       if (k < epoch) return 0;
-      let sum = STICKY_TOP_PAD_PX;
-      for (let i = epoch; i < k; i++) {
-        sum += (orderedMetrics.heights[i] ?? 96) + STACK_GAP_PX;
-      }
-      return sum;
+      return STICKY_TOP_PAD_PX + (stackPrefix[k] ?? 0) - (stackPrefix[epoch] ?? 0);
     },
-    [orderedMetrics],
+    [stackPrefix],
   );
 
   /**
@@ -469,14 +482,27 @@ export function InlineCommentsLayer({
   // actually flips, which is at most 2N events for the whole document.
   // Pure scrolling between transitions is browser-native CSS sticky.
   // Only attached when stacking is on; the non-stacking layout has no
-  // scroll-driven state to update.
+  // scroll-driven state to update. Native scroll events fire faster
+  // than the display refresh on macOS/iOS — coalesce bursts into one
+  // recomputation per animation frame so the O(N) global-state scan
+  // doesn't run multiple times per painted frame on long docs.
   useEffect(() => {
     if (!stackingEnabled) return;
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
-    const onScroll = () => recomputeGlobalState();
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        recomputeGlobalState();
+      });
+    };
     scroll.addEventListener('scroll', onScroll, { passive: true });
-    return () => scroll.removeEventListener('scroll', onScroll);
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      scroll.removeEventListener('scroll', onScroll);
+    };
   }, [recomputeGlobalState, scrollContainerRef, stackingEnabled]);
 
   useLayoutEffect(() => {
