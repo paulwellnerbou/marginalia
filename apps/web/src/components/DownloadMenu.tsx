@@ -147,6 +147,11 @@ export function DownloadMenu({
         <DropdownMenu.Item onSelect={downloadPdf} disabled={busy !== null}>
           PDF document (.pdf)
         </DropdownMenu.Item>
+        {doc.mermaid_renderer === 'chromium' && (
+          <DropdownMenu.Label>
+            Diagrams: Chromium (high fidelity, slower)
+          </DropdownMenu.Label>
+        )}
       </DropdownMenu.Content>
     </DropdownMenu.Root>
   );

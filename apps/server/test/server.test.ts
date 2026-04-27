@@ -1175,6 +1175,66 @@ describe('documents API', () => {
     expect(r2.headers.get('set-cookie')).toContain(SESSION_COOKIE);
   });
 
+  test('PATCH settings: mermaid_renderer accepts mmdr / chromium / null and rejects garbage', async () => {
+    const created = await upload(CLIENT_A);
+
+    // mmdr override
+    const r1 = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/settings`, {
+        method: 'PATCH',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ mermaid_renderer: 'mmdr' }),
+      }),
+    );
+    expect(r1.status).toBe(200);
+    expect(((await r1.json()) as { mermaid_renderer: string | null }).mermaid_renderer).toBe('mmdr');
+
+    // chromium override
+    const r2 = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/settings`, {
+        method: 'PATCH',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ mermaid_renderer: 'chromium' }),
+      }),
+    );
+    expect(r2.status).toBe(200);
+    expect(((await r2.json()) as { mermaid_renderer: string | null }).mermaid_renderer).toBe('chromium');
+
+    // explicit null clears the override
+    const r3 = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/settings`, {
+        method: 'PATCH',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ mermaid_renderer: null }),
+      }),
+    );
+    expect(r3.status).toBe(200);
+    expect(((await r3.json()) as { mermaid_renderer: string | null }).mermaid_renderer).toBeNull();
+
+    // garbage rejected (don't silently coerce — old client typos
+    // shouldn't accidentally clear the value).
+    const r4 = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/settings`, {
+        method: 'PATCH',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ mermaid_renderer: 'merman' }),
+      }),
+    );
+    expect(r4.status).toBe(400);
+    expect((await r4.json()) as { error: string }).toEqual({ error: 'invalid-mermaid-renderer' });
+
+    // GET surfaces the field in the document payload.
+    const get = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(get.status).toBe(200);
+    const docJson = (await get.json()) as { mermaid_renderer: string | null };
+    expect(docJson).toHaveProperty('mermaid_renderer');
+    expect(docJson.mermaid_renderer).toBeNull(); // last patch was a clear
+  });
+
   test('password auth supports session-only cookies and explicit logout', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Secret',

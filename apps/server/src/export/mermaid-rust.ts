@@ -147,34 +147,51 @@ export class MermaidRenderTimeoutError extends Error {
 // Public entry
 // ---------------------------------------------------------------------
 
-export interface RenderedMermaidPng {
-  /** PNG bytes; safe to feed straight to docx ImageRun. */
+/** Image format mmdr can emit. PDF wants SVG (vector → vector PDF);
+ *  DOCX wants PNG (Word's SVG support requires a PNG fallback anyway). */
+export type MermaidImageFormat = 'svg' | 'png';
+
+export interface RenderedMermaidImage {
+  /** Image bytes; safe to feed straight to ImageRun (PNG) or to inline as raw SVG. */
   bytes: Uint8Array;
-  /** MIME type, fixed to `image/png` for now. */
-  mime: 'image/png';
+  /** MIME type matching `format`. */
+  mime: 'image/svg+xml' | 'image/png';
+  /** Format actually emitted — always matches the requested format on success. */
+  format: MermaidImageFormat;
 }
 
+/** @deprecated Prefer {@link RenderedMermaidImage}. Kept for backwards compat. */
+export type RenderedMermaidPng = RenderedMermaidImage;
+
 /**
- * Render a single mermaid source string to PNG bytes via `mmdr`.
- * Returns `null` on parse / render failure so the caller (DOCX
- * exporter) can fall back to its labeled-code-block stopgap instead
- * of failing the whole export.
+ * Render a single mermaid source string via `mmdr`. Returns `null`
+ * on parse / render failure so the caller (DOCX exporter) can fall
+ * back to its labeled-code-block stopgap instead of failing the
+ * whole export.
+ *
+ * `format` picks the output: PNG for DOCX (the `ImageRun` path is
+ * raster-only) and SVG for PDF (Chromium prints vector → vector PDF
+ * and the file size shrinks for diagram-heavy docs).
  *
  * The engine-missing case still throws — that's an operator
  * configuration problem, not per-document data. Callers may either
  * surface it (for a strict export path, e.g. as a 500 with the
  * install hint) or catch it and fall back (as the DOCX path does).
  */
-export async function renderMermaidToPng(source: string): Promise<RenderedMermaidPng | null> {
+export async function renderMermaidToImage(
+  source: string,
+  format: MermaidImageFormat = 'png',
+): Promise<RenderedMermaidImage | null> {
   // Each call gets its own temp dir so concurrent renders don't
   // race on the output filename. tmpdir + mkdtemp is the standard
   // pattern; we clean up in `finally`.
   const dir = await mkdtemp(join(tmpdir(), 'marginalia-mermaid-'));
-  const outPath = join(dir, 'out.png');
+  const outPath = join(dir, `out.${format}`);
   try {
-    await runRenderer(source, outPath);
+    await runRenderer(source, outPath, format);
     const bytes = await readFile(outPath);
-    return { bytes, mime: 'image/png' };
+    const mime = format === 'svg' ? 'image/svg+xml' : 'image/png';
+    return { bytes, mime, format };
   } catch (err) {
     // Engine-missing and timeout are operational; let them propagate.
     if (err instanceof MermaidRenderEngineMissingError) throw err;
@@ -191,23 +208,36 @@ export async function renderMermaidToPng(source: string): Promise<RenderedMermai
   }
 }
 
+/**
+ * @deprecated Use {@link renderMermaidToImage} with `format: 'png'`.
+ * Kept so the existing DOCX wiring + tests keep compiling while
+ * Phase A lands.
+ */
+export function renderMermaidToPng(source: string): Promise<RenderedMermaidImage | null> {
+  return renderMermaidToImage(source, 'png');
+}
+
 // ---------------------------------------------------------------------
 // Subprocess plumbing
 // ---------------------------------------------------------------------
 
 /**
- * `mmdr -i - -o <path> -e png`
+ * `mmdr -i - -o <path> -e <fmt>`
  *   `-i -` reads source from stdin, `-o <path>` is the output file,
- *   `-e png` selects the PNG encoder. PNG-to-stdout was tested and
+ *   `-e svg|png` selects the encoder. PNG-to-stdout was tested and
  *   produced empty files; file output is the supported mode.
  */
-function buildArgv(outPath: string): string[] {
-  return ['-i', '-', '-o', outPath, '-e', 'png'];
+function buildArgv(outPath: string, format: MermaidImageFormat): string[] {
+  return ['-i', '-', '-o', outPath, '-e', format];
 }
 
-function runRenderer(source: string, outPath: string): Promise<void> {
+function runRenderer(
+  source: string,
+  outPath: string,
+  format: MermaidImageFormat,
+): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    const argv = buildArgv(outPath);
+    const argv = buildArgv(outPath, format);
     const child = spawn(config.bin, argv, {
       stdio: ['pipe', 'pipe', 'pipe'],
     });

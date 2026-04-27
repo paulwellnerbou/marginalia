@@ -197,7 +197,14 @@ export const ALLOWED_EXPORT_HOSTS = new Set<string>(
 
 let browserPromise: Promise<Browser> | null = null;
 
-async function getBrowser(): Promise<Browser> {
+/**
+ * Lazily launch (and cache) the shared headless Chromium. Exported so
+ * sibling modules (e.g. `mermaid-chromium.ts`) can render through the
+ * same browser instance instead of paying another launch — both
+ * `chromium.launch()` and the headless-shell binary are heavy, so a
+ * second copy per process would be wasteful.
+ */
+export async function getBrowser(): Promise<Browser> {
   if (!browserPromise) {
     browserPromise = (async () => {
       try {

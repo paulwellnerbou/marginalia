@@ -131,6 +131,134 @@ function mermaidBootstrap(umd: string): string {
 }
 
 /**
+ * Pre-rasterize mermaid blocks in a rendered HTML body, replacing
+ * `<div class="mermaid">…source…</div>` with the resolver's output
+ * (typically inline `<svg>` for the mmdr path).
+ *
+ * Why pre-rasterize for PDF: the body lands inside a Chromium page.
+ * If we leave `<div class="mermaid">` divs in, the export envelope
+ * has to inline the ~3 MB mermaid UMD and wait on the in-page
+ * runtime — that's the existing `chromium` renderer path. When the
+ * caller picked `mmdr` (per-document setting), we can render every
+ * diagram out-of-process first, splice SVG into the body, and let
+ * the PDF stage skip the mermaid runtime entirely (faster, smaller
+ * bytes through `setContent`).
+ *
+ * The resolver is called with the un-escaped mermaid source (HTML
+ * entities decoded back to `<`, `>`, `&`). Returning `null` leaves
+ * that block untouched — useful as a per-block escape hatch and
+ * also as the natural behaviour when the renderer fails on one
+ * diagram of many. Untouched blocks fall through to the in-page
+ * runtime, exactly as today.
+ *
+ * Input HTML is the renderer's own output (sanitized, predictable
+ * shape — double-quoted attributes, no embedded `"` in attribute
+ * values, no `<` inside the diagram source because remarkMermaid
+ * escapes it). The regex is therefore safe enough.
+ */
+export interface PrerasterizedMermaidBlock {
+  /** Image bytes from the resolver. */
+  readonly bytes: Uint8Array;
+  /** `image/svg+xml` or `image/png`. */
+  readonly mime: 'image/svg+xml' | 'image/png';
+}
+
+export type MermaidPrerasterResolver = (
+  source: string,
+  index: number,
+) => Promise<PrerasterizedMermaidBlock | null>;
+
+export async function prerasterizeMermaid(
+  html: string,
+  resolve: MermaidPrerasterResolver,
+): Promise<string> {
+  // Match the entire mermaid div including its inner content. The
+  // `s` flag lets `.` cross newlines (mermaid sources are
+  // multi-line). The capture groups are: (1) the whole tag-attrs
+  // chunk we'll discard, (2) the data-mermaid-index value, (3) the
+  // inner (escaped) source text.
+  const re = /<div\b[^>]*\bclass="mermaid"[^>]*\bdata-mermaid-index="(\d+)"[^>]*>([\s\S]*?)<\/div>/g;
+  interface Hit {
+    start: number;
+    end: number;
+    index: number;
+    source: string;
+  }
+  const hits: Hit[] = [];
+  for (let m: RegExpExecArray | null; (m = re.exec(html)); ) {
+    const index = Number.parseInt(m[1] ?? '', 10);
+    if (!Number.isInteger(index) || index < 0) continue;
+    hits.push({
+      start: m.index,
+      end: m.index + m[0].length,
+      index,
+      source: decodeHtmlEntities(m[2] ?? ''),
+    });
+  }
+  if (hits.length === 0) return html;
+
+  // Resolve in parallel — the helper trusts the resolver to bound
+  // its own concurrency (the server route's resolver does, mirroring
+  // the DOCX path's `mermaidConcurrency`). Failure of an individual
+  // diagram surfaces as `null`; we leave that block untouched so it
+  // falls back to the in-page mermaid runtime.
+  const resolved = await Promise.all(
+    hits.map(async (h) => {
+      try {
+        return await resolve(h.source, h.index);
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  let out = '';
+  let cursor = 0;
+  for (let i = 0; i < hits.length; i++) {
+    const h = hits[i] as Hit;
+    const r = resolved[i];
+    if (!r) continue; // leave the original div in place
+    out += html.slice(cursor, h.start);
+    out += renderImageMarkup(r);
+    cursor = h.end;
+  }
+  out += html.slice(cursor);
+  return out;
+}
+
+function renderImageMarkup(r: PrerasterizedMermaidBlock): string {
+  const decoded = new TextDecoder().decode(r.bytes);
+  if (r.mime === 'image/svg+xml') {
+    // Strip a leading XML prolog if present — inline SVG inside HTML
+    // doesn't want one. Keep everything from the `<svg ...>` tag on.
+    const svgStart = decoded.indexOf('<svg');
+    const svgBody = svgStart >= 0 ? decoded.slice(svgStart) : decoded;
+    return `<div class="mermaid mermaid-prerendered">${svgBody}</div>`;
+  }
+  // PNG path — embed as a data URL inside an `<img>` tag wrapped in
+  // the same .mermaid container so existing print CSS still targets
+  // it.
+  const b64 = Buffer.from(r.bytes).toString('base64');
+  return `<div class="mermaid mermaid-prerendered"><img src="data:image/png;base64,${b64}" alt="Mermaid diagram"></div>`;
+}
+
+/**
+ * Decode the small set of HTML entities that `remarkMermaid` /
+ * `rehypeAsciidocMermaid` emit when stuffing mermaid source into
+ * div text content (`&` → `&amp;`, `<` → `&lt;`). The full HTML
+ * entity set is unnecessary — the upstream plugins only escape the
+ * canonical four.
+ */
+function decodeHtmlEntities(s: string): string {
+  return s
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&'); // last so we don't double-decode `&amp;lt;`
+}
+
+/**
  * Inline `<img src="REF">` tags whose `src` is a document-local ref
  * name with the corresponding blob's bytes as a `data:` URL. Mirrors
  * the DOCX exporter's `resolveAsset` flow — same bytes, different

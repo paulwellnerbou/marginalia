@@ -43,7 +43,8 @@ import type {
   InviteRole,
   InviteRow,
 } from '../db.js';
-import { isDocumentFormat, isInviteKind, isInviteRole } from '../db.js';
+import { isDocumentFormat, isInviteKind, isInviteRole, isMermaidRenderer } from '../db.js';
+import type { MermaidRenderer } from '../db.js';
 import type { HistoryEntry as GitHistoryEntry, GitStore } from '../git-store.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
 import type { Realtime } from '../realtime.js';
@@ -54,12 +55,77 @@ import {
   ExportTimeoutError,
   exportPdf,
 } from '../export/pdf.js';
-import { inlineImageAssets } from '../export/html-envelope.js';
+import {
+  inlineImageAssets,
+  type MermaidPrerasterResolver,
+  prerasterizeMermaid,
+} from '../export/html-envelope.js';
+import { renderMermaidWithChromium } from '../export/mermaid-chromium.js';
 import {
   MermaidRenderEngineMissingError,
-  renderMermaidToPng,
+  type MermaidImageFormat,
+  renderMermaidToImage,
+  type RenderedMermaidImage,
 } from '../export/mermaid-rust.js';
 import { loadPrintCss, loadThemeCss } from '../export/theme-css.js';
+
+// ---------------------------------------------------------------------
+// Mermaid renderer dispatch
+// ---------------------------------------------------------------------
+
+/**
+ * Resolve the effective renderer for an export request.
+ *
+ * Order:
+ *   1. `?mermaid=mmdr|chromium` query — ad-hoc preview override.
+ *   2. Per-document `mermaid_renderer` column.
+ *   3. Server-wide default from `MARGINALIA_MERMAID_RENDERER_DEFAULT`.
+ *   4. Hard-coded `'mmdr'`.
+ *
+ * Returns the choice + a short label for telemetry / log lines.
+ */
+function effectiveMermaidRenderer(
+  doc: DocumentRow,
+  c: Context,
+): MermaidRenderer {
+  const queryRaw = c.req.query('mermaid');
+  if (typeof queryRaw === 'string' && isMermaidRenderer(queryRaw)) return queryRaw;
+  if (doc.mermaid_renderer) return doc.mermaid_renderer;
+  const envRaw = process.env.MARGINALIA_MERMAID_RENDERER_DEFAULT;
+  if (envRaw && isMermaidRenderer(envRaw)) return envRaw;
+  return 'mmdr';
+}
+
+/**
+ * Wrap a renderer (mmdr / chromium) in the swallow-and-fall-back
+ * policy shared by every export caller: parse / render errors return
+ * `null` so the per-block fallback fires; engine-missing logs once
+ * per export (closure captured in the calling route) and returns
+ * `null` so the export still succeeds with placeholders.
+ *
+ * `format` is the bytes shape the caller wants: PNG for DOCX,
+ * SVG for the PDF pre-rasterizer (mmdr path).
+ */
+function makeMermaidResolver(
+  choice: MermaidRenderer,
+  format: MermaidImageFormat,
+  onceWarn: (msg: string) => void,
+): (source: string) => Promise<RenderedMermaidImage | null> {
+  const impl =
+    choice === 'chromium' ? renderMermaidWithChromium : renderMermaidToImage;
+  return async (source) => {
+    try {
+      return await impl(source, format);
+    } catch (err) {
+      if (err instanceof MermaidRenderEngineMissingError) {
+        onceWarn(err.message);
+        return null;
+      }
+      // Render / timeout errors fall back to placeholder too.
+      return null;
+    }
+  };
+}
 
 export interface AppDeps {
   db: Database;
@@ -168,6 +234,11 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
       display_name: adminInvite.display_name,
     },
     default_theme: theme,
+    // New documents inherit the server-default renderer until the
+    // owner overrides it via PATCH. Surface as null so clients can
+    // tell "explicit choice" from "use server default" without an
+    // extra round-trip.
+    mermaid_renderer: null,
     format,
   };
   if (plaintextPassword) {
@@ -211,6 +282,7 @@ async function getDocument(c: Context, deps: AppDeps) {
     attached_assets: attached,
     format: doc.format,
     default_theme: doc.default_theme,
+    mermaid_renderer: doc.mermaid_renderer,
     password_protected: doc.password_hash !== null,
     role: decision.role,
     display_name: forcedDisplayName,
@@ -332,6 +404,20 @@ async function updateSettings(c: Context, deps: AppDeps) {
   if (typeof body.default_theme === 'string') {
     updates.push(['default_theme', body.default_theme]);
   }
+  // Mermaid renderer override: 'mmdr' | 'chromium' | null (null clears
+  // the override, so the document falls back to the server default).
+  // Anything else → 400; we don't silently coerce so an old client
+  // can't unset the value by sending the wrong type.
+  if ('mermaid_renderer' in body) {
+    const raw = body.mermaid_renderer;
+    if (raw === null) {
+      updates.push(['mermaid_renderer', null]);
+    } else if (isMermaidRenderer(raw)) {
+      updates.push(['mermaid_renderer', raw]);
+    } else {
+      return c.json({ error: 'invalid-mermaid-renderer' }, 400);
+    }
+  }
   if (body.name === null) {
     updates.push(['name', null]);
   } else if (typeof body.name === 'string') {
@@ -372,6 +458,7 @@ async function updateSettings(c: Context, deps: AppDeps) {
   const response: Record<string, unknown> = {
     name: fresh.name,
     default_theme: fresh.default_theme,
+    mermaid_renderer: fresh.mermaid_renderer,
     password_protected: fresh.password_hash !== null,
   };
   if (plaintextPassword) {
@@ -468,6 +555,7 @@ async function exportDocument(c: Context, deps: AppDeps) {
       // tooling can still read bundles. The field is meaningless on import.
       editable_by_anyone: doc.editable_by_anyone === 1,
       default_theme: doc.default_theme,
+      mermaid_renderer: doc.mermaid_renderer,
     },
     representation: {
       frontmatter: rendered.frontmatter,
@@ -552,12 +640,19 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
   // the opaque uid. Matches what a human would expect the file to be
   // called when they open it.
   const derivedTitle = doc.name ?? extractDocumentTitle(source, doc.format);
-  // Closed over by `resolveMermaid` below. The engine-missing
-  // condition is per-export (the binary is either on PATH or not, for
-  // the lifetime of this request), so warn once even if the document
-  // contains many mermaid blocks — otherwise a 10-diagram doc would
-  // produce 10 identical install-hint lines on every export.
+  // Per-document renderer selection (mmdr / chromium); see
+  // `apps/server/MERMAID_RENDERER.md` for the resolution order.
+  // DOCX always wants PNG — Word's SVG support requires a PNG
+  // fallback alongside, which doubles per-diagram cost for no clear
+  // gain.
+  const mermaidChoice = effectiveMermaidRenderer(doc, c);
   let mermaidEngineWarned = false;
+  const onceWarn = (msg: string): void => {
+    if (mermaidEngineWarned) return;
+    mermaidEngineWarned = true;
+    console.warn(`[docx-export] mermaid renderer (${mermaidChoice}):`, msg);
+  };
+  const renderMermaidPng = makeMermaidResolver(mermaidChoice, 'png', onceWarn);
   const buf = await exportDocx(source, {
     theme,
     format: doc.format,
@@ -575,29 +670,14 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
         return null;
       }
     },
-    // Rasterize mermaid blocks via the native `mmdr` Rust CLI so the
-    // DOCX gets a real embedded image. If the binary isn't installed
-    // (or any individual render fails) we return null and the
-    // exporter falls back to a labeled code block — mermaid in DOCX
-    // is a nice-to-have, not a hard requirement, so we don't surface
-    // the engine-missing case as an error here (unlike PDF).
+    // Rasterize mermaid blocks via the chosen renderer so the DOCX
+    // gets a real embedded image. Failures (missing binary, parse
+    // error, timeout) fall back to a labeled code block — mermaid
+    // in DOCX is a nice-to-have, not a hard requirement, so we
+    // don't surface engine-missing as an error here (unlike PDF).
     resolveMermaid: async (source) => {
-      try {
-        const png = await renderMermaidToPng(source);
-        return png ? { bytes: png.bytes, mime: png.mime } : null;
-      } catch (err) {
-        if (err instanceof MermaidRenderEngineMissingError) {
-          // Operators only need the install hint once per export, not
-          // once per mermaid block.
-          if (!mermaidEngineWarned) {
-            mermaidEngineWarned = true;
-            console.warn('[docx-export]', err.message);
-          }
-          return null;
-        }
-        // Render / timeout errors fall back to placeholder too.
-        return null;
-      }
+      const img = await renderMermaidPng(source);
+      return img ? { bytes: img.bytes, mime: img.mime } : null;
     },
   });
 
@@ -670,7 +750,54 @@ async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
   for (const a of listAttached(db, doc.uid)) {
     attached.set(a.ref_name, { assetId: a.asset_id, mime: a.mime });
   }
-  const bodyHtml = await inlineImageAssets(rendered.html, attached, blobs);
+  let bodyHtml = await inlineImageAssets(rendered.html, attached, blobs);
+
+  // Renderer dispatch:
+  //   - 'mmdr'     → pre-rasterize each mermaid block to SVG out
+  //                  of process and splice into the body. The PDF
+  //                  Chromium then has nothing mermaid-related to
+  //                  do (no UMD inline, no readiness sentinel) →
+  //                  faster and smaller-bytes through `setContent`.
+  //   - 'chromium' → leave the divs in place and let the in-page
+  //                  mermaid runtime render them, identical to the
+  //                  pre-PR21 PDF flow. We pay Chromium's cost
+  //                  twice (page + mermaid runtime) but get pixel-
+  //                  identical output to the viewer.
+  const mermaidChoice = effectiveMermaidRenderer(doc, c);
+  let mermaidEngineWarned = false;
+  const onceWarn = (msg: string): void => {
+    if (mermaidEngineWarned) return;
+    mermaidEngineWarned = true;
+    console.warn(`[pdf-export] mermaid renderer (${mermaidChoice}):`, msg);
+  };
+  let hasMermaidLive = rendered.mermaid.length > 0;
+  if (rendered.mermaid.length > 0 && mermaidChoice === 'mmdr') {
+    // SVG output for PDF (vector → vector). Failed blocks stay in
+    // the body and fall through to in-page rendering as if the
+    // user had picked `chromium` — but that would require the UMD
+    // inline. Workaround: if ANY block fell back, keep
+    // `hasMermaid: true` so the PDF page still loads the runtime
+    // and finishes those leftovers. In the typical case (all
+    // blocks resolved by mmdr), `hasMermaid` is false and the
+    // mermaid UMD never enters the export page at all.
+    const renderSvg = makeMermaidResolver(mermaidChoice, 'svg', onceWarn);
+    const prerasterizer: MermaidPrerasterResolver = async (source) => {
+      const img = await renderSvg(source);
+      return img ? { bytes: img.bytes, mime: img.mime } : null;
+    };
+    const beforeLen = bodyHtml.length;
+    bodyHtml = await prerasterizeMermaid(bodyHtml, prerasterizer);
+    // Heuristic for "did we render every diagram out of process?":
+    // count how many `<div class="mermaid"` divs survived. If zero,
+    // the runtime is unnecessary on the export page.
+    const survived = (bodyHtml.match(/<div class="mermaid"/g) ?? []).length;
+    hasMermaidLive = survived > 0;
+    if (process.env.MARGINALIA_DEBUG_EXPORT) {
+      console.log(
+        `[pdf-export] mmdr pre-rasterized: ${rendered.mermaid.length - survived}/${rendered.mermaid.length} blocks (${beforeLen} → ${bodyHtml.length} bytes, hasMermaidLive=${hasMermaidLive})`,
+      );
+    }
+  }
 
   const [themeCss, printCss] = await Promise.all([loadThemeCss(theme), loadPrintCss()]);
 
@@ -685,7 +812,7 @@ async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
         author: identity?.displayName ?? null,
         appearance: 'light',
       },
-      hasMermaid: rendered.mermaid.length > 0,
+      hasMermaid: hasMermaidLive,
       // Wire the request's abort signal into the exporter so
       // Chromium work stops promptly when the client disconnects
       // (no point burning a semaphore slot to produce bytes no
@@ -744,14 +871,20 @@ async function importDocument(c: Context, deps: AppDeps) {
       : null;
   const theme = typeof docSpec.default_theme === 'string' ? docSpec.default_theme : 'default';
   const format: DocumentFormat = isDocumentFormat(docSpec.format) ? docSpec.format : 'markdown';
+  // Mermaid renderer override: nullable, must match the typed enum
+  // when present. Anything else (including legacy bundles without
+  // the field) silently falls back to NULL = use server default.
+  const mermaidRenderer: MermaidRenderer | null = isMermaidRenderer(docSpec.mermaid_renderer)
+    ? docSpec.mermaid_renderer
+    : null;
   // Bundle's editable_by_anyone is ignored; the column is deprecated.
 
   const { path } = await store.write(uid, format, docSpec.source, identity, 'upload');
   db.prepare(
     `INSERT INTO documents
-       (uid, path, name, password_hash, editable_by_anyone, default_theme, format, created_at, updated_at)
-     VALUES (?, ?, ?, NULL, 0, ?, ?, ?, ?)`,
-  ).run(uid, path, name, theme, format, now, now);
+       (uid, path, name, password_hash, editable_by_anyone, default_theme, format, mermaid_renderer, created_at, updated_at)
+     VALUES (?, ?, ?, NULL, 0, ?, ?, ?, ?, ?)`,
+  ).run(uid, path, name, theme, format, mermaidRenderer, now, now);
   upsertDocUser(db, uid, identity);
 
   // Fresh admin invite for the importer — not re-using the one from the

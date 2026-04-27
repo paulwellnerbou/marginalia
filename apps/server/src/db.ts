@@ -18,6 +18,12 @@ CREATE TABLE IF NOT EXISTS documents (
   -- as markdown by the route layer (their path column already ends
   -- in ".md").
   format               TEXT NOT NULL DEFAULT 'markdown',
+  -- Mermaid renderer for DOCX/PDF exports: 'mmdr' (native Rust, fast,
+  -- lower fidelity) | 'chromium' (real mermaid.js, slower, pixel-
+  -- identical to viewer). NULL means "use server default" (env
+  -- MARGINALIA_MERMAID_RENDERER_DEFAULT, falling back to 'mmdr').
+  -- Does NOT affect the viewer — that always uses mermaid.js.
+  mermaid_renderer     TEXT,
   created_at           INTEGER NOT NULL,
   updated_at           INTEGER NOT NULL
 );
@@ -168,8 +174,32 @@ export interface DocumentRow {
   editable_by_anyone: number;
   default_theme: string;
   format: DocumentFormat;
+  /**
+   * Per-document override of the mermaid renderer used for DOCX/PDF
+   * exports. NULL → use server default (env
+   * `MARGINALIA_MERMAID_RENDERER_DEFAULT`, falling back to `'mmdr'`).
+   * Does not affect the viewer.
+   */
+  mermaid_renderer: MermaidRenderer | null;
   created_at: number;
   updated_at: number;
+}
+
+/**
+ * Renderer used to rasterize mermaid blocks for DOCX/PDF exports.
+ *
+ *   'mmdr'     — native Rust subprocess (fast, lower fidelity)
+ *   'chromium' — real mermaid.js inside headless Chromium (slow,
+ *                pixel-identical to the viewer)
+ *
+ * The viewer is unaffected by this choice.
+ */
+export type MermaidRenderer = 'mmdr' | 'chromium';
+
+export const MERMAID_RENDERERS: readonly MermaidRenderer[] = ['mmdr', 'chromium'] as const;
+
+export function isMermaidRenderer(v: unknown): v is MermaidRenderer {
+  return typeof v === 'string' && (MERMAID_RENDERERS as readonly string[]).includes(v);
 }
 
 /**
@@ -333,6 +363,7 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'documents', 'format', "TEXT NOT NULL DEFAULT 'markdown'");
   ensureColumn(db, 'documents', 'password_recovery_ciphertext', 'TEXT');
   ensureColumn(db, 'documents', 'password_recovery_iv', 'TEXT');
+  ensureColumn(db, 'documents', 'mermaid_renderer', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'source_snapshot', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'accepted_oid', 'TEXT');
   ensureColumn(db, 'sessions', 'persistent', 'INTEGER NOT NULL DEFAULT 1');

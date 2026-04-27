@@ -1,0 +1,96 @@
+/**
+ * Integration test for the Chromium-based mermaid renderer.
+ *
+ * Auto-skipped when the headless-shell binary isn't installed
+ * (operator hasn't run `bunx playwright install
+ * chromium-headless-shell`). The DOCX/PDF cross-product matrix
+ * lives in `server.test.ts` and stays browser-free.
+ */
+import { afterAll, describe, expect, test } from 'bun:test';
+import { existsSync } from 'node:fs';
+
+import { closeExportBrowser } from '../src/export/pdf.js';
+import {
+  configureMermaidChromium,
+  renderMermaidWithChromium,
+} from '../src/export/mermaid-chromium.js';
+
+/**
+ * Probe Playwright's browser registry for any directory that looks
+ * like a chromium-headless-shell install. Cheaper than launching the
+ * browser just to find out it's missing — and matches what
+ * `pdf.ts:getBrowser()` will do at runtime.
+ */
+function chromiumAvailable(): boolean {
+  // Playwright's `PLAYWRIGHT_BROWSERS_PATH` env var, or the default
+  // user-cache path. We don't need to be exact — if there's any
+  // matching directory we'll let Playwright handle launch.
+  const root =
+    process.env.PLAYWRIGHT_BROWSERS_PATH ??
+    `${process.env.HOME ?? ''}/Library/Caches/ms-playwright`;
+  if (!existsSync(root)) return false;
+  // The shell directories are named like `chromium_headless_shell-*`.
+  // A loose `existsSync` is enough — `getBrowser()` will surface a
+  // typed error if the install is incomplete.
+  try {
+    const entries = require('node:fs').readdirSync(root) as string[];
+    return entries.some((e) => e.startsWith('chromium_headless_shell'));
+  } catch {
+    return false;
+  }
+}
+
+const CHROMIUM_AVAILABLE = chromiumAvailable();
+
+const SAMPLE = `flowchart LR
+  A[Start] --> B{Decision}
+  B -->|Yes| C[OK]
+  B -->|No| D[Stop]`;
+
+describe('renderMermaidWithChromium', () => {
+  // Tighter budget than production so a regression doesn't hang the
+  // suite — the typical render is ~500 ms.
+  configureMermaidChromium({ timeoutMs: 30_000 });
+
+  afterAll(async () => {
+    // Tear down the shared browser singleton so `bun test` exits
+    // cleanly. PDF-export-tests do the same dance.
+    await closeExportBrowser();
+  });
+
+  test.if(CHROMIUM_AVAILABLE)('produces an SVG with diagram content', async () => {
+    const result = await renderMermaidWithChromium(SAMPLE, 'svg');
+    expect(result).not.toBeNull();
+    expect(result!.mime).toBe('image/svg+xml');
+    expect(result!.format).toBe('svg');
+    const text = new TextDecoder().decode(result!.bytes);
+    expect(text).toContain('<svg');
+    // Mermaid stamps node labels into the SVG; a degenerate render
+    // without them should fail this assertion loudly.
+    expect(text).toMatch(/Start|Decision|OK|Stop/);
+  }, 60_000);
+
+  test.if(CHROMIUM_AVAILABLE)('produces a PNG screenshot', async () => {
+    const result = await renderMermaidWithChromium(SAMPLE, 'png');
+    expect(result).not.toBeNull();
+    expect(result!.mime).toBe('image/png');
+    expect(result!.format).toBe('png');
+    // PNG magic bytes.
+    expect(result!.bytes.length).toBeGreaterThan(1000);
+    expect(result!.bytes[0]).toBe(0x89);
+    expect(result!.bytes[1]).toBe(0x50);
+    expect(result!.bytes[2]).toBe(0x4e);
+    expect(result!.bytes[3]).toBe(0x47);
+  }, 60_000);
+
+  test.if(CHROMIUM_AVAILABLE)('returns null on parse failure (graceful degrade)', async () => {
+    // Garbage source — mermaid.render() rejects, the bootstrap
+    // sets `__marginaliaMermaidError`, and we return null so the
+    // caller can fall back to the placeholder.
+    const result = await renderMermaidWithChromium(
+      'not a diagram, just words',
+      'svg',
+    );
+    expect(result).toBeNull();
+  }, 60_000);
+});

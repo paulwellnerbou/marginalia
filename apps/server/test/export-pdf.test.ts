@@ -314,6 +314,48 @@ describe('PDF export', () => {
     expect(diagram.length - plain.length).toBeGreaterThan(2000);
   }, 45_000);
 
+  test('GET /:uid/export.pdf?mermaid=mmdr pre-rasterizes diagrams without the mermaid runtime', async () => {
+    // Same fixture as the chromium-renderer test above. With `?mermaid=mmdr`
+    // the route runs the pre-rasterizer over the body and replaces every
+    // `<div class="mermaid">` with the SVG mmdr returned. The PDF should
+    // still be valid and the diagram still visible. Distinguishing from
+    // the chromium path by byte size is unreliable (both flows embed
+    // approximately-the-same SVG), so we just assert the export succeeded
+    // and produced a non-empty PDF.
+    //
+    // Skipped if mmdr isn't on PATH — same gating as the dedicated
+    // mermaid-rust suite.
+    if (!process.env.PATH?.split(':').some(() => true)) return; // pacify ts
+    const { spawnSync } = await import('node:child_process');
+    const probe = spawnSync('mmdr', ['--version'], { encoding: 'utf8' });
+    if (probe.error && (probe.error as NodeJS.ErrnoException).code === 'ENOENT') return;
+
+    const md = [
+      '# Diagram',
+      '',
+      '```mermaid',
+      'graph TD',
+      '  A[Start] --> B[End]',
+      '```',
+      '',
+      'Aftermath paragraph.',
+      '',
+    ].join('\n');
+    const created = await upload(CLIENT_A, { markdown: md, name: 'mmdr-pdf' });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.pdf?mermaid=mmdr`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const buf = Buffer.from(await res.arrayBuffer());
+    expect(buf.subarray(0, 5).toString('utf8')).toBe('%PDF-');
+    // Sanity floor: a one-paragraph + one-diagram PDF is several
+    // KB minimum (fonts + content streams). Catches a regression
+    // where the page rendered empty.
+    expect(buf.length).toBeGreaterThan(5_000);
+  }, 45_000);
+
   test('GET /:uid/export.pdf rejects path-traversal-shaped theme names cleanly', async () => {
     // An unknown theme name should fall back to default, not 500. The
     // CSS loader's `isValidThemeName` plus the ENOENT fallback cover
