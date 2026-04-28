@@ -31,14 +31,14 @@ export function ViewPage() {
   useEffect(() => {
     if (!uid || !token) return;
     saveInviteToken(uid, token);
-    claimInvite(uid, token)
-      .catch(() => {
-        // 400 (admin invite), 409 (password-protected), 404 (invite gone):
-        // fall back to invite-header auth via the token in localStorage.
-      })
-      .finally(() => {
-        window.history.replaceState({}, '', `/d/${uid}`);
-      });
+    // Strip the token from the address bar synchronously so copy-pasting the
+    // URL no longer leaks the bearer credential, even if the claim request is
+    // still in flight or the component later re-renders for a different uid.
+    window.history.replaceState({}, '', `/d/${uid}`);
+    claimInvite(uid, token).catch(() => {
+      // 400 (admin invite), 409 (password-protected), 404 (invite gone):
+      // fall back to invite-header auth via the token in localStorage.
+    });
   }, [uid, token]);
 
   useEffect(() => {

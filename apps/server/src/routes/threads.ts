@@ -12,6 +12,7 @@ import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
 import {
   type Identity,
+  INVITE_SESSION_COOKIE,
   SESSION_COOKIE,
   authorize,
   canComment,
@@ -960,8 +961,10 @@ function loadDoc(db: Database, uid: string | undefined): DocumentRow | null {
 }
 
 function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
-  const sessionToken = parseCookie(c.req.raw.headers.get('cookie'), SESSION_COOKIE);
-  return authorize(deps.db, doc, c.req.raw.headers, sessionToken);
+  const cookie = c.req.raw.headers.get('cookie');
+  const sessionToken = parseCookie(cookie, SESSION_COOKIE);
+  const inviteSessionToken = parseCookie(cookie, INVITE_SESSION_COOKIE);
+  return authorize(deps.db, doc, c.req.raw.headers, sessionToken, inviteSessionToken);
 }
 
 function loadThreadRow(db: Database, threadId: string, docUid: string): ThreadRow | undefined {

@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { SESSION_COOKIE, authorize, canEdit, parseCookie } from '../auth.js';
+import { INVITE_SESSION_COOKIE, SESSION_COOKIE, authorize, canEdit, parseCookie } from '../auth.js';
 import type { BlobStore } from '../blob-store.js';
 import type { ServerConfig } from '../config.js';
 import type { AssetKind, AssetRow, DocumentAssetRow, DocumentRow } from '../db.js';
@@ -341,8 +341,10 @@ function loadDoc(db: Database, uid: string | undefined): DocumentRow | null {
 }
 
 function authorizeDoc(c: Context, db: Database, doc: DocumentRow) {
-  const sessionToken = parseCookie(c.req.raw.headers.get('cookie'), SESSION_COOKIE);
-  return authorize(db, doc, c.req.raw.headers, sessionToken);
+  const cookie = c.req.raw.headers.get('cookie');
+  const sessionToken = parseCookie(cookie, SESSION_COOKIE);
+  const inviteSessionToken = parseCookie(cookie, INVITE_SESSION_COOKIE);
+  return authorize(db, doc, c.req.raw.headers, sessionToken, inviteSessionToken);
 }
 
 function normalizeRefName(raw: string): string | null {

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { locateAllBlocks } from '@marginalia/renderer';
 import { type App, createApp } from '../src/app.js';
-import { CLIENT_HEADER, CLIENT_NAME_HEADER, INVITE_HEADER, SESSION_COOKIE } from '../src/auth.js';
+import { CLIENT_HEADER, CLIENT_NAME_HEADER, INVITE_HEADER, INVITE_SESSION_COOKIE, SESSION_COOKIE } from '../src/auth.js';
 import { loadConfig } from '../src/config.js';
 
 const CLIENT_A = { id: 'aaaaaaaaaaaaaaaaaaaa', name: 'Alice' };
@@ -90,6 +90,208 @@ describe('documents API', () => {
     expect(setCookie).toContain(SESSION_COOKIE);
     return setCookie.split(';')[0] ?? '';
   }
+
+  async function claimInvite(
+    uid: string,
+    token: string,
+    client: typeof CLIENT_A,
+  ): Promise<{ status: number; cookie: string; body: unknown }> {
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/invites/${token}/claim`, {
+        method: 'POST',
+        headers: headersFor(client),
+      }),
+    );
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    const cookie = setCookie.split(';')[0] ?? '';
+    return { status: res.status, cookie, body: await res.json() };
+  }
+
+  test('claim-invite: named invite sets invite-session cookie, not password-session cookie', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Doc\n\nPara.\n' });
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+
+    // Create a named collaborator invite.
+    const mkRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ kind: 'named', role: 'collaborator', display_name: 'Bob' }),
+      }),
+    );
+    expect(mkRes.status).toBe(201);
+    const { invite } = (await mkRes.json()) as { invite: { token: string } };
+
+    // Claim the invite.
+    const { status, cookie, body } = await claimInvite(created.uid, invite.token, CLIENT_B);
+    expect(status).toBe(201);
+    expect(cookie).toMatch(new RegExp(`^${INVITE_SESSION_COOKIE}=`));
+    expect(cookie).not.toContain(SESSION_COOKIE + '=');
+    expect((body as { role: string }).role).toBe('collaborator');
+    expect((body as { display_name: string }).display_name).toBe('Bob');
+  });
+
+  test('claim-invite: session cookie grants access without the invite header', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Doc\n\nPara.\n' });
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+
+    const mkRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ kind: 'named', role: 'collaborator', display_name: 'Bob' }),
+      }),
+    );
+    const { invite } = (await mkRes.json()) as { invite: { token: string } };
+
+    const { cookie } = await claimInvite(created.uid, invite.token, CLIENT_B);
+    expect(cookie).toMatch(new RegExp(`^${INVITE_SESSION_COOKIE}=`));
+
+    // Access the doc using only the invite-session cookie (no invite header).
+    const getRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: new Headers({
+          'content-type': 'application/json',
+          [CLIENT_HEADER]: CLIENT_B.id,
+          [CLIENT_NAME_HEADER]: CLIENT_B.name,
+          cookie,
+        }),
+      }),
+    );
+    expect(getRes.status).toBe(200);
+    const docBody = (await getRes.json()) as { role: string; display_name: string | null };
+    expect(docBody.role).toBe('collaborator');
+    expect(docBody.display_name).toBe('Bob');
+  });
+
+  test('claim-invite: admin invite token is not claimable (returns 400)', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Doc\n' });
+    const { status } = await claimInvite(created.uid, created.admin_invite.token, CLIENT_B);
+    expect(status).toBe(400);
+  });
+
+  test('claim-invite: password-protected doc returns 409', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Doc\n',
+      password_protected: true,
+    });
+    expect(created.password).toBeString();
+
+    // Authenticate to get a session cookie for admin operations.
+    const aliceCookie = await authenticateForDoc(created.uid, created.password!, CLIENT_A);
+
+    // Create a named invite (password-protected docs need both session + invite).
+    const adminHeaders = withInvite(
+      headersFor(CLIENT_A, { cookie: aliceCookie }),
+      created.admin_invite.token,
+    );
+    const mkRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ kind: 'named', role: 'collaborator', display_name: 'Bob' }),
+      }),
+    );
+    expect(mkRes.status).toBe(201);
+    const { invite } = (await mkRes.json()) as { invite: { token: string } };
+
+    // Claiming should return 409 because the doc is password-protected.
+    const { status } = await claimInvite(created.uid, invite.token, CLIENT_B);
+    expect(status).toBe(409);
+  });
+
+  test('claim-invite: invite-session cookie does NOT clobber password session', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Doc\n' });
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+
+    // Mint a named invite on a non-password-protected doc.
+    const mkRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ kind: 'named', role: 'collaborator', display_name: 'Bob' }),
+      }),
+    );
+    const { invite } = (await mkRes.json()) as { invite: { token: string } };
+
+    // Enable password after invite creation; the server generates the password.
+    const settingsRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/settings`, {
+        method: 'PATCH',
+        headers: adminHeaders,
+        body: JSON.stringify({ password: 'rotate' }),
+      }),
+    );
+    expect(settingsRes.status).toBe(200);
+    const { password } = (await settingsRes.json()) as { password: string };
+
+    // Authenticate with the generated password to get a SESSION_COOKIE.
+    const pwCookie = await authenticateForDoc(created.uid, password, CLIENT_A);
+    expect(pwCookie).toMatch(new RegExp(`^${SESSION_COOKIE}=`));
+
+    // Claiming the invite should 409 (password-protected), and the invite-session
+    // cookie must not be set, ensuring the password session is not polluted.
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites/${invite.token}/claim`, {
+        method: 'POST',
+        headers: new Headers({
+          'content-type': 'application/json',
+          [CLIENT_HEADER]: CLIENT_B.id,
+          [CLIENT_NAME_HEADER]: CLIENT_B.name,
+          cookie: pwCookie,
+        }),
+      }),
+    );
+    expect(res.status).toBe(409);
+    expect(res.headers.get('set-cookie') ?? '').not.toContain(SESSION_COOKIE + '=');
+
+    // The original password session must still be valid.
+    const checkRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: new Headers({
+          'content-type': 'application/json',
+          [CLIENT_HEADER]: CLIENT_A.id,
+          [CLIENT_NAME_HEADER]: CLIENT_A.name,
+          cookie: pwCookie,
+        }),
+      }),
+    );
+    expect(checkRes.status).toBe(200);
+  });
+
+  test('claim-invite: admin invite header overrides an active invite session', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Doc\n\nPara.\n' });
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+
+    // Mint a named reader invite and claim it.
+    const mkRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ kind: 'named', role: 'reader', display_name: 'Bob' }),
+      }),
+    );
+    const { invite } = (await mkRes.json()) as { invite: { token: string } };
+    const { cookie } = await claimInvite(created.uid, invite.token, CLIENT_B);
+
+    // With both the invite-session cookie and the admin invite header,
+    // the admin invite should win (higher privilege).
+    const getRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: new Headers({
+          'content-type': 'application/json',
+          [CLIENT_HEADER]: CLIENT_B.id,
+          [CLIENT_NAME_HEADER]: CLIENT_B.name,
+          [INVITE_HEADER]: created.admin_invite.token,
+          cookie,
+        }),
+      }),
+    );
+    expect(getRes.status).toBe(200);
+    const docBody = (await getRes.json()) as { role: string };
+    expect(docBody.role).toBe('admin');
+  });
+
 
   test('upload returns an admin invite URL; admin access via that invite', async () => {
     const created = await upload(CLIENT_A, { markdown: '# Original\n\nBody.' });

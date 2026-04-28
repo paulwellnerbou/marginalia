@@ -709,8 +709,8 @@ export function deleteInvite(uid: string, token: string, identity: Identity): Pr
 export function claimInvite(
   uid: string,
   token: string,
-): Promise<{ display_name: string | null; role: string }> {
-  return request<{ display_name: string | null; role: string }>(
+): Promise<{ display_name: string | null; role: Role }> {
+  return request<{ display_name: string | null; role: Role }>(
     `/api/documents/${encodeURIComponent(uid)}/invites/${encodeURIComponent(token)}/claim`,
     { method: 'POST' },
   );

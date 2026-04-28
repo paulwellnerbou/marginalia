@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { UpgradeWebSocket } from 'hono/ws';
 import type { Database } from 'bun:sqlite';
 import type { DocumentRow } from '../db.js';
-import { authorize, parseCookie, SESSION_COOKIE } from '../auth.js';
+import { INVITE_SESSION_COOKIE, authorize, parseCookie, SESSION_COOKIE } from '../auth.js';
 import type { Realtime } from '../realtime.js';
 
 export interface EventsDeps {
@@ -29,7 +29,9 @@ export function eventsRouter(deps: EventsDeps): Hono {
       const clientId = c.req.query('client_id') ?? '';
       const clientName = c.req.query('client_name') ?? null;
       const inviteToken = c.req.query('invite') ?? null;
-      const sessionToken = parseCookie(c.req.raw.headers.get('cookie'), SESSION_COOKIE);
+      const cookie = c.req.raw.headers.get('cookie');
+      const sessionToken = parseCookie(cookie, SESSION_COOKIE);
+      const inviteSessionToken = parseCookie(cookie, INVITE_SESSION_COOKIE);
       const doc = uid ? loadDoc(deps.db, uid) : null;
       // The browser WebSocket API can't send custom headers, so we accept
       // the invite token via query param and synthesize a Headers object
@@ -47,7 +49,7 @@ export function eventsRouter(deps: EventsDeps): Hono {
             ws.close();
             return;
           }
-          const decision = authorize(deps.db, doc, headers, sessionToken);
+          const decision = authorize(deps.db, doc, headers, sessionToken, inviteSessionToken);
           if (!decision.ok) {
             ws.send(JSON.stringify({ type: 'error', code: decision.reason }));
             ws.close();

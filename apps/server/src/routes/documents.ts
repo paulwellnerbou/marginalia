@@ -20,6 +20,7 @@ import {
 } from './edit-proposals.js';
 import {
   type Identity,
+  INVITE_SESSION_COOKIE,
   SESSION_COOKIE,
   authorize,
   canEdit,
@@ -278,11 +279,11 @@ async function getDocument(c: Context, deps: AppDeps) {
     assetVersions: new Map(attached.map((a) => [a.ref_name, a.asset_id])),
   });
 
-  // For admin/named invites: the server-resolved current name (invite
-  // seed on first visit, doc_users row after). For generic/no-invite:
+  // For admin/named invites or invite sessions: the server-resolved current
+  // name (invite seed on first visit, doc_users row after). For generic/no-invite:
   // null. Client uses this to keep localStorage in sync with the server.
   const forcedDisplayName =
-    decision.invite && decision.invite.kind !== 'generic'
+    (decision.invite && decision.invite.kind !== 'generic') || decision.isInviteSession
       ? (decision.identity?.displayName ?? null)
       : null;
   return c.json({
@@ -1529,7 +1530,7 @@ async function claimInvite(c: Context, deps: AppDeps) {
   const maxAge = Math.floor(config.namedInviteSessionTtlMs / 1000);
   c.header(
     'Set-Cookie',
-    `${SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+    `${INVITE_SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
   );
   return c.json({ display_name: invite.display_name, role: invite.role }, 201);
 }
@@ -1819,8 +1820,10 @@ function loadDoc(db: Database, uid: string | undefined): DocumentRow | null {
 }
 
 function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
-  const sessionToken = parseCookie(c.req.raw.headers.get('cookie'), SESSION_COOKIE);
-  return authorize(deps.db, doc, c.req.raw.headers, sessionToken);
+  const cookie = c.req.raw.headers.get('cookie');
+  const sessionToken = parseCookie(cookie, SESSION_COOKIE);
+  const inviteSessionToken = parseCookie(cookie, INVITE_SESSION_COOKIE);
+  return authorize(deps.db, doc, c.req.raw.headers, sessionToken, inviteSessionToken);
 }
 
 function requireAdminInvite(c: Context, db: Database, docUid: string): InviteRow | null {
