@@ -492,6 +492,11 @@ function applyCommentHighlights(
           block.setAttribute('aria-label', 'Open comment thread');
         }
       }
+      // Resolved block-scope highlights only need the block-level
+      // dataset for click/scroll targeting — wrapping the entire
+      // block's text in transparent <mark>s adds DOM bloat with no
+      // visible effect. Click/flash falls back to [data-block].
+      if (!hasOpen) continue;
       rawStart = 0;
       rawEnd = map.rawLength;
     } else {
