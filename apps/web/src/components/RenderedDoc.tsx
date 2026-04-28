@@ -465,7 +465,7 @@ function applyCommentHighlights(
 ): void {
   const rangesByBlock = new Map<
     HTMLElement,
-    Array<{ rawStart: number; rawEnd: number; threadIds: string[]; threadStates: string[] }>
+    Array<{ rawStart: number; rawEnd: number; threads: Array<{ id: string; state: string }> }>
   >();
 
   for (const highlight of highlights) {
@@ -514,8 +514,9 @@ function applyCommentHighlights(
     blockRanges.push({
       rawStart,
       rawEnd,
-      threadIds: highlight.threadId ? [highlight.threadId] : [],
-      threadStates: highlight.state ? [highlight.state] : [],
+      threads: highlight.threadId && highlight.state
+        ? [{ id: highlight.threadId, state: highlight.state }]
+        : [],
     });
     rangesByBlock.set(block, blockRanges);
   }
@@ -527,7 +528,7 @@ function applyCommentHighlights(
     const textNodes = collectTextNodes(block);
     for (let i = merged.length - 1; i >= 0; i--) {
       const range = merged[i]!;
-      wrapRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.threadIds, range.threadStates);
+      wrapRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.threads);
     }
   }
 }
@@ -743,25 +744,29 @@ function findTextNodeEntry(
   return textNodes[textNodes.length - 1] ?? null;
 }
 
-function mergeRanges(
-  ranges: Array<{ rawStart: number; rawEnd: number; threadIds: string[]; threadStates: string[] }>,
-): Array<{ rawStart: number; rawEnd: number; threadIds: string[]; threadStates: string[] }> {
+type RangeThread = { id: string; state: string };
+type Range = { rawStart: number; rawEnd: number; threads: RangeThread[] };
+
+function mergeRanges(ranges: Range[]): Range[] {
   if (ranges.length <= 1) return ranges;
   const sorted = [...ranges].sort((a, b) => a.rawStart - b.rawStart || a.rawEnd - b.rawEnd);
-  const merged: Array<{ rawStart: number; rawEnd: number; threadIds: string[]; threadStates: string[] }> = [
-    { ...sorted[0]!, threadIds: [...sorted[0]!.threadIds], threadStates: [...sorted[0]!.threadStates] },
-  ];
+  const merged: Range[] = [{ ...sorted[0]!, threads: [...sorted[0]!.threads] }];
 
   for (let i = 1; i < sorted.length; i++) {
     const next = sorted[i]!;
     const prev = merged[merged.length - 1]!;
     if (next.rawStart <= prev.rawEnd) {
       prev.rawEnd = Math.max(prev.rawEnd, next.rawEnd);
-      prev.threadIds = Array.from(new Set([...prev.threadIds, ...next.threadIds]));
-      prev.threadStates = Array.from(new Set([...prev.threadStates, ...next.threadStates]));
+      const seen = new Set(prev.threads.map((t) => t.id));
+      for (const t of next.threads) {
+        if (!seen.has(t.id)) {
+          prev.threads.push(t);
+          seen.add(t.id);
+        }
+      }
       continue;
     }
-    merged.push({ ...next, threadIds: [...next.threadIds], threadStates: [...next.threadStates] });
+    merged.push({ ...next, threads: [...next.threads] });
   }
 
   return merged;
@@ -771,8 +776,7 @@ function wrapRangeAcrossTextNodes(
   textNodes: Array<{ node: Text; start: number; end: number }>,
   rawStart: number,
   rawEnd: number,
-  threadIds: string[],
-  threadStates: string[],
+  threads: RangeThread[],
 ): void {
   for (let i = textNodes.length - 1; i >= 0; i--) {
     const entry = textNodes[i]!;
@@ -780,7 +784,7 @@ function wrapRangeAcrossTextNodes(
     const segmentEnd = Math.min(rawEnd, entry.end);
     if (segmentEnd <= segmentStart) continue;
 
-    wrapTextSlice(entry.node, segmentStart - entry.start, segmentEnd - entry.start, threadIds, threadStates);
+    wrapTextSlice(entry.node, segmentStart - entry.start, segmentEnd - entry.start, threads);
   }
 }
 
@@ -804,8 +808,7 @@ function wrapTextSlice(
   node: Text,
   startOffset: number,
   endOffset: number,
-  threadIds: string[],
-  threadStates: string[],
+  threads: RangeThread[],
 ): void {
   let target = node;
   if (startOffset > 0) {
@@ -820,12 +823,12 @@ function wrapTextSlice(
 
   const mark = document.createElement('mark');
   mark.dataset.commentHighlight = 'true';
-  const openIndex = threadStates.findIndex((s) => s === 'open');
-  const hasOpen = openIndex !== -1;
+  const openThread = threads.find((t) => t.state === 'open');
+  const hasOpen = openThread !== undefined;
   mark.className = hasOpen ? 'comment-highlight' : 'comment-highlight-resolved';
-  const targetThreadId = hasOpen ? threadIds[openIndex] : threadIds[0];
-  if (targetThreadId) {
-    mark.dataset.commentThreadId = targetThreadId;
+  const targetThread = openThread ?? threads[0];
+  if (targetThread) {
+    mark.dataset.commentThreadId = targetThread.id;
     if (hasOpen) {
       mark.tabIndex = 0;
       mark.setAttribute('role', 'button');
