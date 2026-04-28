@@ -1,5 +1,14 @@
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import * as git from 'isomorphic-git';
 import type { DocumentFormat } from './db.js';
@@ -11,9 +20,11 @@ import type { DocumentFormat } from './db.js';
  *
  * Operations take a `DocLocator` ({ uid, format }) so callers can pass
  * a `DocumentRow` directly. All writes for a given uid serialize through
- * a per-doc async mutex; reads are unlocked (file-level atomicity is
- * good enough — readFileSync sees pre- or post-write content, never
- * garbage).
+ * a per-doc async mutex. Reads stay outside the lock because writes are
+ * atomic at the filesystem level: we stage to a sibling `.tmp` file and
+ * `rename()` it over the target, so a concurrent reader sees either the
+ * old inode or the fully-written new one — never a 0-byte or partially
+ * filled file. Same precedent as `FsBlobStore.put()`.
  *
  * The class is a thin facade over isomorphic-git. New per-doc repos are
  * lazily initialized on first write; subsequent writes reuse the same
@@ -106,7 +117,7 @@ export class GitStore {
       await this.ensureDocRepo(doc.uid);
       const dir = this.repoDir(doc.uid);
       const filename = this.filename(doc.format);
-      writeFileSync(join(dir, filename), content);
+      atomicWrite(join(dir, filename), content);
       await git.add({ fs, dir, filepath: filename });
       const subject =
         action === 'accept-proposal'
@@ -208,6 +219,28 @@ export class GitStore {
     } catch {
       return null;
     }
+  }
+}
+
+/**
+ * Stage to a sibling temp file in the same directory, then `rename()`
+ * over the target. `rename()` is atomic on the same filesystem, so a
+ * concurrent `readFileSync` always sees either the previous inode or
+ * the fully-written new one — never the truncate-then-fill window that
+ * a plain `writeFileSync` exposes. Same precedent as `FsBlobStore.put`.
+ */
+function atomicWrite(target: string, content: string): void {
+  const tmp = `${target}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    writeFileSync(tmp, content);
+    renameSync(tmp, target);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* best effort — leave the temp file for a later sweeper */
+    }
+    throw err;
   }
 }
 

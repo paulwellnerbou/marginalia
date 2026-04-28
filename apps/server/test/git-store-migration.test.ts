@@ -287,6 +287,52 @@ describe('GitStore mutex', () => {
     expect(new Set(history.map((e) => e.oid)).size).toBe(5);
   });
 
+  test('concurrent reads during writes never see partial content', async () => {
+    const store = new GitStore(dir);
+    await store.init();
+
+    // Seed the doc so `read()` has something to find on the very first
+    // tick before any new writes complete.
+    await store.write(
+      { uid: 'doc', format: 'markdown' },
+      'AAAAAAAAAAAAAAAAAAAA\n', // 21 chars
+      { displayName: 't', clientId: 't' },
+      'upload',
+    );
+
+    let done = false;
+    const writes = (async () => {
+      for (let i = 0; i < 30; i++) {
+        // Distinct, full-size payloads. Each is a different repeating
+        // character so a partial-read regression would be visible as a
+        // string that doesn't match any payload exactly.
+        const ch = String.fromCharCode(65 + (i % 26));
+        await store.write(
+          { uid: 'doc', format: 'markdown' },
+          `${ch.repeat(20)}\n`,
+          { displayName: 't', clientId: `c-${i}` },
+          'update',
+        );
+      }
+      done = true;
+    })();
+
+    const reads: string[] = [];
+    while (!done) {
+      reads.push(store.read({ uid: 'doc', format: 'markdown' }));
+      await new Promise((r) => setImmediate(r));
+    }
+    await writes;
+
+    expect(reads.length).toBeGreaterThan(0);
+    for (const r of reads) {
+      // Each observed read must be a complete payload — never a
+      // 0-byte snapshot from a truncate-then-fill window.
+      expect(r.length).toBe(21);
+      expect(r).toMatch(/^([A-Z])\1{19}\n$/);
+    }
+  });
+
   test('writes to different docs run in parallel without interference', async () => {
     const store = new GitStore(dir);
     await store.init();
