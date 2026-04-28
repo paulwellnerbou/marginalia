@@ -206,14 +206,14 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
       ? body.name.trim().slice(0, 200)
       : null;
 
-  const { path } = await store.write(uid, format, sourceRaw, identity, 'upload');
+  await store.write({ uid, format }, sourceRaw, identity, 'upload');
 
   // editable_by_anyone is deprecated; always 0 on new rows, unread by authorize().
   db.prepare(
     `INSERT INTO documents
-       (uid, path, name, password_hash, editable_by_anyone, default_theme, format, created_at, updated_at)
+       (uid, repo_dir, name, password_hash, editable_by_anyone, default_theme, format, created_at, updated_at)
      VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`,
-  ).run(uid, path, docName, passwordHash, theme, format, now, now);
+  ).run(uid, uid, docName, passwordHash, theme, format, now, now);
   upsertDocUser(db, uid, identity);
 
   // Every doc gets an admin invite for its creator. The returned URL is the
@@ -268,7 +268,7 @@ async function getDocument(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
-  const source = store.read(doc.path);
+  const source = store.read(doc);
   const rendered = await renderDocument(source, doc.format);
   const attached = listAttached(db, doc.uid);
   rendered.html = await rewriteAssetReferences(rendered.html, {
@@ -327,15 +327,14 @@ async function updateDocument(c: Context, deps: AppDeps) {
 
   let previousSource = '';
   try {
-    previousSource = store.read(doc.path);
+    previousSource = store.read(doc);
   } catch {
     /* new doc */
   }
 
   const writeOptions = commitMessage ? { commitMessage } : undefined;
   const { oid } = await store.write(
-    doc.uid,
-    doc.format,
+    doc,
     nextSource,
     decision.identity,
     'update',
@@ -531,9 +530,9 @@ async function deleteDocument(c: Context, deps: AppDeps) {
   }
 
   try {
-    await store.deleteDoc(doc.path, doc.uid, decision.identity);
+    await store.destroyDocRepo(doc.uid);
   } catch {
-    /* repo file already missing — fine */
+    /* repo already gone — fine */
   }
 
   return c.body(null, 204);
@@ -549,7 +548,7 @@ async function exportDocument(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
-  const source = store.read(doc.path);
+  const source = store.read(doc);
   const rendered = await renderDocument(source, doc.format);
   const comments = db
     .prepare(
@@ -668,7 +667,7 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
     attached.set(a.ref_name, { assetId: a.asset_id, mime: a.mime });
   }
 
-  const source = store.read(doc.path);
+  const source = store.read(doc);
   // Title resolution for both the DOCX core properties and the
   // download filename: explicit `doc.name` wins; else the document's
   // own title (frontmatter `title:` or first H1 / `= Header`); else
@@ -781,7 +780,7 @@ async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
       ? themeParam
       : (doc.default_theme ?? 'default');
 
-  const source = store.read(doc.path);
+  const source = store.read(doc);
   // Matches DOCX: explicit `doc.name` beats the extracted title.
   const derivedTitle = doc.name ?? extractDocumentTitle(source, doc.format);
 
@@ -941,12 +940,12 @@ async function importDocument(c: Context, deps: AppDeps) {
     : null;
   // Bundle's editable_by_anyone is ignored; the column is deprecated.
 
-  const { path } = await store.write(uid, format, docSpec.source, identity, 'upload');
+  await store.write({ uid, format }, docSpec.source, identity, 'upload');
   db.prepare(
     `INSERT INTO documents
-       (uid, path, name, password_hash, editable_by_anyone, default_theme, format, mermaid_renderer, created_at, updated_at)
+       (uid, repo_dir, name, password_hash, editable_by_anyone, default_theme, format, mermaid_renderer, created_at, updated_at)
      VALUES (?, ?, ?, NULL, 0, ?, ?, ?, ?, ?)`,
-  ).run(uid, path, name, theme, format, mermaidRenderer, now, now);
+  ).run(uid, uid, name, theme, format, mermaidRenderer, now, now);
   upsertDocUser(db, uid, identity);
 
   // Fresh admin invite for the importer — not re-using the one from the
@@ -1135,7 +1134,7 @@ async function getHistory(c: Context, deps: AppDeps) {
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
   const userNames = listDocUserNameMap(db, doc.uid);
-  const history = (await store.history(doc.path)).map((entry) =>
+  const history = (await store.history(doc)).map((entry) =>
     toHistoryWire(db, doc.uid, entry, userNames),
   );
   return c.json({ history });
@@ -1151,7 +1150,7 @@ async function getHistoryDiff(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
-  const diff = await store.diffAt(doc.path, oid);
+  const diff = await store.diffAt(doc, oid);
   if (!diff) return c.json({ error: 'not-found' }, 404);
   return c.json(diff);
 }
@@ -1170,14 +1169,13 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
 
   let restoredSource: string;
   try {
-    restoredSource = await store.readAt(doc.path, targetOid);
+    restoredSource = await store.readAt(doc, targetOid);
   } catch {
     return c.json({ error: 'not-found' }, 404);
   }
 
   const { oid } = await store.write(
-    doc.uid,
-    doc.format,
+    doc,
     restoredSource,
     decision.identity,
     'restore',
@@ -1240,19 +1238,18 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
-  const history = await store.history(doc.path);
+  const history = await store.history(doc);
   const latest = history[0];
   const parent = history[1];
   if (!latest || latest.oid !== targetOid) return c.json({ error: 'not-latest' }, 409);
   if (!parent) return c.json({ error: 'no-parent' }, 409);
 
-  const diff = await store.diffAt(doc.path, targetOid);
+  const diff = await store.diffAt(doc, targetOid);
   if (!diff) return c.json({ error: 'not-found' }, 404);
 
   const meta = parseHistoryMetadata(latest);
   const { oid } = await store.write(
-    doc.uid,
-    doc.format,
+    doc,
     diff.before,
     decision.identity,
     'restore',

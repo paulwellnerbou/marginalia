@@ -5,7 +5,10 @@ import { mkdirSync } from 'node:fs';
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS documents (
   uid                  TEXT PRIMARY KEY,
-  path                 TEXT NOT NULL,
+  -- Per-doc git repo location, relative to <dataDir>/repos. Always equals
+  -- the uid for now (one doc → one repo). Stored as a column so we have
+  -- an obvious place to override later if we ever need it.
+  repo_dir             TEXT NOT NULL DEFAULT '',
   name                 TEXT,              -- human-friendly doc name; NULL → derive from content
   password_hash        TEXT,
   password_recovery_ciphertext TEXT,
@@ -166,7 +169,8 @@ export function isDocumentFormat(v: unknown): v is DocumentFormat {
 
 export interface DocumentRow {
   uid: string;
-  path: string;
+  /** Per-doc repo subpath under `<dataDir>/repos`. Equals `uid`. */
+  repo_dir: string;
   name: string | null;
   password_hash: string | null;
   password_recovery_ciphertext: string | null;
@@ -368,6 +372,13 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments_edit_proposals', 'accepted_oid', 'TEXT');
   ensureColumn(db, 'sessions', 'persistent', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'document_assets', 'mime', "TEXT NOT NULL DEFAULT 'application/octet-stream'");
+  ensureColumn(db, 'documents', 'repo_dir', "TEXT NOT NULL DEFAULT ''");
+  // Backfill per-doc repo subpath. Always = uid for now; the legacy
+  // `path` column held `<uid>.<ext>`, derivable from uid + format and no
+  // longer needed once the data migration (createApp) has split the
+  // shared repo into per-doc repos.
+  db.exec(`UPDATE documents SET repo_dir = uid WHERE repo_dir = ''`);
+  dropColumnIfExists(db, 'documents', 'path');
   db.exec(`UPDATE comments SET link_status = 'linked' WHERE link_status = 'active'`);
   db.exec(`UPDATE comments_edit_proposals SET status = 'open' WHERE status = 'pending'`);
   db.exec(`UPDATE comments_edit_proposals SET status = 'open' WHERE status = 'orphaned'`);
@@ -435,6 +446,12 @@ function renameColumn(db: Database, table: string, from: string, to: string): vo
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
   if (cols.some((c) => c.name === to) || !cols.some((c) => c.name === from)) return;
   db.exec(`ALTER TABLE ${table} RENAME COLUMN ${from} TO ${to}`);
+}
+
+function dropColumnIfExists(db: Database, table: string, column: string): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
 }
 
 function migrateEditProposalsToCommentExtensions(db: Database): void {
