@@ -466,7 +466,7 @@ function applyCommentHighlights(
 ): void {
   const rangesByBlock = new Map<
     HTMLElement,
-    Range[]
+    HighlightRange[]
   >();
 
   for (const highlight of highlights) {
@@ -746,12 +746,12 @@ function findTextNodeEntry(
 }
 
 type RangeThread = { id: string; state: ThreadState };
-type Range = { rawStart: number; rawEnd: number; threads: RangeThread[] };
+type HighlightRange = { rawStart: number; rawEnd: number; threads: RangeThread[] };
 
-function mergeRanges(ranges: Range[]): Range[] {
+function mergeRanges(ranges: HighlightRange[]): HighlightRange[] {
   if (ranges.length <= 1) return ranges;
   const sorted = [...ranges].sort((a, b) => a.rawStart - b.rawStart || a.rawEnd - b.rawEnd);
-  const merged: Range[] = [{ ...sorted[0]!, threads: [...sorted[0]!.threads] }];
+  const merged: HighlightRange[] = [{ ...sorted[0]!, threads: [...sorted[0]!.threads] }];
 
   for (let i = 1; i < sorted.length; i++) {
     const next = sorted[i]!;

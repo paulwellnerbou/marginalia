@@ -120,24 +120,21 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
     }
 
     for (const thread of threads) {
-      if (thread.comments.length > 0) {
+      items.push({
+        kind: 'thread',
+        timestamp: thread.comments[0].created_at,
+        id: `thread-${thread.id}`,
+        thread,
+      });
+      for (let i = 1; i < thread.comments.length; i++) {
+        const comment = thread.comments[i]!;
         items.push({
-          kind: 'thread',
-          timestamp: thread.comments[0].created_at,
-          id: `thread-${thread.id}`,
+          kind: 'reply',
+          timestamp: comment.created_at,
+          id: `reply-${comment.id}`,
           thread,
+          comment,
         });
-        for (let i = 1; i < thread.comments.length; i++) {
-          const comment = thread.comments[i];
-          if (!comment) continue;
-          items.push({
-            kind: 'reply',
-            timestamp: comment.created_at,
-            id: `reply-${comment.id}`,
-            thread,
-            comment,
-          });
-        }
       }
 
       if (thread.resolution) {
@@ -296,7 +293,7 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
           if (activity.kind === 'thread') {
             const { thread } = activity;
             const isProposal = thread.proposal !== null;
-            const comment = thread.comments[0]!;
+            const comment = thread.comments[0];
             const actionText = isProposal ? 'Proposed a change' : 'Started a thread';
 
             return (
@@ -353,7 +350,7 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
           if (activity.kind === 'reply') {
             const { thread, comment } = activity;
             const isProposal = thread.proposal !== null;
-            const threadAuthorName = thread.comments[0]?.author.display_name || 'someone';
+            const threadAuthorName = thread.comments[0].author.display_name || 'someone';
 
             return (
               <Flex
