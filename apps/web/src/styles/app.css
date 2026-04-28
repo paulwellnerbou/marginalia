@@ -1102,18 +1102,21 @@ button.primary:disabled {
 }
 
 .recent-card-title {
-  background: transparent;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
-  font: inherit;
-  color: inherit;
-  text-align: left;
   flex: 1;
   min-width: 0;
 }
-.recent-card-title:hover {
+.recent-card:hover .recent-card-title {
   text-decoration: underline;
+}
+
+.recent-card-uid {
+  font-family: var(--code-font-family, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: var(--font-size-1);
+  letter-spacing: 0.01em;
+  user-select: text;
+  /* Sits above the link overlay so the uid stays selectable. */
+  position: relative;
+  z-index: 2;
 }
 
 /* ============================================================
@@ -1318,8 +1321,13 @@ button.primary:disabled {
   color: var(--accent-11);
 }
 
-/* Cards in the recent grid become hover-able: whole card is clickable. */
+/* Cards in the recent grid become hover-able: whole card is clickable. The
+   anchor overlay (.recent-card-link) is what the browser sees as the link,
+   so the URL appears in the status bar on hover and native open-in-tab
+   shortcuts work. Children that need to receive their own clicks (the
+   remove IconButton) lift above the overlay via z-index. */
 .recent-card {
+  position: relative;
   cursor: pointer;
   transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
   border: 1px solid transparent;
@@ -1328,6 +1336,24 @@ button.primary:disabled {
   transform: translateY(-1px);
   box-shadow: var(--shadow-3);
   border-color: var(--gray-a5);
+}
+.recent-card-link {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  /* Visually invisible but a real <a> with href so Chrome shows the URL
+     in the status bar and right-click / cmd-click work. */
+  text-decoration: none;
+  color: inherit;
+}
+.recent-card-link:focus-visible {
+  outline: 2px solid var(--accent-9);
+  outline-offset: 2px;
+}
+.recent-card-remove {
+  position: relative;
+  z-index: 2;
 }
 
 /* ============================================================

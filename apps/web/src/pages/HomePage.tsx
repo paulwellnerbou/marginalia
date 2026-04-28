@@ -30,7 +30,7 @@ import {
   Tooltip,
 } from '@radix-ui/themes';
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { Copyable } from '../components/Copyable.js';
 import { FormatBadge } from '../components/FormatBadge.js';
@@ -199,7 +199,6 @@ export function HomePage() {
                   <RecentCard
                     key={r.uid}
                     doc={r}
-                    onOpen={() => navigate(openUrlFor(r))}
                     onRemove={() => {
                       removeFromRecent(r.uid);
                       refreshRecent();
@@ -405,31 +404,31 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
   );
 }
 
-function RecentCard({
-  doc,
-  onOpen,
-  onRemove,
-}: {
-  doc: RecentDoc;
-  onOpen: () => void;
-  onRemove: () => void;
-}) {
+function RecentCard({ doc, onRemove }: { doc: RecentDoc; onRemove: () => void }) {
   const updatedSinceVisit = doc.updated_at > doc.visited_at;
+  const url = openUrlFor(doc);
   return (
-    <Card size="2" className="recent-card" onClick={onOpen}>
+    <Card size="2" className="recent-card">
+      {/* Real <a> overlay so the URL appears in the browser's status
+          bar on hover and middle/cmd-click open in a new tab. The
+          IconButton sits above this overlay via CSS z-index. */}
+      <Link to={url} className="recent-card-link" aria-label={`Open ${doc.title}`} />
+      <Text className="recent-card-uid" size="1" color="gray" mb="1" as="div">
+        {doc.uid}
+      </Text>
       <Flex justify="between" align="start" gap="2">
-        <button type="button" onClick={onOpen} className="recent-card-title">
-          <Heading size="3" weight="medium" truncate>
-            {doc.title}
-          </Heading>
-        </button>
+        <Heading size="3" weight="medium" truncate className="recent-card-title">
+          {doc.title}
+        </Heading>
         <Tooltip content="Remove from recent">
           <IconButton
             variant="ghost"
             size="1"
             color="gray"
             aria-label="Remove from recent"
+            className="recent-card-remove"
             onClick={(e) => {
+              e.preventDefault();
               e.stopPropagation();
               onRemove();
             }}
