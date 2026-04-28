@@ -81,6 +81,7 @@ import {
 import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
 import { DownloadMenu } from './DownloadMenu.js';
 import { HistoryList } from './HistoryList.js';
+import { ActivityList } from './ActivityList.js';
 import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
@@ -122,7 +123,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const navigate = useNavigate();
   const canComment = doc.role !== 'reader';
   const [tocOpen, setTocOpen] = useState(true);
-  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(true);
   const [inlineCommentsOpen, setInlineCommentsOpen] = useState<boolean>(() => {
     const saved = localStorage.getItem(INLINE_COMMENTS_OPEN_KEY);
     return saved === null ? true : saved === 'true';
@@ -135,7 +136,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     const saved = localStorage.getItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
     return saved === 'true';
   });
-  const [rightTab, setRightTab] = useState<'comments' | 'history' | 'search'>('comments');
+  const [rightTab, setRightTab] = useState<'comments' | 'history' | 'search' | 'activities'>(
+    'activities',
+  );
   const [historyVersion, setHistoryVersion] = useState(0);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   const [docSearchOpen, setDocSearchOpen] = useState(false);
@@ -488,37 +491,46 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return { clientId: getClientId(), displayName: name };
   }
 
-  const scrollToAnchor = useCallback((blockId: string, quote?: string | null) => {
+  const scrollToAnchor = useCallback((blockId: string, quote?: string | null, threadId?: string) => {
     const root = docRef.current;
     if (!root) return;
-    const escaped = CSS.escape(blockId);
-    let target = root.querySelector<HTMLElement>(
-      `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-    );
-    if (!target) return;
-    // Recovery for comments anchored before sub-block-aware capture
-    // landed: their stored block_id points at the enclosing top-level
-    // block. If the quote uniquely identifies one sub-block, flash
-    // that one instead of the whole container.
-    if (target.dataset.block && quote) {
-      const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
-      let narrowed: HTMLElement | null = null;
-      let unique = true;
-      for (const sub of subEls) {
-        const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
-        if (text.includes(quote)) {
-          if (narrowed) {
-            unique = false;
-            break;
-          }
-          narrowed = sub;
-        }
-      }
-      if (unique && narrowed) target = narrowed;
+
+    let target: HTMLElement | null = null;
+    if (threadId) {
+      target = root.querySelector<HTMLElement>(`mark[data-comment-thread-id="${CSS.escape(threadId)}"]`);
     }
+
+    if (!target) {
+      const escaped = CSS.escape(blockId);
+      target = root.querySelector<HTMLElement>(
+        `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
+      );
+      if (!target) return;
+      // Recovery for comments anchored before sub-block-aware capture
+      // landed: their stored block_id points at the enclosing top-level
+      // block. If the quote uniquely identifies one sub-block, flash
+      // that one instead of the whole container.
+      if (target.dataset.block && quote) {
+        const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
+        let narrowed: HTMLElement | null = null;
+        let unique = true;
+        for (const sub of subEls) {
+          const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
+          if (text.includes(quote)) {
+            if (narrowed) {
+              unique = false;
+              break;
+            }
+            narrowed = sub;
+          }
+        }
+        if (unique && narrowed) target = narrowed;
+      }
+    }
+
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     target.classList.add('anchor-flash');
-    window.setTimeout(() => target.classList.remove('anchor-flash'), 1600);
+    window.setTimeout(() => target?.classList.remove('anchor-flash'), 1600);
   }, []);
 
   const onCreate = useCallback(
@@ -794,6 +806,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       quote: string;
       startOffset: number;
       endOffset: number;
+      state?: string;
     }> = [];
 
     for (const thread of threads) {
@@ -824,9 +837,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             quote: thread.anchor.quote,
             startOffset: start,
             endOffset: end,
+            state: thread.state,
           });
         }
-      } else if (thread.state === 'open') {
+      } else {
         highlights.push({
           scope: 'block',
           threadId: thread.id,
@@ -834,6 +848,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           quote: thread.anchor.quote,
           startOffset: 0,
           endOffset: thread.anchor.quote.length,
+          state: thread.state,
         });
       }
     }
@@ -1293,11 +1308,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           {commentsOpen ? (
             <Tabs.Root
               value={rightTab}
-              onValueChange={(v) => setRightTab(v as 'comments' | 'history' | 'search')}
+              onValueChange={(v) => setRightTab(v as 'comments' | 'history' | 'search' | 'activities')}
               className="right-tabs"
             >
               <Flex align="center" px="2" pt="2" className="pane-header">
                 <Tabs.List size="1">
+                  <Tabs.Trigger value="activities">Activities</Tabs.Trigger>
                   <Tabs.Trigger value="comments">
                     <Flex align="center" gap="2">
                       Threads
@@ -1327,6 +1343,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   </IconButton>
                 </Tooltip>
               </Flex>
+              <Tabs.Content value="activities" className="right-tab-panel">
+                <ActivityList
+                  uid={doc.uid}
+                  version={historyVersion}
+                  threads={threads}
+                  onOpenThread={openCommentThread}
+                />
+              </Tabs.Content>
               <Tabs.Content value="comments" className="right-tab-panel">
                 <InlineCommentsList
                   uid={doc.uid}

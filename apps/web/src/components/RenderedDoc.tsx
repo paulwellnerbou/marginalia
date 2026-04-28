@@ -460,11 +460,12 @@ function applyCommentHighlights(
     quote: string;
     startOffset: number;
     endOffset: number;
+    state?: string;
   }>,
 ): void {
   const rangesByBlock = new Map<
     HTMLElement,
-    Array<{ rawStart: number; rawEnd: number; threadIds: string[] }>
+    Array<{ rawStart: number; rawEnd: number; threadIds: string[]; threadStates: string[] }>
   >();
 
   for (const highlight of highlights) {
@@ -509,6 +510,7 @@ function applyCommentHighlights(
       rawStart,
       rawEnd,
       threadIds: highlight.threadId ? [highlight.threadId] : [],
+      threadStates: highlight.state ? [highlight.state] : [],
     });
     rangesByBlock.set(block, blockRanges);
   }
@@ -520,7 +522,7 @@ function applyCommentHighlights(
     const textNodes = collectTextNodes(block);
     for (let i = merged.length - 1; i >= 0; i--) {
       const range = merged[i]!;
-      wrapRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.threadIds);
+      wrapRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.threadIds, range.threadStates);
     }
   }
 }
@@ -737,12 +739,12 @@ function findTextNodeEntry(
 }
 
 function mergeRanges(
-  ranges: Array<{ rawStart: number; rawEnd: number; threadIds: string[] }>,
-): Array<{ rawStart: number; rawEnd: number; threadIds: string[] }> {
+  ranges: Array<{ rawStart: number; rawEnd: number; threadIds: string[]; threadStates: string[] }>,
+): Array<{ rawStart: number; rawEnd: number; threadIds: string[]; threadStates: string[] }> {
   if (ranges.length <= 1) return ranges;
   const sorted = [...ranges].sort((a, b) => a.rawStart - b.rawStart || a.rawEnd - b.rawEnd);
-  const merged: Array<{ rawStart: number; rawEnd: number; threadIds: string[] }> = [
-    { ...sorted[0]!, threadIds: [...sorted[0]!.threadIds] },
+  const merged: Array<{ rawStart: number; rawEnd: number; threadIds: string[]; threadStates: string[] }> = [
+    { ...sorted[0]!, threadIds: [...sorted[0]!.threadIds], threadStates: [...sorted[0]!.threadStates] },
   ];
 
   for (let i = 1; i < sorted.length; i++) {
@@ -751,9 +753,10 @@ function mergeRanges(
     if (next.rawStart <= prev.rawEnd) {
       prev.rawEnd = Math.max(prev.rawEnd, next.rawEnd);
       prev.threadIds = Array.from(new Set([...prev.threadIds, ...next.threadIds]));
+      prev.threadStates = Array.from(new Set([...prev.threadStates, ...next.threadStates]));
       continue;
     }
-    merged.push({ ...next, threadIds: [...next.threadIds] });
+    merged.push({ ...next, threadIds: [...next.threadIds], threadStates: [...next.threadStates] });
   }
 
   return merged;
@@ -764,6 +767,7 @@ function wrapRangeAcrossTextNodes(
   rawStart: number,
   rawEnd: number,
   threadIds: string[],
+  threadStates: string[],
 ): void {
   for (let i = textNodes.length - 1; i >= 0; i--) {
     const entry = textNodes[i]!;
@@ -771,7 +775,7 @@ function wrapRangeAcrossTextNodes(
     const segmentEnd = Math.min(rawEnd, entry.end);
     if (segmentEnd <= segmentStart) continue;
 
-    wrapTextSlice(entry.node, segmentStart - entry.start, segmentEnd - entry.start, threadIds);
+    wrapTextSlice(entry.node, segmentStart - entry.start, segmentEnd - entry.start, threadIds, threadStates);
   }
 }
 
@@ -796,6 +800,7 @@ function wrapTextSlice(
   startOffset: number,
   endOffset: number,
   threadIds: string[],
+  threadStates: string[],
 ): void {
   let target = node;
   if (startOffset > 0) {
@@ -810,7 +815,8 @@ function wrapTextSlice(
 
   const mark = document.createElement('mark');
   mark.dataset.commentHighlight = 'true';
-  mark.className = 'comment-highlight';
+  const hasOpen = threadStates.some(s => s === 'open');
+  mark.className = hasOpen ? 'comment-highlight' : 'comment-highlight-resolved';
   if (threadIds.length > 0) {
     mark.dataset.commentThreadId = threadIds[0]!;
     mark.tabIndex = 0;

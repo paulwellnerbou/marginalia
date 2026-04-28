@@ -2574,3 +2574,9 @@ button.primary:disabled {
   border-top: 1px dashed var(--ui-border);
   margin-top: 0.2rem;
 }
+
+mark.comment-highlight-resolved {
+  background-color: transparent;
+  color: inherit;
+}
+
