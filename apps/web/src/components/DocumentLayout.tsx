@@ -170,6 +170,22 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [liveRendered, setLiveRendered] = useState(doc.rendered);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * Comment ID parsed from the URL hash on mount (e.g. `#comment-<id>`).
+   * Cleared after the deep link is processed so thread refreshes don't
+   * re-trigger the scroll.
+   */
+  const pendingDeepLinkCommentId = useRef<string | null>(null);
+
+  // Capture the URL hash once on mount so deep links survive async thread load.
+  // Re-runs on doc.uid change to handle SPA navigation to a deep-linked document.
+  useEffect(() => {
+    const hash = window.location.hash;
+    pendingDeepLinkCommentId.current = hash.startsWith('#comment-')
+      ? (hash.slice('#comment-'.length) || null)
+      : null;
+  }, [doc.uid]);
+
   /*
    * Per-block source ranges for the live document. Shared by the
    * ProposalComposer (extracts the clicked block's source into
@@ -345,6 +361,42 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       cancelled = true;
     };
   }, [doc.uid]);
+
+  // Process a pending deep-link comment once threads have loaded.
+  useEffect(() => {
+    const commentId = pendingDeepLinkCommentId.current;
+    if (!commentId || threads.length === 0) return;
+
+    const thread = threads.find((t) => t.comments.some((c) => c.id === commentId));
+    if (!thread) return;
+
+    // Clear so subsequent thread refreshes don't re-scroll.
+    pendingDeepLinkCommentId.current = null;
+
+    // Ensure the inline comments column is visible.
+    setInlineCommentsOpen(true);
+
+    // Focus + scroll the thread card (works for both inline column and right pane).
+    setFocusedThread((prev) => ({
+      threadId: thread.id,
+      nonce: (prev?.nonce ?? 0) + 1,
+      scroll: true,
+    }));
+
+    // For reply comments, additionally scroll to and flash the specific reply
+    // element after the thread card has had time to expand.
+    const isReply = thread.comments[0]?.id !== commentId;
+    if (isReply) {
+      window.setTimeout(() => {
+        const el = document.getElementById(`comment-${commentId}`);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        el.classList.add('ic-row-flash');
+        window.setTimeout(() => el.classList.remove('ic-row-flash'), 760);
+      }, 900);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threads]);
 
   useEffect(() => {
     let cancelled = false;

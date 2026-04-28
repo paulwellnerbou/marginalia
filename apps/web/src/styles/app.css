@@ -2091,6 +2091,10 @@ button.primary:disabled {
   animation: ic-flash 760ms ease-out;
 }
 
+.ic-row-flash {
+  animation: ic-flash 760ms ease-out;
+}
+
 .ic-card-orphaned {
   border-style: dashed;
 }

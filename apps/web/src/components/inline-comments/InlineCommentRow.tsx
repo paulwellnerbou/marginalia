@@ -1,8 +1,9 @@
-import { Pencil2Icon, QuoteIcon, TrashIcon } from '@radix-ui/react-icons';
-import { useState } from 'react';
+import { CheckIcon, Link2Icon, Pencil2Icon, QuoteIcon, TrashIcon } from '@radix-ui/react-icons';
+import { useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Comment } from '../../lib/api.js';
+import { reportError } from '../../lib/log.js';
 import { InlineAvatar } from './InlineAvatar.js';
 import { formatTimestamp, formatTimestampLong } from '../../lib/format-time.js';
 
@@ -27,6 +28,8 @@ export function InlineCommentRow({
   const [draft, setDraft] = useState(node.body);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+  const linkCopyTimer = useRef<number | null>(null);
 
   function startEdit() {
     setDraft(node.body);
@@ -55,12 +58,24 @@ export function InlineCommentRow({
     }
   }
 
+  async function copyLink() {
+    try {
+      const url = `${window.location.origin}${window.location.pathname}#comment-${node.id}`;
+      await navigator.clipboard.writeText(url);
+      setLinkCopied(true);
+      if (linkCopyTimer.current !== null) window.clearTimeout(linkCopyTimer.current);
+      linkCopyTimer.current = window.setTimeout(() => setLinkCopied(false), 1500);
+    } catch (err) {
+      reportError('InlineCommentRow.copyLink', err);
+    }
+  }
+
   const showQuote = !editing && !confirmingDelete && canQuote && onQuote;
   const showEdit = !editing && !confirmingDelete && node.capabilities.edit;
   const showDelete = !editing && !confirmingDelete && node.capabilities.delete;
 
   return (
-    <div className={`ic-row ic-row-${variant}`}>
+    <div id={`comment-${node.id}`} className={`ic-row ic-row-${variant}`}>
       <InlineAvatar
         name={node.author.display_name}
         seed={node.author.client_id}
@@ -107,6 +122,15 @@ export function InlineCommentRow({
                       <QuoteIcon />
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="ic-icon-btn"
+                    title={linkCopied ? 'Link copied!' : 'Copy link to this comment'}
+                    aria-label={linkCopied ? 'Link copied!' : 'Copy link to this comment'}
+                    onClick={() => void copyLink()}
+                  >
+                    {linkCopied ? <CheckIcon /> : <Link2Icon />}
+                  </button>
                   {showEdit && (
                     <button
                       type="button"
