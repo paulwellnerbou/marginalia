@@ -11,7 +11,6 @@ import {
 import {
   Badge,
   Button,
-  DropdownMenu,
   Flex,
   IconButton,
   Select,
@@ -96,6 +95,7 @@ const TOC_WIDTH_KEY = 'marginalia.tocWidth';
 const COMMENTS_WIDTH_KEY = 'marginalia.commentsWidth';
 const INLINE_COMMENTS_OPEN_KEY = 'marginalia.inlineCommentsOpen';
 const INLINE_COMMENTS_STACKING_KEY = 'marginalia.inlineCommentsStacking';
+const INLINE_COMMENTS_HIDE_RESOLVED_KEY = 'marginalia.inlineCommentsHideResolved';
 const COLLAPSED_WIDTH = 36;
 /** Duration of the comment/row flash animation in ms. Must match the CSS `ic-flash` keyframe. */
 const COMMENT_FLASH_MS = 760;
@@ -131,6 +131,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [inlineCommentsStacking, setInlineCommentsStacking] = useState<boolean>(() => {
     const saved = localStorage.getItem(INLINE_COMMENTS_STACKING_KEY);
     return saved === null ? true : saved === 'true';
+  });
+  const [inlineCommentsHideResolved, setInlineCommentsHideResolved] = useState<boolean>(() => {
+    const saved = localStorage.getItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
+    return saved === 'true';
   });
   const [rightTab, setRightTab] = useState<'comments' | 'history' | 'search'>('comments');
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -186,7 +190,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     const hash = window.location.hash;
     pendingDeepLinkCommentId.current = hash.startsWith('#comment-')
-      ? (hash.slice('#comment-'.length) || null)
+      ? hash.slice('#comment-'.length) || null
       : null;
   }, [doc.uid]);
 
@@ -255,6 +259,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(INLINE_COMMENTS_STACKING_KEY, String(inlineCommentsStacking));
   }, [inlineCommentsStacking]);
+  useEffect(() => {
+    localStorage.setItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY, String(inlineCommentsHideResolved));
+  }, [inlineCommentsHideResolved]);
   useEffect(() => {
     void applyTheme(theme);
   }, [theme]);
@@ -1065,37 +1072,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 <AccessControlDialog doc={doc} onChange={onDocSettingsChanged} />
               </>
             )}
-            <DropdownMenu.Root>
-              {/* Radix Tooltip wrap would break the DropdownMenu trigger;
-                  use the plain HTML `title` attribute on the icon. */}
-              <DropdownMenu.Trigger>
-                <IconButton
-                  variant="soft"
-                  color={APP_ACCENT_COLOR}
-                  size="2"
-                  className="inline-comments-trigger"
-                  aria-label="Comment view options"
-                  title="Comment view options"
-                >
-                  <ChatBubbleIcon />
-                </IconButton>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Content align="end">
-                <DropdownMenu.CheckboxItem
-                  checked={inlineCommentsOpen}
-                  onCheckedChange={(v) => setInlineCommentsOpen(Boolean(v))}
-                >
-                  Show comments
-                </DropdownMenu.CheckboxItem>
-                <DropdownMenu.CheckboxItem
-                  checked={inlineCommentsStacking}
-                  disabled={!inlineCommentsOpen}
-                  onCheckedChange={(v) => setInlineCommentsStacking(Boolean(v))}
-                >
-                  Stack at top while scrolling
-                </DropdownMenu.CheckboxItem>
-              </DropdownMenu.Content>
-            </DropdownMenu.Root>
+            <Tooltip content={inlineCommentsOpen ? 'Hide comments' : 'Show comments'}>
+              <IconButton
+                variant={inlineCommentsOpen ? 'soft' : 'ghost'}
+                color={APP_ACCENT_COLOR}
+                size="2"
+                className={`inline-comments-trigger ${inlineCommentsOpen ? 'active' : ''}`}
+                aria-label={inlineCommentsOpen ? 'Hide comments' : 'Show comments'}
+                aria-pressed={inlineCommentsOpen}
+                onClick={() => setInlineCommentsOpen((v) => !v)}
+              >
+                <ChatBubbleIcon />
+              </IconButton>
+            </Tooltip>
             <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
               <IconButton
                 variant="soft"
@@ -1264,6 +1253,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   blockRanges={blockRanges}
                   canComment={canComment}
                   stackingEnabled={inlineCommentsStacking}
+                  onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
+                  hideResolved={inlineCommentsHideResolved}
+                  onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}
                   displayName={effectiveDisplayName}

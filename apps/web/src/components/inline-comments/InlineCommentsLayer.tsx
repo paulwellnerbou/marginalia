@@ -16,6 +16,7 @@ import {
   reconcileThreadCollapseState,
   type ThreadCollapseState,
 } from '../threadCollapseState.js';
+import { InlineCommentsToolbar } from './InlineCommentsToolbar.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 
@@ -39,6 +40,13 @@ interface Props {
    * no sticky behaviour.
    */
   stackingEnabled: boolean;
+  onToggleStacking: () => void;
+  /** When true, threads with `state === 'resolved'` (resolved comments,
+   *  accepted proposals, rejected proposals) are filtered out of the
+   *  column entirely — they don't appear, don't take space, and don't
+   *  participate in the sticky-stacking calculations. */
+  hideResolved: boolean;
+  onToggleHideResolved: () => void;
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number; scroll: boolean } | null;
   displayName: string | null;
@@ -77,11 +85,15 @@ interface RenderItem {
 const PENDING_ID = '__pending__';
 const STACK_GAP_PX = 8;
 /**
- * Pixels of breathing room between the document chrome's bottom border
- * and the topmost sticky comment card. Doubles as the sticky `top:`
- * value for the lead card and the offset everything else stacks below.
+ * Base offset above each sticky card: the toolbar's own CSS `top`
+ * (8px, see `.ic-toolbar` in app.css) plus a `STACK_GAP_PX` gap below
+ * it so the spacing between the toolbar and the first card matches
+ * the spacing between cards. The effective sticky-top pad is this
+ * base plus the measured toolbar height (computed inside the
+ * component as `stickyTopPad`).
  */
-const STICKY_TOP_PAD_PX = 12;
+const TOOLBAR_TOP_OFFSET_PX = 8;
+const TOOLBAR_BASE_TOP_PAD_PX = TOOLBAR_TOP_OFFSET_PX + STACK_GAP_PX;
 const FLASH_MS = 760;
 const FOCUS_MS = 1800;
 
@@ -113,6 +125,9 @@ export function InlineCommentsLayer({
   blockRanges,
   canComment,
   stackingEnabled,
+  onToggleStacking,
+  hideResolved,
+  onToggleHideResolved,
   pendingAnchor,
   focusedThread,
   displayName,
@@ -127,6 +142,20 @@ export function InlineCommentsLayer({
   onScrollToAnchor,
 }: Props) {
   const rootRef = useRef<HTMLElement>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const [toolbarHeight, setToolbarHeight] = useState(0);
+  const stickyTopPad = TOOLBAR_BASE_TOP_PAD_PX + toolbarHeight;
+
+  /**
+   * Apply the show/hide-resolved filter once, upstream of every
+   * derivation that follows. `state === 'resolved'` covers resolved
+   * comments, accepted proposals, and rejected proposals — they all
+   * share that state, only `resolution.kind` differs.
+   */
+  const visibleThreads = useMemo(
+    () => (hideResolved ? threads.filter((t) => t.state !== 'resolved') : threads),
+    [threads, hideResolved],
+  );
 
   /**
    * Auto-collapse defaults derived from the current thread list.
@@ -137,11 +166,11 @@ export function InlineCommentsLayer({
    */
   const collapseDefaults = useMemo(
     () =>
-      threads.map((t) => ({
+      visibleThreads.map((t) => ({
         id: t.id,
         autoCollapse: shouldAutoCollapse(t),
       })),
-    [threads],
+    [visibleThreads],
   );
   const [collapseState, setCollapseState] = useState<ThreadCollapseState>(() =>
     buildThreadCollapseState(collapseDefaults),
@@ -164,9 +193,7 @@ export function InlineCommentsLayer({
    * instead so list-item-anchored threads land in the right place.
    */
   const blockOrder = useMemo(() => {
-    const ranked = Array.from(blockRanges.entries()).sort(
-      ([, a], [, b]) => a.start - b.start,
-    );
+    const ranked = Array.from(blockRanges.entries()).sort(([, a], [, b]) => a.start - b.start);
     const order = new Map<string, number>();
     let i = 0;
     for (const [id] of ranked) order.set(id, i++);
@@ -174,7 +201,7 @@ export function InlineCommentsLayer({
   }, [blockRanges]);
 
   const sorted = useMemo<OrderItem[]>(() => {
-    const items: OrderItem[] = threads.map((t) => ({
+    const items: OrderItem[] = visibleThreads.map((t) => ({
       thread: t,
       blockIndex: t.anchor.block_id
         ? (blockOrder.get(t.anchor.block_id) ?? Number.MAX_SAFE_INTEGER)
@@ -187,7 +214,7 @@ export function InlineCommentsLayer({
         a.blockIndex - b.blockIndex || a.startOffset - b.startOffset || a.createdAt - b.createdAt,
     );
     return items;
-  }, [threads, blockOrder]);
+  }, [visibleThreads, blockOrder]);
 
   /** O(1) lookup of thread by id — avoids `sorted.find(...)` per render in renderCardById. */
   const sortedById = useMemo<Map<string, OrderItem>>(() => {
@@ -256,9 +283,9 @@ export function InlineCommentsLayer({
 
   /**
    * Stack offset for card_k inside the stack of cards [epoch..N-1].
-   * The lead card (k === epoch) sits at STICKY_TOP_PAD_PX so it
-   * doesn't touch the doc-chrome's bottom border; subsequent cards
-   * stack below with the gap between them.
+   * The lead card (k === epoch) sits at `stickyTopPad` so it doesn't
+   * touch the toolbar's bottom border; subsequent cards stack below
+   * with the gap between them.
    */
   /**
    * Prefix sums of (cardHeight + gap) so stackOffset() is O(1) per
@@ -280,10 +307,29 @@ export function InlineCommentsLayer({
   const stackOffset = useCallback(
     (k: number, epoch: number): number => {
       if (k < epoch) return 0;
-      return STICKY_TOP_PAD_PX + (stackPrefix[k] ?? 0) - (stackPrefix[epoch] ?? 0);
+      return stickyTopPad + (stackPrefix[k] ?? 0) - (stackPrefix[epoch] ?? 0);
     },
-    [stackPrefix],
+    [stackPrefix, stickyTopPad],
   );
+
+  /**
+   * Non-stacking layout: walk cards in document order and push each
+   * one down to the max of its anchor and the previous card's bottom
+   * (plus the gap), so two cards anchored close together never
+   * visually overlap. Used only when `stackingEnabled === false`.
+   */
+  const noStackLayout = useMemo(() => {
+    const tops: number[] = [];
+    let prevBottom = 0;
+    for (let k = 0; k < orderedMetrics.anchors.length; k++) {
+      const natural = orderedMetrics.anchors[k] ?? 0;
+      const h = orderedMetrics.heights[k] ?? 96;
+      const top = Math.max(natural, prevBottom + STACK_GAP_PX);
+      tops.push(top);
+      prevBottom = top + h;
+    }
+    return { tops, totalHeight: prevBottom };
+  }, [orderedMetrics]);
 
   /**
    * Walk through the global lifecycle to find the current
@@ -369,10 +415,9 @@ export function InlineCommentsLayer({
         changed = true;
       }
       // Keep bottom measurement aligned with the render pass: stacked
-      // cards land at nat + STICKY_TOP_PAD_PX, while non-stacking
-      // cards render directly at nat.
-      const cardBottom =
-        nat + (stackingEnabled ? STICKY_TOP_PAD_PX : 0) + cardHeight;
+      // cards land at nat + stickyTopPad, while non-stacking cards
+      // render directly at nat.
+      const cardBottom = nat + (stackingEnabled ? stickyTopPad : 0) + cardHeight;
       if (cardBottom > maxBottom) maxBottom = cardBottom;
     }
     // Second pass: stack any unanchored / orphaned items beneath the
@@ -398,7 +443,7 @@ export function InlineCommentsLayer({
     }
     setColumnHeight((prev) => (Math.abs(prev - maxBottom) > 0.5 ? maxBottom : prev));
     return changed;
-  }, [renderItems, docElementRef, scrollContainerRef]);
+  }, [renderItems, docElementRef, scrollContainerRef, stackingEnabled, stickyTopPad]);
 
   // Stable per-id ref callbacks — see the prior sticky-overlay version
   // for why inline arrows would re-attach every render.
@@ -453,6 +498,25 @@ export function InlineCommentsLayer({
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
   }, [requestRemeasure]);
+
+  // Measure the toolbar height so cards can stack below it. Re-runs on
+  // any toolbar resize (e.g. theme/font changes that nudge the icon row).
+  useLayoutEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) {
+      setToolbarHeight(0);
+      return;
+    }
+    const measure = () => {
+      const next = el.offsetHeight;
+      setToolbarHeight((prev) => (Math.abs(prev - next) > 0.5 ? next : prev));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const obs = new ResizeObserver(measure);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
 
   useEffect(() => {
     const doc = docElementRef.current;
@@ -614,9 +678,7 @@ export function InlineCommentsLayer({
     const item = sortedById.get(id);
     if (!item) return null;
     const blockId = item.thread.anchor.block_id;
-    const onJump = blockId
-      ? () => onScrollToAnchor(blockId, item.thread.anchor.quote)
-      : undefined;
+    const onJump = blockId ? () => onScrollToAnchor(blockId, item.thread.anchor.quote) : undefined;
     return (
       <InlineThreadCard
         uid={uid}
@@ -641,7 +703,10 @@ export function InlineCommentsLayer({
   }
 
   const showEmpty = sorted.length === 0 && !pendingAnchor;
-  const minHeight = Math.max(columnHeight, 0);
+  const minHeight = Math.max(
+    columnHeight,
+    stackingEnabled ? 0 : noStackLayout.totalHeight,
+  );
 
   return (
     <aside
@@ -650,6 +715,18 @@ export function InlineCommentsLayer({
       aria-label="Inline comments"
       style={{ minHeight: `${minHeight}px` }}
     >
+      <InlineCommentsToolbar
+        rootRef={toolbarRef}
+        sortedThreads={sorted.map((s) => s.thread)}
+        scrollContainerRef={scrollContainerRef}
+        cardNaturalTops={naturalTops.current}
+        stickyTopPad={stickyTopPad}
+        stackingEnabled={stackingEnabled}
+        onToggleStacking={onToggleStacking}
+        hideResolved={hideResolved}
+        onToggleHideResolved={onToggleHideResolved}
+        onScrollToAnchor={onScrollToAnchor}
+      />
       {renderItems.map((item, k) => {
         const naturalTop = orderedMetrics.anchors[k] ?? 0;
         const cardHeight = orderedMetrics.heights[k] ?? 96;
@@ -661,18 +738,19 @@ export function InlineCommentsLayer({
         let stickyTop = 0;
 
         if (!stackingEnabled) {
-          // No sticky behaviour: card sits at its anchor and scrolls
-          // with the document.
-          containerTop = naturalTop;
+          // No sticky behaviour: card sits at its anchor (or pushed
+          // down by the previous card if they would overlap) and
+          // scrolls with the document.
+          containerTop = noStackLayout.tops[k] ?? naturalTop;
           containerHeight = cardHeight;
           useSticky = false;
         } else if (k < epoch) {
           // Card has already passed its anchor and landed. We add the
           // sticky top-pad to the landed scroll-y so the transition
           // out of the SCROLLING phase is continuous (the card sat at
-          // viewport-y=STICKY_TOP_PAD_PX while sticky and stays at
-          // the same screen position when it lands).
-          containerTop = naturalTop + STICKY_TOP_PAD_PX;
+          // viewport-y=stickyTopPad while sticky and stays at the
+          // same screen position when it lands).
+          containerTop = naturalTop + stickyTopPad;
           containerHeight = cardHeight;
           useSticky = false;
         } else if (isSticky) {
@@ -713,9 +791,7 @@ export function InlineCommentsLayer({
               ref={getRefCallback(item.id)}
               className="ic-sticky-card"
               style={
-                useSticky
-                  ? { position: 'sticky', top: `${stickyTop}px` }
-                  : { position: 'static' }
+                useSticky ? { position: 'sticky', top: `${stickyTop}px` } : { position: 'static' }
               }
             >
               {renderCardById(item.id)}
