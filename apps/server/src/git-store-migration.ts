@@ -194,10 +194,14 @@ function archiveLegacyRepo(legacyRepoDir: string): void {
   if (existsSync(archived)) return;
   try {
     renameSync(legacyRepoDir, archived);
-  } catch {
-    // Best-effort: if rename fails (e.g. cross-device), leave the
-    // original in place. The migration is idempotent so subsequent
-    // boots will re-attempt.
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[marginalia] failed to archive legacy repo from ${legacyRepoDir} to ${archived}: ${reason}`,
+    );
+    console.error(
+      `[marginalia] leaving legacy repo in place; migration work may be re-attempted on next boot. Manual cleanup/archive may be required.`,
+    );
   }
 }
 
