@@ -2574,3 +2574,13 @@ button.primary:disabled {
   border-top: 1px dashed var(--ui-border);
   margin-top: 0.2rem;
 }
+
+mark.comment-highlight-resolved {
+  background-color: transparent;
+  color: inherit;
+  padding: 0.03em 0;
+  border-radius: 0.18em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+

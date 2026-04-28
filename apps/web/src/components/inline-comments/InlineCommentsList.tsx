@@ -48,7 +48,7 @@ interface Props {
     name?: string,
   ) => Promise<void>;
   onEditProposalRationale: (id: string, rationale: string | null) => Promise<void>;
-  onScrollToAnchor: (blockId: string, quote?: string | null) => void;
+  onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
 }
 
 type SortMode = 'document' | 'latest';
@@ -237,7 +237,7 @@ export function InlineCommentsList({
   function renderItem(item: ThreadListItem) {
     const blockId = item.thread.anchor.block_id;
     const onJump = blockId
-      ? () => onScrollToAnchor(blockId, item.thread.anchor.quote)
+      ? () => onScrollToAnchor(blockId, item.thread.anchor.quote, item.thread.id)
       : undefined;
     return (
       <InlineThreadCard

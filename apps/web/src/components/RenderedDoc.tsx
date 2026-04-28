@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { RenderResult } from '@marginalia/renderer';
+import type { ThreadState } from '../lib/api.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
 
@@ -460,11 +461,12 @@ function applyCommentHighlights(
     quote: string;
     startOffset: number;
     endOffset: number;
+    state?: ThreadState;
   }>,
 ): void {
   const rangesByBlock = new Map<
     HTMLElement,
-    Array<{ rawStart: number; rawEnd: number; threadIds: string[] }>
+    HighlightRange[]
   >();
 
   for (const highlight of highlights) {
@@ -478,13 +480,23 @@ function applyCommentHighlights(
     if (highlight.scope === 'block') {
       if (map.rawLength <= 0) continue;
       block.dataset.commentHighlightBlock = 'true';
-      block.classList.add('comment-highlight-block');
+      const hasOpen = highlight.state === 'open';
+      if (hasOpen) {
+        block.classList.add('comment-highlight-block');
+      }
       if (highlight.threadId) {
         block.dataset.commentThreadId = highlight.threadId;
-        block.tabIndex = 0;
-        block.setAttribute('role', 'button');
-        block.setAttribute('aria-label', 'Open comment thread');
+        if (hasOpen) {
+          block.tabIndex = 0;
+          block.setAttribute('role', 'button');
+          block.setAttribute('aria-label', 'Open comment thread');
+        }
       }
+      // Resolved block-scope highlights only need the block-level
+      // dataset for click/scroll targeting — wrapping the entire
+      // block's text in transparent <mark>s adds DOM bloat with no
+      // visible effect. Click/flash falls back to [data-block].
+      if (!hasOpen) continue;
       rawStart = 0;
       rawEnd = map.rawLength;
     } else {
@@ -508,7 +520,9 @@ function applyCommentHighlights(
     blockRanges.push({
       rawStart,
       rawEnd,
-      threadIds: highlight.threadId ? [highlight.threadId] : [],
+      threads: highlight.threadId && highlight.state
+        ? [{ id: highlight.threadId, state: highlight.state }]
+        : [],
     });
     rangesByBlock.set(block, blockRanges);
   }
@@ -520,7 +534,7 @@ function applyCommentHighlights(
     const textNodes = collectTextNodes(block);
     for (let i = merged.length - 1; i >= 0; i--) {
       const range = merged[i]!;
-      wrapRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.threadIds);
+      wrapRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.threads);
     }
   }
 }
@@ -736,24 +750,29 @@ function findTextNodeEntry(
   return textNodes[textNodes.length - 1] ?? null;
 }
 
-function mergeRanges(
-  ranges: Array<{ rawStart: number; rawEnd: number; threadIds: string[] }>,
-): Array<{ rawStart: number; rawEnd: number; threadIds: string[] }> {
+type RangeThread = { id: string; state: ThreadState };
+type HighlightRange = { rawStart: number; rawEnd: number; threads: RangeThread[] };
+
+function mergeRanges(ranges: HighlightRange[]): HighlightRange[] {
   if (ranges.length <= 1) return ranges;
   const sorted = [...ranges].sort((a, b) => a.rawStart - b.rawStart || a.rawEnd - b.rawEnd);
-  const merged: Array<{ rawStart: number; rawEnd: number; threadIds: string[] }> = [
-    { ...sorted[0]!, threadIds: [...sorted[0]!.threadIds] },
-  ];
+  const merged: HighlightRange[] = [{ ...sorted[0]!, threads: [...sorted[0]!.threads] }];
 
   for (let i = 1; i < sorted.length; i++) {
     const next = sorted[i]!;
     const prev = merged[merged.length - 1]!;
     if (next.rawStart <= prev.rawEnd) {
       prev.rawEnd = Math.max(prev.rawEnd, next.rawEnd);
-      prev.threadIds = Array.from(new Set([...prev.threadIds, ...next.threadIds]));
+      const seen = new Set(prev.threads.map((t) => t.id));
+      for (const t of next.threads) {
+        if (!seen.has(t.id)) {
+          prev.threads.push(t);
+          seen.add(t.id);
+        }
+      }
       continue;
     }
-    merged.push({ ...next, threadIds: [...next.threadIds] });
+    merged.push({ ...next, threads: [...next.threads] });
   }
 
   return merged;
@@ -763,7 +782,7 @@ function wrapRangeAcrossTextNodes(
   textNodes: Array<{ node: Text; start: number; end: number }>,
   rawStart: number,
   rawEnd: number,
-  threadIds: string[],
+  threads: RangeThread[],
 ): void {
   for (let i = textNodes.length - 1; i >= 0; i--) {
     const entry = textNodes[i]!;
@@ -771,7 +790,7 @@ function wrapRangeAcrossTextNodes(
     const segmentEnd = Math.min(rawEnd, entry.end);
     if (segmentEnd <= segmentStart) continue;
 
-    wrapTextSlice(entry.node, segmentStart - entry.start, segmentEnd - entry.start, threadIds);
+    wrapTextSlice(entry.node, segmentStart - entry.start, segmentEnd - entry.start, threads);
   }
 }
 
@@ -795,7 +814,7 @@ function wrapTextSlice(
   node: Text,
   startOffset: number,
   endOffset: number,
-  threadIds: string[],
+  threads: RangeThread[],
 ): void {
   let target = node;
   if (startOffset > 0) {
@@ -810,12 +829,19 @@ function wrapTextSlice(
 
   const mark = document.createElement('mark');
   mark.dataset.commentHighlight = 'true';
-  mark.className = 'comment-highlight';
-  if (threadIds.length > 0) {
-    mark.dataset.commentThreadId = threadIds[0]!;
-    mark.tabIndex = 0;
-    mark.setAttribute('role', 'button');
-    mark.setAttribute('aria-label', 'Open comment thread');
+  const openThread = threads.find((t) => t.state === 'open');
+  // No threads = a pending/transient highlight (e.g. a fresh selection):
+  // treat as visible "open" so it isn't styled transparent.
+  const isVisuallyOpen = threads.length === 0 || openThread !== undefined;
+  mark.className = isVisuallyOpen ? 'comment-highlight' : 'comment-highlight-resolved';
+  const targetThread = openThread ?? threads[0];
+  if (targetThread) {
+    mark.dataset.commentThreadId = targetThread.id;
+    if (openThread) {
+      mark.tabIndex = 0;
+      mark.setAttribute('role', 'button');
+      mark.setAttribute('aria-label', 'Open comment thread');
+    }
   }
   parent.insertBefore(mark, target);
   mark.appendChild(target);

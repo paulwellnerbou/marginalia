@@ -68,7 +68,7 @@ interface Props {
     name?: string,
   ) => Promise<void>;
   onEditProposalRationale: (id: string, rationale: string | null) => Promise<void>;
-  onScrollToAnchor: (blockId: string, quote?: string | null) => void;
+  onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
 }
 
 interface OrderItem {
@@ -678,7 +678,9 @@ export function InlineCommentsLayer({
     const item = sortedById.get(id);
     if (!item) return null;
     const blockId = item.thread.anchor.block_id;
-    const onJump = blockId ? () => onScrollToAnchor(blockId, item.thread.anchor.quote) : undefined;
+    const onJump = blockId
+      ? () => onScrollToAnchor(blockId, item.thread.anchor.quote, item.thread.id)
+      : undefined;
     return (
       <InlineThreadCard
         uid={uid}
