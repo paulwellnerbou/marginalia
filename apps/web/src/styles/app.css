@@ -2014,48 +2014,34 @@ button.primary:disabled {
   margin: 8px 0.9rem 0 0.6rem;
   z-index: 5;
   display: flex;
-  align-items: stretch;
+  align-items: center;
   justify-content: space-between;
+  gap: 8px;
   height: 32px;
-  padding: 0;
+  padding: 0 6px;
   background: var(--ui-surface);
   border: 1px solid var(--ui-border);
   border-radius: 6px;
-  /* Keep button active backgrounds inside the bar's rounded corners. */
-  overflow: hidden;
-}
-/* Pin every IconButton in the toolbar to a fixed 32x30 box (matches
-   the toolbar's interior height: 32 minus 2x1 border). Higher
-   specificity than Radix's own `.rt-IconButton.rt-r-size-1` rule.
-   `border-box` + zero padding ensures the active background fills
-   the visible cell exactly, so the toolbar `gap` becomes the true
-   visible spacing between adjacent active toggles. */
-.ic-toolbar.ic-toolbar .rt-IconButton {
-  box-sizing: border-box;
-  padding: 0;
-  flex: 0 0 32px;
-  width: 32px;
-  height: 30px;
-  min-width: 32px;
-  border-radius: 0;
 }
 .ic-toolbar-group {
   display: flex;
-  align-items: stretch;
-  gap: 4px;
+  align-items: center;
+  gap: 8px;
 }
 .ic-toolbar-count {
   flex: 1;
-  align-self: center;
   text-align: center;
   font-size: 0.75rem;
   color: var(--ui-fg-muted);
   user-select: none;
   pointer-events: none;
 }
-.ic-toolbar.ic-toolbar .ic-toolbar-toggle.is-active {
-  background-color: var(--accent-a4, var(--gray-a4));
-  color: var(--accent-11, var(--gray-12));
+/* Active toggle styling. Reuses Radix's ghost IconButton box exactly,
+   only swapping the background — so the click target, padding, and
+   bounds stay identical between the on and off states. */
+.ic-toolbar .rt-IconButton[aria-pressed="true"] {
+  background-color: var(--gray-a4);
+  color: var(--gray-12);
 }
 
 /* Each card lives inside an absolutely-positioned slot whose top and
