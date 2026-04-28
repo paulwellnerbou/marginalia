@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertDialog, Box, Button, Code, Flex, Text } from '@radix-ui/themes';
+import { Box, Code, Flex, Text } from '@radix-ui/themes';
 import { getHistory, getHistoryDiff, type HistoryEntry, type Thread, type Comment, type ThreadResolution } from '../lib/api.js';
 import { formatTimestamp, formatTimestampLong } from '../lib/format-time.js';
 import { reportError } from '../lib/log.js';
