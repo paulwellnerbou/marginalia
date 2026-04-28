@@ -43,6 +43,7 @@ export function ActivityList({
 
   useEffect(() => {
     let cancelled = false;
+    setHistoryEntries(null);
     setLoadError(null);
     setDiffError(null);
     getHistory(uid).then(
