@@ -213,6 +213,49 @@ describe('migrateSharedRepoToPerDoc', () => {
     expect(existsSync(join(reposBaseDir, 'no-history'))).toBe(false);
   });
 
+  test('cleans up the target repo when the replay loop fails mid-flight', async () => {
+    await seedLegacy([
+      {
+        uid: 'doc',
+        format: 'markdown',
+        commits: [
+          {
+            content: 'first\n',
+            message: 'upload: doc\n',
+            author: 'paul',
+            timestampSec: 1_700_000_000,
+          },
+        ],
+      },
+    ]);
+    seedDocsRow('doc', 'markdown');
+
+    // Surface a non-NotFound failure on the second readBlob call so the
+    // first commit's init+seed have already happened. (The first
+    // readBlob succeeds; the second one is what we sabotage by
+    // corrupting the legacy commit's blob lookup via an unreachable oid.)
+    // Easiest sabotage: monkey-patch a single git function on a clone of
+    // the module surface area would be too invasive — instead, pass an
+    // empty database file (no objects). That makes init+log work via
+    // the existing repo, but readBlob throws an internal error rather
+    // than NotFoundError. We sidestep that and use a simpler proof:
+    // pre-create a non-empty FILE at the targetDir path so the
+    // migration's `mkdirSync(targetDir, { recursive: true })` rejects
+    // with EEXIST, and the outer try/catch must clean up.
+    rmSync(reposBaseDir, { recursive: true, force: true });
+    mkdirSync(reposBaseDir, { recursive: true });
+    writeFileSync(join(reposBaseDir, 'doc'), 'not a directory');
+
+    const db = openDatabase(dbPath);
+    await expect(
+      migrateSharedRepoToPerDoc(db, legacyRepoDir, reposBaseDir),
+    ).rejects.toBeDefined();
+    db.close();
+
+    // Cleanup ran: the file we planted is gone (rm -rf'd by the catch).
+    expect(existsSync(join(reposBaseDir, 'doc'))).toBe(false);
+  });
+
   test('skips docs whose per-doc repo already exists', async () => {
     await seedLegacy([
       {

@@ -68,73 +68,93 @@ async function migrateOneDoc(
   // git.log returns newest-first; replay oldest-first.
   entries.reverse();
 
-  // Initialize the new repo with the same seed commit pattern as fresh
-  // doc repos so log() always works.
-  mkdirSync(targetDir, { recursive: true });
-  await git.init({ fs, dir: targetDir, defaultBranch: 'main' });
-  writeFileSync(join(targetDir, '.marginalia-root'), 'marginalia repo\n');
-  await git.add({ fs, dir: targetDir, filepath: '.marginalia-root' });
-  await git.commit({
-    fs,
-    dir: targetDir,
-    message: 'init',
-    author: { name: 'marginalia', email: 'system@marginalia.local' },
-  });
+  // Wrap the materialize-and-replay block so any failure (a corrupt
+  // legacy blob, a write error, etc) doesn't leave a half-built repo
+  // behind. The idempotency check at the call site uses `.git`
+  // existence as its resume marker, so a stub directory would
+  // otherwise lock in a partial migration.
+  try {
+    // Initialize the new repo with the same seed commit pattern as fresh
+    // doc repos so log() always works.
+    mkdirSync(targetDir, { recursive: true });
+    await git.init({ fs, dir: targetDir, defaultBranch: 'main' });
+    writeFileSync(join(targetDir, '.marginalia-root'), 'marginalia repo\n');
+    await git.add({ fs, dir: targetDir, filepath: '.marginalia-root' });
+    await git.commit({
+      fs,
+      dir: targetDir,
+      message: 'init',
+      author: { name: 'marginalia', email: 'system@marginalia.local' },
+    });
 
-  for (const entry of entries) {
-    let blob: Uint8Array | null = null;
-    try {
-      const res = await git.readBlob({
-        fs,
-        dir: legacyRepoDir,
-        oid: entry.oid,
-        filepath: legacyFilename,
-      });
-      blob = res.blob;
-    } catch {
-      blob = null;
-    }
-
-    const targetFile = join(targetDir, newFilename);
-    const author = {
-      name: entry.commit.author.name,
-      email: entry.commit.author.email,
-      timestamp: entry.commit.author.timestamp,
-      timezoneOffset: entry.commit.author.timezoneOffset,
-    };
-    const committer = entry.commit.committer
-      ? {
-          name: entry.commit.committer.name,
-          email: entry.commit.committer.email,
-          timestamp: entry.commit.committer.timestamp,
-          timezoneOffset: entry.commit.committer.timezoneOffset,
+    for (const entry of entries) {
+      // readBlob throws NotFoundError when the file was deleted at this
+      // commit — that's a legitimate "replay as deletion" signal. Any
+      // other error means corruption / IO trouble; rethrow so the
+      // caller cleans up rather than silently turning a bad commit
+      // into a deletion in the new history.
+      let blob: Uint8Array | null;
+      try {
+        const res = await git.readBlob({
+          fs,
+          dir: legacyRepoDir,
+          oid: entry.oid,
+          filepath: legacyFilename,
+        });
+        blob = res.blob;
+      } catch (err) {
+        if ((err as { code?: string }).code === 'NotFoundError') {
+          blob = null;
+        } else {
+          throw err;
         }
-      : author;
+      }
 
-    if (blob !== null) {
-      writeFileSync(targetFile, blob);
-      await git.add({ fs, dir: targetDir, filepath: newFilename });
-      await git.commit({
-        fs,
-        dir: targetDir,
-        message: entry.commit.message,
-        author,
-        committer,
-      });
-    } else if (existsSync(targetFile)) {
-      rmSync(targetFile);
-      await git.remove({ fs, dir: targetDir, filepath: newFilename });
-      await git.commit({
-        fs,
-        dir: targetDir,
-        message: entry.commit.message,
-        author,
-        committer,
-      });
+      const targetFile = join(targetDir, newFilename);
+      const author = {
+        name: entry.commit.author.name,
+        email: entry.commit.author.email,
+        timestamp: entry.commit.author.timestamp,
+        timezoneOffset: entry.commit.author.timezoneOffset,
+      };
+      const committer = entry.commit.committer
+        ? {
+            name: entry.commit.committer.name,
+            email: entry.commit.committer.email,
+            timestamp: entry.commit.committer.timestamp,
+            timezoneOffset: entry.commit.committer.timezoneOffset,
+          }
+        : author;
+
+      if (blob !== null) {
+        writeFileSync(targetFile, blob);
+        await git.add({ fs, dir: targetDir, filepath: newFilename });
+        await git.commit({
+          fs,
+          dir: targetDir,
+          message: entry.commit.message,
+          author,
+          committer,
+        });
+      } else if (existsSync(targetFile)) {
+        rmSync(targetFile);
+        await git.remove({ fs, dir: targetDir, filepath: newFilename });
+        await git.commit({
+          fs,
+          dir: targetDir,
+          message: entry.commit.message,
+          author,
+          committer,
+        });
+      }
+      // If blob is null and the file was never present in the new
+      // repo, skip — there's nothing to delete and the original commit
+      // was a no-op for this filepath.
     }
-    // If blob is null and the file was never present in the new repo,
-    // skip — there's nothing to delete and the original commit was a
-    // no-op for this filepath.
+  } catch (err) {
+    // Tear down the partial repo so the next boot retries cleanly.
+    rmSync(targetDir, { recursive: true, force: true });
+    throw err;
   }
 }
 
