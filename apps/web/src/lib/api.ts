@@ -700,6 +700,23 @@ export function deleteInvite(uid: string, token: string, identity: Identity): Pr
 }
 
 /**
+ * Claim a named/generic invite: the server mints an invite session cookie so
+ * the token no longer needs to appear in the URL. The invite itself is NOT
+ * deleted, so the same user can re-claim from another browser. Admin invites
+ * and password-protected docs return an error — callers should ignore those
+ * and fall back to the invite-header flow.
+ */
+export function claimInvite(
+  uid: string,
+  token: string,
+): Promise<{ display_name: string | null; role: Role }> {
+  return request<{ display_name: string | null; role: Role }>(
+    `/api/documents/${encodeURIComponent(uid)}/invites/${encodeURIComponent(token)}/claim`,
+    { method: 'POST' },
+  );
+}
+
+/**
  * Rotate the admin invite: revokes the existing token and issues a fresh
  * one. Useful if the admin URL leaked. Keeps the same display_name + note.
  */

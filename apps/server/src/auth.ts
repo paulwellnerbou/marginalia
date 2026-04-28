@@ -7,6 +7,7 @@ export const CLIENT_HEADER = 'x-marginalia-client';
 export const CLIENT_NAME_HEADER = 'x-marginalia-client-name';
 export const INVITE_HEADER = 'x-marginalia-invite';
 export const SESSION_COOKIE = 'marginalia_session';
+export const INVITE_SESSION_COOKIE = 'marginalia_invite_session';
 
 export interface Identity {
   clientId: string;
@@ -88,12 +89,23 @@ export function createSession(
   docUid: string,
   ttlMs: number,
   persistent = true,
+  invite?: { display_name: string | null; role: string; kind: string } | null,
 ): string {
   const token = newSessionToken();
   const expiresAt = Date.now() + ttlMs;
   db.prepare(
-    'INSERT INTO sessions (token, doc_uid, persistent, expires_at) VALUES (?, ?, ?, ?)',
-  ).run(token, docUid, persistent ? 1 : 0, expiresAt);
+    `INSERT INTO sessions
+       (token, doc_uid, persistent, expires_at, invite_display_name, invite_role, invite_kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    token,
+    docUid,
+    persistent ? 1 : 0,
+    expiresAt,
+    invite?.display_name ?? null,
+    invite?.role ?? null,
+    invite?.kind ?? null,
+  );
   return token;
 }
 
@@ -131,9 +143,15 @@ export function parseCookie(header: string | null, name: string): string | null 
  * Can this request access this document, and in what role?
  *
  * Precedence:
- *   1. Password gate — if doc has a hash, a valid session is mandatory.
- *   2. Invite token → carries role (+ seeded display_name for admin/named).
- *   3. No invite → reader, identity comes from headers if present.
+ *   1. Password gate  — if doc has a hash, a password session is mandatory.
+ *                       Invite sessions do NOT satisfy the password gate.
+ *   2. Invite header  — admin-kind invite always takes precedence over an
+ *                       invite session so a user can "upgrade" to admin
+ *                       by presenting an admin token.
+ *   3. Invite session — a session cookie minted by POST /invites/:token/claim;
+ *                       uses the stored role + display_name from the session row.
+ *   4. Non-admin invite header — named/generic invite token in the header.
+ *   5. No invite      — reader, identity comes from headers if present.
  *
  * Returns one resolved identity so callers don't re-derive authorship.
  */
@@ -142,16 +160,66 @@ export function authorize(
   doc: DocumentRow,
   headers: Headers,
   sessionToken: string | null,
+  inviteSessionToken?: string | null,
 ): AuthDecision {
+  const passwordSession = sessionToken ? readSession(db, sessionToken) : null;
+  const validPasswordSession = passwordSession?.doc_uid === doc.uid ? passwordSession : null;
+
+  const invSession = inviteSessionToken ? readSession(db, inviteSessionToken) : null;
+  const validInviteSession = invSession?.doc_uid === doc.uid ? invSession : null;
+  const isInviteSession = !!(validInviteSession?.invite_role);
+
+  // Password gate is unconditional — invites (including admin) and invite
+  // sessions never bypass it. Only a password-type session satisfies it.
+  if (doc.password_hash !== null) {
+    if (!validPasswordSession) {
+      return { ok: false, reason: 'password-required' };
+    }
+  }
+
   const invite = readInvite(db, headers, doc.uid);
   const clientId = readClientId(headers);
   const base = readIdentity(headers);
 
-  // Password gate is unconditional — invites (including admin) never bypass it.
-  if (doc.password_hash !== null) {
-    if (!sessionToken || !checkSession(db, sessionToken, doc.uid)) {
-      return { ok: false, reason: 'password-required' };
+  // Admin invites always take priority over an invite session so the user
+  // can "upgrade" to a higher-privilege role even after a session was minted.
+  if (invite?.kind === 'admin') {
+    let resolvedName: string;
+    if (clientId) {
+      const prior = db
+        .prepare('SELECT display_name FROM doc_users WHERE doc_uid = ? AND client_id = ?')
+        .get(doc.uid, clientId) as { display_name: string } | null | undefined;
+      if (prior && prior.display_name) {
+        resolvedName = base?.displayName ?? prior.display_name;
+      } else {
+        resolvedName = invite.display_name ?? base?.displayName ?? '';
+      }
+    } else {
+      resolvedName = invite.display_name ?? base?.displayName ?? '';
     }
+    const identity = clientId && resolvedName ? { clientId, displayName: resolvedName } : null;
+    return recordAndReturn(db, doc.uid, { ok: true, role: invite.role, identity, invite });
+  }
+
+  // Invite session: minted by POST /invites/:token/claim. Takes precedence
+  // over non-admin invite headers so the browser no longer needs the token URL.
+  // Only reachable for non-password-protected docs (password gate above
+  // rejects requests without a password session for password-protected docs).
+  if (isInviteSession) {
+    const role = validInviteSession!.invite_role as Role;
+    // Same name-resolution logic as named/admin invites: seeded name on
+    // first visit, header (user rename) wins on subsequent requests.
+    let resolvedName = validInviteSession!.invite_display_name ?? base?.displayName ?? '';
+    if (clientId) {
+      const prior = db
+        .prepare('SELECT display_name FROM doc_users WHERE doc_uid = ? AND client_id = ?')
+        .get(doc.uid, clientId) as { display_name: string } | null | undefined;
+      if (prior?.display_name) {
+        resolvedName = base?.displayName ?? prior.display_name;
+      }
+    }
+    const identity = clientId && resolvedName ? { clientId, displayName: resolvedName } : null;
+    return recordAndReturn(db, doc.uid, { ok: true, role, identity, invite: null, isInviteSession: true });
   }
 
   if (invite) {
@@ -162,7 +230,7 @@ export function authorize(
       return recordAndReturn(db, doc.uid, { ok: true, role: invite.role, identity, invite });
     }
 
-    // admin + named: invite name seeds on first visit (no doc_users row),
+    // named: invite name seeds on first visit (no doc_users row),
     // header wins thereafter so UserMenu renames propagate via the upsert
     // diff. Prevents a browser with a stale local name from accidentally
     // inheriting the invite's identity.
@@ -221,5 +289,16 @@ function syncAdminInviteDisplayName(
 }
 
 export type AuthDecision =
-  | { ok: true; role: Role; identity: Identity | null; invite: InviteRow | null }
+  | {
+      ok: true;
+      role: Role;
+      identity: Identity | null;
+      invite: InviteRow | null;
+      /**
+       * True when access was granted via a session cookie minted by the
+       * claim-invite route (POST /invites/:token/claim). Absent/false for
+       * all other auth paths (password session, invite header, anonymous).
+       */
+      isInviteSession?: boolean;
+    }
   | { ok: false; reason: 'password-required' | 'forbidden' };
