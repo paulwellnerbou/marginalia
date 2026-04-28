@@ -806,7 +806,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       quote: string;
       startOffset: number;
       endOffset: number;
-      state?: string;
+      state?: Thread['state'];
     }> = [];
 
     for (const thread of threads) {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { RenderResult } from '@marginalia/renderer';
+import type { ThreadState } from '../lib/api.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
 
@@ -460,12 +461,12 @@ function applyCommentHighlights(
     quote: string;
     startOffset: number;
     endOffset: number;
-    state?: string;
+    state?: ThreadState;
   }>,
 ): void {
   const rangesByBlock = new Map<
     HTMLElement,
-    Array<{ rawStart: number; rawEnd: number; threads: Array<{ id: string; state: string }> }>
+    Range[]
   >();
 
   for (const highlight of highlights) {
@@ -744,7 +745,7 @@ function findTextNodeEntry(
   return textNodes[textNodes.length - 1] ?? null;
 }
 
-type RangeThread = { id: string; state: string };
+type RangeThread = { id: string; state: ThreadState };
 type Range = { rawStart: number; rawEnd: number; threads: RangeThread[] };
 
 function mergeRanges(ranges: Range[]): Range[] {

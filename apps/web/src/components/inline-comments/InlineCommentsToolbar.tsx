@@ -23,7 +23,7 @@ interface Props {
   hideResolved: boolean;
   onToggleHideResolved: () => void;
   /** Reuse the existing scrollToAnchor flow so jumps share the flash animation. */
-  onScrollToAnchor: (blockId: string, quote?: string | null) => void;
+  onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
   /** Receives the toolbar's outer element so the layer can measure its height. */
   rootRef: RefObject<HTMLDivElement | null>;
 }
@@ -48,7 +48,7 @@ export function InlineCommentsToolbar({
     (thread: Thread) => {
       const blockId = thread.anchor.block_id;
       if (!blockId) return;
-      onScrollToAnchor(blockId, thread.anchor.quote);
+      onScrollToAnchor(blockId, thread.anchor.quote, thread.id);
     },
     [onScrollToAnchor],
   );
