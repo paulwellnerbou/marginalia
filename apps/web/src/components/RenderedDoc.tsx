@@ -479,12 +479,17 @@ function applyCommentHighlights(
     if (highlight.scope === 'block') {
       if (map.rawLength <= 0) continue;
       block.dataset.commentHighlightBlock = 'true';
-      block.classList.add('comment-highlight-block');
+      const hasOpen = highlight.state === 'open';
+      if (hasOpen) {
+        block.classList.add('comment-highlight-block');
+      }
       if (highlight.threadId) {
         block.dataset.commentThreadId = highlight.threadId;
-        block.tabIndex = 0;
-        block.setAttribute('role', 'button');
-        block.setAttribute('aria-label', 'Open comment thread');
+        if (hasOpen) {
+          block.tabIndex = 0;
+          block.setAttribute('role', 'button');
+          block.setAttribute('aria-label', 'Open comment thread');
+        }
       }
       rawStart = 0;
       rawEnd = map.rawLength;
@@ -819,9 +824,11 @@ function wrapTextSlice(
   mark.className = hasOpen ? 'comment-highlight' : 'comment-highlight-resolved';
   if (threadIds.length > 0) {
     mark.dataset.commentThreadId = threadIds[0]!;
-    mark.tabIndex = 0;
-    mark.setAttribute('role', 'button');
-    mark.setAttribute('aria-label', 'Open comment thread');
+    if (hasOpen) {
+      mark.tabIndex = 0;
+      mark.setAttribute('role', 'button');
+      mark.setAttribute('aria-label', 'Open comment thread');
+    }
   }
   parent.insertBefore(mark, target);
   mark.appendChild(target);

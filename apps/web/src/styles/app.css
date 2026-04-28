@@ -2578,5 +2578,9 @@ button.primary:disabled {
 mark.comment-highlight-resolved {
   background-color: transparent;
   color: inherit;
+  padding: 0.03em 0;
+  border-radius: 0.18em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
