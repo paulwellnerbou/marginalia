@@ -1,11 +1,44 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Code, Flex, Text } from '@radix-ui/themes';
-import { getHistory, getHistoryDiff, type HistoryEntry, type Thread, type Comment, type ThreadResolution } from '../lib/api.js';
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type Comment,
+  type HistoryEntry,
+  type Thread,
+  type ThreadResolution,
+  getHistory,
+  getHistoryDiff,
+} from '../lib/api.js';
 import { formatTimestamp, formatTimestampLong } from '../lib/format-time.js';
+import { describeEntry, historyActorLabel, shortOid } from '../lib/history-format.js';
 import { reportError } from '../lib/log.js';
 import { DiffDialog } from './DiffDialog.js';
 import { ShowDiffButton } from './ShowDiffButton.js';
 import { InlineAvatar } from './inline-comments/InlineAvatar.js';
+
+function buildRowProps(
+  targetId: string | undefined,
+  onOpenThread: ((id: string) => void) | undefined,
+  borderStyle: string | undefined,
+) {
+  if (!targetId || !onOpenThread) {
+    return {
+      style: { borderBottom: borderStyle },
+    };
+  }
+  const open = () => onOpenThread(targetId);
+  return {
+    onClick: open,
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        open();
+      }
+    },
+    role: 'button' as const,
+    tabIndex: 0,
+    style: { cursor: 'pointer', borderBottom: borderStyle },
+  };
+}
 
 interface SelectedDiff {
   oid: string;
@@ -18,7 +51,13 @@ export type Activity =
   | { kind: 'history'; timestamp: number; id: string; entry: HistoryEntry }
   | { kind: 'thread'; timestamp: number; id: string; thread: Thread }
   | { kind: 'reply'; timestamp: number; id: string; thread: Thread; comment: Comment }
-  | { kind: 'resolution'; timestamp: number; id: string; thread: Thread; resolution: ThreadResolution };
+  | {
+      kind: 'resolution';
+      timestamp: number;
+      id: string;
+      thread: Thread;
+      resolution: ThreadResolution;
+    };
 
 interface Props {
   uid: string;
@@ -27,12 +66,7 @@ interface Props {
   onOpenThread?: (threadId: string) => void;
 }
 
-export function ActivityList({
-  uid,
-  version,
-  threads,
-  onOpenThread,
-}: Props) {
+export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -199,13 +233,23 @@ export function ActivityList({
               : 'Unknown user';
 
             return (
-              <Flex key={activity.id} direction="column" gap="2" pb="4" mb="4" className="history-entry"
-                onClick={() => proposal && onOpenThread?.(proposal.id)}
-                style={{ cursor: proposal ? 'pointer' : 'default', borderBottom: borderStyle }}>
+              <Flex
+                key={activity.id}
+                direction="column"
+                gap="2"
+                pb="4"
+                mb="4"
+                className="history-entry"
+                {...buildRowProps(proposal?.id, onOpenThread, borderStyle)}
+              >
                 <Flex align="start" gap="3" justify="between">
                   <Flex align="start" gap="2" style={{ flex: 1, minWidth: 0 }}>
                     <Box style={{ flexShrink: 0, marginTop: '2px' }}>
-                      <InlineAvatar name={actorName} seed={entry.actor.client_id || actorName} size="md" />
+                      <InlineAvatar
+                        name={actorName}
+                        seed={entry.actor.client_id || actorName}
+                        size="md"
+                      />
                     </Box>
                     <Box style={{ flex: 1, minWidth: 0 }}>
                       <Flex align="baseline" gap="2" wrap="wrap">
@@ -253,11 +297,22 @@ export function ActivityList({
             const actionText = isProposal ? 'Proposed a change' : 'Started a thread';
 
             return (
-              <Flex key={activity.id} direction="column" gap="2" pb="4" mb="4" className="history-entry"
-                onClick={() => onOpenThread?.(thread.id)} style={{ cursor: 'pointer', borderBottom: borderStyle }}>
+              <Flex
+                key={activity.id}
+                direction="column"
+                gap="2"
+                pb="4"
+                mb="4"
+                className="history-entry"
+                {...buildRowProps(thread.id, onOpenThread, borderStyle)}
+              >
                 <Flex align="start" gap="3">
                   <Box style={{ flexShrink: 0, marginTop: '2px' }}>
-                    <InlineAvatar name={comment.author.display_name} seed={comment.author.client_id} size="md" />
+                    <InlineAvatar
+                      name={comment.author.display_name}
+                      seed={comment.author.client_id}
+                      size="md"
+                    />
                   </Box>
                   <Box style={{ flex: 1, minWidth: 0 }}>
                     <Flex align="baseline" gap="2" wrap="wrap">
@@ -272,7 +327,17 @@ export function ActivityList({
                       {actionText}
                     </Text>
                     {thread.anchor.quote ? (
-                      <Text size="1" color="gray" mt="1" as="p" style={{ borderLeft: '2px solid var(--gray-a4)', paddingLeft: '8px', fontStyle: 'italic' }}>
+                      <Text
+                        size="1"
+                        color="gray"
+                        mt="1"
+                        as="p"
+                        style={{
+                          borderLeft: '2px solid var(--gray-a4)',
+                          paddingLeft: '8px',
+                          fontStyle: 'italic',
+                        }}
+                      >
                         "{thread.anchor.quote}"
                       </Text>
                     ) : null}
@@ -288,11 +353,22 @@ export function ActivityList({
             const threadAuthorName = thread.comments[0]?.author.display_name || 'someone';
 
             return (
-              <Flex key={activity.id} direction="column" gap="2" pb="4" mb="4" className="history-entry"
-                onClick={() => onOpenThread?.(thread.id)} style={{ cursor: 'pointer', borderBottom: borderStyle }}>
+              <Flex
+                key={activity.id}
+                direction="column"
+                gap="2"
+                pb="4"
+                mb="4"
+                className="history-entry"
+                {...buildRowProps(thread.id, onOpenThread, borderStyle)}
+              >
                 <Flex align="start" gap="3">
                   <Box style={{ flexShrink: 0, marginTop: '2px' }}>
-                    <InlineAvatar name={comment.author.display_name} seed={comment.author.client_id} size="md" />
+                    <InlineAvatar
+                      name={comment.author.display_name}
+                      seed={comment.author.client_id}
+                      size="md"
+                    />
                   </Box>
                   <Box style={{ flex: 1, minWidth: 0 }}>
                     <Flex align="baseline" gap="2" wrap="wrap">
@@ -317,12 +393,19 @@ export function ActivityList({
             let text = 'Resolved thread';
             if (resolution.kind === 'accept') text = 'Accepted proposal';
             if (resolution.kind === 'reject') text = 'Rejected proposal';
-            
+
             const name = resolution.by_name || 'Unknown';
 
             return (
-              <Flex key={activity.id} direction="column" gap="2" pb="4" mb="4" className="history-entry"
-                onClick={() => onOpenThread?.(thread.id)} style={{ cursor: 'pointer', borderBottom: borderStyle }}>
+              <Flex
+                key={activity.id}
+                direction="column"
+                gap="2"
+                pb="4"
+                mb="4"
+                className="history-entry"
+                {...buildRowProps(thread.id, onOpenThread, borderStyle)}
+              >
                 <Flex align="start" gap="3">
                   <Box style={{ flexShrink: 0, marginTop: '2px' }}>
                     <InlineAvatar name={name} seed={name} size="md" />
@@ -358,29 +441,4 @@ export function ActivityList({
       />
     </>
   );
-}
-
-function describeEntry(entry: HistoryEntry): string {
-  switch (entry.action) {
-    case 'upload':
-      return 'Uploaded';
-    case 'update':
-      return 'Edited';
-    case 'restore':
-      return 'Restored';
-    case 'accept-proposal':
-      return 'Accepted proposal';
-    default:
-      return 'History entry';
-  }
-}
-
-function shortOid(oid: string): string {
-  return oid.slice(0, 7);
-}
-
-function historyActorLabel(displayName: string | null, clientId: string | null): string {
-  if (displayName) return displayName;
-  if (clientId) return clientId.slice(0, 8);
-  return 'Unknown user';
 }

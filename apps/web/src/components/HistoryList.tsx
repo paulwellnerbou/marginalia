@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertDialog, Box, Button, Code, Flex, Text } from '@radix-ui/themes';
 import { getDocument, getHistory, getHistoryDiff, type HistoryEntry } from '../lib/api.js';
 import { formatTimestamp, formatTimestampLong } from '../lib/format-time.js';
+import { describeEntry, historyActorLabel, shortOid } from '../lib/history-format.js';
 import { reportError } from '../lib/log.js';
 import { DiffDialog } from './DiffDialog.js';
 import { ShowDiffButton } from './ShowDiffButton.js';
@@ -436,30 +437,5 @@ export function HistoryList({
       </AlertDialog.Root>
     </>
   );
-}
-
-function describeEntry(entry: HistoryEntry): string {
-  switch (entry.action) {
-    case 'upload':
-      return 'Uploaded';
-    case 'update':
-      return 'Edited';
-    case 'restore':
-      return 'Restored';
-    case 'accept-proposal':
-      return 'Accepted proposal';
-    default:
-      return 'History entry';
-  }
-}
-
-function shortOid(oid: string): string {
-  return oid.slice(0, 7);
-}
-
-function historyActorLabel(displayName: string | null, clientId: string | null): string {
-  if (displayName) return displayName;
-  if (clientId) return clientId.slice(0, 8);
-  return 'Unknown user';
 }
 

@@ -820,10 +820,12 @@ function wrapTextSlice(
 
   const mark = document.createElement('mark');
   mark.dataset.commentHighlight = 'true';
-  const hasOpen = threadStates.some(s => s === 'open');
+  const openIndex = threadStates.findIndex((s) => s === 'open');
+  const hasOpen = openIndex !== -1;
   mark.className = hasOpen ? 'comment-highlight' : 'comment-highlight-resolved';
-  if (threadIds.length > 0) {
-    mark.dataset.commentThreadId = threadIds[0]!;
+  const targetThreadId = hasOpen ? threadIds[openIndex] : threadIds[0];
+  if (targetThreadId) {
+    mark.dataset.commentThreadId = targetThreadId;
     if (hasOpen) {
       mark.tabIndex = 0;
       mark.setAttribute('role', 'button');

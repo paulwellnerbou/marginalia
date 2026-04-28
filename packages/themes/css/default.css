@@ -175,6 +175,18 @@
   color: inherit;
 }
 
+/* Resolved comment highlights are visually neutral by default — the
+   anchor flash below is the only time they reveal themselves. */
+.marginalia mark.comment-highlight-resolved {
+  background: transparent;
+  color: inherit;
+  padding: 0.03em 0;
+  border-radius: 0.18em;
+  text-decoration: none;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
 .marginalia mark.comment-highlight[data-comment-thread-id] {
   cursor: pointer;
 }
