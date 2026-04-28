@@ -29,6 +29,9 @@ function buildRowProps(
   return {
     onClick: open,
     onKeyDown: (e: KeyboardEvent) => {
+      // Ignore keydown bubbling up from inner controls (e.g. ShowDiffButton),
+      // so Enter/Space activates the inner control instead of opening the row.
+      if (e.target !== e.currentTarget) return;
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         open();

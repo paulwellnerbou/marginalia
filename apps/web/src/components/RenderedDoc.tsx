@@ -824,12 +824,14 @@ function wrapTextSlice(
   const mark = document.createElement('mark');
   mark.dataset.commentHighlight = 'true';
   const openThread = threads.find((t) => t.state === 'open');
-  const hasOpen = openThread !== undefined;
-  mark.className = hasOpen ? 'comment-highlight' : 'comment-highlight-resolved';
+  // No threads = a pending/transient highlight (e.g. a fresh selection):
+  // treat as visible "open" so it isn't styled transparent.
+  const isVisuallyOpen = threads.length === 0 || openThread !== undefined;
+  mark.className = isVisuallyOpen ? 'comment-highlight' : 'comment-highlight-resolved';
   const targetThread = openThread ?? threads[0];
   if (targetThread) {
     mark.dataset.commentThreadId = targetThread.id;
-    if (hasOpen) {
+    if (openThread) {
       mark.tabIndex = 0;
       mark.setAttribute('role', 'button');
       mark.setAttribute('aria-label', 'Open comment thread');
