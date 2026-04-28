@@ -31,10 +31,31 @@ export async function migrateSharedRepoToPerDoc(
     format: DocumentFormat;
   }>;
 
+  // Track per-doc failures separately from per-doc successes so we
+  // don't archive the legacy repo while any doc still needs a retry.
+  // A failed doc's `targetDir` was already cleaned up by `migrateOneDoc`,
+  // so the next boot will see no `.git` there and re-attempt cleanly.
+  const failures: Array<{ uid: string; reason: string }> = [];
   for (const doc of docs) {
     const targetDir = join(reposBaseDir, doc.uid);
     if (existsSync(join(targetDir, '.git'))) continue;
-    await migrateOneDoc(legacyRepoDir, targetDir, doc);
+    try {
+      await migrateOneDoc(legacyRepoDir, targetDir, doc);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      failures.push({ uid: doc.uid, reason });
+      console.error(
+        `[marginalia] per-doc migration failed for ${doc.uid}: ${reason}`,
+      );
+    }
+  }
+
+  if (failures.length > 0) {
+    console.error(
+      `[marginalia] ${failures.length} doc(s) did not migrate; ` +
+        `legacy repo kept at ${legacyRepoDir} for retry on next boot.`,
+    );
+    return;
   }
 
   archiveLegacyRepo(legacyRepoDir);
@@ -49,10 +70,13 @@ async function migrateOneDoc(
   const newFilename = doc.format === 'asciidoc' ? 'document.adoc' : 'document.md';
 
   // Validate the legacy history *before* materializing the target repo:
-  // if log() throws or returns nothing, leaving a stub `.git` behind
-  // would lock in a broken migration (subsequent boots skip uids whose
-  // target repo already exists). Skip such docs entirely; they get the
-  // normal lazy-init flow on first write instead.
+  // a stub `.git` from a partial init would lock in a broken migration
+  // (subsequent boots skip uids whose target repo already exists).
+  //
+  // Discriminate `NotFoundError` (no history for this filepath — a
+  // benign "skip and lazy-init on first write" signal) from real
+  // errors like repo corruption or permission issues, which must
+  // surface so the caller keeps the legacy repo around for retry.
   let entries: Awaited<ReturnType<typeof git.log>>;
   try {
     entries = await git.log({
@@ -61,8 +85,9 @@ async function migrateOneDoc(
       filepath: legacyFilename,
       force: true,
     });
-  } catch {
-    return;
+  } catch (err) {
+    if ((err as { code?: string }).code === 'NotFoundError') return;
+    throw err;
   }
   if (entries.length === 0) return;
   // git.log returns newest-first; replay oldest-first.
