@@ -168,6 +168,7 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.get('/:uid/invites', async (c) => listInvites(c, deps));
   r.post('/:uid/invites', async (c) => createInvite(c, deps));
   r.post('/:uid/invites/admin/rotate', async (c) => rotateAdminInvite(c, deps));
+  r.post('/:uid/invites/:token/claim', async (c) => claimInvite(c, deps));
   r.delete('/:uid/invites/:token', async (c) => deleteInvite(c, deps));
 
   return r;
@@ -1486,6 +1487,51 @@ async function deleteInvite(c: Context, deps: AppDeps) {
 
   db.prepare('DELETE FROM invites WHERE token = ?').run(token);
   return c.body(null, 204);
+}
+
+/**
+ * Claim a named (or generic) invite: mint an invite session cookie so the
+ * browser no longer needs the token in the URL. The invite row is kept so
+ * the same user can claim again from a different browser. Admin invites and
+ * password-protected docs are excluded — they use separate mechanisms.
+ */
+async function claimInvite(c: Context, deps: AppDeps) {
+  const { db, config } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  // Password-protected docs: the password gate would reject an invite session
+  // anyway, so claiming doesn't help. The invite-header flow still works.
+  if (doc.password_hash !== null) {
+    return c.json({ error: 'password-protected' }, 409);
+  }
+
+  const token = c.req.param('token');
+  if (!token) return c.json({ error: 'not-found' }, 404);
+
+  const invite = db
+    .prepare('SELECT * FROM invites WHERE token = ? AND doc_uid = ?')
+    .get(token, doc.uid) as InviteRow | undefined;
+  if (!invite) return c.json({ error: 'not-found' }, 404);
+
+  // Admin invites stay permanent and use rotate-on-leak, not claiming.
+  if (invite.kind === 'admin') {
+    return c.json({ error: 'admin-invite-not-claimable' }, 400);
+  }
+
+  // Mint an invite session. The invite row is NOT deleted so the user can
+  // re-claim from another browser using the original URL.
+  const sessionToken = createSession(db, doc.uid, config.namedInviteSessionTtlMs, true, {
+    display_name: invite.display_name,
+    role: invite.role,
+    kind: invite.kind,
+  });
+  const maxAge = Math.floor(config.namedInviteSessionTtlMs / 1000);
+  c.header(
+    'Set-Cookie',
+    `${SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+  );
+  return c.json({ display_name: invite.display_name, role: invite.role }, 201);
 }
 
 /**

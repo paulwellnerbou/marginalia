@@ -12,6 +12,8 @@ export interface ServerConfig {
   dbPath: string;
   webDir: string;
   sessionTtlMs: number;
+  /** TTL for invite sessions created by POST /invites/:token/claim. Default 90 days. */
+  namedInviteSessionTtlMs: number;
   /** Upload size ceiling for asset binaries. Defaults to 16 MiB. */
   maxAssetBytes: number;
   /**
@@ -55,6 +57,7 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     dbPath: overrides.dbPath ?? join(dataDir, 'db.sqlite'),
     webDir,
     sessionTtlMs: overrides.sessionTtlMs ?? 24 * 60 * 60 * 1000, // 24h
+    namedInviteSessionTtlMs: overrides.namedInviteSessionTtlMs ?? 90 * 24 * 60 * 60 * 1000, // 90d
     maxAssetBytes: overrides.maxAssetBytes ?? 16 * 1024 * 1024,
     blobStorage,
     ...(s3 ? { s3 } : {}),

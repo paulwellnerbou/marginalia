@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { Button, Container, Flex, Text } from '@radix-ui/themes';
 import {
   getDocument,
+  claimInvite,
   ApiError,
   type Document,
   type DocumentSettingsResponse,
@@ -23,10 +24,21 @@ export function ViewPage() {
   // Bumped by the error "Try again" button to re-trigger getDocument.
   const [reloadNonce, setReloadNonce] = useState(0);
 
-  // Persist the URL-supplied invite token before loading the doc so the API
-  // client picks it up on the first GET.
+  // Persist the URL-supplied invite token, then claim it to mint a session
+  // cookie, then strip the token from the address bar so copy-pasting the
+  // URL no longer leaks it. The invite row is kept server-side so the same
+  // user can re-claim from another browser via the original URL.
   useEffect(() => {
-    if (uid && token) saveInviteToken(uid, token);
+    if (!uid || !token) return;
+    saveInviteToken(uid, token);
+    claimInvite(uid, token)
+      .catch(() => {
+        // 400 (admin invite), 409 (password-protected), 404 (invite gone):
+        // fall back to invite-header auth via the token in localStorage.
+      })
+      .finally(() => {
+        window.history.replaceState({}, '', `/d/${uid}`);
+      });
   }, [uid, token]);
 
   useEffect(() => {

@@ -258,6 +258,10 @@ export interface SessionRow {
   doc_uid: string;
   persistent: number;
   expires_at: number;
+  /** Non-null only for invite sessions created by POST /invites/:token/claim. */
+  invite_display_name: string | null;
+  invite_role: string | null;
+  invite_kind: string | null;
 }
 
 export type CommentLinkStatus = 'linked' | 'low-confidence' | 'orphaned';
@@ -371,6 +375,9 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments_edit_proposals', 'source_snapshot', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'accepted_oid', 'TEXT');
   ensureColumn(db, 'sessions', 'persistent', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn(db, 'sessions', 'invite_display_name', 'TEXT');
+  ensureColumn(db, 'sessions', 'invite_role', 'TEXT');
+  ensureColumn(db, 'sessions', 'invite_kind', 'TEXT');
   ensureColumn(db, 'document_assets', 'mime', "TEXT NOT NULL DEFAULT 'application/octet-stream'");
   ensureColumn(db, 'documents', 'repo_dir', "TEXT NOT NULL DEFAULT ''");
   // Backfill per-doc repo subpath. Always = uid for now; the legacy

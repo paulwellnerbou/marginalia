@@ -88,12 +88,23 @@ export function createSession(
   docUid: string,
   ttlMs: number,
   persistent = true,
+  invite?: { display_name: string | null; role: string; kind: string } | null,
 ): string {
   const token = newSessionToken();
   const expiresAt = Date.now() + ttlMs;
   db.prepare(
-    'INSERT INTO sessions (token, doc_uid, persistent, expires_at) VALUES (?, ?, ?, ?)',
-  ).run(token, docUid, persistent ? 1 : 0, expiresAt);
+    `INSERT INTO sessions
+       (token, doc_uid, persistent, expires_at, invite_display_name, invite_role, invite_kind)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    token,
+    docUid,
+    persistent ? 1 : 0,
+    expiresAt,
+    invite?.display_name ?? null,
+    invite?.role ?? null,
+    invite?.kind ?? null,
+  );
   return token;
 }
 
@@ -131,9 +142,12 @@ export function parseCookie(header: string | null, name: string): string | null 
  * Can this request access this document, and in what role?
  *
  * Precedence:
- *   1. Password gate — if doc has a hash, a valid session is mandatory.
- *   2. Invite token → carries role (+ seeded display_name for admin/named).
- *   3. No invite → reader, identity comes from headers if present.
+ *   1. Password gate  — if doc has a hash, a password session is mandatory.
+ *                       Invite sessions do NOT satisfy the password gate.
+ *   2. Invite session — a session cookie minted by POST /invites/:token/claim;
+ *                       uses the stored role + display_name from the session row.
+ *   3. Invite header  — existing token-in-header path (fallback when no session).
+ *   4. No invite      — reader, identity comes from headers if present.
  *
  * Returns one resolved identity so callers don't re-derive authorship.
  */
@@ -143,15 +157,41 @@ export function authorize(
   headers: Headers,
   sessionToken: string | null,
 ): AuthDecision {
+  const session = sessionToken ? readSession(db, sessionToken) : null;
+  const validDocSession = session?.doc_uid === doc.uid ? session : null;
+  const isInviteSession = !!(validDocSession?.invite_role);
+
+  // Password gate is unconditional — invites (including admin) and invite
+  // sessions never bypass it. Only a password-type session satisfies it.
+  if (doc.password_hash !== null) {
+    if (!validDocSession || isInviteSession) {
+      return { ok: false, reason: 'password-required' };
+    }
+  }
+
   const invite = readInvite(db, headers, doc.uid);
   const clientId = readClientId(headers);
   const base = readIdentity(headers);
 
-  // Password gate is unconditional — invites (including admin) never bypass it.
-  if (doc.password_hash !== null) {
-    if (!sessionToken || !checkSession(db, sessionToken, doc.uid)) {
-      return { ok: false, reason: 'password-required' };
+  // Invite session: minted by POST /invites/:token/claim. Takes precedence
+  // over the invite header so the browser no longer needs the token URL.
+  // Only reachable for non-password-protected docs (password gate above
+  // rejects invite sessions for password-protected docs).
+  if (isInviteSession) {
+    const role = validDocSession!.invite_role as Role;
+    // Same name-resolution logic as named/admin invites: seeded name on
+    // first visit, header (user rename) wins on subsequent requests.
+    let resolvedName = validDocSession!.invite_display_name ?? base?.displayName ?? '';
+    if (clientId) {
+      const prior = db
+        .prepare('SELECT display_name FROM doc_users WHERE doc_uid = ? AND client_id = ?')
+        .get(doc.uid, clientId) as { display_name: string } | null | undefined;
+      if (prior?.display_name) {
+        resolvedName = base?.displayName ?? prior.display_name;
+      }
     }
+    const identity = clientId && resolvedName ? { clientId, displayName: resolvedName } : null;
+    return recordAndReturn(db, doc.uid, { ok: true, role, identity, invite: null });
   }
 
   if (invite) {
