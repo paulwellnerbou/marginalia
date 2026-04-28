@@ -31,6 +31,13 @@ export function InlineCommentRow({
   const [linkCopied, setLinkCopied] = useState(false);
   const linkCopyTimer = useRef<number | null>(null);
 
+  // Clean up the copy-confirmation timer if the component unmounts while it's pending.
+  useEffect(() => {
+    return () => {
+      if (linkCopyTimer.current !== null) window.clearTimeout(linkCopyTimer.current);
+    };
+  }, []);
+
   function startEdit() {
     setDraft(node.body);
     setEditing(true);
