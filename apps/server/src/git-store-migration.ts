@@ -48,6 +48,26 @@ async function migrateOneDoc(
   const legacyFilename = doc.format === 'asciidoc' ? `${doc.uid}.adoc` : `${doc.uid}.md`;
   const newFilename = doc.format === 'asciidoc' ? 'document.adoc' : 'document.md';
 
+  // Validate the legacy history *before* materializing the target repo:
+  // if log() throws or returns nothing, leaving a stub `.git` behind
+  // would lock in a broken migration (subsequent boots skip uids whose
+  // target repo already exists). Skip such docs entirely; they get the
+  // normal lazy-init flow on first write instead.
+  let entries: Awaited<ReturnType<typeof git.log>>;
+  try {
+    entries = await git.log({
+      fs,
+      dir: legacyRepoDir,
+      filepath: legacyFilename,
+      force: true,
+    });
+  } catch {
+    return;
+  }
+  if (entries.length === 0) return;
+  // git.log returns newest-first; replay oldest-first.
+  entries.reverse();
+
   // Initialize the new repo with the same seed commit pattern as fresh
   // doc repos so log() always works.
   mkdirSync(targetDir, { recursive: true });
@@ -60,20 +80,6 @@ async function migrateOneDoc(
     message: 'init',
     author: { name: 'marginalia', email: 'system@marginalia.local' },
   });
-
-  let entries: Awaited<ReturnType<typeof git.log>>;
-  try {
-    entries = await git.log({
-      fs,
-      dir: legacyRepoDir,
-      filepath: legacyFilename,
-      force: true,
-    });
-  } catch {
-    return;
-  }
-  // git.log returns newest-first; replay oldest-first.
-  entries.reverse();
 
   for (const entry of entries) {
     let blob: Uint8Array | null = null;

@@ -1,4 +1,3 @@
-import { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import fs from 'node:fs';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -181,6 +180,37 @@ describe('migrateSharedRepoToPerDoc', () => {
     db.close();
 
     expect(existsSync(reposBaseDir)).toBe(false);
+  });
+
+  test('does not leave a stub repo when the legacy history is missing', async () => {
+    // Doc row exists in the DB but the legacy file was never present
+    // in the shared repo (e.g. lost to a prior partial migration). The
+    // migration must NOT create a half-initialized `<reposBaseDir>/<uid>`
+    // — that would lock the doc out of recovery on subsequent boots
+    // (the idempotency check skips uids whose target `.git` exists).
+    await seedLegacy([
+      {
+        uid: 'has-history',
+        format: 'markdown',
+        commits: [
+          {
+            content: 'real\n',
+            message: 'upload: has-history\n',
+            author: 'paul',
+            timestampSec: 1_700_000_000,
+          },
+        ],
+      },
+    ]);
+    seedDocsRow('has-history', 'markdown');
+    seedDocsRow('no-history', 'markdown');
+
+    const db = openDatabase(dbPath);
+    await migrateSharedRepoToPerDoc(db, legacyRepoDir, reposBaseDir);
+    db.close();
+
+    expect(existsSync(join(reposBaseDir, 'has-history', '.git'))).toBe(true);
+    expect(existsSync(join(reposBaseDir, 'no-history'))).toBe(false);
   });
 
   test('skips docs whose per-doc repo already exists', async () => {
