@@ -282,6 +282,8 @@ async function getDocument(c: Context, deps: AppDeps) {
   // For admin/named invites or invite sessions: the server-resolved current
   // name (invite seed on first visit, doc_users row after). For generic/no-invite:
   // null. Client uses this to keep localStorage in sync with the server.
+  // `isInviteSession` covers the claim-session path (named invite was claimed
+  // as a session cookie); the invite-row check covers the header token path.
   const forcedDisplayName =
     (decision.invite && decision.invite.kind !== 'generic') || decision.isInviteSession
       ? (decision.identity?.displayName ?? null)

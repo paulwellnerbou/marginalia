@@ -294,6 +294,11 @@ export type AuthDecision =
       role: Role;
       identity: Identity | null;
       invite: InviteRow | null;
+      /**
+       * True when access was granted via a session cookie minted by the
+       * claim-invite route (POST /invites/:token/claim). Absent/false for
+       * all other auth paths (password session, invite header, anonymous).
+       */
       isInviteSession?: boolean;
     }
   | { ok: false; reason: 'password-required' | 'forbidden' };
