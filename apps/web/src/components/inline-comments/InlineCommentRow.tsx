@@ -1,5 +1,5 @@
 import { CheckIcon, Link2Icon, Pencil2Icon, QuoteIcon, TrashIcon } from '@radix-ui/react-icons';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Comment } from '../../lib/api.js';
