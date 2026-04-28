@@ -840,7 +840,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             state: thread.state,
           });
         }
-      } else {
+      } else if (thread.state === 'open') {
+        // Block-scope highlights are visual + interactive on the *whole*
+        // anchored block. For resolved proposals that would silently turn
+        // the whole paragraph into a click target (and intercept clicks on
+        // links inside it), so only emit them while the proposal is open.
+        // Activities-tab navigation falls back to [data-block]/[data-subblock]
+        // via blockId, so scroll-to-anchor still works for resolved ones.
         highlights.push({
           scope: 'block',
           threadId: thread.id,
