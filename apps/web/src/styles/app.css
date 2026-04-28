@@ -2002,6 +2002,48 @@ button.primary:disabled {
   color: var(--ui-fg);
 }
 
+/* Sticky toolbar pinned near the top of the comment column, with a
+   small gap below the doc chrome so it doesn't visually merge with
+   the bar above. The InlineCommentsLayer measures this element's
+   height and the layout's `stickyTopPad` accounts for both this
+   element's `top` offset and its measured height so cards always
+   stack just below it. */
+.ic-toolbar {
+  position: sticky;
+  top: 8px;
+  margin: 8px 0.9rem 0 0.6rem;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 32px;
+  padding: 0 6px;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+}
+.ic-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ic-toolbar-count {
+  flex: 1;
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--ui-fg-muted);
+  user-select: none;
+  pointer-events: none;
+}
+/* Active toggle styling. Reuses Radix's ghost IconButton box exactly,
+   only swapping the background — so the click target, padding, and
+   bounds stay identical between the on and off states. */
+.ic-toolbar .rt-IconButton[aria-pressed="true"] {
+  background-color: var(--gray-a4);
+  color: var(--gray-12);
+}
+
 /* Each card lives inside an absolutely-positioned slot whose top and
    height are driven by JS to express the user's "all cards sticky at
    top → all unstick at first anchor → next card re-engages alone"
@@ -2083,11 +2125,16 @@ button.primary:disabled {
    end of the flash. A box-shadow overlay leaves the card's own
    background untouched. */
 @keyframes ic-flash {
-  0% { box-shadow: inset 0 0 0 9999px rgba(59, 130, 246, 0.16); }
-  100% { box-shadow: inset 0 0 0 9999px rgba(59, 130, 246, 0); }
+  0% {
+    box-shadow: inset 0 0 0 9999px rgba(59, 130, 246, 0.16);
+  }
+  100% {
+    box-shadow: inset 0 0 0 9999px rgba(59, 130, 246, 0);
+  }
 }
 .ic-card-flash-a,
-.ic-card-flash-b {
+.ic-card-flash-b,
+.ic-row-flash {
   animation: ic-flash 760ms ease-out;
 }
 
@@ -2140,11 +2187,26 @@ button.primary:disabled {
   background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
   color: var(--ui-fg);
 }
-.ic-badge-proposal { background: rgba(59, 130, 246, 0.12); color: #1d4ed8; }
-.ic-badge-accepted { background: rgba(34, 197, 94, 0.14); color: #15803d; }
-.ic-badge-rejected { background: rgba(239, 68, 68, 0.14); color: #b91c1c; }
-.ic-badge-resolved { background: rgba(34, 197, 94, 0.14); color: #15803d; }
-.ic-badge-orphan { background: rgba(15, 23, 42, 0.08); color: var(--ui-fg-muted); }
+.ic-badge-proposal {
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+.ic-badge-accepted {
+  background: rgba(34, 197, 94, 0.14);
+  color: #15803d;
+}
+.ic-badge-rejected {
+  background: rgba(239, 68, 68, 0.14);
+  color: #b91c1c;
+}
+.ic-badge-resolved {
+  background: rgba(34, 197, 94, 0.14);
+  color: #15803d;
+}
+.ic-badge-orphan {
+  background: rgba(15, 23, 42, 0.08);
+  color: var(--ui-fg-muted);
+}
 
 .ic-card-anchor {
   appearance: none;
@@ -2158,8 +2220,12 @@ button.primary:disabled {
   cursor: pointer;
   line-height: 1.3;
 }
-.ic-card-anchor:disabled { cursor: default; }
-.ic-card-anchor:hover:not(:disabled) { color: var(--ui-fg); }
+.ic-card-anchor:disabled {
+  cursor: default;
+}
+.ic-card-anchor:hover:not(:disabled) {
+  color: var(--ui-fg);
+}
 
 .ic-card-collapse {
   align-self: flex-start;
@@ -2268,8 +2334,12 @@ button.primary:disabled {
   word-wrap: break-word;
   overflow-wrap: anywhere;
 }
-.ic-row-body p { margin: 0 0 0.3rem; }
-.ic-row-body p:last-child { margin: 0; }
+.ic-row-body p {
+  margin: 0 0 0.3rem;
+}
+.ic-row-body p:last-child {
+  margin: 0;
+}
 .ic-row-body code {
   font-size: 0.78rem;
   padding: 0 0.25rem;
@@ -2315,8 +2385,15 @@ button.primary:disabled {
   letter-spacing: 0.02em;
   user-select: none;
 }
-.ic-avatar-md { width: 28px; height: 28px; }
-.ic-avatar-sm { width: 22px; height: 22px; font-size: 0.6rem; }
+.ic-avatar-md {
+  width: 28px;
+  height: 28px;
+}
+.ic-avatar-sm {
+  width: 22px;
+  height: 22px;
+  font-size: 0.6rem;
+}
 
 /* ---------- Buttons ---------- */
 
@@ -2333,7 +2410,10 @@ button.primary:disabled {
   line-height: 1.3;
   transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
-.ic-btn:disabled { cursor: not-allowed; opacity: 0.5; }
+.ic-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
 
 .ic-btn-link {
   padding: 0.1rem 0.35rem;
@@ -2343,7 +2423,9 @@ button.primary:disabled {
   background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
   color: var(--ui-fg);
 }
-.ic-btn-danger { color: #b91c1c; }
+.ic-btn-danger {
+  color: #b91c1c;
+}
 .ic-btn-danger:hover:not(:disabled) {
   background: rgba(239, 68, 68, 0.1);
   color: #b91c1c;
@@ -2362,14 +2444,18 @@ button.primary:disabled {
   border-color: transparent;
   font-weight: 500;
 }
-.ic-btn-primary:hover:not(:disabled) { filter: brightness(0.95); }
+.ic-btn-primary:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
 
 .ic-btn-resolve {
   background: rgba(34, 197, 94, 0.14);
   color: #15803d;
   border-color: rgba(34, 197, 94, 0.2);
 }
-.ic-btn-resolve:hover:not(:disabled) { background: rgba(34, 197, 94, 0.2); }
+.ic-btn-resolve:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.2);
+}
 
 .ic-btn-accept {
   background: rgba(34, 197, 94, 0.14);
@@ -2377,7 +2463,9 @@ button.primary:disabled {
   border-color: rgba(34, 197, 94, 0.25);
   font-weight: 500;
 }
-.ic-btn-accept:hover:not(:disabled) { background: rgba(34, 197, 94, 0.22); }
+.ic-btn-accept:hover:not(:disabled) {
+  background: rgba(34, 197, 94, 0.22);
+}
 
 .ic-btn-reject {
   background: rgba(239, 68, 68, 0.12);
@@ -2385,7 +2473,9 @@ button.primary:disabled {
   border-color: rgba(239, 68, 68, 0.25);
   font-weight: 500;
 }
-.ic-btn-reject:hover:not(:disabled) { background: rgba(239, 68, 68, 0.18); }
+.ic-btn-reject:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.18);
+}
 
 /* ---------- Composer ---------- */
 
@@ -2396,7 +2486,10 @@ button.primary:disabled {
   padding-top: 0.35rem;
   border-top: 1px dashed var(--ui-border);
 }
-.ic-card-pending .ic-composer { border-top: 0; padding-top: 0; }
+.ic-card-pending .ic-composer {
+  border-top: 0;
+  padding-top: 0;
+}
 
 .ic-composer-name,
 .ic-composer-body {
@@ -2411,7 +2504,10 @@ button.primary:disabled {
   box-sizing: border-box;
   resize: vertical;
 }
-.ic-composer-body { min-height: 2.4rem; line-height: 1.4; }
+.ic-composer-body {
+  min-height: 2.4rem;
+  line-height: 1.4;
+}
 .ic-composer-name:focus,
 .ic-composer-body:focus {
   outline: none;
@@ -2438,7 +2534,11 @@ button.primary:disabled {
   flex-wrap: wrap;
 }
 
-.ic-edit { display: flex; flex-direction: column; gap: 0.35rem; }
+.ic-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
 
 .ic-card-pending {
   background: var(--ui-bg-muted, rgba(59, 130, 246, 0.04));

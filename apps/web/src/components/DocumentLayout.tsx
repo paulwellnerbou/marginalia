@@ -11,7 +11,6 @@ import {
 import {
   Badge,
   Button,
-  DropdownMenu,
   Flex,
   IconButton,
   Select,
@@ -89,6 +88,7 @@ import { ProposalComposer } from './ThreadComposer.js';
 import { Toc } from './Toc.js';
 import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
 import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
+import { COMMENT_FLASH_MS } from './inline-comments/inlineUtils.js';
 
 const MAX_WIDTH_KEY = 'marginalia.maxWidth';
 const TEXT_ZOOM_KEY = 'marginalia.textZoom';
@@ -96,7 +96,10 @@ const TOC_WIDTH_KEY = 'marginalia.tocWidth';
 const COMMENTS_WIDTH_KEY = 'marginalia.commentsWidth';
 const INLINE_COMMENTS_OPEN_KEY = 'marginalia.inlineCommentsOpen';
 const INLINE_COMMENTS_STACKING_KEY = 'marginalia.inlineCommentsStacking';
+const INLINE_COMMENTS_HIDE_RESOLVED_KEY = 'marginalia.inlineCommentsHideResolved';
 const COLLAPSED_WIDTH = 36;
+/** Delay before scrolling to a specific reply after the parent thread has expanded (ms). */
+const REPLY_SCROLL_DELAY_MS = 900;
 
 interface Props {
   doc: Document;
@@ -127,6 +130,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [inlineCommentsStacking, setInlineCommentsStacking] = useState<boolean>(() => {
     const saved = localStorage.getItem(INLINE_COMMENTS_STACKING_KEY);
     return saved === null ? true : saved === 'true';
+  });
+  const [inlineCommentsHideResolved, setInlineCommentsHideResolved] = useState<boolean>(() => {
+    const saved = localStorage.getItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
+    return saved === 'true';
   });
   const [rightTab, setRightTab] = useState<'comments' | 'history' | 'search'>('comments');
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -169,6 +176,22 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [liveSource, setLiveSource] = useState<string>(doc.source);
   const [liveRendered, setLiveRendered] = useState(doc.rendered);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * Comment ID parsed from the URL hash on mount (e.g. `#comment-<id>`).
+   * Cleared after the deep link is processed so thread refreshes don't
+   * re-trigger the scroll.
+   */
+  const pendingDeepLinkCommentId = useRef<string | null>(null);
+
+  // Capture the URL hash once on mount so deep links survive async thread load.
+  // Re-runs on doc.uid change to handle SPA navigation to a deep-linked document.
+  useEffect(() => {
+    const hash = window.location.hash;
+    pendingDeepLinkCommentId.current = hash.startsWith('#comment-')
+      ? hash.slice('#comment-'.length) || null
+      : null;
+  }, [doc.uid]);
 
   /*
    * Per-block source ranges for the live document. Shared by the
@@ -235,6 +258,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(INLINE_COMMENTS_STACKING_KEY, String(inlineCommentsStacking));
   }, [inlineCommentsStacking]);
+  useEffect(() => {
+    localStorage.setItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY, String(inlineCommentsHideResolved));
+  }, [inlineCommentsHideResolved]);
   useEffect(() => {
     void applyTheme(theme);
   }, [theme]);
@@ -345,6 +371,55 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       cancelled = true;
     };
   }, [doc.uid]);
+
+  // Process a pending deep-link comment once threads have loaded.
+  useEffect(() => {
+    const commentId = pendingDeepLinkCommentId.current;
+    if (!commentId || threads.length === 0) return;
+
+    const thread = threads.find((t) => t.comments.some((c) => c.id === commentId));
+    if (!thread) return;
+
+    // Clear so subsequent thread refreshes don't re-scroll.
+    pendingDeepLinkCommentId.current = null;
+
+    // Ensure the inline comments column is visible.
+    setInlineCommentsOpen(true);
+
+    // Focus + scroll the thread card (works for both inline column and right pane).
+    setFocusedThread((prev) => ({
+      threadId: thread.id,
+      nonce: (prev?.nonce ?? 0) + 1,
+      scroll: true,
+    }));
+
+    // For reply comments, additionally scroll to and flash the specific reply
+    // element after the thread card has had time to expand.
+    const isReply = thread.comments[0]?.id !== commentId;
+    if (!isReply) return;
+
+    // innerTimer is assigned inside the outer callback; the ref lets the
+    // cleanup cancel it even if the component unmounts after the outer fires.
+    const innerTimer = { current: null as number | null };
+    const outerTimer = window.setTimeout(() => {
+      const el = document.getElementById(`comment-${commentId}`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      el.classList.add('ic-row-flash');
+      innerTimer.current = window.setTimeout(
+        () => el.classList.remove('ic-row-flash'),
+        COMMENT_FLASH_MS,
+      );
+    }, REPLY_SCROLL_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(outerTimer);
+      if (innerTimer.current !== null) window.clearTimeout(innerTimer.current);
+    };
+    // threads is the real trigger; setInlineCommentsOpen/setFocusedThread are
+    // stable useState dispatchers; pendingDeepLinkCommentId is a ref (not reactive).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threads]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1009,37 +1084,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 <AccessControlDialog doc={doc} onChange={onDocSettingsChanged} />
               </>
             )}
-            <DropdownMenu.Root>
-              {/* Radix Tooltip wrap would break the DropdownMenu trigger;
-                  use the plain HTML `title` attribute on the icon. */}
-              <DropdownMenu.Trigger>
-                <IconButton
-                  variant="soft"
-                  color={APP_ACCENT_COLOR}
-                  size="2"
-                  className="inline-comments-trigger"
-                  aria-label="Comment view options"
-                  title="Comment view options"
-                >
-                  <ChatBubbleIcon />
-                </IconButton>
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Content align="end">
-                <DropdownMenu.CheckboxItem
-                  checked={inlineCommentsOpen}
-                  onCheckedChange={(v) => setInlineCommentsOpen(Boolean(v))}
-                >
-                  Show comments
-                </DropdownMenu.CheckboxItem>
-                <DropdownMenu.CheckboxItem
-                  checked={inlineCommentsStacking}
-                  disabled={!inlineCommentsOpen}
-                  onCheckedChange={(v) => setInlineCommentsStacking(Boolean(v))}
-                >
-                  Stack at top while scrolling
-                </DropdownMenu.CheckboxItem>
-              </DropdownMenu.Content>
-            </DropdownMenu.Root>
+            <Tooltip content={inlineCommentsOpen ? 'Hide comments' : 'Show comments'}>
+              <IconButton
+                variant={inlineCommentsOpen ? 'soft' : 'ghost'}
+                color={APP_ACCENT_COLOR}
+                size="2"
+                className={`inline-comments-trigger ${inlineCommentsOpen ? 'active' : ''}`}
+                aria-label={inlineCommentsOpen ? 'Hide comments' : 'Show comments'}
+                aria-pressed={inlineCommentsOpen}
+                onClick={() => setInlineCommentsOpen((v) => !v)}
+              >
+                <ChatBubbleIcon />
+              </IconButton>
+            </Tooltip>
             <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
               <IconButton
                 variant="soft"
@@ -1208,6 +1265,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   blockRanges={blockRanges}
                   canComment={canComment}
                   stackingEnabled={inlineCommentsStacking}
+                  onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
+                  hideResolved={inlineCommentsHideResolved}
+                  onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}
                   displayName={effectiveDisplayName}
