@@ -206,6 +206,7 @@
    anchored block so the user can spot it after the scroll. */
 .marginalia [data-block].anchor-flash,
 .marginalia [data-subblock].anchor-flash,
+.marginalia mark.comment-highlight.anchor-flash,
 .marginalia mark.comment-highlight-resolved.anchor-flash {
   animation: md-anchor-flash 1.6s ease-out;
 }
