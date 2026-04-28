@@ -529,8 +529,10 @@ describe('documents API', () => {
     );
     expect(updateRes.status).toBe(200);
 
-    const doc = app.db.prepare('SELECT path FROM documents WHERE uid = ?').get(created.uid) as { path: string };
-    const history = await app.store.history(doc.path);
+    const doc = app.db
+      .prepare('SELECT uid, format FROM documents WHERE uid = ?')
+      .get(created.uid) as { uid: string; format: 'markdown' | 'asciidoc' };
+    const history = await app.store.history(doc);
     expect(history[0]?.message).toContain('Fix typo in introduction');
     expect(history[0]?.message).toContain(`X-Marginalia-Client-ID: ${CLIENT_A.id}`);
   });
@@ -549,8 +551,10 @@ describe('documents API', () => {
       }),
     );
 
-    const doc = app.db.prepare('SELECT path FROM documents WHERE uid = ?').get(created.uid) as { path: string };
-    const history = await app.store.history(doc.path);
+    const doc = app.db
+      .prepare('SELECT uid, format FROM documents WHERE uid = ?')
+      .get(created.uid) as { uid: string; format: 'markdown' | 'asciidoc' };
+    const history = await app.store.history(doc);
     expect(history[0]?.message).not.toContain('spoofed-id');
     expect(history[0]?.message).not.toContain('whitespace-spoofed');
     expect(history[0]?.message).toContain(`X-Marginalia-Client-ID: ${CLIENT_A.id}`);

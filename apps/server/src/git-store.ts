@@ -1,125 +1,179 @@
-import * as git from 'isomorphic-git';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
-import { mkdirSync, existsSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import * as git from 'isomorphic-git';
 import type { DocumentFormat } from './db.js';
 
 /**
- * Thin wrapper around isomorphic-git that stores every document as a file
- * at the repo root with a name derived from uid + format
- * (`<uid>.md` or `<uid>.adoc`). Every write is a commit authored by the
- * stable client ID (+ extra Marginalia trailers when needed).
+ * Per-document git storage. Each document lives in its own repo at
+ * `<reposBaseDir>/<uid>/`, with the source pinned to a fixed in-repo
+ * filename (`document.md` for markdown, `document.adoc` for asciidoc).
  *
- * `read()`, `history()`, `readAt()`, `deleteDoc()` take a relative `path`
- * — typically the value already stored in `documents.path`, so callers
- * don't have to re-derive it. `write()` is the outlier: it still takes
- * `uid` + `format` and derives the filename via `docPath()` itself,
- * since an upload is the moment the `path` column gets populated in the
- * first place. The class has both APIs on purpose.
+ * Operations take a `DocLocator` ({ uid, format }) so callers can pass
+ * a `DocumentRow` directly. All writes for a given uid serialize through
+ * a per-doc async mutex. Reads stay outside the lock because writes are
+ * atomic at the filesystem level: we stage to a sibling `.tmp` file and
+ * `rename()` it over the target, so a concurrent reader sees either the
+ * old inode or the fully-written new one — never a 0-byte or partially
+ * filled file. Same precedent as `FsBlobStore.put()`.
+ *
+ * The class is a thin facade over isomorphic-git. New per-doc repos are
+ * lazily initialized on first write; subsequent writes reuse the same
+ * directory without re-initing.
  */
 export class GitStore {
-  constructor(private readonly repoDir: string) {}
+  private readonly chains = new Map<string, Promise<unknown>>();
+  private readonly initialized = new Set<string>();
 
+  constructor(private readonly reposBaseDir: string) {}
+
+  /**
+   * Ensure the base directory exists. Per-doc repos are created lazily
+   * on first write; nothing else happens here.
+   */
   async init(): Promise<void> {
-    mkdirSync(this.repoDir, { recursive: true });
-    const gitDir = join(this.repoDir, '.git');
+    mkdirSync(this.reposBaseDir, { recursive: true });
+  }
+
+  /** Absolute path of a doc's repo dir. Public for migration helpers. */
+  repoDir(uid: string): string {
+    return join(this.reposBaseDir, uid);
+  }
+
+  /** Fixed in-repo filename for the given format. */
+  private filename(format: DocumentFormat): string {
+    return format === 'asciidoc' ? 'document.adoc' : 'document.md';
+  }
+
+  private filepath(doc: DocLocator): string {
+    return join(this.repoDir(doc.uid), this.filename(doc.format));
+  }
+
+  /**
+   * Serialize work for a single doc. Concurrent writes / accepts on the
+   * same uid wait their turn; different uids run in parallel.
+   */
+  private async withLock<T>(uid: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.chains.get(uid) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    // Track a swallowed version so a thrown error doesn't poison
+    // subsequent calls in the chain.
+    const tracker = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.chains.set(uid, tracker);
+    try {
+      return await next;
+    } finally {
+      if (this.chains.get(uid) === tracker) {
+        this.chains.delete(uid);
+      }
+    }
+  }
+
+  private async ensureDocRepo(uid: string): Promise<void> {
+    if (this.initialized.has(uid)) return;
+    const dir = this.repoDir(uid);
+    mkdirSync(dir, { recursive: true });
+    const gitDir = join(dir, '.git');
     if (!existsSync(gitDir)) {
-      await git.init({ fs, dir: this.repoDir, defaultBranch: 'main' });
-      // Seed with an initial empty commit so log() always works.
-      writeFileSync(join(this.repoDir, '.marginalia-root'), 'marginalia repo\n');
-      await git.add({ fs, dir: this.repoDir, filepath: '.marginalia-root' });
+      await git.init({ fs, dir, defaultBranch: 'main' });
+      // Seed with an empty marker commit so log() works before the
+      // first real write.
+      writeFileSync(join(dir, '.marginalia-root'), 'marginalia repo\n');
+      await git.add({ fs, dir, filepath: '.marginalia-root' });
       await git.commit({
         fs,
-        dir: this.repoDir,
+        dir,
         message: 'init',
         author: { name: 'marginalia', email: 'system@marginalia.local' },
       });
     }
+    this.initialized.add(uid);
   }
 
-  docPath(uid: string, format: DocumentFormat = 'markdown'): string {
-    return format === 'asciidoc' ? `${uid}.adoc` : `${uid}.md`;
-  }
-
-  absPath(path: string): string {
-    return join(this.repoDir, path);
-  }
-
-  read(path: string): string {
-    return readFileSync(this.absPath(path), 'utf8');
+  read(doc: DocLocator): string {
+    return readFileSync(this.filepath(doc), 'utf8');
   }
 
   async write(
-    uid: string,
-    format: DocumentFormat,
+    doc: DocLocator,
     content: string,
     author: { displayName: string; clientId: string },
     action: 'upload' | 'update' | 'restore' | 'accept-proposal',
     meta: { proposalId?: string; restoredFromOid?: string; commitMessage?: string } = {},
-  ): Promise<{ oid: string; path: string }> {
-    const path = this.docPath(uid, format);
-    writeFileSync(this.absPath(path), content);
-    await git.add({ fs, dir: this.repoDir, filepath: path });
-    const subject =
-      action === 'accept-proposal' ? `${action}: ${meta.proposalId ?? uid}` : `${action}: ${uid}`;
-    const trailers = [
-      `X-Marginalia-Client-ID: ${author.clientId}`,
-      meta.proposalId ? `X-Marginalia-Proposal-ID: ${meta.proposalId}` : null,
-      meta.restoredFromOid ? `X-Marginalia-Restored-From: ${meta.restoredFromOid}` : null,
-    ].filter((line): line is string => Boolean(line));
-    const sanitizedCommitMessage = meta.commitMessage
-      ? meta.commitMessage
-          .split('\n')
-          .filter((line) => !line.trim().startsWith('X-Marginalia-'))
-          .join('\n')
-          .trim() || undefined
-      : undefined;
-    const bodyParts = sanitizedCommitMessage ? [sanitizedCommitMessage, trailers.join('\n')] : [trailers.join('\n')];
-    const oid = await git.commit({
-      fs,
-      dir: this.repoDir,
-      message: `${subject}\n\n${bodyParts.join('\n\n')}\n`,
-      author: {
-        name: author.clientId,
-        email: `${author.clientId}@marginalia.local`,
-      },
+  ): Promise<{ oid: string }> {
+    return this.withLock(doc.uid, async () => {
+      await this.ensureDocRepo(doc.uid);
+      const dir = this.repoDir(doc.uid);
+      const filename = this.filename(doc.format);
+      atomicWrite(join(dir, filename), content);
+      await git.add({ fs, dir, filepath: filename });
+      const subject =
+        action === 'accept-proposal'
+          ? `${action}: ${meta.proposalId ?? doc.uid}`
+          : `${action}: ${doc.uid}`;
+      const trailers = [
+        `X-Marginalia-Client-ID: ${author.clientId}`,
+        meta.proposalId ? `X-Marginalia-Proposal-ID: ${meta.proposalId}` : null,
+        meta.restoredFromOid ? `X-Marginalia-Restored-From: ${meta.restoredFromOid}` : null,
+      ].filter((line): line is string => Boolean(line));
+      const sanitizedCommitMessage = meta.commitMessage
+        ? meta.commitMessage
+            .split('\n')
+            .filter((line) => !line.trim().startsWith('X-Marginalia-'))
+            .join('\n')
+            .trim() || undefined
+        : undefined;
+      const bodyParts = sanitizedCommitMessage
+        ? [sanitizedCommitMessage, trailers.join('\n')]
+        : [trailers.join('\n')];
+      const oid = await git.commit({
+        fs,
+        dir,
+        message: `${subject}\n\n${bodyParts.join('\n\n')}\n`,
+        author: {
+          name: author.clientId,
+          email: `${author.clientId}@marginalia.local`,
+        },
+      });
+      return { oid };
     });
-    return { oid, path };
   }
 
   /**
-   * Permanently remove a document's file and commit the deletion. NOTE:
-   * old commit blobs still hold the previous content in the git object
-   * database (not exposed via any API). If "no trace" needs to extend to
-   * the on-disk blobs too, follow up with a `git gc --prune=now` after
-   * history rewriting — deliberately left out for now.
+   * Delete a doc's repo entirely. Called when the document itself is
+   * deleted — the repo *is* the document's history, so dropping the
+   * directory drops the history with it. No commit is made; no readers
+   * remain.
    */
-  async deleteDoc(
-    path: string,
-    uid: string,
-    author: { displayName: string; clientId: string },
-  ): Promise<void> {
-    const absPath = this.absPath(path);
-    if (existsSync(absPath)) {
-      rmSync(absPath, { force: true });
-    }
-    await git.remove({ fs, dir: this.repoDir, filepath: path });
-    await git.commit({
-      fs,
-      dir: this.repoDir,
-      message: `delete: ${uid}\n\nX-Marginalia-Client-ID: ${author.clientId}\n`,
-      author: {
-        name: author.clientId,
-        email: `${author.clientId}@marginalia.local`,
-      },
+  async destroyDocRepo(uid: string): Promise<void> {
+    return this.withLock(uid, async () => {
+      const dir = this.repoDir(uid);
+      if (existsSync(dir)) {
+        rmSync(dir, { recursive: true, force: true });
+      }
+      this.initialized.delete(uid);
     });
   }
 
-  async history(path: string): Promise<HistoryEntry[]> {
+  async history(doc: DocLocator): Promise<HistoryEntry[]> {
+    const dir = this.repoDir(doc.uid);
+    if (!existsSync(join(dir, '.git'))) return [];
     const entries = await git.log({
       fs,
-      dir: this.repoDir,
-      filepath: path,
+      dir,
+      filepath: this.filename(doc.format),
       force: true, // include even if file was deleted in later commits
     });
     return entries.map((e) => ({
@@ -133,39 +187,67 @@ export class GitStore {
     }));
   }
 
-  async diffAt(path: string, oid: string): Promise<{ before: string; after: string } | null> {
-    const after = await this.tryReadAt(path, oid);
+  async diffAt(doc: DocLocator, oid: string): Promise<{ before: string; after: string } | null> {
+    const after = await this.tryReadAt(doc, oid);
     if (after === null) return null;
 
     let parentOid: string | undefined;
     try {
-      const { commit } = await git.readCommit({ fs, dir: this.repoDir, oid });
+      const { commit } = await git.readCommit({ fs, dir: this.repoDir(doc.uid), oid });
       parentOid = commit.parent[0];
     } catch {
       return null;
     }
 
-    const before = parentOid ? (await this.tryReadAt(path, parentOid)) ?? '' : '';
+    const before = parentOid ? ((await this.tryReadAt(doc, parentOid)) ?? '') : '';
     return { before, after };
   }
 
-  async readAt(path: string, oid: string): Promise<string> {
+  async readAt(doc: DocLocator, oid: string): Promise<string> {
     const { blob } = await git.readBlob({
       fs,
-      dir: this.repoDir,
+      dir: this.repoDir(doc.uid),
       oid,
-      filepath: path,
+      filepath: this.filename(doc.format),
     });
     return new TextDecoder().decode(blob);
   }
 
-  private async tryReadAt(path: string, oid: string): Promise<string | null> {
+  private async tryReadAt(doc: DocLocator, oid: string): Promise<string | null> {
     try {
-      return await this.readAt(path, oid);
+      return await this.readAt(doc, oid);
     } catch {
       return null;
     }
   }
+}
+
+/**
+ * Stage to a sibling temp file in the same directory, then `rename()`
+ * over the target. `rename()` is atomic on the same filesystem, so a
+ * concurrent `readFileSync` always sees either the previous inode or
+ * the fully-written new one — never the truncate-then-fill window that
+ * a plain `writeFileSync` exposes. Same precedent as `FsBlobStore.put`.
+ */
+function atomicWrite(target: string, content: string): void {
+  const tmp = `${target}.${randomBytes(6).toString('hex')}.tmp`;
+  try {
+    writeFileSync(tmp, content);
+    renameSync(tmp, target);
+  } catch (err) {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* best effort — leave the temp file for a later sweeper */
+    }
+    throw err;
+  }
+}
+
+/** What the store needs to identify a doc. `DocumentRow` is a superset. */
+export interface DocLocator {
+  uid: string;
+  format: DocumentFormat;
 }
 
 export interface HistoryEntry {

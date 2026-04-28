@@ -170,7 +170,7 @@ async function createThread(c: Context, deps: AppDeps) {
   // Read file source before opening the transaction so we don't hold a
   // SQLite write lock during filesystem I/O (consistent with the accept/reopen
   // paths in prepareAcceptProposalThread / prepareReopenAcceptedProposalThread).
-  const currentSource = proposal ? store.read(doc.path) : null;
+  const currentSource = proposal ? store.read(doc) : null;
   const sourceSnapshot = currentSource
     ? (readProposalBlockSource(doc, currentSource, anchor.blockId) ?? anchor.quote)
     : null;
@@ -755,7 +755,7 @@ async function prepareAcceptProposalThread(
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
 
-  const source = deps.store.read(doc.path);
+  const source = deps.store.read(doc);
   const range =
     doc.format === 'asciidoc'
       ? (locateAllBlocksAsciidoc(source).get(row.anchor_block_id) ?? null)
@@ -782,8 +782,7 @@ async function prepareAcceptProposalThread(
 
   const nextSource = source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
   const { oid } = await deps.store.write(
-    doc.uid,
-    doc.format,
+    doc,
     nextSource,
     identity,
     'accept-proposal',
@@ -894,17 +893,17 @@ async function prepareReopenAcceptedProposalThread(
 ): Promise<PreparedThreadWorkflow> {
   if (!row.accepted_oid) throw new ThreadActionError(409, 'not-reopenable');
 
-  const history = await deps.store.history(doc.path);
+  const history = await deps.store.history(doc);
   const latest = history[0];
   const parent = history[1];
   if (!latest || latest.oid !== row.accepted_oid || !parent) {
     throw new ThreadActionError(409, 'not-reopenable');
   }
 
-  const diff = await deps.store.diffAt(doc.path, row.accepted_oid);
+  const diff = await deps.store.diffAt(doc, row.accepted_oid);
   if (!diff) throw new ThreadActionError(409, 'not-reopenable');
 
-  const { oid } = await deps.store.write(doc.uid, doc.format, diff.before, identity, 'restore', {
+  const { oid } = await deps.store.write(doc, diff.before, identity, 'restore', {
     restoredFromOid: parent.oid,
   });
 
@@ -1043,7 +1042,7 @@ async function loadReopenableAcceptedThreadIds(
   const accepted = rows.filter((row) => row.proposal_status === 'accepted' && row.accepted_oid);
   if (accepted.length === 0) return new Set<string>();
 
-  const history = await deps.store.history(doc.path);
+  const history = await deps.store.history(doc);
   const latest = history[0];
   const parent = history[1];
   if (!latest || !parent) return new Set<string>();

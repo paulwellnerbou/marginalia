@@ -127,7 +127,7 @@ export async function resolveProposalDiffBefore(
   const snapshot = proposal.source_snapshot ?? proposal.anchor_quote ?? '';
 
   if (proposal.proposal_status !== 'accepted') {
-    const liveSource = deps.store.read(doc.path);
+    const liveSource = deps.store.read(doc);
     const liveBlock = readProposalBlockSource(doc, liveSource, proposal.anchor_block_id);
     if (!liveBlock) return snapshot;
     if (liveBlock === proposal.proposed_text && snapshot !== proposal.proposed_text)
@@ -158,7 +158,7 @@ async function resolveAcceptedProposalSnapshot(
 
   if (!proposal.decided_at) return null;
 
-  const history = await deps.store.history(doc.path);
+  const history = await deps.store.history(doc);
   const candidates = history
     .filter((entry) => entry.message.startsWith('accept-proposal:'))
     .sort(
@@ -182,7 +182,7 @@ async function readAcceptedProposalSnapshotAtCommit(
   acceptedOid: string,
   deps: AppDeps,
 ): Promise<string | null> {
-  const diff = await deps.store.diffAt(doc.path, acceptedOid);
+  const diff = await deps.store.diffAt(doc, acceptedOid);
   if (!diff) return null;
 
   // Fast path: block ID is stable across the accept — find the pre-accept source

@@ -174,14 +174,18 @@ describe('openDatabase migrations', () => {
     expect(nameCol).toBeDefined();
     expect(nameCol!.notnull).toBe(0);
 
-    const row = db.prepare('SELECT uid, path, name FROM documents WHERE uid = ?').get('doc-1') as {
-      uid: string;
-      path: string;
-      name: string | null;
-    };
+    // The path column has been replaced by repo_dir; legacy rows get
+    // backfilled to repo_dir = uid as part of the migration.
+    expect(cols.some((c) => c.name === 'path')).toBe(false);
+    const repoDirCol = cols.find((c) => c.name === 'repo_dir');
+    expect(repoDirCol).toBeDefined();
+
+    const row = db
+      .prepare('SELECT uid, repo_dir, name FROM documents WHERE uid = ?')
+      .get('doc-1') as { uid: string; repo_dir: string; name: string | null };
     expect(row).toEqual({
       uid: 'doc-1',
-      path: 'docs/doc-1.md',
+      repo_dir: 'doc-1',
       name: null,
     });
     db.close();

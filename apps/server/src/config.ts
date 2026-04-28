@@ -4,7 +4,10 @@ import { fileURLToPath } from 'node:url';
 export interface ServerConfig {
   port: number;
   dataDir: string;
-  repoDir: string;
+  /** Base directory for per-document git repos. Each doc lives at `<reposDir>/<uid>/`. */
+  reposDir: string;
+  /** Legacy single-repo location, kept so the per-doc migration can read it. */
+  legacyRepoDir: string;
   blobDir: string;
   dbPath: string;
   webDir: string;
@@ -46,7 +49,8 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
   return {
     port: overrides.port ?? Number(process.env.PORT ?? 3434),
     dataDir,
-    repoDir: overrides.repoDir ?? join(dataDir, 'repo'),
+    reposDir: overrides.reposDir ?? join(dataDir, 'repos'),
+    legacyRepoDir: overrides.legacyRepoDir ?? join(dataDir, 'repo'),
     blobDir: overrides.blobDir ?? join(dataDir, 'blobs'),
     dbPath: overrides.dbPath ?? join(dataDir, 'db.sqlite'),
     webDir,
