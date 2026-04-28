@@ -88,6 +88,7 @@ import { ProposalComposer } from './ThreadComposer.js';
 import { Toc } from './Toc.js';
 import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
 import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
+import { COMMENT_FLASH_MS } from './inline-comments/inlineUtils.js';
 
 const MAX_WIDTH_KEY = 'marginalia.maxWidth';
 const TEXT_ZOOM_KEY = 'marginalia.textZoom';
@@ -97,8 +98,6 @@ const INLINE_COMMENTS_OPEN_KEY = 'marginalia.inlineCommentsOpen';
 const INLINE_COMMENTS_STACKING_KEY = 'marginalia.inlineCommentsStacking';
 const INLINE_COMMENTS_HIDE_RESOLVED_KEY = 'marginalia.inlineCommentsHideResolved';
 const COLLAPSED_WIDTH = 36;
-/** Duration of the comment/row flash animation in ms. Must match the CSS `ic-flash` keyframe. */
-const COMMENT_FLASH_MS = 760;
 /** Delay before scrolling to a specific reply after the parent thread has expanded (ms). */
 const REPLY_SCROLL_DELAY_MS = 900;
 
@@ -397,15 +396,28 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     // For reply comments, additionally scroll to and flash the specific reply
     // element after the thread card has had time to expand.
     const isReply = thread.comments[0]?.id !== commentId;
-    if (isReply) {
-      window.setTimeout(() => {
-        const el = document.getElementById(`comment-${commentId}`);
-        if (!el) return;
-        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-        el.classList.add('ic-row-flash');
-        window.setTimeout(() => el.classList.remove('ic-row-flash'), COMMENT_FLASH_MS);
-      }, REPLY_SCROLL_DELAY_MS);
-    }
+    if (!isReply) return;
+
+    // innerTimer is assigned inside the outer callback; the ref lets the
+    // cleanup cancel it even if the component unmounts after the outer fires.
+    const innerTimer = { current: null as number | null };
+    const outerTimer = window.setTimeout(() => {
+      const el = document.getElementById(`comment-${commentId}`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      el.classList.add('ic-row-flash');
+      innerTimer.current = window.setTimeout(
+        () => el.classList.remove('ic-row-flash'),
+        COMMENT_FLASH_MS,
+      );
+    }, REPLY_SCROLL_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(outerTimer);
+      if (innerTimer.current !== null) window.clearTimeout(innerTimer.current);
+    };
+    // threads is the real trigger; setInlineCommentsOpen/setFocusedThread are
+    // stable useState dispatchers; pendingDeepLinkCommentId is a ref (not reactive).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threads]);
 

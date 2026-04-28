@@ -19,6 +19,7 @@ import {
 import { InlineCommentsToolbar } from './InlineCommentsToolbar.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
+import { COMMENT_FLASH_MS } from './inlineUtils.js';
 
 interface Props {
   uid: string;
@@ -94,7 +95,6 @@ const STACK_GAP_PX = 8;
  */
 const TOOLBAR_TOP_OFFSET_PX = 8;
 const TOOLBAR_BASE_TOP_PAD_PX = TOOLBAR_TOP_OFFSET_PX + STACK_GAP_PX;
-const FLASH_MS = 760;
 const FOCUS_MS = 1800;
 
 /**
@@ -623,7 +623,7 @@ export function InlineCommentsLayer({
       : -1;
     const flashT = window.setTimeout(() => {
       setFlash((cur) => (cur?.id === focusedThread.threadId && cur.phase === phase ? null : cur));
-    }, FLASH_MS);
+    }, COMMENT_FLASH_MS);
     const focusT = window.setTimeout(() => {
       setFocusedId((cur) => (cur === focusedThread.threadId ? null : cur));
     }, FOCUS_MS);

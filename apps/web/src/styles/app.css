@@ -2002,12 +2002,6 @@ button.primary:disabled {
   color: var(--ui-fg);
 }
 
-/* Sticky toolbar pinned to the top of the comment column. The
-   InlineCommentsLayer measures its height and shifts every card's
-   sticky-top offset by that amount so cards stack below it. Margins
-   match the .ic-anchor-slot insets so the toolbar visually aligns
-   with the comment cards. Fixed height keeps the bar from jumping
-   when toggle buttons swap visual state. */
 /* Sticky toolbar pinned near the top of the comment column, with a
    small gap below the doc chrome so it doesn't visually merge with
    the bar above. The InlineCommentsLayer measures this element's

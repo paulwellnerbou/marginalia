@@ -1,3 +1,6 @@
+/** Duration of the ic-flash CSS keyframe in ms. Must stay in sync with `app.css`. */
+export const COMMENT_FLASH_MS = 760;
+
 export function inlineAvatarInitials(name: string): string {
   const trimmed = name.trim();
   if (!trimmed) return '?';
