@@ -491,7 +491,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return { clientId: getClientId(), displayName: name };
   }
 
-  const scrollToAnchor = useCallback((blockId: string, quote?: string | null, threadId?: string) => {
+  const scrollToAnchor = useCallback((blockId: string, quote?: string | null, threadId?: string, scrollOffset = 0) => {
     const root = docRef.current;
     if (!root) return;
 
@@ -528,7 +528,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     }
 
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const scroll = docScrollRef.current;
+    if (scrollOffset > 0 && scroll) {
+      const targetTop =
+        target.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop;
+      scroll.scrollTo({ top: targetTop - scrollOffset, behavior: 'smooth' });
+    } else {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
     target.classList.add('anchor-flash');
     window.setTimeout(() => target?.classList.remove('anchor-flash'), 1600);
   }, []);

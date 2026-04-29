@@ -68,7 +68,7 @@ interface Props {
     name?: string,
   ) => Promise<void>;
   onEditProposalRationale: (id: string, rationale: string | null) => Promise<void>;
-  onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
+  onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string, scrollOffset?: number) => void;
 }
 
 interface OrderItem {
@@ -255,6 +255,19 @@ export function InlineCommentsLayer({
     }
     return items;
   }, [sorted, canComment, pendingAnchor, blockOrder]);
+
+  /**
+   * When stacking is disabled, cards sit at their natural anchor
+   * positions (no stickyTopPad offset). Wrap onScrollToAnchor to
+   * inject the stickyTopPad so the scrolled-to text appears with
+   * the same clearance below the toolbar as in stacking mode.
+   */
+  const scrollToAnchorWithOffset = useCallback(
+    (blockId: string, quote?: string | null, threadId?: string) => {
+      onScrollToAnchor(blockId, quote, threadId, stackingEnabled ? 0 : stickyTopPad);
+    },
+    [onScrollToAnchor, stackingEnabled, stickyTopPad],
+  );
 
   const cardEls = useRef<Map<string, HTMLDivElement>>(new Map());
   const cardHeights = useRef<Map<string, number>>(new Map());
@@ -679,7 +692,7 @@ export function InlineCommentsLayer({
     if (!item) return null;
     const blockId = item.thread.anchor.block_id;
     const onJump = blockId
-      ? () => onScrollToAnchor(blockId, item.thread.anchor.quote, item.thread.id)
+      ? () => scrollToAnchorWithOffset(blockId, item.thread.anchor.quote, item.thread.id)
       : undefined;
     return (
       <InlineThreadCard
@@ -727,7 +740,7 @@ export function InlineCommentsLayer({
         onToggleStacking={onToggleStacking}
         hideResolved={hideResolved}
         onToggleHideResolved={onToggleHideResolved}
-        onScrollToAnchor={onScrollToAnchor}
+        onScrollToAnchor={scrollToAnchorWithOffset}
       />
       {renderItems.map((item, k) => {
         const naturalTop = orderedMetrics.anchors[k] ?? 0;
