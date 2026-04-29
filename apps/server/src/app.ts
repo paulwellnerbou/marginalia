@@ -8,6 +8,7 @@ import type { ServerConfig } from './config.js';
 import { openDatabase } from './db.js';
 import { GitStore } from './git-store.js';
 import { migrateSharedRepoToPerDoc } from './git-store-migration.js';
+import { backfillProposalBranches } from './proposal-branch-backfill.js';
 import { Realtime } from './realtime.js';
 import { closeExportBrowser } from './export/pdf.js';
 import { assetsRouter } from './routes/assets.js';
@@ -42,6 +43,9 @@ export async function createApp(config: ServerConfig): Promise<App> {
   await migrateSharedRepoToPerDoc(db, config.legacyRepoDir, config.reposDir);
   const store = new GitStore(config.reposDir);
   await store.init();
+  // One-shot: build refs/proposals/<pid> for any pending proposal that
+  // predates issue #25. Idempotent — already-backfilled rows skip.
+  await backfillProposalBranches(db, store);
   const blobs = createBlobStore(config);
   const realtime = new Realtime();
 
