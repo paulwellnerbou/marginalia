@@ -1,11 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import {
-  locateAllBlocks,
-  locateAllBlocksAsciidoc,
-  locateBlockSource,
-  renderDocument,
-} from '@marginalia/renderer';
+import { renderDocument } from '@marginalia/renderer';
 import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -1337,10 +1332,7 @@ function locateBlockRange(
   source: string,
   blockId: string,
 ): BlockSourceRange | null {
-  return (
-    locateDocumentBlocks(doc, source).get(blockId) ??
-    (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId))
-  );
+  return locateDocumentBlocks(doc, source).get(blockId) ?? null;
 }
 
 /**
