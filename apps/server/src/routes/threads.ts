@@ -1286,7 +1286,7 @@ function asProposal(
   if (typeof v !== 'object') return { ok: false, error: 'proposal-text-required' };
   const proposal = v as Record<string, unknown>;
   const proposedText = typeof proposal.proposed_text === 'string' ? proposal.proposed_text : null;
-  if (proposedText === null || proposedText.length === 0 || proposedText.length > 20000) {
+  if (proposedText === null || proposedText.length > 20000) {
     return { ok: false, error: 'proposal-text-required' };
   }
   return {

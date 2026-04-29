@@ -93,7 +93,7 @@ function ProposalComposerBody({
     setRationale('');
   }, [target.block_id, originalSource]);
 
-  const changed = value !== originalSource && value.trim().length > 0;
+  const changed = value !== originalSource;
   const ready = changed && (!needsName || name.trim().length > 0);
 
   async function send() {

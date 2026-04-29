@@ -859,6 +859,29 @@ describe('threads API', () => {
     expect(await res.json()).toEqual({ error: 'proposal-text-required' });
   });
 
+  test('proposal can set block text to empty string', async () => {
+    const uid = await newDoc('# Title');
+    const blockId = await firstBlockId(uid);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          proposal: {
+            anchor_kind: 'heading',
+            proposed_text: '',
+          },
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as { thread: ThreadShape };
+    expect(created.thread.proposal?.proposed_text).toBe('');
+  });
+
   test('invalid proposal rationale is rejected instead of silently dropped', async () => {
     const uid = await newDoc('# Title');
     const blockId = await firstBlockId(uid);
