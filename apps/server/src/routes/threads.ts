@@ -917,6 +917,7 @@ async function prepareAcceptProposalThread(
     oid = merge.oid;
     nextSource = deps.store.read(doc);
     spliceStart = locatePostMergeSpliceStart(
+      doc,
       nextSource,
       row.proposed_text,
       preMergeRange.start,
@@ -1336,32 +1337,36 @@ function locateBlockRange(
 }
 
 /**
- * Find `proposedText` in `nextSource`, breaking ties by proximity to
- * `baselineStart` (the splice site in pre-merge source). 3-way merges
- * can shift byte positions, so the pre-merge offset is only a baseline.
+ * Find the block-boundary position in `nextSource` where `proposedText`
+ * was inserted by the merge. The splice always starts at a block start
+ * (the branch was built that way against base), so we only consider
+ * candidate positions that align with a block boundary — `indexOf`
+ * alone could match common short text inside an unrelated block.
+ *
+ * Ties broken by proximity to `baselineStart` (the splice site in
+ * pre-merge source). Falls back to `baselineStart` if no block start
+ * carries the proposed text.
  */
 function locatePostMergeSpliceStart(
+  doc: DocumentRow,
   nextSource: string,
   proposedText: string,
   baselineStart: number,
 ): number {
   if (proposedText.length === 0) return baselineStart;
-  const first = nextSource.indexOf(proposedText);
-  if (first === -1) return baselineStart;
-  const second = nextSource.indexOf(proposedText, first + 1);
-  if (second === -1) return first;
-  let bestPos = first;
-  let bestDist = Math.abs(first - baselineStart);
-  let pos = second;
-  while (pos !== -1) {
-    const dist = Math.abs(pos - baselineStart);
+  let bestStart: number | null = null;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const range of locateDocumentBlocks(doc, nextSource).values()) {
+    if (nextSource.slice(range.start, range.start + proposedText.length) !== proposedText) {
+      continue;
+    }
+    const dist = Math.abs(range.start - baselineStart);
     if (dist < bestDist) {
-      bestPos = pos;
+      bestStart = range.start;
       bestDist = dist;
     }
-    pos = nextSource.indexOf(proposedText, pos + 1);
   }
-  return bestPos;
+  return bestStart ?? baselineStart;
 }
 
 function locateAcceptedProposalAnchor(
