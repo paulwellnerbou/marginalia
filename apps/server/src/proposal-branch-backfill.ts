@@ -25,6 +25,9 @@ export async function backfillProposalBranches(
                   c.author_client_id      AS author_client_id,
                   c.author_display_name   AS author_display_name,
                   cep.proposed_text       AS proposed_text,
+                  cep.base_oid            AS base_oid,
+                  cep.base_block_start    AS base_block_start,
+                  cep.base_block_end      AS base_block_end,
                   d.format                AS format
              FROM comments_edit_proposals cep
              JOIN comments c   ON c.id  = cep.comment_id
@@ -42,6 +45,9 @@ export async function backfillProposalBranches(
                     c.author_client_id      AS author_client_id,
                     c.author_display_name   AS author_display_name,
                     cep.proposed_text       AS proposed_text,
+                    cep.base_oid            AS base_oid,
+                    cep.base_block_start    AS base_block_start,
+                    cep.base_block_end      AS base_block_end,
                     d.format                AS format
                FROM comments_edit_proposals cep
                JOIN comments c   ON c.id  = cep.comment_id
@@ -60,6 +66,9 @@ export async function backfillProposalBranches(
     author_client_id: string;
     author_display_name: string;
     proposed_text: string;
+    base_oid: string | null;
+    base_block_start: number | null;
+    base_block_end: number | null;
     format: DocumentFormat;
   }>;
 
@@ -80,40 +89,50 @@ export async function backfillProposalBranches(
 
   for (const row of rows) {
     const doc = { uid: row.doc_uid, format: row.format };
+
+    // If the row already carries base metadata (a post-#25 row whose
+    // branch creation failed at create time), reuse it — the original
+    // base is the proposal's stable parent and must not be re-based onto
+    // current main. Otherwise pick current main as the base and locate
+    // the splice site by anchor_block_id.
+    const hasStoredBase =
+      row.base_oid !== null && row.base_block_start !== null && row.base_block_end !== null;
     let baseOid: string;
-    let source: string;
+    let rangeStart: number;
+    let rangeEnd: number;
+    let nextSource: string;
     try {
-      // Resolve baseOid first, then read source AT that oid — keeps the
-      // splice and the eventual proposal-branch parent on the same tree
-      // even if main advances during the loop.
-      baseOid = await store.mainOid(doc);
-      source = await store.readAt(doc, baseOid);
+      if (hasStoredBase) {
+        baseOid = row.base_oid as string;
+        const base = await store.readAt(doc, baseOid);
+        rangeStart = row.base_block_start as number;
+        rangeEnd = row.base_block_end as number;
+        nextSource = base.slice(0, rangeStart) + row.proposed_text + base.slice(rangeEnd);
+      } else {
+        baseOid = await store.mainOid(doc);
+        const source = await store.readAt(doc, baseOid);
+        const blocks =
+          doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
+        const range = blocks.get(row.anchor_block_id);
+        if (!range) {
+          skipped += 1;
+          continue;
+        }
+        rangeStart = range.start;
+        rangeEnd = range.end;
+        nextSource = source.slice(0, rangeStart) + row.proposed_text + source.slice(rangeEnd);
+      }
     } catch {
       skipped += 1;
       continue;
     }
-    const blocks =
-      doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
-    const range = blocks.get(row.anchor_block_id) ?? null;
-    if (!range) {
-      skipped += 1;
-      continue;
-    }
-    const nextSource =
-      source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
 
     try {
       const { refName } = await store.createProposalBranch(doc, baseOid, row.id, nextSource, {
         clientId: row.author_client_id,
         displayName: row.author_display_name,
       });
-      persist.push({
-        id: row.id,
-        refName,
-        baseOid,
-        rangeStart: range.start,
-        rangeEnd: range.end,
-      });
+      persist.push({ id: row.id, refName, baseOid, rangeStart, rangeEnd });
     } catch (err) {
       console.warn(
         `[marginalia] proposal-branch backfill failed for ${row.id} (${row.doc_uid}):`,
@@ -128,9 +147,16 @@ export async function backfillProposalBranches(
   // path set the ref between our SELECT and now, so we never clobber a
   // newer branch.
   if (persist.length > 0) {
+    // COALESCE preserves any existing base metadata defensively: the
+    // loop already reuses stored values when present, but if a
+    // concurrent path set them between SELECT and UPDATE we must not
+    // overwrite them.
     const update = db.prepare(
       `UPDATE comments_edit_proposals
-          SET branch_ref = ?, base_oid = ?, base_block_start = ?, base_block_end = ?
+          SET branch_ref = ?,
+              base_oid = COALESCE(base_oid, ?),
+              base_block_start = COALESCE(base_block_start, ?),
+              base_block_end = COALESCE(base_block_end, ?)
         WHERE comment_id = ? AND branch_ref IS NULL`,
     );
     db.exec('BEGIN');

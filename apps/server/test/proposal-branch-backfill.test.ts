@@ -237,4 +237,80 @@ describe('backfillProposalBranches', () => {
 
     db.close();
   });
+
+  test('preserves stored base_oid + byte range when only branch_ref is missing', async () => {
+    // Simulates a row from createThread where base reads succeeded but
+    // createProposalBranch failed (e.g. transient git error). The row
+    // has base_oid + base_block_{start,end} populated and branch_ref
+    // null. Backfill must NOT re-base it onto current main; the
+    // original base is the proposal's stable parent.
+    const db = openDatabase(dbPath);
+    db.prepare(
+      `INSERT INTO documents (uid, repo_dir, format, default_theme, created_at, updated_at)
+       VALUES ('doc-1', 'doc-1', 'markdown', 'default', 0, 0)`,
+    ).run();
+    const store = new GitStore(reposDir);
+    await store.init();
+
+    // Original main: contains "alpha".
+    await store.write(
+      { uid: 'doc-1', format: 'markdown' },
+      '# Title\n\nalpha',
+      { displayName: 'orig', clientId: 'orig' },
+      'upload',
+    );
+    const originalBaseOid = await store.mainOid({ uid: 'doc-1', format: 'markdown' });
+
+    // Insert the proposal row with the original base captured but no
+    // branch_ref. Block id doesn't matter — the loop must not re-locate.
+    db.prepare(
+      `INSERT INTO comments
+         (id, doc_uid, anchor_block_id, anchor_quote,
+          author_client_id, author_display_name,
+          body, link_status, created_at, updated_at)
+       VALUES ('prop-1', 'doc-1', 'doesnt-matter', 'alpha',
+               'alice', 'Alice', '', 'linked', 0, 0)`,
+    ).run();
+    db.prepare(
+      `INSERT INTO comments_edit_proposals
+         (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid,
+          branch_ref, base_oid, base_block_start, base_block_end)
+       VALUES ('prop-1', NULL, 'alpha', 'beta', 'open', NULL,
+               NULL, ?, 10, 15)`,
+    ).run(originalBaseOid);
+
+    // Main moves on (someone else edited the doc) — the *current* main
+    // is no longer the proposal's base.
+    await store.write(
+      { uid: 'doc-1', format: 'markdown' },
+      '# Title\n\nalpha\n\nadded paragraph',
+      { displayName: 'orig', clientId: 'orig' },
+      'update',
+    );
+    const newMainOid = await store.mainOid({ uid: 'doc-1', format: 'markdown' });
+    expect(newMainOid).not.toBe(originalBaseOid);
+
+    const summary = await backfillProposalBranches(db, store);
+    expect(summary.migrated).toBe(1);
+
+    const row = db
+      .prepare(
+        `SELECT branch_ref, base_oid, base_block_start, base_block_end
+           FROM comments_edit_proposals WHERE comment_id = 'prop-1'`,
+      )
+      .get() as {
+      branch_ref: string;
+      base_oid: string;
+      base_block_start: number;
+      base_block_end: number;
+    };
+    // branch_ref is now set, but the base_* values must be the original
+    // ones we stored — NOT the new main tip.
+    expect(row.branch_ref).toBe('refs/proposals/prop-1');
+    expect(row.base_oid).toBe(originalBaseOid);
+    expect(row.base_block_start).toBe(10);
+    expect(row.base_block_end).toBe(15);
+
+    db.close();
+  });
 });
