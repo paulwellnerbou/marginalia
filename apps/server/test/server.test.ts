@@ -1267,6 +1267,125 @@ describe('documents API', () => {
     ).toBe(proposal.thread.id);
   });
 
+  test('rejecting a proposal deletes its branch ref; reopening recreates it (#25)', async () => {
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          body: 'please change',
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+
+    const docLocator = { uid: created.uid, format: 'markdown' as const };
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe(
+      '# Title\n\nbeta',
+    );
+
+    const rejectRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'reject' }),
+        },
+      ),
+    );
+    expect(rejectRes.status).toBe(200);
+
+    // After reject the branch ref must be gone — no dangling
+    // refs/proposals/<pid> hanging around for a dead proposal.
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeNull();
+
+    // Reopen rebuilds the branch from the stored base_oid + proposed_text
+    // so a subsequent accept can still use the git.merge path.
+    const reopenRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'reopen' }),
+        },
+      ),
+    );
+    expect(reopenRes.status).toBe(200);
+
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe(
+      '# Title\n\nbeta',
+    );
+
+    // And accepting after reopen still works end-to-end through git.merge.
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(((await docRes.json()) as { source: string }).source).toBe('# Title\n\nbeta');
+  });
+
+  test('deleting a proposal thread also deletes its branch ref (#25)', async () => {
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          body: 'please change',
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+
+    const docLocator = { uid: created.uid, format: 'markdown' as const };
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeString();
+
+    const deleteRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}`,
+        {
+          method: 'DELETE',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        },
+      ),
+    );
+    expect(deleteRes.status).toBe(204);
+
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeNull();
+  });
+
   test('createThread populates branch_ref and base_oid for proposal threads (#25)', async () => {
     // The proposal route now also writes a one-commit branch on
     // refs/proposals/<id>. The branch ref + the main tip at create time

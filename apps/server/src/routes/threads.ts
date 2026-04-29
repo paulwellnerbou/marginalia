@@ -454,6 +454,12 @@ async function deleteThread(c: Context, deps: AppDeps) {
         AND (id = ? OR parent_id = ? OR parent_proposal_id = ?)`,
   ).run(now, now, doc.uid, tid, tid, tid);
   if (isProposalRow(row)) {
+    // The thread is gone (soft-deleted with no un-delete endpoint). Drop
+    // the proposal's branch ref so a future doc audit doesn't show a
+    // dangling refs/proposals/<pid> for a thread that no longer exists.
+    if (row.branch_ref) {
+      await deps.store.deleteProposalBranch(doc, row.id).catch(() => undefined);
+    }
     realtime.broadcast(
       doc.uid,
       { type: 'edit_proposal.deleted', edit_proposal_id: tid },
@@ -654,6 +660,14 @@ async function respondToThread(c: Context, deps: AppDeps) {
       preparedWorkflow = await prepareAcceptProposalThread(doc, row, deps, identity);
     } else if (action === 'reopen' && resolution?.kind === 'accept') {
       preparedWorkflow = await prepareReopenAcceptedProposalThread(doc, row, deps, identity);
+    } else if (action === 'reopen' && resolution?.kind === 'reject') {
+      // Reject deletes the proposal's branch ref. Reopen needs it back —
+      // rebuild from the row's stored base_oid + proposed_text so the
+      // re-opened proposal lives at the same parent commit it had
+      // originally and stays eligible for the git.merge accept path.
+      // Failures fall through silently; the row will accept via the
+      // legacy splice fallback.
+      await ensureProposalBranchExists(doc, row, deps, identity);
     }
   } catch (err) {
     if (err instanceof ThreadActionError) {
@@ -755,6 +769,14 @@ async function respondToThread(c: Context, deps: AppDeps) {
     throw err;
   }
 
+  // Post-commit: if reject succeeded, the proposal is dead until a
+  // possible reopen. Drop its branch ref so it stops showing up in
+  // proposalMergeStatus checks. Reopen recreates it from the stored
+  // base_oid + proposed_text via ensureProposalBranchExists above.
+  if (action === 'reject' && row.branch_ref) {
+    await deps.store.deleteProposalBranch(doc, row.id).catch(() => undefined);
+  }
+
   if (createdReply) {
     realtime.broadcast(
       doc.uid,
@@ -810,6 +832,47 @@ async function respondToThread(c: Context, deps: AppDeps) {
     thread: toThreadWire(updated, replies, decision, reopenableAccepted),
     created_reply_id: createdReplyId,
   });
+}
+
+/**
+ * Reject deletes the proposal's branch ref. Reopen has to put it back
+ * before the SQL flips status to 'open' again, otherwise the next
+ * accept on this proposal would skip the git.merge path entirely (no
+ * branch to merge) and fall through to the legacy splice — losing the
+ * conflict-detection behavior the issue #25 model promises.
+ *
+ * Best-effort: if the row is missing the columns we need (legacy row
+ * with no base_oid, or anchor block no longer locatable), we leave
+ * things as they are. The legacy splice path on accept will still
+ * work — just without merge-based conflict detection until the row
+ * gets backfilled at next boot.
+ */
+async function ensureProposalBranchExists(
+  doc: DocumentRow,
+  row: ThreadRow,
+  deps: AppDeps,
+  identity: Identity,
+): Promise<void> {
+  if (!row.branch_ref || !row.base_oid || !row.anchor_block_id || !row.proposed_text) return;
+  const tip = await deps.store.readProposalTip(doc, row.id);
+  if (tip !== null) return;
+  let baseSource: string;
+  try {
+    baseSource = await deps.store.readAt(doc, row.base_oid);
+  } catch {
+    return;
+  }
+  const range = locateBlockRange(doc, baseSource, row.anchor_block_id);
+  if (!range) return;
+  const nextSource =
+    baseSource.slice(0, range.start) +
+    row.proposed_text +
+    baseSource.slice(range.end);
+  try {
+    await deps.store.createProposalBranch(doc, row.base_oid, row.id, nextSource, identity);
+  } catch {
+    // Concurrent recreate or git error — fall through.
+  }
 }
 
 async function prepareAcceptProposalThread(
