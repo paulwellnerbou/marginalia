@@ -26,6 +26,8 @@ const PROPOSAL_SELECT = `
     cep.proposed_text,
     cep.status AS proposal_status,
     cep.accepted_oid,
+    cep.branch_ref,
+    cep.base_oid,
     c.resolved_at AS decided_at,
     c.resolved_by_name AS decided_by_name
   FROM comments c

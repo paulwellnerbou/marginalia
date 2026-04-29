@@ -44,6 +44,8 @@ interface ThreadRow extends CommentRow {
   proposed_text: string | null;
   proposal_status: EditProposalStatus | null;
   accepted_oid: string | null;
+  branch_ref: string | null;
+  base_oid: string | null;
   decided_at: number | null;
   decided_by_name: string | null;
 }
@@ -65,6 +67,8 @@ const THREAD_SELECT = `
     cep.proposed_text,
     cep.status AS proposal_status,
     cep.accepted_oid,
+    cep.branch_ref,
+    cep.base_oid,
     c.resolved_at AS decided_at,
     c.resolved_by_name AS decided_by_name
   FROM comments c
@@ -172,11 +176,36 @@ async function createThread(c: Context, deps: AppDeps) {
   // SQLite write lock during filesystem I/O (consistent with the accept/reopen
   // paths in prepareAcceptProposalThread / prepareReopenAcceptedProposalThread).
   const currentSource = proposal ? store.read(doc) : null;
-  const sourceSnapshot = currentSource
-    ? (readProposalBlockSource(doc, currentSource, anchor.blockId) ?? anchor.quote)
-    : null;
+  const blockRange =
+    proposal && currentSource ? locateBlockRange(doc, currentSource, anchor.blockId) : null;
+  const sourceSnapshot =
+    currentSource && blockRange ? currentSource.slice(blockRange.start, blockRange.end) : null;
 
   const id = newCommentId();
+
+  // Build the proposal branch before opening the SQL transaction — the
+  // branch is one git commit on `refs/proposals/<id>` parented at the
+  // current main tip. If the block can't be located in source we skip
+  // the branch (the proposal will be flagged orphaned at accept time,
+  // matching pre-#25 behavior).
+  let branchRef: string | null = null;
+  let baseOid: string | null = null;
+  if (proposal && currentSource && blockRange) {
+    const nextSource =
+      currentSource.slice(0, blockRange.start) +
+      proposal.proposedText +
+      currentSource.slice(blockRange.end);
+    baseOid = await store.mainOid(doc);
+    const branch = await store.createProposalBranch(
+      doc,
+      baseOid,
+      id,
+      nextSource,
+      identity,
+    );
+    branchRef = branch.refName;
+  }
+
   const now = Date.now();
   db.exec('BEGIN');
   try {
@@ -212,13 +241,23 @@ async function createThread(c: Context, deps: AppDeps) {
     if (proposal) {
       db.prepare(
         `INSERT INTO comments_edit_proposals
-           (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid)
-         VALUES (?, ?, ?, ?, 'open', NULL)`,
-      ).run(id, proposal.anchorKind, sourceSnapshot ?? anchor.quote, proposal.proposedText);
+           (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid, branch_ref, base_oid)
+         VALUES (?, ?, ?, ?, 'open', NULL, ?, ?)`,
+      ).run(
+        id,
+        proposal.anchorKind,
+        sourceSnapshot ?? anchor.quote,
+        proposal.proposedText,
+        branchRef,
+        baseOid,
+      );
     }
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
+    // The branch ref is now orphaned (DB row never inserted); clean it up
+    // best-effort so refs don't leak.
+    if (branchRef) await store.deleteProposalBranch(doc, id).catch(() => undefined);
     throw err;
   }
 
@@ -756,6 +795,18 @@ async function prepareAcceptProposalThread(
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
 
+  // For branch-backed proposals (#25), use git's 3-way merge as the
+  // conflict check: if main has moved in a way that overlaps with the
+  // proposal's edit since it was created, refuse the accept and return
+  // 409 so the UI can surface "another change conflicts with this
+  // proposal." Legacy rows (no branch_ref) fall through to the original
+  // splice path.
+  if (row.branch_ref) {
+    const status = await deps.store.proposalMergeStatus(doc, row.id);
+    if (status === 'conflict') throw new ThreadActionError(409, 'proposal-conflict');
+    if (status === 'absent') throw new ThreadActionError(409, 'proposal-orphaned');
+  }
+
   const source = deps.store.read(doc);
   const range =
     doc.format === 'asciidoc'
@@ -1182,11 +1233,15 @@ function isProposalRow(row: ThreadRow): boolean {
   return row.proposal_status !== null;
 }
 
-function readProposalBlockSource(doc: DocumentRow, source: string, blockId: string): string | null {
-  const range =
+function locateBlockRange(
+  doc: DocumentRow,
+  source: string,
+  blockId: string,
+): BlockSourceRange | null {
+  return (
     locateDocumentBlocks(doc, source).get(blockId) ??
-    (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId));
-  return range ? source.slice(range.start, range.end) : null;
+    (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId))
+  );
 }
 
 function locateAcceptedProposalAnchor(

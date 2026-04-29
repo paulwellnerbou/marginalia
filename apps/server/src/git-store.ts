@@ -203,6 +203,11 @@ export class GitStore {
     return { before, after };
   }
 
+  /** Main's current tip oid for this doc. Throws if the repo isn't initialized. */
+  async mainOid(doc: DocLocator): Promise<string> {
+    return git.resolveRef({ fs, dir: this.repoDir(doc.uid), ref: 'main' });
+  }
+
   async readAt(doc: DocLocator, oid: string): Promise<string> {
     const { blob } = await git.readBlob({
       fs,

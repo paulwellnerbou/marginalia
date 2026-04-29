@@ -1267,6 +1267,104 @@ describe('documents API', () => {
     ).toBe(proposal.thread.id);
   });
 
+  test('createThread populates branch_ref and base_oid for proposal threads (#25)', async () => {
+    // The proposal route now also writes a one-commit branch on
+    // refs/proposals/<id>. The branch ref + the main tip at create time
+    // are persisted alongside proposed_text so accept can use git.merge
+    // for conflict detection.
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { thread } = (await res.json()) as { thread: { id: string } };
+
+    const row = app.db
+      .prepare(
+        `SELECT branch_ref, base_oid FROM comments_edit_proposals WHERE comment_id = ?`,
+      )
+      .get(thread.id) as { branch_ref: string | null; base_oid: string | null };
+    expect(row.branch_ref).toBe(`refs/proposals/${thread.id}`);
+    expect(row.base_oid).toBeString();
+
+    // The branch's tip must contain the spliced source (full doc with the
+    // block replaced) so accept can git-merge it later.
+    const tip = await app.store.readProposalTip(
+      { uid: created.uid, format: 'markdown' },
+      thread.id,
+    );
+    expect(tip).toBe('# Title\n\nbeta');
+  });
+
+  test('two proposals on different blocks both accept cleanly even after the first one moves main (#25)', async () => {
+    // Adjacent-but-non-overlapping edits — iso-git's 3-way merge handles
+    // this for us via the precheck (status='clean'), so the second accept
+    // must succeed.
+    const source = '# Title\n\nfirst\n\nsecond';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blocks = [...locateAllBlocks(source).entries()];
+    const firstId = blocks.find(([, r]) => r.text === 'first')?.[0];
+    const secondId = blocks.find(([, r]) => r.text === 'second')?.[0];
+    expect(firstId).toBeString();
+    expect(secondId).toBeString();
+
+    async function propose(blockId: string, quote: string, text: string): Promise<string> {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/threads`, {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({
+            anchor: { block_id: blockId, quote },
+            proposal: { proposed_text: text },
+          }),
+        }),
+      );
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { thread: { id: string } };
+      return body.thread.id;
+    }
+
+    const a = await propose(firstId!, 'first', 'first edited');
+    const b = await propose(secondId!, 'second', 'second edited');
+
+    for (const id of [a, b]) {
+      const acceptRes = await app.hono.fetch(
+        new Request(
+          `http://test/api/documents/${created.uid}/threads/${id}/respond`,
+          {
+            method: 'POST',
+            headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+            body: JSON.stringify({ action: 'accept' }),
+          },
+        ),
+      );
+      expect(acceptRes.status).toBe(200);
+    }
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(docRes.status).toBe(200);
+    const doc = (await docRes.json()) as { source: string };
+    expect(doc.source).toContain('first edited');
+    expect(doc.source).toContain('second edited');
+  });
+
   test('accepted proposal diff reconstructs the original table-cell source for legacy rows', async () => {
     const source = [
       '| Label | Link |',
