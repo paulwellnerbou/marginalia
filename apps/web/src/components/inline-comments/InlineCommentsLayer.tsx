@@ -81,6 +81,7 @@ interface OrderItem {
 interface RenderItem {
   id: string;
   blockId: string | null;
+  quote?: string | null;
 }
 
 const PENDING_ID = '__pending__';
@@ -235,6 +236,7 @@ export function InlineCommentsLayer({
     const items: RenderItem[] = sorted.map((s) => ({
       id: s.thread.id,
       blockId: s.thread.anchor.block_id,
+      quote: s.thread.anchor.quote,
     }));
     if (canComment && pendingAnchor) {
       const pendingBlockIndex = pendingAnchor.block_id
@@ -249,12 +251,40 @@ export function InlineCommentsLayer({
       const pendingItem: RenderItem = {
         id: PENDING_ID,
         blockId: pendingAnchor.block_id,
+        quote: pendingAnchor.quote,
       };
       if (insertAt === -1) items.push(pendingItem);
       else items.splice(insertAt, 0, pendingItem);
     }
     return items;
   }, [sorted, canComment, pendingAnchor, blockOrder]);
+
+  function resolveAnchorElement(
+    doc: HTMLElement,
+    blockId: string,
+    quote?: string | null,
+  ): HTMLElement | null {
+    const escaped = CSS.escape(blockId);
+    let target = doc.querySelector<HTMLElement>(
+      `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
+    );
+    if (!target) return null;
+    if (!target.dataset.block || !quote) return target;
+
+    const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
+    let narrowed: HTMLElement | null = null;
+    let unique = true;
+    for (const sub of subEls) {
+      const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
+      if (!text.includes(quote)) continue;
+      if (narrowed) {
+        unique = false;
+        break;
+      }
+      narrowed = sub;
+    }
+    return unique && narrowed ? narrowed : target;
+  }
 
   /**
    * When stacking is disabled, cards sit at their natural anchor
@@ -410,10 +440,7 @@ export function InlineCommentsLayer({
       const cardHeight = cardHeights.current.get(item.id) ?? 96;
       let nat: number | null = null;
       if (item.blockId) {
-        const escaped = CSS.escape(item.blockId);
-        const el = doc.querySelector<HTMLElement>(
-          `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-        );
+        const el = resolveAnchorElement(doc, item.blockId, item.quote);
         if (el) {
           nat = el.getBoundingClientRect().top - scrollRect.top + scrollTop;
         }
