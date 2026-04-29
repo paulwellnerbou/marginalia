@@ -276,8 +276,15 @@ export class GitStore {
         timestamp: ts,
         timezoneOffset: 0,
       };
+      // The branch's commit message is already styled as if it were the
+      // accept commit: when accept happens, FF makes main point straight
+      // at this commit, and the existing history parser
+      // (`parseHistoryAction` in routes/documents.ts) keys off the
+      // `accept-proposal:` subject prefix to recognize it. The trailers
+      // carry the same proposer + proposal-id metadata accept commits
+      // have always had.
       const message =
-        `proposal: ${proposalId}\n\n` +
+        `accept-proposal: ${proposalId}\n\n` +
         `X-Marginalia-Client-ID: ${identity.clientId}\n` +
         `X-Marginalia-Proposal-ID: ${proposalId}\n`;
       const commitOid = await git.writeCommit({
@@ -330,6 +337,14 @@ export class GitStore {
         `X-Marginalia-Client-ID: ${identity.clientId}\n` +
         `X-Marginalia-Proposal-ID: ${proposalId}\n`;
       try {
+        // FF when possible. The branch's commit subject is already
+        // `accept-proposal: <pid>` (see createProposalBranch), so a FF
+        // makes main point directly at a commit that the history parser
+        // in routes/documents.ts recognizes as an accept. iso-git's
+        // recursive-merge support is limited (criss-cross histories are
+        // unsupported), so forcing a merge commit on every accept would
+        // box us into a multi-merge-base configuration that breaks the
+        // *next* accept.
         const result = (await git.merge({
           fs,
           dir,

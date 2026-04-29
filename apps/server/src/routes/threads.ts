@@ -302,6 +302,15 @@ async function createThread(c: Context, deps: AppDeps) {
  * `GET /:uid/threads/:tid/diff`
  *
  * Returns the before/after diff payload for a proposal thread.
+ *
+ * For branch-backed proposals (#25): `before` is the anchor block's
+ * content at `base_oid` (the main tip when the branch was created).
+ * That snapshot is git-authoritative — no reconstruction from history
+ * is needed regardless of whether the proposal is still open or has
+ * been accepted/rejected. `after` stays `proposed_text`.
+ *
+ * Legacy rows (no `branch_ref`/`base_oid`) fall through to the older
+ * `resolveProposalDiffBefore` walk over git history.
  */
 async function getThreadDiff(c: Context, deps: AppDeps) {
   const { db } = deps;
@@ -316,8 +325,26 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
   const proposal = loadProposalRow(db, tid, doc.uid);
   if (!proposal) return c.json({ error: 'proposal-required' }, 400);
 
-  const before = await resolveProposalDiffBefore(doc, proposal, deps);
+  const before = await resolveDiffBefore(doc, proposal, deps);
   return c.json({ before, after: proposal.proposed_text });
+}
+
+async function resolveDiffBefore(
+  doc: DocumentRow,
+  proposal: EditProposalThreadRow,
+  deps: AppDeps,
+): Promise<string> {
+  if (proposal.branch_ref && proposal.base_oid && proposal.anchor_block_id) {
+    try {
+      const baseSource = await deps.store.readAt(doc, proposal.base_oid);
+      const range = locateBlockRange(doc, baseSource, proposal.anchor_block_id);
+      if (range) return baseSource.slice(range.start, range.end);
+    } catch {
+      // base commit not readable — fall through to the legacy walk so
+      // the diff still renders something useful.
+    }
+  }
+  return resolveProposalDiffBefore(doc, proposal, deps);
 }
 
 /**
@@ -795,24 +822,14 @@ async function prepareAcceptProposalThread(
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
 
-  // For branch-backed proposals (#25), use git's 3-way merge as the
-  // conflict check: if main has moved in a way that overlaps with the
-  // proposal's edit since it was created, refuse the accept and return
-  // 409 so the UI can surface "another change conflicts with this
-  // proposal." Legacy rows (no branch_ref) fall through to the original
-  // splice path.
-  if (row.branch_ref) {
-    const status = await deps.store.proposalMergeStatus(doc, row.id);
-    if (status === 'conflict') throw new ThreadActionError(409, 'proposal-conflict');
-    if (status === 'absent') throw new ThreadActionError(409, 'proposal-orphaned');
-  }
-
-  const source = deps.store.read(doc);
-  const range =
-    doc.format === 'asciidoc'
-      ? (locateAllBlocksAsciidoc(source).get(row.anchor_block_id) ?? null)
-      : locateBlockSource(source, row.anchor_block_id);
-  if (!range) {
+  // The anchor block must still exist in current main — otherwise the
+  // proposal is orphaned, regardless of which path (branch or legacy
+  // splice) writes the accept commit. Capture the range here so we can
+  // both detect orphaning and use it as the splice-site fallback when
+  // resolving the post-merge anchor below.
+  const preMergeSource = deps.store.read(doc);
+  const preMergeRange = locateBlockRange(doc, preMergeSource, row.anchor_block_id);
+  if (!preMergeRange) {
     const now = Date.now();
     deps.db
       .prepare(
@@ -832,16 +849,35 @@ async function prepareAcceptProposalThread(
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
 
-  const nextSource = source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
-  const { oid } = await deps.store.write(
-    doc,
-    nextSource,
-    identity,
-    'accept-proposal',
-    {
+  // Branch-backed (#25) proposals go through git.merge — FF when main
+  // hasn't moved, 3-way otherwise. iso-git's MergeConflictError surfaces
+  // as 409 'proposal-conflict' so the UI can prompt for a rebase. Legacy
+  // rows (no branch_ref) keep the original splice path; they get the
+  // backfill on next boot but in this request must stay correct.
+  let oid: string;
+  let nextSource: string;
+  let spliceStart: number;
+  if (row.branch_ref && row.base_oid) {
+    const merge = await deps.store.mergeProposalBranch(doc, row.id, identity);
+    if (!merge.ok) throw new ThreadActionError(409, 'proposal-conflict');
+    oid = merge.oid;
+    nextSource = deps.store.read(doc);
+    spliceStart = locatePostMergeSpliceStart(
+      nextSource,
+      row.proposed_text,
+      preMergeRange.start,
+    );
+  } else {
+    nextSource =
+      preMergeSource.slice(0, preMergeRange.start) +
+      row.proposed_text +
+      preMergeSource.slice(preMergeRange.end);
+    const written = await deps.store.write(doc, nextSource, identity, 'accept-proposal', {
       proposalId: row.id,
-    },
-  );
+    });
+    oid = written.oid;
+    spliceStart = preMergeRange.start;
+  }
 
   const rendered = await renderDocument(nextSource, doc.format);
   const presentBlocks = locateDocumentBlocks(doc, nextSource);
@@ -865,8 +901,8 @@ async function prepareAcceptProposalThread(
   const acceptedAnchor = locateAcceptedProposalAnchor(
     presentBlocks,
     rendered.blocks,
-    range.start,
-    range.start + row.proposed_text.length,
+    spliceStart,
+    spliceStart + row.proposed_text.length,
   );
 
   return {
@@ -1242,6 +1278,46 @@ function locateBlockRange(
     locateDocumentBlocks(doc, source).get(blockId) ??
     (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId))
   );
+}
+
+/**
+ * Find where `proposedText` lives in `nextSource` after a merge.
+ *
+ * In FF accepts the splice site equals `baselineStart`. In a 3-way merge
+ * other commits' edits before the splice can shift everything by some
+ * delta, so we can't just trust `baselineStart`. The branch was built by
+ * splicing a contiguous run of bytes exactly equal to `proposedText`, so
+ * `nextSource.indexOf(proposedText)` recovers the new position when the
+ * text appears uniquely.
+ *
+ * If the same text appears more than once (rare — usually only on very
+ * short proposals like single-word edits) we fall back to the position
+ * closest to `baselineStart` so the chosen anchor is at least near the
+ * pre-merge block. If the text doesn't appear at all (shouldn't happen
+ * after a successful merge, but kept for safety) we return `baselineStart`.
+ */
+function locatePostMergeSpliceStart(
+  nextSource: string,
+  proposedText: string,
+  baselineStart: number,
+): number {
+  if (proposedText.length === 0) return baselineStart;
+  const first = nextSource.indexOf(proposedText);
+  if (first === -1) return baselineStart;
+  const second = nextSource.indexOf(proposedText, first + 1);
+  if (second === -1) return first;
+  let bestPos = first;
+  let bestDist = Math.abs(first - baselineStart);
+  let pos = second;
+  while (pos !== -1) {
+    const dist = Math.abs(pos - baselineStart);
+    if (dist < bestDist) {
+      bestPos = pos;
+      bestDist = dist;
+    }
+    pos = nextSource.indexOf(proposedText, pos + 1);
+  }
+  return bestPos;
 }
 
 function locateAcceptedProposalAnchor(

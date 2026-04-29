@@ -69,7 +69,7 @@ Para C baseline.
       oid: commitOid,
     });
     expect(commit.parent).toEqual([baseOid]);
-    expect(commit.message).toContain('proposal: p1');
+    expect(commit.message).toContain('accept-proposal: p1');
     expect(commit.message).toContain('X-Marginalia-Proposal-ID: p1');
 
     const tip = await store.readProposalTip(doc, 'p1');
