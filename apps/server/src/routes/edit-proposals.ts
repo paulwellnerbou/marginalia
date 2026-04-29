@@ -28,6 +28,8 @@ const PROPOSAL_SELECT = `
     cep.accepted_oid,
     cep.branch_ref,
     cep.base_oid,
+    cep.base_block_start,
+    cep.base_block_end,
     c.resolved_at AS decided_at,
     c.resolved_by_name AS decided_by_name
   FROM comments c

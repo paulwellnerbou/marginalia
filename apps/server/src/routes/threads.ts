@@ -46,6 +46,8 @@ interface ThreadRow extends CommentRow {
   accepted_oid: string | null;
   branch_ref: string | null;
   base_oid: string | null;
+  base_block_start: number | null;
+  base_block_end: number | null;
   decided_at: number | null;
   decided_by_name: string | null;
 }
@@ -69,6 +71,8 @@ const THREAD_SELECT = `
     cep.accepted_oid,
     cep.branch_ref,
     cep.base_oid,
+    cep.base_block_start,
+    cep.base_block_end,
     c.resolved_at AS decided_at,
     c.resolved_by_name AS decided_by_name
   FROM comments c
@@ -238,8 +242,9 @@ async function createThread(c: Context, deps: AppDeps) {
     if (proposal) {
       db.prepare(
         `INSERT INTO comments_edit_proposals
-           (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid, branch_ref, base_oid)
-         VALUES (?, ?, ?, ?, 'open', NULL, ?, ?)`,
+           (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid,
+            branch_ref, base_oid, base_block_start, base_block_end)
+         VALUES (?, ?, ?, ?, 'open', NULL, ?, ?, ?, ?)`,
       ).run(
         id,
         proposal.anchorKind,
@@ -247,6 +252,8 @@ async function createThread(c: Context, deps: AppDeps) {
         proposal.proposedText,
         branchRef,
         baseOid,
+        blockRange?.start ?? null,
+        blockRange?.end ?? null,
       );
     }
     db.exec('COMMIT');
@@ -316,14 +323,14 @@ async function resolveDiffBefore(
   proposal: EditProposalThreadRow,
   deps: AppDeps,
 ): Promise<string> {
-  // anchor_block_id is content-hash-derived and changes on accept, so
-  // this path resolves only for still-open proposals; accepted rows
-  // fall through to the snapshot walk.
-  if (proposal.branch_ref && proposal.base_oid && proposal.anchor_block_id) {
+  if (
+    proposal.base_oid &&
+    proposal.base_block_start !== null &&
+    proposal.base_block_end !== null
+  ) {
     try {
       const baseSource = await deps.store.readAt(doc, proposal.base_oid);
-      const range = locateBlockRange(doc, baseSource, proposal.anchor_block_id);
-      if (range) return baseSource.slice(range.start, range.end);
+      return baseSource.slice(proposal.base_block_start, proposal.base_block_end);
     } catch {
       // fall through
     }
@@ -815,7 +822,15 @@ async function ensureProposalBranchExists(
   deps: AppDeps,
   identity: Identity,
 ): Promise<void> {
-  if (!row.branch_ref || !row.base_oid || !row.anchor_block_id || !row.proposed_text) return;
+  if (
+    !row.branch_ref ||
+    !row.base_oid ||
+    !row.proposed_text ||
+    row.base_block_start === null ||
+    row.base_block_end === null
+  ) {
+    return;
+  }
   const tip = await deps.store.readProposalTip(doc, row.id);
   if (tip !== null) return;
   let baseSource: string;
@@ -824,12 +839,10 @@ async function ensureProposalBranchExists(
   } catch {
     return;
   }
-  const range = locateBlockRange(doc, baseSource, row.anchor_block_id);
-  if (!range) return;
   const nextSource =
-    baseSource.slice(0, range.start) +
+    baseSource.slice(0, row.base_block_start) +
     row.proposed_text +
-    baseSource.slice(range.end);
+    baseSource.slice(row.base_block_end);
   try {
     await deps.store.createProposalBranch(doc, row.base_oid, row.id, nextSource, identity);
   } catch {

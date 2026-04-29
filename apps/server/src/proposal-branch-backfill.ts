@@ -65,7 +65,7 @@ export async function backfillProposalBranches(
   let skipped = 0;
   const update = db.prepare(
     `UPDATE comments_edit_proposals
-        SET branch_ref = ?, base_oid = ?
+        SET branch_ref = ?, base_oid = ?, base_block_start = ?, base_block_end = ?
       WHERE comment_id = ?`,
   );
 
@@ -105,7 +105,7 @@ export async function backfillProposalBranches(
         nextSource,
         identity,
       );
-      update.run(refName, baseOid, row.id);
+      update.run(refName, baseOid, range.start, range.end, row.id);
       migrated += 1;
     } catch (err) {
       console.warn(

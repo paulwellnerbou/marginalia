@@ -1386,6 +1386,74 @@ describe('documents API', () => {
     expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeNull();
   });
 
+  test('accepted proposal diff renders the original block content via base_block_{start,end} (#25)', async () => {
+    // anchor_block_id is rewritten on accept (block ids are content-
+    // hash-derived), so it can't be used to locate the splice in
+    // base_oid afterwards. The persisted byte range is what makes the
+    // diff path work for accepted proposals without falling back to
+    // the source_snapshot column.
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          body: 'change it',
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+
+    // The byte range is persisted at proposal-create time.
+    const row = app.db
+      .prepare(
+        `SELECT base_block_start, base_block_end FROM comments_edit_proposals WHERE comment_id = ?`,
+      )
+      .get(proposal.thread.id) as {
+      base_block_start: number;
+      base_block_end: number;
+    };
+    expect(row.base_block_start).toBeNumber();
+    expect(row.base_block_end).toBeNumber();
+    expect(source.slice(row.base_block_start, row.base_block_end)).toBe('alpha');
+
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    // Diff renders the original block content from base_oid using the
+    // stored byte range — no anchor_block_id lookup, no source_snapshot.
+    const diffRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/diff`,
+        {
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        },
+      ),
+    );
+    expect(diffRes.status).toBe(200);
+    const diff = (await diffRes.json()) as { before: string; after: string };
+    expect(diff.before).toBe('alpha');
+    expect(diff.after).toBe('beta');
+  });
+
   test('createThread populates branch_ref and base_oid for proposal threads (#25)', async () => {
     // The proposal route now also writes a one-commit branch on
     // refs/proposals/<id>. The branch ref + the main tip at create time
