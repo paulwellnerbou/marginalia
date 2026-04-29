@@ -65,66 +65,85 @@ export async function backfillProposalBranches(
 
   let migrated = 0;
   let skipped = 0;
-  const update = db.prepare(
-    `UPDATE comments_edit_proposals
-        SET branch_ref = ?, base_oid = ?, base_block_start = ?, base_block_end = ?
-      WHERE comment_id = ?`,
-  );
 
-  // Wrap the loop in a transaction — autocommit per-row would pay
-  // SQLite's BEGIN/COMMIT cost for every migrated proposal, which adds
-  // up on large repositories.
-  db.exec('BEGIN');
-  try {
-    for (const row of rows) {
-      const doc = { uid: row.doc_uid, format: row.format };
-      let baseOid: string;
-      let source: string;
-      try {
-        // Resolve baseOid first, then read source AT that oid — keeps the
-        // splice and the eventual proposal-branch parent on the same tree
-        // even if main advances during the loop.
-        baseOid = await store.mainOid(doc);
-        source = await store.readAt(doc, baseOid);
-      } catch {
-        skipped += 1;
-        continue;
-      }
-      const blocks =
-        doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
-      const range = blocks.get(row.anchor_block_id) ?? null;
-      if (!range) {
-        skipped += 1;
-        continue;
-      }
-      const nextSource =
-        source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
+  // Phase 1: do all git work outside any DB transaction. Holding the
+  // SQLite write lock across filesystem / git I/O would block unrelated
+  // requests on the import path, where this runs inside a request
+  // handler.
+  const persist: Array<{
+    id: string;
+    refName: string;
+    baseOid: string;
+    rangeStart: number;
+    rangeEnd: number;
+  }> = [];
 
-      try {
-        const { refName } = await store.createProposalBranch(
-          doc,
-          baseOid,
-          row.id,
-          nextSource,
-          {
-            clientId: row.author_client_id,
-            displayName: row.author_display_name,
-          },
-        );
-        update.run(refName, baseOid, range.start, range.end, row.id);
-        migrated += 1;
-      } catch (err) {
-        console.warn(
-          `[marginalia] proposal-branch backfill failed for ${row.id} (${row.doc_uid}):`,
-          err,
-        );
-        skipped += 1;
-      }
+  for (const row of rows) {
+    const doc = { uid: row.doc_uid, format: row.format };
+    let baseOid: string;
+    let source: string;
+    try {
+      // Resolve baseOid first, then read source AT that oid — keeps the
+      // splice and the eventual proposal-branch parent on the same tree
+      // even if main advances during the loop.
+      baseOid = await store.mainOid(doc);
+      source = await store.readAt(doc, baseOid);
+    } catch {
+      skipped += 1;
+      continue;
     }
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
+    const blocks =
+      doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
+    const range = blocks.get(row.anchor_block_id) ?? null;
+    if (!range) {
+      skipped += 1;
+      continue;
+    }
+    const nextSource =
+      source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
+
+    try {
+      const { refName } = await store.createProposalBranch(doc, baseOid, row.id, nextSource, {
+        clientId: row.author_client_id,
+        displayName: row.author_display_name,
+      });
+      persist.push({
+        id: row.id,
+        refName,
+        baseOid,
+        rangeStart: range.start,
+        rangeEnd: range.end,
+      });
+    } catch (err) {
+      console.warn(
+        `[marginalia] proposal-branch backfill failed for ${row.id} (${row.doc_uid}):`,
+        err,
+      );
+      skipped += 1;
+    }
+  }
+
+  // Phase 2: persist all results in one short transaction. The
+  // `branch_ref IS NULL` guard makes the UPDATE a no-op if a concurrent
+  // path set the ref between our SELECT and now, so we never clobber a
+  // newer branch.
+  if (persist.length > 0) {
+    const update = db.prepare(
+      `UPDATE comments_edit_proposals
+          SET branch_ref = ?, base_oid = ?, base_block_start = ?, base_block_end = ?
+        WHERE comment_id = ? AND branch_ref IS NULL`,
+    );
+    db.exec('BEGIN');
+    try {
+      for (const p of persist) {
+        update.run(p.refName, p.baseOid, p.rangeStart, p.rangeEnd, p.id);
+      }
+      db.exec('COMMIT');
+      migrated = persist.length;
+    } catch (err) {
+      db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   return { migrated, skipped };
