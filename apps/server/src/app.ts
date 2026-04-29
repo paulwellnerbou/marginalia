@@ -43,8 +43,6 @@ export async function createApp(config: ServerConfig): Promise<App> {
   await migrateSharedRepoToPerDoc(db, config.legacyRepoDir, config.reposDir);
   const store = new GitStore(config.reposDir);
   await store.init();
-  // One-shot: build refs/proposals/<pid> for any pending proposal that
-  // predates issue #25. Idempotent — already-backfilled rows skip.
   await backfillProposalBranches(db, store);
   const blobs = createBlobStore(config);
   const realtime = new Realtime();

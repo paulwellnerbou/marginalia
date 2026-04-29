@@ -226,26 +226,10 @@ export class GitStore {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // Proposal branches
-  //
-  // Each open proposal lives on `refs/proposals/<pid>` inside the doc's repo.
-  // A proposal is exactly one commit — parent = the doc's main tip at create
-  // time (`baseOid`), tree = main's tree at that point with `document.<ext>`
-  // replaced by the full proposed source. Accepting calls `git.merge` (FF or
-  // 3-way), which writes the merge commit straight onto main.
-  //
-  // Refs live under `refs/proposals/` rather than `refs/heads/` so they don't
-  // clutter `git branch` listings and signal that they aren't normal branches.
-  // ---------------------------------------------------------------------------
-
   /**
-   * Build a one-commit branch with `baseOid` as parent and the file replaced
-   * by `nextSource`. The ref is `refs/proposals/<proposalId>`. Returns the
-   * created commit oid; the ref points at it.
-   *
-   * Uses git plumbing (write-blob + write-tree + write-commit) so we don't
-   * thrash the working tree — main's checkout stays in place.
+   * Build a one-commit branch on `refs/proposals/<proposalId>` parented at
+   * `baseOid`, with the doc file replaced by `nextSource`. Uses plumbing
+   * so main's working tree isn't touched.
    */
   async createProposalBranch(
     doc: DocLocator,
@@ -276,13 +260,8 @@ export class GitStore {
         timestamp: ts,
         timezoneOffset: 0,
       };
-      // The branch's commit message is already styled as if it were the
-      // accept commit: when accept happens, FF makes main point straight
-      // at this commit, and the existing history parser
-      // (`parseHistoryAction` in routes/documents.ts) keys off the
-      // `accept-proposal:` subject prefix to recognize it. The trailers
-      // carry the same proposer + proposal-id metadata accept commits
-      // have always had.
+      // Subject is pre-styled as `accept-proposal:` so a FF accept lands
+      // a commit `parseHistoryAction` (routes/documents.ts) recognizes.
       const message =
         `accept-proposal: ${proposalId}\n\n` +
         `X-Marginalia-Client-ID: ${identity.clientId}\n` +
@@ -305,17 +284,7 @@ export class GitStore {
     });
   }
 
-  /**
-   * Merge the proposal branch into main. FF when possible, 3-way otherwise.
-   * The merge commit message carries the same trailers `write()` would have
-   * stamped on a direct accept commit, so the audit trail in the activity
-   * log doesn't change shape.
-   *
-   * Returns a discriminated union: `{ ok: true, oid }` on success, where
-   * `oid` is main's new tip (FF target or merge commit); or `{ ok: false,
-   * conflict }` with the structured info iso-git raised, so the caller can
-   * surface a 409 without re-parsing error messages.
-   */
+  /** Merge the proposal branch into main. FF when possible, 3-way otherwise. */
   async mergeProposalBranch(
     doc: DocLocator,
     proposalId: string,
@@ -337,14 +306,10 @@ export class GitStore {
         `X-Marginalia-Client-ID: ${identity.clientId}\n` +
         `X-Marginalia-Proposal-ID: ${proposalId}\n`;
       try {
-        // FF when possible. The branch's commit subject is already
-        // `accept-proposal: <pid>` (see createProposalBranch), so a FF
-        // makes main point directly at a commit that the history parser
-        // in routes/documents.ts recognizes as an accept. iso-git's
-        // recursive-merge support is limited (criss-cross histories are
-        // unsupported), so forcing a merge commit on every accept would
-        // box us into a multi-merge-base configuration that breaks the
-        // *next* accept.
+        // FF default. `fastForward: false` would let the merge commit
+        // carry a fresh subject, but iso-git's recursive merge isn't
+        // implemented — a forced merge commit creates the multi-base
+        // history that breaks the next accept with MergeNotSupportedError.
         const result = (await git.merge({
           fs,
           dir,
@@ -354,9 +319,8 @@ export class GitStore {
           message,
         })) as { oid?: string; alreadyMerged?: boolean; fastForward?: boolean };
         const oid = result.oid ?? (await git.resolveRef({ fs, dir, ref: 'main' }));
-        // After a non-FF merge iso-git advances the ref but not the working
-        // tree — re-checkout main so subsequent `read()` calls see the new
-        // file content.
+        // iso-git's 3-way merge advances the ref without updating the
+        // working tree; checkout so `read()` reflects the merged file.
         await git.checkout({ fs, dir, ref: 'main', force: true });
         return { ok: true, oid };
       } catch (err) {
@@ -416,15 +380,7 @@ export class GitStore {
     }
   }
 
-  /**
-   * Cheap check: would merging this branch into main right now succeed,
-   * conflict, or is it already merged / absent?
-   *
-   * `'clean'`   → FF or 3-way merge would auto-resolve.
-   * `'conflict'`→ would raise MergeConflictError.
-   * `'merged'`  → main already contains the branch tip (e.g. accepted).
-   * `'absent'`  → no ref by that name (rejected/deleted/never-created).
-   */
+  /** Dry-run merge precheck used to gate accept and detect conflicts. */
   async proposalMergeStatus(
     doc: DocLocator,
     proposalId: string,
@@ -458,10 +414,6 @@ export class GitStore {
   }
 }
 
-/**
- * Internal — every place that names a proposal ref goes through this so a
- * later naming change is one edit.
- */
 function proposalRef(proposalId: string): string {
   return `refs/proposals/${proposalId}`;
 }

@@ -172,16 +172,9 @@ async function createThread(c: Context, deps: AppDeps) {
     if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
   }
 
-  // Read file source before opening the transaction so we don't hold a
-  // SQLite write lock during filesystem I/O (consistent with the accept/reopen
-  // paths in prepareAcceptProposalThread / prepareReopenAcceptedProposalThread).
-  //
-  // For proposals: the source must be read AT baseOid, not from the
-  // working tree. Reading the working tree separately from `mainOid()`
-  // opens a race where a concurrent accept could advance main between
-  // the two reads — we'd splice into the working-tree state but parent
-  // the branch on a different commit. `readAt(baseOid)` ties source
-  // and parent to the same commit deterministically.
+  // For proposals, read source AT baseOid — reading the working tree
+  // separately from `mainOid()` would race with concurrent accepts and
+  // parent the branch on a different commit than the spliced content.
   const baseOidForProposal = proposal ? await store.mainOid(doc) : null;
   const currentSource =
     proposal && baseOidForProposal ? await store.readAt(doc, baseOidForProposal) : null;
@@ -192,11 +185,6 @@ async function createThread(c: Context, deps: AppDeps) {
 
   const id = newCommentId();
 
-  // Build the proposal branch before opening the SQL transaction — the
-  // branch is one git commit on `refs/proposals/<id>` parented at
-  // baseOidForProposal. If the block can't be located in source we skip
-  // the branch (the proposal will be flagged orphaned at accept time,
-  // matching pre-#25 behavior).
   let branchRef: string | null = null;
   let baseOid: string | null = null;
   if (proposal && currentSource && blockRange && baseOidForProposal) {
@@ -264,8 +252,6 @@ async function createThread(c: Context, deps: AppDeps) {
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
-    // The branch ref is now orphaned (DB row never inserted); clean it up
-    // best-effort so refs don't leak.
     if (branchRef) await store.deleteProposalBranch(doc, id).catch(() => undefined);
     throw err;
   }
@@ -307,20 +293,7 @@ async function createThread(c: Context, deps: AppDeps) {
   return c.json({ thread }, 201);
 }
 
-/**
- * `GET /:uid/threads/:tid/diff`
- *
- * Returns the before/after diff payload for a proposal thread.
- *
- * For branch-backed proposals (#25): `before` is the anchor block's
- * content at `base_oid` (the main tip when the branch was created).
- * That snapshot is git-authoritative — no reconstruction from history
- * is needed regardless of whether the proposal is still open or has
- * been accepted/rejected. `after` stays `proposed_text`.
- *
- * Legacy rows (no `branch_ref`/`base_oid`) fall through to the older
- * `resolveProposalDiffBefore` walk over git history.
- */
+/** `GET /:uid/threads/:tid/diff` — before/after diff for a proposal thread. */
 async function getThreadDiff(c: Context, deps: AppDeps) {
   const { db } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
@@ -343,26 +316,16 @@ async function resolveDiffBefore(
   proposal: EditProposalThreadRow,
   deps: AppDeps,
 ): Promise<string> {
-  // For *open* branch-backed proposals, anchor_block_id is still valid
-  // in baseSource, so we can read it directly from the base commit
-  // without walking history. Accepted proposals fall through to the
-  // legacy walk because their anchor_block_id was rewritten on accept
-  // (block ids are content-hash-derived) and won't resolve in
-  // baseSource — the legacy walk recovers the snapshot from the
-  // source_snapshot column instead.
-  //
-  // Phase 3 will need a proper byte-range locator (e.g. base_block_start/
-  // _end persisted at proposal create time) to keep this path working
-  // once source_snapshot/proposed_text are dropped. Pure base/tip
-  // diffing is not enough — the minimal diff is ambiguous when block
-  // contents share trailing characters (e.g. "alpha" → "beta").
+  // anchor_block_id is content-hash-derived and changes on accept, so
+  // this path resolves only for still-open proposals; accepted rows
+  // fall through to the snapshot walk.
   if (proposal.branch_ref && proposal.base_oid && proposal.anchor_block_id) {
     try {
       const baseSource = await deps.store.readAt(doc, proposal.base_oid);
       const range = locateBlockRange(doc, baseSource, proposal.anchor_block_id);
       if (range) return baseSource.slice(range.start, range.end);
     } catch {
-      // base commit not readable — fall through to the legacy walk.
+      // fall through
     }
   }
   return resolveProposalDiffBefore(doc, proposal, deps);
@@ -475,9 +438,6 @@ async function deleteThread(c: Context, deps: AppDeps) {
         AND (id = ? OR parent_id = ? OR parent_proposal_id = ?)`,
   ).run(now, now, doc.uid, tid, tid, tid);
   if (isProposalRow(row)) {
-    // The thread is gone (soft-deleted with no un-delete endpoint). Drop
-    // the proposal's branch ref so a future doc audit doesn't show a
-    // dangling refs/proposals/<pid> for a thread that no longer exists.
     if (row.branch_ref) {
       await deps.store.deleteProposalBranch(doc, row.id).catch(() => undefined);
     }
@@ -682,12 +642,6 @@ async function respondToThread(c: Context, deps: AppDeps) {
     } else if (action === 'reopen' && resolution?.kind === 'accept') {
       preparedWorkflow = await prepareReopenAcceptedProposalThread(doc, row, deps, identity);
     } else if (action === 'reopen' && resolution?.kind === 'reject') {
-      // Reject deletes the proposal's branch ref. Reopen needs it back —
-      // rebuild from the row's stored base_oid + proposed_text so the
-      // re-opened proposal lives at the same parent commit it had
-      // originally and stays eligible for the git.merge accept path.
-      // Failures fall through silently; the row will accept via the
-      // legacy splice fallback.
       await ensureProposalBranchExists(doc, row, deps, identity);
     }
   } catch (err) {
@@ -790,10 +744,6 @@ async function respondToThread(c: Context, deps: AppDeps) {
     throw err;
   }
 
-  // Post-commit: if reject succeeded, the proposal is dead until a
-  // possible reopen. Drop its branch ref so it stops showing up in
-  // proposalMergeStatus checks. Reopen recreates it from the stored
-  // base_oid + proposed_text via ensureProposalBranchExists above.
   if (action === 'reject' && row.branch_ref) {
     await deps.store.deleteProposalBranch(doc, row.id).catch(() => undefined);
   }
@@ -856,17 +806,8 @@ async function respondToThread(c: Context, deps: AppDeps) {
 }
 
 /**
- * Reject deletes the proposal's branch ref. Reopen has to put it back
- * before the SQL flips status to 'open' again, otherwise the next
- * accept on this proposal would skip the git.merge path entirely (no
- * branch to merge) and fall through to the legacy splice — losing the
- * conflict-detection behavior the issue #25 model promises.
- *
- * Best-effort: if the row is missing the columns we need (legacy row
- * with no base_oid, or anchor block no longer locatable), we leave
- * things as they are. The legacy splice path on accept will still
- * work — just without merge-based conflict detection until the row
- * gets backfilled at next boot.
+ * Recreate the proposal's branch ref from `base_oid` + `proposed_text`
+ * if it's missing. Used by reopen-after-reject (reject deletes the ref).
  */
 async function ensureProposalBranchExists(
   doc: DocumentRow,
@@ -892,7 +833,7 @@ async function ensureProposalBranchExists(
   try {
     await deps.store.createProposalBranch(doc, row.base_oid, row.id, nextSource, identity);
   } catch {
-    // Concurrent recreate or git error — fall through.
+    // fall through
   }
 }
 
@@ -906,11 +847,6 @@ async function prepareAcceptProposalThread(
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
 
-  // The anchor block must still exist in current main — otherwise the
-  // proposal is orphaned, regardless of which path (branch or legacy
-  // splice) writes the accept commit. Capture the range here so we can
-  // both detect orphaning and use it as the splice-site fallback when
-  // resolving the post-merge anchor below.
   const preMergeSource = deps.store.read(doc);
   const preMergeRange = locateBlockRange(doc, preMergeSource, row.anchor_block_id);
   if (!preMergeRange) {
@@ -933,11 +869,6 @@ async function prepareAcceptProposalThread(
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
 
-  // Branch-backed (#25) proposals go through git.merge — FF when main
-  // hasn't moved, 3-way otherwise. iso-git's MergeConflictError surfaces
-  // as 409 'proposal-conflict' so the UI can prompt for a rebase. Legacy
-  // rows (no branch_ref) keep the original splice path; they get the
-  // backfill on next boot but in this request must stay correct.
   let oid: string;
   let nextSource: string;
   let spliceStart: number;
@@ -1365,20 +1296,9 @@ function locateBlockRange(
 }
 
 /**
- * Find where `proposedText` lives in `nextSource` after a merge.
- *
- * In FF accepts the splice site equals `baselineStart`. In a 3-way merge
- * other commits' edits before the splice can shift everything by some
- * delta, so we can't just trust `baselineStart`. The branch was built by
- * splicing a contiguous run of bytes exactly equal to `proposedText`, so
- * `nextSource.indexOf(proposedText)` recovers the new position when the
- * text appears uniquely.
- *
- * If the same text appears more than once (rare — usually only on very
- * short proposals like single-word edits) we fall back to the position
- * closest to `baselineStart` so the chosen anchor is at least near the
- * pre-merge block. If the text doesn't appear at all (shouldn't happen
- * after a successful merge, but kept for safety) we return `baselineStart`.
+ * Find `proposedText` in `nextSource`, breaking ties by proximity to
+ * `baselineStart` (the splice site in pre-merge source). 3-way merges
+ * can shift byte positions, so the pre-merge offset is only a baseline.
  */
 function locatePostMergeSpliceStart(
   nextSource: string,

@@ -8,21 +8,12 @@ import type { DocumentFormat } from './db.js';
 import type { GitStore } from './git-store.js';
 
 /**
- * One-shot boot migration: for every still-open proposal that predates
- * issue #25 (`branch_ref IS NULL`), retroactively build the
- * `refs/proposals/<pid>` ref so accept can use git's merge for conflict
- * detection. Idempotent — rows already carrying a `branch_ref` are
- * skipped, so it's safe to run on every boot.
+ * Build `refs/proposals/<pid>` for every open proposal whose row is missing
+ * a `branch_ref`. Idempotent. `docUid`, when set, scopes the scan to one
+ * document (used by the import path to skip scanning the whole DB).
  *
- * For each row we splice the stored `proposed_text` into the doc's
- * current main source at the anchor block's range and create a one-commit
- * branch parented at main's tip. If the anchor block can no longer be
- * located (the doc has moved on without anchor block id stability), we
- * leave the row alone — it'll fall through to the legacy splice path on
- * accept and surface as orphaned via the existing block-id check.
- *
- * Pass `docUid` to scope the scan to one document — the import path uses
- * this to avoid scanning every legacy proposal in the DB on every import.
+ * Rows whose anchor block can't be located in current source are left
+ * alone; the existing block-id orphan check surfaces them at accept time.
  */
 export async function backfillProposalBranches(
   db: Database,

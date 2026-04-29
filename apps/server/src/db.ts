@@ -90,10 +90,8 @@ CREATE TABLE IF NOT EXISTS comments_edit_proposals (
   proposed_text          TEXT NOT NULL,
   status                 TEXT NOT NULL DEFAULT 'open',
   accepted_oid           TEXT,
-  -- Branch-per-proposal (issue #25). NULL only for legacy rows created
-  -- before the migration; new rows always carry both. base_oid is main's
-  -- tip when the branch was created; branch_ref points at one commit
-  -- on top of base_oid that holds the full proposed source.
+  -- branch_ref points at one commit on top of base_oid that holds the
+  -- full proposed source. Nullable — backfilled lazily.
   branch_ref             TEXT,
   base_oid               TEXT
 );
