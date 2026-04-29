@@ -5,6 +5,7 @@ import {
   extractDocumentTitle,
   locateAllBlocks,
   locateAllBlocksAsciidoc,
+  locateBlockSource,
   renderDocument,
   rewriteAssetReferences,
   sanitizeDocumentFilename,
@@ -48,6 +49,7 @@ import type {
 import { isDocumentFormat, isInviteKind, isInviteRole, isMermaidRenderer } from '../db.js';
 import type { MermaidRenderer } from '../db.js';
 import type { HistoryEntry as GitHistoryEntry, GitStore } from '../git-store.js';
+import { backfillProposalBranches } from '../proposal-branch-backfill.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
 import type { Realtime } from '../realtime.js';
 import { listDocUserNameMap, upsertDocUser } from '../users.js';
@@ -144,6 +146,8 @@ interface BundleCommentRow extends CommentRow {
   proposed_text: string | null;
   proposal_status: EditProposalStatus | null;
   accepted_oid: string | null;
+  branch_ref: string | null;
+  base_oid: string | null;
 }
 
 export function documentsRouter(deps: AppDeps): Hono {
@@ -562,7 +566,9 @@ async function exportDocument(c: Context, deps: AppDeps) {
          cep.source_snapshot,
          cep.proposed_text,
          cep.status AS proposal_status,
-         cep.accepted_oid
+         cep.accepted_oid,
+         cep.branch_ref,
+         cep.base_oid
          FROM comments c
          LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
         WHERE c.doc_uid = ? AND c.deleted_at IS NULL
@@ -593,38 +599,31 @@ async function exportDocument(c: Context, deps: AppDeps) {
       blocks: rendered.blocks,
       warnings: rendered.warnings,
     },
-    comments: comments.map((row) => ({
-      id: row.id,
-      parent_id: row.parent_id,
-      parent_proposal_id: row.parent_proposal_id,
-      anchor_block_id: row.anchor_block_id,
-      anchor_quote: row.anchor_quote,
-      anchor_prefix: row.anchor_prefix,
-      anchor_suffix: row.anchor_suffix,
-      anchor_start_offset: row.anchor_start_offset,
-      anchor_end_offset: row.anchor_end_offset,
-      anchor_heading_path: parseStringArray(row.anchor_heading_path),
-      anchor_section_index: row.anchor_section_index,
-      anchor_section_index_path: parseNumberArray(row.anchor_section_index_path),
-      author_client_id: row.author_client_id,
-      author_display_name: row.author_display_name,
-      body: row.body,
-      link_status: row.link_status,
-      resolved_at: row.resolved_at,
-      resolved_by_name: row.resolved_by_name,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-      edit_proposal:
-        row.proposal_status === null
-          ? null
-          : {
-              anchor_kind: row.anchor_kind,
-              source_snapshot: row.source_snapshot,
-              proposed_text: row.proposed_text,
-              status: row.proposal_status,
-              accepted_oid: row.accepted_oid,
-            },
-    })),
+    comments: await Promise.all(
+      comments.map(async (row) => ({
+        id: row.id,
+        parent_id: row.parent_id,
+        parent_proposal_id: row.parent_proposal_id,
+        anchor_block_id: row.anchor_block_id,
+        anchor_quote: row.anchor_quote,
+        anchor_prefix: row.anchor_prefix,
+        anchor_suffix: row.anchor_suffix,
+        anchor_start_offset: row.anchor_start_offset,
+        anchor_end_offset: row.anchor_end_offset,
+        anchor_heading_path: parseStringArray(row.anchor_heading_path),
+        anchor_section_index: row.anchor_section_index,
+        anchor_section_index_path: parseNumberArray(row.anchor_section_index_path),
+        author_client_id: row.author_client_id,
+        author_display_name: row.author_display_name,
+        body: row.body,
+        link_status: row.link_status,
+        resolved_at: row.resolved_at,
+        resolved_by_name: row.resolved_by_name,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        edit_proposal: await buildBundleProposalPayload(store, doc, row),
+      })),
+    ),
   };
 
   const filename = (doc.name ?? doc.uid).replace(/[^\w.-]+/g, '_').slice(0, 80);
@@ -1065,6 +1064,14 @@ async function importDocument(c: Context, deps: AppDeps) {
     }
   }
 
+  // Build refs/proposals/<pid> for every imported open proposal. The
+  // bundle carries proposed_text but no branch refs — those are per-repo
+  // identifiers that can't survive a cross-environment transfer. Reusing
+  // the boot-time backfill keeps one well-tested code path responsible
+  // for "rebuild branches from proposed_text," whether the cause is an
+  // older deployment or a fresh import.
+  await backfillProposalBranches(db, store);
+
   return c.json(
     {
       uid,
@@ -1083,6 +1090,81 @@ async function importDocument(c: Context, deps: AppDeps) {
 
 function isBundleVersion(v: unknown): v is 1 | 2 | 3 | 4 {
   return v === 1 || v === 2 || v === 3 || v === 4;
+}
+
+/**
+ * Build the bundle's `edit_proposal` payload for one comment row.
+ *
+ * The bundle format is intentionally decoupled from the DB schema: when
+ * a row has `branch_ref`/`base_oid`, the canonical proposed_text and
+ * source_snapshot live in git (branch tip + base commit) — the columns
+ * are a denormalized cache that Phase 3 will drop. Reading from git
+ * here means an export keeps producing the same shape after the column
+ * drop with zero changes to the bundle format or the import code.
+ *
+ * Legacy rows (no branch_ref) keep using the column values, since they
+ * have no other source of truth. They get backfilled on next boot.
+ */
+async function buildBundleProposalPayload(
+  store: GitStore,
+  doc: DocumentRow,
+  row: BundleCommentRow,
+): Promise<{
+  anchor_kind: string | null;
+  source_snapshot: string | null;
+  proposed_text: string;
+  status: EditProposalStatus;
+  accepted_oid: string | null;
+} | null> {
+  if (row.proposal_status === null) return null;
+
+  let proposedText: string | null = row.proposed_text;
+  let sourceSnapshot: string | null = row.source_snapshot;
+
+  if (row.branch_ref && row.base_oid && row.anchor_block_id) {
+    try {
+      const tip = await store.readProposalTip(doc, row.id);
+      const base = await store.readAt(doc, row.base_oid);
+      const range = locateBundleBlockRange(doc, base, row.anchor_block_id);
+      if (tip !== null && range !== null) {
+        // The branch was built by splicing proposed_text into base at
+        // `range`, so:
+        //   tip = base[0..start] + proposed + base[end..]
+        //   proposed.length = tip.length - base.length + (end - start)
+        const proposedLen = tip.length - base.length + (range.end - range.start);
+        if (proposedLen >= 0 && range.start + proposedLen <= tip.length) {
+          proposedText = tip.slice(range.start, range.start + proposedLen);
+          sourceSnapshot = base.slice(range.start, range.end);
+        }
+      }
+    } catch {
+      // Branch ref or base commit no longer readable — fall back to the
+      // column values so the export still completes.
+    }
+  }
+
+  if (proposedText === null) return null;
+  return {
+    anchor_kind: row.anchor_kind,
+    source_snapshot: sourceSnapshot,
+    proposed_text: proposedText,
+    status: row.proposal_status,
+    accepted_oid: row.accepted_oid,
+  };
+}
+
+function locateBundleBlockRange(
+  doc: DocumentRow,
+  source: string,
+  blockId: string,
+): { start: number; end: number } | null {
+  const map =
+    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
+  return (
+    map.get(blockId) ??
+    (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId)) ??
+    null
+  );
 }
 
 function parseStringArray(raw: string | null): string[] | null {

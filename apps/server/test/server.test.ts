@@ -2042,6 +2042,124 @@ describe('documents API', () => {
     ]);
   });
 
+  test('export + import of an open proposal rebuilds the branch on import so accept goes through git.merge (#25)', async () => {
+    // The bundle format intentionally carries proposed_text / source_snapshot
+    // but not branch_ref / base_oid (those are per-repo identifiers that
+    // can't survive a cross-environment transfer). Import re-uses the
+    // boot-time backfill helper to rebuild refs/proposals/<pid> from
+    // proposed_text against the imported main tip — making the imported
+    // proposal eligible for the git.merge accept path, not the legacy
+    // splice fallback.
+    const created = await upload(CLIENT_A, {
+      markdown: '# Title\n\nalpha',
+    });
+    const blockId = [...locateAllBlocks('# Title\n\nalpha').entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          body: 'please change this',
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(exportRes.status).toBe(200);
+    const bundle = (await exportRes.json()) as Record<string, unknown>;
+
+    // Bundle shape contract: branch_ref / base_oid are NOT in the per-
+    // proposal payload. proposed_text + source_snapshot are.
+    const exportedComments = bundle.comments as Array<{
+      edit_proposal: Record<string, unknown> | null;
+    }>;
+    const exportedProposal = exportedComments
+      .map((c) => c.edit_proposal)
+      .find((p) => p !== null) as Record<string, unknown>;
+    expect(Object.keys(exportedProposal)).toEqual(
+      expect.arrayContaining(['proposed_text', 'source_snapshot', 'status']),
+    );
+    expect(Object.keys(exportedProposal)).not.toContain('branch_ref');
+    expect(Object.keys(exportedProposal)).not.toContain('base_oid');
+    expect(exportedProposal.proposed_text).toBe('beta');
+    expect(exportedProposal.source_snapshot).toBe('alpha');
+
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: headersFor(CLIENT_C),
+        body: JSON.stringify(bundle),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as {
+      uid: string;
+      admin_invite: { token: string };
+    };
+
+    // After import, the open proposal must have a fresh branch_ref +
+    // base_oid pointing into the imported repo.
+    const importedProposalRow = app.db
+      .prepare(
+        `SELECT cep.comment_id, cep.branch_ref, cep.base_oid, cep.proposed_text
+           FROM comments_edit_proposals cep
+           JOIN comments c ON c.id = cep.comment_id
+          WHERE c.doc_uid = ? AND cep.status = 'open'`,
+      )
+      .get(imported.uid) as {
+      comment_id: string;
+      branch_ref: string;
+      base_oid: string;
+      proposed_text: string;
+    };
+    expect(importedProposalRow.branch_ref).toBe(
+      `refs/proposals/${importedProposalRow.comment_id}`,
+    );
+    expect(importedProposalRow.base_oid).toBeString();
+    expect(importedProposalRow.proposed_text).toBe('beta');
+
+    // The branch tip must contain the spliced source — confirms the
+    // backfill ran end-to-end and the branch is mergeable.
+    const tip = await app.store.readProposalTip(
+      { uid: imported.uid, format: 'markdown' },
+      importedProposalRow.comment_id,
+    );
+    expect(tip).toBe('# Title\n\nbeta');
+
+    // And accepting it should now go through git.merge — exercise it
+    // and confirm the doc source updates.
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${imported.uid}/threads/${importedProposalRow.comment_id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    const docAfter = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}`, {
+        headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
+      }),
+    );
+    const docBody = (await docAfter.json()) as { source: string };
+    expect(docBody.source).toBe('# Title\n\nbeta');
+  });
+
   test('GET /:uid/export.docx returns a themed Word document (binary)', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Export me\n\nA paragraph with **bold** text.\n',
