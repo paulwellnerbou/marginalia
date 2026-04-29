@@ -238,6 +238,83 @@ describe('backfillProposalBranches', () => {
     db.close();
   });
 
+  test('reuses stored base_oid even when byte range is null; recomputes range from base_oid source', async () => {
+    // Half-populated row: base_oid was captured but the byte range
+    // wasn't (e.g. createThread reached store.readAt successfully but
+    // locateBlockRange returned null at create time, or a later
+    // schema migration left ranges null). The backfill must reuse
+    // base_oid as the splice base and locate the block in *that*
+    // source — not silently re-anchor onto current main.
+    const db = openDatabase(dbPath);
+    db.prepare(
+      `INSERT INTO documents (uid, repo_dir, format, default_theme, created_at, updated_at)
+       VALUES ('doc-1', 'doc-1', 'markdown', 'default', 0, 0)`,
+    ).run();
+    const store = new GitStore(reposDir);
+    await store.init();
+
+    const baseSource = '# Title\n\nalpha';
+    await store.write(
+      { uid: 'doc-1', format: 'markdown' },
+      baseSource,
+      { displayName: 'orig', clientId: 'orig' },
+      'upload',
+    );
+    const originalBaseOid = await store.mainOid({ uid: 'doc-1', format: 'markdown' });
+    const blockId = [...locateAllBlocks(baseSource).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    if (!blockId) throw new Error('seed alpha block not found');
+
+    db.prepare(
+      `INSERT INTO comments
+         (id, doc_uid, anchor_block_id, anchor_quote,
+          author_client_id, author_display_name,
+          body, link_status, created_at, updated_at)
+       VALUES ('prop-1', 'doc-1', ?, 'alpha',
+               'alice', 'Alice', '', 'linked', 0, 0)`,
+    ).run(blockId);
+    db.prepare(
+      `INSERT INTO comments_edit_proposals
+         (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid,
+          branch_ref, base_oid, base_block_start, base_block_end)
+       VALUES ('prop-1', NULL, 'alpha', 'beta', 'open', NULL,
+               NULL, ?, NULL, NULL)`,
+    ).run(originalBaseOid);
+
+    // Move main on so any "use current main" behavior would be visible.
+    await store.write(
+      { uid: 'doc-1', format: 'markdown' },
+      `${baseSource}\n\nadded paragraph`,
+      { displayName: 'orig', clientId: 'orig' },
+      'update',
+    );
+    const newMainOid = await store.mainOid({ uid: 'doc-1', format: 'markdown' });
+    expect(newMainOid).not.toBe(originalBaseOid);
+
+    const summary = await backfillProposalBranches(db, store);
+    expect(summary.migrated).toBe(1);
+
+    const row = db
+      .prepare(
+        `SELECT branch_ref, base_oid, base_block_start, base_block_end
+           FROM comments_edit_proposals WHERE comment_id = 'prop-1'`,
+      )
+      .get() as {
+      branch_ref: string;
+      base_oid: string;
+      base_block_start: number;
+      base_block_end: number;
+    };
+    // base_oid must remain the original; range must be the alpha range
+    // *in the original base*, not the current main.
+    expect(row.branch_ref).toBe('refs/proposals/prop-1');
+    expect(row.base_oid).toBe(originalBaseOid);
+    expect(baseSource.slice(row.base_block_start, row.base_block_end)).toBe('alpha');
+
+    db.close();
+  });
+
   test('preserves stored base_oid + byte range when only branch_ref is missing', async () => {
     // Simulates a row from createThread where base reads succeeded but
     // createProposalBranch failed (e.g. transient git error). The row

@@ -1357,9 +1357,9 @@ function locatePostMergeSpliceStart(
   let bestStart: number | null = null;
   let bestDist = Number.POSITIVE_INFINITY;
   for (const range of locateDocumentBlocks(doc, nextSource).values()) {
-    if (nextSource.slice(range.start, range.start + proposedText.length) !== proposedText) {
-      continue;
-    }
+    // Require an exact range match — a prefix-only match could pick an
+    // unrelated block that just happens to start with proposedText.
+    if (nextSource.slice(range.start, range.end) !== proposedText) continue;
     const dist = Math.abs(range.start - baselineStart);
     if (dist < bestDist) {
       bestStart = range.start;

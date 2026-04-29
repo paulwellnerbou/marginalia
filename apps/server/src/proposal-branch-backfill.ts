@@ -90,42 +90,46 @@ export async function backfillProposalBranches(
   for (const row of rows) {
     const doc = { uid: row.doc_uid, format: row.format };
 
-    // If the row already carries base metadata (a post-#25 row whose
-    // branch creation failed at create time), reuse it — the original
-    // base is the proposal's stable parent and must not be re-based onto
-    // current main. Otherwise pick current main as the base and locate
-    // the splice site by anchor_block_id.
-    const hasStoredBase =
-      row.base_oid !== null && row.base_block_start !== null && row.base_block_end !== null;
+    // base_oid alone is authoritative for the proposal's base — the
+    // original base must not silently re-anchor onto current main. If
+    // it's set but the byte range isn't (e.g. a post-#25 createThread
+    // where base reads succeeded but `locateBlockRange` returned null),
+    // recompute the range from the source at the stored baseOid, not
+    // from current main.
     let baseOid: string;
-    let rangeStart: number;
-    let rangeEnd: number;
-    let nextSource: string;
+    let baseSource: string;
     try {
-      if (hasStoredBase) {
-        baseOid = row.base_oid as string;
-        const base = await store.readAt(doc, baseOid);
-        rangeStart = row.base_block_start as number;
-        rangeEnd = row.base_block_end as number;
-        nextSource = base.slice(0, rangeStart) + row.proposed_text + base.slice(rangeEnd);
+      if (row.base_oid !== null) {
+        baseOid = row.base_oid;
       } else {
         baseOid = await store.mainOid(doc);
-        const source = await store.readAt(doc, baseOid);
-        const blocks =
-          doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
-        const range = blocks.get(row.anchor_block_id);
-        if (!range) {
-          skipped += 1;
-          continue;
-        }
-        rangeStart = range.start;
-        rangeEnd = range.end;
-        nextSource = source.slice(0, rangeStart) + row.proposed_text + source.slice(rangeEnd);
       }
+      baseSource = await store.readAt(doc, baseOid);
     } catch {
       skipped += 1;
       continue;
     }
+
+    let rangeStart: number;
+    let rangeEnd: number;
+    if (row.base_block_start !== null && row.base_block_end !== null) {
+      rangeStart = row.base_block_start;
+      rangeEnd = row.base_block_end;
+    } else {
+      const blocks =
+        doc.format === 'asciidoc'
+          ? locateAllBlocksAsciidoc(baseSource)
+          : locateAllBlocks(baseSource);
+      const range = blocks.get(row.anchor_block_id);
+      if (!range) {
+        skipped += 1;
+        continue;
+      }
+      rangeStart = range.start;
+      rangeEnd = range.end;
+    }
+    const nextSource =
+      baseSource.slice(0, rangeStart) + row.proposed_text + baseSource.slice(rangeEnd);
 
     try {
       const { refName } = await store.createProposalBranch(doc, baseOid, row.id, nextSource, {

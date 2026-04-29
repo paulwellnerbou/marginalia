@@ -1,9 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import {
-  locateAllBlocks,
-  locateAllBlocksAsciidoc,
-  locateBlockSource,
-} from '@marginalia/renderer';
+import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { DocumentRow, EditProposalThreadRow } from '../db.js';
 import type { Realtime } from '../realtime.js';
@@ -235,9 +231,7 @@ function readProposalBlockSource(
   blockId: string | null,
 ): string | null {
   if (!blockId) return null;
-  const range =
-    locateDocumentBlocks(doc, source).get(blockId) ??
-    (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId));
+  const range = locateDocumentBlocks(doc, source).get(blockId);
   return range ? source.slice(range.start, range.end) : null;
 }
 
