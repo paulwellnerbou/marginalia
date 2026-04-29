@@ -1354,6 +1354,7 @@ describe('documents API', () => {
     const blockId = [...locateAllBlocks(source).entries()].find(
       ([, range]) => range.text === 'alpha',
     )?.[0];
+    expect(blockId).toBeString();
 
     const proposeRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}/threads`, {

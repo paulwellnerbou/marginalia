@@ -186,40 +186,47 @@ async function createThread(c: Context, deps: AppDeps) {
     // Read source AT baseOid — reading the working tree separately
     // from `mainOid()` would race with concurrent accepts and parent
     // the branch on a different commit than the spliced content.
-    // Wrapped: a transient git failure (permissions, disk, missing
-    // ref) shouldn't block proposal creation; the row inserts with
-    // NULL branch metadata and accept falls back to the legacy splice.
+    let currentSource: string | null = null;
     try {
-      const baseOidForProposal = await store.mainOid(doc);
-      const currentSource = await store.readAt(doc, baseOidForProposal);
+      baseOid = await store.mainOid(doc);
+      currentSource = await store.readAt(doc, baseOid);
+    } catch (err) {
+      console.warn(
+        `[marginalia] reading base for proposal ${id} (${doc.uid}) failed; falling back to legacy splice metadata:`,
+        err,
+      );
+      baseOid = null;
+    }
+    if (currentSource) {
       blockRange = locateBlockRange(doc, currentSource, anchor.blockId);
       sourceSnapshot = blockRange
         ? currentSource.slice(blockRange.start, blockRange.end)
         : null;
+      // Branch creation can fail independently (disk, permissions,
+      // corruption). Keep the already-derived snapshot + byte range
+      // so the row still gets the better data — only branch_ref is
+      // nulled. Accept's legacy splice fallback handles the rest.
       if (blockRange) {
         const nextSource =
           currentSource.slice(0, blockRange.start) +
           proposal.proposedText +
           currentSource.slice(blockRange.end);
-        const branch = await store.createProposalBranch(
-          doc,
-          baseOidForProposal,
-          id,
-          nextSource,
-          identity,
-        );
-        baseOid = baseOidForProposal;
-        branchRef = branch.refName;
+        try {
+          const branch = await store.createProposalBranch(
+            doc,
+            baseOid as string,
+            id,
+            nextSource,
+            identity,
+          );
+          branchRef = branch.refName;
+        } catch (err) {
+          console.warn(
+            `[marginalia] proposal-branch creation failed for ${id} (${doc.uid}); proposal stored without ref:`,
+            err,
+          );
+        }
       }
-    } catch (err) {
-      console.warn(
-        `[marginalia] proposal-branch creation failed for ${id} (${doc.uid}); continuing with legacy splice metadata:`,
-        err,
-      );
-      blockRange = null;
-      sourceSnapshot = null;
-      baseOid = null;
-      branchRef = null;
     }
   }
 
@@ -836,7 +843,7 @@ async function ensureProposalBranchExists(
   doc: DocumentRow,
   row: ThreadRow,
   deps: AppDeps,
-  identity: Identity,
+  _identity: Identity,
 ): Promise<void> {
   if (
     !row.branch_ref ||
@@ -860,7 +867,13 @@ async function ensureProposalBranchExists(
     row.proposed_text +
     baseSource.slice(row.base_block_end);
   try {
-    await deps.store.createProposalBranch(doc, row.base_oid, row.id, nextSource, identity);
+    // Use the original proposer's identity so a FF accept of the
+    // recreated branch attributes the resulting `accept-proposal:`
+    // commit to the proposer rather than whoever reopened the thread.
+    await deps.store.createProposalBranch(doc, row.base_oid, row.id, nextSource, {
+      clientId: row.author_client_id,
+      displayName: row.author_display_name,
+    });
   } catch {
     // fall through
   }

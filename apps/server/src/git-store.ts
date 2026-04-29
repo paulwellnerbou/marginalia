@@ -250,7 +250,13 @@ export class GitStore {
         dir,
         blob: new TextEncoder().encode(nextSource),
       });
-      const newTree = tree.map((e) => (e.path === filename ? { ...e, oid: blobOid } : e));
+      // If the base tree doesn't carry the doc file yet (e.g. the only
+      // commit so far is the seed `.marginalia-root`), insert a new
+      // entry. `tree.map` on its own would silently keep the old tree.
+      const hasEntry = tree.some((e) => e.path === filename);
+      const newTree = hasEntry
+        ? tree.map((e) => (e.path === filename ? { ...e, oid: blobOid } : e))
+        : [...tree, { path: filename, mode: '100644', type: 'blob' as const, oid: blobOid }];
       const newTreeOid = await git.writeTree({ fs, dir, tree: newTree });
 
       const ts = Math.floor(Date.now() / 1000);
