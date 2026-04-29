@@ -336,6 +336,7 @@ export class GitStore {
         if (e.code === 'MergeConflictError') {
           return {
             ok: false,
+            reason: 'conflict',
             conflict: {
               filepaths: e.data?.filepaths ?? [],
               bothModified: e.data?.bothModified ?? [],
@@ -343,6 +344,9 @@ export class GitStore {
               deleteByTheirs: e.data?.deleteByTheirs ?? [],
             },
           };
+        }
+        if (e.code === 'NotFoundError') {
+          return { ok: false, reason: 'absent' };
         }
         throw err;
       }
@@ -422,13 +426,15 @@ export type MergeProposalResult =
   | { ok: true; oid: string }
   | {
       ok: false;
+      reason: 'conflict';
       conflict: {
         filepaths: string[];
         bothModified: string[];
         deleteByUs: string[];
         deleteByTheirs: string[];
       };
-    };
+    }
+  | { ok: false; reason: 'absent' };
 
 /**
  * Stage to a sibling temp file in the same directory, then `rename()`

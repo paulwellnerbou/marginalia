@@ -134,9 +134,19 @@ Para C baseline.
     const r2 = await store.mergeProposalBranch(doc, 'p2', author);
     expect(r2.ok).toBe(false);
     if (r2.ok) return;
+    expect(r2.reason).toBe('conflict');
+    if (r2.reason !== 'conflict') return;
     expect(r2.conflict.bothModified).toContain('document.md');
     // Main must NOT have moved on a conflicted merge attempt.
     expect(store.read(doc)).toBe(aProposed);
+  });
+
+  test('mergeProposalBranch reports `absent` when the ref is gone', async () => {
+    // Concurrent reject deletes the branch; a late accept should land on
+    // a structured `{ ok: false, reason: 'absent' }` instead of throwing
+    // out to the HTTP layer as a 500.
+    const result = await store.mergeProposalBranch(doc, 'never-existed', author);
+    expect(result).toEqual({ ok: false, reason: 'absent' });
   });
 
   test('deleteProposalBranch removes the ref; idempotent on a missing ref', async () => {

@@ -885,9 +885,11 @@ async function prepareAcceptProposalThread(
   let oid: string;
   let nextSource: string;
   let spliceStart: number;
-  if (row.branch_ref && row.base_oid) {
-    const merge = await deps.store.mergeProposalBranch(doc, row.id, identity);
-    if (!merge.ok) throw new ThreadActionError(409, 'proposal-conflict');
+  const merge =
+    row.branch_ref && row.base_oid
+      ? await deps.store.mergeProposalBranch(doc, row.id, identity)
+      : null;
+  if (merge?.ok) {
     oid = merge.oid;
     nextSource = deps.store.read(doc);
     spliceStart = locatePostMergeSpliceStart(
@@ -895,7 +897,11 @@ async function prepareAcceptProposalThread(
       row.proposed_text,
       preMergeRange.start,
     );
+  } else if (merge && merge.reason === 'conflict') {
+    throw new ThreadActionError(409, 'proposal-conflict');
   } else {
+    // Legacy row, or branch ref vanished out from under us — splice
+    // proposed_text into preMergeSource and write a regular commit.
     nextSource =
       preMergeSource.slice(0, preMergeRange.start) +
       row.proposed_text +

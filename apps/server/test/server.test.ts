@@ -1386,6 +1386,57 @@ describe('documents API', () => {
     expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeNull();
   });
 
+  test('accept falls back to splice when the proposal branch ref has vanished (#25)', async () => {
+    // If the ref is deleted out from under us (concurrent reject, manual
+    // git surgery, repo corruption recovery), accept must not 500. The
+    // legacy splice path takes over and produces a normal accept commit.
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          body: 'change it',
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+
+    // Simulate the ref being gone (without clearing branch_ref on the
+    // row, so the route's branch-backed branch is still taken).
+    await app.store.deleteProposalBranch(
+      { uid: created.uid, format: 'markdown' },
+      proposal.thread.id,
+    );
+
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(((await docRes.json()) as { source: string }).source).toBe('# Title\n\nbeta');
+  });
+
   test('accepted proposal diff renders the original block content via base_block_{start,end} (#25)', async () => {
     // anchor_block_id is rewritten on accept (block ids are content-
     // hash-derived), so it can't be used to locate the splice in
