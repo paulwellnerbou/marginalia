@@ -175,7 +175,16 @@ async function createThread(c: Context, deps: AppDeps) {
   // Read file source before opening the transaction so we don't hold a
   // SQLite write lock during filesystem I/O (consistent with the accept/reopen
   // paths in prepareAcceptProposalThread / prepareReopenAcceptedProposalThread).
-  const currentSource = proposal ? store.read(doc) : null;
+  //
+  // For proposals: the source must be read AT baseOid, not from the
+  // working tree. Reading the working tree separately from `mainOid()`
+  // opens a race where a concurrent accept could advance main between
+  // the two reads — we'd splice into the working-tree state but parent
+  // the branch on a different commit. `readAt(baseOid)` ties source
+  // and parent to the same commit deterministically.
+  const baseOidForProposal = proposal ? await store.mainOid(doc) : null;
+  const currentSource =
+    proposal && baseOidForProposal ? await store.readAt(doc, baseOidForProposal) : null;
   const blockRange =
     proposal && currentSource ? locateBlockRange(doc, currentSource, anchor.blockId) : null;
   const sourceSnapshot =
@@ -184,18 +193,18 @@ async function createThread(c: Context, deps: AppDeps) {
   const id = newCommentId();
 
   // Build the proposal branch before opening the SQL transaction — the
-  // branch is one git commit on `refs/proposals/<id>` parented at the
-  // current main tip. If the block can't be located in source we skip
+  // branch is one git commit on `refs/proposals/<id>` parented at
+  // baseOidForProposal. If the block can't be located in source we skip
   // the branch (the proposal will be flagged orphaned at accept time,
   // matching pre-#25 behavior).
   let branchRef: string | null = null;
   let baseOid: string | null = null;
-  if (proposal && currentSource && blockRange) {
+  if (proposal && currentSource && blockRange && baseOidForProposal) {
     const nextSource =
       currentSource.slice(0, blockRange.start) +
       proposal.proposedText +
       currentSource.slice(blockRange.end);
-    baseOid = await store.mainOid(doc);
+    baseOid = baseOidForProposal;
     const branch = await store.createProposalBranch(
       doc,
       baseOid,
@@ -334,14 +343,26 @@ async function resolveDiffBefore(
   proposal: EditProposalThreadRow,
   deps: AppDeps,
 ): Promise<string> {
+  // For *open* branch-backed proposals, anchor_block_id is still valid
+  // in baseSource, so we can read it directly from the base commit
+  // without walking history. Accepted proposals fall through to the
+  // legacy walk because their anchor_block_id was rewritten on accept
+  // (block ids are content-hash-derived) and won't resolve in
+  // baseSource — the legacy walk recovers the snapshot from the
+  // source_snapshot column instead.
+  //
+  // Phase 3 will need a proper byte-range locator (e.g. base_block_start/
+  // _end persisted at proposal create time) to keep this path working
+  // once source_snapshot/proposed_text are dropped. Pure base/tip
+  // diffing is not enough — the minimal diff is ambiguous when block
+  // contents share trailing characters (e.g. "alpha" → "beta").
   if (proposal.branch_ref && proposal.base_oid && proposal.anchor_block_id) {
     try {
       const baseSource = await deps.store.readAt(doc, proposal.base_oid);
       const range = locateBlockRange(doc, baseSource, proposal.anchor_block_id);
       if (range) return baseSource.slice(range.start, range.end);
     } catch {
-      // base commit not readable — fall through to the legacy walk so
-      // the diff still renders something useful.
+      // base commit not readable — fall through to the legacy walk.
     }
   }
   return resolveProposalDiffBefore(doc, proposal, deps);

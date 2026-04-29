@@ -5,7 +5,6 @@ import {
   extractDocumentTitle,
   locateAllBlocks,
   locateAllBlocksAsciidoc,
-  locateBlockSource,
   renderDocument,
   rewriteAssetReferences,
   sanitizeDocumentFilename,
@@ -1069,8 +1068,10 @@ async function importDocument(c: Context, deps: AppDeps) {
   // identifiers that can't survive a cross-environment transfer. Reusing
   // the boot-time backfill keeps one well-tested code path responsible
   // for "rebuild branches from proposed_text," whether the cause is an
-  // older deployment or a fresh import.
-  await backfillProposalBranches(db, store);
+  // older deployment or a fresh import. Scoped to the imported uid so
+  // we don't fan out across every legacy proposal in the database on
+  // each import.
+  await backfillProposalBranches(db, store, uid);
 
   return c.json(
     {
@@ -1118,53 +1119,22 @@ async function buildBundleProposalPayload(
 } | null> {
   if (row.proposal_status === null) return null;
 
-  let proposedText: string | null = row.proposed_text;
-  let sourceSnapshot: string | null = row.source_snapshot;
-
-  if (row.branch_ref && row.base_oid && row.anchor_block_id) {
-    try {
-      const tip = await store.readProposalTip(doc, row.id);
-      const base = await store.readAt(doc, row.base_oid);
-      const range = locateBundleBlockRange(doc, base, row.anchor_block_id);
-      if (tip !== null && range !== null) {
-        // The branch was built by splicing proposed_text into base at
-        // `range`, so:
-        //   tip = base[0..start] + proposed + base[end..]
-        //   proposed.length = tip.length - base.length + (end - start)
-        const proposedLen = tip.length - base.length + (range.end - range.start);
-        if (proposedLen >= 0 && range.start + proposedLen <= tip.length) {
-          proposedText = tip.slice(range.start, range.start + proposedLen);
-          sourceSnapshot = base.slice(range.start, range.end);
-        }
-      }
-    } catch {
-      // Branch ref or base commit no longer readable — fall back to the
-      // column values so the export still completes.
-    }
-  }
-
-  if (proposedText === null) return null;
+  // Bundle uses the column values directly. We tried recovering them
+  // from git (branch tip + base_oid blob) for forward-compatibility
+  // with the Phase 3 column drop, but pure base/tip diffing yields a
+  // *minimal* splice range — when block contents share trailing
+  // characters (e.g. "alpha" → "beta") it produces "bet" instead of
+  // "beta". Recovering the original splice unambiguously needs an
+  // explicit byte range stored at proposal-create time, which is
+  // Phase 3 work. Until then the columns stay authoritative.
+  if (row.proposed_text === null) return null;
   return {
     anchor_kind: row.anchor_kind,
-    source_snapshot: sourceSnapshot,
-    proposed_text: proposedText,
+    source_snapshot: row.source_snapshot,
+    proposed_text: row.proposed_text,
     status: row.proposal_status,
     accepted_oid: row.accepted_oid,
   };
-}
-
-function locateBundleBlockRange(
-  doc: DocumentRow,
-  source: string,
-  blockId: string,
-): { start: number; end: number } | null {
-  const map =
-    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
-  return (
-    map.get(blockId) ??
-    (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId)) ??
-    null
-  );
 }
 
 function parseStringArray(raw: string | null): string[] | null {

@@ -20,27 +20,49 @@ import type { GitStore } from './git-store.js';
  * located (the doc has moved on without anchor block id stability), we
  * leave the row alone — it'll fall through to the legacy splice path on
  * accept and surface as orphaned via the existing block-id check.
+ *
+ * Pass `docUid` to scope the scan to one document — the import path uses
+ * this to avoid scanning every legacy proposal in the DB on every import.
  */
 export async function backfillProposalBranches(
   db: Database,
   store: GitStore,
+  docUid?: string,
 ): Promise<{ migrated: number; skipped: number }> {
-  const rows = db
-    .prepare(
-      `SELECT cep.comment_id     AS id,
-              c.doc_uid          AS doc_uid,
-              c.anchor_block_id  AS anchor_block_id,
-              cep.proposed_text  AS proposed_text,
-              d.format           AS format
-         FROM comments_edit_proposals cep
-         JOIN comments c   ON c.id  = cep.comment_id
-         JOIN documents d  ON d.uid = c.doc_uid
-        WHERE cep.status = 'open'
-          AND cep.branch_ref IS NULL
-          AND c.deleted_at IS NULL
-          AND c.anchor_block_id IS NOT NULL`,
-    )
-    .all() as Array<{
+  const rows = (
+    docUid === undefined
+      ? db.prepare(
+          `SELECT cep.comment_id     AS id,
+                  c.doc_uid          AS doc_uid,
+                  c.anchor_block_id  AS anchor_block_id,
+                  cep.proposed_text  AS proposed_text,
+                  d.format           AS format
+             FROM comments_edit_proposals cep
+             JOIN comments c   ON c.id  = cep.comment_id
+             JOIN documents d  ON d.uid = c.doc_uid
+            WHERE cep.status = 'open'
+              AND cep.branch_ref IS NULL
+              AND c.deleted_at IS NULL
+              AND c.anchor_block_id IS NOT NULL`,
+        ).all()
+      : db
+          .prepare(
+            `SELECT cep.comment_id     AS id,
+                    c.doc_uid          AS doc_uid,
+                    c.anchor_block_id  AS anchor_block_id,
+                    cep.proposed_text  AS proposed_text,
+                    d.format           AS format
+               FROM comments_edit_proposals cep
+               JOIN comments c   ON c.id  = cep.comment_id
+               JOIN documents d  ON d.uid = c.doc_uid
+              WHERE cep.status = 'open'
+                AND cep.branch_ref IS NULL
+                AND c.deleted_at IS NULL
+                AND c.anchor_block_id IS NOT NULL
+                AND c.doc_uid = ?`,
+          )
+          .all(docUid)
+  ) as Array<{
     id: string;
     doc_uid: string;
     anchor_block_id: string;
