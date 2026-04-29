@@ -176,35 +176,51 @@ async function createThread(c: Context, deps: AppDeps) {
     if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
   }
 
-  // For proposals, read source AT baseOid — reading the working tree
-  // separately from `mainOid()` would race with concurrent accepts and
-  // parent the branch on a different commit than the spliced content.
-  const baseOidForProposal = proposal ? await store.mainOid(doc) : null;
-  const currentSource =
-    proposal && baseOidForProposal ? await store.readAt(doc, baseOidForProposal) : null;
-  const blockRange =
-    proposal && currentSource ? locateBlockRange(doc, currentSource, anchor.blockId) : null;
-  const sourceSnapshot =
-    currentSource && blockRange ? currentSource.slice(blockRange.start, blockRange.end) : null;
-
   const id = newCommentId();
 
+  let sourceSnapshot: string | null = null;
+  let blockRange: BlockSourceRange | null = null;
   let branchRef: string | null = null;
   let baseOid: string | null = null;
-  if (proposal && currentSource && blockRange && baseOidForProposal) {
-    const nextSource =
-      currentSource.slice(0, blockRange.start) +
-      proposal.proposedText +
-      currentSource.slice(blockRange.end);
-    baseOid = baseOidForProposal;
-    const branch = await store.createProposalBranch(
-      doc,
-      baseOid,
-      id,
-      nextSource,
-      identity,
-    );
-    branchRef = branch.refName;
+  if (proposal) {
+    // Read source AT baseOid — reading the working tree separately
+    // from `mainOid()` would race with concurrent accepts and parent
+    // the branch on a different commit than the spliced content.
+    // Wrapped: a transient git failure (permissions, disk, missing
+    // ref) shouldn't block proposal creation; the row inserts with
+    // NULL branch metadata and accept falls back to the legacy splice.
+    try {
+      const baseOidForProposal = await store.mainOid(doc);
+      const currentSource = await store.readAt(doc, baseOidForProposal);
+      blockRange = locateBlockRange(doc, currentSource, anchor.blockId);
+      sourceSnapshot = blockRange
+        ? currentSource.slice(blockRange.start, blockRange.end)
+        : null;
+      if (blockRange) {
+        const nextSource =
+          currentSource.slice(0, blockRange.start) +
+          proposal.proposedText +
+          currentSource.slice(blockRange.end);
+        const branch = await store.createProposalBranch(
+          doc,
+          baseOidForProposal,
+          id,
+          nextSource,
+          identity,
+        );
+        baseOid = baseOidForProposal;
+        branchRef = branch.refName;
+      }
+    } catch (err) {
+      console.warn(
+        `[marginalia] proposal-branch creation failed for ${id} (${doc.uid}); continuing with legacy splice metadata:`,
+        err,
+      );
+      blockRange = null;
+      sourceSnapshot = null;
+      baseOid = null;
+      branchRef = null;
+    }
   }
 
   const now = Date.now();

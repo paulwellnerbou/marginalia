@@ -20,7 +20,7 @@ describe('backfillProposalBranches', () => {
   let reposDir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'mdn-bckfill-'));
+    dir = mkdtempSync(join(tmpdir(), 'mdn-backfill-'));
     dbPath = join(dir, 'db.sqlite');
     reposDir = join(dir, 'repos');
   });
