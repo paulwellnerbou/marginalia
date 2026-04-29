@@ -71,8 +71,15 @@ export async function backfillProposalBranches(
 
   for (const row of rows) {
     const doc = { uid: row.doc_uid, format: row.format };
-    const source = safeRead(store, doc);
-    if (source === null) {
+    let baseOid: string;
+    let source: string;
+    try {
+      // Resolve baseOid first, then read source AT that oid — keeps the
+      // splice and the eventual proposal-branch parent on the same tree
+      // even if main advances during the loop.
+      baseOid = await store.mainOid(doc);
+      source = await store.readAt(doc, baseOid);
+    } catch {
       skipped += 1;
       continue;
     }
@@ -89,13 +96,6 @@ export async function backfillProposalBranches(
     const nextSource =
       source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
 
-    let baseOid: string;
-    try {
-      baseOid = await store.mainOid(doc);
-    } catch {
-      skipped += 1;
-      continue;
-    }
     const identity = { displayName: 'marginalia', clientId: 'marginalia' };
     try {
       const { refName } = await store.createProposalBranch(
@@ -119,10 +119,3 @@ export async function backfillProposalBranches(
   return { migrated, skipped };
 }
 
-function safeRead(store: GitStore, doc: { uid: string; format: DocumentFormat }): string | null {
-  try {
-    return store.read(doc);
-  } catch {
-    return null;
-  }
-}

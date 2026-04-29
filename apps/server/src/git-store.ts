@@ -389,32 +389,36 @@ export class GitStore {
     doc: DocLocator,
     proposalId: string,
   ): Promise<'clean' | 'conflict' | 'merged' | 'absent'> {
-    const dir = this.repoDir(doc.uid);
-    if (!existsSync(join(dir, '.git'))) return 'absent';
-    const refName = proposalRef(proposalId);
-    let tipOid: string;
-    try {
-      tipOid = await git.resolveRef({ fs, dir, ref: refName });
-    } catch {
-      return 'absent';
-    }
-    const mainOid = await git.resolveRef({ fs, dir, ref: 'main' });
-    if (tipOid === mainOid) return 'merged';
-    try {
-      await git.merge({
-        fs,
-        dir,
-        ours: 'main',
-        theirs: refName,
-        dryRun: true,
-        author: { name: 'check', email: 'check@local', timestamp: 0, timezoneOffset: 0 },
-      });
-      return 'clean';
-    } catch (err) {
-      const e = err as { code?: string };
-      if (e.code === 'MergeConflictError') return 'conflict';
-      throw err;
-    }
+    // Even with `dryRun: true`, iso-git's merge touches index/working-tree
+    // state — serialize through the per-doc lock alongside writes/merges.
+    return this.withLock(doc.uid, async () => {
+      const dir = this.repoDir(doc.uid);
+      if (!existsSync(join(dir, '.git'))) return 'absent';
+      const refName = proposalRef(proposalId);
+      let tipOid: string;
+      try {
+        tipOid = await git.resolveRef({ fs, dir, ref: refName });
+      } catch {
+        return 'absent';
+      }
+      const mainOid = await git.resolveRef({ fs, dir, ref: 'main' });
+      if (tipOid === mainOid) return 'merged';
+      try {
+        await git.merge({
+          fs,
+          dir,
+          ours: 'main',
+          theirs: refName,
+          dryRun: true,
+          author: { name: 'check', email: 'check@local', timestamp: 0, timezoneOffset: 0 },
+        });
+        return 'clean';
+      } catch (err) {
+        const e = err as { code?: string };
+        if (e.code === 'MergeConflictError') return 'conflict';
+        throw err;
+      }
+    });
   }
 }
 
