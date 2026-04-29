@@ -220,7 +220,243 @@ export class GitStore {
       return null;
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Proposal branches
+  //
+  // Each open proposal lives on `refs/proposals/<pid>` inside the doc's repo.
+  // A proposal is exactly one commit — parent = the doc's main tip at create
+  // time (`baseOid`), tree = main's tree at that point with `document.<ext>`
+  // replaced by the full proposed source. Accepting calls `git.merge` (FF or
+  // 3-way), which writes the merge commit straight onto main.
+  //
+  // Refs live under `refs/proposals/` rather than `refs/heads/` so they don't
+  // clutter `git branch` listings and signal that they aren't normal branches.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Build a one-commit branch with `baseOid` as parent and the file replaced
+   * by `nextSource`. The ref is `refs/proposals/<proposalId>`. Returns the
+   * created commit oid; the ref points at it.
+   *
+   * Uses git plumbing (write-blob + write-tree + write-commit) so we don't
+   * thrash the working tree — main's checkout stays in place.
+   */
+  async createProposalBranch(
+    doc: DocLocator,
+    baseOid: string,
+    proposalId: string,
+    nextSource: string,
+    identity: { displayName: string; clientId: string },
+  ): Promise<{ commitOid: string; refName: string }> {
+    return this.withLock(doc.uid, async () => {
+      await this.ensureDocRepo(doc.uid);
+      const dir = this.repoDir(doc.uid);
+      const filename = this.filename(doc.format);
+
+      const { commit: baseCommit } = await git.readCommit({ fs, dir, oid: baseOid });
+      const { tree } = await git.readTree({ fs, dir, oid: baseCommit.tree });
+      const blobOid = await git.writeBlob({
+        fs,
+        dir,
+        blob: new TextEncoder().encode(nextSource),
+      });
+      const newTree = tree.map((e) => (e.path === filename ? { ...e, oid: blobOid } : e));
+      const newTreeOid = await git.writeTree({ fs, dir, tree: newTree });
+
+      const ts = Math.floor(Date.now() / 1000);
+      const author = {
+        name: identity.clientId,
+        email: `${identity.clientId}@marginalia.local`,
+        timestamp: ts,
+        timezoneOffset: 0,
+      };
+      const message =
+        `proposal: ${proposalId}\n\n` +
+        `X-Marginalia-Client-ID: ${identity.clientId}\n` +
+        `X-Marginalia-Proposal-ID: ${proposalId}\n`;
+      const commitOid = await git.writeCommit({
+        fs,
+        dir,
+        commit: {
+          tree: newTreeOid,
+          parent: [baseOid],
+          author,
+          committer: author,
+          message,
+        },
+      });
+
+      const refName = proposalRef(proposalId);
+      await git.writeRef({ fs, dir, ref: refName, value: commitOid, force: true });
+      return { commitOid, refName };
+    });
+  }
+
+  /**
+   * Merge the proposal branch into main. FF when possible, 3-way otherwise.
+   * The merge commit message carries the same trailers `write()` would have
+   * stamped on a direct accept commit, so the audit trail in the activity
+   * log doesn't change shape.
+   *
+   * Returns a discriminated union: `{ ok: true, oid }` on success, where
+   * `oid` is main's new tip (FF target or merge commit); or `{ ok: false,
+   * conflict }` with the structured info iso-git raised, so the caller can
+   * surface a 409 without re-parsing error messages.
+   */
+  async mergeProposalBranch(
+    doc: DocLocator,
+    proposalId: string,
+    identity: { displayName: string; clientId: string },
+  ): Promise<MergeProposalResult> {
+    return this.withLock(doc.uid, async () => {
+      await this.ensureDocRepo(doc.uid);
+      const dir = this.repoDir(doc.uid);
+      const refName = proposalRef(proposalId);
+      const ts = Math.floor(Date.now() / 1000);
+      const author = {
+        name: identity.clientId,
+        email: `${identity.clientId}@marginalia.local`,
+        timestamp: ts,
+        timezoneOffset: 0,
+      };
+      const message =
+        `accept-proposal: ${proposalId}\n\n` +
+        `X-Marginalia-Client-ID: ${identity.clientId}\n` +
+        `X-Marginalia-Proposal-ID: ${proposalId}\n`;
+      try {
+        const result = (await git.merge({
+          fs,
+          dir,
+          ours: 'main',
+          theirs: refName,
+          author,
+          message,
+        })) as { oid?: string; alreadyMerged?: boolean; fastForward?: boolean };
+        const oid = result.oid ?? (await git.resolveRef({ fs, dir, ref: 'main' }));
+        // After a non-FF merge iso-git advances the ref but not the working
+        // tree — re-checkout main so subsequent `read()` calls see the new
+        // file content.
+        await git.checkout({ fs, dir, ref: 'main', force: true });
+        return { ok: true, oid };
+      } catch (err) {
+        const e = err as Error & {
+          code?: string;
+          data?: {
+            filepaths?: string[];
+            bothModified?: string[];
+            deleteByUs?: string[];
+            deleteByTheirs?: string[];
+          };
+        };
+        if (e.code === 'MergeConflictError') {
+          return {
+            ok: false,
+            conflict: {
+              filepaths: e.data?.filepaths ?? [],
+              bothModified: e.data?.bothModified ?? [],
+              deleteByUs: e.data?.deleteByUs ?? [],
+              deleteByTheirs: e.data?.deleteByTheirs ?? [],
+            },
+          };
+        }
+        throw err;
+      }
+    });
+  }
+
+  /** Delete the proposal's ref. No-op if it's already gone. */
+  async deleteProposalBranch(doc: DocLocator, proposalId: string): Promise<void> {
+    return this.withLock(doc.uid, async () => {
+      const dir = this.repoDir(doc.uid);
+      if (!existsSync(join(dir, '.git'))) return;
+      try {
+        await git.deleteRef({ fs, dir, ref: proposalRef(proposalId) });
+      } catch {
+        // Ref absent or already deleted.
+      }
+    });
+  }
+
+  /** Read the file content at the proposal branch's tip. */
+  async readProposalTip(doc: DocLocator, proposalId: string): Promise<string | null> {
+    const dir = this.repoDir(doc.uid);
+    if (!existsSync(join(dir, '.git'))) return null;
+    try {
+      const tipOid = await git.resolveRef({ fs, dir, ref: proposalRef(proposalId) });
+      const { blob } = await git.readBlob({
+        fs,
+        dir,
+        oid: tipOid,
+        filepath: this.filename(doc.format),
+      });
+      return new TextDecoder().decode(blob);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Cheap check: would merging this branch into main right now succeed,
+   * conflict, or is it already merged / absent?
+   *
+   * `'clean'`   → FF or 3-way merge would auto-resolve.
+   * `'conflict'`→ would raise MergeConflictError.
+   * `'merged'`  → main already contains the branch tip (e.g. accepted).
+   * `'absent'`  → no ref by that name (rejected/deleted/never-created).
+   */
+  async proposalMergeStatus(
+    doc: DocLocator,
+    proposalId: string,
+  ): Promise<'clean' | 'conflict' | 'merged' | 'absent'> {
+    const dir = this.repoDir(doc.uid);
+    if (!existsSync(join(dir, '.git'))) return 'absent';
+    const refName = proposalRef(proposalId);
+    let tipOid: string;
+    try {
+      tipOid = await git.resolveRef({ fs, dir, ref: refName });
+    } catch {
+      return 'absent';
+    }
+    const mainOid = await git.resolveRef({ fs, dir, ref: 'main' });
+    if (tipOid === mainOid) return 'merged';
+    try {
+      await git.merge({
+        fs,
+        dir,
+        ours: 'main',
+        theirs: refName,
+        dryRun: true,
+        author: { name: 'check', email: 'check@local', timestamp: 0, timezoneOffset: 0 },
+      });
+      return 'clean';
+    } catch (err) {
+      const e = err as { code?: string };
+      if (e.code === 'MergeConflictError') return 'conflict';
+      throw err;
+    }
+  }
 }
+
+/**
+ * Internal — every place that names a proposal ref goes through this so a
+ * later naming change is one edit.
+ */
+function proposalRef(proposalId: string): string {
+  return `refs/proposals/${proposalId}`;
+}
+
+export type MergeProposalResult =
+  | { ok: true; oid: string }
+  | {
+      ok: false;
+      conflict: {
+        filepaths: string[];
+        bothModified: string[];
+        deleteByUs: string[];
+        deleteByTheirs: string[];
+      };
+    };
 
 /**
  * Stage to a sibling temp file in the same directory, then `rename()`

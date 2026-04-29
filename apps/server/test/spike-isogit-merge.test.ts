@@ -39,9 +39,9 @@ Para C baseline.
 interface CaseResult {
   name: string;
   outcome: 'ff' | 'merged' | 'already' | 'threw' | 'unknown';
-  error?: string;
-  fileAfter?: string;
-  raw?: unknown;
+  error: string | undefined;
+  fileAfter: string | undefined;
+  raw: unknown;
 }
 
 const results: CaseResult[] = [];
