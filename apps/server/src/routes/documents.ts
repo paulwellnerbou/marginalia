@@ -602,31 +602,7 @@ async function exportDocument(c: Context, deps: AppDeps) {
       blocks: rendered.blocks,
       warnings: rendered.warnings,
     },
-    comments: await Promise.all(
-      comments.map(async (row) => ({
-        id: row.id,
-        parent_id: row.parent_id,
-        parent_proposal_id: row.parent_proposal_id,
-        anchor_block_id: row.anchor_block_id,
-        anchor_quote: row.anchor_quote,
-        anchor_prefix: row.anchor_prefix,
-        anchor_suffix: row.anchor_suffix,
-        anchor_start_offset: row.anchor_start_offset,
-        anchor_end_offset: row.anchor_end_offset,
-        anchor_heading_path: parseStringArray(row.anchor_heading_path),
-        anchor_section_index: row.anchor_section_index,
-        anchor_section_index_path: parseNumberArray(row.anchor_section_index_path),
-        author_client_id: row.author_client_id,
-        author_display_name: row.author_display_name,
-        body: row.body,
-        link_status: row.link_status,
-        resolved_at: row.resolved_at,
-        resolved_by_name: row.resolved_by_name,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-        edit_proposal: await bundleProposalPayload(store, doc, row),
-      })),
-    ),
+    comments: await mapBundleComments(comments, store, doc),
   };
 
   const filename = (doc.name ?? doc.uid).replace(/[^\w.-]+/g, '_').slice(0, 80);
@@ -1090,6 +1066,45 @@ function isBundleVersion(v: unknown): v is 1 | 2 | 3 | 4 {
   return v === 1 || v === 2 || v === 3 || v === 4;
 }
 
+/**
+ * Sequential `for...of` rather than `Promise.all`: each branch-backed
+ * proposal does git reads, and a doc with hundreds of proposals would
+ * otherwise spike open-fd / I/O contention by reading them all at once.
+ */
+async function mapBundleComments(
+  comments: BundleCommentRow[],
+  store: GitStore,
+  doc: DocumentRow,
+): Promise<unknown[]> {
+  const out: unknown[] = [];
+  for (const row of comments) {
+    out.push({
+      id: row.id,
+      parent_id: row.parent_id,
+      parent_proposal_id: row.parent_proposal_id,
+      anchor_block_id: row.anchor_block_id,
+      anchor_quote: row.anchor_quote,
+      anchor_prefix: row.anchor_prefix,
+      anchor_suffix: row.anchor_suffix,
+      anchor_start_offset: row.anchor_start_offset,
+      anchor_end_offset: row.anchor_end_offset,
+      anchor_heading_path: parseStringArray(row.anchor_heading_path),
+      anchor_section_index: row.anchor_section_index,
+      anchor_section_index_path: parseNumberArray(row.anchor_section_index_path),
+      author_client_id: row.author_client_id,
+      author_display_name: row.author_display_name,
+      body: row.body,
+      link_status: row.link_status,
+      resolved_at: row.resolved_at,
+      resolved_by_name: row.resolved_by_name,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      edit_proposal: await bundleProposalPayload(store, doc, row),
+    });
+  }
+  return out;
+}
+
 async function bundleProposalPayload(
   store: GitStore,
   doc: DocumentRow,
@@ -1115,8 +1130,8 @@ async function bundleProposalPayload(
   ) {
     try {
       const tip = await store.readProposalTip(doc, row.id);
-      const base = await store.readAt(doc, row.base_oid);
       if (tip !== null) {
+        const base = await store.readAt(doc, row.base_oid);
         const proposedLen =
           tip.length - base.length + (row.base_block_end - row.base_block_start);
         return {
