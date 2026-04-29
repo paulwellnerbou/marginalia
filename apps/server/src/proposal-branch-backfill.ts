@@ -23,11 +23,13 @@ export async function backfillProposalBranches(
   const rows = (
     docUid === undefined
       ? db.prepare(
-          `SELECT cep.comment_id     AS id,
-                  c.doc_uid          AS doc_uid,
-                  c.anchor_block_id  AS anchor_block_id,
-                  cep.proposed_text  AS proposed_text,
-                  d.format           AS format
+          `SELECT cep.comment_id          AS id,
+                  c.doc_uid               AS doc_uid,
+                  c.anchor_block_id       AS anchor_block_id,
+                  c.author_client_id      AS author_client_id,
+                  c.author_display_name   AS author_display_name,
+                  cep.proposed_text       AS proposed_text,
+                  d.format                AS format
              FROM comments_edit_proposals cep
              JOIN comments c   ON c.id  = cep.comment_id
              JOIN documents d  ON d.uid = c.doc_uid
@@ -38,11 +40,13 @@ export async function backfillProposalBranches(
         ).all()
       : db
           .prepare(
-            `SELECT cep.comment_id     AS id,
-                    c.doc_uid          AS doc_uid,
-                    c.anchor_block_id  AS anchor_block_id,
-                    cep.proposed_text  AS proposed_text,
-                    d.format           AS format
+            `SELECT cep.comment_id          AS id,
+                    c.doc_uid               AS doc_uid,
+                    c.anchor_block_id       AS anchor_block_id,
+                    c.author_client_id      AS author_client_id,
+                    c.author_display_name   AS author_display_name,
+                    cep.proposed_text       AS proposed_text,
+                    d.format                AS format
                FROM comments_edit_proposals cep
                JOIN comments c   ON c.id  = cep.comment_id
                JOIN documents d  ON d.uid = c.doc_uid
@@ -57,6 +61,8 @@ export async function backfillProposalBranches(
     id: string;
     doc_uid: string;
     anchor_block_id: string;
+    author_client_id: string;
+    author_display_name: string;
     proposed_text: string;
     format: DocumentFormat;
   }>;
@@ -96,15 +102,11 @@ export async function backfillProposalBranches(
     const nextSource =
       source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
 
-    const identity = { displayName: 'marginalia', clientId: 'marginalia' };
     try {
-      const { refName } = await store.createProposalBranch(
-        doc,
-        baseOid,
-        row.id,
-        nextSource,
-        identity,
-      );
+      const { refName } = await store.createProposalBranch(doc, baseOid, row.id, nextSource, {
+        clientId: row.author_client_id,
+        displayName: row.author_display_name,
+      });
       update.run(refName, baseOid, range.start, range.end, row.id);
       migrated += 1;
     } catch (err) {

@@ -114,6 +114,19 @@ describe('backfillProposalBranches', () => {
     });
     expect(row.base_oid).toBe(mainOid);
 
+    // The branch commit must be authored by the proposal's author
+    // (`seed`) — not by a hard-coded backfill identity. Otherwise a
+    // FF accept would attribute the resulting `accept-proposal:` history
+    // entry to the wrong user.
+    const tipOid = await git.resolveRef({
+      fs,
+      dir: store.repoDir('doc-1'),
+      ref: 'refs/proposals/prop-1',
+    });
+    const { commit } = await git.readCommit({ fs, dir: store.repoDir('doc-1'), oid: tipOid });
+    expect(commit.author.name).toBe('seed');
+    expect(commit.message).toContain('X-Marginalia-Client-ID: seed');
+
     db.close();
   });
 

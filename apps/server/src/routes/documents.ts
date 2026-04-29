@@ -147,6 +147,8 @@ interface BundleCommentRow extends CommentRow {
   accepted_oid: string | null;
   branch_ref: string | null;
   base_oid: string | null;
+  base_block_start: number | null;
+  base_block_end: number | null;
 }
 
 export function documentsRouter(deps: AppDeps): Hono {
@@ -567,7 +569,9 @@ async function exportDocument(c: Context, deps: AppDeps) {
          cep.status AS proposal_status,
          cep.accepted_oid,
          cep.branch_ref,
-         cep.base_oid
+         cep.base_oid,
+         cep.base_block_start,
+         cep.base_block_end
          FROM comments c
          LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
         WHERE c.doc_uid = ? AND c.deleted_at IS NULL
@@ -598,29 +602,31 @@ async function exportDocument(c: Context, deps: AppDeps) {
       blocks: rendered.blocks,
       warnings: rendered.warnings,
     },
-    comments: comments.map((row) => ({
-      id: row.id,
-      parent_id: row.parent_id,
-      parent_proposal_id: row.parent_proposal_id,
-      anchor_block_id: row.anchor_block_id,
-      anchor_quote: row.anchor_quote,
-      anchor_prefix: row.anchor_prefix,
-      anchor_suffix: row.anchor_suffix,
-      anchor_start_offset: row.anchor_start_offset,
-      anchor_end_offset: row.anchor_end_offset,
-      anchor_heading_path: parseStringArray(row.anchor_heading_path),
-      anchor_section_index: row.anchor_section_index,
-      anchor_section_index_path: parseNumberArray(row.anchor_section_index_path),
-      author_client_id: row.author_client_id,
-      author_display_name: row.author_display_name,
-      body: row.body,
-      link_status: row.link_status,
-      resolved_at: row.resolved_at,
-      resolved_by_name: row.resolved_by_name,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-      edit_proposal: bundleProposalPayload(row),
-    })),
+    comments: await Promise.all(
+      comments.map(async (row) => ({
+        id: row.id,
+        parent_id: row.parent_id,
+        parent_proposal_id: row.parent_proposal_id,
+        anchor_block_id: row.anchor_block_id,
+        anchor_quote: row.anchor_quote,
+        anchor_prefix: row.anchor_prefix,
+        anchor_suffix: row.anchor_suffix,
+        anchor_start_offset: row.anchor_start_offset,
+        anchor_end_offset: row.anchor_end_offset,
+        anchor_heading_path: parseStringArray(row.anchor_heading_path),
+        anchor_section_index: row.anchor_section_index,
+        anchor_section_index_path: parseNumberArray(row.anchor_section_index_path),
+        author_client_id: row.author_client_id,
+        author_display_name: row.author_display_name,
+        body: row.body,
+        link_status: row.link_status,
+        resolved_at: row.resolved_at,
+        resolved_by_name: row.resolved_by_name,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        edit_proposal: await bundleProposalPayload(store, doc, row),
+      })),
+    ),
   };
 
   const filename = (doc.name ?? doc.uid).replace(/[^\w.-]+/g, '_').slice(0, 80);
@@ -1084,14 +1090,49 @@ function isBundleVersion(v: unknown): v is 1 | 2 | 3 | 4 {
   return v === 1 || v === 2 || v === 3 || v === 4;
 }
 
-function bundleProposalPayload(row: BundleCommentRow): {
+async function bundleProposalPayload(
+  store: GitStore,
+  doc: DocumentRow,
+  row: BundleCommentRow,
+): Promise<{
   anchor_kind: string | null;
   source_snapshot: string | null;
   proposed_text: string;
   status: EditProposalStatus;
   accepted_oid: string | null;
-} | null {
-  if (row.proposal_status === null || row.proposed_text === null) return null;
+} | null> {
+  if (row.proposal_status === null) return null;
+
+  // For branch-backed rows, derive proposed_text and source_snapshot
+  // from git via the persisted byte range. The DB columns are a
+  // denormalized cache that Phase 3 drops; the bundle stays correct
+  // after that drop because git is the source of truth here.
+  if (
+    row.branch_ref &&
+    row.base_oid &&
+    row.base_block_start !== null &&
+    row.base_block_end !== null
+  ) {
+    try {
+      const tip = await store.readProposalTip(doc, row.id);
+      const base = await store.readAt(doc, row.base_oid);
+      if (tip !== null) {
+        const proposedLen =
+          tip.length - base.length + (row.base_block_end - row.base_block_start);
+        return {
+          anchor_kind: row.anchor_kind,
+          source_snapshot: base.slice(row.base_block_start, row.base_block_end),
+          proposed_text: tip.slice(row.base_block_start, row.base_block_start + proposedLen),
+          status: row.proposal_status,
+          accepted_oid: row.accepted_oid,
+        };
+      }
+    } catch {
+      // fall through to columns
+    }
+  }
+
+  if (row.proposed_text === null) return null;
   return {
     anchor_kind: row.anchor_kind,
     source_snapshot: row.source_snapshot,
