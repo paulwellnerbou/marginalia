@@ -37,7 +37,7 @@ export async function backfillProposalBranches(
              FROM comments_edit_proposals cep
              JOIN comments c   ON c.id  = cep.comment_id
              JOIN documents d  ON d.uid = c.doc_uid
-            WHERE cep.status = 'open'
+            WHERE cep.status IN ('open', 'rejected')
               AND cep.branch_ref IS NULL
               AND c.deleted_at IS NULL
               AND c.anchor_block_id IS NOT NULL`,
@@ -57,7 +57,7 @@ export async function backfillProposalBranches(
                FROM comments_edit_proposals cep
                JOIN comments c   ON c.id  = cep.comment_id
                JOIN documents d  ON d.uid = c.doc_uid
-              WHERE cep.status = 'open'
+              WHERE cep.status IN ('open', 'rejected')
                 AND cep.branch_ref IS NULL
                 AND c.deleted_at IS NULL
                 AND c.anchor_block_id IS NOT NULL

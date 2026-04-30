@@ -1884,7 +1884,11 @@ async function loadAcceptedProposalHistory(
   ) as AcceptedProposalHistoryRow | null | undefined;
   if (!row) return null;
 
-  const proposedText = await readProposedTextFromBranch(store, doc, row);
+  // Skip the git read when rationale is non-empty — summarize prefers
+  // it and proposedText is only the fallback.
+  const proposedText = row.rationale?.trim()
+    ? null
+    : await readProposedTextFromBranch(store, doc, row);
   return {
     id: row.id,
     author: {
