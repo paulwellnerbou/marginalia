@@ -103,6 +103,7 @@ export function InlineCommentRow({
                     onClick={() => setConfirmingDelete(false)}
                     disabled={saving}
                     title="Cancel"
+                    aria-label="Cancel"
                   >
                     <Cross2Icon />
                   </button>
@@ -112,6 +113,7 @@ export function InlineCommentRow({
                     onClick={() => void confirmDelete()}
                     disabled={saving}
                     title="Confirm delete"
+                    aria-label="Confirm delete"
                   >
                     <TrashIcon />
                   </button>

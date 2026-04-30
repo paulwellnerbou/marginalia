@@ -7,9 +7,11 @@ function normalizeWs(s: string): string {
 // anchor quote, keep only the meaningful text before the stylesheet.
 function stripMermaidRuntimeCss(s: string): string {
   const idx = s.indexOf('#mermaid-');
-  if (idx <= 0) return s;
+  if (idx < 0) return s;
   const tail = s.slice(idx, Math.min(s.length, idx + 200));
   if (!tail.includes('{') || !tail.includes('font-family')) return s;
+  // idx === 0 means the whole textContent is the stylesheet — drop it
+  // entirely rather than returning the leaked CSS as the quote.
   return s.slice(0, idx).trim();
 }
 
