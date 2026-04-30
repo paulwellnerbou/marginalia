@@ -1267,6 +1267,344 @@ describe('documents API', () => {
     ).toBe(proposal.thread.id);
   });
 
+  test('rejecting a proposal deletes its branch ref; reopening recreates it (#25)', async () => {
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          body: 'please change',
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+
+    const docLocator = { uid: created.uid, format: 'markdown' as const };
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe(
+      '# Title\n\nbeta',
+    );
+
+    const rejectRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'reject' }),
+        },
+      ),
+    );
+    expect(rejectRes.status).toBe(200);
+
+    // After reject the branch ref must be gone — no dangling
+    // refs/proposals/<pid> hanging around for a dead proposal.
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeNull();
+
+    // Reopen rebuilds the branch from the stored base_oid + proposed_text
+    // so a subsequent accept can still use the git.merge path.
+    const reopenRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'reopen' }),
+        },
+      ),
+    );
+    expect(reopenRes.status).toBe(200);
+
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe(
+      '# Title\n\nbeta',
+    );
+
+    // And accepting after reopen still works end-to-end through git.merge.
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(((await docRes.json()) as { source: string }).source).toBe('# Title\n\nbeta');
+  });
+
+  test('deleting a proposal thread also deletes its branch ref (#25)', async () => {
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          body: 'please change',
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+
+    const docLocator = { uid: created.uid, format: 'markdown' as const };
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeString();
+
+    const deleteRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}`,
+        {
+          method: 'DELETE',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        },
+      ),
+    );
+    expect(deleteRes.status).toBe(204);
+
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeNull();
+  });
+
+  test('accept falls back to splice when the proposal branch ref has vanished (#25)', async () => {
+    // If the ref is deleted out from under us (concurrent reject, manual
+    // git surgery, repo corruption recovery), accept must not 500. The
+    // legacy splice path takes over and produces a normal accept commit.
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          body: 'change it',
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+
+    // Simulate the ref being gone (without clearing branch_ref on the
+    // row, so the route's branch-backed branch is still taken).
+    await app.store.deleteProposalBranch(
+      { uid: created.uid, format: 'markdown' },
+      proposal.thread.id,
+    );
+
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(((await docRes.json()) as { source: string }).source).toBe('# Title\n\nbeta');
+  });
+
+  test('accepted proposal diff renders the original block content via base_block_{start,end} (#25)', async () => {
+    // anchor_block_id is rewritten on accept (block ids are content-
+    // hash-derived), so it can't be used to locate the splice in
+    // base_oid afterwards. The persisted byte range is what makes the
+    // diff path work for accepted proposals without falling back to
+    // the source_snapshot column.
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          body: 'change it',
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+
+    // The byte range is persisted at proposal-create time.
+    const row = app.db
+      .prepare(
+        `SELECT base_block_start, base_block_end FROM comments_edit_proposals WHERE comment_id = ?`,
+      )
+      .get(proposal.thread.id) as {
+      base_block_start: number;
+      base_block_end: number;
+    };
+    expect(row.base_block_start).toBeNumber();
+    expect(row.base_block_end).toBeNumber();
+    expect(source.slice(row.base_block_start, row.base_block_end)).toBe('alpha');
+
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    // Diff renders the original block content from base_oid using the
+    // stored byte range — no anchor_block_id lookup, no source_snapshot.
+    const diffRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/diff`,
+        {
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        },
+      ),
+    );
+    expect(diffRes.status).toBe(200);
+    const diff = (await diffRes.json()) as { before: string; after: string };
+    expect(diff.before).toBe('alpha');
+    expect(diff.after).toBe('beta');
+  });
+
+  test('createThread populates branch_ref and base_oid for proposal threads (#25)', async () => {
+    // The proposal route now also writes a one-commit branch on
+    // refs/proposals/<id>. The branch ref + the main tip at create time
+    // are persisted alongside proposed_text so accept can use git.merge
+    // for conflict detection.
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { thread } = (await res.json()) as { thread: { id: string } };
+
+    const row = app.db
+      .prepare(
+        `SELECT branch_ref, base_oid FROM comments_edit_proposals WHERE comment_id = ?`,
+      )
+      .get(thread.id) as { branch_ref: string | null; base_oid: string | null };
+    expect(row.branch_ref).toBe(`refs/proposals/${thread.id}`);
+    expect(row.base_oid).toBeString();
+
+    // The branch's tip must contain the spliced source (full doc with the
+    // block replaced) so accept can git-merge it later.
+    const tip = await app.store.readProposalTip(
+      { uid: created.uid, format: 'markdown' },
+      thread.id,
+    );
+    expect(tip).toBe('# Title\n\nbeta');
+  });
+
+  test('two proposals on different blocks both accept cleanly even after the first one moves main (#25)', async () => {
+    // Adjacent-but-non-overlapping edits — iso-git's 3-way merge handles
+    // this for us via the precheck (status='clean'), so the second accept
+    // must succeed.
+    const source = '# Title\n\nfirst\n\nsecond';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blocks = [...locateAllBlocks(source).entries()];
+    const firstId = blocks.find(([, r]) => r.text === 'first')?.[0];
+    const secondId = blocks.find(([, r]) => r.text === 'second')?.[0];
+    expect(firstId).toBeString();
+    expect(secondId).toBeString();
+
+    async function propose(blockId: string, quote: string, text: string): Promise<string> {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/threads`, {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({
+            anchor: { block_id: blockId, quote },
+            proposal: { proposed_text: text },
+          }),
+        }),
+      );
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { thread: { id: string } };
+      return body.thread.id;
+    }
+
+    const a = await propose(firstId!, 'first', 'first edited');
+    const b = await propose(secondId!, 'second', 'second edited');
+
+    for (const id of [a, b]) {
+      const acceptRes = await app.hono.fetch(
+        new Request(
+          `http://test/api/documents/${created.uid}/threads/${id}/respond`,
+          {
+            method: 'POST',
+            headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+            body: JSON.stringify({ action: 'accept' }),
+          },
+        ),
+      );
+      expect(acceptRes.status).toBe(200);
+    }
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(docRes.status).toBe(200);
+    const doc = (await docRes.json()) as { source: string };
+    expect(doc.source).toContain('first edited');
+    expect(doc.source).toContain('second edited');
+  });
+
   test('accepted proposal diff reconstructs the original table-cell source for legacy rows', async () => {
     const source = [
       '| Label | Link |',
@@ -1942,6 +2280,124 @@ describe('documents API', () => {
     expect(importedProposalThread.comments.slice(1).map((reply) => reply.body)).toEqual([
       'proposal reply',
     ]);
+  });
+
+  test('export + import of an open proposal rebuilds the branch on import so accept goes through git.merge (#25)', async () => {
+    // The bundle format intentionally carries proposed_text / source_snapshot
+    // but not branch_ref / base_oid (those are per-repo identifiers that
+    // can't survive a cross-environment transfer). Import re-uses the
+    // boot-time backfill helper to rebuild refs/proposals/<pid> from
+    // proposed_text against the imported main tip — making the imported
+    // proposal eligible for the git.merge accept path, not the legacy
+    // splice fallback.
+    const created = await upload(CLIENT_A, {
+      markdown: '# Title\n\nalpha',
+    });
+    const blockId = [...locateAllBlocks('# Title\n\nalpha').entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          body: 'please change this',
+          proposal: { proposed_text: 'beta' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(exportRes.status).toBe(200);
+    const bundle = (await exportRes.json()) as Record<string, unknown>;
+
+    // Bundle shape contract: branch_ref / base_oid are NOT in the per-
+    // proposal payload. proposed_text + source_snapshot are.
+    const exportedComments = bundle.comments as Array<{
+      edit_proposal: Record<string, unknown> | null;
+    }>;
+    const exportedProposal = exportedComments
+      .map((c) => c.edit_proposal)
+      .find((p) => p !== null) as Record<string, unknown>;
+    expect(Object.keys(exportedProposal)).toEqual(
+      expect.arrayContaining(['proposed_text', 'source_snapshot', 'status']),
+    );
+    expect(Object.keys(exportedProposal)).not.toContain('branch_ref');
+    expect(Object.keys(exportedProposal)).not.toContain('base_oid');
+    expect(exportedProposal.proposed_text).toBe('beta');
+    expect(exportedProposal.source_snapshot).toBe('alpha');
+
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: headersFor(CLIENT_C),
+        body: JSON.stringify(bundle),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as {
+      uid: string;
+      admin_invite: { token: string };
+    };
+
+    // After import, the open proposal must have a fresh branch_ref +
+    // base_oid pointing into the imported repo.
+    const importedProposalRow = app.db
+      .prepare(
+        `SELECT cep.comment_id, cep.branch_ref, cep.base_oid, cep.proposed_text
+           FROM comments_edit_proposals cep
+           JOIN comments c ON c.id = cep.comment_id
+          WHERE c.doc_uid = ? AND cep.status = 'open'`,
+      )
+      .get(imported.uid) as {
+      comment_id: string;
+      branch_ref: string;
+      base_oid: string;
+      proposed_text: string;
+    };
+    expect(importedProposalRow.branch_ref).toBe(
+      `refs/proposals/${importedProposalRow.comment_id}`,
+    );
+    expect(importedProposalRow.base_oid).toBeString();
+    expect(importedProposalRow.proposed_text).toBe('beta');
+
+    // The branch tip must contain the spliced source — confirms the
+    // backfill ran end-to-end and the branch is mergeable.
+    const tip = await app.store.readProposalTip(
+      { uid: imported.uid, format: 'markdown' },
+      importedProposalRow.comment_id,
+    );
+    expect(tip).toBe('# Title\n\nbeta');
+
+    // And accepting it should now go through git.merge — exercise it
+    // and confirm the doc source updates.
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${imported.uid}/threads/${importedProposalRow.comment_id}/respond`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    const docAfter = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}`, {
+        headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
+      }),
+    );
+    const docBody = (await docAfter.json()) as { source: string };
+    expect(docBody.source).toBe('# Title\n\nbeta');
   });
 
   test('GET /:uid/export.docx returns a themed Word document (binary)', async () => {

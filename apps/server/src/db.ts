@@ -89,7 +89,15 @@ CREATE TABLE IF NOT EXISTS comments_edit_proposals (
   source_snapshot        TEXT,
   proposed_text          TEXT NOT NULL,
   status                 TEXT NOT NULL DEFAULT 'open',
-  accepted_oid           TEXT
+  accepted_oid           TEXT,
+  -- branch_ref points at one commit on top of base_oid that holds the
+  -- full proposed source. base_block_{start,end} are source offsets in
+  -- base_oid's source that the branch replaces — used for diff rendering
+  -- regardless of whether the proposal is still open. Nullable: backfilled.
+  branch_ref             TEXT,
+  base_oid               TEXT,
+  base_block_start       INTEGER,
+  base_block_end         INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS comment_mentions (
@@ -341,6 +349,10 @@ export interface EditProposalRow {
   proposed_text: string;
   status: EditProposalStatus;
   accepted_oid: string | null;
+  branch_ref: string | null;
+  base_oid: string | null;
+  base_block_start: number | null;
+  base_block_end: number | null;
 }
 
 export interface EditProposalThreadRow extends CommentRow {
@@ -350,6 +362,10 @@ export interface EditProposalThreadRow extends CommentRow {
   proposed_text: string;
   proposal_status: EditProposalStatus;
   accepted_oid: string | null;
+  branch_ref: string | null;
+  base_oid: string | null;
+  base_block_start: number | null;
+  base_block_end: number | null;
   decided_at: number | null;
   decided_by_name: string | null;
 }
@@ -374,6 +390,10 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'documents', 'mermaid_renderer', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'source_snapshot', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'accepted_oid', 'TEXT');
+  ensureColumn(db, 'comments_edit_proposals', 'branch_ref', 'TEXT');
+  ensureColumn(db, 'comments_edit_proposals', 'base_oid', 'TEXT');
+  ensureColumn(db, 'comments_edit_proposals', 'base_block_start', 'INTEGER');
+  ensureColumn(db, 'comments_edit_proposals', 'base_block_end', 'INTEGER');
   ensureColumn(db, 'sessions', 'persistent', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'sessions', 'invite_display_name', 'TEXT');
   ensureColumn(db, 'sessions', 'invite_role', 'TEXT');

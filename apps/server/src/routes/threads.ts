@@ -1,11 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import {
-  locateAllBlocks,
-  locateAllBlocksAsciidoc,
-  locateBlockSource,
-  renderDocument,
-} from '@marginalia/renderer';
+import { renderDocument } from '@marginalia/renderer';
 import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -44,6 +39,10 @@ interface ThreadRow extends CommentRow {
   proposed_text: string | null;
   proposal_status: EditProposalStatus | null;
   accepted_oid: string | null;
+  branch_ref: string | null;
+  base_oid: string | null;
+  base_block_start: number | null;
+  base_block_end: number | null;
   decided_at: number | null;
   decided_by_name: string | null;
 }
@@ -65,6 +64,10 @@ const THREAD_SELECT = `
     cep.proposed_text,
     cep.status AS proposal_status,
     cep.accepted_oid,
+    cep.branch_ref,
+    cep.base_oid,
+    cep.base_block_start,
+    cep.base_block_end,
     c.resolved_at AS decided_at,
     c.resolved_by_name AS decided_by_name
   FROM comments c
@@ -168,15 +171,60 @@ async function createThread(c: Context, deps: AppDeps) {
     if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
   }
 
-  // Read file source before opening the transaction so we don't hold a
-  // SQLite write lock during filesystem I/O (consistent with the accept/reopen
-  // paths in prepareAcceptProposalThread / prepareReopenAcceptedProposalThread).
-  const currentSource = proposal ? store.read(doc) : null;
-  const sourceSnapshot = currentSource
-    ? (readProposalBlockSource(doc, currentSource, anchor.blockId) ?? anchor.quote)
-    : null;
-
   const id = newCommentId();
+
+  let sourceSnapshot: string | null = null;
+  let blockRange: BlockSourceRange | null = null;
+  let branchRef: string | null = null;
+  let baseOid: string | null = null;
+  if (proposal) {
+    // Read source AT baseOid — reading the working tree separately
+    // from `mainOid()` would race with concurrent accepts and parent
+    // the branch on a different commit than the spliced content.
+    let currentSource: string | null = null;
+    try {
+      baseOid = await store.mainOid(doc);
+      currentSource = await store.readAt(doc, baseOid);
+    } catch (err) {
+      console.warn(
+        `[marginalia] reading base for proposal ${id} (${doc.uid}) failed; falling back to legacy splice metadata:`,
+        err,
+      );
+      baseOid = null;
+    }
+    if (currentSource) {
+      blockRange = locateBlockRange(doc, currentSource, anchor.blockId);
+      sourceSnapshot = blockRange
+        ? currentSource.slice(blockRange.start, blockRange.end)
+        : null;
+      // Branch creation can fail independently (disk, permissions,
+      // corruption). Keep the already-derived snapshot + source offsets
+      // so the row still gets the better data — only branch_ref is
+      // nulled. Accept's legacy splice fallback handles the rest.
+      if (blockRange) {
+        const nextSource =
+          currentSource.slice(0, blockRange.start) +
+          proposal.proposedText +
+          currentSource.slice(blockRange.end);
+        try {
+          const branch = await store.createProposalBranch(
+            doc,
+            baseOid as string,
+            id,
+            nextSource,
+            identity,
+          );
+          branchRef = branch.refName;
+        } catch (err) {
+          console.warn(
+            `[marginalia] proposal-branch creation failed for ${id} (${doc.uid}); proposal stored without ref:`,
+            err,
+          );
+        }
+      }
+    }
+  }
+
   const now = Date.now();
   db.exec('BEGIN');
   try {
@@ -212,13 +260,24 @@ async function createThread(c: Context, deps: AppDeps) {
     if (proposal) {
       db.prepare(
         `INSERT INTO comments_edit_proposals
-           (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid)
-         VALUES (?, ?, ?, ?, 'open', NULL)`,
-      ).run(id, proposal.anchorKind, sourceSnapshot ?? anchor.quote, proposal.proposedText);
+           (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid,
+            branch_ref, base_oid, base_block_start, base_block_end)
+         VALUES (?, ?, ?, ?, 'open', NULL, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        proposal.anchorKind,
+        sourceSnapshot ?? anchor.quote,
+        proposal.proposedText,
+        branchRef,
+        baseOid,
+        blockRange?.start ?? null,
+        blockRange?.end ?? null,
+      );
     }
     db.exec('COMMIT');
   } catch (err) {
     db.exec('ROLLBACK');
+    if (branchRef) await store.deleteProposalBranch(doc, id).catch(() => undefined);
     throw err;
   }
 
@@ -259,11 +318,7 @@ async function createThread(c: Context, deps: AppDeps) {
   return c.json({ thread }, 201);
 }
 
-/**
- * `GET /:uid/threads/:tid/diff`
- *
- * Returns the before/after diff payload for a proposal thread.
- */
+/** `GET /:uid/threads/:tid/diff` — before/after diff for a proposal thread. */
 async function getThreadDiff(c: Context, deps: AppDeps) {
   const { db } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
@@ -277,8 +332,28 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
   const proposal = loadProposalRow(db, tid, doc.uid);
   if (!proposal) return c.json({ error: 'proposal-required' }, 400);
 
-  const before = await resolveProposalDiffBefore(doc, proposal, deps);
+  const before = await resolveDiffBefore(doc, proposal, deps);
   return c.json({ before, after: proposal.proposed_text });
+}
+
+async function resolveDiffBefore(
+  doc: DocumentRow,
+  proposal: EditProposalThreadRow,
+  deps: AppDeps,
+): Promise<string> {
+  if (
+    proposal.base_oid &&
+    proposal.base_block_start !== null &&
+    proposal.base_block_end !== null
+  ) {
+    try {
+      const baseSource = await deps.store.readAt(doc, proposal.base_oid);
+      return baseSource.slice(proposal.base_block_start, proposal.base_block_end);
+    } catch {
+      // fall through
+    }
+  }
+  return resolveProposalDiffBefore(doc, proposal, deps);
 }
 
 /**
@@ -388,6 +463,9 @@ async function deleteThread(c: Context, deps: AppDeps) {
         AND (id = ? OR parent_id = ? OR parent_proposal_id = ?)`,
   ).run(now, now, doc.uid, tid, tid, tid);
   if (isProposalRow(row)) {
+    if (row.branch_ref) {
+      await deps.store.deleteProposalBranch(doc, row.id).catch(() => undefined);
+    }
     realtime.broadcast(
       doc.uid,
       { type: 'edit_proposal.deleted', edit_proposal_id: tid },
@@ -588,6 +666,8 @@ async function respondToThread(c: Context, deps: AppDeps) {
       preparedWorkflow = await prepareAcceptProposalThread(doc, row, deps, identity);
     } else if (action === 'reopen' && resolution?.kind === 'accept') {
       preparedWorkflow = await prepareReopenAcceptedProposalThread(doc, row, deps, identity);
+    } else if (action === 'reopen' && resolution?.kind === 'reject') {
+      await ensureProposalBranchExists(doc, row, deps, identity);
     }
   } catch (err) {
     if (err instanceof ThreadActionError) {
@@ -689,6 +769,10 @@ async function respondToThread(c: Context, deps: AppDeps) {
     throw err;
   }
 
+  if (action === 'reject' && row.branch_ref) {
+    await deps.store.deleteProposalBranch(doc, row.id).catch(() => undefined);
+  }
+
   if (createdReply) {
     realtime.broadcast(
       doc.uid,
@@ -746,6 +830,50 @@ async function respondToThread(c: Context, deps: AppDeps) {
   });
 }
 
+/**
+ * Recreate the proposal's branch ref from `base_oid` + `proposed_text`
+ * if it's missing. Used by reopen-after-reject (reject deletes the ref).
+ */
+async function ensureProposalBranchExists(
+  doc: DocumentRow,
+  row: ThreadRow,
+  deps: AppDeps,
+  _identity: Identity,
+): Promise<void> {
+  if (
+    !row.branch_ref ||
+    !row.base_oid ||
+    !row.proposed_text ||
+    row.base_block_start === null ||
+    row.base_block_end === null
+  ) {
+    return;
+  }
+  const tip = await deps.store.readProposalTip(doc, row.id);
+  if (tip !== null) return;
+  let baseSource: string;
+  try {
+    baseSource = await deps.store.readAt(doc, row.base_oid);
+  } catch {
+    return;
+  }
+  const nextSource =
+    baseSource.slice(0, row.base_block_start) +
+    row.proposed_text +
+    baseSource.slice(row.base_block_end);
+  try {
+    // Use the original proposer's identity so a FF accept of the
+    // recreated branch attributes the resulting `accept-proposal:`
+    // commit to the proposer rather than whoever reopened the thread.
+    await deps.store.createProposalBranch(doc, row.base_oid, row.id, nextSource, {
+      clientId: row.author_client_id,
+      displayName: row.author_display_name,
+    });
+  } catch {
+    // fall through
+  }
+}
+
 async function prepareAcceptProposalThread(
   doc: DocumentRow,
   row: ThreadRow,
@@ -756,12 +884,9 @@ async function prepareAcceptProposalThread(
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
 
-  const source = deps.store.read(doc);
-  const range =
-    doc.format === 'asciidoc'
-      ? (locateAllBlocksAsciidoc(source).get(row.anchor_block_id) ?? null)
-      : locateBlockSource(source, row.anchor_block_id);
-  if (!range) {
+  const preMergeSource = deps.store.read(doc);
+  const preMergeRange = locateBlockRange(doc, preMergeSource, row.anchor_block_id);
+  if (!preMergeRange) {
     const now = Date.now();
     deps.db
       .prepare(
@@ -781,16 +906,37 @@ async function prepareAcceptProposalThread(
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
 
-  const nextSource = source.slice(0, range.start) + row.proposed_text + source.slice(range.end);
-  const { oid } = await deps.store.write(
-    doc,
-    nextSource,
-    identity,
-    'accept-proposal',
-    {
+  let oid: string;
+  let nextSource: string;
+  let spliceStart: number;
+  const merge =
+    row.branch_ref && row.base_oid
+      ? await deps.store.mergeProposalBranch(doc, row.id, identity)
+      : null;
+  if (merge?.ok) {
+    oid = merge.oid;
+    nextSource = deps.store.read(doc);
+    spliceStart = locatePostMergeSpliceStart(
+      doc,
+      nextSource,
+      row.proposed_text,
+      preMergeRange.start,
+    );
+  } else if (merge && merge.reason === 'conflict') {
+    throw new ThreadActionError(409, 'proposal-conflict');
+  } else {
+    // Legacy row, or branch ref vanished out from under us — splice
+    // proposed_text into preMergeSource and write a regular commit.
+    nextSource =
+      preMergeSource.slice(0, preMergeRange.start) +
+      row.proposed_text +
+      preMergeSource.slice(preMergeRange.end);
+    const written = await deps.store.write(doc, nextSource, identity, 'accept-proposal', {
       proposalId: row.id,
-    },
-  );
+    });
+    oid = written.oid;
+    spliceStart = preMergeRange.start;
+  }
 
   const rendered = await renderDocument(nextSource, doc.format);
   const presentBlocks = locateDocumentBlocks(doc, nextSource);
@@ -814,8 +960,8 @@ async function prepareAcceptProposalThread(
   const acceptedAnchor = locateAcceptedProposalAnchor(
     presentBlocks,
     rendered.blocks,
-    range.start,
-    range.start + row.proposed_text.length,
+    spliceStart,
+    spliceStart + row.proposed_text.length,
   );
 
   return {
@@ -1182,11 +1328,45 @@ function isProposalRow(row: ThreadRow): boolean {
   return row.proposal_status !== null;
 }
 
-function readProposalBlockSource(doc: DocumentRow, source: string, blockId: string): string | null {
-  const range =
-    locateDocumentBlocks(doc, source).get(blockId) ??
-    (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId));
-  return range ? source.slice(range.start, range.end) : null;
+function locateBlockRange(
+  doc: DocumentRow,
+  source: string,
+  blockId: string,
+): BlockSourceRange | null {
+  return locateDocumentBlocks(doc, source).get(blockId) ?? null;
+}
+
+/**
+ * Find the block-boundary position in `nextSource` where `proposedText`
+ * was inserted by the merge. The splice always starts at a block start
+ * (the branch was built that way against base), so we only consider
+ * candidate positions that align with a block boundary — `indexOf`
+ * alone could match common short text inside an unrelated block.
+ *
+ * Ties broken by proximity to `baselineStart` (the splice site in
+ * pre-merge source). Falls back to `baselineStart` if no block start
+ * carries the proposed text.
+ */
+function locatePostMergeSpliceStart(
+  doc: DocumentRow,
+  nextSource: string,
+  proposedText: string,
+  baselineStart: number,
+): number {
+  if (proposedText.length === 0) return baselineStart;
+  let bestStart: number | null = null;
+  let bestDist = Number.POSITIVE_INFINITY;
+  for (const range of locateDocumentBlocks(doc, nextSource).values()) {
+    // Require an exact range match — a prefix-only match could pick an
+    // unrelated block that just happens to start with proposedText.
+    if (nextSource.slice(range.start, range.end) !== proposedText) continue;
+    const dist = Math.abs(range.start - baselineStart);
+    if (dist < bestDist) {
+      bestStart = range.start;
+      bestDist = dist;
+    }
+  }
+  return bestStart ?? baselineStart;
 }
 
 function locateAcceptedProposalAnchor(
