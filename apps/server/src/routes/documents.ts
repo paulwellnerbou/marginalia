@@ -1163,29 +1163,43 @@ async function bundleProposalPayload(
   accepted_oid: string | null;
 } | null> {
   if (row.proposal_status === null) return null;
-  if (
-    !row.branch_ref ||
-    !row.base_oid ||
-    row.base_block_start === null ||
-    row.base_block_end === null
-  ) {
-    return null;
+  const branchBacked =
+    row.branch_ref &&
+    row.base_oid &&
+    row.base_block_start !== null &&
+    row.base_block_end !== null;
+  if (branchBacked) {
+    try {
+      const tip = await store.readProposalTip(doc, row.id);
+      if (tip !== null) {
+        const base = await store.readAt(doc, row.base_oid as string);
+        const start = row.base_block_start as number;
+        const end = row.base_block_end as number;
+        const proposedLen = tip.length - base.length + (end - start);
+        return {
+          source_snapshot: base.slice(start, end),
+          proposed_text: tip.slice(start, start + proposedLen),
+          status: row.proposal_status,
+          accepted_oid: row.accepted_oid,
+        };
+      }
+    } catch {
+      // fall through to minimal payload
+    }
   }
-  try {
-    const tip = await store.readProposalTip(doc, row.id);
-    if (tip === null) return null;
-    const base = await store.readAt(doc, row.base_oid);
-    const proposedLen =
-      tip.length - base.length + (row.base_block_end - row.base_block_start);
-    return {
-      source_snapshot: base.slice(row.base_block_start, row.base_block_end),
-      proposed_text: tip.slice(row.base_block_start, row.base_block_start + proposedLen),
-      status: row.proposal_status,
-      accepted_oid: row.accepted_oid,
-    };
-  } catch {
-    return null;
-  }
+  // Historical row without recoverable content (legacy accepted, or
+  // an import that landed without a branch). Preserve status +
+  // accepted_oid so a round-trip doesn't drop the proposal record;
+  // empty placeholders keep the bundle schema stable. Open and
+  // rejected rows without a branch can't be safely reconstructed
+  // (no diff content to splice on re-import) so they're dropped.
+  if (row.proposal_status !== 'accepted') return null;
+  return {
+    source_snapshot: '',
+    proposed_text: '',
+    status: row.proposal_status,
+    accepted_oid: row.accepted_oid,
+  };
 }
 
 function parseStringArray(raw: string | null): string[] | null {

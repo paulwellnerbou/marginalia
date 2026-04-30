@@ -4,14 +4,17 @@ import { columnExists, type DocumentFormat } from './db.js';
 import type { GitStore } from './git-store.js';
 
 /**
- * Build `refs/proposals/<pid>` for every open proposal whose row is missing
- * a `branch_ref`. Idempotent. `docUid`, when set, scopes the scan to one
- * document.
+ * Build `refs/proposals/<pid>` for every open or rejected proposal whose
+ * row is missing a `branch_ref`. Rejected rows are included because the
+ * Phase-2 reject-deletes-branch behavior left them without a ref but
+ * with `proposed_text` still in the column — last chance to capture
+ * before `dropLegacyProposalColumns`. Idempotent. `docUid`, when set,
+ * scopes the scan to one document.
  *
  * Reads `proposed_text` from the legacy column to splice the branch tip,
  * so this is a no-op once `dropLegacyProposalColumns` has run — fresh
  * databases never had the column, and post-migration databases have all
- * open rows already carrying a `branch_ref`.
+ * applicable rows already carrying a `branch_ref`.
  */
 export async function backfillProposalBranches(
   db: Database,
