@@ -1032,46 +1032,64 @@ async function importDocument(c: Context, deps: AppDeps) {
         ? (row.edit_proposal as Record<string, unknown>)
         : null;
     if (isRootComment && proposal && typeof proposal.proposed_text === 'string') {
+      const status = normalizeImportedProposalStatus(
+        typeof proposal.status === 'string' ? proposal.status : null,
+      );
+      const acceptedOid =
+        typeof proposal.accepted_oid === 'string' ? proposal.accepted_oid : null;
+
+      // Accepted proposals: skip branch creation. The bundle's source
+      // is post-accept, so splicing `proposed_text` into it would
+      // produce a no-op branch (tip == base). Insert as a historical
+      // row with null branch metadata; the diff endpoint returns
+      // unavailable, matching the issue's "default null + block reopen
+      // for pre-migration rows" stance.
+      if (status === 'accepted') {
+        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null);
+        importedEditProposals += 1;
+        continue;
+      }
+
+      // Open and rejected proposals: branch creation is mandatory.
+      // Without a branch the row is permanently undiffable + un-
+      // acceptable (Phase 3 dropped the column fallback). Skip the
+      // proposal row on failure rather than insert a broken one.
       const anchorBlockId = typeof row.anchor_block_id === 'string' ? row.anchor_block_id : null;
       const range = anchorBlockId ? importBlocks.get(anchorBlockId) : undefined;
-      let branchRef: string | null = null;
-      let baseBlockStart: number | null = null;
-      let baseBlockEnd: number | null = null;
-      if (range) {
-        const nextSource =
-          importBaseSource.slice(0, range.start) +
-          proposal.proposed_text +
-          importBaseSource.slice(range.end);
-        try {
-          const result = await store.createProposalBranch(
-            { uid, format },
-            importBaseOid,
-            newId,
-            nextSource,
-            { clientId: row.author_client_id, displayName: row.author_display_name },
-          );
-          branchRef = result.refName;
-          baseBlockStart = range.start;
-          baseBlockEnd = range.end;
-        } catch (err) {
-          console.warn(
-            `[marginalia] import branch creation failed for proposal ${newId} (${uid}):`,
-            err,
-          );
-        }
+      if (!range) {
+        console.warn(
+          `[marginalia] import skipped proposal ${newId} (${uid}): anchor block not found in source`,
+        );
+        continue;
       }
-      insertEditProposal.run(
-        newId,
-        normalizeImportedProposalStatus(
-          typeof proposal.status === 'string' ? proposal.status : null,
-        ),
-        typeof proposal.accepted_oid === 'string' ? proposal.accepted_oid : null,
-        branchRef,
-        branchRef ? importBaseOid : null,
-        baseBlockStart,
-        baseBlockEnd,
-      );
-      importedEditProposals += 1;
+      const nextSource =
+        importBaseSource.slice(0, range.start) +
+        proposal.proposed_text +
+        importBaseSource.slice(range.end);
+      try {
+        const result = await store.createProposalBranch(
+          { uid, format },
+          importBaseOid,
+          newId,
+          nextSource,
+          { clientId: row.author_client_id, displayName: row.author_display_name },
+        );
+        insertEditProposal.run(
+          newId,
+          status,
+          acceptedOid,
+          result.refName,
+          importBaseOid,
+          range.start,
+          range.end,
+        );
+        importedEditProposals += 1;
+      } catch (err) {
+        console.warn(
+          `[marginalia] import skipped proposal ${newId} (${uid}): branch creation failed:`,
+          err,
+        );
+      }
     }
   }
 

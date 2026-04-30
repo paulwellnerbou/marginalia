@@ -173,7 +173,7 @@ async function createThread(c: Context, deps: AppDeps) {
     // Read source AT baseOid — reading the working tree separately
     // from `mainOid()` would race with concurrent accepts and parent
     // the branch on a different commit than the spliced content.
-    let currentSource: string | null = null;
+    let currentSource: string;
     try {
       baseOid = await store.mainOid(doc);
       currentSource = await store.readAt(doc, baseOid);
@@ -182,34 +182,29 @@ async function createThread(c: Context, deps: AppDeps) {
         `[marginalia] reading base for proposal ${id} (${doc.uid}) failed:`,
         err,
       );
-      baseOid = null;
+      return c.json({ error: 'proposal-storage-unavailable' }, 503);
     }
-    if (currentSource) {
-      blockRange = locateBlockRange(doc, currentSource, anchor.blockId);
-      // Branch creation can fail independently (disk, permissions,
-      // corruption). Keep the byte range — diff rendering uses it
-      // directly via base_oid. Only branch_ref ends up null.
-      if (blockRange) {
-        const nextSource =
-          currentSource.slice(0, blockRange.start) +
-          proposal.proposedText +
-          currentSource.slice(blockRange.end);
-        try {
-          const branch = await store.createProposalBranch(
-            doc,
-            baseOid as string,
-            id,
-            nextSource,
-            identity,
-          );
-          branchRef = branch.refName;
-        } catch (err) {
-          console.warn(
-            `[marginalia] proposal-branch creation failed for ${id} (${doc.uid}); proposal stored without ref:`,
-            err,
-          );
-        }
-      }
+    blockRange = locateBlockRange(doc, currentSource, anchor.blockId);
+    if (!blockRange) return c.json({ error: 'anchor-block-not-found' }, 400);
+    const nextSource =
+      currentSource.slice(0, blockRange.start) +
+      proposal.proposedText +
+      currentSource.slice(blockRange.end);
+    try {
+      const branch = await store.createProposalBranch(
+        doc,
+        baseOid as string,
+        id,
+        nextSource,
+        identity,
+      );
+      branchRef = branch.refName;
+    } catch (err) {
+      console.warn(
+        `[marginalia] proposal-branch creation failed for ${id} (${doc.uid}):`,
+        err,
+      );
+      return c.json({ error: 'proposal-storage-unavailable' }, 503);
     }
   }
 
