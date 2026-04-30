@@ -769,10 +769,6 @@ async function respondToThread(c: Context, deps: AppDeps) {
     throw err;
   }
 
-  if (action === 'reject' && row.branch_ref) {
-    await deps.store.deleteProposalBranch(doc, row.id).catch(() => undefined);
-  }
-
   if (createdReply) {
     realtime.broadcast(
       doc.uid,

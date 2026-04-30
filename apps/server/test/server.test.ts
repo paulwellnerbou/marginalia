@@ -1267,7 +1267,7 @@ describe('documents API', () => {
     ).toBe(proposal.thread.id);
   });
 
-  test('rejecting a proposal deletes its branch ref; reopening recreates it (#25)', async () => {
+  test('rejecting a proposal preserves its branch ref so reopen + accept still work (#25)', async () => {
     const source = '# Title\n\nalpha';
     const created = await upload(CLIENT_A, { markdown: source });
     const blockId = [...locateAllBlocks(source).entries()].find(
@@ -1306,12 +1306,13 @@ describe('documents API', () => {
     );
     expect(rejectRes.status).toBe(200);
 
-    // After reject the branch ref must be gone — no dangling
-    // refs/proposals/<pid> hanging around for a dead proposal.
-    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeNull();
+    // The branch ref is intentionally kept after reject so reopen +
+    // accept don't have to reconstruct it from columns that Phase 3
+    // drops. The proposal is just status='rejected' in the DB.
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe(
+      '# Title\n\nbeta',
+    );
 
-    // Reopen rebuilds the branch from the stored base_oid + proposed_text
-    // so a subsequent accept can still use the git.merge path.
     const reopenRes = await app.hono.fetch(
       new Request(
         `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
@@ -1328,7 +1329,6 @@ describe('documents API', () => {
       '# Title\n\nbeta',
     );
 
-    // And accepting after reopen still works end-to-end through git.merge.
     const acceptRes = await app.hono.fetch(
       new Request(
         `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
