@@ -1387,10 +1387,10 @@ describe('documents API', () => {
     expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeNull();
   });
 
-  test('accept falls back to splice when the proposal branch ref has vanished (#25)', async () => {
-    // If the ref is deleted out from under us (concurrent reject, manual
-    // git surgery, repo corruption recovery), accept must not 500. The
-    // legacy splice path takes over and produces a normal accept commit.
+  test('accept returns 409 proposal-orphaned when the branch ref has vanished (#25)', async () => {
+    // Without `proposed_text` in a column anymore the branch tip is the
+    // only source of truth, so a missing ref means the proposal can't
+    // be accepted. The route returns 409 rather than crashing.
     const source = '# Title\n\nalpha';
     const created = await upload(CLIENT_A, { markdown: source });
     const blockId = [...locateAllBlocks(source).entries()].find(
@@ -1412,8 +1412,6 @@ describe('documents API', () => {
     expect(proposeRes.status).toBe(201);
     const proposal = (await proposeRes.json()) as { thread: { id: string } };
 
-    // Simulate the ref being gone (without clearing branch_ref on the
-    // row, so the route's branch-backed branch is still taken).
     await app.store.deleteProposalBranch(
       { uid: created.uid, format: 'markdown' },
       proposal.thread.id,
@@ -1429,14 +1427,8 @@ describe('documents API', () => {
         },
       ),
     );
-    expect(acceptRes.status).toBe(200);
-
-    const docRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}`, {
-        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
-      }),
-    );
-    expect(((await docRes.json()) as { source: string }).source).toBe('# Title\n\nbeta');
+    expect(acceptRes.status).toBe(409);
+    expect(await acceptRes.json()).toEqual({ error: 'proposal-orphaned' });
   });
 
   test('accepted proposal diff renders the original block content via base_block_{start,end} (#25)', async () => {
@@ -1603,75 +1595,6 @@ describe('documents API', () => {
     const doc = (await docRes.json()) as { source: string };
     expect(doc.source).toContain('first edited');
     expect(doc.source).toContain('second edited');
-  });
-
-  test('accepted proposal diff reconstructs the original table-cell source for legacy rows', async () => {
-    const source = [
-      '| Label | Link |',
-      '| --- | --- |',
-      '| Availability | [5.3](#53-hosting--betrieb) |',
-    ].join('\n');
-    const created = await upload(CLIENT_A, { markdown: source });
-    const blockId = [...locateAllBlocks(source).entries()].find(
-      ([, range]) => range.kind === 'tableCell' && range.text === '5.3',
-    )?.[0];
-    expect(blockId).toBeString();
-
-    const proposeRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/threads`, {
-        method: 'POST',
-        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
-        body: JSON.stringify({
-          anchor: { block_id: blockId, quote: '5.3' },
-          proposal: {
-            anchor_kind: 'tableCell',
-            proposed_text: '[5.3](#53-hosting-betrieb)',
-          },
-        }),
-      }),
-    );
-    expect(proposeRes.status).toBe(201);
-    const proposal = (await proposeRes.json()) as {
-      thread: { id: string; proposal: { source_snapshot: string | null } };
-    };
-    expect(proposal.thread.proposal.source_snapshot).toBe('[5.3](#53-hosting--betrieb)');
-
-    const acceptRes = await app.hono.fetch(
-      new Request(
-        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
-        {
-          method: 'POST',
-          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
-          body: JSON.stringify({ action: 'accept' }),
-        },
-      ),
-    );
-    expect(acceptRes.status).toBe(200);
-
-    // Simulate an older accepted row that predates source_snapshot /
-    // accepted_oid persistence. The diff endpoint should still recover
-    // the true source from git history.
-    app.db
-      .prepare(
-        `UPDATE comments_edit_proposals
-          SET source_snapshot = NULL, accepted_oid = NULL
-        WHERE comment_id = ?`,
-      )
-      .run(proposal.thread.id);
-
-    const diffRes = await app.hono.fetch(
-      new Request(
-        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/diff`,
-        {
-          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
-        },
-      ),
-    );
-    expect(diffRes.status).toBe(200);
-    expect(await diffRes.json()).toEqual({
-      before: '[5.3](#53-hosting--betrieb)',
-      after: '[5.3](#53-hosting-betrieb)',
-    });
   });
 
   test('health endpoint', async () => {
@@ -2184,8 +2107,7 @@ describe('documents API', () => {
         anchor_section_index: number | null;
         anchor_section_index_path: number[] | null;
         edit_proposal: {
-          anchor_kind: string | null;
-          source_snapshot: string | null;
+          source_snapshot: string;
           proposed_text: string;
           status: string;
           accepted_oid: string | null;
@@ -2211,7 +2133,6 @@ describe('documents API', () => {
       (comment) => comment.body === 'please improve this heading',
     )!;
     expect(exportedProposal.edit_proposal).toEqual({
-      anchor_kind: 'heading',
       source_snapshot: '# Hi',
       proposed_text: '# Better Hi',
       status: 'rejected',
@@ -2256,10 +2177,11 @@ describe('documents API', () => {
     expect(threadsRes.status).toBe(200);
     const importedThreads = (await threadsRes.json()) as {
       threads: Array<{
+        id: string;
         state: string;
         resolution: { kind: string } | null;
         comments: [{ body: string }, ...Array<{ body: string }>];
-        proposal: { proposed_text: string; source_snapshot: string | null } | null;
+        proposal: Record<string, unknown> | null;
       }>;
     };
     expect(importedThreads.threads).toHaveLength(2);
@@ -2273,13 +2195,22 @@ describe('documents API', () => {
     const importedProposalThread = importedThreads.threads.find(
       (thread) => thread.comments[0].body === 'please improve this heading',
     )!;
-    expect(importedProposalThread.proposal?.proposed_text).toBe('# Better Hi');
-    expect(importedProposalThread.proposal?.source_snapshot).toBe('# Hi');
+    expect(importedProposalThread.proposal).toEqual({});
     expect(importedProposalThread.state).toBe('resolved');
     expect(importedProposalThread.resolution?.kind).toBe('reject');
     expect(importedProposalThread.comments.slice(1).map((reply) => reply.body)).toEqual([
       'proposal reply',
     ]);
+    // Diff endpoint recovers proposed_text + source_snapshot from the
+    // proposal's branch + base_oid, even after the columns are gone.
+    const importedDiffRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${imported.uid}/threads/${importedProposalThread.id}/diff`,
+        { headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token) },
+      ),
+    );
+    expect(importedDiffRes.status).toBe(200);
+    expect(await importedDiffRes.json()).toEqual({ before: '# Hi', after: '# Better Hi' });
   });
 
   test('export + import of an open proposal rebuilds the branch on import so accept goes through git.merge (#25)', async () => {
@@ -2352,7 +2283,7 @@ describe('documents API', () => {
     // base_oid pointing into the imported repo.
     const importedProposalRow = app.db
       .prepare(
-        `SELECT cep.comment_id, cep.branch_ref, cep.base_oid, cep.proposed_text
+        `SELECT cep.comment_id, cep.branch_ref, cep.base_oid, cep.base_block_start, cep.base_block_end
            FROM comments_edit_proposals cep
            JOIN comments c ON c.id = cep.comment_id
           WHERE c.doc_uid = ? AND cep.status = 'open'`,
@@ -2361,16 +2292,18 @@ describe('documents API', () => {
       comment_id: string;
       branch_ref: string;
       base_oid: string;
-      proposed_text: string;
+      base_block_start: number;
+      base_block_end: number;
     };
     expect(importedProposalRow.branch_ref).toBe(
       `refs/proposals/${importedProposalRow.comment_id}`,
     );
     expect(importedProposalRow.base_oid).toBeString();
-    expect(importedProposalRow.proposed_text).toBe('beta');
+    expect(importedProposalRow.base_block_start).toBeNumber();
+    expect(importedProposalRow.base_block_end).toBeNumber();
 
-    // The branch tip must contain the spliced source — confirms the
-    // backfill ran end-to-end and the branch is mergeable.
+    // The branch tip must contain the spliced source — confirms inline
+    // branch creation ran end-to-end and the branch is mergeable.
     const tip = await app.store.readProposalTip(
       { uid: imported.uid, format: 'markdown' },
       importedProposalRow.comment_id,

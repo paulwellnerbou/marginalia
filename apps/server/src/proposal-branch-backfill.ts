@@ -1,21 +1,26 @@
 import type { Database } from 'bun:sqlite';
 import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
-import type { DocumentFormat } from './db.js';
+import { columnExists, type DocumentFormat } from './db.js';
 import type { GitStore } from './git-store.js';
 
 /**
  * Build `refs/proposals/<pid>` for every open proposal whose row is missing
  * a `branch_ref`. Idempotent. `docUid`, when set, scopes the scan to one
- * document (used by the import path to skip scanning the whole DB).
+ * document.
  *
- * Rows whose anchor block can't be located in current source are left
- * alone; the existing block-id orphan check surfaces them at accept time.
+ * Reads `proposed_text` from the legacy column to splice the branch tip,
+ * so this is a no-op once `dropLegacyProposalColumns` has run — fresh
+ * databases never had the column, and post-migration databases have all
+ * open rows already carrying a `branch_ref`.
  */
 export async function backfillProposalBranches(
   db: Database,
   store: GitStore,
   docUid?: string,
 ): Promise<{ migrated: number; skipped: number }> {
+  if (!columnExists(db, 'comments_edit_proposals', 'proposed_text')) {
+    return { migrated: 0, skipped: 0 };
+  }
   const rows = (
     docUid === undefined
       ? db.prepare(

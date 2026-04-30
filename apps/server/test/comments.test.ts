@@ -879,7 +879,14 @@ describe('threads API', () => {
 
     expect(res.status).toBe(201);
     const created = (await res.json()) as { thread: ThreadShape };
-    expect(created.thread.proposal?.proposed_text).toBe('');
+    expect(created.thread.proposal).toBeDefined();
+    const diffRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${created.thread.id}/diff`, {
+        headers: headersFor(BOB),
+      }),
+    );
+    expect(diffRes.status).toBe(200);
+    expect(((await diffRes.json()) as { after: string }).after).toBe('');
   });
 
   test('invalid proposal rationale is rejected instead of silently dropped', async () => {
@@ -1161,8 +1168,13 @@ describe('threads API', () => {
     expect(thread.state).toBe('open');
     expect(thread.resolution).toBeNull();
     expect(thread.proposal).not.toBeNull();
-    expect(thread.proposal!.proposed_text).toBe('# Better title');
-    expect(thread.proposal!.anchor_kind).toBe('heading');
+    const diffRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${thread.id}/diff`, {
+        headers: headersFor(BOB),
+      }),
+    );
+    expect(diffRes.status).toBe(200);
+    expect(await diffRes.json()).toEqual({ before: '# Title', after: '# Better title' });
 
     // Capabilities: Bob is collaborator → can propose/reject own, but not accept (needs editor)
     expect(thread.capabilities.accept).toBe(false); // collaborator cannot accept

@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { createBunWebSocket } from 'hono/bun';
 import { createBlobStore } from './blob-store.js';
 import type { ServerConfig } from './config.js';
-import { openDatabase } from './db.js';
+import { dropLegacyProposalColumns, openDatabase } from './db.js';
 import { GitStore } from './git-store.js';
 import { migrateSharedRepoToPerDoc } from './git-store-migration.js';
 import { backfillProposalBranches } from './proposal-branch-backfill.js';
@@ -44,6 +44,9 @@ export async function createApp(config: ServerConfig): Promise<App> {
   const store = new GitStore(config.reposDir);
   await store.init();
   await backfillProposalBranches(db, store);
+  // Backfill must run before this — it reads `proposed_text`. After,
+  // those columns are dead.
+  dropLegacyProposalColumns(db);
   const blobs = createBlobStore(config);
   const realtime = new Realtime();
 

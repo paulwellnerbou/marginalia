@@ -48,7 +48,6 @@ import type {
 import { isDocumentFormat, isInviteKind, isInviteRole, isMermaidRenderer } from '../db.js';
 import type { MermaidRenderer } from '../db.js';
 import type { HistoryEntry as GitHistoryEntry, GitStore } from '../git-store.js';
-import { backfillProposalBranches } from '../proposal-branch-backfill.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
 import type { Realtime } from '../realtime.js';
 import { listDocUserNameMap, upsertDocUser } from '../users.js';
@@ -140,9 +139,6 @@ export interface AppDeps {
 }
 
 interface BundleCommentRow extends CommentRow {
-  anchor_kind: string | null;
-  source_snapshot: string | null;
-  proposed_text: string | null;
   proposal_status: EditProposalStatus | null;
   accepted_oid: string | null;
   branch_ref: string | null;
@@ -563,9 +559,6 @@ async function exportDocument(c: Context, deps: AppDeps) {
     .prepare(
       `SELECT
          c.*,
-         cep.anchor_kind,
-         cep.source_snapshot,
-         cep.proposed_text,
          cep.status AS proposal_status,
          cep.accepted_oid,
          cep.branch_ref,
@@ -969,9 +962,19 @@ async function importDocument(c: Context, deps: AppDeps) {
   );
   const insertEditProposal = db.prepare(
     `INSERT INTO comments_edit_proposals
-       (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+       (comment_id, status, accepted_oid, branch_ref, base_oid, base_block_start, base_block_end)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
+
+  // Imported proposals get their branch built here from the bundle's
+  // `proposed_text` rather than via the boot-time backfill (which reads
+  // a column that's no longer in the schema). Single base read per doc.
+  const importBaseOid = await store.mainOid({ uid, format });
+  const importBaseSource = docSpec.source;
+  const importBlocks =
+    format === 'asciidoc'
+      ? locateAllBlocksAsciidoc(importBaseSource)
+      : locateAllBlocks(importBaseSource);
   for (const raw of commentRows) {
     const row = raw as Record<string, unknown>;
     if (
@@ -1029,22 +1032,48 @@ async function importDocument(c: Context, deps: AppDeps) {
         ? (row.edit_proposal as Record<string, unknown>)
         : null;
     if (isRootComment && proposal && typeof proposal.proposed_text === 'string') {
+      const anchorBlockId = typeof row.anchor_block_id === 'string' ? row.anchor_block_id : null;
+      const range = anchorBlockId ? importBlocks.get(anchorBlockId) : undefined;
+      let branchRef: string | null = null;
+      let baseBlockStart: number | null = null;
+      let baseBlockEnd: number | null = null;
+      if (range) {
+        const nextSource =
+          importBaseSource.slice(0, range.start) +
+          proposal.proposed_text +
+          importBaseSource.slice(range.end);
+        try {
+          const result = await store.createProposalBranch(
+            { uid, format },
+            importBaseOid,
+            newId,
+            nextSource,
+            { clientId: row.author_client_id, displayName: row.author_display_name },
+          );
+          branchRef = result.refName;
+          baseBlockStart = range.start;
+          baseBlockEnd = range.end;
+        } catch (err) {
+          console.warn(
+            `[marginalia] import branch creation failed for proposal ${newId} (${uid}):`,
+            err,
+          );
+        }
+      }
       insertEditProposal.run(
         newId,
-        typeof proposal.anchor_kind === 'string' ? proposal.anchor_kind : null,
-        typeof proposal.source_snapshot === 'string' ? proposal.source_snapshot : null,
-        proposal.proposed_text,
         normalizeImportedProposalStatus(
           typeof proposal.status === 'string' ? proposal.status : null,
         ),
         typeof proposal.accepted_oid === 'string' ? proposal.accepted_oid : null,
+        branchRef,
+        branchRef ? importBaseOid : null,
+        baseBlockStart,
+        baseBlockEnd,
       );
       importedEditProposals += 1;
     }
   }
-
-  // Bundles carry proposed_text but no branch refs (refs are per-repo).
-  await backfillProposalBranches(db, store, uid);
 
   return c.json(
     {
@@ -1110,51 +1139,35 @@ async function bundleProposalPayload(
   doc: DocumentRow,
   row: BundleCommentRow,
 ): Promise<{
-  anchor_kind: string | null;
-  source_snapshot: string | null;
+  source_snapshot: string;
   proposed_text: string;
   status: EditProposalStatus;
   accepted_oid: string | null;
 } | null> {
   if (row.proposal_status === null) return null;
-
-  // For branch-backed rows, derive proposed_text and source_snapshot
-  // from git via the persisted byte range. The DB columns are a
-  // denormalized cache that Phase 3 drops; the bundle stays correct
-  // after that drop because git is the source of truth here.
   if (
-    row.branch_ref &&
-    row.base_oid &&
-    row.base_block_start !== null &&
-    row.base_block_end !== null
+    !row.branch_ref ||
+    !row.base_oid ||
+    row.base_block_start === null ||
+    row.base_block_end === null
   ) {
-    try {
-      const tip = await store.readProposalTip(doc, row.id);
-      if (tip !== null) {
-        const base = await store.readAt(doc, row.base_oid);
-        const proposedLen =
-          tip.length - base.length + (row.base_block_end - row.base_block_start);
-        return {
-          anchor_kind: row.anchor_kind,
-          source_snapshot: base.slice(row.base_block_start, row.base_block_end),
-          proposed_text: tip.slice(row.base_block_start, row.base_block_start + proposedLen),
-          status: row.proposal_status,
-          accepted_oid: row.accepted_oid,
-        };
-      }
-    } catch {
-      // fall through to columns
-    }
+    return null;
   }
-
-  if (row.proposed_text === null) return null;
-  return {
-    anchor_kind: row.anchor_kind,
-    source_snapshot: row.source_snapshot,
-    proposed_text: row.proposed_text,
-    status: row.proposal_status,
-    accepted_oid: row.accepted_oid,
-  };
+  try {
+    const tip = await store.readProposalTip(doc, row.id);
+    if (tip === null) return null;
+    const base = await store.readAt(doc, row.base_oid);
+    const proposedLen =
+      tip.length - base.length + (row.base_block_end - row.base_block_start);
+    return {
+      source_snapshot: base.slice(row.base_block_start, row.base_block_end),
+      proposed_text: tip.slice(row.base_block_start, row.base_block_start + proposedLen),
+      status: row.proposal_status,
+      accepted_oid: row.accepted_oid,
+    };
+  } catch {
+    return null;
+  }
 }
 
 function parseStringArray(raw: string | null): string[] | null {
@@ -1210,9 +1223,11 @@ async function getHistory(c: Context, deps: AppDeps) {
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
   const userNames = listDocUserNameMap(db, doc.uid);
-  const history = (await store.history(doc)).map((entry) =>
-    toHistoryWire(db, doc.uid, entry, userNames),
-  );
+  const entries = await store.history(doc);
+  const history: Record<string, unknown>[] = [];
+  for (const entry of entries) {
+    history.push(await toHistoryWire(db, store, doc, entry, userNames));
+  }
   return c.json({ history });
 }
 
@@ -1723,24 +1738,28 @@ type HistoryAction = 'upload' | 'update' | 'restore' | 'accept-proposal' | 'unkn
 interface AcceptedProposalHistoryRow {
   id: string;
   rationale: string | null;
-  proposed_text: string;
   author_client_id: string;
   author_display_name: string;
+  branch_ref: string | null;
+  base_oid: string | null;
+  base_block_start: number | null;
+  base_block_end: number | null;
 }
 
-function toHistoryWire(
+async function toHistoryWire(
   db: Database,
-  docUid: string,
+  store: GitStore,
+  doc: DocumentRow,
   entry: GitHistoryEntry,
   userNames: Map<string, string>,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const meta = parseHistoryMetadata(entry);
   const actorDisplayName = meta.clientId
     ? (userNames.get(meta.clientId) ?? fallbackHistoryAuthorName(entry.author.name, meta.clientId))
     : fallbackHistoryAuthorName(entry.author.name, null);
   const proposal =
     meta.action === 'accept-proposal'
-      ? loadAcceptedProposalHistory(db, docUid, entry.oid, userNames, meta.proposalId)
+      ? await loadAcceptedProposalHistory(db, store, doc, entry.oid, userNames, meta.proposalId)
       : null;
 
   return {
@@ -1817,67 +1836,80 @@ function fallbackHistoryAuthorName(authorName: string, clientId: string | null):
   return trimmed;
 }
 
-function loadAcceptedProposalHistory(
+async function loadAcceptedProposalHistory(
   db: Database,
-  docUid: string,
+  store: GitStore,
+  doc: DocumentRow,
   acceptedOid: string,
   userNames: Map<string, string>,
   proposalId: string | null,
-): Record<string, unknown> | null {
-  const row = proposalId
-    ? (db
-        .prepare(
-          `SELECT
-           c.id,
-           NULLIF(c.body, '') AS rationale,
-           cep.proposed_text,
-           c.author_client_id,
-           c.author_display_name
-         FROM comments c
-         INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
-        WHERE c.doc_uid = ?
-          AND c.id = ?
-          AND c.deleted_at IS NULL
-        LIMIT 1`,
-        )
-        .get(docUid, proposalId) as AcceptedProposalHistoryRow | null | undefined)
-    : (db
-        .prepare(
-          `SELECT
-           c.id,
-           NULLIF(c.body, '') AS rationale,
-           cep.proposed_text,
-           c.author_client_id,
-           c.author_display_name
-         FROM comments c
-         INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
-        WHERE c.doc_uid = ?
-          AND cep.accepted_oid = ?
-          AND c.deleted_at IS NULL
-        LIMIT 1`,
-        )
-        .get(docUid, acceptedOid) as AcceptedProposalHistoryRow | null | undefined);
+): Promise<Record<string, unknown> | null> {
+  const select = `
+    SELECT
+      c.id,
+      NULLIF(c.body, '') AS rationale,
+      c.author_client_id,
+      c.author_display_name,
+      cep.branch_ref,
+      cep.base_oid,
+      cep.base_block_start,
+      cep.base_block_end
+    FROM comments c
+    INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+    WHERE c.doc_uid = ?
+      AND c.deleted_at IS NULL
+  `;
+  const row = (
+    proposalId
+      ? db.prepare(`${select} AND c.id = ? LIMIT 1`).get(doc.uid, proposalId)
+      : db.prepare(`${select} AND cep.accepted_oid = ? LIMIT 1`).get(doc.uid, acceptedOid)
+  ) as AcceptedProposalHistoryRow | null | undefined;
   if (!row) return null;
 
+  const proposedText = await readProposedTextFromBranch(store, doc, row);
   return {
     id: row.id,
     author: {
       client_id: row.author_client_id,
       display_name: userNames.get(row.author_client_id) ?? row.author_display_name,
     },
-    summary: summarizeProposalHistory(row),
+    summary: summarizeProposalHistory(row.rationale, proposedText),
   };
 }
 
-function summarizeProposalHistory(row: AcceptedProposalHistoryRow): string {
-  const rationale = row.rationale?.trim();
-  if (rationale) return clipHistoryText(rationale, 160);
+async function readProposedTextFromBranch(
+  store: GitStore,
+  doc: DocumentRow,
+  row: AcceptedProposalHistoryRow,
+): Promise<string | null> {
+  if (
+    !row.branch_ref ||
+    !row.base_oid ||
+    row.base_block_start === null ||
+    row.base_block_end === null
+  ) {
+    return null;
+  }
+  try {
+    const tip = await store.readProposalTip(doc, row.id);
+    if (tip === null) return null;
+    const base = await store.readAt(doc, row.base_oid);
+    const proposedLen = tip.length - base.length + (row.base_block_end - row.base_block_start);
+    return tip.slice(row.base_block_start, row.base_block_start + proposedLen);
+  } catch {
+    return null;
+  }
+}
 
+function summarizeProposalHistory(rationale: string | null, proposedText: string | null): string {
+  const trimmed = rationale?.trim();
+  if (trimmed) return clipHistoryText(trimmed, 160);
+  if (!proposedText) return '(proposal)';
   const firstLine =
-    row.proposed_text
+    proposedText
       .split('\n')
       .map((line) => line.trim())
-      .find((line) => line.length > 0) ?? row.proposed_text.trim();
+      .find((line) => line.length > 0) ?? proposedText.trim();
   return clipHistoryText(firstLine || '(empty proposal)', 160);
 }
 
