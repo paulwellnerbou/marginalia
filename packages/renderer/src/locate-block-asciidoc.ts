@@ -33,6 +33,9 @@ export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSource
  * the returned range covers everything from the earlier block's start
  * to the later block's end (in source order). Inter-block whitespace
  * is included so a server-side splice replaces the whole span atomically.
+ *
+ * `text` is intentionally '' for multi-block (matches the markdown
+ * twin); callers slice `source` with `start`/`end` themselves.
  */
 export function locateBlockRangeAsciidoc(
   source: string,
@@ -47,7 +50,7 @@ export function locateBlockRangeAsciidoc(
   if (!b) return null;
   const start = Math.min(a.start, b.start);
   const end = Math.max(a.end, b.end);
-  return { start, end, kind: 'multi', text: source.slice(start, end) };
+  return { start, end, kind: 'multi', text: '' };
 }
 
 /**

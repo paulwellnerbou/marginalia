@@ -126,6 +126,12 @@ export function locateBlockSource(
  *
  * Returns the start block's range when `endId` is null/equal to start.
  * Returns null if either id is missing — callers treat that as orphaned.
+ *
+ * Note on `text`: for single-block ranges, `BlockSourceRange.text` is
+ * the *normalized* block text (used for ID hashing). A merged
+ * multi-block span has no single normalized text — it's a raw source
+ * slice plus inter-block whitespace — so we set `text` to '' here and
+ * leave it to callers to slice the source themselves with start/end.
  */
 export function locateBlockRange(
   markdown: string,
@@ -140,5 +146,5 @@ export function locateBlockRange(
   if (!b) return null;
   const start = Math.min(a.start, b.start);
   const end = Math.max(a.end, b.end);
-  return { start, end, kind: 'multi', text: markdown.slice(start, end) };
+  return { start, end, kind: 'multi', text: '' };
 }

@@ -20,6 +20,7 @@ function rawHeadersFor(c: { id: string; name: string }): Headers {
 
 interface ThreadAnchorShape {
   block_id: string | null;
+  end_block_id?: string | null;
   quote: string | null;
   prefix: string;
   suffix: string;
@@ -949,6 +950,75 @@ describe('threads API', () => {
       parent_id: null,
       parent_proposal_id: proposed.thread.id,
     });
+  });
+
+  test('multi-block proposal: stores end_block_id, accept splices the whole span and clears the column', async () => {
+    const uid = await newDoc('Alpha paragraph.\n\nBeta paragraph.\n\nGamma paragraph.\n');
+
+    // Pull all rendered top-level block IDs.
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const docJson = (await docRes.json()) as {
+      rendered: { blocks: Array<{ id: string; text: string }> };
+    };
+    const [alpha, beta, gamma] = docJson.rendered.blocks;
+    expect(alpha?.text).toContain('Alpha');
+    expect(beta?.text).toContain('Beta');
+    expect(gamma?.text).toContain('Gamma');
+
+    // Multi-block proposal spanning Alpha → Gamma.
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: {
+            block_id: alpha!.id,
+            end_block_id: gamma!.id,
+            quote: 'Alpha paragraph.\n\nBeta paragraph.\n\nGamma paragraph.',
+          },
+          proposal: { anchor_kind: 'paragraph', proposed_text: 'REPLACED.' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposed = (await proposeRes.json()) as {
+      thread: ThreadShape & { anchor: ThreadAnchorShape & { end_block_id: string | null } };
+    };
+    expect(proposed.thread.anchor.block_id).toBe(alpha!.id);
+    expect(proposed.thread.anchor.end_block_id).toBe(gamma!.id);
+
+    // Accept by admin → all three paragraphs collapse to "REPLACED."
+    const acceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    // The document now contains exactly the proposed_text where the
+    // three paragraphs used to be (no leftover Beta).
+    const afterRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const after = (await afterRes.json()) as { source: string };
+    expect(after.source.trim()).toBe('REPLACED.');
+
+    // Post-accept the proposal anchor collapses to single-block: the
+    // server clears `anchor_end_block_id` so a future reopen / read
+    // doesn't carry stale endpoints.
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, { headers: headersFor(ALICE) }),
+    );
+    const listJson = (await listRes.json()) as {
+      threads: Array<ThreadShape & { anchor: ThreadAnchorShape & { end_block_id: string | null } }>;
+    };
+    const accepted = listJson.threads.find((t) => t.id === proposed.thread.id);
+    expect(accepted).toBeDefined();
+    expect(accepted!.anchor.end_block_id).toBeNull();
   });
 
   test('accepted proposal authors cannot delete unless they are admin', async () => {

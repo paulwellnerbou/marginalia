@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { locateAllBlocks, locateBlockSource, render } from '../src/index.js';
+import {
+  locateAllBlocks,
+  locateBlockRange,
+  locateBlockSource,
+  render,
+} from '../src/index.js';
 
 describe('locateBlockSource', () => {
   test('returns ranges that slice back to exact block sources — round-trips with remarkBlockIds', async () => {
@@ -188,5 +193,73 @@ Real paragraph.
 
     const rewritten = md.slice(0, second.start) + 'NO' + md.slice(second.end);
     expect(rewritten).toBe(`| A | B |\n|---|---|\n| Yes | NO |\n`);
+  });
+});
+
+describe('locateBlockRange', () => {
+  // Three paragraphs, each its own top-level block. Ranges should
+  // round-trip cleanly via the block IDs from `locateAllBlocks`.
+  const md = `Alpha paragraph.
+
+Beta paragraph.
+
+Gamma paragraph.
+`;
+
+  test('null endId returns the start block range unchanged', () => {
+    const ids = [...locateAllBlocks(md).keys()];
+    const [a] = ids;
+    const single = locateBlockRange(md, a!, null);
+    expect(single).not.toBeNull();
+    expect(md.slice(single!.start, single!.end).trim()).toBe('Alpha paragraph.');
+  });
+
+  test('endId === startId collapses to single-block range', () => {
+    const ids = [...locateAllBlocks(md).keys()];
+    const [a] = ids;
+    const collapsed = locateBlockRange(md, a!, a!);
+    const single = locateBlockRange(md, a!, null);
+    expect(collapsed).toEqual(single);
+  });
+
+  test('multi-block range covers both endpoints plus inter-block whitespace', () => {
+    const ids = [...locateAllBlocks(md).keys()];
+    const [a, b, c] = ids;
+    const range = locateBlockRange(md, a!, c!);
+    expect(range).not.toBeNull();
+    // Slicing the range yields all three paragraphs joined by their
+    // original blank-line separators — no leading/trailing extra text.
+    const sliced = md.slice(range!.start, range!.end);
+    expect(sliced).toContain('Alpha paragraph.');
+    expect(sliced).toContain('Beta paragraph.');
+    expect(sliced).toContain('Gamma paragraph.');
+    // Inter-block whitespace included
+    expect(sliced).toMatch(/Alpha paragraph\.\n\nBeta paragraph\.\n\nGamma paragraph\./);
+    // Bounds: start = paragraph A's start, end = paragraph C's end.
+    expect(range!.start).toBe(locateBlockRange(md, a!, null)!.start);
+    expect(range!.end).toBe(locateBlockRange(md, c!, null)!.end);
+    // Multi-block sentinel: kind = 'multi', text = ''.
+    expect(range!.kind).toBe('multi');
+    expect(range!.text).toBe('');
+    // Unused suppression
+    void b;
+  });
+
+  test('reversed endpoints still produce the correct merged range (min/max)', () => {
+    const ids = [...locateAllBlocks(md).keys()];
+    const [a, , c] = ids;
+    const forward = locateBlockRange(md, a!, c!);
+    const reversed = locateBlockRange(md, c!, a!);
+    expect(forward).not.toBeNull();
+    expect(reversed).not.toBeNull();
+    expect(reversed!.start).toBe(forward!.start);
+    expect(reversed!.end).toBe(forward!.end);
+  });
+
+  test('returns null when either endpoint id is unknown', () => {
+    const ids = [...locateAllBlocks(md).keys()];
+    const [a] = ids;
+    expect(locateBlockRange(md, a!, 'does-not-exist')).toBeNull();
+    expect(locateBlockRange(md, 'does-not-exist', a!)).toBeNull();
   });
 });
