@@ -40,7 +40,8 @@ interface ResolvedSpan {
  * share a single `[data-block]` ancestor, the proposal targets that
  * parent (the whole list / whole table). Otherwise, when the selection
  * spans multiple distinct top-level blocks, the proposal carries
- * `start_id`/`end_id` so the server can splice the entire range.
+ * `block_id` plus optional `end_block_id` so the server can splice the
+ * entire range.
  */
 export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
   const [state, setState] = useState<{ rect: DOMRect; span: ResolvedSpan | null } | null>(null);
@@ -140,9 +141,29 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
  *     top-level block in DOM order.
  */
 function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
-  const all = Array.from(
-    root.querySelectorAll<HTMLElement>('[data-block], [data-subblock]'),
-  );
+  // Narrow the search to the selection's common ancestor subtree —
+  // `selectionchange` fires on every keystroke / drag tick, and a full
+  // `root.querySelectorAll` over a large document would be wasteful.
+  // Then walk back up to `root` so we still consider any wrapping
+  // top-level block the selection sits inside (e.g. cursor in one cell
+  // → only the table is an ancestor of commonAncestor).
+  const selector = '[data-block], [data-subblock]';
+  const ca = range.commonAncestorContainer;
+  const scope =
+    (ca.nodeType === Node.ELEMENT_NODE ? (ca as Element) : ca.parentElement) ?? root;
+  const inScope =
+    scope instanceof HTMLElement && root.contains(scope) ? scope : root;
+
+  const all: HTMLElement[] = [];
+  if (inScope instanceof HTMLElement && inScope.matches(selector)) all.push(inScope);
+  all.push(...inScope.querySelectorAll<HTMLElement>(selector));
+  let ancestor: HTMLElement | null = inScope.parentElement;
+  while (ancestor && ancestor !== root) {
+    if (ancestor.matches(selector)) all.push(ancestor);
+    ancestor = ancestor.parentElement;
+  }
+  if (root !== inScope && root.matches(selector)) all.push(root);
+
   let touched = all.filter((el) => intersectsRange(range, el));
 
   // Drop ancestors whose descendants are also touched. A selection
@@ -245,12 +266,18 @@ function intersectsRange(range: Range, el: HTMLElement): boolean {
   // Range.intersectsNode is a non-standard but widely supported helper;
   // fall back to manual comparison if missing.
   if (typeof range.intersectsNode === 'function') return range.intersectsNode(el);
+  // Standard overlap test: range.start < el.end AND range.end > el.start.
+  // `compareBoundaryPoints(END_TO_START, other)` compares this.start to
+  // other.end; `START_TO_END` compares this.end to other.start.
+  // Returns -1 / 0 / +1 for before / equal / after, so strict inequality
+  // matches Range.intersectsNode (touching boundaries don't count).
   const elRange = el.ownerDocument!.createRange();
   elRange.selectNodeContents(el);
-  const startsBefore =
-    range.compareBoundaryPoints(Range.END_TO_START, elRange) <= 0;
-  const endsAfter = range.compareBoundaryPoints(Range.START_TO_END, elRange) >= 0;
-  return startsBefore && endsAfter;
+  const startsBeforeElEnd =
+    range.compareBoundaryPoints(Range.END_TO_START, elRange) < 0;
+  const endsAfterElStart =
+    range.compareBoundaryPoints(Range.START_TO_END, elRange) > 0;
+  return startsBeforeElEnd && endsAfterElStart;
 }
 
 function topLevelAncestor(el: HTMLElement): HTMLElement | null {
