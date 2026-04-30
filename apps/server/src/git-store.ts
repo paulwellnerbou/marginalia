@@ -203,6 +203,11 @@ export class GitStore {
     return { before, after };
   }
 
+  /** Main's current tip oid for this doc. Throws if the repo isn't initialized. */
+  async mainOid(doc: DocLocator): Promise<string> {
+    return git.resolveRef({ fs, dir: this.repoDir(doc.uid), ref: 'main' });
+  }
+
   async readAt(doc: DocLocator, oid: string): Promise<string> {
     const { blob } = await git.readBlob({
       fs,
@@ -220,7 +225,226 @@ export class GitStore {
       return null;
     }
   }
+
+  /**
+   * Build a one-commit branch on `refs/proposals/<proposalId>` parented at
+   * `baseOid`, with the doc file replaced by `nextSource`. Uses plumbing
+   * so main's working tree isn't touched.
+   */
+  async createProposalBranch(
+    doc: DocLocator,
+    baseOid: string,
+    proposalId: string,
+    nextSource: string,
+    identity: { displayName: string; clientId: string },
+  ): Promise<{ commitOid: string; refName: string }> {
+    return this.withLock(doc.uid, async () => {
+      await this.ensureDocRepo(doc.uid);
+      const dir = this.repoDir(doc.uid);
+      const filename = this.filename(doc.format);
+
+      const { commit: baseCommit } = await git.readCommit({ fs, dir, oid: baseOid });
+      const { tree } = await git.readTree({ fs, dir, oid: baseCommit.tree });
+      const blobOid = await git.writeBlob({
+        fs,
+        dir,
+        blob: new TextEncoder().encode(nextSource),
+      });
+      // If the base tree doesn't carry the doc file yet (e.g. the only
+      // commit so far is the seed `.marginalia-root`), insert a new
+      // entry. `tree.map` on its own would silently keep the old tree.
+      const hasEntry = tree.some((e) => e.path === filename);
+      const newTree = hasEntry
+        ? tree.map((e) => (e.path === filename ? { ...e, oid: blobOid } : e))
+        : [...tree, { path: filename, mode: '100644', type: 'blob' as const, oid: blobOid }];
+      const newTreeOid = await git.writeTree({ fs, dir, tree: newTree });
+
+      const ts = Math.floor(Date.now() / 1000);
+      const author = {
+        name: identity.clientId,
+        email: `${identity.clientId}@marginalia.local`,
+        timestamp: ts,
+        timezoneOffset: 0,
+      };
+      // Subject is pre-styled as `accept-proposal:` so a FF accept lands
+      // a commit `parseHistoryAction` (routes/documents.ts) recognizes.
+      const message =
+        `accept-proposal: ${proposalId}\n\n` +
+        `X-Marginalia-Client-ID: ${identity.clientId}\n` +
+        `X-Marginalia-Proposal-ID: ${proposalId}\n`;
+      const commitOid = await git.writeCommit({
+        fs,
+        dir,
+        commit: {
+          tree: newTreeOid,
+          parent: [baseOid],
+          author,
+          committer: author,
+          message,
+        },
+      });
+
+      const refName = proposalRef(proposalId);
+      await git.writeRef({ fs, dir, ref: refName, value: commitOid, force: true });
+      return { commitOid, refName };
+    });
+  }
+
+  /** Merge the proposal branch into main. FF when possible, 3-way otherwise. */
+  async mergeProposalBranch(
+    doc: DocLocator,
+    proposalId: string,
+    identity: { displayName: string; clientId: string },
+  ): Promise<MergeProposalResult> {
+    return this.withLock(doc.uid, async () => {
+      await this.ensureDocRepo(doc.uid);
+      const dir = this.repoDir(doc.uid);
+      const refName = proposalRef(proposalId);
+      const ts = Math.floor(Date.now() / 1000);
+      const author = {
+        name: identity.clientId,
+        email: `${identity.clientId}@marginalia.local`,
+        timestamp: ts,
+        timezoneOffset: 0,
+      };
+      const message =
+        `accept-proposal: ${proposalId}\n\n` +
+        `X-Marginalia-Client-ID: ${identity.clientId}\n` +
+        `X-Marginalia-Proposal-ID: ${proposalId}\n`;
+      try {
+        // FF default. `fastForward: false` would let the merge commit
+        // carry a fresh subject, but iso-git's recursive merge isn't
+        // implemented — a forced merge commit creates the multi-base
+        // history that breaks the next accept with MergeNotSupportedError.
+        const result = (await git.merge({
+          fs,
+          dir,
+          ours: 'main',
+          theirs: refName,
+          author,
+          message,
+        })) as { oid?: string; alreadyMerged?: boolean; fastForward?: boolean };
+        const oid = result.oid ?? (await git.resolveRef({ fs, dir, ref: 'main' }));
+        // iso-git's 3-way merge advances the ref without updating the
+        // working tree; checkout so `read()` reflects the merged file.
+        await git.checkout({ fs, dir, ref: 'main', force: true });
+        return { ok: true, oid };
+      } catch (err) {
+        const e = err as Error & {
+          code?: string;
+          data?: {
+            filepaths?: string[];
+            bothModified?: string[];
+            deleteByUs?: string[];
+            deleteByTheirs?: string[];
+          };
+        };
+        if (e.code === 'MergeConflictError') {
+          return {
+            ok: false,
+            reason: 'conflict',
+            conflict: {
+              filepaths: e.data?.filepaths ?? [],
+              bothModified: e.data?.bothModified ?? [],
+              deleteByUs: e.data?.deleteByUs ?? [],
+              deleteByTheirs: e.data?.deleteByTheirs ?? [],
+            },
+          };
+        }
+        if (e.code === 'NotFoundError') {
+          return { ok: false, reason: 'absent' };
+        }
+        throw err;
+      }
+    });
+  }
+
+  /** Delete the proposal's ref. No-op if it's already gone. */
+  async deleteProposalBranch(doc: DocLocator, proposalId: string): Promise<void> {
+    return this.withLock(doc.uid, async () => {
+      const dir = this.repoDir(doc.uid);
+      if (!existsSync(join(dir, '.git'))) return;
+      try {
+        await git.deleteRef({ fs, dir, ref: proposalRef(proposalId) });
+      } catch {
+        // Ref absent or already deleted.
+      }
+    });
+  }
+
+  /** Read the file content at the proposal branch's tip. */
+  async readProposalTip(doc: DocLocator, proposalId: string): Promise<string | null> {
+    const dir = this.repoDir(doc.uid);
+    if (!existsSync(join(dir, '.git'))) return null;
+    try {
+      const tipOid = await git.resolveRef({ fs, dir, ref: proposalRef(proposalId) });
+      const { blob } = await git.readBlob({
+        fs,
+        dir,
+        oid: tipOid,
+        filepath: this.filename(doc.format),
+      });
+      return new TextDecoder().decode(blob);
+    } catch {
+      return null;
+    }
+  }
+
+  /** Dry-run merge precheck used to gate accept and detect conflicts. */
+  async proposalMergeStatus(
+    doc: DocLocator,
+    proposalId: string,
+  ): Promise<'clean' | 'conflict' | 'merged' | 'absent'> {
+    // Even with `dryRun: true`, iso-git's merge touches index/working-tree
+    // state — serialize through the per-doc lock alongside writes/merges.
+    return this.withLock(doc.uid, async () => {
+      const dir = this.repoDir(doc.uid);
+      if (!existsSync(join(dir, '.git'))) return 'absent';
+      const refName = proposalRef(proposalId);
+      let tipOid: string;
+      try {
+        tipOid = await git.resolveRef({ fs, dir, ref: refName });
+      } catch {
+        return 'absent';
+      }
+      const mainOid = await git.resolveRef({ fs, dir, ref: 'main' });
+      if (tipOid === mainOid) return 'merged';
+      try {
+        await git.merge({
+          fs,
+          dir,
+          ours: 'main',
+          theirs: refName,
+          dryRun: true,
+          author: { name: 'check', email: 'check@local', timestamp: 0, timezoneOffset: 0 },
+        });
+        return 'clean';
+      } catch (err) {
+        const e = err as { code?: string };
+        if (e.code === 'MergeConflictError') return 'conflict';
+        throw err;
+      }
+    });
+  }
 }
+
+function proposalRef(proposalId: string): string {
+  return `refs/proposals/${proposalId}`;
+}
+
+export type MergeProposalResult =
+  | { ok: true; oid: string }
+  | {
+      ok: false;
+      reason: 'conflict';
+      conflict: {
+        filepaths: string[];
+        bothModified: string[];
+        deleteByUs: string[];
+        deleteByTheirs: string[];
+      };
+    }
+  | { ok: false; reason: 'absent' };
 
 /**
  * Stage to a sibling temp file in the same directory, then `rename()`

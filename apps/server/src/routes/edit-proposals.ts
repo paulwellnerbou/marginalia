@@ -4,7 +4,6 @@ import {
   locateAllBlocksAsciidoc,
   locateBlockRange,
   locateBlockRangeAsciidoc,
-  locateBlockSource,
 } from '@marginalia/renderer';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { DocumentRow, EditProposalThreadRow } from '../db.js';
@@ -28,6 +27,10 @@ const PROPOSAL_SELECT = `
     cep.proposed_text,
     cep.status AS proposal_status,
     cep.accepted_oid,
+    cep.branch_ref,
+    cep.base_oid,
+    cep.base_block_start,
+    cep.base_block_end,
     c.resolved_at AS decided_at,
     c.resolved_by_name AS decided_by_name
   FROM comments c
@@ -249,9 +252,7 @@ function readProposalBlockSource(
         : locateBlockRange(source, blockId, endBlockId);
     return range ? source.slice(range.start, range.end) : null;
   }
-  const range =
-    locateDocumentBlocks(doc, source).get(blockId) ??
-    (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId));
+  const range = locateDocumentBlocks(doc, source).get(blockId);
   return range ? source.slice(range.start, range.end) : null;
 }
 
