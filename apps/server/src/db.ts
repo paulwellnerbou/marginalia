@@ -91,7 +91,7 @@ CREATE TABLE IF NOT EXISTS comments_edit_proposals (
   status                 TEXT NOT NULL DEFAULT 'open',
   accepted_oid           TEXT,
   -- branch_ref points at one commit on top of base_oid that holds the
-  -- full proposed source. base_block_{start,end} are the byte range in
+  -- full proposed source. base_block_{start,end} are source offsets in
   -- base_oid's source that the branch replaces — used for diff rendering
   -- regardless of whether the proposal is still open. Nullable: backfilled.
   branch_ref             TEXT,
