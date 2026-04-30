@@ -2,6 +2,8 @@ import type { Database } from 'bun:sqlite';
 import {
   locateAllBlocks,
   locateAllBlocksAsciidoc,
+  locateBlockRange,
+  locateBlockRangeAsciidoc,
   locateBlockSource,
 } from '@marginalia/renderer';
 import type { BlockSourceRange } from '@marginalia/renderer';
@@ -59,12 +61,15 @@ export function reanchorProposals(
     .all(docUid) as EditProposalThreadRow[];
   const markComment = db.prepare(
     `UPDATE comments
-        SET link_status = 'orphaned', anchor_block_id = NULL, updated_at = ?
+        SET link_status = 'orphaned', anchor_block_id = NULL, anchor_end_block_id = NULL,
+            updated_at = ?
       WHERE id = ?`,
   );
   const orphaned: EditProposalThreadRow[] = [];
   for (const p of open) {
-    if (!p.anchor_block_id || !present.has(p.anchor_block_id)) {
+    const startMissing = !p.anchor_block_id || !present.has(p.anchor_block_id);
+    const endMissing = p.anchor_end_block_id != null && !present.has(p.anchor_end_block_id);
+    if (startMissing || endMissing) {
       markComment.run(now, p.id);
       const fresh = loadProposalRow(db, p.id, docUid);
       if (fresh) {
@@ -128,7 +133,12 @@ export async function resolveProposalDiffBefore(
 
   if (proposal.proposal_status !== 'accepted') {
     const liveSource = deps.store.read(doc);
-    const liveBlock = readProposalBlockSource(doc, liveSource, proposal.anchor_block_id);
+    const liveBlock = readProposalBlockSource(
+      doc,
+      liveSource,
+      proposal.anchor_block_id,
+      proposal.anchor_end_block_id,
+    );
     if (!liveBlock) return snapshot;
     if (liveBlock === proposal.proposed_text && snapshot !== proposal.proposed_text)
       return snapshot;
@@ -229,8 +239,16 @@ function readProposalBlockSource(
   doc: DocumentRow,
   source: string,
   blockId: string | null,
+  endBlockId: string | null = null,
 ): string | null {
   if (!blockId) return null;
+  if (endBlockId) {
+    const range =
+      doc.format === 'asciidoc'
+        ? locateBlockRangeAsciidoc(source, blockId, endBlockId)
+        : locateBlockRange(source, blockId, endBlockId);
+    return range ? source.slice(range.start, range.end) : null;
+  }
   const range =
     locateDocumentBlocks(doc, source).get(blockId) ??
     (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId));

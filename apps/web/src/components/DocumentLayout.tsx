@@ -726,6 +726,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           anchor_quote: pendingProposalTarget.block_text,
           proposed_text: payload.proposed_text,
         };
+        if (pendingProposalTarget.end_block_id) {
+          req.anchor_end_block_id = pendingProposalTarget.end_block_id;
+        }
         if (payload.rationale) req.rationale = payload.rationale;
         await apiCreateProposal(doc.uid, req, identity);
         setPendingDraft(null);

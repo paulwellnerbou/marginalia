@@ -29,6 +29,28 @@ export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSource
 }
 
 /**
+ * AsciiDoc twin of `locateBlockRange`. Same min/max merge semantics:
+ * the returned range covers everything from the earlier block's start
+ * to the later block's end (in source order). Inter-block whitespace
+ * is included so a server-side splice replaces the whole span atomically.
+ */
+export function locateBlockRangeAsciidoc(
+  source: string,
+  startId: string,
+  endId: string | null,
+): BlockSourceRange | null {
+  const all = locateAllBlocksAsciidoc(source);
+  const a = all.get(startId);
+  if (!a) return null;
+  if (!endId || endId === startId) return a;
+  const b = all.get(endId);
+  if (!b) return null;
+  const start = Math.min(a.start, b.start);
+  const end = Math.max(a.end, b.end);
+  return { start, end, kind: 'multi', text: source.slice(start, end) };
+}
+
+/**
  * Mirror `walkSubBlocks` in render-asciidoc.ts: walk ulist/olist items
  * in document order and map their content-hash IDs back to source
  * ranges. IDs use `computeSubBlockId('listItem', text, counts)` with a

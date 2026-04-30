@@ -115,3 +115,30 @@ export function locateBlockSource(
 ): BlockSourceRange | null {
   return locateAllBlocks(markdown).get(blockId) ?? null;
 }
+
+/**
+ * Resolve a multi-block source range from two block IDs. Used by the
+ * "propose edit" flow when a selection spans more than one top-level
+ * block. The returned range covers everything from the earlier block's
+ * start to the later block's end (in source order), inclusive of any
+ * inter-block whitespace, so a server-side splice replaces the whole
+ * span atomically.
+ *
+ * Returns the start block's range when `endId` is null/equal to start.
+ * Returns null if either id is missing — callers treat that as orphaned.
+ */
+export function locateBlockRange(
+  markdown: string,
+  startId: string,
+  endId: string | null,
+): BlockSourceRange | null {
+  const all = locateAllBlocks(markdown);
+  const a = all.get(startId);
+  if (!a) return null;
+  if (!endId || endId === startId) return a;
+  const b = all.get(endId);
+  if (!b) return null;
+  const start = Math.min(a.start, b.start);
+  const end = Math.max(a.end, b.end);
+  return { start, end, kind: 'multi', text: markdown.slice(start, end) };
+}

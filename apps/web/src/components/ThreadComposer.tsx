@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button, Dialog, Flex, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { DocumentFormat } from '../lib/api.js';
+import { mergeBlockRanges } from './mergeBlockRanges.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
 // Proposal dialog composer — used for new edit proposals.
@@ -79,9 +80,13 @@ function ProposalComposerBody({
   onSubmit: ProposalComposerProps['onSubmit'];
 }) {
   const originalSource = useMemo(() => {
-    const range = blockRanges.get(target.block_id);
+    const range = mergeBlockRanges(
+      blockRanges,
+      target.block_id,
+      target.end_block_id ?? null,
+    );
     return range ? docSource.slice(range.start, range.end) : '';
-  }, [docSource, blockRanges, target.block_id]);
+  }, [docSource, blockRanges, target.block_id, target.end_block_id]);
 
   const [value, setValue] = useState(originalSource);
   const [rationale, setRationale] = useState('');
@@ -91,7 +96,7 @@ function ProposalComposerBody({
   useEffect(() => {
     setValue(originalSource);
     setRationale('');
-  }, [target.block_id, originalSource]);
+  }, [target.block_id, target.end_block_id, originalSource]);
 
   const changed = value !== originalSource;
   const ready = changed && (!needsName || name.trim().length > 0);
@@ -110,12 +115,13 @@ function ProposalComposerBody({
   }
 
   const formatLabel = docFormat === 'asciidoc' ? 'AsciiDoc' : 'Markdown';
+  const blockNoun = target.block_count > 1 ? `${target.block_count} blocks` : 'this block';
 
   return (
     <>
       <Dialog.Title>Propose edit</Dialog.Title>
       <Dialog.Description size="2" color="gray" mb="3">
-        Edit the {formatLabel} source of this block. Editors will review the diff before accepting.
+        Edit the {formatLabel} source of {blockNoun}. Editors will review the diff before accepting.
       </Dialog.Description>
 
       <Flex direction="column" gap="3" className="edit-proposal-composer composer">

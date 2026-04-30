@@ -780,6 +780,8 @@ export interface ThreadNodeCapabilities {
 
 export interface ThreadAnchor {
   block_id: string | null;
+  /** Multi-block proposal: ID of the last block in the span. NULL/absent for single-block. */
+  end_block_id?: string | null;
   quote: string | null;
   prefix: string;
   suffix: string;
@@ -1046,6 +1048,7 @@ export function createEditProposal(
   uid: string,
   payload: {
     anchor_block_id: string;
+    anchor_end_block_id?: string | null;
     anchor_quote: string;
     anchor_kind?: string | null;
     proposed_text: string;
@@ -1058,6 +1061,7 @@ export function createEditProposal(
     body: JSON.stringify({
       anchor: {
         block_id: payload.anchor_block_id,
+        end_block_id: payload.anchor_end_block_id ?? null,
         quote: payload.anchor_quote,
       },
       body: payload.rationale,

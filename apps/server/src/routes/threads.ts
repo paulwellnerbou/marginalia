@@ -3,6 +3,8 @@ import { randomBytes } from 'node:crypto';
 import {
   locateAllBlocks,
   locateAllBlocksAsciidoc,
+  locateBlockRange,
+  locateBlockRangeAsciidoc,
   locateBlockSource,
   renderDocument,
 } from '@marginalia/renderer';
@@ -173,7 +175,8 @@ async function createThread(c: Context, deps: AppDeps) {
   // paths in prepareAcceptProposalThread / prepareReopenAcceptedProposalThread).
   const currentSource = proposal ? store.read(doc) : null;
   const sourceSnapshot = currentSource
-    ? (readProposalBlockSource(doc, currentSource, anchor.blockId) ?? anchor.quote)
+    ? (readProposalBlockSource(doc, currentSource, anchor.blockId, anchor.endBlockId) ??
+       anchor.quote)
     : null;
 
   const id = newCommentId();
@@ -183,17 +186,19 @@ async function createThread(c: Context, deps: AppDeps) {
     db.prepare(
       `INSERT INTO comments
          (id, doc_uid, parent_id, parent_proposal_id,
-          anchor_block_id, anchor_quote, anchor_prefix, anchor_suffix,
+          anchor_block_id, anchor_end_block_id,
+          anchor_quote, anchor_prefix, anchor_suffix,
           anchor_start_offset, anchor_end_offset,
           anchor_heading_path, anchor_section_index, anchor_section_index_path,
           author_client_id, author_display_name,
           body, link_status, resolved_at, resolved_by_name,
           created_at, updated_at, deleted_at)
-       VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'linked', NULL, NULL, ?, ?, NULL)`,
+       VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'linked', NULL, NULL, ?, ?, NULL)`,
     ).run(
       id,
       doc.uid,
       anchor.blockId,
+      anchor.endBlockId,
       anchor.quote,
       anchor.prefix,
       anchor.suffix,
@@ -759,14 +764,15 @@ async function prepareAcceptProposalThread(
   const source = deps.store.read(doc);
   const range =
     doc.format === 'asciidoc'
-      ? (locateAllBlocksAsciidoc(source).get(row.anchor_block_id) ?? null)
-      : locateBlockSource(source, row.anchor_block_id);
+      ? locateBlockRangeAsciidoc(source, row.anchor_block_id, row.anchor_end_block_id)
+      : locateBlockRange(source, row.anchor_block_id, row.anchor_end_block_id);
   if (!range) {
     const now = Date.now();
     deps.db
       .prepare(
         `UPDATE comments
-            SET link_status = 'orphaned', anchor_block_id = NULL, updated_at = ?
+            SET link_status = 'orphaned', anchor_block_id = NULL, anchor_end_block_id = NULL,
+                updated_at = ?
           WHERE id = ?`,
       )
       .run(now, row.id);
@@ -852,6 +858,7 @@ async function prepareAcceptProposalThread(
         .prepare(
           `UPDATE comments
             SET anchor_block_id = ?,
+                anchor_end_block_id = NULL,
                 anchor_start_offset = ?,
                 anchor_end_offset = ?,
                 anchor_heading_path = ?,
@@ -1077,6 +1084,7 @@ function toThreadWire(
     link_status: row.link_status,
     anchor: {
       block_id: row.anchor_block_id,
+      end_block_id: row.anchor_end_block_id,
       quote: row.anchor_quote,
       prefix: row.anchor_prefix ?? '',
       suffix: row.anchor_suffix ?? '',
@@ -1182,7 +1190,19 @@ function isProposalRow(row: ThreadRow): boolean {
   return row.proposal_status !== null;
 }
 
-function readProposalBlockSource(doc: DocumentRow, source: string, blockId: string): string | null {
+function readProposalBlockSource(
+  doc: DocumentRow,
+  source: string,
+  blockId: string,
+  endBlockId: string | null = null,
+): string | null {
+  if (endBlockId) {
+    const range =
+      doc.format === 'asciidoc'
+        ? locateBlockRangeAsciidoc(source, blockId, endBlockId)
+        : locateBlockRange(source, blockId, endBlockId);
+    return range ? source.slice(range.start, range.end) : null;
+  }
   const range =
     locateDocumentBlocks(doc, source).get(blockId) ??
     (doc.format === 'asciidoc' ? null : locateBlockSource(source, blockId));
@@ -1244,6 +1264,7 @@ function asRespondAction(v: unknown): RespondAction | null {
 
 function asAnchor(v: unknown): {
   blockId: string;
+  endBlockId: string | null;
   quote: string;
   prefix: string;
   suffix: string;
@@ -1258,6 +1279,8 @@ function asAnchor(v: unknown): {
   const blockId = asString(a.block_id);
   const quote = typeof a.quote === 'string' ? a.quote : null;
   if (!blockId || quote === null) return null;
+  const rawEnd = typeof a.end_block_id === 'string' ? a.end_block_id : null;
+  const endBlockId = rawEnd && rawEnd.length > 0 && rawEnd !== blockId ? rawEnd : null;
   const headingPath = Array.isArray(a.heading_path)
     ? a.heading_path.filter((s): s is string => typeof s === 'string')
     : null;
@@ -1266,6 +1289,7 @@ function asAnchor(v: unknown): {
     : null;
   return {
     blockId,
+    endBlockId,
     quote,
     prefix: typeof a.prefix === 'string' ? a.prefix : '',
     suffix: typeof a.suffix === 'string' ? a.suffix : '',
@@ -1286,7 +1310,7 @@ function asProposal(
   if (typeof v !== 'object') return { ok: false, error: 'proposal-text-required' };
   const proposal = v as Record<string, unknown>;
   const proposedText = typeof proposal.proposed_text === 'string' ? proposal.proposed_text : null;
-  if (proposedText === null || proposedText.length > 20000) {
+  if (proposedText === null || proposedText.length > 60000) {
     return { ok: false, error: 'proposal-text-required' };
   }
   return {
