@@ -1,11 +1,10 @@
-import { CheckIcon, Link2Icon, Pencil2Icon, QuoteIcon, TrashIcon } from '@radix-ui/react-icons';
+import { CheckIcon, Cross2Icon, Link2Icon, Pencil2Icon, QuoteIcon, TrashIcon } from '@radix-ui/react-icons';
 import { useEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import type { Comment } from '../../lib/api.js';
+import { formatTimestamp, formatTimestampLong } from '../../lib/format-time.js';
 import { reportError } from '../../lib/log.js';
 import { InlineAvatar } from './InlineAvatar.js';
-import { formatTimestamp, formatTimestampLong } from '../../lib/format-time.js';
+import { InlineCommentMarkdown } from './InlineCommentMarkdown.js';
 
 interface Props {
   node: Comment;
@@ -98,22 +97,23 @@ export function InlineCommentRow({
             <div className="ic-row-meta-actions">
               {confirmingDelete ? (
                 <>
-                  <span className="ic-confirm-prompt">Delete?</span>
                   <button
                     type="button"
-                    className="ic-btn ic-btn-link"
+                    className="ic-icon-btn"
                     onClick={() => setConfirmingDelete(false)}
                     disabled={saving}
+                    title="Cancel"
                   >
-                    Cancel
+                    <Cross2Icon />
                   </button>
                   <button
                     type="button"
-                    className="ic-btn ic-btn-link ic-btn-danger"
+                    className="ic-icon-btn ic-icon-btn-danger"
                     onClick={() => void confirmDelete()}
                     disabled={saving}
+                    title="Confirm delete"
                   >
-                    Yes, delete
+                    <TrashIcon />
                   </button>
                 </>
               ) : (
@@ -196,7 +196,7 @@ export function InlineCommentRow({
           </div>
         ) : (
           <div className="ic-row-body">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{node.body}</ReactMarkdown>
+            <InlineCommentMarkdown>{node.body}</InlineCommentMarkdown>
           </div>
         )}
       </div>

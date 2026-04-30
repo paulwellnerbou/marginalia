@@ -2,8 +2,9 @@ import { Pencil2Icon, TrashIcon } from '@radix-ui/react-icons';
 import { useState } from 'react';
 import type { Thread, ThreadProposalData } from '../../lib/api.js';
 import { proposalStatus } from '../../lib/api.js';
-import { InlineAvatar } from './InlineAvatar.js';
 import { formatTimestamp, formatTimestampLong } from '../../lib/format-time.js';
+import { InlineAvatar } from './InlineAvatar.js';
+import { InlineCommentMarkdown } from './InlineCommentMarkdown.js';
 
 interface Props {
   thread: Thread & { proposal: ThreadProposalData };
@@ -144,7 +145,11 @@ export function InlineProposalEntry({ thread, onEditRationale, onDeleteThread }:
           </div>
         ) : (
           <div className={`ic-row-body ic-proposal-rationale${hasRationale ? '' : ' ic-empty'}`}>
-            {hasRationale ? opener.body : 'Change proposal'}
+            {hasRationale ? (
+              <InlineCommentMarkdown>{opener.body}</InlineCommentMarkdown>
+            ) : (
+              'Change proposal'
+            )}
           </div>
         )}
       </div>

@@ -428,7 +428,7 @@ button.primary:disabled {
 .doc-search-popover {
   position: absolute;
   top: calc(var(--doc-chrome-height));
-  right: 0.25rem;
+  right: calc(var(--doc-search-inline-comments-offset, 0px) + 0.25rem);
   left: 0;
   display: flex;
   justify-content: flex-end;

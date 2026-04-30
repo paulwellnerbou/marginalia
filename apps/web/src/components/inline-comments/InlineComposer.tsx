@@ -1,4 +1,11 @@
-import { type ReactNode, forwardRef, useImperativeHandle, useRef, useState } from 'react';
+import {
+  type ReactNode,
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from 'react';
 
 export interface InlineComposerHandle {
   insertText: (text: string) => void;
@@ -65,7 +72,17 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
   const [value, setValue] = useState('');
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!autoFocus) return;
+    const frame = window.requestAnimationFrame(() => {
+      const el = needsName ? nameRef.current : textRef.current;
+      el?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [autoFocus, needsName]);
 
   useImperativeHandle(ref, () => ({
     insertText(text: string) {
@@ -77,13 +94,13 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
       window.setTimeout(() => {
         const el = textRef.current;
         if (!el) return;
-        el.focus();
+        el.focus({ preventScroll: true });
         const pos = el.value.length;
         el.setSelectionRange(pos, pos);
       }, 0);
     },
     focus() {
-      textRef.current?.focus();
+      textRef.current?.focus({ preventScroll: true });
     },
   }));
 
@@ -132,13 +149,13 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
     <div className="ic-composer">
       {needsName && (
         <input
+          ref={nameRef}
           type="text"
           className="ic-composer-name"
           placeholder="Your display name"
           value={name}
           maxLength={80}
           onChange={(e) => setName(e.target.value)}
-          autoFocus={autoFocus}
         />
       )}
       <textarea
@@ -149,7 +166,6 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKey}
-        autoFocus={autoFocus && !needsName}
       />
       <div className="ic-composer-actions">
         <span className="ic-composer-hint">⌘/Ctrl+Enter</span>
