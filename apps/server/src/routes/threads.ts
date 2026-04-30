@@ -198,7 +198,7 @@ async function createThread(c: Context, deps: AppDeps) {
         ? currentSource.slice(blockRange.start, blockRange.end)
         : null;
       // Branch creation can fail independently (disk, permissions,
-      // corruption). Keep the already-derived snapshot + byte range
+      // corruption). Keep the already-derived snapshot + source offsets
       // so the row still gets the better data — only branch_ref is
       // nulled. Accept's legacy splice fallback handles the rest.
       if (blockRange) {
