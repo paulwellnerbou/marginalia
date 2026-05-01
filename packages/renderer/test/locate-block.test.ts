@@ -260,4 +260,34 @@ Gamma paragraph.
     expect(locateBlockRange(md, a!, 'does-not-exist')).toBeNull();
     expect(locateBlockRange(md, 'does-not-exist', a!)).toBeNull();
   });
+
+  test('rejects sub-block endpoints (listItem / tableCell) when endId is set', () => {
+    // Doc with both a paragraph (top-level) and table cells / list
+    // items (sub-blocks). A sub-block id as `endId` must be rejected,
+    // matching the server-side `locateAnchorRange` validation.
+    const mixed = `Top paragraph.
+
+| A | B |
+|---|---|
+| 1 | 2 |
+
+- one
+- two
+`;
+    const map = locateAllBlocks(mixed);
+    const top = [...map.entries()].find(([, r]) => r.kind === 'paragraph');
+    const cell = [...map.entries()].find(([, r]) => r.kind === 'tableCell');
+    const item = [...map.entries()].find(([, r]) => r.kind === 'listItem');
+    expect(top).toBeDefined();
+    expect(cell).toBeDefined();
+    expect(item).toBeDefined();
+
+    expect(locateBlockRange(mixed, top![0], cell![0])).toBeNull();
+    expect(locateBlockRange(mixed, cell![0], top![0])).toBeNull();
+    expect(locateBlockRange(mixed, top![0], item![0])).toBeNull();
+    expect(locateBlockRange(mixed, item![0], cell![0])).toBeNull();
+    // Sanity: equal sub-block id (single-block path) still works.
+    expect(locateBlockRange(mixed, cell![0], null)).not.toBeNull();
+    expect(locateBlockRange(mixed, cell![0], cell![0])).not.toBeNull();
+  });
 });

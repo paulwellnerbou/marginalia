@@ -127,6 +127,12 @@ export function locateBlockSource(
  * Returns the start block's range when `endId` is null/equal to start.
  * Returns null if either id is missing — callers treat that as orphaned.
  *
+ * Validation: when `endId` is non-null, both endpoints must be
+ * top-level blocks (not `listItem` / `tableCell`). A sub-block endpoint
+ * would point inside structural markup — splicing across pipes or list
+ * bullets would corrupt the document — so we return null. This matches
+ * the server's `locateAnchorRange` and the frontend's `mergeBlockRanges`.
+ *
  * Note on `text`: for single-block ranges, `BlockSourceRange.text` is
  * the *normalized* block text (used for ID hashing). A merged
  * multi-block span has no single normalized text — it's a raw source
@@ -144,7 +150,12 @@ export function locateBlockRange(
   if (!endId || endId === startId) return a;
   const b = all.get(endId);
   if (!b) return null;
+  if (!isTopLevelKind(a.kind) || !isTopLevelKind(b.kind)) return null;
   const start = Math.min(a.start, b.start);
   const end = Math.max(a.end, b.end);
   return { start, end, kind: 'multi', text: '' };
+}
+
+function isTopLevelKind(kind: string): boolean {
+  return kind !== 'listItem' && kind !== 'tableCell';
 }
