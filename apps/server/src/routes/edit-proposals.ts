@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { DocumentRow, EditProposalThreadRow } from '../db.js';
+import type { GitStore } from '../git-store.js';
 import type { Realtime } from '../realtime.js';
 import { toWire as toCommentWire } from './comments.js';
 
@@ -43,8 +44,7 @@ export function reanchorProposals(
   docUid: string,
   presentBlockIds: string[],
   now: number,
-  realtime?: Realtime,
-  exceptClientId?: string,
+  broadcast?: (row: EditProposalThreadRow) => void,
 ): EditProposalThreadRow[] {
   const present = new Set(presentBlockIds);
   const open = db
@@ -65,13 +65,7 @@ export function reanchorProposals(
       const fresh = loadProposalRow(db, p.id, docUid);
       if (fresh) {
         orphaned.push(fresh);
-        if (realtime) {
-          realtime.broadcast(
-            docUid,
-            { type: 'edit_proposal.updated', edit_proposal: toWire(fresh) },
-            exceptClientId,
-          );
-        }
+        if (broadcast) broadcast(fresh);
       }
     }
   }
@@ -162,12 +156,52 @@ export function findBlockBySourceSpan(
   return null;
 }
 
-export function toWire(row: EditProposalThreadRow): Record<string, unknown> {
+export async function toWire(
+  store: GitStore,
+  doc: DocumentRow,
+  row: EditProposalThreadRow,
+): Promise<Record<string, unknown>> {
   return {
     id: row.id,
     comment: toCommentWire(row),
     status: row.proposal_status,
     decided_at: row.decided_at,
     decided_by_name: row.decided_by_name,
+    ...(await readProposalContent(store, doc, row)),
   };
+}
+
+/**
+ * Recover the legacy `source_snapshot` + `proposed_text` fields from
+ * the proposal's branch tip and base blob. Phase 4 will drop these from
+ * the wire entirely; for now they're computed on-demand from git so
+ * existing clients keep working after the column drop.
+ */
+export async function readProposalContent(
+  store: GitStore,
+  doc: DocumentRow,
+  row: EditProposalThreadRow,
+): Promise<{ source_snapshot: string; proposed_text: string }> {
+  if (
+    !row.branch_ref ||
+    !row.base_oid ||
+    row.base_block_start === null ||
+    row.base_block_end === null
+  ) {
+    return { source_snapshot: '', proposed_text: '' };
+  }
+  try {
+    const tip = await store.readProposalTip(doc, row.id);
+    if (tip === null) return { source_snapshot: '', proposed_text: '' };
+    const base = await store.readAt(doc, row.base_oid);
+    const start = row.base_block_start;
+    const end = row.base_block_end;
+    const proposedLen = tip.length - base.length + (end - start);
+    return {
+      source_snapshot: base.slice(start, end),
+      proposed_text: tip.slice(start, start + proposedLen),
+    };
+  } catch {
+    return { source_snapshot: '', proposed_text: '' };
+  }
 }

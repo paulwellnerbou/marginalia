@@ -381,7 +381,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
     doc.format === 'asciidoc'
       ? [...locateAllBlocksAsciidoc(nextSource).keys()]
       : [...locateAllBlocks(nextSource).keys()];
-  reanchorProposals(db, doc.uid, knownIds, now, realtime, decision.identity.clientId);
+  await reanchorAndBroadcast(deps, doc, knownIds, now, decision.identity.clientId);
 
   if (isContentChange(previousSource, nextSource)) {
     realtime.broadcast(
@@ -1113,6 +1113,26 @@ function isBundleVersion(v: unknown): v is 1 | 2 | 3 | 4 {
   return v === 1 || v === 2 || v === 3 || v === 4;
 }
 
+async function reanchorAndBroadcast(
+  deps: AppDeps,
+  doc: DocumentRow,
+  presentBlockIds: string[],
+  now: number,
+  exceptClientId: string,
+): Promise<void> {
+  const orphaned = reanchorProposals(deps.db, doc.uid, presentBlockIds, now);
+  for (const row of orphaned) {
+    deps.realtime.broadcast(
+      doc.uid,
+      {
+        type: 'edit_proposal.updated',
+        edit_proposal: await toEditProposalWire(deps.store, doc, row),
+      },
+      exceptClientId,
+    );
+  }
+}
+
 /**
  * Sequential `for...of` rather than `Promise.all`: each branch-backed
  * proposal does git reads, and a doc with hundreds of proposals would
@@ -1256,11 +1276,32 @@ async function getHistory(c: Context, deps: AppDeps) {
 
   const userNames = listDocUserNameMap(db, doc.uid);
   const entries = await store.history(doc);
-  const history: Record<string, unknown>[] = [];
-  for (const entry of entries) {
-    history.push(await toHistoryWire(db, store, doc, entry, userNames));
-  }
+  // Per-entry mapping does git reads only for `accept-proposal` entries
+  // (loadAcceptedProposalHistory may read base + tip blobs). Run with a
+  // small concurrency cap so `/history` doesn't get linear-in-history
+  // latency, but doesn't open unbounded fds either.
+  const history = await mapWithConcurrency(entries, 4, (entry) =>
+    toHistoryWire(db, store, doc, entry, userNames),
+  );
   return c.json({ history });
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i] as T, i);
+    }
+  });
+  await Promise.all(workers);
+  return out;
 }
 
 async function getHistoryDiff(c: Context, deps: AppDeps) {
@@ -1338,7 +1379,7 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
     doc.format === 'asciidoc'
       ? [...locateAllBlocksAsciidoc(restoredSource).keys()]
       : [...locateAllBlocks(restoredSource).keys()];
-  reanchorProposals(db, doc.uid, knownIds, now, realtime, decision.identity.clientId);
+  await reanchorAndBroadcast(deps, doc, knownIds, now, decision.identity.clientId);
 
   realtime.broadcast(
     doc.uid,
@@ -1417,14 +1458,17 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
     doc.format === 'asciidoc'
       ? [...locateAllBlocksAsciidoc(diff.before).keys()]
       : [...locateAllBlocks(diff.before).keys()];
-  reanchorProposals(db, doc.uid, knownIds, now, realtime, decision.identity.clientId);
+  await reanchorAndBroadcast(deps, doc, knownIds, now, decision.identity.clientId);
 
   if (reopenedProposalId) {
     const reopened = loadProposalRow(db, reopenedProposalId, doc.uid);
     if (reopened && reopened.proposal_status === 'open') {
       realtime.broadcast(
         doc.uid,
-        { type: 'edit_proposal.updated', edit_proposal: toEditProposalWire(reopened) },
+        {
+          type: 'edit_proposal.updated',
+          edit_proposal: await toEditProposalWire(deps.store, doc, reopened),
+        },
         decision.identity.clientId,
       );
     }

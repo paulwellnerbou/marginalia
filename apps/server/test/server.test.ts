@@ -2195,7 +2195,10 @@ describe('documents API', () => {
     const importedProposalThread = importedThreads.threads.find(
       (thread) => thread.comments[0].body === 'please improve this heading',
     )!;
-    expect(importedProposalThread.proposal).toEqual({});
+    expect(importedProposalThread.proposal).toEqual({
+      source_snapshot: '# Hi',
+      proposed_text: '# Better Hi',
+    });
     expect(importedProposalThread.state).toBe('resolved');
     expect(importedProposalThread.resolution?.kind).toBe('reject');
     expect(importedProposalThread.comments.slice(1).map((reply) => reply.body)).toEqual([
