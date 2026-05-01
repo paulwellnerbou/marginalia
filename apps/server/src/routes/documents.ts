@@ -12,6 +12,7 @@ import {
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
+import { mapWithConcurrency } from '../concurrency.js';
 import {
   loadProposalRow,
   reopenAcceptedProposal,
@@ -1284,24 +1285,6 @@ async function getHistory(c: Context, deps: AppDeps) {
     toHistoryWire(db, store, doc, entry, userNames),
   );
   return c.json({ history });
-}
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (true) {
-      const i = next++;
-      if (i >= items.length) return;
-      out[i] = await fn(items[i] as T, i);
-    }
-  });
-  await Promise.all(workers);
-  return out;
 }
 
 async function getHistoryDiff(c: Context, deps: AppDeps) {

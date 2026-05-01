@@ -5,6 +5,7 @@ import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
+import { mapWithConcurrency } from '../concurrency.js';
 import {
   type Identity,
   INVITE_SESSION_COOKIE,
@@ -120,19 +121,16 @@ async function listThreads(c: Context, deps: AppDeps) {
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, roots);
 
   const { store } = deps;
-  const threads: Record<string, unknown>[] = [];
-  for (const root of roots) {
-    threads.push(
-      await toThreadWire(
-        store,
-        doc,
-        root,
-        repliesByThread.get(root.id) ?? [],
-        decision,
-        reopenableAccepted,
-      ),
-    );
-  }
+  const threads = await mapWithConcurrency(roots, 4, (root) =>
+    toThreadWire(
+      store,
+      doc,
+      root,
+      repliesByThread.get(root.id) ?? [],
+      decision,
+      reopenableAccepted,
+    ),
+  );
   return c.json({
     threads,
     mention_candidates: listMentionCandidates(db, doc.uid),
@@ -1237,7 +1235,12 @@ async function toThreadWire(
               ? decision.ok && canEdit(decision.role) && reopenableAccepted.has(row.id)
               : false),
     },
-    proposal: proposal ? await readProposalContent(store, doc, row as never) : null,
+    proposal: proposal
+      ? (await readProposalContent(store, doc, row as never)) ?? {
+          source_snapshot: null,
+          proposed_text: null,
+        }
+      : null,
     comments: [
       {
         id: row.id,

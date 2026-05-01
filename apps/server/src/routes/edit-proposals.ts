@@ -161,38 +161,42 @@ export async function toWire(
   doc: DocumentRow,
   row: EditProposalThreadRow,
 ): Promise<Record<string, unknown>> {
+  const content = await readProposalContent(store, doc, row);
   return {
     id: row.id,
     comment: toCommentWire(row),
     status: row.proposal_status,
     decided_at: row.decided_at,
     decided_by_name: row.decided_by_name,
-    ...(await readProposalContent(store, doc, row)),
+    source_snapshot: content?.source_snapshot ?? null,
+    proposed_text: content?.proposed_text ?? null,
   };
 }
 
 /**
  * Recover the legacy `source_snapshot` + `proposed_text` fields from
- * the proposal's branch tip and base blob. Phase 4 will drop these from
- * the wire entirely; for now they're computed on-demand from git so
- * existing clients keep working after the column drop.
+ * the proposal's branch tip and base blob. Returns `null` when the
+ * row lacks the metadata to address the bytes or git is unreachable —
+ * the caller surfaces null fields so clients can distinguish "diff
+ * unavailable" from a legitimate empty proposal. Phase 4 will drop
+ * these from the wire entirely.
  */
 export async function readProposalContent(
   store: GitStore,
   doc: DocumentRow,
   row: EditProposalThreadRow,
-): Promise<{ source_snapshot: string; proposed_text: string }> {
+): Promise<{ source_snapshot: string; proposed_text: string } | null> {
   if (
     !row.branch_ref ||
     !row.base_oid ||
     row.base_block_start === null ||
     row.base_block_end === null
   ) {
-    return { source_snapshot: '', proposed_text: '' };
+    return null;
   }
   try {
     const tip = await store.readProposalTip(doc, row.id);
-    if (tip === null) return { source_snapshot: '', proposed_text: '' };
+    if (tip === null) return null;
     const base = await store.readAt(doc, row.base_oid);
     const start = row.base_block_start;
     const end = row.base_block_end;
@@ -202,6 +206,6 @@ export async function readProposalContent(
       proposed_text: tip.slice(start, start + proposedLen),
     };
   } catch {
-    return { source_snapshot: '', proposed_text: '' };
+    return null;
   }
 }
