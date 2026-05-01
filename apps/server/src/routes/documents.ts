@@ -1145,33 +1145,29 @@ async function mapBundleComments(
   store: GitStore,
   doc: DocumentRow,
 ): Promise<unknown[]> {
-  const out: unknown[] = [];
-  for (const row of comments) {
-    out.push({
-      id: row.id,
-      parent_id: row.parent_id,
-      parent_proposal_id: row.parent_proposal_id,
-      anchor_block_id: row.anchor_block_id,
-      anchor_quote: row.anchor_quote,
-      anchor_prefix: row.anchor_prefix,
-      anchor_suffix: row.anchor_suffix,
-      anchor_start_offset: row.anchor_start_offset,
-      anchor_end_offset: row.anchor_end_offset,
-      anchor_heading_path: parseStringArray(row.anchor_heading_path),
-      anchor_section_index: row.anchor_section_index,
-      anchor_section_index_path: parseNumberArray(row.anchor_section_index_path),
-      author_client_id: row.author_client_id,
-      author_display_name: row.author_display_name,
-      body: row.body,
-      link_status: row.link_status,
-      resolved_at: row.resolved_at,
-      resolved_by_name: row.resolved_by_name,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-      edit_proposal: await bundleProposalPayload(store, doc, row),
-    });
-  }
-  return out;
+  return mapWithConcurrency(comments, 4, async (row) => ({
+    id: row.id,
+    parent_id: row.parent_id,
+    parent_proposal_id: row.parent_proposal_id,
+    anchor_block_id: row.anchor_block_id,
+    anchor_quote: row.anchor_quote,
+    anchor_prefix: row.anchor_prefix,
+    anchor_suffix: row.anchor_suffix,
+    anchor_start_offset: row.anchor_start_offset,
+    anchor_end_offset: row.anchor_end_offset,
+    anchor_heading_path: parseStringArray(row.anchor_heading_path),
+    anchor_section_index: row.anchor_section_index,
+    anchor_section_index_path: parseNumberArray(row.anchor_section_index_path),
+    author_client_id: row.author_client_id,
+    author_display_name: row.author_display_name,
+    body: row.body,
+    link_status: row.link_status,
+    resolved_at: row.resolved_at,
+    resolved_by_name: row.resolved_by_name,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    edit_proposal: await bundleProposalPayload(store, doc, row),
+  }));
 }
 
 async function bundleProposalPayload(

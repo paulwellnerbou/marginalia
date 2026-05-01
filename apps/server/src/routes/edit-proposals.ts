@@ -3,7 +3,6 @@ import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { DocumentRow, EditProposalThreadRow } from '../db.js';
 import type { GitStore } from '../git-store.js';
-import type { Realtime } from '../realtime.js';
 import { toWire as toCommentWire } from './comments.js';
 
 /**
