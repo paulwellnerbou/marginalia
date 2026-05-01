@@ -367,7 +367,7 @@ Gamma paragraph.
 
   test('multi-block range covers both endpoints + inter-block whitespace', () => {
     const ids = [...locateAllBlocksAsciidoc(src).keys()];
-    const [a, b, c] = ids;
+    const [a, , c] = ids;
     const range = locateBlockRangeAsciidoc(src, a!, c!);
     expect(range).not.toBeNull();
     const sliced = src.slice(range!.start, range!.end);
@@ -376,7 +376,6 @@ Gamma paragraph.
     expect(sliced).toContain('Gamma paragraph.');
     expect(range!.kind).toBe('multi');
     expect(range!.text).toBe('');
-    void b;
   });
 
   test('null endId returns the start block range; reversed order still merges via min/max', () => {

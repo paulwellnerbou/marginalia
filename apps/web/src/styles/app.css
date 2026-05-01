@@ -2290,8 +2290,11 @@ button.primary:disabled {
 .ic-row:focus-within .ic-row-meta-actions {
   opacity: 1;
 }
-/* Confirm prompts always visible regardless of hover state. */
-.ic-row-meta-actions:has(.ic-confirm-prompt) {
+/* Confirm prompts always visible regardless of hover state — keyboard
+   activation can move focus off the row when the originating button
+   unmounts, so we can't rely on :hover/:focus-within. */
+.ic-row-meta-actions:has(.ic-confirm-prompt),
+.ic-row-meta-actions[data-confirming='true'] {
   opacity: 1;
 }
 /* Touch / coarse-pointer devices don't have hover — keep the row

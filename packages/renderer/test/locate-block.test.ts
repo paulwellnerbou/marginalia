@@ -224,7 +224,7 @@ Gamma paragraph.
 
   test('multi-block range covers both endpoints plus inter-block whitespace', () => {
     const ids = [...locateAllBlocks(md).keys()];
-    const [a, b, c] = ids;
+    const [a, , c] = ids;
     const range = locateBlockRange(md, a!, c!);
     expect(range).not.toBeNull();
     // Slicing the range yields all three paragraphs joined by their
@@ -241,8 +241,6 @@ Gamma paragraph.
     // Multi-block sentinel: kind = 'multi', text = ''.
     expect(range!.kind).toBe('multi');
     expect(range!.text).toBe('');
-    // Unused suppression
-    void b;
   });
 
   test('reversed endpoints still produce the correct merged range (min/max)', () => {

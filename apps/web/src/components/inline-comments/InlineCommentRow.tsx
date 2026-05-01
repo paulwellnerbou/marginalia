@@ -94,7 +94,10 @@ export function InlineCommentRow({
             {formatTimestamp(node.created_at)}
           </span>
           {!editing && (
-            <div className="ic-row-meta-actions">
+            <div
+              className="ic-row-meta-actions"
+              data-confirming={confirmingDelete ? 'true' : undefined}
+            >
               {confirmingDelete ? (
                 <>
                   <button
