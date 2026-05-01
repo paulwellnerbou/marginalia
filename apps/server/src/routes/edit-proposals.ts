@@ -1,10 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import {
-  locateAllBlocks,
-  locateAllBlocksAsciidoc,
-  locateBlockRange,
-  locateBlockRangeAsciidoc,
-} from '@marginalia/renderer';
+import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { DocumentRow, EditProposalThreadRow } from '../db.js';
 import type { Realtime } from '../realtime.js';
@@ -259,6 +254,9 @@ function readProposalBlockSource(
  * top-level blocks (not `listItem` / `tableCell`). A sub-block endpoint
  * would point inside structural markup — splicing across pipes or list
  * bullets would corrupt the document — so we treat that as orphaned.
+ *
+ * The merged range is computed directly from the per-block map we
+ * already built — no second parse via `locateBlockRange*`.
  */
 export function locateAnchorRange(
   doc: DocumentRow,
@@ -267,15 +265,18 @@ export function locateAnchorRange(
   endBlockId: string | null,
 ): BlockSourceRange | null {
   const blocks = locateDocumentBlocks(doc, source);
-  if (endBlockId && endBlockId !== blockId) {
-    const startBlock = blocks.get(blockId);
-    const endBlock = blocks.get(endBlockId);
-    if (!isTopLevelKind(startBlock?.kind) || !isTopLevelKind(endBlock?.kind)) return null;
-    return doc.format === 'asciidoc'
-      ? locateBlockRangeAsciidoc(source, blockId, endBlockId)
-      : locateBlockRange(source, blockId, endBlockId);
-  }
-  return blocks.get(blockId) ?? null;
+  const startBlock = blocks.get(blockId);
+  if (!startBlock) return null;
+  if (!endBlockId || endBlockId === blockId) return startBlock;
+  const endBlock = blocks.get(endBlockId);
+  if (!endBlock) return null;
+  if (!isTopLevelKind(startBlock.kind) || !isTopLevelKind(endBlock.kind)) return null;
+  return {
+    start: Math.min(startBlock.start, endBlock.start),
+    end: Math.max(startBlock.end, endBlock.end),
+    kind: 'multi',
+    text: '',
+  };
 }
 
 function isTopLevelKind(kind: string | undefined): boolean {
