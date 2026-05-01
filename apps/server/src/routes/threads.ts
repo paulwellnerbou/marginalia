@@ -1149,7 +1149,22 @@ async function loadReopenableAcceptedThreadIds(
   const parent = history[1];
   if (!latest || !parent) return new Set<string>();
 
-  return new Set(accepted.filter((row) => row.accepted_oid === latest.oid).map((row) => row.id));
+  // Reopen makes the proposal `status='open'` again; without recoverable
+  // branch metadata the row is permanently undiffable + unacceptable
+  // (accept would 409 proposal-orphaned, diff 410). Block reopen for
+  // legacy accepted rows that don't carry the metadata to be operational.
+  return new Set(
+    accepted
+      .filter(
+        (row) =>
+          row.accepted_oid === latest.oid &&
+          row.branch_ref !== null &&
+          row.base_oid !== null &&
+          row.base_block_start !== null &&
+          row.base_block_end !== null,
+      )
+      .map((row) => row.id),
+  );
 }
 
 async function toThreadWire(
