@@ -100,7 +100,7 @@ export async function backfillProposalBranches(
 
     // base_oid alone is authoritative for the proposal's base — the
     // original base must not silently re-anchor onto current main. If
-    // it's set but the byte range isn't (e.g. a post-#25 createThread
+    // it's set but the splice range isn't (e.g. a post-#25 createThread
     // where base reads succeeded but `locateBlockRange` returned null),
     // recompute the range from the source at the stored baseOid, not
     // from current main.

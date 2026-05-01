@@ -176,10 +176,15 @@ export async function toWire(
 /**
  * Recover the legacy `source_snapshot` + `proposed_text` fields from
  * the proposal's branch tip and base blob. Returns `null` when the
- * row lacks the metadata to address the bytes or git is unreachable —
- * the caller surfaces null fields so clients can distinguish "diff
- * unavailable" from a legitimate empty proposal. Phase 4 will drop
- * these from the wire entirely.
+ * row lacks the metadata to address the splice range or git is
+ * unreachable — the caller surfaces null fields so clients can
+ * distinguish "diff unavailable" from a legitimate empty proposal.
+ * Phase 4 will drop these from the wire entirely.
+ *
+ * `base_block_{start,end}` are character offsets into the decoded
+ * source string (matching unist `position.offset`), not raw byte
+ * offsets — `String.prototype.slice` is the right operator, not a
+ * `Buffer` slice.
  *
  * Takes the minimal structural shape so callers with different row
  * types (thread, bundle export, history) can use the same recovery

@@ -336,8 +336,9 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
  * Recover the {before, after} pair for a proposal from git: `before` is
  * the anchor block at `base_oid`, `after` is the corresponding range at
  * the proposal branch tip. Returns null when the row lacks the columns
- * needed to address those bytes (legacy pre-#25 rows that escaped boot
- * backfill, or branch creation failed at create time without recovery).
+ * needed to address the splice range (legacy pre-#25 rows that escaped
+ * boot backfill, or branch creation failed at create time without
+ * recovery).
  */
 async function resolveProposalDiff(
   doc: DocumentRow,
