@@ -125,6 +125,7 @@ export function InlineCommentsToolbar({
           size="1"
           variant="ghost"
           color="gray"
+          className="doc-toolbar-toggle"
           onClick={onToggleHideResolved}
           aria-label={
             hideResolved
@@ -144,8 +145,11 @@ export function InlineCommentsToolbar({
           size="1"
           variant="ghost"
           color="gray"
+          className="doc-toolbar-toggle"
           onClick={onToggleStacking}
-          aria-label={stackingEnabled ? 'Disable stacking' : 'Stack comments at top while scrolling'}
+          aria-label={
+            stackingEnabled ? 'Disable stacking' : 'Stack comments at top while scrolling'
+          }
           aria-pressed={stackingEnabled}
           title={stackingEnabled ? 'Disable stacking' : 'Stack comments at top while scrolling'}
         >

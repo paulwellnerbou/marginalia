@@ -8,6 +8,8 @@
   --ui-control-radius: 8px;
   --ui-control-font-size: 0.9375rem;
   --ui-control-line-height: 1.4;
+  --doc-floating-toolbar-height: 38px;
+  --doc-floating-toolbar-radius: var(--ui-control-radius);
 
   --app-bar-height: 48px;
   --doc-chrome-height: 44px;
@@ -439,9 +441,10 @@ button.primary:disabled {
 
 .doc-search-toolbar {
   pointer-events: auto;
+  height: var(--doc-floating-toolbar-height);
   padding: 0.35rem 0.4rem;
   border: 1px solid var(--ui-border);
-  border-radius: calc(var(--ui-control-radius) + 2px);
+  border-radius: var(--doc-floating-toolbar-radius);
   background: color-mix(in srgb, var(--color-panel-solid) 94%, transparent);
   box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
   backdrop-filter: blur(14px);
@@ -467,11 +470,18 @@ button.primary:disabled {
   flex-shrink: 0;
 }
 
-.doc-search-option {
+.doc-toolbar-toggle {
   flex-shrink: 0;
+  inline-size: 24px;
+  block-size: 24px;
+  min-inline-size: 24px;
+  border-radius: var(--doc-floating-toolbar-radius);
+  color: var(--gray-11);
 }
 
-.doc-search-option.active {
+.doc-toolbar-toggle[aria-pressed="true"] {
+  background-color: color-mix(in srgb, var(--accent-a4) 75%, transparent);
+  color: var(--accent-11);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-a7) 45%, transparent);
 }
 
@@ -481,11 +491,10 @@ button.primary:disabled {
 }
 
 .doc-search-field .rt-TextFieldSlot svg,
-.doc-search-option svg,
+.doc-toolbar-toggle svg,
 .toc-search-icon {
   width: 16px;
   height: 16px;
-  color: var(--gray-11);
 }
 
 .doc-search-count {
@@ -2017,11 +2026,13 @@ button.primary:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: 32px;
-  padding: 0 6px;
-  background: var(--ui-surface);
+  height: var(--doc-floating-toolbar-height);
+  padding: 0.35rem 0.4rem;
+  background: color-mix(in srgb, var(--color-panel-solid) 94%, transparent);
   border: 1px solid var(--ui-border);
-  border-radius: 6px;
+  border-radius: var(--doc-floating-toolbar-radius);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
+  backdrop-filter: blur(14px);
 }
 .ic-toolbar-group {
   display: flex;
@@ -2036,14 +2047,6 @@ button.primary:disabled {
   user-select: none;
   pointer-events: none;
 }
-/* Active toggle styling. Reuses Radix's ghost IconButton box exactly,
-   only swapping the background — so the click target, padding, and
-   bounds stay identical between the on and off states. */
-.ic-toolbar .rt-IconButton[aria-pressed="true"] {
-  background-color: var(--gray-a4);
-  color: var(--gray-12);
-}
-
 /* Each card lives inside an absolutely-positioned slot whose top and
    height are driven by JS to express the user's "all cards sticky at
    top → all unstick at first anchor → next card re-engages alone"
@@ -2586,4 +2589,3 @@ mark.comment-highlight-resolved {
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
-

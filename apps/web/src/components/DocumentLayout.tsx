@@ -6,7 +6,6 @@ import {
   Cross2Icon,
   LetterCaseToggleIcon,
   MagnifyingGlassIcon,
-  TokensIcon,
 } from '@radix-ui/react-icons';
 import {
   Badge,
@@ -20,6 +19,7 @@ import {
   TextField,
   Tooltip,
 } from '@radix-ui/themes';
+import { WholeWordIcon } from 'lucide-react';
 import {
   type ReactNode,
   useCallback,
@@ -1276,9 +1276,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 >
                   <IconButton
                     size="1"
-                    variant={docSearchCaseSensitive ? 'soft' : 'ghost'}
-                    color={docSearchCaseSensitive ? APP_ACCENT_COLOR : 'gray'}
-                    className={`doc-search-option ${docSearchCaseSensitive ? 'active' : ''}`}
+                    variant="ghost"
+                    color="gray"
+                    className="doc-toolbar-toggle"
                     aria-label={
                       docSearchCaseSensitive
                         ? 'Disable case-sensitive search'
@@ -1300,9 +1300,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 >
                   <IconButton
                     size="1"
-                    variant={docSearchWholeWords ? 'soft' : 'ghost'}
-                    color={docSearchWholeWords ? APP_ACCENT_COLOR : 'gray'}
-                    className={`doc-search-option ${docSearchWholeWords ? 'active' : ''}`}
+                    variant="ghost"
+                    color="gray"
+                    className="doc-toolbar-toggle"
                     aria-label={
                       docSearchWholeWords ? 'Disable whole-word search' : 'Enable whole-word search'
                     }
@@ -1312,7 +1312,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                       docSearchInputRef.current?.focus({ preventScroll: true });
                     }}
                   >
-                    <TokensIcon />
+                    <WholeWordIcon />
                   </IconButton>
                 </Tooltip>
                 <Text size="1" color="gray" className="doc-search-count">
