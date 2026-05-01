@@ -952,10 +952,11 @@ describe('threads API', () => {
     });
   });
 
-  test('multi-block proposal: rejects sub-block endpoints (table cell / list item) as orphaned', async () => {
-    // A sub-block id sneaking in as the end of a multi-block range
-    // would splice mid-row through structural markup. The server must
-    // refuse to resolve such a range.
+  test('multi-block proposal: rejects table-cell endpoints as orphaned', async () => {
+    // A table-cell id sneaking in as the end of a multi-block range
+    // would splice mid-row through `|` pipes and corrupt the table.
+    // The server must refuse to resolve such a range. (List-item
+    // endpoints are accepted — see the test below.)
     const uid = await newDoc(
       '# H\n\n| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nTrailing paragraph.\n',
     );
@@ -1111,6 +1112,66 @@ describe('threads API', () => {
     const accepted = listJson.threads.find((t) => t.id === proposed.thread.id);
     expect(accepted).toBeDefined();
     expect(accepted!.anchor.end_block_id).toBeNull();
+  });
+
+  test('multi-block proposal: list-item endpoints span the items and splice cleanly', async () => {
+    // List items have line-aligned source ranges, so a multi-listItem
+    // span is a clean splice (unlike table cells, which would slice
+    // across `|` pipes). Selecting a subset of items in the UI emits
+    // first→last list-item ids, and accepting the proposal must replace
+    // exactly those items, leaving surrounding list items intact.
+    const uid = await newDoc('Intro paragraph.\n\n- one\n- two\n- three\n- four\n\nOutro.\n');
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const docJson = (await docRes.json()) as {
+      rendered: { html: string };
+    };
+    const subBlockIds = [...docJson.rendered.html.matchAll(/data-subblock="([^"]+)"/g)].map(
+      (m) => m[1]!,
+    );
+    expect(subBlockIds.length).toBe(4);
+    const [, two, three] = subBlockIds;
+
+    // Multi-block proposal spanning items "two" → "three". Items
+    // "one" and "four" must be untouched.
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: {
+            block_id: two,
+            end_block_id: three,
+            quote: 'two\nthree',
+          },
+          proposal: { anchor_kind: 'listItem', proposed_text: '- TWO\n- THREE\n' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
+
+    const acceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    const afterRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const after = (await afterRes.json()) as { source: string };
+    expect(after.source).toContain('- one\n');
+    expect(after.source).toContain('- TWO\n');
+    expect(after.source).toContain('- THREE\n');
+    expect(after.source).toContain('- four\n');
+    expect(after.source).not.toMatch(/- two\b/);
+    expect(after.source).not.toMatch(/- three\b/);
   });
 
   test('accepted proposal authors cannot delete unless they are admin', async () => {

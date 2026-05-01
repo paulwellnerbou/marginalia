@@ -250,10 +250,11 @@ function readProposalBlockSource(
  * and the multi-block endpoint validation so accept, diff, and orphan
  * paths can't drift apart.
  *
- * Validation: when `endBlockId` is set, both endpoints MUST resolve to
- * top-level blocks (not `listItem` / `tableCell`). A sub-block endpoint
- * would point inside structural markup — splicing across pipes or list
- * bullets would corrupt the document — so we treat that as orphaned.
+ * Validation: when `endBlockId` is set, neither endpoint may be a
+ * `tableCell` — splicing across `|` pipes would corrupt the table, so
+ * we treat that as orphaned. `listItem` endpoints ARE accepted: list
+ * items have line-aligned source ranges, so selecting a subset of items
+ * maps to a clean multi-listItem splice.
  *
  * The merged range is computed directly from the per-block map we
  * already built — no second parse via `locateBlockRange*`.
@@ -270,7 +271,7 @@ export function locateAnchorRange(
   if (!endBlockId || endBlockId === blockId) return startBlock;
   const endBlock = blocks.get(endBlockId);
   if (!endBlock) return null;
-  if (!isTopLevelKind(startBlock.kind) || !isTopLevelKind(endBlock.kind)) return null;
+  if (!isMultiBlockEndpoint(startBlock.kind) || !isMultiBlockEndpoint(endBlock.kind)) return null;
   return {
     start: Math.min(startBlock.start, endBlock.start),
     end: Math.max(startBlock.end, endBlock.end),
@@ -279,8 +280,8 @@ export function locateAnchorRange(
   };
 }
 
-function isTopLevelKind(kind: string | undefined): boolean {
-  return !!kind && kind !== 'listItem' && kind !== 'tableCell';
+function isMultiBlockEndpoint(kind: string | undefined): boolean {
+  return !!kind && kind !== 'tableCell';
 }
 
 export function locateDocumentBlocks(doc: DocumentRow, source: string): Map<string, BlockSourceRange> {

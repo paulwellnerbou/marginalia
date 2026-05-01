@@ -37,10 +37,10 @@ export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSource
  * `text` is intentionally '' for multi-block (matches the markdown
  * twin); callers slice `source` with `start`/`end` themselves.
  *
- * Validation: when `endId` is non-null, both endpoints must be
- * top-level blocks (not `listItem` / `tableCell`); sub-block endpoints
- * are rejected so a stray sub-block id can't produce a span that
- * splices through structural markup.
+ * Validation: when `endId` is non-null, neither endpoint may be a
+ * `tableCell` — splicing across `|` pipes would corrupt the table.
+ * `listItem` endpoints are allowed; selecting a subset of items in the
+ * UI maps to a multi-listItem span here. Matches the markdown twin.
  */
 export function locateBlockRangeAsciidoc(
   source: string,
@@ -53,14 +53,14 @@ export function locateBlockRangeAsciidoc(
   if (!endId || endId === startId) return a;
   const b = all.get(endId);
   if (!b) return null;
-  if (!isTopLevelKind(a.kind) || !isTopLevelKind(b.kind)) return null;
+  if (!isMultiBlockEndpoint(a.kind) || !isMultiBlockEndpoint(b.kind)) return null;
   const start = Math.min(a.start, b.start);
   const end = Math.max(a.end, b.end);
   return { start, end, kind: 'multi', text: '' };
 }
 
-function isTopLevelKind(kind: string): boolean {
-  return kind !== 'listItem' && kind !== 'tableCell';
+function isMultiBlockEndpoint(kind: string): boolean {
+  return kind !== 'tableCell';
 }
 
 /**

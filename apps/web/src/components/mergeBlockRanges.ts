@@ -13,11 +13,10 @@ import type { BlockSourceRange } from '@marginalia/renderer';
  * merged span has no single normalized text.
  *
  * Validation mirrors the server's `locateAnchorRange`: when `endId` is
- * non-null, both endpoints must be top-level blocks (not `listItem` /
- * `tableCell`). A sub-block endpoint would point inside structural
- * markup; the renderer's map contains sub-blocks too, so without this
- * guard the composer / diff could splice mid-row even though the
- * server would treat the same anchor as orphaned.
+ * non-null, neither endpoint may be a `tableCell` — a multi-cell span
+ * would slice across `|` pipes and corrupt the table. `listItem`
+ * endpoints are allowed (line-aligned source ranges splice cleanly), so
+ * selecting a subset of items maps to a multi-listItem span.
  */
 export function mergeBlockRanges(
   ranges: Map<string, BlockSourceRange>,
@@ -29,10 +28,10 @@ export function mergeBlockRanges(
   if (!endId || endId === startId) return { start: a.start, end: a.end };
   const b = ranges.get(endId);
   if (!b) return null;
-  if (!isTopLevelKind(a.kind) || !isTopLevelKind(b.kind)) return null;
+  if (!isMultiBlockEndpoint(a.kind) || !isMultiBlockEndpoint(b.kind)) return null;
   return { start: Math.min(a.start, b.start), end: Math.max(a.end, b.end) };
 }
 
-function isTopLevelKind(kind: string): boolean {
-  return kind !== 'listItem' && kind !== 'tableCell';
+function isMultiBlockEndpoint(kind: string): boolean {
+  return kind !== 'tableCell';
 }

@@ -261,10 +261,11 @@ Gamma paragraph.
     expect(locateBlockRange(md, 'does-not-exist', a!)).toBeNull();
   });
 
-  test('rejects sub-block endpoints (listItem / tableCell) when endId is set', () => {
+  test('rejects tableCell endpoints but accepts listItem endpoints when endId is set', () => {
     // Doc with both a paragraph (top-level) and table cells / list
-    // items (sub-blocks). A sub-block id as `endId` must be rejected,
-    // matching the server-side `locateAnchorRange` validation.
+    // items (sub-blocks). `tableCell` endpoints are rejected (splicing
+    // across pipes would corrupt the table); `listItem` endpoints are
+    // accepted (line-aligned source ranges splice cleanly).
     const mixed = `Top paragraph.
 
 | A | B |
@@ -273,21 +274,36 @@ Gamma paragraph.
 
 - one
 - two
+- three
 `;
     const map = locateAllBlocks(mixed);
     const top = [...map.entries()].find(([, r]) => r.kind === 'paragraph');
     const cell = [...map.entries()].find(([, r]) => r.kind === 'tableCell');
-    const item = [...map.entries()].find(([, r]) => r.kind === 'listItem');
+    const items = [...map.entries()].filter(([, r]) => r.kind === 'listItem');
     expect(top).toBeDefined();
     expect(cell).toBeDefined();
-    expect(item).toBeDefined();
+    expect(items.length).toBe(3);
 
+    // tableCell endpoints are rejected.
     expect(locateBlockRange(mixed, top![0], cell![0])).toBeNull();
     expect(locateBlockRange(mixed, cell![0], top![0])).toBeNull();
-    expect(locateBlockRange(mixed, top![0], item![0])).toBeNull();
-    expect(locateBlockRange(mixed, item![0], cell![0])).toBeNull();
+    expect(locateBlockRange(mixed, items[0]![0], cell![0])).toBeNull();
+    expect(locateBlockRange(mixed, cell![0], items[0]![0])).toBeNull();
+
     // Sanity: equal sub-block id (single-block path) still works.
     expect(locateBlockRange(mixed, cell![0], null)).not.toBeNull();
     expect(locateBlockRange(mixed, cell![0], cell![0])).not.toBeNull();
+
+    // listItem-to-listItem multi-block is accepted and spans the items.
+    const itemSpan = locateBlockRange(mixed, items[0]![0], items[1]![0]);
+    expect(itemSpan).not.toBeNull();
+    expect(itemSpan!.kind).toBe('multi');
+    expect(mixed.slice(itemSpan!.start, itemSpan!.end)).toContain('- one');
+    expect(mixed.slice(itemSpan!.start, itemSpan!.end)).toContain('- two');
+    expect(mixed.slice(itemSpan!.start, itemSpan!.end)).not.toContain('- three');
+
+    // listItem-to-paragraph (mixed kinds) is also accepted now —
+    // listItem isn't structural like tableCell.
+    expect(locateBlockRange(mixed, top![0], items[0]![0])).not.toBeNull();
   });
 });

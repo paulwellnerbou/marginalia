@@ -133,9 +133,12 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
  * Resolve which block(s) the selection range covers.
  *
  *   - Exactly one sub-block touched → single-block proposal at the sub-block id.
- *   - Multiple sub-blocks all sharing one `[data-block]` parent → single-block
- *     proposal at the parent id (covers "all list items in one list",
- *     "all cells in one table").
+ *   - Multiple list-item sub-blocks (any parent grouping) → multi-block
+ *     proposal spanning the first/last list-item ids. List-item ranges
+ *     are line-aligned, so a span splices cleanly across items.
+ *   - Multiple table-cell sub-blocks sharing one `<table>` parent →
+ *     single-block proposal at the table id. Cell-level multi-block
+ *     would slice across `|` pipes and corrupt the table.
  *   - One top-level block touched (no sub-blocks involved) → single-block.
  *   - Anything else → multi-block: startId/endId are the first/last
  *     top-level block in DOM order.
@@ -224,9 +227,7 @@ function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
     return { startId: id, endId: null, textEls: [nearest], blockCount: 1 };
   }
 
-  // Sub-block-only selection: if every touched element is a sub-block
-  // (no top-level data-block in the touched set) and they all share one
-  // top-level ancestor, expand to that ancestor.
+  // Sub-block-only selection.
   const subBlocksOnly = touched.every(
     (el) => !!el.dataset.subblock && !el.dataset.block,
   );
@@ -236,6 +237,22 @@ function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
       const id = only.dataset.subblock!;
       return { startId: id, endId: null, textEls: [only], blockCount: 1 };
     }
+    // List items splice cleanly as a multi-block range (line-aligned
+    // source). Emit first→last list-item ids so the user can edit a
+    // subset of items without dragging the whole list along.
+    const allListItems = touched.every((el) => el.tagName === 'LI');
+    if (allListItems) {
+      const first = touched[0]!;
+      const last = touched[touched.length - 1]!;
+      return {
+        startId: first.dataset.subblock!,
+        endId: last.dataset.subblock!,
+        textEls: touched,
+        blockCount: touched.length,
+      };
+    }
+    // Table cells: collapse to the shared `<table>` parent. A
+    // cell-level multi-block span would slice across `|` pipes.
     const sharedParent = sharedTopLevelAncestor(touched);
     if (sharedParent && sharedParent.dataset.block) {
       return {
@@ -245,7 +262,8 @@ function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
         blockCount: 1,
       };
     }
-    // Different parents: fall through to multi-block on the parents.
+    // Different parents (e.g. cells from different tables): fall
+    // through to multi-block on the parents.
     const parents = uniqueOrdered(
       touched.map((el) => topLevelAncestor(el)).filter((el): el is HTMLElement => el !== null),
     );
