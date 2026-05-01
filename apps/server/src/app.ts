@@ -43,7 +43,16 @@ export async function createApp(config: ServerConfig): Promise<App> {
   await migrateSharedRepoToPerDoc(db, config.legacyRepoDir, config.reposDir);
   const store = new GitStore(config.reposDir);
   await store.init();
-  await backfillProposalBranches(db, store);
+  const backfill = await backfillProposalBranches(db, store);
+  if (backfill.skipped > 0) {
+    // Proposals whose anchor block isn't locatable in the current
+    // source can't be backfilled. After the column drop their content
+    // is lost permanently — surface the count so operators can audit
+    // before/after a deploy.
+    console.warn(
+      `[marginalia] proposal-branch backfill skipped ${backfill.skipped} row(s); their proposed_text/source_snapshot will be discarded by the column drop`,
+    );
+  }
   // Backfill must run before this — it reads `proposed_text`. After,
   // those columns are dead.
   dropLegacyProposalColumns(db);

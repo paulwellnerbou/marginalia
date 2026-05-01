@@ -208,6 +208,12 @@ export async function readProposalContent(
   ) {
     return null;
   }
+  // GitStore derives the ref name from the proposal id internally
+  // (`refs/proposals/<id>`). Refuse to read if the row's stored
+  // `branch_ref` doesn't match — guards against silently reading a
+  // different ref if the persisted shape ever drifts (e.g. future
+  // synthesized historical refs).
+  if (row.branch_ref !== `refs/proposals/${row.id}`) return null;
   try {
     const tip = await store.readProposalTip(doc, row.id);
     if (tip === null) return null;
