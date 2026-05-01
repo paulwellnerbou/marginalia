@@ -285,12 +285,12 @@ async function createThread(c: Context, deps: AppDeps) {
     rootComment.author_display_name,
   );
 
-  if (proposal) {
+  if (proposal && isProposalRow(root)) {
     realtime.broadcast(
       doc.uid,
       {
         type: 'edit_proposal.created',
-        edit_proposal: await toProposalWire(store, doc, root as never),
+        edit_proposal: await toProposalWire(store, doc, root),
       },
       identity.clientId,
     );
@@ -344,28 +344,9 @@ async function resolveProposalDiff(
   proposal: EditProposalThreadRow,
   deps: AppDeps,
 ): Promise<{ before: string; after: string } | null> {
-  if (
-    !proposal.base_oid ||
-    proposal.base_block_start === null ||
-    proposal.base_block_end === null
-  ) {
-    return null;
-  }
-  try {
-    const baseSource = await deps.store.readAt(doc, proposal.base_oid);
-    const before = baseSource.slice(proposal.base_block_start, proposal.base_block_end);
-    const tip = await deps.store.readProposalTip(doc, proposal.id);
-    if (tip === null) return null;
-    const proposedLen =
-      tip.length - baseSource.length + (proposal.base_block_end - proposal.base_block_start);
-    const after = tip.slice(
-      proposal.base_block_start,
-      proposal.base_block_start + proposedLen,
-    );
-    return { before, after };
-  } catch {
-    return null;
-  }
+  const content = await readProposalContent(deps.store, doc, proposal);
+  if (!content) return null;
+  return { before: content.source_snapshot, after: content.proposed_text };
 }
 
 /**
@@ -415,7 +396,7 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
       doc.uid,
       {
         type: 'edit_proposal.updated',
-        edit_proposal: await toProposalWire(store, doc, updated as never),
+        edit_proposal: await toProposalWire(store, doc, updated),
       },
       decision.identity.clientId,
     );
@@ -819,7 +800,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
         doc.uid,
         {
           type: 'edit_proposal.updated',
-          edit_proposal: await toProposalWire(deps.store, doc, updated as never),
+          edit_proposal: await toProposalWire(deps.store, doc, updated),
         },
         identity.clientId,
       );
@@ -864,17 +845,9 @@ async function prepareAcceptProposalThread(
   // Recover proposedText from the branch tip and base blob — needed
   // for post-merge anchor relocation. Done before the merge so we
   // don't depend on git state mutated by the merge call.
-  let proposedText: string;
-  try {
-    const tip = await deps.store.readProposalTip(doc, row.id);
-    if (tip === null) throw new Error('proposal branch missing');
-    const base = await deps.store.readAt(doc, row.base_oid);
-    const proposedLen =
-      tip.length - base.length + (row.base_block_end - row.base_block_start);
-    proposedText = tip.slice(row.base_block_start, row.base_block_start + proposedLen);
-  } catch {
-    throw new ThreadActionError(409, 'proposal-orphaned');
-  }
+  const content = await readProposalContent(deps.store, doc, row);
+  if (!content) throw new ThreadActionError(409, 'proposal-orphaned');
+  const proposedText = content.proposed_text;
 
   const preMergeSource = deps.store.read(doc);
   const preMergeRange = locateBlockRange(doc, preMergeSource, row.anchor_block_id);
@@ -1192,7 +1165,8 @@ async function toThreadWire(
   const viewerId = decision.ok ? (decision.identity?.clientId ?? null) : null;
   const isRootAuthor = viewerId !== null && viewerId === rootAuthor;
   const isAdmin = decision.ok && decision.role === 'admin';
-  const proposal = isProposalRow(row);
+  const proposalRow: EditProposalThreadRow | null = isProposalRow(row) ? row : null;
+  const proposal = proposalRow !== null;
   const canReply = decision.ok && canComment(decision.role);
   const canRootEdit = viewerId !== null && viewerId === row.author_client_id;
   const canRootDelete = canRootEdit || isAdmin;
@@ -1235,8 +1209,8 @@ async function toThreadWire(
               ? decision.ok && canEdit(decision.role) && reopenableAccepted.has(row.id)
               : false),
     },
-    proposal: proposal
-      ? (await readProposalContent(store, doc, row as never)) ?? {
+    proposal: proposalRow
+      ? (await readProposalContent(store, doc, proposalRow)) ?? {
           source_snapshot: null,
           proposed_text: null,
         }
@@ -1304,7 +1278,7 @@ function threadResolution(
   return null;
 }
 
-function isProposalRow(row: ThreadRow): boolean {
+function isProposalRow(row: ThreadRow): row is EditProposalThreadRow {
   return row.proposal_status !== null;
 }
 

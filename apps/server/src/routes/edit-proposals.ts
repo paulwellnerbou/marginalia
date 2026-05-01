@@ -180,11 +180,21 @@ export async function toWire(
  * the caller surfaces null fields so clients can distinguish "diff
  * unavailable" from a legitimate empty proposal. Phase 4 will drop
  * these from the wire entirely.
+ *
+ * Takes the minimal structural shape so callers with different row
+ * types (thread, bundle export, history) can use the same recovery
+ * helper without casts.
  */
 export async function readProposalContent(
   store: GitStore,
   doc: DocumentRow,
-  row: EditProposalThreadRow,
+  row: {
+    id: string;
+    branch_ref: string | null;
+    base_oid: string | null;
+    base_block_start: number | null;
+    base_block_end: number | null;
+  },
 ): Promise<{ source_snapshot: string; proposed_text: string } | null> {
   if (
     !row.branch_ref ||

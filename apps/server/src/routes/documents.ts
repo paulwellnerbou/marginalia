@@ -17,6 +17,7 @@ import {
   loadProposalRow,
   reopenAcceptedProposal,
   reanchorProposals,
+  readProposalContent,
   toWire as toEditProposalWire,
 } from './edit-proposals.js';
 import {
@@ -1184,29 +1185,14 @@ async function bundleProposalPayload(
   accepted_oid: string | null;
 } | null> {
   if (row.proposal_status === null) return null;
-  const branchBacked =
-    row.branch_ref &&
-    row.base_oid &&
-    row.base_block_start !== null &&
-    row.base_block_end !== null;
-  if (branchBacked) {
-    try {
-      const tip = await store.readProposalTip(doc, row.id);
-      if (tip !== null) {
-        const base = await store.readAt(doc, row.base_oid as string);
-        const start = row.base_block_start as number;
-        const end = row.base_block_end as number;
-        const proposedLen = tip.length - base.length + (end - start);
-        return {
-          source_snapshot: base.slice(start, end),
-          proposed_text: tip.slice(start, start + proposedLen),
-          status: row.proposal_status,
-          accepted_oid: row.accepted_oid,
-        };
-      }
-    } catch {
-      // fall through to minimal payload
-    }
+  const content = await readProposalContent(store, doc, row);
+  if (content) {
+    return {
+      source_snapshot: content.source_snapshot,
+      proposed_text: content.proposed_text,
+      status: row.proposal_status,
+      accepted_oid: row.accepted_oid,
+    };
   }
   // Historical row without recoverable content (legacy accepted, or
   // an import that landed without a branch). Preserve status +
@@ -1945,23 +1931,7 @@ async function readProposedTextFromBranch(
   doc: DocumentRow,
   row: AcceptedProposalHistoryRow,
 ): Promise<string | null> {
-  if (
-    !row.branch_ref ||
-    !row.base_oid ||
-    row.base_block_start === null ||
-    row.base_block_end === null
-  ) {
-    return null;
-  }
-  try {
-    const tip = await store.readProposalTip(doc, row.id);
-    if (tip === null) return null;
-    const base = await store.readAt(doc, row.base_oid);
-    const proposedLen = tip.length - base.length + (row.base_block_end - row.base_block_start);
-    return tip.slice(row.base_block_start, row.base_block_start + proposedLen);
-  } catch {
-    return null;
-  }
+  return (await readProposalContent(store, doc, row))?.proposed_text ?? null;
 }
 
 function summarizeProposalHistory(rationale: string | null, proposedText: string | null): string {
