@@ -1853,17 +1853,24 @@ button.primary:disabled {
  * Edit proposals
  * ============================================================ */
 
-/* The composer lives inside a Dialog; no extra frame needed. The
-   nested .composer .composer-body-field rule applies the same font /
-   padding / border / resize-vertical treatment the comment composer
-   uses, so the two look identical. */
-/* Markdown source deserves a monospace face so indentation and fences
-   are readable. Sized slightly larger than the rationale field for the
-   same reason — it's the primary field users type into. */
-.edit-proposal-composer .proposal-source-field :is(textarea, .rt-TextAreaInput) {
-  font-family: var(--md-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
-  font-size: 0.875rem;
+/* CodeMirror editor used for the markdown source field in the edit
+   proposal dialog. Styled to match the textarea look of other composer
+   fields: same border, radius, background, and min-height. */
+.proposal-source-editor {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-control-radius);
+  background: var(--color-surface);
+  overflow: hidden;
   min-height: calc(var(--ui-control-height) * 5);
+}
+
+.proposal-source-editor .cm-editor {
+  height: 100%;
+  min-height: calc(var(--ui-control-height) * 5);
+}
+
+.proposal-source-editor .cm-scroller {
+  padding: 0.35rem 0;
 }
 
 /* ============================================================

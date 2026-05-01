@@ -1,9 +1,86 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Dialog, Flex, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { DocumentFormat } from '../lib/api.js';
 import { mergeBlockRanges } from './mergeBlockRanges.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
+
+type EditorDeps = {
+  EditorState: typeof import('@codemirror/state').EditorState;
+  EditorView: typeof import('codemirror').EditorView;
+  basicSetup: typeof import('codemirror').basicSetup;
+  markdown: typeof import('@codemirror/lang-markdown').markdown;
+};
+
+let editorDepsPromise: Promise<EditorDeps> | null = null;
+
+function loadEditorDeps(): Promise<EditorDeps> {
+  if (!editorDepsPromise) {
+    editorDepsPromise = Promise.all([
+      import('@codemirror/state'),
+      import('codemirror'),
+      import('@codemirror/lang-markdown'),
+    ]).then(([state, view, md]) => ({
+      EditorState: state.EditorState,
+      EditorView: view.EditorView,
+      basicSetup: view.basicSetup,
+      markdown: md.markdown,
+    }));
+  }
+  return editorDepsPromise;
+}
+
+function MarkdownEditorField({
+  initialValue,
+  onChange,
+  autoFocus,
+}: {
+  initialValue: string;
+  onChange: (value: string) => void;
+  autoFocus?: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    let view: import('codemirror').EditorView | null = null;
+    let disposed = false;
+
+    void loadEditorDeps().then(({ EditorState, EditorView, basicSetup, markdown }) => {
+      if (disposed || !container) return;
+      const state = EditorState.create({
+        doc: initialValue,
+        extensions: [
+          basicSetup,
+          markdown(),
+          EditorView.lineWrapping,
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged) onChangeRef.current(u.state.doc.toString());
+          }),
+          EditorView.theme({
+            '&': { fontSize: '0.875rem' },
+            '.cm-scroller': {
+              fontFamily:
+                'var(--md-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)',
+            },
+          }),
+        ],
+      });
+      view = new EditorView({ state, parent: container });
+      if (autoFocus) view.focus();
+    });
+
+    return () => {
+      disposed = true;
+      view?.destroy();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return <div ref={containerRef} className="proposal-source-editor" />;
+}
 
 // Proposal dialog composer — used for new edit proposals.
 //
@@ -149,16 +226,13 @@ function ProposalComposerBody({
         )}
 
         <Flex direction="column" gap="1">
-          <Text as="label" size="2" htmlFor="proposal-text">
+          <Text as="label" size="2">
             Edited {formatLabel}
           </Text>
-          <TextArea
-            id="proposal-text"
-            className="composer-body-field proposal-source-field"
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            rows={8}
-            size="1"
+          <MarkdownEditorField
+            key={`${target.block_id}-${target.end_block_id ?? ''}`}
+            initialValue={originalSource}
+            onChange={setValue}
             autoFocus={!needsName}
           />
         </Flex>
