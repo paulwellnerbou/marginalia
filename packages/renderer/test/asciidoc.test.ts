@@ -387,6 +387,8 @@ Gamma paragraph.
 
     const forward = locateBlockRangeAsciidoc(src, a!, c!);
     const reversed = locateBlockRangeAsciidoc(src, c!, a!);
+    expect(forward).not.toBeNull();
+    expect(reversed).not.toBeNull();
     expect(reversed!.start).toBe(forward!.start);
     expect(reversed!.end).toBe(forward!.end);
   });
