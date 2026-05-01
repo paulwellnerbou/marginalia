@@ -952,6 +952,74 @@ describe('threads API', () => {
     });
   });
 
+  test('multi-block proposal: rejects sub-block endpoints (table cell / list item) as orphaned', async () => {
+    // A sub-block id sneaking in as the end of a multi-block range
+    // would splice mid-row through structural markup. The server must
+    // refuse to resolve such a range.
+    const uid = await newDoc(
+      '# H\n\n| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nTrailing paragraph.\n',
+    );
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const docJson = (await docRes.json()) as {
+      rendered: { html: string; blocks: Array<{ id: string; text: string }> };
+    };
+    const heading = docJson.rendered.blocks[0]!;
+    // Pull a sub-block id (table cell) from the rendered HTML.
+    const subBlockId = docJson.rendered.html.match(/data-subblock="([^"]+)"/)?.[1];
+    expect(subBlockId).toBeDefined();
+
+    // Create the proposal with a sub-block as `end_block_id`. The
+    // server stores it (validation lives in the locator), but accept
+    // must orphan the row instead of splicing.
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: {
+            block_id: heading.id,
+            end_block_id: subBlockId,
+            quote: 'H',
+          },
+          proposal: { anchor_kind: 'heading', proposed_text: 'corrupt' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
+
+    const acceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(acceptRes.status).toBe(409);
+    expect(await acceptRes.json()).toEqual({ error: 'proposal-orphaned' });
+  });
+
+  test('proposed_text exceeding the size limit returns proposal-text-too-long', async () => {
+    const uid = await newDoc('# Title\n');
+    const blockId = await firstBlockId(uid);
+    const tooLong = 'x'.repeat(60001);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          proposal: { anchor_kind: 'heading', proposed_text: tooLong },
+        }),
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'proposal-text-too-long' });
+  });
+
   test('multi-block proposal: stores end_block_id, accept splices the whole span and clears the column', async () => {
     const uid = await newDoc('Alpha paragraph.\n\nBeta paragraph.\n\nGamma paragraph.\n');
 

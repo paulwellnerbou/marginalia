@@ -1,10 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import {
-  locateBlockRange,
-  locateBlockRangeAsciidoc,
-  renderDocument,
-} from '@marginalia/renderer';
+import { renderDocument } from '@marginalia/renderer';
 import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
@@ -30,6 +26,7 @@ import type { AppDeps } from './documents.js';
 import {
   findBlockBySourceSpan,
   loadProposalRow,
+  locateAnchorRange,
   locateDocumentBlocks,
   reanchorProposals,
   reopenAcceptedProposal,
@@ -1348,26 +1345,6 @@ function isProposalRow(row: ThreadRow): boolean {
 }
 
 /**
- * Resolve a proposal anchor (single-block or multi-block) to a source
- * range in the given document source. When `endBlockId` is null the
- * range covers just the start block; when set, it spans both endpoints
- * via the renderer's format-specific multi-block locator.
- */
-function locateAnchorRange(
-  doc: DocumentRow,
-  source: string,
-  blockId: string,
-  endBlockId: string | null,
-): BlockSourceRange | null {
-  if (endBlockId) {
-    return doc.format === 'asciidoc'
-      ? locateBlockRangeAsciidoc(source, blockId, endBlockId)
-      : locateBlockRange(source, blockId, endBlockId);
-  }
-  return locateDocumentBlocks(doc, source).get(blockId) ?? null;
-}
-
-/**
  * Find the block-boundary position in `nextSource` where `proposedText`
  * was inserted by the merge. The splice always starts at a block start
  * (the branch was built that way against base), so we only consider
@@ -1492,17 +1469,20 @@ function asAnchor(v: unknown): {
   };
 }
 
+const MAX_PROPOSED_TEXT_LENGTH = 60000;
+
 function asProposal(
   v: unknown,
 ):
   | { ok: true; proposal: { anchorKind: string | null; proposedText: string } | null }
-  | { ok: false; error: 'proposal-text-required' } {
+  | { ok: false; error: 'proposal-text-required' | 'proposal-text-too-long' } {
   if (v === null || v === undefined) return { ok: true, proposal: null };
   if (typeof v !== 'object') return { ok: false, error: 'proposal-text-required' };
   const proposal = v as Record<string, unknown>;
   const proposedText = typeof proposal.proposed_text === 'string' ? proposal.proposed_text : null;
-  if (proposedText === null || proposedText.length > 60000) {
-    return { ok: false, error: 'proposal-text-required' };
+  if (proposedText === null) return { ok: false, error: 'proposal-text-required' };
+  if (proposedText.length > MAX_PROPOSED_TEXT_LENGTH) {
+    return { ok: false, error: 'proposal-text-too-long' };
   }
   return {
     ok: true,

@@ -245,15 +245,41 @@ function readProposalBlockSource(
   endBlockId: string | null = null,
 ): string | null {
   if (!blockId) return null;
-  if (endBlockId) {
-    const range =
-      doc.format === 'asciidoc'
-        ? locateBlockRangeAsciidoc(source, blockId, endBlockId)
-        : locateBlockRange(source, blockId, endBlockId);
-    return range ? source.slice(range.start, range.end) : null;
-  }
-  const range = locateDocumentBlocks(doc, source).get(blockId);
+  const range = locateAnchorRange(doc, source, blockId, endBlockId);
   return range ? source.slice(range.start, range.end) : null;
+}
+
+/**
+ * Resolve a proposal anchor (single-block or multi-block) to a source
+ * range in the given document source. Centralizes the format dispatch
+ * and the multi-block endpoint validation so accept, diff, and orphan
+ * paths can't drift apart.
+ *
+ * Validation: when `endBlockId` is set, both endpoints MUST resolve to
+ * top-level blocks (not `listItem` / `tableCell`). A sub-block endpoint
+ * would point inside structural markup — splicing across pipes or list
+ * bullets would corrupt the document — so we treat that as orphaned.
+ */
+export function locateAnchorRange(
+  doc: DocumentRow,
+  source: string,
+  blockId: string,
+  endBlockId: string | null,
+): BlockSourceRange | null {
+  const blocks = locateDocumentBlocks(doc, source);
+  if (endBlockId && endBlockId !== blockId) {
+    const startBlock = blocks.get(blockId);
+    const endBlock = blocks.get(endBlockId);
+    if (!isTopLevelKind(startBlock?.kind) || !isTopLevelKind(endBlock?.kind)) return null;
+    return doc.format === 'asciidoc'
+      ? locateBlockRangeAsciidoc(source, blockId, endBlockId)
+      : locateBlockRange(source, blockId, endBlockId);
+  }
+  return blocks.get(blockId) ?? null;
+}
+
+function isTopLevelKind(kind: string | undefined): boolean {
+  return !!kind && kind !== 'listItem' && kind !== 'tableCell';
 }
 
 export function locateDocumentBlocks(doc: DocumentRow, source: string): Map<string, BlockSourceRange> {
