@@ -166,17 +166,30 @@ function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
 
   let touched = all.filter((el) => intersectsRange(range, el));
 
+  // `all` is built from `inScope.querySelectorAll(...)` (preorder)
+  // *plus* matching ancestors walked outward to `root`, so descendants
+  // can come before their ancestors. The stack-based prune below
+  // assumes DOM preorder (parents before descendants) — sort first so
+  // a selection inside a cell doesn't keep both the `<td>` AND the
+  // enclosing `<table>`.
+  touched.sort((a, b) => {
+    if (a === b) return 0;
+    const pos = a.compareDocumentPosition(b);
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  });
+
   // Drop ancestors whose descendants are also touched. A selection
   // inside one table cell intersects both the `<td data-subblock>` and
   // the enclosing `<table data-block>`; we want to act on the
   // innermost — the cell — not the whole table.
   //
-  // `all` comes from `querySelectorAll`, which yields elements in
-  // document (preorder) order, so a parent always appears before its
-  // descendants. A linear stack pass keeps only the innermost touched
-  // elements: when the new element is contained by the stack's top,
-  // pop the top (the ancestor is subsumed); otherwise push and move on.
-  // O(n) instead of the previous O(n²) `some(contains)` filter.
+  // After the sort above, `touched` is in preorder. A linear stack
+  // pass keeps only the innermost touched elements: when the new
+  // element is contained by the stack's top, pop the top (the
+  // ancestor is subsumed); otherwise push and move on. O(n) instead
+  // of the previous O(n²) `some(contains)` filter.
   const pruned: HTMLElement[] = [];
   for (const el of touched) {
     while (pruned.length > 0 && pruned[pruned.length - 1]!.contains(el)) {
