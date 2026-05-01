@@ -1001,6 +1001,30 @@ describe('threads API', () => {
     expect(await acceptRes.json()).toEqual({ error: 'proposal-orphaned' });
   });
 
+  test('over-long anchor.quote / prefix / suffix is rejected with anchor-too-long', async () => {
+    const uid = await newDoc('# Title\n');
+    const blockId = await firstBlockId(uid);
+    const oversizeQuote = 'q'.repeat(60001);
+    const oversizeContext = 'c'.repeat(1025);
+
+    const cases = [
+      { anchor: { block_id: blockId, quote: oversizeQuote }, label: 'quote' },
+      { anchor: { block_id: blockId, quote: 'Title', prefix: oversizeContext }, label: 'prefix' },
+      { anchor: { block_id: blockId, quote: 'Title', suffix: oversizeContext }, label: 'suffix' },
+    ];
+    for (const { anchor } of cases) {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: headersFor(BOB),
+          body: JSON.stringify({ anchor, body: 'note' }),
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'anchor-too-long' });
+    }
+  });
+
   test('proposed_text exceeding the size limit returns proposal-text-too-long', async () => {
     const uid = await newDoc('# Title\n');
     const blockId = await firstBlockId(uid);

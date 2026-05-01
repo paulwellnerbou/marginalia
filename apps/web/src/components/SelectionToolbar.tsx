@@ -170,9 +170,21 @@ function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
   // inside one table cell intersects both the `<td data-subblock>` and
   // the enclosing `<table data-block>`; we want to act on the
   // innermost — the cell — not the whole table.
-  touched = touched.filter(
-    (el) => !touched.some((other) => other !== el && el.contains(other)),
-  );
+  //
+  // `all` comes from `querySelectorAll`, which yields elements in
+  // document (preorder) order, so a parent always appears before its
+  // descendants. A linear stack pass keeps only the innermost touched
+  // elements: when the new element is contained by the stack's top,
+  // pop the top (the ancestor is subsumed); otherwise push and move on.
+  // O(n) instead of the previous O(n²) `some(contains)` filter.
+  const pruned: HTMLElement[] = [];
+  for (const el of touched) {
+    while (pruned.length > 0 && pruned[pruned.length - 1]!.contains(el)) {
+      pruned.pop();
+    }
+    pruned.push(el);
+  }
+  touched = pruned;
 
   // Triple-click / keyboard-extend selections often end at offset 0 of
   // the *next* block; drop a trailing block that's only "touched"

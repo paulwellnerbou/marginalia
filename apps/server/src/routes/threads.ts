@@ -156,8 +156,9 @@ async function createThread(c: Context, deps: AppDeps) {
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
 
-  const anchor = asAnchor(body.anchor);
-  if (!anchor) return c.json({ error: 'anchor-required' }, 400);
+  const parsedAnchor = asAnchor(body.anchor);
+  if (!parsedAnchor.ok) return c.json({ error: parsedAnchor.error }, 400);
+  const anchor = parsedAnchor.anchor;
 
   const rootBody = parseOptionalBody(body.body);
   if (!rootBody.ok) return c.json({ error: 'invalid-body' }, 400);
@@ -1430,7 +1431,14 @@ function asRespondAction(v: unknown): RespondAction | null {
   return v === 'resolve' || v === 'accept' || v === 'reject' || v === 'reopen' ? v : null;
 }
 
-function asAnchor(v: unknown): {
+// Caps on free-text anchor fields. `quote` can legitimately concatenate
+// multiple top-level blocks for multi-block proposals, so we mirror the
+// proposed_text ceiling. prefix/suffix are short context windows used for
+// re-anchoring — kilobytes are plenty.
+const MAX_ANCHOR_QUOTE_LENGTH = 60000;
+const MAX_ANCHOR_CONTEXT_LENGTH = 1024;
+
+interface ParsedAnchor {
   blockId: string;
   endBlockId: string | null;
   quote: string;
@@ -1441,12 +1449,27 @@ function asAnchor(v: unknown): {
   headingPath: string[] | null;
   sectionIndex: number | null;
   sectionIndexPath: number[] | null;
-} | null {
-  if (!v || typeof v !== 'object') return null;
+}
+
+type AnchorParseResult =
+  | { ok: true; anchor: ParsedAnchor }
+  | { ok: false; error: 'anchor-required' | 'anchor-too-long' };
+
+function asAnchor(v: unknown): AnchorParseResult {
+  if (!v || typeof v !== 'object') return { ok: false, error: 'anchor-required' };
   const a = v as Record<string, unknown>;
   const blockId = asString(a.block_id);
   const quote = typeof a.quote === 'string' ? a.quote : null;
-  if (!blockId || quote === null) return null;
+  if (!blockId || quote === null) return { ok: false, error: 'anchor-required' };
+  const prefix = typeof a.prefix === 'string' ? a.prefix : '';
+  const suffix = typeof a.suffix === 'string' ? a.suffix : '';
+  if (
+    quote.length > MAX_ANCHOR_QUOTE_LENGTH ||
+    prefix.length > MAX_ANCHOR_CONTEXT_LENGTH ||
+    suffix.length > MAX_ANCHOR_CONTEXT_LENGTH
+  ) {
+    return { ok: false, error: 'anchor-too-long' };
+  }
   const rawEnd = typeof a.end_block_id === 'string' ? a.end_block_id : null;
   const endBlockId = rawEnd && rawEnd.length > 0 && rawEnd !== blockId ? rawEnd : null;
   const headingPath = Array.isArray(a.heading_path)
@@ -1456,16 +1479,19 @@ function asAnchor(v: unknown): {
     ? a.section_index_path.filter((n): n is number => typeof n === 'number')
     : null;
   return {
-    blockId,
-    endBlockId,
-    quote,
-    prefix: typeof a.prefix === 'string' ? a.prefix : '',
-    suffix: typeof a.suffix === 'string' ? a.suffix : '',
-    startOffset: typeof a.start_offset === 'number' ? a.start_offset : 0,
-    endOffset: typeof a.end_offset === 'number' ? a.end_offset : quote.length,
-    headingPath,
-    sectionIndex: typeof a.section_index === 'number' ? a.section_index : null,
-    sectionIndexPath,
+    ok: true,
+    anchor: {
+      blockId,
+      endBlockId,
+      quote,
+      prefix,
+      suffix,
+      startOffset: typeof a.start_offset === 'number' ? a.start_offset : 0,
+      endOffset: typeof a.end_offset === 'number' ? a.end_offset : quote.length,
+      headingPath,
+      sectionIndex: typeof a.section_index === 'number' ? a.section_index : null,
+      sectionIndexPath,
+    },
   };
 }
 
