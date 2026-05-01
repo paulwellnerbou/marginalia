@@ -59,12 +59,15 @@ export function reanchorProposals(
     .all(docUid) as EditProposalThreadRow[];
   const markComment = db.prepare(
     `UPDATE comments
-        SET link_status = 'orphaned', anchor_block_id = NULL, updated_at = ?
+        SET link_status = 'orphaned', anchor_block_id = NULL, anchor_end_block_id = NULL,
+            updated_at = ?
       WHERE id = ?`,
   );
   const orphaned: EditProposalThreadRow[] = [];
   for (const p of open) {
-    if (!p.anchor_block_id || !present.has(p.anchor_block_id)) {
+    const startMissing = !p.anchor_block_id || !present.has(p.anchor_block_id);
+    const endMissing = p.anchor_end_block_id != null && !present.has(p.anchor_end_block_id);
+    if (startMissing || endMissing) {
       markComment.run(now, p.id);
       const fresh = loadProposalRow(db, p.id, docUid);
       if (fresh) {
@@ -128,7 +131,12 @@ export async function resolveProposalDiffBefore(
 
   if (proposal.proposal_status !== 'accepted') {
     const liveSource = deps.store.read(doc);
-    const liveBlock = readProposalBlockSource(doc, liveSource, proposal.anchor_block_id);
+    const liveBlock = readProposalBlockSource(
+      doc,
+      liveSource,
+      proposal.anchor_block_id,
+      proposal.anchor_end_block_id,
+    );
     if (!liveBlock) return snapshot;
     if (liveBlock === proposal.proposed_text && snapshot !== proposal.proposed_text)
       return snapshot;
@@ -229,10 +237,50 @@ function readProposalBlockSource(
   doc: DocumentRow,
   source: string,
   blockId: string | null,
+  endBlockId: string | null = null,
 ): string | null {
   if (!blockId) return null;
-  const range = locateDocumentBlocks(doc, source).get(blockId);
+  const range = locateAnchorRange(doc, source, blockId, endBlockId);
   return range ? source.slice(range.start, range.end) : null;
+}
+
+/**
+ * Resolve a proposal anchor (single-block or multi-block) to a source
+ * range in the given document source. Centralizes the format dispatch
+ * and the multi-block endpoint validation so accept, diff, and orphan
+ * paths can't drift apart.
+ *
+ * Validation: when `endBlockId` is set, both endpoints MUST resolve to
+ * top-level blocks (not `listItem` / `tableCell`). A sub-block endpoint
+ * would point inside structural markup — splicing across pipes or list
+ * bullets would corrupt the document — so we treat that as orphaned.
+ *
+ * The merged range is computed directly from the per-block map we
+ * already built — no second parse via `locateBlockRange*`.
+ */
+export function locateAnchorRange(
+  doc: DocumentRow,
+  source: string,
+  blockId: string,
+  endBlockId: string | null,
+): BlockSourceRange | null {
+  const blocks = locateDocumentBlocks(doc, source);
+  const startBlock = blocks.get(blockId);
+  if (!startBlock) return null;
+  if (!endBlockId || endBlockId === blockId) return startBlock;
+  const endBlock = blocks.get(endBlockId);
+  if (!endBlock) return null;
+  if (!isTopLevelKind(startBlock.kind) || !isTopLevelKind(endBlock.kind)) return null;
+  return {
+    start: Math.min(startBlock.start, endBlock.start),
+    end: Math.max(startBlock.end, endBlock.end),
+    kind: 'multi',
+    text: '',
+  };
+}
+
+function isTopLevelKind(kind: string | undefined): boolean {
+  return !!kind && kind !== 'listItem' && kind !== 'tableCell';
 }
 
 export function locateDocumentBlocks(doc: DocumentRow, source: string): Map<string, BlockSourceRange> {

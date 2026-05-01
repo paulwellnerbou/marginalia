@@ -29,6 +29,41 @@ export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSource
 }
 
 /**
+ * AsciiDoc twin of `locateBlockRange`. Same min/max merge semantics:
+ * the returned range covers everything from the earlier block's start
+ * to the later block's end (in source order). Inter-block whitespace
+ * is included so a server-side splice replaces the whole span atomically.
+ *
+ * `text` is intentionally '' for multi-block (matches the markdown
+ * twin); callers slice `source` with `start`/`end` themselves.
+ *
+ * Validation: when `endId` is non-null, both endpoints must be
+ * top-level blocks (not `listItem` / `tableCell`); sub-block endpoints
+ * are rejected so a stray sub-block id can't produce a span that
+ * splices through structural markup.
+ */
+export function locateBlockRangeAsciidoc(
+  source: string,
+  startId: string,
+  endId: string | null,
+): BlockSourceRange | null {
+  const all = locateAllBlocksAsciidoc(source);
+  const a = all.get(startId);
+  if (!a) return null;
+  if (!endId || endId === startId) return a;
+  const b = all.get(endId);
+  if (!b) return null;
+  if (!isTopLevelKind(a.kind) || !isTopLevelKind(b.kind)) return null;
+  const start = Math.min(a.start, b.start);
+  const end = Math.max(a.end, b.end);
+  return { start, end, kind: 'multi', text: '' };
+}
+
+function isTopLevelKind(kind: string): boolean {
+  return kind !== 'listItem' && kind !== 'tableCell';
+}
+
+/**
  * Mirror `walkSubBlocks` in render-asciidoc.ts: walk ulist/olist items
  * in document order and map their content-hash IDs back to source
  * ranges. IDs use `computeSubBlockId('listItem', text, counts)` with a

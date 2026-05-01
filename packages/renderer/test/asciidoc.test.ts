@@ -3,6 +3,7 @@ import {
   renderAsciidoc,
   renderDocument,
   locateAllBlocksAsciidoc,
+  locateBlockRangeAsciidoc,
   isDocumentFormat,
 } from '../src/index.js';
 
@@ -353,5 +354,49 @@ ____
       const window = src.slice(range!.start, range!.end);
       expect(window.startsWith('* ')).toBe(true);
     }
+  });
+});
+
+describe('locateBlockRangeAsciidoc', () => {
+  const src = `Alpha paragraph.
+
+Beta paragraph.
+
+Gamma paragraph.
+`;
+
+  test('multi-block range covers both endpoints + inter-block whitespace', () => {
+    const ids = [...locateAllBlocksAsciidoc(src).keys()];
+    const [a, , c] = ids;
+    const range = locateBlockRangeAsciidoc(src, a!, c!);
+    expect(range).not.toBeNull();
+    const sliced = src.slice(range!.start, range!.end);
+    expect(sliced).toContain('Alpha paragraph.');
+    expect(sliced).toContain('Beta paragraph.');
+    expect(sliced).toContain('Gamma paragraph.');
+    expect(range!.kind).toBe('multi');
+    expect(range!.text).toBe('');
+  });
+
+  test('null endId returns the start block range; reversed order still merges via min/max', () => {
+    const ids = [...locateAllBlocksAsciidoc(src).keys()];
+    const [a, , c] = ids;
+    const single = locateBlockRangeAsciidoc(src, a!, null);
+    expect(single).not.toBeNull();
+    expect(src.slice(single!.start, single!.end).trim()).toBe('Alpha paragraph.');
+
+    const forward = locateBlockRangeAsciidoc(src, a!, c!);
+    const reversed = locateBlockRangeAsciidoc(src, c!, a!);
+    expect(forward).not.toBeNull();
+    expect(reversed).not.toBeNull();
+    expect(reversed!.start).toBe(forward!.start);
+    expect(reversed!.end).toBe(forward!.end);
+  });
+
+  test('returns null when either endpoint id is unknown', () => {
+    const ids = [...locateAllBlocksAsciidoc(src).keys()];
+    const [a] = ids;
+    expect(locateBlockRangeAsciidoc(src, a!, 'nope')).toBeNull();
+    expect(locateBlockRangeAsciidoc(src, 'nope', a!)).toBeNull();
   });
 });

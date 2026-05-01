@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS comments (
   parent_id             TEXT,
   parent_proposal_id    TEXT,            -- reply to an edit proposal; mutually exclusive with parent_id + anchor
   anchor_block_id       TEXT,
+  anchor_end_block_id   TEXT,            -- multi-block proposal: id of the last block in the span; NULL for single-block
   anchor_quote          TEXT,
   anchor_prefix         TEXT,
   anchor_suffix         TEXT,
@@ -280,6 +281,7 @@ export interface CommentRow {
   parent_id: string | null;
   parent_proposal_id: string | null;
   anchor_block_id: string | null;
+  anchor_end_block_id: string | null;
   anchor_quote: string | null;
   anchor_prefix: string | null;
   anchor_suffix: string | null;
@@ -384,6 +386,7 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments', 'anchor_section_index', 'INTEGER');
   ensureColumn(db, 'comments', 'anchor_section_index_path', 'TEXT');
   ensureColumn(db, 'comments', 'parent_proposal_id', 'TEXT');
+  ensureColumn(db, 'comments', 'anchor_end_block_id', 'TEXT');
   ensureColumn(db, 'documents', 'format', "TEXT NOT NULL DEFAULT 'markdown'");
   ensureColumn(db, 'documents', 'password_recovery_ciphertext', 'TEXT');
   ensureColumn(db, 'documents', 'password_recovery_iv', 'TEXT');

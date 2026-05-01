@@ -18,8 +18,8 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
   if (!root.contains(range.commonAncestorContainer)) return null;
 
   const blockEl =
-    closestBlock(range.commonAncestorContainer) ??
     closestBlock(range.startContainer) ??
+    closestBlock(range.commonAncestorContainer) ??
     blockAtElementOffset(range.startContainer, range.startOffset);
   if (!blockEl) return null;
   // Prefer the more specific sub-block id (list item, table cell, …)
@@ -28,17 +28,32 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
   const blockId = blockEl.dataset.subblock ?? blockEl.dataset.block;
   if (!blockId) return null;
 
+  // Triple-click line/paragraph selection can end at offset 0 of the
+  // next block. Clamp the captured range to the resolved block so the
+  // quote/offsets never leak into following content.
+  const blockRange = document.createRange();
+  blockRange.selectNodeContents(blockEl);
+  const clamped = range.cloneRange();
+  if (clamped.compareBoundaryPoints(Range.START_TO_START, blockRange) < 0) {
+    clamped.setStart(blockRange.startContainer, blockRange.startOffset);
+  }
+  if (clamped.compareBoundaryPoints(Range.END_TO_END, blockRange) > 0) {
+    clamped.setEnd(blockRange.endContainer, blockRange.endOffset);
+  }
+  if (clamped.collapsed) return null;
+
   const blockText = normalizeWs(blockEl.textContent ?? '');
-  const quote = normalizeWs(range.toString());
+  const clampedText = clamped.toString();
+  const quote = normalizeWs(clampedText);
   if (!quote) return null;
 
   // DOM offsets are per-text-node; convert to offsets within the block's
   // normalized text by measuring the length of the un-selected prefix.
   const preRange = document.createRange();
   preRange.selectNodeContents(blockEl);
-  preRange.setEnd(range.startContainer, range.startOffset);
+  preRange.setEnd(clamped.startContainer, clamped.startOffset);
   const rawStart = preRange.toString().length;
-  const rawEnd = rawStart + range.toString().length;
+  const rawEnd = rawStart + clampedText.length;
 
   // Offsets into the normalized string aren't exactly `rawStart` because
   // whitespace was collapsed, but we can approximate by locating `quote`

@@ -8,6 +8,7 @@ import {
   getHistory,
   getHistoryDiff,
 } from '../lib/api.js';
+import { formatAnchorQuote } from '../lib/anchor-quote.js';
 import { formatTimestamp, formatTimestampLong } from '../lib/format-time.js';
 import { describeEntry, historyActorLabel, shortOid } from '../lib/history-format.js';
 import { reportError } from '../lib/log.js';
@@ -295,6 +296,7 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
             const isProposal = thread.proposal !== null;
             const comment = thread.comments[0];
             const actionText = isProposal ? 'Proposed a change' : 'Started a thread';
+            const quoteText = formatAnchorQuote(thread.anchor.quote, 180);
 
             return (
               <Flex
@@ -326,7 +328,7 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
                     <Text size="1" color="gray">
                       {actionText}
                     </Text>
-                    {thread.anchor.quote ? (
+                    {quoteText ? (
                       <Text
                         size="1"
                         color="gray"
@@ -338,7 +340,7 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
                           fontStyle: 'italic',
                         }}
                       >
-                        "{thread.anchor.quote}"
+                        "{quoteText}"
                       </Text>
                     ) : null}
                   </Box>

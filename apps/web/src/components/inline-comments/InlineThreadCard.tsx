@@ -2,6 +2,7 @@ import type { BlockSourceRange } from '@marginalia/renderer';
 import { useMemo, useRef, useState } from 'react';
 import type { Thread } from '../../lib/api.js';
 import { getEditProposalDiff, isProposal, proposalStatus } from '../../lib/api.js';
+import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import { reportError } from '../../lib/log.js';
 import { DiffDialog } from '../DiffDialog.js';
 import { resolveProposalDiffBefore } from '../proposalDiff.js';
@@ -149,6 +150,7 @@ export function InlineThreadCard({
   const summary = proposal
     ? statusLabel(thread, status)
     : `${thread.comments.length} comment${thread.comments.length === 1 ? '' : 's'}`;
+  const anchorQuote = formatAnchorQuote(thread.anchor.quote, 80);
 
   return (
     <article className={cardClasses} data-comment-thread-id={thread.id} tabIndex={-1}>
@@ -188,8 +190,8 @@ export function InlineThreadCard({
             onClick={onJump}
           >
             <span aria-hidden>↗</span>{' '}
-            {thread.anchor.quote
-              ? `"${truncate(thread.anchor.quote, 80)}"`
+            {anchorQuote
+              ? `"${anchorQuote}"`
               : 'Jump to anchor'}
           </button>
         )}
@@ -396,11 +398,6 @@ export function InlineThreadCard({
       )}
     </article>
   );
-}
-
-function truncate(s: string, n: number): string {
-  if (s.length <= n) return s;
-  return `${s.slice(0, n)}…`;
 }
 
 function statusLabel(thread: Thread, status: ReturnType<typeof proposalStatus> | null): string {
