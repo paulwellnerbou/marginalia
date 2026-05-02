@@ -180,20 +180,36 @@ export function locateBlockRange(
   if (!endId || endId === startId) return a;
   const b = all.get(endId);
   if (!b) return null;
-  if (!canMergeMultiBlock(a, b)) return null;
+  if (!canMergeMultiBlock(a, b, 'markdown')) return null;
   const start = Math.min(a.start, b.start);
   const end = Math.max(a.end, b.end);
   return { start, end, kind: 'multi', text: '' };
 }
 
 /**
- * Shared multi-block endpoint predicate. `tableCell` is always
- * unsafe; `listItem` is safe only when paired with another `listItem`
- * in the same parent list (same `parentStart`).
+ * Shared multi-block endpoint predicate.
+ *
+ *   - `tableCell` endpoints are always unsafe (would slice across `|`
+ *     pipes).
+ *   - `listItem` is unsafe in asciidoc regardless of `parentStart`:
+ *     `locateAllBlocksAsciidoc` derives item ranges best-effort
+ *     (single line, no continuation `+` lines), so a multi-listItem
+ *     splice would truncate items with continuations. This rejection
+ *     is explicit, not implicit-via-missing-`parentStart`, so future
+ *     changes to the asciidoc walker can't silently re-enable the
+ *     unsafe path.
+ *   - In markdown, `listItem` is safe only when paired with another
+ *     `listItem` in the same parent list (same `parentStart`).
+ *     Cross-depth and mixed-kind pairings are rejected.
  */
-export function canMergeMultiBlock(a: BlockSourceRange, b: BlockSourceRange): boolean {
+export function canMergeMultiBlock(
+  a: BlockSourceRange,
+  b: BlockSourceRange,
+  format: 'markdown' | 'asciidoc',
+): boolean {
   if (a.kind === 'tableCell' || b.kind === 'tableCell') return false;
   if (a.kind === 'listItem' || b.kind === 'listItem') {
+    if (format === 'asciidoc') return false;
     if (a.kind !== 'listItem' || b.kind !== 'listItem') return false;
     if (a.parentStart === undefined || b.parentStart === undefined) return false;
     return a.parentStart === b.parentStart;

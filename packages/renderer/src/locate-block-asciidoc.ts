@@ -55,7 +55,7 @@ export function locateBlockRangeAsciidoc(
   if (!endId || endId === startId) return a;
   const b = all.get(endId);
   if (!b) return null;
-  if (!canMergeMultiBlock(a, b)) return null;
+  if (!canMergeMultiBlock(a, b, 'asciidoc')) return null;
   const start = Math.min(a.start, b.start);
   const end = Math.max(a.end, b.end);
   return { start, end, kind: 'multi', text: '' };
@@ -105,6 +105,13 @@ function recordSubBlockRange(
   if (!range) return;
   // Every occurrence gets its own entry — counts suffixes duplicates
   // with `#2`, `#3`, …, so ids remain unique.
+  //
+  // Intentionally NOT setting `parentStart`: the multi-listItem path
+  // is unsafe in asciidoc (best-effort `listItemSourceRange` doesn't
+  // cover continuation lines), and `canMergeMultiBlock` rejects
+  // asciidoc listItems explicitly via its `format` argument. Don't
+  // start populating `parentStart` here without first making
+  // continuation ranges accurate.
   out.set(id, { ...range, kind: 'listItem', text });
 }
 

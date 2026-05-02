@@ -278,7 +278,7 @@ export function locateAnchorRange(
   if (!endBlockId || endBlockId === blockId) return startBlock;
   const endBlock = blocks.get(endBlockId);
   if (!endBlock) return null;
-  if (!canMergeMultiBlock(startBlock, endBlock)) return null;
+  if (!canMergeMultiBlock(startBlock, endBlock, doc.format)) return null;
   return {
     start: Math.min(startBlock.start, endBlock.start),
     end: Math.max(startBlock.end, endBlock.end),

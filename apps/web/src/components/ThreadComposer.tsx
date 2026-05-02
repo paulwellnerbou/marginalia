@@ -84,9 +84,10 @@ function ProposalComposerBody({
       blockRanges,
       target.block_id,
       target.end_block_id ?? null,
+      docFormat,
     );
     return range ? docSource.slice(range.start, range.end) : '';
-  }, [docSource, blockRanges, target.block_id, target.end_block_id]);
+  }, [docSource, blockRanges, target.block_id, target.end_block_id, docFormat]);
 
   const [value, setValue] = useState(originalSource);
   const [rationale, setRationale] = useState('');
