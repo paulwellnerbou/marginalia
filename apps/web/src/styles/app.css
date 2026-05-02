@@ -1884,7 +1884,10 @@ button.primary:disabled {
 }
 
 .proposal-source-editor .cm-scroller {
-  padding: 0.35rem 0;
+  /* Match the textarea fallback's 0.65rem 0.85rem padding so the
+     source text sits the same distance from the chrome both before
+     and after the CodeMirror swap. */
+  padding: 0.65rem 0.85rem;
 }
 
 /* Restore the markdown-source font face / size on the textarea

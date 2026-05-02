@@ -35,7 +35,14 @@ function ProposalSourceField({
   const depsRef = useRef<EditorDeps | null>(null);
   const transferFocusRef = useRef(false);
   const transferSelectionRef = useRef<{ from: number; to: number } | null>(null);
+  const transferHeightRef = useRef<number | null>(null);
   const initialValueRef = useRef(initialValue);
+  // IME composition tracking: if the user is mid-composition (CJK
+  // input methods etc.) when the lazy chunks resolve, we defer the
+  // textarea→editor swap until composition finishes, otherwise the
+  // unmount cancels the session and drops the in-progress character.
+  const composingRef = useRef(false);
+  const pendingSwapRef = useRef(false);
 
   const onChangeRef = useRef(onChange);
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
@@ -71,23 +78,41 @@ function ProposalSourceField({
     }
   }, [initialValue]);
 
+  // Snapshot textarea state and trigger the swap. Pulled out so we
+  // can call it both when the loader resolves and when an IME
+  // composition that was blocking the swap finishes.
+  const finishSwapRef = useRef<() => void>(() => {});
+  finishSwapRef.current = () => {
+    const ta = textareaRef.current;
+    if (ta) {
+      if (document.activeElement === ta) {
+        transferFocusRef.current = true;
+        transferSelectionRef.current = {
+          from: ta.selectionStart ?? value.length,
+          to: ta.selectionEnd ?? value.length,
+        };
+      }
+      // Carry the user's chosen height across the swap. The textarea
+      // has `resize: vertical`, so the user may have dragged it
+      // taller; offsetHeight reflects that, and we re-apply it to
+      // the editor wrapper after mount.
+      transferHeightRef.current = ta.offsetHeight;
+    }
+    setPhase('ready');
+  };
+
   useEffect(() => {
     let disposed = false;
     loadEditorDeps(format).then(
       (deps) => {
         if (disposed) return;
         depsRef.current = deps;
-        // Snapshot focus + selection from the textarea *before* React
-        // unmounts it, so we can hand them to CodeMirror seamlessly.
-        const ta = textareaRef.current;
-        if (ta && document.activeElement === ta) {
-          transferFocusRef.current = true;
-          transferSelectionRef.current = {
-            from: ta.selectionStart ?? value.length,
-            to: ta.selectionEnd ?? value.length,
-          };
+        if (composingRef.current) {
+          // Defer until compositionend fires.
+          pendingSwapRef.current = true;
+        } else {
+          finishSwapRef.current();
         }
-        setPhase('ready');
       },
       (err) => {
         reportError('ProposalComposer.editor', err);
@@ -146,6 +171,12 @@ function ProposalSourceField({
     if (sel) {
       view.dispatch({ selection: { anchor: sel.from, head: sel.to } });
     }
+    if (transferHeightRef.current && transferHeightRef.current > 0) {
+      // Preserve any height the user dragged on the textarea before
+      // the swap; the wrapper has `resize: vertical` so they can
+      // continue to adjust it from here.
+      container.style.height = `${transferHeightRef.current}px`;
+    }
     if (transferFocusRef.current) view.focus();
     return () => {
       view.destroy();
@@ -166,6 +197,16 @@ function ProposalSourceField({
       className="composer-body-field proposal-source-field"
       value={value}
       onChange={(e) => updateValue(e.target.value)}
+      onCompositionStart={() => {
+        composingRef.current = true;
+      }}
+      onCompositionEnd={() => {
+        composingRef.current = false;
+        if (pendingSwapRef.current) {
+          pendingSwapRef.current = false;
+          finishSwapRef.current();
+        }
+      }}
       rows={8}
       size="1"
       autoFocus={autoFocus}
