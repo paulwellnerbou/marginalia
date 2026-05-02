@@ -134,16 +134,20 @@ export function SelectionToolbar({ rootRef, docFormat, onAdd, onPropose }: Props
  * Resolve which block(s) the selection range covers.
  *
  *   - Exactly one sub-block touched → single-block proposal at the sub-block id.
- *   - Multiple list-item sub-blocks (markdown only) → multi-block
- *     proposal spanning the first/last list-item ids. Markdown
- *     list-item ranges are line-aligned, so a span splices cleanly
- *     across items. For asciidoc we instead collapse to the parent
- *     list — `locateAllBlocksAsciidoc` derives item ranges
- *     best-effort and doesn't yet cover continuation (`+`) lines, so
- *     a multi-listItem splice would truncate items with continuations.
+ *   - Multiple sibling list-item sub-blocks whose direct parent
+ *     `<ul>`/`<ol>` contains the range's common ancestor (markdown
+ *     only) → multi-block proposal spanning the first/last list-item
+ *     ids. Markdown list-item ranges are line-aligned, so a span
+ *     splices cleanly across items. Asciidoc skips this path because
+ *     `locateAllBlocksAsciidoc` derives item ranges best-effort and
+ *     doesn't yet cover continuation (`+`) lines.
  *   - Multiple table-cell sub-blocks sharing one `<table>` parent →
  *     single-block proposal at the table id. Cell-level multi-block
  *     would slice across `|` pipes and corrupt the table.
+ *   - Sub-blocks whose enclosing top-level container has no
+ *     `[data-block]` (e.g. an asciidoc list whose synthesized parent
+ *     wasn't recorded) → single-block proposal on the first touched
+ *     sub-block, so "Propose edit" stays available.
  *   - One top-level block touched (no sub-blocks involved) → single-block.
  *   - Anything else → multi-block: startId/endId are the first/last
  *     top-level block in DOM order.
@@ -255,22 +259,24 @@ function resolveSpan(
     //   1. All siblings at the same list level (same direct parent
     //      `<ul>`/`<ol>`). Otherwise an inner-bullet→outer-sibling span
     //      crosses the outer item's closing.
-    //   2. Their direct parent `<ul>`/`<ol>` must itself be a top-level
-    //      list (carries `[data-block]`). Without this, a selection
+    //   2. The original selection's `commonAncestorContainer` must be
+    //      contained by that direct parent. Without this, a selection
     //      that starts in an outer item and crosses into its nested
     //      sublist gets pruned by the ancestor-prune pass down to just
-    //      the nested children, and we'd emit a multi-listItem span
-    //      for the nested items — silently dropping the outer item's
-    //      content the user actually selected. The previous behavior
-    //      was to collapse to the outer list; preserve that by falling
-    //      through here when we detect a nested-list situation.
+    //      the nested children — same parent passes constraint 1, but
+    //      the user's outer-item content would be silently dropped.
+    //      The range's common ancestor sits OUTSIDE the nested list
+    //      in that case, so this check distinguishes "user selected
+    //      only nested items" (common ancestor inside the nested list,
+    //      emit multi-item) from "user crossed from outer → nested"
+    //      (common ancestor outside, fall through to collapse).
     const directParent = touched[0]?.parentElement;
     const allSiblingListItems =
       docFormat === 'markdown' &&
       touched.every((el) => el.tagName === 'LI') &&
       touched.every((el) => el.parentElement === directParent) &&
       directParent instanceof HTMLElement &&
-      !!directParent.dataset.block;
+      directParent.contains(range.commonAncestorContainer);
     if (allSiblingListItems) {
       const first = touched[0]!;
       const last = touched[touched.length - 1]!;
