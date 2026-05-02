@@ -250,9 +250,19 @@ function resolveSpan(
     // (line-aligned source). Emit first→last list-item ids so the user
     // can edit a subset of items without dragging the whole list along.
     // Asciidoc skips this branch — see the resolveSpan doc comment.
-    const allListItems =
-      docFormat === 'markdown' && touched.every((el) => el.tagName === 'LI');
-    if (allListItems) {
+    //
+    // Constraint: all touched `<li>`s must be siblings at the *same*
+    // list level (same direct parent `<ul>`/`<ol>`). Without this, a
+    // selection that starts in an outer item and crosses into a nested
+    // sublist gets pruned down to the nested child + a later outer
+    // sibling, producing a span that starts at the inner bullet and
+    // crosses the outer item's closing — corrupting structure on
+    // splice. Mixed-level selections fall through to the collapse path.
+    const allSiblingListItems =
+      docFormat === 'markdown' &&
+      touched.every((el) => el.tagName === 'LI') &&
+      touched.every((el) => el.parentElement === touched[0]!.parentElement);
+    if (allSiblingListItems) {
       const first = touched[0]!;
       const last = touched[touched.length - 1]!;
       return {
