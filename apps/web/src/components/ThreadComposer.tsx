@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Dialog, Flex, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { DocumentFormat } from '../lib/api.js';
+import { reportError } from '../lib/log.js';
 import { mergeBlockRanges } from './mergeBlockRanges.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
@@ -34,26 +35,40 @@ function MarkdownEditorField({
   initialValue,
   onChange,
   autoFocus,
+  ariaLabel,
 }: {
   initialValue: string;
   onChange: (value: string) => void;
   autoFocus?: boolean;
+  ariaLabel?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const onChangeRef = useRef(onChange);
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+  const [loadError, setLoadError] = useState(false);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    // Track real user pointer activity since mount. If the user has
+    // clicked elsewhere (e.g. the Reason field) while the editor was
+    // still loading, don't steal focus when it finishes. Radix's own
+    // initial autofocus moves focus via JS without a pointerdown, so
+    // this still lets the editor claim focus on a normal fast load.
+    let userInteracted = false;
+    const markInteraction = (e: Event) => {
+      if (!container.contains(e.target as Node)) userInteracted = true;
+    };
+    document.addEventListener('pointerdown', markInteraction, true);
+    document.addEventListener('keydown', markInteraction, true);
+
     let view: import('codemirror').EditorView | null = null;
     let disposed = false;
 
-    void loadEditorDeps().then(({ EditorState, EditorView, basicSetup, markdown }) => {
-      if (disposed || !container) return;
-      const state = EditorState.create({
-        doc: initialValue,
-        extensions: [
+    loadEditorDeps().then(
+      ({ EditorState, EditorView, basicSetup, markdown }) => {
+        if (disposed || !container) return;
+        const extensions = [
           basicSetup,
           markdown(),
           EditorView.lineWrapping,
@@ -67,18 +82,37 @@ function MarkdownEditorField({
                 'var(--md-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)',
             },
           }),
-        ],
-      });
-      view = new EditorView({ state, parent: container });
-      if (autoFocus) view.focus();
-    });
+        ];
+        if (ariaLabel) {
+          extensions.push(EditorView.contentAttributes.of({ 'aria-label': ariaLabel }));
+        }
+        const state = EditorState.create({ doc: initialValue, extensions });
+        view = new EditorView({ state, parent: container });
+        if (autoFocus && !userInteracted) view.focus();
+      },
+      (err) => {
+        reportError('ProposalComposer.editor', err);
+        if (!disposed) setLoadError(true);
+      },
+    );
 
     return () => {
       disposed = true;
+      document.removeEventListener('pointerdown', markInteraction, true);
+      document.removeEventListener('keydown', markInteraction, true);
       view?.destroy();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  if (loadError) {
+    return (
+      <div className="proposal-source-editor proposal-source-editor--error">
+        <Text size="2" color="red">
+          Failed to load the editor. Please reload the page and try again.
+        </Text>
+      </div>
+    );
+  }
   return <div ref={containerRef} className="proposal-source-editor" />;
 }
 
@@ -234,6 +268,7 @@ function ProposalComposerBody({
             initialValue={originalSource}
             onChange={setValue}
             autoFocus={!needsName}
+            ariaLabel={`Edited ${formatLabel}`}
           />
         </Flex>
 

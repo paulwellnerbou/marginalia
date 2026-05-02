@@ -1873,6 +1873,14 @@ button.primary:disabled {
   padding: 0.35rem 0;
 }
 
+.proposal-source-editor--error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  text-align: center;
+}
+
 /* ============================================================
  * Diff view (inside DiffDialog)
  * ============================================================ */
