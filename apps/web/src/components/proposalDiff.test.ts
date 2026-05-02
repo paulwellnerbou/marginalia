@@ -64,7 +64,6 @@ test('uses the saved snapshot for accepted proposals so their diff remains visib
     thread: acceptedThread,
     docSource: source,
     blockRanges: makeBlockRanges(source),
-    docFormat: 'markdown',
   });
 
   expect(before).toBe('[5.3](#53-hosting--betrieb)');
@@ -76,7 +75,6 @@ test('uses the live block source for open proposals while the document still dif
     thread: baseThread,
     docSource: source,
     blockRanges: makeBlockRanges(source),
-    docFormat: 'markdown',
   });
 
   expect(before).toBe('5.3');
@@ -88,7 +86,6 @@ test('falls back to the saved snapshot when the live block already matches the p
     thread: baseThread,
     docSource: source,
     blockRanges: makeBlockRanges(source),
-    docFormat: 'markdown',
   });
 
   expect(before).toBe('[5.3](#53-hosting--betrieb)');

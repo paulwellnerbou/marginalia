@@ -5,7 +5,6 @@ import { getEditProposalDiff, isProposal, proposalStatus } from '../../lib/api.j
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import { reportError } from '../../lib/log.js';
 import { DiffDialog } from '../DiffDialog.js';
-import type { DocumentFormat } from '../../lib/api.js';
 import { resolveProposalDiffBefore } from '../proposalDiff.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
 import { InlineComposer, type InlineComposerHandle } from './InlineComposer.js';
@@ -18,7 +17,6 @@ interface Props {
   needsName: boolean;
   docSource: string;
   blockRanges: Map<string, BlockSourceRange>;
-  docFormat: DocumentFormat;
   focused: boolean;
   flashPhase: 'a' | 'b' | null;
   collapsed: boolean;
@@ -44,7 +42,6 @@ export function InlineThreadCard({
   needsName,
   docSource,
   blockRanges,
-  docFormat,
   focused,
   flashPhase,
   collapsed,
@@ -77,8 +74,8 @@ export function InlineThreadCard({
 
   const originalSource = useMemo(() => {
     if (!proposalThread) return '';
-    return resolveProposalDiffBefore({ thread: proposalThread, docSource, blockRanges, docFormat });
-  }, [proposalThread, docSource, blockRanges, docFormat]);
+    return resolveProposalDiffBefore({ thread: proposalThread, docSource, blockRanges });
+  }, [proposalThread, docSource, blockRanges]);
 
   const diffBefore = resolvedDiff?.before ?? originalSource;
   const diffAfter = resolvedDiff?.after ?? proposalThread?.proposal.proposed_text ?? '';

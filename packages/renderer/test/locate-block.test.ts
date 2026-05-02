@@ -294,7 +294,8 @@ Gamma paragraph.
     expect(locateBlockRange(mixed, cell![0], null)).not.toBeNull();
     expect(locateBlockRange(mixed, cell![0], cell![0])).not.toBeNull();
 
-    // listItem-to-listItem multi-block is accepted and spans the items.
+    // Same-list listItem→listItem multi-block is accepted and spans
+    // the items.
     const itemSpan = locateBlockRange(mixed, items[0]![0], items[1]![0]);
     expect(itemSpan).not.toBeNull();
     expect(itemSpan!.kind).toBe('multi');
@@ -302,8 +303,40 @@ Gamma paragraph.
     expect(mixed.slice(itemSpan!.start, itemSpan!.end)).toContain('- two');
     expect(mixed.slice(itemSpan!.start, itemSpan!.end)).not.toContain('- three');
 
-    // listItem-to-paragraph (mixed kinds) is also accepted now —
-    // listItem isn't structural like tableCell.
-    expect(locateBlockRange(mixed, top![0], items[0]![0])).not.toBeNull();
+    // listItem mixed with another kind (paragraph) is rejected — a
+    // paragraph→nested-listItem span would slice through an outer
+    // item's closing, so we conservatively reject all mixed-kind
+    // pairings involving listItem.
+    expect(locateBlockRange(mixed, top![0], items[0]![0])).toBeNull();
+    expect(locateBlockRange(mixed, items[0]![0], top![0])).toBeNull();
+  });
+
+  test('rejects cross-depth listItem endpoints (nested item ↔ outer sibling)', () => {
+    // Outer list with a nested sublist inside the first item. A span
+    // from the nested item to a later outer sibling would slice
+    // through the outer item's closing — `parentStart` differs
+    // (different parent `list` nodes), so the validator must reject.
+    const nested = `- outer1
+  - nested1
+  - nested2
+- outer2
+`;
+    const map = locateAllBlocks(nested);
+    const items = [...map.entries()].filter(([, r]) => r.kind === 'listItem');
+    // Items: outer1, nested1, nested2, outer2 (visit order).
+    expect(items.length).toBe(4);
+    const [outer1, nested1, nested2, outer2] = items;
+
+    // Same parent: nested1 ↔ nested2 (both children of the inner
+    // sublist) accepted.
+    expect(locateBlockRange(nested, nested1![0], nested2![0])).not.toBeNull();
+    // Same parent: outer1 ↔ outer2 (both children of the outer list)
+    // accepted.
+    expect(locateBlockRange(nested, outer1![0], outer2![0])).not.toBeNull();
+
+    // Cross-depth: nested item ↔ outer sibling rejected.
+    expect(locateBlockRange(nested, nested1![0], outer2![0])).toBeNull();
+    expect(locateBlockRange(nested, outer2![0], nested1![0])).toBeNull();
+    expect(locateBlockRange(nested, outer1![0], nested1![0])).toBeNull();
   });
 });

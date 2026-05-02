@@ -1,6 +1,6 @@
 import Asciidoctor from '@asciidoctor/core';
 import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
-import type { BlockSourceRange } from './locate-block.js';
+import { canMergeMultiBlock, type BlockSourceRange } from './locate-block.js';
 
 declare global {
   var __asciidoctor: ReturnType<typeof Asciidoctor> | undefined;
@@ -37,14 +37,12 @@ export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSource
  * `text` is intentionally '' for multi-block (matches the markdown
  * twin); callers slice `source` with `start`/`end` themselves.
  *
- * Validation: when `endId` is non-null, neither endpoint may be a
- * `tableCell` (splicing across `|` pipes would corrupt the table) or a
- * `listItem`. The markdown twin allows `listItem` endpoints, but
- * `listItemSourceRange` here is best-effort — it ends at the start of
- * the *next* source line and doesn't yet cover continuation (`+`)
- * lines, so a multi-listItem splice would truncate any item with a
- * continuation and corrupt the doc. Re-allow once continuations are
- * supported.
+ * Validation goes through the shared `canMergeMultiBlock` predicate,
+ * with one asciidoc-only difference: `listItem` is always rejected
+ * because `listItemSourceRange` is best-effort (single line, no
+ * continuation `+` lines), and we don't populate `parentStart` for
+ * asciidoc list items — so the markdown same-parent path can't admit
+ * them either. Re-allow once continuations are supported.
  */
 export function locateBlockRangeAsciidoc(
   source: string,
@@ -57,14 +55,10 @@ export function locateBlockRangeAsciidoc(
   if (!endId || endId === startId) return a;
   const b = all.get(endId);
   if (!b) return null;
-  if (!isMultiBlockEndpoint(a.kind) || !isMultiBlockEndpoint(b.kind)) return null;
+  if (!canMergeMultiBlock(a, b)) return null;
   const start = Math.min(a.start, b.start);
   const end = Math.max(a.end, b.end);
   return { start, end, kind: 'multi', text: '' };
-}
-
-function isMultiBlockEndpoint(kind: string): boolean {
-  return kind !== 'tableCell' && kind !== 'listItem';
 }
 
 /**

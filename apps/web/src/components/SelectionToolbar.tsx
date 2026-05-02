@@ -288,7 +288,17 @@ function resolveSpan(
     const parents = uniqueOrdered(
       touched.map((el) => topLevelAncestor(el)).filter((el): el is HTMLElement => el !== null),
     );
-    if (parents.length === 0) return null;
+    if (parents.length === 0) {
+      // No `[data-block]` ancestor exists for any touched sub-block
+      // (e.g. an asciidoc list whose enclosing `<ul>` had no
+      // extractable text and so wasn't recorded as a top-level block).
+      // Fall back to a single-block proposal on the first touched
+      // sub-block — better than hiding "Propose edit" entirely.
+      const only = touched[0]!;
+      const id = only.dataset.subblock;
+      if (!id) return null;
+      return { startId: id, endId: null, textEls: [only], blockCount: 1 };
+    }
     const first = parents[0]!;
     const lastP = parents[parents.length - 1]!;
     if (parents.length === 1) {

@@ -1,19 +1,17 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
-import type { DocumentFormat, Thread, ThreadProposalData } from '../lib/api.js';
+import type { Thread, ThreadProposalData } from '../lib/api.js';
 import { mergeBlockRanges } from './mergeBlockRanges.js';
 
 interface ResolveProposalDiffBeforeArgs {
   thread: Thread & { proposal: ThreadProposalData };
   docSource: string;
   blockRanges: Map<string, BlockSourceRange>;
-  docFormat: DocumentFormat;
 }
 
 export function resolveProposalDiffBefore({
   thread,
   docSource,
   blockRanges,
-  docFormat,
 }: ResolveProposalDiffBeforeArgs): string {
   const { proposal } = thread;
   const quoteSnapshot = proposal.source_snapshot ?? thread.anchor.quote ?? '';
@@ -26,7 +24,7 @@ export function resolveProposalDiffBefore({
   const blockId = thread.anchor.block_id;
   if (!blockId) return quoteSnapshot;
 
-  const range = mergeBlockRanges(blockRanges, blockId, thread.anchor.end_block_id ?? null, docFormat);
+  const range = mergeBlockRanges(blockRanges, blockId, thread.anchor.end_block_id ?? null);
   if (!range) return quoteSnapshot;
 
   const liveSource = docSource.slice(range.start, range.end);

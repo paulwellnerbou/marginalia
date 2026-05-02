@@ -6,7 +6,12 @@ export type { DocxExportOptions } from './export-docx.js';
 export { extractDocumentTitle, sanitizeDocumentFilename } from './extract-title.js';
 export { rewriteAssetReferences } from './asset-rewrite.js';
 export type { RewriteOptions as AssetRewriteOptions } from './asset-rewrite.js';
-export { locateBlockSource, locateAllBlocks, locateBlockRange } from './locate-block.js';
+export {
+  canMergeMultiBlock,
+  locateAllBlocks,
+  locateBlockRange,
+  locateBlockSource,
+} from './locate-block.js';
 export { locateAllBlocksAsciidoc, locateBlockRangeAsciidoc } from './locate-block-asciidoc.js';
 export type { BlockSourceRange } from './locate-block.js';
 export type {

@@ -1402,7 +1402,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   docElementRef={docRef}
                   scrollContainerRef={docScrollRef}
                   blockRanges={blockRanges}
-                  docFormat={doc.format}
                   canComment={canComment}
                   stackingEnabled={inlineCommentsStacking}
                   onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
@@ -1482,7 +1481,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   threads={threads}
                   docSource={liveSource}
                   blockRanges={blockRanges}
-                  docFormat={doc.format}
                   canComment={canComment}
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}

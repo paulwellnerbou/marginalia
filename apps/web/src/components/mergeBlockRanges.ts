@@ -1,5 +1,4 @@
-import type { BlockSourceRange } from '@marginalia/renderer';
-import type { DocumentFormat } from '../lib/api.js';
+import { canMergeMultiBlock, type BlockSourceRange } from '@marginalia/renderer';
 
 /**
  * Resolve a (possibly multi-block) source span from the renderer's
@@ -13,31 +12,24 @@ import type { DocumentFormat } from '../lib/api.js';
  * because `text` and `kind` are only meaningful for single blocks; a
  * merged span has no single normalized text.
  *
- * Validation mirrors the server's `locateAnchorRange`: when `endId` is
- * non-null, neither endpoint may be a `tableCell` (splicing across `|`
- * pipes would corrupt the table). For markdown, `listItem` endpoints
- * are allowed; for asciidoc they're rejected because the asciidoc
- * renderer's per-item source range is single-line / best-effort and
- * doesn't yet cover continuation (`+`) lines, so a multi-listItem
- * splice would truncate items with continuations.
+ * Validation goes through the renderer's `canMergeMultiBlock`:
+ * `tableCell` endpoints are always rejected; `listItem` endpoints are
+ * accepted only when both endpoints are `listItem` AND share the same
+ * `parentStart` (same parent list, same nesting depth). Asciidoc
+ * rejects all listItem multi-block via the same predicate because the
+ * asciidoc walker doesn't populate `parentStart` (and its per-item
+ * source range is best-effort anyway).
  */
 export function mergeBlockRanges(
   ranges: Map<string, BlockSourceRange>,
   startId: string,
   endId: string | null,
-  format: DocumentFormat,
 ): { start: number; end: number } | null {
   const a = ranges.get(startId);
   if (!a) return null;
   if (!endId || endId === startId) return { start: a.start, end: a.end };
   const b = ranges.get(endId);
   if (!b) return null;
-  if (!isMultiBlockEndpoint(a.kind, format) || !isMultiBlockEndpoint(b.kind, format)) return null;
+  if (!canMergeMultiBlock(a, b)) return null;
   return { start: Math.min(a.start, b.start), end: Math.max(a.end, b.end) };
-}
-
-function isMultiBlockEndpoint(kind: string, format: DocumentFormat): boolean {
-  if (kind === 'tableCell') return false;
-  if (kind === 'listItem' && format === 'asciidoc') return false;
-  return true;
 }
