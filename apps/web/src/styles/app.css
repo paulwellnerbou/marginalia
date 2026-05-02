@@ -1853,9 +1853,13 @@ button.primary:disabled {
  * Edit proposals
  * ============================================================ */
 
-/* CodeMirror editor used for the markdown source field in the edit
-   proposal dialog. Styled to match the textarea look of other composer
-   fields: same border, radius, background, and min-height. */
+/* CodeMirror editor used for the proposal source field (Markdown or
+   AsciiDoc, depending on the document format). Styled to match the
+   textarea look of other composer fields: same border, radius,
+   background, and min-height. While the editor's lazy chunks are
+   loading — or if they fail outright — the field falls back to the
+   textarea styled by the .composer .composer-body-field rules above,
+   so the dialog stays usable in both transient and degraded states. */
 .proposal-source-editor {
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-control-radius);
@@ -1873,12 +1877,12 @@ button.primary:disabled {
   padding: 0.35rem 0;
 }
 
-.proposal-source-editor--error {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1rem;
-  text-align: center;
+/* Restore the markdown-source font face / size on the textarea
+   fallback, matching the CodeMirror editor's monospace styling. */
+.edit-proposal-composer .proposal-source-field :is(textarea, .rt-TextAreaInput) {
+  font-family: var(--md-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 0.875rem;
+  min-height: calc(var(--ui-control-height) * 5);
 }
 
 /* ============================================================

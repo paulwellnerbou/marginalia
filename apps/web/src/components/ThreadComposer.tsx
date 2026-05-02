@@ -32,88 +32,116 @@ function loadEditorDeps(): Promise<EditorDeps> {
 }
 
 function MarkdownEditorField({
+  id,
   initialValue,
   onChange,
   autoFocus,
-  ariaLabel,
+  ariaLabelledBy,
 }: {
+  id: string;
   initialValue: string;
   onChange: (value: string) => void;
   autoFocus?: boolean;
-  ariaLabel?: string;
+  ariaLabelledBy?: string;
 }) {
+  // Render a plain <textarea> first and swap to CodeMirror once the
+  // lazy chunks resolve. This keeps the field focusable from the
+  // moment the dialog opens (so Radix's autofocus has a real target
+  // to land on, even on a cold chunk load) and turns a chunk-load
+  // failure into a graceful fallback instead of a dead dialog.
+  const [value, setValue] = useState(initialValue);
+  const [phase, setPhase] = useState<'loading' | 'ready' | 'failed'>('loading');
   const containerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const depsRef = useRef<EditorDeps | null>(null);
+  const transferFocusRef = useRef(false);
+  const transferSelectionRef = useRef<{ from: number; to: number } | null>(null);
+
   const onChangeRef = useRef(onChange);
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
-  const [loadError, setLoadError] = useState(false);
+  useEffect(() => { onChangeRef.current(value); }, [value]);
 
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    // Track real user pointer activity since mount. If the user has
-    // clicked elsewhere (e.g. the Reason field) while the editor was
-    // still loading, don't steal focus when it finishes. Radix's own
-    // initial autofocus moves focus via JS without a pointerdown, so
-    // this still lets the editor claim focus on a normal fast load.
-    let userInteracted = false;
-    const markInteraction = (e: Event) => {
-      if (!container.contains(e.target as Node)) userInteracted = true;
-    };
-    document.addEventListener('pointerdown', markInteraction, true);
-    document.addEventListener('keydown', markInteraction, true);
-
-    let view: import('codemirror').EditorView | null = null;
     let disposed = false;
-
     loadEditorDeps().then(
-      ({ EditorState, EditorView, basicSetup, markdown }) => {
-        if (disposed || !container) return;
-        const extensions = [
-          basicSetup,
-          markdown(),
-          EditorView.lineWrapping,
-          EditorView.updateListener.of((u) => {
-            if (u.docChanged) onChangeRef.current(u.state.doc.toString());
-          }),
-          EditorView.theme({
-            '&': { fontSize: '0.875rem' },
-            '.cm-scroller': {
-              fontFamily:
-                'var(--md-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)',
-            },
-          }),
-        ];
-        if (ariaLabel) {
-          extensions.push(EditorView.contentAttributes.of({ 'aria-label': ariaLabel }));
+      (deps) => {
+        if (disposed) return;
+        depsRef.current = deps;
+        // Snapshot focus + selection from the textarea *before* React
+        // unmounts it, so we can hand them to CodeMirror seamlessly.
+        const ta = textareaRef.current;
+        if (ta && document.activeElement === ta) {
+          transferFocusRef.current = true;
+          transferSelectionRef.current = {
+            from: ta.selectionStart ?? value.length,
+            to: ta.selectionEnd ?? value.length,
+          };
         }
-        const state = EditorState.create({ doc: initialValue, extensions });
-        view = new EditorView({ state, parent: container });
-        if (autoFocus && !userInteracted) view.focus();
+        setPhase('ready');
       },
       (err) => {
         reportError('ProposalComposer.editor', err);
-        if (!disposed) setLoadError(true);
+        if (!disposed) setPhase('failed');
       },
     );
-
-    return () => {
-      disposed = true;
-      document.removeEventListener('pointerdown', markInteraction, true);
-      document.removeEventListener('keydown', markInteraction, true);
-      view?.destroy();
-    };
+    return () => { disposed = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (loadError) {
+  useEffect(() => {
+    if (phase !== 'ready') return;
+    const container = containerRef.current;
+    const deps = depsRef.current;
+    if (!container || !deps) return;
+    const { EditorState, EditorView, basicSetup, markdown } = deps;
+    const extensions: import('@codemirror/state').Extension[] = [
+      basicSetup,
+      markdown(),
+      EditorView.lineWrapping,
+      EditorView.updateListener.of((u) => {
+        if (u.docChanged) setValue(u.state.doc.toString());
+      }),
+      EditorView.theme({
+        '&': { fontSize: '0.875rem' },
+        '.cm-scroller': {
+          fontFamily:
+            'var(--md-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)',
+        },
+      }),
+    ];
+    if (ariaLabelledBy) {
+      extensions.push(EditorView.contentAttributes.of({ 'aria-labelledby': ariaLabelledBy }));
+    }
+    const sel = transferSelectionRef.current;
+    const state = EditorState.create({
+      doc: value,
+      extensions,
+      selection: sel ? { anchor: sel.from, head: sel.to } : undefined,
+    });
+    const view = new EditorView({ state, parent: container });
+    if (transferFocusRef.current) view.focus();
+    return () => { view.destroy(); };
+  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (phase === 'ready') {
     return (
-      <div className="proposal-source-editor proposal-source-editor--error">
-        <Text size="2" color="red">
-          Failed to load the editor. Please reload the page and try again.
-        </Text>
-      </div>
+      <div ref={containerRef} className="proposal-source-editor" data-proposal-source-id={id} />
     );
   }
-  return <div ref={containerRef} className="proposal-source-editor" />;
+  // 'loading' or 'failed' — both render a usable textarea so the user
+  // can always edit the proposal source. The visible label uses
+  // htmlFor={id}, which keeps the association live in this state.
+  return (
+    <TextArea
+      ref={textareaRef}
+      id={id}
+      className="composer-body-field proposal-source-field"
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      rows={8}
+      size="1"
+      autoFocus={autoFocus}
+    />
+  );
 }
 
 // Proposal dialog composer — used for new edit proposals.
@@ -260,15 +288,33 @@ function ProposalComposerBody({
         )}
 
         <Flex direction="column" gap="1">
-          <Text as="label" size="2">
+          <Text
+            as="label"
+            size="2"
+            htmlFor="proposal-text"
+            id="proposal-text-label"
+            onClick={(e) => {
+              // htmlFor focuses the textarea in fallback mode. In
+              // CodeMirror mode the field is a div, so re-route the
+              // click to the contenteditable so the visible label
+              // still acts as a focus affordance.
+              const cm = document
+                .querySelector('[data-proposal-source-id="proposal-text"] .cm-content');
+              if (cm instanceof HTMLElement) {
+                e.preventDefault();
+                cm.focus();
+              }
+            }}
+          >
             Edited {formatLabel}
           </Text>
           <MarkdownEditorField
             key={`${target.block_id}-${target.end_block_id ?? ''}`}
+            id="proposal-text"
             initialValue={originalSource}
             onChange={setValue}
             autoFocus={!needsName}
-            ariaLabel={`Edited ${formatLabel}`}
+            ariaLabelledBy="proposal-text-label"
           />
         </Flex>
 
