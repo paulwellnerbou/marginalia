@@ -19,6 +19,27 @@ export interface BlockSourceRange {
   end: number;
   kind: string;
   text: string;
+  /**
+   * For sub-block entries (`listItem` / `tableCell`), the source-offset
+   * identifier of the directly-enclosing parent (the `list` / `table`
+   * node's `start`). Two sub-blocks with the same `parentStart` are
+   * siblings in the same parent; different values mean different lists
+   * or different nesting depths. Multi-block validation uses this to
+   * reject cross-depth listItem spans, which would slice across an
+   * outer item's closing.
+   *
+   * For markdown listItems, `parentStart` is set ONLY when the parent
+   * list begins at column 1 (the character preceding the list's start
+   * offset is `\n`, or the list is at offset 0). Indented and quoted
+   * lists (`  - item`, `> - item`) leave it unset, because the mdast
+   * item position starts at the bullet and a min/max splice between
+   * sibling items would drop the leading indent / `>` prefix on every
+   * line after the first — corrupting the structure.
+   *
+   * Undefined for top-level entries — they have no enclosing sub-block
+   * parent.
+   */
+  parentStart?: number;
 }
 
 /** Build a map of every top-level block's id → source range. Use this when
@@ -52,7 +73,7 @@ export function locateAllBlocks(markdown: string): Map<string, BlockSourceRange>
   // their own source range — including duplicate-content siblings, each
   // of which gets its own `#n` suffix via computeSubBlockId.
   const subBlockCounts = new Map<string, number>();
-  visit(tree, (node) => {
+  visit(tree, (node, _index, parent) => {
     if (node.type !== 'listItem' && node.type !== 'tableCell') return;
     const text = normalizeBlockText(mdastToString(node));
     if (!text) return;
@@ -60,9 +81,30 @@ export function locateAllBlocks(markdown: string): Map<string, BlockSourceRange>
     if (!pos || pos.start.offset === undefined || pos.end.offset === undefined) return;
     const range = narrowedRange(node, pos.start.offset, pos.end.offset);
     const id = computeSubBlockId(node.type, text, subBlockCounts);
+    // Parent identifier: the enclosing `list` / `table` node's start
+    // offset. Two sub-blocks with the same `parentStart` are siblings;
+    // different values mean different parents (different lists,
+    // different tables, or different nesting depths for nested lists).
+    //
+    // Gate to column-1 parents: a list at indent > 0 (nested under a
+    // listItem, blockquote, etc.) has items whose mdast position
+    // starts at the bullet, so a min/max splice between sibling items
+    // would drop the indent / `>` prefix on every line after the
+    // first. Leave `parentStart` unset in that case so
+    // `canMergeMultiBlock` rejects multi-block on those items.
+    const parentStart = parent?.position?.start?.offset;
+    const parentAtColumnOne =
+      parentStart !== undefined &&
+      (parentStart === 0 || markdown.charCodeAt(parentStart - 1) === 0x0a);
     // Unique per occurrence, so no `has` guard — every duplicate gets its
     // own entry pointing at its own source range.
-    out.set(id, { start: range.start, end: range.end, kind: node.type, text });
+    out.set(id, {
+      start: range.start,
+      end: range.end,
+      kind: node.type,
+      text,
+      ...(parentAtColumnOne ? { parentStart } : {}),
+    });
   });
 
   return out;
@@ -127,11 +169,17 @@ export function locateBlockSource(
  * Returns the start block's range when `endId` is null/equal to start.
  * Returns null if either id is missing — callers treat that as orphaned.
  *
- * Validation: when `endId` is non-null, both endpoints must be
- * top-level blocks (not `listItem` / `tableCell`). A sub-block endpoint
- * would point inside structural markup — splicing across pipes or list
- * bullets would corrupt the document — so we return null. This matches
- * the server's `locateAnchorRange` and the frontend's `mergeBlockRanges`.
+ * Validation: when `endId` is non-null:
+ *   - `tableCell` endpoints are always rejected (splicing across `|`
+ *     pipes would corrupt the table).
+ *   - `listItem` endpoints are allowed only when BOTH endpoints are
+ *     `listItem` AND share the same parent list (`parentStart`
+ *     equal). A cross-depth span (nested item ↔ outer sibling) would
+ *     slice through an outer item's closing; mixing `listItem` with
+ *     another kind could also cross structural boundaries when the
+ *     item is nested. Both cases return null.
+ * Matches the server's `locateAnchorRange` and the frontend's
+ * `mergeBlockRanges`.
  *
  * Note on `text`: for single-block ranges, `BlockSourceRange.text` is
  * the *normalized* block text (used for ID hashing). A merged
@@ -150,12 +198,39 @@ export function locateBlockRange(
   if (!endId || endId === startId) return a;
   const b = all.get(endId);
   if (!b) return null;
-  if (!isTopLevelKind(a.kind) || !isTopLevelKind(b.kind)) return null;
+  if (!canMergeMultiBlock(a, b, 'markdown')) return null;
   const start = Math.min(a.start, b.start);
   const end = Math.max(a.end, b.end);
   return { start, end, kind: 'multi', text: '' };
 }
 
-function isTopLevelKind(kind: string): boolean {
-  return kind !== 'listItem' && kind !== 'tableCell';
+/**
+ * Shared multi-block endpoint predicate.
+ *
+ *   - `tableCell` endpoints are always unsafe (would slice across `|`
+ *     pipes).
+ *   - `listItem` is unsafe in asciidoc regardless of `parentStart`:
+ *     `locateAllBlocksAsciidoc` derives item ranges best-effort
+ *     (single line, no continuation `+` lines), so a multi-listItem
+ *     splice would truncate items with continuations. This rejection
+ *     is explicit, not implicit-via-missing-`parentStart`, so future
+ *     changes to the asciidoc walker can't silently re-enable the
+ *     unsafe path.
+ *   - In markdown, `listItem` is safe only when paired with another
+ *     `listItem` in the same parent list (same `parentStart`).
+ *     Cross-depth and mixed-kind pairings are rejected.
+ */
+export function canMergeMultiBlock(
+  a: BlockSourceRange,
+  b: BlockSourceRange,
+  format: 'markdown' | 'asciidoc',
+): boolean {
+  if (a.kind === 'tableCell' || b.kind === 'tableCell') return false;
+  if (a.kind === 'listItem' || b.kind === 'listItem') {
+    if (format === 'asciidoc') return false;
+    if (a.kind !== 'listItem' || b.kind !== 'listItem') return false;
+    if (a.parentStart === undefined || b.parentStart === undefined) return false;
+    return a.parentStart === b.parentStart;
+  }
+  return true;
 }

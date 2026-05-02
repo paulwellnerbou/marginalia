@@ -1,6 +1,7 @@
+import type { BlockSourceRange } from '@marginalia/renderer';
 import { useEffect, useState } from 'react';
 import { captureSelection, selectionRect } from '../lib/selection.js';
-import type { CommentAnchor } from '../lib/api.js';
+import type { CommentAnchor, DocumentFormat } from '../lib/api.js';
 
 export interface ProposalTarget {
   block_id: string;
@@ -17,6 +18,8 @@ export interface ProposalTarget {
 
 interface Props {
   rootRef: React.RefObject<HTMLElement | null>;
+  docFormat: DocumentFormat;
+  blockRanges: Map<string, BlockSourceRange>;
   onAdd: (anchor: CommentAnchor) => void;
   onPropose?: (target: ProposalTarget) => void;
 }
@@ -43,7 +46,7 @@ interface ResolvedSpan {
  * `block_id` plus optional `end_block_id` so the server can splice the
  * entire range.
  */
-export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
+export function SelectionToolbar({ rootRef, docFormat, blockRanges, onAdd, onPropose }: Props) {
   const [state, setState] = useState<{ rect: DOMRect; span: ResolvedSpan | null } | null>(null);
 
   useEffect(() => {
@@ -65,12 +68,12 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
         setState(null);
         return;
       }
-      const span = resolveSpan(root, range);
+      const span = resolveSpan(root, range, docFormat, blockRanges);
       setState({ rect, span });
     };
     document.addEventListener('selectionchange', handle);
     return () => document.removeEventListener('selectionchange', handle);
-  }, [rootRef]);
+  }, [rootRef, docFormat, blockRanges]);
 
   if (!state) return null;
 
@@ -133,14 +136,30 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
  * Resolve which block(s) the selection range covers.
  *
  *   - Exactly one sub-block touched → single-block proposal at the sub-block id.
- *   - Multiple sub-blocks all sharing one `[data-block]` parent → single-block
- *     proposal at the parent id (covers "all list items in one list",
- *     "all cells in one table").
+ *   - Multiple sibling list-item sub-blocks of a top-level markdown
+ *     list (their direct `<ul>`/`<ol>` parent carries `[data-block]`)
+ *     → multi-block proposal spanning the first/last list-item ids.
+ *     Items in nested lists, lists inside blockquotes, or asciidoc
+ *     lists don't qualify — splicing across their bullets would
+ *     drop the indent/`>` prefix or hit best-effort source ranges,
+ *     so we fall through to collapse-to-parent.
+ *   - Multiple table-cell sub-blocks sharing one `<table>` parent →
+ *     single-block proposal at the table id. Cell-level multi-block
+ *     would slice across `|` pipes and corrupt the table.
+ *   - Sub-blocks whose enclosing top-level container has no
+ *     `[data-block]` (e.g. an asciidoc list whose synthesized parent
+ *     wasn't recorded) → single-block proposal on the first touched
+ *     sub-block, so "Propose edit" stays available.
  *   - One top-level block touched (no sub-blocks involved) → single-block.
  *   - Anything else → multi-block: startId/endId are the first/last
  *     top-level block in DOM order.
  */
-function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
+function resolveSpan(
+  root: HTMLElement,
+  range: Range,
+  docFormat: DocumentFormat,
+  blockRanges: Map<string, BlockSourceRange>,
+): ResolvedSpan | null {
   // Narrow the search to the selection's common ancestor subtree —
   // `selectionchange` fires on every keystroke / drag tick, and a full
   // `root.querySelectorAll` over a large document would be wasteful.
@@ -224,9 +243,7 @@ function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
     return { startId: id, endId: null, textEls: [nearest], blockCount: 1 };
   }
 
-  // Sub-block-only selection: if every touched element is a sub-block
-  // (no top-level data-block in the touched set) and they all share one
-  // top-level ancestor, expand to that ancestor.
+  // Sub-block-only selection.
   const subBlocksOnly = touched.every(
     (el) => !!el.dataset.subblock && !el.dataset.block,
   );
@@ -236,6 +253,52 @@ function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
       const id = only.dataset.subblock!;
       return { startId: id, endId: null, textEls: [only], blockCount: 1 };
     }
+    // List items splice cleanly as a multi-block range in markdown
+    // only when the validator (`canMergeMultiBlock`) would accept the
+    // pair. We check directly against the block-range map so the UI
+    // doesn't propose splices the server then rejects:
+    //
+    //   1. Both items must be siblings at the same list level (same
+    //      direct parent `<ul>`/`<ol>`). Otherwise an
+    //      inner-bullet→outer-sibling span crosses the outer item's
+    //      closing.
+    //   2. Both items' resolved `BlockSourceRange.parentStart` must
+    //      be defined and equal. The locator only sets `parentStart`
+    //      for items in lists that begin at column 1 (offset 0 or
+    //      preceded by `\n`); indented or blockquoted lists leave it
+    //      unset, so this check naturally excludes them.
+    //
+    // The earlier `directParent.dataset.block` heuristic was close
+    // but not exact — a markdown list indented 1–3 spaces is still a
+    // top-level mdast node and gets `data-block`, yet its items lack
+    // `parentStart`. Going through `blockRanges` gives the same rule
+    // the validator uses.
+    const directParent = touched[0]?.parentElement;
+    const firstParentStart =
+      docFormat === 'markdown' &&
+      touched.length > 0 &&
+      touched.every((el) => el.tagName === 'LI') &&
+      touched.every((el) => el.parentElement === directParent)
+        ? blockRanges.get(touched[0]!.dataset.subblock ?? '')?.parentStart
+        : undefined;
+    const allSiblingListItems =
+      firstParentStart !== undefined &&
+      touched.every(
+        (el) =>
+          blockRanges.get(el.dataset.subblock ?? '')?.parentStart === firstParentStart,
+      );
+    if (allSiblingListItems) {
+      const first = touched[0]!;
+      const last = touched[touched.length - 1]!;
+      return {
+        startId: first.dataset.subblock!,
+        endId: last.dataset.subblock!,
+        textEls: touched,
+        blockCount: touched.length,
+      };
+    }
+    // Table cells: collapse to the shared `<table>` parent. A
+    // cell-level multi-block span would slice across `|` pipes.
     const sharedParent = sharedTopLevelAncestor(touched);
     if (sharedParent && sharedParent.dataset.block) {
       return {
@@ -245,11 +308,22 @@ function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
         blockCount: 1,
       };
     }
-    // Different parents: fall through to multi-block on the parents.
+    // Different parents (e.g. cells from different tables): fall
+    // through to multi-block on the parents.
     const parents = uniqueOrdered(
       touched.map((el) => topLevelAncestor(el)).filter((el): el is HTMLElement => el !== null),
     );
-    if (parents.length === 0) return null;
+    if (parents.length === 0) {
+      // No `[data-block]` ancestor exists for any touched sub-block
+      // (e.g. an asciidoc list whose enclosing `<ul>` had no
+      // extractable text and so wasn't recorded as a top-level block).
+      // Fall back to a single-block proposal on the first touched
+      // sub-block — better than hiding "Propose edit" entirely.
+      const only = touched[0]!;
+      const id = only.dataset.subblock;
+      if (!id) return null;
+      return { startId: id, endId: null, textEls: [only], blockCount: 1 };
+    }
     const first = parents[0]!;
     const lastP = parents[parents.length - 1]!;
     if (parents.length === 1) {

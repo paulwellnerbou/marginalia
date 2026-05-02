@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
+import { canMergeMultiBlock, locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { DocumentRow, EditProposalThreadRow } from '../db.js';
 import type { Realtime } from '../realtime.js';
@@ -45,12 +45,12 @@ const PROPOSAL_SELECT = `
 export function reanchorProposals(
   db: Database,
   docUid: string,
-  presentBlockIds: string[],
+  blocks: Map<string, BlockSourceRange>,
+  format: 'markdown' | 'asciidoc',
   now: number,
   realtime?: Realtime,
   exceptClientId?: string,
 ): EditProposalThreadRow[] {
-  const present = new Set(presentBlockIds);
   const open = db
     .prepare(
       `${PROPOSAL_SELECT}
@@ -65,9 +65,25 @@ export function reanchorProposals(
   );
   const orphaned: EditProposalThreadRow[] = [];
   for (const p of open) {
-    const startMissing = !p.anchor_block_id || !present.has(p.anchor_block_id);
-    const endMissing = p.anchor_end_block_id != null && !present.has(p.anchor_end_block_id);
-    if (startMissing || endMissing) {
+    const startBlock = p.anchor_block_id ? blocks.get(p.anchor_block_id) : undefined;
+    const startMissing = !p.anchor_block_id || !startBlock;
+    let endMissing = false;
+    let structurallyInvalid = false;
+    if (!startMissing && p.anchor_end_block_id != null) {
+      const endBlock = blocks.get(p.anchor_end_block_id);
+      if (!endBlock) {
+        endMissing = true;
+      } else if (!canMergeMultiBlock(startBlock!, endBlock, format)) {
+        // Both endpoint IDs still resolve, but the multi-block span
+        // is no longer structurally safe (e.g. an upstream edit moved
+        // one item into a different list depth, or what was a
+        // top-level list is now nested/quoted). Orphan so the
+        // proposal doesn't sit "linked" until someone tries to
+        // diff or accept it.
+        structurallyInvalid = true;
+      }
+    }
+    if (startMissing || endMissing || structurallyInvalid) {
       markComment.run(now, p.id);
       const fresh = loadProposalRow(db, p.id, docUid);
       if (fresh) {
@@ -250,10 +266,18 @@ function readProposalBlockSource(
  * and the multi-block endpoint validation so accept, diff, and orphan
  * paths can't drift apart.
  *
- * Validation: when `endBlockId` is set, both endpoints MUST resolve to
- * top-level blocks (not `listItem` / `tableCell`). A sub-block endpoint
- * would point inside structural markup — splicing across pipes or list
- * bullets would corrupt the document — so we treat that as orphaned.
+ * Validation goes through the renderer's `canMergeMultiBlock`:
+ *   - `tableCell` endpoints are always rejected (would slice across
+ *     `|` pipes).
+ *   - `listItem` endpoints are accepted only when both endpoints are
+ *     `listItem` AND share the same `parentStart` (same parent list,
+ *     same nesting depth). The asciidoc walker doesn't populate
+ *     `parentStart` for items, so asciidoc multi-listItem is rejected
+ *     here too — this also covers the best-effort
+ *     `listItemSourceRange` (no continuation support).
+ *   - Cross-depth or cross-list listItem spans, or `listItem` paired
+ *     with a different kind, are rejected to avoid splicing across
+ *     structural boundaries.
  *
  * The merged range is computed directly from the per-block map we
  * already built — no second parse via `locateBlockRange*`.
@@ -270,17 +294,13 @@ export function locateAnchorRange(
   if (!endBlockId || endBlockId === blockId) return startBlock;
   const endBlock = blocks.get(endBlockId);
   if (!endBlock) return null;
-  if (!isTopLevelKind(startBlock.kind) || !isTopLevelKind(endBlock.kind)) return null;
+  if (!canMergeMultiBlock(startBlock, endBlock, doc.format)) return null;
   return {
     start: Math.min(startBlock.start, endBlock.start),
     end: Math.max(startBlock.end, endBlock.end),
     kind: 'multi',
     text: '',
   };
-}
-
-function isTopLevelKind(kind: string | undefined): boolean {
-  return !!kind && kind !== 'listItem' && kind !== 'tableCell';
 }
 
 export function locateDocumentBlocks(doc: DocumentRow, source: string): Map<string, BlockSourceRange> {

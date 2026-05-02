@@ -399,4 +399,33 @@ Gamma paragraph.
     expect(locateBlockRangeAsciidoc(src, a!, 'nope')).toBeNull();
     expect(locateBlockRangeAsciidoc(src, 'nope', a!)).toBeNull();
   });
+
+  test('rejects listItem endpoints (asciidoc-only restriction) when endId is set', () => {
+    // The markdown twin accepts `listItem` endpoints, but asciidoc's
+    // `listItemSourceRange` is best-effort and doesn't yet cover
+    // continuation (`+`) lines, so a multi-listItem splice would
+    // truncate items with continuations. Reject for now; sanity-check
+    // that single-block listItem ranges still work.
+    const listSrc = `Intro paragraph.
+
+* one
+* two
+* three
+`;
+    const map = locateAllBlocksAsciidoc(listSrc);
+    const para = [...map.entries()].find(([, r]) => r.kind === 'paragraph');
+    const items = [...map.entries()].filter(([, r]) => r.kind === 'listItem');
+    expect(para).toBeDefined();
+    expect(items.length).toBe(3);
+
+    // listItem→listItem and listItem↔paragraph multi-block: rejected.
+    expect(locateBlockRangeAsciidoc(listSrc, items[0]![0], items[1]![0])).toBeNull();
+    expect(locateBlockRangeAsciidoc(listSrc, items[0]![0], items[2]![0])).toBeNull();
+    expect(locateBlockRangeAsciidoc(listSrc, para![0], items[0]![0])).toBeNull();
+    expect(locateBlockRangeAsciidoc(listSrc, items[0]![0], para![0])).toBeNull();
+
+    // Single-block listItem path is unaffected.
+    expect(locateBlockRangeAsciidoc(listSrc, items[0]![0], null)).not.toBeNull();
+    expect(locateBlockRangeAsciidoc(listSrc, items[0]![0], items[0]![0])).not.toBeNull();
+  });
 });

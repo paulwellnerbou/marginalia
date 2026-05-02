@@ -9,6 +9,7 @@ import {
   reconcileThreadCollapseState,
   type ThreadCollapseState,
 } from '../threadCollapseState.js';
+import type { DocumentFormat } from '../../lib/api.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 
@@ -27,6 +28,7 @@ interface Props {
   threads: Thread[];
   docSource: string;
   blockRanges: Map<string, BlockSourceRange>;
+  docFormat: DocumentFormat;
   canComment: boolean;
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number } | null;
@@ -72,6 +74,7 @@ export function InlineCommentsList({
   threads,
   docSource,
   blockRanges,
+  docFormat,
   canComment,
   pendingAnchor,
   focusedThread,
@@ -248,6 +251,7 @@ export function InlineCommentsList({
         needsName={!displayName}
         docSource={docSource}
         blockRanges={blockRanges}
+        docFormat={docFormat}
         focused={focusedId === item.id}
         flashPhase={flash?.id === item.id ? flash.phase : null}
         collapsed={collapsed.has(item.id)}
