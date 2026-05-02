@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { captureSelection, selectionRect } from '../lib/selection.js';
-import type { CommentAnchor } from '../lib/api.js';
+import type { CommentAnchor, DocumentFormat } from '../lib/api.js';
 
 export interface ProposalTarget {
   block_id: string;
@@ -17,6 +17,7 @@ export interface ProposalTarget {
 
 interface Props {
   rootRef: React.RefObject<HTMLElement | null>;
+  docFormat: DocumentFormat;
   onAdd: (anchor: CommentAnchor) => void;
   onPropose?: (target: ProposalTarget) => void;
 }
@@ -43,7 +44,7 @@ interface ResolvedSpan {
  * `block_id` plus optional `end_block_id` so the server can splice the
  * entire range.
  */
-export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
+export function SelectionToolbar({ rootRef, docFormat, onAdd, onPropose }: Props) {
   const [state, setState] = useState<{ rect: DOMRect; span: ResolvedSpan | null } | null>(null);
 
   useEffect(() => {
@@ -65,12 +66,12 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
         setState(null);
         return;
       }
-      const span = resolveSpan(root, range);
+      const span = resolveSpan(root, range, docFormat);
       setState({ rect, span });
     };
     document.addEventListener('selectionchange', handle);
     return () => document.removeEventListener('selectionchange', handle);
-  }, [rootRef]);
+  }, [rootRef, docFormat]);
 
   if (!state) return null;
 
@@ -133,9 +134,13 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
  * Resolve which block(s) the selection range covers.
  *
  *   - Exactly one sub-block touched → single-block proposal at the sub-block id.
- *   - Multiple list-item sub-blocks (any parent grouping) → multi-block
- *     proposal spanning the first/last list-item ids. List-item ranges
- *     are line-aligned, so a span splices cleanly across items.
+ *   - Multiple list-item sub-blocks (markdown only) → multi-block
+ *     proposal spanning the first/last list-item ids. Markdown
+ *     list-item ranges are line-aligned, so a span splices cleanly
+ *     across items. For asciidoc we instead collapse to the parent
+ *     list — `locateAllBlocksAsciidoc` derives item ranges
+ *     best-effort and doesn't yet cover continuation (`+`) lines, so
+ *     a multi-listItem splice would truncate items with continuations.
  *   - Multiple table-cell sub-blocks sharing one `<table>` parent →
  *     single-block proposal at the table id. Cell-level multi-block
  *     would slice across `|` pipes and corrupt the table.
@@ -143,7 +148,11 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
  *   - Anything else → multi-block: startId/endId are the first/last
  *     top-level block in DOM order.
  */
-function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
+function resolveSpan(
+  root: HTMLElement,
+  range: Range,
+  docFormat: DocumentFormat,
+): ResolvedSpan | null {
   // Narrow the search to the selection's common ancestor subtree —
   // `selectionchange` fires on every keystroke / drag tick, and a full
   // `root.querySelectorAll` over a large document would be wasteful.
@@ -237,10 +246,12 @@ function resolveSpan(root: HTMLElement, range: Range): ResolvedSpan | null {
       const id = only.dataset.subblock!;
       return { startId: id, endId: null, textEls: [only], blockCount: 1 };
     }
-    // List items splice cleanly as a multi-block range (line-aligned
-    // source). Emit first→last list-item ids so the user can edit a
-    // subset of items without dragging the whole list along.
-    const allListItems = touched.every((el) => el.tagName === 'LI');
+    // List items splice cleanly as a multi-block range in markdown
+    // (line-aligned source). Emit first→last list-item ids so the user
+    // can edit a subset of items without dragging the whole list along.
+    // Asciidoc skips this branch — see the resolveSpan doc comment.
+    const allListItems =
+      docFormat === 'markdown' && touched.every((el) => el.tagName === 'LI');
     if (allListItems) {
       const first = touched[0]!;
       const last = touched[touched.length - 1]!;

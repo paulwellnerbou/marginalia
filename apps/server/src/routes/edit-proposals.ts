@@ -251,10 +251,13 @@ function readProposalBlockSource(
  * paths can't drift apart.
  *
  * Validation: when `endBlockId` is set, neither endpoint may be a
- * `tableCell` — splicing across `|` pipes would corrupt the table, so
- * we treat that as orphaned. `listItem` endpoints ARE accepted: list
- * items have line-aligned source ranges, so selecting a subset of items
- * maps to a clean multi-listItem splice.
+ * `tableCell` (splicing across `|` pipes would corrupt the table). For
+ * markdown, `listItem` endpoints ARE accepted — list items have
+ * line-aligned source ranges, so selecting a subset of items maps to a
+ * clean multi-listItem splice. For asciidoc, `listItem` is also
+ * rejected: `locateAllBlocksAsciidoc` derives item ranges best-effort
+ * (single line, no continuation support), so a multi-listItem splice
+ * would truncate items with `+` continuations and corrupt the doc.
  *
  * The merged range is computed directly from the per-block map we
  * already built — no second parse via `locateBlockRange*`.
@@ -271,7 +274,12 @@ export function locateAnchorRange(
   if (!endBlockId || endBlockId === blockId) return startBlock;
   const endBlock = blocks.get(endBlockId);
   if (!endBlock) return null;
-  if (!isMultiBlockEndpoint(startBlock.kind) || !isMultiBlockEndpoint(endBlock.kind)) return null;
+  if (
+    !isMultiBlockEndpoint(startBlock.kind, doc.format) ||
+    !isMultiBlockEndpoint(endBlock.kind, doc.format)
+  ) {
+    return null;
+  }
   return {
     start: Math.min(startBlock.start, endBlock.start),
     end: Math.max(startBlock.end, endBlock.end),
@@ -280,8 +288,10 @@ export function locateAnchorRange(
   };
 }
 
-function isMultiBlockEndpoint(kind: string | undefined): boolean {
-  return !!kind && kind !== 'tableCell';
+function isMultiBlockEndpoint(kind: string | undefined, format: string | undefined): boolean {
+  if (!kind || kind === 'tableCell') return false;
+  if (kind === 'listItem' && format === 'asciidoc') return false;
+  return true;
 }
 
 export function locateDocumentBlocks(doc: DocumentRow, source: string): Map<string, BlockSourceRange> {

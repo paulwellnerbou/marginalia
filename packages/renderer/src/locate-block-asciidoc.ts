@@ -38,9 +38,13 @@ export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSource
  * twin); callers slice `source` with `start`/`end` themselves.
  *
  * Validation: when `endId` is non-null, neither endpoint may be a
- * `tableCell` — splicing across `|` pipes would corrupt the table.
- * `listItem` endpoints are allowed; selecting a subset of items in the
- * UI maps to a multi-listItem span here. Matches the markdown twin.
+ * `tableCell` (splicing across `|` pipes would corrupt the table) or a
+ * `listItem`. The markdown twin allows `listItem` endpoints, but
+ * `listItemSourceRange` here is best-effort — it ends at the start of
+ * the *next* source line and doesn't yet cover continuation (`+`)
+ * lines, so a multi-listItem splice would truncate any item with a
+ * continuation and corrupt the doc. Re-allow once continuations are
+ * supported.
  */
 export function locateBlockRangeAsciidoc(
   source: string,
@@ -60,7 +64,7 @@ export function locateBlockRangeAsciidoc(
 }
 
 function isMultiBlockEndpoint(kind: string): boolean {
-  return kind !== 'tableCell';
+  return kind !== 'tableCell' && kind !== 'listItem';
 }
 
 /**
