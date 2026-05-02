@@ -313,16 +313,26 @@ function ProposalComposerBody({
   const [submitting, setSubmitting] = useState(false);
 
   // Reset the proposal text + rationale synchronously when the
-  // target source changes. Doing this in a useEffect would leave
-  // `value` (and therefore `ready` / the submit payload) carrying
-  // the previous block's text for one render after the field
-  // remounts, so a fast submit could send the wrong content for
-  // the newly-selected block. The "reset state from props" pattern
+  // target changes. Doing this in a useEffect would leave `value`
+  // (and therefore `ready` / the submit payload) carrying the
+  // previous block's text for one render after the field remounts,
+  // so a fast submit could send the wrong content for the
+  // newly-selected block. The "reset state from props" pattern
   // (calling setState during render based on a stored snapshot)
   // makes the reset happen before commit.
-  const [trackedSource, setTrackedSource] = useState(originalSource);
-  if (trackedSource !== originalSource) {
-    setTrackedSource(originalSource);
+  //
+  // Key off both the target identity *and* the source: keying off
+  // source alone would skip the reset when a new target happens to
+  // have the same text (repeated list items, identical table cells,
+  // boilerplate paragraphs), leaving the parent carrying the
+  // previous block's edits.
+  const targetKey = `${target.block_id}-${target.end_block_id ?? ''}`;
+  const [trackedTarget, setTrackedTarget] = useState({
+    key: targetKey,
+    source: originalSource,
+  });
+  if (trackedTarget.key !== targetKey || trackedTarget.source !== originalSource) {
+    setTrackedTarget({ key: targetKey, source: originalSource });
     setValue(originalSource);
     setRationale('');
   }
