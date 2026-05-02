@@ -6,36 +6,59 @@ import { reportError } from '../lib/log.js';
 import { mergeBlockRanges } from './mergeBlockRanges.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
-type EditorDeps = {
+type EditorBaseDeps = {
   EditorState: typeof import('@codemirror/state').EditorState;
   EditorView: typeof import('codemirror').EditorView;
   basicSetup: typeof import('codemirror').basicSetup;
-  markdown: typeof import('@codemirror/lang-markdown').markdown;
 };
 
-let editorDepsPromise: Promise<EditorDeps> | null = null;
+type MarkdownFn = typeof import('@codemirror/lang-markdown').markdown;
 
-function loadEditorDeps(): Promise<EditorDeps> {
-  if (!editorDepsPromise) {
-    const p = Promise.all([
-      import('@codemirror/state'),
-      import('codemirror'),
-      import('@codemirror/lang-markdown'),
-    ]).then(([state, view, md]) => ({
-      EditorState: state.EditorState,
-      EditorView: view.EditorView,
-      basicSetup: view.basicSetup,
-      markdown: md.markdown,
-    }));
-    editorDepsPromise = p;
-    // If this load fails, drop the cached rejection so a later call
-    // retries instead of being stuck on the failed promise for the
-    // rest of the session.
+type EditorDeps = EditorBaseDeps & { markdown?: MarkdownFn };
+
+let baseDepsPromise: Promise<EditorBaseDeps> | null = null;
+let markdownDepPromise: Promise<MarkdownFn> | null = null;
+
+// Both caches drop themselves on rejection so a transient chunk-load
+// error doesn't pin every later open of the dialog on the textarea
+// fallback.
+function loadBaseDeps(): Promise<EditorBaseDeps> {
+  if (!baseDepsPromise) {
+    const p = Promise.all([import('@codemirror/state'), import('codemirror')]).then(
+      ([state, view]) => ({
+        EditorState: state.EditorState,
+        EditorView: view.EditorView,
+        basicSetup: view.basicSetup,
+      }),
+    );
+    baseDepsPromise = p;
     p.catch(() => {
-      if (editorDepsPromise === p) editorDepsPromise = null;
+      if (baseDepsPromise === p) baseDepsPromise = null;
     });
   }
-  return editorDepsPromise;
+  return baseDepsPromise;
+}
+
+function loadMarkdownDep(): Promise<MarkdownFn> {
+  if (!markdownDepPromise) {
+    const p = import('@codemirror/lang-markdown').then((m) => m.markdown);
+    markdownDepPromise = p;
+    p.catch(() => {
+      if (markdownDepPromise === p) markdownDepPromise = null;
+    });
+  }
+  return markdownDepPromise;
+}
+
+async function loadEditorDeps(format: DocumentFormat): Promise<EditorDeps> {
+  // Only fetch the markdown grammar chunk for documents that will
+  // actually use it. AsciiDoc proposals don't need it (and we have
+  // no asciidoc grammar bundled).
+  if (format === 'markdown') {
+    const [base, markdown] = await Promise.all([loadBaseDeps(), loadMarkdownDep()]);
+    return { ...base, markdown };
+  }
+  return loadBaseDeps();
 }
 
 function MarkdownEditorField({
@@ -68,11 +91,18 @@ function MarkdownEditorField({
 
   const onChangeRef = useRef(onChange);
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
-  useEffect(() => { onChangeRef.current(value); }, [value]);
+
+  // Keep parent state in lockstep with the local value: call onChange
+  // synchronously from the editor's change handlers so a fast
+  // type-then-click-Submit sequence doesn't lose the last edit.
+  const updateValue = (next: string) => {
+    setValue(next);
+    onChangeRef.current(next);
+  };
 
   useEffect(() => {
     let disposed = false;
-    loadEditorDeps().then(
+    loadEditorDeps(format).then(
       (deps) => {
         if (disposed) return;
         depsRef.current = deps;
@@ -106,7 +136,7 @@ function MarkdownEditorField({
       basicSetup,
       EditorView.lineWrapping,
       EditorView.updateListener.of((u) => {
-        if (u.docChanged) setValue(u.state.doc.toString());
+        if (u.docChanged) updateValue(u.state.doc.toString());
       }),
       EditorView.theme({
         '&': { fontSize: '0.875rem' },
@@ -119,7 +149,7 @@ function MarkdownEditorField({
     // Markdown highlighting only applies to markdown documents. We
     // don't bundle an asciidoc grammar, so asciidoc proposals get a
     // plain editor — better than mis-tokenizing `image::foo[]` etc.
-    if (format === 'markdown') extensions.push(markdown());
+    if (markdown) extensions.push(markdown());
     if (ariaLabelledBy) {
       extensions.push(EditorView.contentAttributes.of({ 'aria-labelledby': ariaLabelledBy }));
     }
@@ -149,7 +179,7 @@ function MarkdownEditorField({
       id={id}
       className="composer-body-field proposal-source-field"
       value={value}
-      onChange={(e) => setValue(e.target.value)}
+      onChange={(e) => updateValue(e.target.value)}
       rows={8}
       size="1"
       autoFocus={autoFocus}

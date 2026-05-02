@@ -1864,7 +1864,11 @@ button.primary:disabled {
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-control-radius);
   background: var(--color-surface);
-  overflow: hidden;
+  /* `overflow: auto` + `resize: vertical` gives the wrapper a vertical
+     resize affordance, restoring the textarea's old `resize: vertical`
+     behavior so long or multi-block proposals can be expanded. */
+  overflow: auto;
+  resize: vertical;
   min-height: calc(var(--ui-control-height) * 5);
 }
 
