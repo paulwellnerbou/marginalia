@@ -251,17 +251,26 @@ function resolveSpan(
     // can edit a subset of items without dragging the whole list along.
     // Asciidoc skips this branch — see the resolveSpan doc comment.
     //
-    // Constraint: all touched `<li>`s must be siblings at the *same*
-    // list level (same direct parent `<ul>`/`<ol>`). Without this, a
-    // selection that starts in an outer item and crosses into a nested
-    // sublist gets pruned down to the nested child + a later outer
-    // sibling, producing a span that starts at the inner bullet and
-    // crosses the outer item's closing — corrupting structure on
-    // splice. Mixed-level selections fall through to the collapse path.
+    // Two constraints on the touched `<li>`s:
+    //   1. All siblings at the same list level (same direct parent
+    //      `<ul>`/`<ol>`). Otherwise an inner-bullet→outer-sibling span
+    //      crosses the outer item's closing.
+    //   2. Their direct parent `<ul>`/`<ol>` must itself be a top-level
+    //      list (carries `[data-block]`). Without this, a selection
+    //      that starts in an outer item and crosses into its nested
+    //      sublist gets pruned by the ancestor-prune pass down to just
+    //      the nested children, and we'd emit a multi-listItem span
+    //      for the nested items — silently dropping the outer item's
+    //      content the user actually selected. The previous behavior
+    //      was to collapse to the outer list; preserve that by falling
+    //      through here when we detect a nested-list situation.
+    const directParent = touched[0]?.parentElement;
     const allSiblingListItems =
       docFormat === 'markdown' &&
       touched.every((el) => el.tagName === 'LI') &&
-      touched.every((el) => el.parentElement === touched[0]!.parentElement);
+      touched.every((el) => el.parentElement === directParent) &&
+      directParent instanceof HTMLElement &&
+      !!directParent.dataset.block;
     if (allSiblingListItems) {
       const first = touched[0]!;
       const last = touched[touched.length - 1]!;
