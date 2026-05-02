@@ -15,12 +15,7 @@ import {
   uploadAsset,
   deleteAttachedAsset,
 } from '../lib/api.js';
-import {
-  loadEditorBase,
-  loadMarkdownExt,
-  type EditorBaseDeps,
-  type MarkdownFn,
-} from '../lib/codemirror-loader.js';
+import { loadEditorDeps, type EditorDeps } from '../lib/codemirror-loader.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { reportError } from '../lib/log.js';
 import {
@@ -43,8 +38,6 @@ const LS_ASSETS_WIDTH = 'marginalia.editAssetsWidth';
 const LS_EDITOR_WIDTH = 'marginalia.editEditorWidth';
 const LS_TEXT_ZOOM = 'marginalia.textZoom';
 const LS_WORD_WRAP = 'marginalia.editWordWrap';
-
-type EditorDeps = EditorBaseDeps & { markdown: MarkdownFn };
 
 let rendererPromise: Promise<typeof import('@marginalia/renderer')> | null = null;
 
@@ -77,11 +70,6 @@ function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'):
     out.add(raw);
   }
   return out;
-}
-
-async function loadEditorDeps(): Promise<EditorDeps> {
-  const [base, markdown] = await Promise.all([loadEditorBase(), loadMarkdownExt()]);
-  return { ...base, markdown };
 }
 
 function loadRenderer(): Promise<typeof import('@marginalia/renderer')> {
@@ -215,28 +203,29 @@ export function EditPage() {
   useEffect(() => {
     if (!editorEl.current || doc === null || viewRef.current) return;
     let disposed = false;
-    void loadEditorDeps().then(
+    void loadEditorDeps(doc.format).then(
       (deps) => {
         if (disposed || !editorEl.current || viewRef.current) return;
         editorDepsRef.current = deps;
         const { EditorState, Compartment, EditorView, basicSetup, markdown, lineWrapping } = deps;
         const wrapCompartment = new Compartment();
         wrapCompartmentRef.current = wrapCompartment;
-        const state = EditorState.create({
-          doc: doc.source,
-          extensions: [
-            basicSetup,
-            markdown(),
-            EditorView.updateListener.of((u) => {
-              if (u.docChanged) setSource(u.state.doc.toString());
-            }),
-            EditorView.theme({
-              '&': { height: '100%', fontSize: '14px' },
-              '.cm-scroller': { fontFamily: 'ui-monospace, SFMono-Regular, monospace' },
-            }),
-            wrapCompartment.of(wordWrapRef.current ? [lineWrapping] : []),
-          ],
-        });
+        const extensions: import('@codemirror/state').Extension[] = [
+          basicSetup,
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged) setSource(u.state.doc.toString());
+          }),
+          EditorView.theme({
+            '&': { height: '100%', fontSize: '14px' },
+            '.cm-scroller': { fontFamily: 'ui-monospace, SFMono-Regular, monospace' },
+          }),
+          wrapCompartment.of(wordWrapRef.current ? [lineWrapping] : []),
+        ];
+        // Markdown grammar only ships for markdown documents. AsciiDoc
+        // gets a plain editor — no asciidoc grammar bundled, and the
+        // markdown grammar mistokenizes `image::foo[]` etc.
+        if (markdown) extensions.push(markdown());
+        const state = EditorState.create({ doc: doc.source, extensions });
         viewRef.current = new EditorView({ state, parent: editorEl.current });
       },
       (err) => {

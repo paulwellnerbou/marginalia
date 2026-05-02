@@ -338,7 +338,12 @@ function ProposalComposerBody({
             Edited {formatLabel}
           </Text>
           <ProposalSourceField
-            key={`${target.block_id}-${target.end_block_id ?? ''}`}
+            // Include docFormat in the key so that, if the document
+            // format changes while the dialog is still open (e.g.
+            // navigating between a markdown and an asciidoc doc),
+            // we remount with the right loader and grammar instead
+            // of leaving a stale Markdown-configured editor in place.
+            key={`${docFormat}-${target.block_id}-${target.end_block_id ?? ''}`}
             id="proposal-text"
             initialValue={originalSource}
             onChange={setValue}
