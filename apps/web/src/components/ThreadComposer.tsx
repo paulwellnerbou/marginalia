@@ -85,11 +85,21 @@ function ProposalSourceField({
   finishSwapRef.current = () => {
     const ta = textareaRef.current;
     if (ta) {
+      // Read the live DOM value, not React state: a final input
+      // event from `compositionend` (or any onChange that hasn't
+      // yet hit React's batch) may not have flushed into `value`,
+      // and the editor would otherwise initialize from a stale
+      // snapshot and drop the just-committed character.
+      const liveValue = ta.value;
+      if (liveValue !== value) {
+        setValue(liveValue);
+        onChangeRef.current(liveValue);
+      }
       if (document.activeElement === ta) {
         transferFocusRef.current = true;
         transferSelectionRef.current = {
-          from: ta.selectionStart ?? value.length,
-          to: ta.selectionEnd ?? value.length,
+          from: ta.selectionStart ?? liveValue.length,
+          to: ta.selectionEnd ?? liveValue.length,
         };
       }
       // Carry the user's chosen height across the swap. The textarea
@@ -302,10 +312,20 @@ function ProposalComposerBody({
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
+  // Reset the proposal text + rationale synchronously when the
+  // target source changes. Doing this in a useEffect would leave
+  // `value` (and therefore `ready` / the submit payload) carrying
+  // the previous block's text for one render after the field
+  // remounts, so a fast submit could send the wrong content for
+  // the newly-selected block. The "reset state from props" pattern
+  // (calling setState during render based on a stored snapshot)
+  // makes the reset happen before commit.
+  const [trackedSource, setTrackedSource] = useState(originalSource);
+  if (trackedSource !== originalSource) {
+    setTrackedSource(originalSource);
     setValue(originalSource);
     setRationale('');
-  }, [target.block_id, target.end_block_id, originalSource]);
+  }
 
   const changed = value !== originalSource;
   const ready = changed && (!needsName || name.trim().length > 0);

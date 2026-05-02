@@ -172,6 +172,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   const [threads, setThreads] = useState<Thread[]>([]);
   const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
+  // The pending comment / proposal anchors carry block_ids that are
+  // only valid for the current document. Navigating to a different
+  // doc (doc.uid changes) must drop any in-flight draft so the
+  // composer can't submit a stale anchor against the new document.
+  const lastDocUidRef = useRef(doc.uid);
+  if (lastDocUidRef.current !== doc.uid) {
+    lastDocUidRef.current = doc.uid;
+    setPendingDraft(null);
+  }
   const pendingAnchor = pendingDraft?.mode === 'comment' ? pendingDraft.anchor : null;
   const pendingProposalTarget = pendingDraft?.mode === 'proposal' ? pendingDraft.target : null;
   const [focusedThread, setFocusedThread] = useState<ThreadFocusTarget | null>(null);
