@@ -17,7 +17,7 @@ let editorDepsPromise: Promise<EditorDeps> | null = null;
 
 function loadEditorDeps(): Promise<EditorDeps> {
   if (!editorDepsPromise) {
-    editorDepsPromise = Promise.all([
+    const p = Promise.all([
       import('@codemirror/state'),
       import('codemirror'),
       import('@codemirror/lang-markdown'),
@@ -27,6 +27,13 @@ function loadEditorDeps(): Promise<EditorDeps> {
       basicSetup: view.basicSetup,
       markdown: md.markdown,
     }));
+    editorDepsPromise = p;
+    // If this load fails, drop the cached rejection so a later call
+    // retries instead of being stuck on the failed promise for the
+    // rest of the session.
+    p.catch(() => {
+      if (editorDepsPromise === p) editorDepsPromise = null;
+    });
   }
   return editorDepsPromise;
 }
@@ -37,12 +44,14 @@ function MarkdownEditorField({
   onChange,
   autoFocus,
   ariaLabelledBy,
+  format,
 }: {
   id: string;
   initialValue: string;
   onChange: (value: string) => void;
   autoFocus?: boolean;
   ariaLabelledBy?: string;
+  format: DocumentFormat;
 }) {
   // Render a plain <textarea> first and swap to CodeMirror once the
   // lazy chunks resolve. This keeps the field focusable from the
@@ -95,7 +104,6 @@ function MarkdownEditorField({
     const { EditorState, EditorView, basicSetup, markdown } = deps;
     const extensions: import('@codemirror/state').Extension[] = [
       basicSetup,
-      markdown(),
       EditorView.lineWrapping,
       EditorView.updateListener.of((u) => {
         if (u.docChanged) setValue(u.state.doc.toString());
@@ -108,15 +116,20 @@ function MarkdownEditorField({
         },
       }),
     ];
+    // Markdown highlighting only applies to markdown documents. We
+    // don't bundle an asciidoc grammar, so asciidoc proposals get a
+    // plain editor — better than mis-tokenizing `image::foo[]` etc.
+    if (format === 'markdown') extensions.push(markdown());
     if (ariaLabelledBy) {
       extensions.push(EditorView.contentAttributes.of({ 'aria-labelledby': ariaLabelledBy }));
     }
     const sel = transferSelectionRef.current;
-    const state = EditorState.create({
+    const stateConfig: import('@codemirror/state').EditorStateConfig = {
       doc: value,
       extensions,
-      selection: sel ? { anchor: sel.from, head: sel.to } : undefined,
-    });
+    };
+    if (sel) stateConfig.selection = { anchor: sel.from, head: sel.to };
+    const state = EditorState.create(stateConfig);
     const view = new EditorView({ state, parent: container });
     if (transferFocusRef.current) view.focus();
     return () => { view.destroy(); };
@@ -309,12 +322,18 @@ function ProposalComposerBody({
             Edited {formatLabel}
           </Text>
           <MarkdownEditorField
-            key={`${target.block_id}-${target.end_block_id ?? ''}`}
+            // Include originalSource in the key so a refresh of
+            // docSource / blockRanges that changes the underlying
+            // text remounts the editor with the new value, instead
+            // of leaving stale content in CodeMirror's mount-only
+            // initialValue.
+            key={`${target.block_id}-${target.end_block_id ?? ''}-${originalSource}`}
             id="proposal-text"
             initialValue={originalSource}
             onChange={setValue}
             autoFocus={!needsName}
             ariaLabelledBy="proposal-text-label"
+            format={docFormat}
           />
         </Flex>
 
