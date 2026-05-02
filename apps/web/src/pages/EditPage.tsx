@@ -4,7 +4,6 @@ import { saveInviteToken } from '../lib/invite.js';
 import { Button, Container, Flex, Select, Slider, Text } from '@radix-ui/themes';
 import type { RenderResult } from '@marginalia/renderer';
 import type { EditorView } from 'codemirror';
-import type { Extension } from '@codemirror/state';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import {
   getDocument,
@@ -16,6 +15,12 @@ import {
   uploadAsset,
   deleteAttachedAsset,
 } from '../lib/api.js';
+import {
+  loadEditorBase,
+  loadMarkdownExt,
+  type EditorBaseDeps,
+  type MarkdownFn,
+} from '../lib/codemirror-loader.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { reportError } from '../lib/log.js';
 import {
@@ -39,16 +44,8 @@ const LS_EDITOR_WIDTH = 'marginalia.editEditorWidth';
 const LS_TEXT_ZOOM = 'marginalia.textZoom';
 const LS_WORD_WRAP = 'marginalia.editWordWrap';
 
-type EditorDeps = {
-  EditorState: typeof import('@codemirror/state').EditorState;
-  Compartment: typeof import('@codemirror/state').Compartment;
-  EditorView: typeof import('codemirror').EditorView;
-  basicSetup: typeof import('codemirror').basicSetup;
-  markdown: typeof import('@codemirror/lang-markdown').markdown;
-  lineWrapping: Extension;
-};
+type EditorDeps = EditorBaseDeps & { markdown: MarkdownFn };
 
-let editorDepsPromise: Promise<EditorDeps> | null = null;
 let rendererPromise: Promise<typeof import('@marginalia/renderer')> | null = null;
 
 /**
@@ -82,22 +79,9 @@ function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'):
   return out;
 }
 
-function loadEditorDeps(): Promise<EditorDeps> {
-  if (!editorDepsPromise) {
-    editorDepsPromise = Promise.all([
-      import('@codemirror/state'),
-      import('codemirror'),
-      import('@codemirror/lang-markdown'),
-    ]).then(([state, view, markdown]) => ({
-      EditorState: state.EditorState,
-      Compartment: state.Compartment,
-      EditorView: view.EditorView,
-      basicSetup: view.basicSetup,
-      markdown: markdown.markdown,
-      lineWrapping: view.EditorView.lineWrapping,
-    }));
-  }
-  return editorDepsPromise;
+async function loadEditorDeps(): Promise<EditorDeps> {
+  const [base, markdown] = await Promise.all([loadEditorBase(), loadMarkdownExt()]);
+  return { ...base, markdown };
 }
 
 function loadRenderer(): Promise<typeof import('@marginalia/renderer')> {

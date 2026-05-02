@@ -2,64 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Dialog, Flex, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { DocumentFormat } from '../lib/api.js';
+import { loadEditorDeps, type EditorDeps } from '../lib/codemirror-loader.js';
 import { reportError } from '../lib/log.js';
 import { mergeBlockRanges } from './mergeBlockRanges.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
-
-type EditorBaseDeps = {
-  EditorState: typeof import('@codemirror/state').EditorState;
-  EditorView: typeof import('codemirror').EditorView;
-  basicSetup: typeof import('codemirror').basicSetup;
-};
-
-type MarkdownFn = typeof import('@codemirror/lang-markdown').markdown;
-
-type EditorDeps = EditorBaseDeps & { markdown?: MarkdownFn };
-
-let baseDepsPromise: Promise<EditorBaseDeps> | null = null;
-let markdownDepPromise: Promise<MarkdownFn> | null = null;
-
-// Both caches drop themselves on rejection so a transient chunk-load
-// error doesn't pin every later open of the dialog on the textarea
-// fallback.
-function loadBaseDeps(): Promise<EditorBaseDeps> {
-  if (!baseDepsPromise) {
-    const p = Promise.all([import('@codemirror/state'), import('codemirror')]).then(
-      ([state, view]) => ({
-        EditorState: state.EditorState,
-        EditorView: view.EditorView,
-        basicSetup: view.basicSetup,
-      }),
-    );
-    baseDepsPromise = p;
-    p.catch(() => {
-      if (baseDepsPromise === p) baseDepsPromise = null;
-    });
-  }
-  return baseDepsPromise;
-}
-
-function loadMarkdownDep(): Promise<MarkdownFn> {
-  if (!markdownDepPromise) {
-    const p = import('@codemirror/lang-markdown').then((m) => m.markdown);
-    markdownDepPromise = p;
-    p.catch(() => {
-      if (markdownDepPromise === p) markdownDepPromise = null;
-    });
-  }
-  return markdownDepPromise;
-}
-
-async function loadEditorDeps(format: DocumentFormat): Promise<EditorDeps> {
-  // Only fetch the markdown grammar chunk for documents that will
-  // actually use it. AsciiDoc proposals don't need it (and we have
-  // no asciidoc grammar bundled).
-  if (format === 'markdown') {
-    const [base, markdown] = await Promise.all([loadBaseDeps(), loadMarkdownDep()]);
-    return { ...base, markdown };
-  }
-  return loadBaseDeps();
-}
 
 function ProposalSourceField({
   id,
@@ -113,9 +59,14 @@ function ProposalSourceField({
     setValue(initialValue);
     onChangeRef.current(initialValue);
     const view = viewRef.current;
-    if (view) {
+    const deps = depsRef.current;
+    if (view && deps) {
+      // Mark the reset transaction as not-undoable: this is an
+      // external sync, not a user edit, so pressing Undo afterwards
+      // shouldn't bring back the stale snapshot.
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: initialValue },
+        annotations: [deps.Transaction.addToHistory.of(false)],
       });
     }
   }, [initialValue]);
@@ -366,7 +317,24 @@ function ProposalComposerBody({
         )}
 
         <Flex direction="column" gap="1">
-          <Text as="label" size="2" htmlFor="proposal-text" id="proposal-text-label">
+          <Text
+            as="label"
+            size="2"
+            htmlFor="proposal-text"
+            id="proposal-text-label"
+            onClick={(e) => {
+              // <label htmlFor> only natively focuses labelable form
+              // controls; once the textarea swaps to CodeMirror's
+              // contenteditable, clicking the label stops moving
+              // focus. Route the click manually so the visible label
+              // still acts as a focus affordance after the swap.
+              const target = document.getElementById('proposal-text');
+              if (target instanceof HTMLElement && target.isContentEditable) {
+                e.preventDefault();
+                target.focus();
+              }
+            }}
+          >
             Edited {formatLabel}
           </Text>
           <ProposalSourceField
