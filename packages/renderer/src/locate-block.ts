@@ -28,6 +28,14 @@ export interface BlockSourceRange {
    * reject cross-depth listItem spans, which would slice across an
    * outer item's closing.
    *
+   * For markdown listItems, `parentStart` is set ONLY when the parent
+   * list begins at column 1 (the character preceding the list's start
+   * offset is `\n`, or the list is at offset 0). Indented and quoted
+   * lists (`  - item`, `> - item`) leave it unset, because the mdast
+   * item position starts at the bullet and a min/max splice between
+   * sibling items would drop the leading indent / `>` prefix on every
+   * line after the first — corrupting the structure.
+   *
    * Undefined for top-level entries — they have no enclosing sub-block
    * parent.
    */
@@ -77,7 +85,17 @@ export function locateAllBlocks(markdown: string): Map<string, BlockSourceRange>
     // offset. Two sub-blocks with the same `parentStart` are siblings;
     // different values mean different parents (different lists,
     // different tables, or different nesting depths for nested lists).
+    //
+    // Gate to column-1 parents: a list at indent > 0 (nested under a
+    // listItem, blockquote, etc.) has items whose mdast position
+    // starts at the bullet, so a min/max splice between sibling items
+    // would drop the indent / `>` prefix on every line after the
+    // first. Leave `parentStart` unset in that case so
+    // `canMergeMultiBlock` rejects multi-block on those items.
     const parentStart = parent?.position?.start?.offset;
+    const parentAtColumnOne =
+      parentStart !== undefined &&
+      (parentStart === 0 || markdown.charCodeAt(parentStart - 1) === 0x0a);
     // Unique per occurrence, so no `has` guard — every duplicate gets its
     // own entry pointing at its own source range.
     out.set(id, {
@@ -85,7 +103,7 @@ export function locateAllBlocks(markdown: string): Map<string, BlockSourceRange>
       end: range.end,
       kind: node.type,
       text,
-      ...(parentStart !== undefined ? { parentStart } : {}),
+      ...(parentAtColumnOne ? { parentStart } : {}),
     });
   });
 

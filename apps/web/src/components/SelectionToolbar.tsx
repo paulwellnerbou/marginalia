@@ -134,13 +134,13 @@ export function SelectionToolbar({ rootRef, docFormat, onAdd, onPropose }: Props
  * Resolve which block(s) the selection range covers.
  *
  *   - Exactly one sub-block touched → single-block proposal at the sub-block id.
- *   - Multiple sibling list-item sub-blocks whose direct parent
- *     `<ul>`/`<ol>` contains the range's common ancestor (markdown
- *     only) → multi-block proposal spanning the first/last list-item
- *     ids. Markdown list-item ranges are line-aligned, so a span
- *     splices cleanly across items. Asciidoc skips this path because
- *     `locateAllBlocksAsciidoc` derives item ranges best-effort and
- *     doesn't yet cover continuation (`+`) lines.
+ *   - Multiple sibling list-item sub-blocks of a top-level markdown
+ *     list (their direct `<ul>`/`<ol>` parent carries `[data-block]`)
+ *     → multi-block proposal spanning the first/last list-item ids.
+ *     Items in nested lists, lists inside blockquotes, or asciidoc
+ *     lists don't qualify — splicing across their bullets would
+ *     drop the indent/`>` prefix or hit best-effort source ranges,
+ *     so we fall through to collapse-to-parent.
  *   - Multiple table-cell sub-blocks sharing one `<table>` parent →
  *     single-block proposal at the table id. Cell-level multi-block
  *     would slice across `|` pipes and corrupt the table.
@@ -251,32 +251,33 @@ function resolveSpan(
       return { startId: id, endId: null, textEls: [only], blockCount: 1 };
     }
     // List items splice cleanly as a multi-block range in markdown
-    // (line-aligned source). Emit first→last list-item ids so the user
-    // can edit a subset of items without dragging the whole list along.
-    // Asciidoc skips this branch — see the resolveSpan doc comment.
+    // ONLY for top-level lists at column 1: the renderer's listItem
+    // source ranges start at the bullet (not the start of the line),
+    // so a min/max splice between siblings in an indented list
+    // (`  - item`) or a list inside a blockquote (`> - item`) would
+    // drop the indent / `>` prefix on every line after the first.
+    // Asciidoc skips this path entirely — `canMergeMultiBlock`
+    // rejects asciidoc listItem multi-block.
     //
     // Two constraints on the touched `<li>`s:
     //   1. All siblings at the same list level (same direct parent
     //      `<ul>`/`<ol>`). Otherwise an inner-bullet→outer-sibling span
     //      crosses the outer item's closing.
-    //   2. The original selection's `commonAncestorContainer` must be
-    //      contained by that direct parent. Without this, a selection
-    //      that starts in an outer item and crosses into its nested
-    //      sublist gets pruned by the ancestor-prune pass down to just
-    //      the nested children — same parent passes constraint 1, but
-    //      the user's outer-item content would be silently dropped.
-    //      The range's common ancestor sits OUTSIDE the nested list
-    //      in that case, so this check distinguishes "user selected
-    //      only nested items" (common ancestor inside the nested list,
-    //      emit multi-item) from "user crossed from outer → nested"
-    //      (common ancestor outside, fall through to collapse).
+    //   2. Their direct parent `<ul>`/`<ol>` carries `[data-block]`,
+    //      i.e. is itself a top-level markdown list. Nested lists
+    //      and lists inside other top-level blocks (blockquotes,
+    //      admonitions, etc.) don't carry it — only top-level mdast
+    //      nodes do. Falling through there matches the
+    //      `canMergeMultiBlock` rule (parentStart only set for
+    //      column-1 lists), so the UI doesn't propose splices that
+    //      the validator would reject.
     const directParent = touched[0]?.parentElement;
     const allSiblingListItems =
       docFormat === 'markdown' &&
       touched.every((el) => el.tagName === 'LI') &&
       touched.every((el) => el.parentElement === directParent) &&
       directParent instanceof HTMLElement &&
-      directParent.contains(range.commonAncestorContainer);
+      !!directParent.dataset.block;
     if (allSiblingListItems) {
       const first = touched[0]!;
       const last = touched[touched.length - 1]!;

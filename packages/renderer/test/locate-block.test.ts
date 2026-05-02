@@ -311,11 +311,42 @@ Gamma paragraph.
     expect(locateBlockRange(mixed, items[0]![0], top![0])).toBeNull();
   });
 
+  test('rejects multi-listItem in indented and quoted lists (parentStart not set)', () => {
+    // Indented and blockquoted lists have items whose mdast position
+    // starts at the bullet, so a min/max splice between siblings
+    // would drop the leading indent / `>` prefix on every line after
+    // the first. The locator must NOT set `parentStart` on these
+    // items, so `canMergeMultiBlock` rejects multi-block on them.
+    const blockquoted = `> - one\n> - two\n> - three\n`;
+    const bMap = locateAllBlocks(blockquoted);
+    const bItems = [...bMap.entries()].filter(([, r]) => r.kind === 'listItem');
+    expect(bItems.length).toBe(3);
+    for (const [, r] of bItems) {
+      expect(r.parentStart).toBeUndefined();
+    }
+    expect(locateBlockRange(blockquoted, bItems[0]![0], bItems[1]![0])).toBeNull();
+
+    // Indented (non-list-nested) is also unsafe — but markdown
+    // doesn't really have "indented top-level lists" except inside
+    // other constructs, so the relevant case is nested lists.
+    const nested = `- outer1\n  - nested1\n  - nested2\n- outer2\n`;
+    const nMap = locateAllBlocks(nested);
+    const nItems = [...nMap.entries()].filter(([, r]) => r.kind === 'listItem');
+    const [outer1, nested1, nested2, outer2] = nItems;
+    expect(outer1![1].parentStart).toBeDefined();
+    expect(outer2![1].parentStart).toBeDefined();
+    expect(nested1![1].parentStart).toBeUndefined();
+    expect(nested2![1].parentStart).toBeUndefined();
+    // Outer↔outer (column-1 list): accepted.
+    expect(locateBlockRange(nested, outer1![0], outer2![0])).not.toBeNull();
+    // Nested↔nested: rejected (parentStart absent).
+    expect(locateBlockRange(nested, nested1![0], nested2![0])).toBeNull();
+  });
+
   test('rejects cross-depth listItem endpoints (nested item ↔ outer sibling)', () => {
-    // Outer list with a nested sublist inside the first item. A span
-    // from the nested item to a later outer sibling would slice
-    // through the outer item's closing — `parentStart` differs
-    // (different parent `list` nodes), so the validator must reject.
+    // Outer list with a nested sublist inside the first item. The
+    // outer items have `parentStart` (column-1 list); the nested
+    // items don't (indent > 0). All cross-depth combinations reject.
     const nested = `- outer1
   - nested1
   - nested2
@@ -327,12 +358,12 @@ Gamma paragraph.
     expect(items.length).toBe(4);
     const [outer1, nested1, nested2, outer2] = items;
 
-    // Same parent: nested1 ↔ nested2 (both children of the inner
-    // sublist) accepted.
-    expect(locateBlockRange(nested, nested1![0], nested2![0])).not.toBeNull();
-    // Same parent: outer1 ↔ outer2 (both children of the outer list)
-    // accepted.
+    // Outer↔outer accepted (same column-1 parent list).
     expect(locateBlockRange(nested, outer1![0], outer2![0])).not.toBeNull();
+
+    // Nested↔nested rejected — `parentStart` is unset for indented
+    // lists, so even same-list siblings can't merge.
+    expect(locateBlockRange(nested, nested1![0], nested2![0])).toBeNull();
 
     // Cross-depth: nested item ↔ outer sibling rejected.
     expect(locateBlockRange(nested, nested1![0], outer2![0])).toBeNull();

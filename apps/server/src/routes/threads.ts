@@ -1043,7 +1043,7 @@ async function prepareAcceptProposalThread(
           row.id,
         );
 
-      return reanchorProposals(deps.db, doc.uid, [...presentBlocks.keys()], now);
+      return reanchorProposals(deps.db, doc.uid, presentBlocks, doc.format, now);
     },
   };
 }
@@ -1082,7 +1082,7 @@ async function prepareReopenAcceptedProposalThread(
     return { commentId: comment.id, ...upd };
   });
 
-  const knownIds = [...locateDocumentBlocks(doc, diff.before).keys()];
+  const knownBlocks = locateDocumentBlocks(doc, diff.before);
   return {
     oid,
     applyDb: () => {
@@ -1109,7 +1109,7 @@ async function prepareReopenAcceptedProposalThread(
       const reopened = reopenAcceptedProposal(deps.db, doc.uid, row.id, now);
       if (!reopened) throw new ThreadActionError(409, 'not-reopenable');
 
-      return reanchorProposals(deps.db, doc.uid, knownIds, now);
+      return reanchorProposals(deps.db, doc.uid, knownBlocks, doc.format, now);
     },
   };
 }

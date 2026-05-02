@@ -45,12 +45,12 @@ const PROPOSAL_SELECT = `
 export function reanchorProposals(
   db: Database,
   docUid: string,
-  presentBlockIds: string[],
+  blocks: Map<string, BlockSourceRange>,
+  format: 'markdown' | 'asciidoc',
   now: number,
   realtime?: Realtime,
   exceptClientId?: string,
 ): EditProposalThreadRow[] {
-  const present = new Set(presentBlockIds);
   const open = db
     .prepare(
       `${PROPOSAL_SELECT}
@@ -65,9 +65,25 @@ export function reanchorProposals(
   );
   const orphaned: EditProposalThreadRow[] = [];
   for (const p of open) {
-    const startMissing = !p.anchor_block_id || !present.has(p.anchor_block_id);
-    const endMissing = p.anchor_end_block_id != null && !present.has(p.anchor_end_block_id);
-    if (startMissing || endMissing) {
+    const startBlock = p.anchor_block_id ? blocks.get(p.anchor_block_id) : undefined;
+    const startMissing = !p.anchor_block_id || !startBlock;
+    let endMissing = false;
+    let structurallyInvalid = false;
+    if (!startMissing && p.anchor_end_block_id != null) {
+      const endBlock = blocks.get(p.anchor_end_block_id);
+      if (!endBlock) {
+        endMissing = true;
+      } else if (!canMergeMultiBlock(startBlock!, endBlock, format)) {
+        // Both endpoint IDs still resolve, but the multi-block span
+        // is no longer structurally safe (e.g. an upstream edit moved
+        // one item into a different list depth, or what was a
+        // top-level list is now nested/quoted). Orphan so the
+        // proposal doesn't sit "linked" until someone tries to
+        // diff or accept it.
+        structurallyInvalid = true;
+      }
+    }
+    if (startMissing || endMissing || structurallyInvalid) {
       markComment.run(now, p.id);
       const fresh = loadProposalRow(db, p.id, docUid);
       if (fresh) {

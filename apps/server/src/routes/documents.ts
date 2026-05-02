@@ -381,11 +381,11 @@ async function updateDocument(c: Context, deps: AppDeps) {
   // get orphaned after every save. Markdown uses the mdast-based locator;
   // asciidoc hands off to its own pipeline, and its locator also emits
   // sub-block ids for supported nested structures (e.g. list items).
-  const knownIds =
+  const knownBlocks =
     doc.format === 'asciidoc'
-      ? [...locateAllBlocksAsciidoc(nextSource).keys()]
-      : [...locateAllBlocks(nextSource).keys()];
-  reanchorProposals(db, doc.uid, knownIds, now, realtime, decision.identity.clientId);
+      ? locateAllBlocksAsciidoc(nextSource)
+      : locateAllBlocks(nextSource);
+  reanchorProposals(db, doc.uid, knownBlocks, doc.format, now, realtime, decision.identity.clientId);
 
   if (isContentChange(previousSource, nextSource)) {
     realtime.broadcast(
@@ -1287,11 +1287,11 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
     );
   }
 
-  const knownIds =
+  const knownBlocks =
     doc.format === 'asciidoc'
-      ? [...locateAllBlocksAsciidoc(restoredSource).keys()]
-      : [...locateAllBlocks(restoredSource).keys()];
-  reanchorProposals(db, doc.uid, knownIds, now, realtime, decision.identity.clientId);
+      ? locateAllBlocksAsciidoc(restoredSource)
+      : locateAllBlocks(restoredSource);
+  reanchorProposals(db, doc.uid, knownBlocks, doc.format, now, realtime, decision.identity.clientId);
 
   realtime.broadcast(
     doc.uid,
@@ -1366,11 +1366,11 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
       ? (reopenAcceptedProposal(db, doc.uid, meta.proposalId, now)?.id ?? null)
       : null;
 
-  const knownIds =
+  const knownBlocks =
     doc.format === 'asciidoc'
-      ? [...locateAllBlocksAsciidoc(diff.before).keys()]
-      : [...locateAllBlocks(diff.before).keys()];
-  reanchorProposals(db, doc.uid, knownIds, now, realtime, decision.identity.clientId);
+      ? locateAllBlocksAsciidoc(diff.before)
+      : locateAllBlocks(diff.before);
+  reanchorProposals(db, doc.uid, knownBlocks, doc.format, now, realtime, decision.identity.clientId);
 
   if (reopenedProposalId) {
     const reopened = loadProposalRow(db, reopenedProposalId, doc.uid);
