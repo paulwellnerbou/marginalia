@@ -61,7 +61,7 @@ async function loadEditorDeps(format: DocumentFormat): Promise<EditorDeps> {
   return loadBaseDeps();
 }
 
-function MarkdownEditorField({
+function ProposalSourceField({
   id,
   initialValue,
   onChange,
@@ -85,9 +85,11 @@ function MarkdownEditorField({
   const [phase, setPhase] = useState<'loading' | 'ready' | 'failed'>('loading');
   const containerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const viewRef = useRef<import('codemirror').EditorView | null>(null);
   const depsRef = useRef<EditorDeps | null>(null);
   const transferFocusRef = useRef(false);
   const transferSelectionRef = useRef<{ from: number; to: number } | null>(null);
+  const initialValueRef = useRef(initialValue);
 
   const onChangeRef = useRef(onChange);
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
@@ -99,6 +101,24 @@ function MarkdownEditorField({
     setValue(next);
     onChangeRef.current(next);
   };
+
+  // If the parent's `initialValue` changes after mount (e.g. the
+  // underlying docSource refreshed), reset both the local state and
+  // the live editor so the visible content can't diverge from what
+  // gets submitted. Avoids forcing a full remount via the React key,
+  // which would otherwise have to include the entire source string.
+  useEffect(() => {
+    if (initialValue === initialValueRef.current) return;
+    initialValueRef.current = initialValue;
+    setValue(initialValue);
+    onChangeRef.current(initialValue);
+    const view = viewRef.current;
+    if (view) {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: initialValue },
+      });
+    }
+  }, [initialValue]);
 
   useEffect(() => {
     let disposed = false;
@@ -150,25 +170,40 @@ function MarkdownEditorField({
     // don't bundle an asciidoc grammar, so asciidoc proposals get a
     // plain editor — better than mis-tokenizing `image::foo[]` etc.
     if (markdown) extensions.push(markdown());
-    if (ariaLabelledBy) {
-      extensions.push(EditorView.contentAttributes.of({ 'aria-labelledby': ariaLabelledBy }));
+    // Set id on the contenteditable so <label htmlFor={id}> resolves
+    // to a real element after the swap, and use aria-labelledby so AT
+    // sees the visible label as the field's accessible name.
+    const contentAttrs: Record<string, string> = { id };
+    if (ariaLabelledBy) contentAttrs['aria-labelledby'] = ariaLabelledBy;
+    extensions.push(EditorView.contentAttributes.of(contentAttrs));
+
+    // Initialize CodeMirror with the *original* source so the editor's
+    // history starts from a clean baseline. If the user typed into the
+    // textarea before the chunks resolved, replay that into the editor
+    // as a transaction so those edits are recorded in the undo stack —
+    // otherwise the swap would silently make them un-undoable.
+    const baseline = initialValueRef.current;
+    const state = EditorState.create({ doc: baseline, extensions });
+    const view = new EditorView({ state, parent: container });
+    viewRef.current = view;
+    if (value !== baseline) {
+      view.dispatch({
+        changes: { from: 0, to: baseline.length, insert: value },
+      });
     }
     const sel = transferSelectionRef.current;
-    const stateConfig: import('@codemirror/state').EditorStateConfig = {
-      doc: value,
-      extensions,
-    };
-    if (sel) stateConfig.selection = { anchor: sel.from, head: sel.to };
-    const state = EditorState.create(stateConfig);
-    const view = new EditorView({ state, parent: container });
+    if (sel) {
+      view.dispatch({ selection: { anchor: sel.from, head: sel.to } });
+    }
     if (transferFocusRef.current) view.focus();
-    return () => { view.destroy(); };
+    return () => {
+      view.destroy();
+      viewRef.current = null;
+    };
   }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (phase === 'ready') {
-    return (
-      <div ref={containerRef} className="proposal-source-editor" data-proposal-source-id={id} />
-    );
+    return <div ref={containerRef} className="proposal-source-editor" />;
   }
   // 'loading' or 'failed' — both render a usable textarea so the user
   // can always edit the proposal source. The visible label uses
@@ -331,33 +366,11 @@ function ProposalComposerBody({
         )}
 
         <Flex direction="column" gap="1">
-          <Text
-            as="label"
-            size="2"
-            htmlFor="proposal-text"
-            id="proposal-text-label"
-            onClick={(e) => {
-              // htmlFor focuses the textarea in fallback mode. In
-              // CodeMirror mode the field is a div, so re-route the
-              // click to the contenteditable so the visible label
-              // still acts as a focus affordance.
-              const cm = document
-                .querySelector('[data-proposal-source-id="proposal-text"] .cm-content');
-              if (cm instanceof HTMLElement) {
-                e.preventDefault();
-                cm.focus();
-              }
-            }}
-          >
+          <Text as="label" size="2" htmlFor="proposal-text" id="proposal-text-label">
             Edited {formatLabel}
           </Text>
-          <MarkdownEditorField
-            // Include originalSource in the key so a refresh of
-            // docSource / blockRanges that changes the underlying
-            // text remounts the editor with the new value, instead
-            // of leaving stale content in CodeMirror's mount-only
-            // initialValue.
-            key={`${target.block_id}-${target.end_block_id ?? ''}-${originalSource}`}
+          <ProposalSourceField
+            key={`${target.block_id}-${target.end_block_id ?? ''}`}
             id="proposal-text"
             initialValue={originalSource}
             onChange={setValue}

@@ -1386,6 +1386,18 @@ button.primary:disabled {
 }
 
 .composer .composer-name-field :is(input, .rt-TextFieldInput),
+.composer .composer-body-field :is(textarea, .rt-TextAreaInput),
+.proposal-source-editor {
+  /* Shared "control chrome" for the composer text inputs and the
+     CodeMirror wrapper, so the textarea fallback and the editor look
+     identical. */
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-control-radius);
+  background: var(--color-surface);
+  box-shadow: none;
+}
+
+.composer .composer-name-field :is(input, .rt-TextFieldInput),
 .composer .composer-body-field :is(textarea, .rt-TextAreaInput) {
   width: 100%;
   box-sizing: border-box;
@@ -1395,10 +1407,6 @@ button.primary:disabled {
   line-height: var(--ui-control-line-height);
   letter-spacing: normal;
   padding: 0.65rem 0.85rem;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-control-radius);
-  background: var(--color-surface);
-  box-shadow: none;
   resize: vertical;
 }
 
@@ -1854,16 +1862,14 @@ button.primary:disabled {
  * ============================================================ */
 
 /* CodeMirror editor used for the proposal source field (Markdown or
-   AsciiDoc, depending on the document format). Styled to match the
-   textarea look of other composer fields: same border, radius,
-   background, and min-height. While the editor's lazy chunks are
-   loading — or if they fail outright — the field falls back to the
-   textarea styled by the .composer .composer-body-field rules above,
-   so the dialog stays usable in both transient and degraded states. */
+   AsciiDoc, depending on the document format). Border, radius, and
+   surface come from the shared "control chrome" rule above so the
+   textarea fallback and the editor render identically; only the bits
+   that differ between a textarea and a div live here. While the
+   editor's lazy chunks are loading — or if they fail outright — the
+   field falls back to the textarea, so the dialog stays usable in
+   both transient and degraded states. */
 .proposal-source-editor {
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-control-radius);
-  background: var(--color-surface);
   /* `overflow: auto` + `resize: vertical` gives the wrapper a vertical
      resize affordance, restoring the textarea's old `resize: vertical`
      behavior so long or multi-block proposals can be expanded. */
