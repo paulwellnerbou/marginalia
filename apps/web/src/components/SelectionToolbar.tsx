@@ -1,3 +1,4 @@
+import type { BlockSourceRange } from '@marginalia/renderer';
 import { useEffect, useState } from 'react';
 import { captureSelection, selectionRect } from '../lib/selection.js';
 import type { CommentAnchor, DocumentFormat } from '../lib/api.js';
@@ -18,6 +19,7 @@ export interface ProposalTarget {
 interface Props {
   rootRef: React.RefObject<HTMLElement | null>;
   docFormat: DocumentFormat;
+  blockRanges: Map<string, BlockSourceRange>;
   onAdd: (anchor: CommentAnchor) => void;
   onPropose?: (target: ProposalTarget) => void;
 }
@@ -44,7 +46,7 @@ interface ResolvedSpan {
  * `block_id` plus optional `end_block_id` so the server can splice the
  * entire range.
  */
-export function SelectionToolbar({ rootRef, docFormat, onAdd, onPropose }: Props) {
+export function SelectionToolbar({ rootRef, docFormat, blockRanges, onAdd, onPropose }: Props) {
   const [state, setState] = useState<{ rect: DOMRect; span: ResolvedSpan | null } | null>(null);
 
   useEffect(() => {
@@ -66,12 +68,12 @@ export function SelectionToolbar({ rootRef, docFormat, onAdd, onPropose }: Props
         setState(null);
         return;
       }
-      const span = resolveSpan(root, range, docFormat);
+      const span = resolveSpan(root, range, docFormat, blockRanges);
       setState({ rect, span });
     };
     document.addEventListener('selectionchange', handle);
     return () => document.removeEventListener('selectionchange', handle);
-  }, [rootRef, docFormat]);
+  }, [rootRef, docFormat, blockRanges]);
 
   if (!state) return null;
 
@@ -156,6 +158,7 @@ function resolveSpan(
   root: HTMLElement,
   range: Range,
   docFormat: DocumentFormat,
+  blockRanges: Map<string, BlockSourceRange>,
 ): ResolvedSpan | null {
   // Narrow the search to the selection's common ancestor subtree —
   // `selectionchange` fires on every keystroke / drag tick, and a full
@@ -251,33 +254,39 @@ function resolveSpan(
       return { startId: id, endId: null, textEls: [only], blockCount: 1 };
     }
     // List items splice cleanly as a multi-block range in markdown
-    // ONLY for top-level lists at column 1: the renderer's listItem
-    // source ranges start at the bullet (not the start of the line),
-    // so a min/max splice between siblings in an indented list
-    // (`  - item`) or a list inside a blockquote (`> - item`) would
-    // drop the indent / `>` prefix on every line after the first.
-    // Asciidoc skips this path entirely — `canMergeMultiBlock`
-    // rejects asciidoc listItem multi-block.
+    // only when the validator (`canMergeMultiBlock`) would accept the
+    // pair. We check directly against the block-range map so the UI
+    // doesn't propose splices the server then rejects:
     //
-    // Two constraints on the touched `<li>`s:
-    //   1. All siblings at the same list level (same direct parent
-    //      `<ul>`/`<ol>`). Otherwise an inner-bullet→outer-sibling span
-    //      crosses the outer item's closing.
-    //   2. Their direct parent `<ul>`/`<ol>` carries `[data-block]`,
-    //      i.e. is itself a top-level markdown list. Nested lists
-    //      and lists inside other top-level blocks (blockquotes,
-    //      admonitions, etc.) don't carry it — only top-level mdast
-    //      nodes do. Falling through there matches the
-    //      `canMergeMultiBlock` rule (parentStart only set for
-    //      column-1 lists), so the UI doesn't propose splices that
-    //      the validator would reject.
+    //   1. Both items must be siblings at the same list level (same
+    //      direct parent `<ul>`/`<ol>`). Otherwise an
+    //      inner-bullet→outer-sibling span crosses the outer item's
+    //      closing.
+    //   2. Both items' resolved `BlockSourceRange.parentStart` must
+    //      be defined and equal. The locator only sets `parentStart`
+    //      for items in lists that begin at column 1 (offset 0 or
+    //      preceded by `\n`); indented or blockquoted lists leave it
+    //      unset, so this check naturally excludes them.
+    //
+    // The earlier `directParent.dataset.block` heuristic was close
+    // but not exact — a markdown list indented 1–3 spaces is still a
+    // top-level mdast node and gets `data-block`, yet its items lack
+    // `parentStart`. Going through `blockRanges` gives the same rule
+    // the validator uses.
     const directParent = touched[0]?.parentElement;
-    const allSiblingListItems =
+    const firstParentStart =
       docFormat === 'markdown' &&
+      touched.length > 0 &&
       touched.every((el) => el.tagName === 'LI') &&
-      touched.every((el) => el.parentElement === directParent) &&
-      directParent instanceof HTMLElement &&
-      !!directParent.dataset.block;
+      touched.every((el) => el.parentElement === directParent)
+        ? blockRanges.get(touched[0]!.dataset.subblock ?? '')?.parentStart
+        : undefined;
+    const allSiblingListItems =
+      firstParentStart !== undefined &&
+      touched.every(
+        (el) =>
+          blockRanges.get(el.dataset.subblock ?? '')?.parentStart === firstParentStart,
+      );
     if (allSiblingListItems) {
       const first = touched[0]!;
       const last = touched[touched.length - 1]!;

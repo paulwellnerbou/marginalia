@@ -1382,6 +1382,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   <SelectionToolbar
                     rootRef={docRef}
                     docFormat={doc.format}
+                    blockRanges={blockRanges}
                     onAdd={startCommentDraft}
                     onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
                   />
