@@ -181,6 +181,28 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [liveRendered, setLiveRendered] = useState(doc.rendered);
   const [error, setError] = useState<string | null>(null);
 
+  // Pending comment / proposal anchors carry block_ids that are only
+  // valid for the current document content. Drop any in-flight draft
+  // when:
+  //  - the document changes (doc.uid), so the composer can't submit a
+  //    previous document's anchor against a new one;
+  //  - the live source mutates in place (proposal accepted, refresh),
+  //    since block_ids are content-derived and may no longer point at
+  //    the same content the user originally selected.
+  //
+  // The snapshots live in `useState`, not refs: under React 19's
+  // concurrent renderer an interrupted render can mutate a ref and
+  // discard the matching setState, leaving a stale draft open. State
+  // updates only commit if the render commits, keeping snapshot and
+  // reset in lockstep.
+  const [trackedDocUid, setTrackedDocUid] = useState(doc.uid);
+  const [trackedLiveSource, setTrackedLiveSource] = useState(liveSource);
+  if (trackedDocUid !== doc.uid || trackedLiveSource !== liveSource) {
+    setTrackedDocUid(doc.uid);
+    setTrackedLiveSource(liveSource);
+    setPendingDraft(null);
+  }
+
   /**
    * Comment ID parsed from the URL hash on mount (e.g. `#comment-<id>`).
    * Cleared after the deep link is processed so thread refreshes don't
