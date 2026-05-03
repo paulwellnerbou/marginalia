@@ -189,14 +189,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   //  - the live source mutates in place (proposal accepted, refresh),
   //    since block_ids are content-derived and may no longer point at
   //    the same content the user originally selected.
-  const lastDocUidRef = useRef(doc.uid);
-  const lastLiveSourceRef = useRef(liveSource);
-  if (
-    lastDocUidRef.current !== doc.uid ||
-    lastLiveSourceRef.current !== liveSource
-  ) {
-    lastDocUidRef.current = doc.uid;
-    lastLiveSourceRef.current = liveSource;
+  //
+  // The snapshots live in `useState`, not refs: under React 19's
+  // concurrent renderer an interrupted render can mutate a ref and
+  // discard the matching setState, leaving a stale draft open. State
+  // updates only commit if the render commits, keeping snapshot and
+  // reset in lockstep.
+  const [trackedDocUid, setTrackedDocUid] = useState(doc.uid);
+  const [trackedLiveSource, setTrackedLiveSource] = useState(liveSource);
+  if (trackedDocUid !== doc.uid || trackedLiveSource !== liveSource) {
+    setTrackedDocUid(doc.uid);
+    setTrackedLiveSource(liveSource);
     setPendingDraft(null);
   }
 
