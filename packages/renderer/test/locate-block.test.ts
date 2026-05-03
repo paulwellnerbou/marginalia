@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { locateAllBlocks, locateBlockSource, render } from '../src/index.js';
+import {
+  locateAllBlocks,
+  locateBlockRange,
+  locateBlockSource,
+  render,
+} from '../src/index.js';
 
 describe('locateBlockSource', () => {
   test('returns ranges that slice back to exact block sources — round-trips with remarkBlockIds', async () => {
@@ -188,5 +193,181 @@ Real paragraph.
 
     const rewritten = md.slice(0, second.start) + 'NO' + md.slice(second.end);
     expect(rewritten).toBe(`| A | B |\n|---|---|\n| Yes | NO |\n`);
+  });
+});
+
+describe('locateBlockRange', () => {
+  // Three paragraphs, each its own top-level block. Ranges should
+  // round-trip cleanly via the block IDs from `locateAllBlocks`.
+  const md = `Alpha paragraph.
+
+Beta paragraph.
+
+Gamma paragraph.
+`;
+
+  test('null endId returns the start block range unchanged', () => {
+    const ids = [...locateAllBlocks(md).keys()];
+    const [a] = ids;
+    const single = locateBlockRange(md, a!, null);
+    expect(single).not.toBeNull();
+    expect(md.slice(single!.start, single!.end).trim()).toBe('Alpha paragraph.');
+  });
+
+  test('endId === startId collapses to single-block range', () => {
+    const ids = [...locateAllBlocks(md).keys()];
+    const [a] = ids;
+    const collapsed = locateBlockRange(md, a!, a!);
+    const single = locateBlockRange(md, a!, null);
+    expect(collapsed).toEqual(single);
+  });
+
+  test('multi-block range covers both endpoints plus inter-block whitespace', () => {
+    const ids = [...locateAllBlocks(md).keys()];
+    const [a, , c] = ids;
+    const range = locateBlockRange(md, a!, c!);
+    expect(range).not.toBeNull();
+    // Slicing the range yields all three paragraphs joined by their
+    // original blank-line separators — no leading/trailing extra text.
+    const sliced = md.slice(range!.start, range!.end);
+    expect(sliced).toContain('Alpha paragraph.');
+    expect(sliced).toContain('Beta paragraph.');
+    expect(sliced).toContain('Gamma paragraph.');
+    // Inter-block whitespace included
+    expect(sliced).toMatch(/Alpha paragraph\.\n\nBeta paragraph\.\n\nGamma paragraph\./);
+    // Bounds: start = paragraph A's start, end = paragraph C's end.
+    expect(range!.start).toBe(locateBlockRange(md, a!, null)!.start);
+    expect(range!.end).toBe(locateBlockRange(md, c!, null)!.end);
+    // Multi-block sentinel: kind = 'multi', text = ''.
+    expect(range!.kind).toBe('multi');
+    expect(range!.text).toBe('');
+  });
+
+  test('reversed endpoints still produce the correct merged range (min/max)', () => {
+    const ids = [...locateAllBlocks(md).keys()];
+    const [a, , c] = ids;
+    const forward = locateBlockRange(md, a!, c!);
+    const reversed = locateBlockRange(md, c!, a!);
+    expect(forward).not.toBeNull();
+    expect(reversed).not.toBeNull();
+    expect(reversed!.start).toBe(forward!.start);
+    expect(reversed!.end).toBe(forward!.end);
+  });
+
+  test('returns null when either endpoint id is unknown', () => {
+    const ids = [...locateAllBlocks(md).keys()];
+    const [a] = ids;
+    expect(locateBlockRange(md, a!, 'does-not-exist')).toBeNull();
+    expect(locateBlockRange(md, 'does-not-exist', a!)).toBeNull();
+  });
+
+  test('rejects tableCell endpoints but accepts listItem endpoints when endId is set', () => {
+    // Doc with both a paragraph (top-level) and table cells / list
+    // items (sub-blocks). `tableCell` endpoints are rejected (splicing
+    // across pipes would corrupt the table); `listItem` endpoints are
+    // accepted (line-aligned source ranges splice cleanly).
+    const mixed = `Top paragraph.
+
+| A | B |
+|---|---|
+| 1 | 2 |
+
+- one
+- two
+- three
+`;
+    const map = locateAllBlocks(mixed);
+    const top = [...map.entries()].find(([, r]) => r.kind === 'paragraph');
+    const cell = [...map.entries()].find(([, r]) => r.kind === 'tableCell');
+    const items = [...map.entries()].filter(([, r]) => r.kind === 'listItem');
+    expect(top).toBeDefined();
+    expect(cell).toBeDefined();
+    expect(items.length).toBe(3);
+
+    // tableCell endpoints are rejected.
+    expect(locateBlockRange(mixed, top![0], cell![0])).toBeNull();
+    expect(locateBlockRange(mixed, cell![0], top![0])).toBeNull();
+    expect(locateBlockRange(mixed, items[0]![0], cell![0])).toBeNull();
+    expect(locateBlockRange(mixed, cell![0], items[0]![0])).toBeNull();
+
+    // Sanity: equal sub-block id (single-block path) still works.
+    expect(locateBlockRange(mixed, cell![0], null)).not.toBeNull();
+    expect(locateBlockRange(mixed, cell![0], cell![0])).not.toBeNull();
+
+    // Same-list listItem→listItem multi-block is accepted and spans
+    // the items.
+    const itemSpan = locateBlockRange(mixed, items[0]![0], items[1]![0]);
+    expect(itemSpan).not.toBeNull();
+    expect(itemSpan!.kind).toBe('multi');
+    expect(mixed.slice(itemSpan!.start, itemSpan!.end)).toContain('- one');
+    expect(mixed.slice(itemSpan!.start, itemSpan!.end)).toContain('- two');
+    expect(mixed.slice(itemSpan!.start, itemSpan!.end)).not.toContain('- three');
+
+    // listItem mixed with another kind (paragraph) is rejected — a
+    // paragraph→nested-listItem span would slice through an outer
+    // item's closing, so we conservatively reject all mixed-kind
+    // pairings involving listItem.
+    expect(locateBlockRange(mixed, top![0], items[0]![0])).toBeNull();
+    expect(locateBlockRange(mixed, items[0]![0], top![0])).toBeNull();
+  });
+
+  test('rejects multi-listItem in indented and quoted lists (parentStart not set)', () => {
+    // Indented and blockquoted lists have items whose mdast position
+    // starts at the bullet, so a min/max splice between siblings
+    // would drop the leading indent / `>` prefix on every line after
+    // the first. The locator must NOT set `parentStart` on these
+    // items, so `canMergeMultiBlock` rejects multi-block on them.
+    const blockquoted = `> - one\n> - two\n> - three\n`;
+    const bMap = locateAllBlocks(blockquoted);
+    const bItems = [...bMap.entries()].filter(([, r]) => r.kind === 'listItem');
+    expect(bItems.length).toBe(3);
+    for (const [, r] of bItems) {
+      expect(r.parentStart).toBeUndefined();
+    }
+    expect(locateBlockRange(blockquoted, bItems[0]![0], bItems[1]![0])).toBeNull();
+
+    // Indented (non-list-nested) is also unsafe — but markdown
+    // doesn't really have "indented top-level lists" except inside
+    // other constructs, so the relevant case is nested lists.
+    const nested = `- outer1\n  - nested1\n  - nested2\n- outer2\n`;
+    const nMap = locateAllBlocks(nested);
+    const nItems = [...nMap.entries()].filter(([, r]) => r.kind === 'listItem');
+    const [outer1, nested1, nested2, outer2] = nItems;
+    expect(outer1![1].parentStart).toBeDefined();
+    expect(outer2![1].parentStart).toBeDefined();
+    expect(nested1![1].parentStart).toBeUndefined();
+    expect(nested2![1].parentStart).toBeUndefined();
+    // Outer↔outer (column-1 list): accepted.
+    expect(locateBlockRange(nested, outer1![0], outer2![0])).not.toBeNull();
+    // Nested↔nested: rejected (parentStart absent).
+    expect(locateBlockRange(nested, nested1![0], nested2![0])).toBeNull();
+  });
+
+  test('rejects cross-depth listItem endpoints (nested item ↔ outer sibling)', () => {
+    // Outer list with a nested sublist inside the first item. The
+    // outer items have `parentStart` (column-1 list); the nested
+    // items don't (indent > 0). All cross-depth combinations reject.
+    const nested = `- outer1
+  - nested1
+  - nested2
+- outer2
+`;
+    const map = locateAllBlocks(nested);
+    const items = [...map.entries()].filter(([, r]) => r.kind === 'listItem');
+    // Items: outer1, nested1, nested2, outer2 (visit order).
+    expect(items.length).toBe(4);
+    const [outer1, nested1, nested2, outer2] = items;
+
+    // Outer↔outer accepted (same column-1 parent list).
+    expect(locateBlockRange(nested, outer1![0], outer2![0])).not.toBeNull();
+
+    // Nested↔nested rejected — `parentStart` is unset for indented
+    // lists, so even same-list siblings can't merge.
+    expect(locateBlockRange(nested, nested1![0], nested2![0])).toBeNull();
+
+    // Cross-depth: nested item ↔ outer sibling rejected.
+    expect(locateBlockRange(nested, nested1![0], outer2![0])).toBeNull();
+    expect(locateBlockRange(nested, outer2![0], nested1![0])).toBeNull();
+    expect(locateBlockRange(nested, outer1![0], nested1![0])).toBeNull();
   });
 });

@@ -6,7 +6,6 @@ import {
   Cross2Icon,
   LetterCaseToggleIcon,
   MagnifyingGlassIcon,
-  TokensIcon,
 } from '@radix-ui/react-icons';
 import {
   Badge,
@@ -20,11 +19,13 @@ import {
   TextField,
   Tooltip,
 } from '@radix-ui/themes';
+import { WholeWordIcon } from 'lucide-react';
 import {
   type ReactNode,
   useCallback,
   useDeferredValue,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -180,6 +181,28 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [liveRendered, setLiveRendered] = useState(doc.rendered);
   const [error, setError] = useState<string | null>(null);
 
+  // Pending comment / proposal anchors carry block_ids that are only
+  // valid for the current document content. Drop any in-flight draft
+  // when:
+  //  - the document changes (doc.uid), so the composer can't submit a
+  //    previous document's anchor against a new one;
+  //  - the live source mutates in place (proposal accepted, refresh),
+  //    since block_ids are content-derived and may no longer point at
+  //    the same content the user originally selected.
+  //
+  // The snapshots live in `useState`, not refs: under React 19's
+  // concurrent renderer an interrupted render can mutate a ref and
+  // discard the matching setState, leaving a stale draft open. State
+  // updates only commit if the render commits, keeping snapshot and
+  // reset in lockstep.
+  const [trackedDocUid, setTrackedDocUid] = useState(doc.uid);
+  const [trackedLiveSource, setTrackedLiveSource] = useState(liveSource);
+  if (trackedDocUid !== doc.uid || trackedLiveSource !== liveSource) {
+    setTrackedDocUid(doc.uid);
+    setTrackedLiveSource(liveSource);
+    setPendingDraft(null);
+  }
+
   /**
    * Comment ID parsed from the URL hash on mount (e.g. `#comment-<id>`).
    * Cleared after the deep link is processed so thread refreshes don't
@@ -242,6 +265,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const docRef = useRef<HTMLElement>(null);
   const docScrollRef = useRef<HTMLDivElement>(null);
   const docSearchInputRef = useRef<HTMLInputElement>(null);
+  const [inlineCommentsColumnWidth, setInlineCommentsColumnWidth] = useState(0);
 
   useEffect(() => {
     localStorage.setItem(MAX_WIDTH_KEY, String(maxWidth));
@@ -275,6 +299,46 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     if (!canComment) setPendingDraft(null);
   }, [canComment]);
+
+  useLayoutEffect(() => {
+    if (!inlineCommentsOpen) {
+      setInlineCommentsColumnWidth(0);
+      return;
+    }
+
+    const scroll = docScrollRef.current;
+    const column = scroll?.querySelector<HTMLElement>('.ic-column') ?? null;
+
+    const updateWidth = () => {
+      if (!column) {
+        setInlineCommentsColumnWidth(0);
+        return;
+      }
+      const style = window.getComputedStyle(column);
+      const visible =
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        column.getClientRects().length > 0;
+      setInlineCommentsColumnWidth(visible ? column.getBoundingClientRect().width : 0);
+    };
+
+    updateWidth();
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateWidth);
+      return () => window.removeEventListener('resize', updateWidth);
+    }
+
+    const observer = new ResizeObserver(updateWidth);
+    if (scroll) observer.observe(scroll);
+    if (column) observer.observe(column);
+    window.addEventListener('resize', updateWidth);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateWidth);
+    };
+  }, [inlineCommentsOpen]);
 
   const headingIds = useMemo(() => flattenTocIds(liveRendered.toc), [liveRendered.toc]);
   const headingIdsKey = useMemo(() => headingIds.join('\u0000'), [headingIds]);
@@ -684,6 +748,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           anchor_quote: pendingProposalTarget.block_text,
           proposed_text: payload.proposed_text,
         };
+        if (pendingProposalTarget.end_block_id) {
+          req.anchor_end_block_id = pendingProposalTarget.end_block_id;
+        }
         if (payload.rationale) req.rationale = payload.rationale;
         await apiCreateProposal(doc.uid, req, identity);
         setPendingDraft(null);
@@ -902,17 +969,67 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return column.getClientRects().length > 0;
   }, [inlineCommentsOpen]);
 
+  useEffect(() => {
+    if (!canComment || !pendingAnchor) return;
+
+    if (!inlineCommentsOpen) {
+      setInlineCommentsOpen(true);
+      return;
+    }
+
+    if (!inlineCommentsVisible()) {
+      setCommentsOpen(true);
+      setRightTab('comments');
+    }
+  }, [canComment, pendingAnchor, inlineCommentsOpen, inlineCommentsVisible]);
+
+  const startCommentDraft = useCallback((anchor: CommentAnchor) => {
+    const scrollTop = docScrollRef.current?.scrollTop ?? null;
+    setInlineCommentsOpen(true);
+    setPendingDraft({ mode: 'comment', anchor });
+
+    if (scrollTop === null) return;
+
+    const restoreScroll = () => {
+      const scroll = docScrollRef.current;
+      if (scroll) scroll.scrollTop = scrollTop;
+    };
+
+    restoreScroll();
+    window.requestAnimationFrame(() => {
+      restoreScroll();
+      window.requestAnimationFrame(restoreScroll);
+    });
+  }, []);
+
   const openCommentThread = useCallback(
-    (threadId: string, scroll = true) => {
+    (
+      threadId: string,
+      options?: {
+        scroll?: boolean;
+        jumpToAnchor?: boolean;
+      },
+    ) => {
+      const jumpToAnchor = options?.jumpToAnchor ?? true;
+      const scroll = options?.scroll ?? !jumpToAnchor;
       // Prefer the inline column when it's actually visible; otherwise
       // fall back to the right pane (and open it if it's collapsed).
       if (!inlineCommentsVisible()) {
         setCommentsOpen(true);
         setRightTab('comments');
       }
+
+      if (jumpToAnchor) {
+        const thread = threads.find((t) => t.id === threadId);
+        const blockId = thread?.anchor.block_id;
+        if (thread && blockId) {
+          scrollToAnchor(blockId, thread.anchor.quote, thread.id);
+        }
+      }
+
       setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1, scroll }));
     },
-    [inlineCommentsVisible],
+    [inlineCommentsVisible, scrollToAnchor, threads],
   );
 
   const onRevertLatestHistoryVersion = useCallback(
@@ -1145,7 +1262,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             </Tooltip>
           </Flex>
           {docSearchOpen && (
-            <div className="doc-search-popover">
+            <div
+              className="doc-search-popover"
+              style={
+                inlineCommentsColumnWidth > 0
+                  ? ({
+                      '--doc-search-inline-comments-offset': `${inlineCommentsColumnWidth}px`,
+                    } as React.CSSProperties)
+                  : undefined
+              }
+            >
               <Flex align="center" gap="2" className="doc-search-toolbar">
                 <TextField.Root
                   ref={docSearchInputRef}
@@ -1153,6 +1279,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   type="search"
                   value={docSearchQuery}
                   onChange={(event) => setDocSearchQuery(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+                    event.preventDefault();
+                    navigateSearchResult(event.shiftKey ? -1 : 1);
+                  }}
                   placeholder="Search this document"
                   className="doc-search-field"
                 >
@@ -1167,9 +1298,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 >
                   <IconButton
                     size="1"
-                    variant={docSearchCaseSensitive ? 'soft' : 'ghost'}
-                    color={docSearchCaseSensitive ? APP_ACCENT_COLOR : 'gray'}
-                    className={`doc-search-option ${docSearchCaseSensitive ? 'active' : ''}`}
+                    variant="ghost"
+                    color="gray"
+                    className="doc-toolbar-toggle"
                     aria-label={
                       docSearchCaseSensitive
                         ? 'Disable case-sensitive search'
@@ -1191,9 +1322,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 >
                   <IconButton
                     size="1"
-                    variant={docSearchWholeWords ? 'soft' : 'ghost'}
-                    color={docSearchWholeWords ? APP_ACCENT_COLOR : 'gray'}
-                    className={`doc-search-option ${docSearchWholeWords ? 'active' : ''}`}
+                    variant="ghost"
+                    color="gray"
+                    className="doc-toolbar-toggle"
                     aria-label={
                       docSearchWholeWords ? 'Disable whole-word search' : 'Enable whole-word search'
                     }
@@ -1203,7 +1334,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                       docSearchInputRef.current?.focus({ preventScroll: true });
                     }}
                   >
-                    <TokensIcon />
+                    <WholeWordIcon />
                   </IconButton>
                 </Tooltip>
                 <Text size="1" color="gray" className="doc-search-count">
@@ -1265,13 +1396,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   activeSearchResultId={activeSearchTarget?.id ?? null}
                   activeSearchVersion={activeSearchTarget?.nonce ?? 0}
                   onSearchResultsChange={updateSearchResults}
-                  onHighlightClick={(threadId) => openCommentThread(threadId, false)}
+                  onHighlightClick={(threadId) =>
+                    openCommentThread(threadId, { scroll: false, jumpToAnchor: false })}
                   onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
                 />
                 {canComment && (
                   <SelectionToolbar
                     rootRef={docRef}
-                    onAdd={(anchor) => setPendingDraft({ mode: 'comment', anchor })}
+                    docFormat={doc.format}
+                    blockRanges={blockRanges}
+                    onAdd={startCommentDraft}
                     onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
                   />
                 )}
@@ -1291,6 +1425,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   docElementRef={docRef}
                   scrollContainerRef={docScrollRef}
                   blockRanges={blockRanges}
+                  docFormat={doc.format}
                   canComment={canComment}
                   stackingEnabled={inlineCommentsStacking}
                   onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
@@ -1370,6 +1505,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   threads={threads}
                   docSource={liveSource}
                   blockRanges={blockRanges}
+                  docFormat={doc.format}
                   canComment={canComment}
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}

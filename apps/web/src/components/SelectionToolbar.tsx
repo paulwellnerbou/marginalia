@@ -1,17 +1,35 @@
+import type { BlockSourceRange } from '@marginalia/renderer';
 import { useEffect, useState } from 'react';
 import { captureSelection, selectionRect } from '../lib/selection.js';
-import type { CommentAnchor } from '../lib/api.js';
+import type { CommentAnchor, DocumentFormat } from '../lib/api.js';
 
 export interface ProposalTarget {
   block_id: string;
-  /** Normalized plain text of the whole block, used as the quote snapshot. */
+  /**
+   * Multi-block proposal: id of the last top-level block in the span
+   * (in source/DOM order). Null/absent for single-block proposals.
+   */
+  end_block_id?: string | null;
+  /** Normalized plain text of the whole span, used as the quote snapshot. */
   block_text: string;
+  /** Number of top-level blocks the span covers. 1 for single-block. */
+  block_count: number;
 }
 
 interface Props {
   rootRef: React.RefObject<HTMLElement | null>;
+  docFormat: DocumentFormat;
+  blockRanges: Map<string, BlockSourceRange>;
   onAdd: (anchor: CommentAnchor) => void;
   onPropose?: (target: ProposalTarget) => void;
+}
+
+interface ResolvedSpan {
+  startId: string;
+  endId: string | null;
+  /** Elements whose text contributes to `block_text`, in DOM order. */
+  textEls: HTMLElement[];
+  blockCount: number;
 }
 
 /**
@@ -20,9 +38,16 @@ interface Props {
  * to the nearest proposal-targetable block — a top-level block
  * (paragraph, heading, code block, blockquote, list, table, …) OR a
  * sub-block (list item, table cell) when the selection is inside one.
+ *
+ * Multi-block selections collapse first: if all touched sub-blocks
+ * share a single `[data-block]` ancestor, the proposal targets that
+ * parent (the whole list / whole table). Otherwise, when the selection
+ * spans multiple distinct top-level blocks, the proposal carries
+ * `block_id` plus optional `end_block_id` so the server can splice the
+ * entire range.
  */
-export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
-  const [state, setState] = useState<{ rect: DOMRect; blockId: string | null } | null>(null);
+export function SelectionToolbar({ rootRef, docFormat, blockRanges, onAdd, onPropose }: Props) {
+  const [state, setState] = useState<{ rect: DOMRect; span: ResolvedSpan | null } | null>(null);
 
   useEffect(() => {
     const handle = () => {
@@ -43,19 +68,12 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
         setState(null);
         return;
       }
-      // Triple-click typically sets the selection end at offset 0 of the
-      // *next* node, which makes `commonAncestorContainer` the parent of
-      // the paragraph rather than the paragraph itself. Fall back to the
-      // node where the selection starts — that's always inside the block
-      // the user meant to act on.
-      const blockEl =
-        closestBlock(range.commonAncestorContainer) ?? closestBlock(range.startContainer);
-      const blockId = blockEl?.dataset.subblock ?? blockEl?.dataset.block ?? null;
-      setState({ rect, blockId });
+      const span = resolveSpan(root, range, docFormat, blockRanges);
+      setState({ rect, span });
     };
     document.addEventListener('selectionchange', handle);
     return () => document.removeEventListener('selectionchange', handle);
-  }, [rootRef]);
+  }, [rootRef, docFormat, blockRanges]);
 
   if (!state) return null;
 
@@ -71,18 +89,25 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
 
   function doPropose(e: React.MouseEvent) {
     e.preventDefault();
-    const root = rootRef.current;
-    if (!root || !state || !state.blockId) return;
-    const escaped = CSS.escape(state.blockId);
-    const blockEl = root.querySelector<HTMLElement>(
-      `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-    );
-    if (!blockEl) return;
-    const blockText = (blockEl.textContent ?? '').replace(/\s+/gu, ' ').trim();
-    onPropose?.({ block_id: state.blockId, block_text: blockText });
+    if (!state || !state.span) return;
+    const blockText = state.span.textEls
+      .map((el) => (el.textContent ?? '').replace(/\s+/gu, ' ').trim())
+      .filter((s) => s.length > 0)
+      .join('\n\n');
+    onPropose?.({
+      block_id: state.span.startId,
+      end_block_id: state.span.endId,
+      block_text: blockText,
+      block_count: state.span.blockCount,
+    });
     setState(null);
     window.getSelection()?.removeAllRanges();
   }
+
+  const proposeLabel =
+    state.span && state.span.blockCount > 1
+      ? `Propose edit (${state.span.blockCount} blocks)`
+      : 'Propose edit';
 
   return (
     <div
@@ -100,11 +125,292 @@ export function SelectionToolbar({ rootRef, onAdd, onPropose }: Props) {
     >
       {/* mousedown so the handler fires before selectionchange clears the range */}
       <button type="button" onMouseDown={doComment}>+ Comment</button>
-      {onPropose && state.blockId && (
-        <button type="button" onMouseDown={doPropose}>Propose edit</button>
+      {onPropose && state.span && (
+        <button type="button" onMouseDown={doPropose}>{proposeLabel}</button>
       )}
     </div>
   );
+}
+
+/**
+ * Resolve which block(s) the selection range covers.
+ *
+ *   - Exactly one sub-block touched → single-block proposal at the sub-block id.
+ *   - Multiple sibling list-item sub-blocks of a top-level markdown
+ *     list (their direct `<ul>`/`<ol>` parent carries `[data-block]`)
+ *     → multi-block proposal spanning the first/last list-item ids.
+ *     Items in nested lists, lists inside blockquotes, or asciidoc
+ *     lists don't qualify — splicing across their bullets would
+ *     drop the indent/`>` prefix or hit best-effort source ranges,
+ *     so we fall through to collapse-to-parent.
+ *   - Multiple table-cell sub-blocks sharing one `<table>` parent →
+ *     single-block proposal at the table id. Cell-level multi-block
+ *     would slice across `|` pipes and corrupt the table.
+ *   - Sub-blocks whose enclosing top-level container has no
+ *     `[data-block]` (e.g. an asciidoc list whose synthesized parent
+ *     wasn't recorded) → single-block proposal on the first touched
+ *     sub-block, so "Propose edit" stays available.
+ *   - One top-level block touched (no sub-blocks involved) → single-block.
+ *   - Anything else → multi-block: startId/endId are the first/last
+ *     top-level block in DOM order.
+ */
+function resolveSpan(
+  root: HTMLElement,
+  range: Range,
+  docFormat: DocumentFormat,
+  blockRanges: Map<string, BlockSourceRange>,
+): ResolvedSpan | null {
+  // Narrow the search to the selection's common ancestor subtree —
+  // `selectionchange` fires on every keystroke / drag tick, and a full
+  // `root.querySelectorAll` over a large document would be wasteful.
+  // Then walk back up to `root` so we still consider any wrapping
+  // top-level block the selection sits inside (e.g. cursor in one cell
+  // → only the table is an ancestor of commonAncestor).
+  const selector = '[data-block], [data-subblock]';
+  const ca = range.commonAncestorContainer;
+  const scope =
+    (ca.nodeType === Node.ELEMENT_NODE ? (ca as Element) : ca.parentElement) ?? root;
+  const inScope =
+    scope instanceof HTMLElement && root.contains(scope) ? scope : root;
+
+  const all: HTMLElement[] = [];
+  if (inScope instanceof HTMLElement && inScope.matches(selector)) all.push(inScope);
+  all.push(...inScope.querySelectorAll<HTMLElement>(selector));
+  let ancestor: HTMLElement | null = inScope.parentElement;
+  while (ancestor && ancestor !== root) {
+    if (ancestor.matches(selector)) all.push(ancestor);
+    ancestor = ancestor.parentElement;
+  }
+  if (root !== inScope && root.matches(selector)) all.push(root);
+
+  let touched = all.filter((el) => intersectsRange(range, el));
+
+  // `all` is built from `inScope.querySelectorAll(...)` (preorder)
+  // *plus* matching ancestors walked outward to `root`, so descendants
+  // can come before their ancestors. The stack-based prune below
+  // assumes DOM preorder (parents before descendants) — sort first so
+  // a selection inside a cell doesn't keep both the `<td>` AND the
+  // enclosing `<table>`.
+  touched.sort((a, b) => {
+    if (a === b) return 0;
+    const pos = a.compareDocumentPosition(b);
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return 0;
+  });
+
+  // Drop ancestors whose descendants are also touched. A selection
+  // inside one table cell intersects both the `<td data-subblock>` and
+  // the enclosing `<table data-block>`; we want to act on the
+  // innermost — the cell — not the whole table.
+  //
+  // After the sort above, `touched` is in preorder. A linear stack
+  // pass keeps only the innermost touched elements: when the new
+  // element is contained by the stack's top, pop the top (the
+  // ancestor is subsumed); otherwise push and move on. O(n) instead
+  // of the previous O(n²) `some(contains)` filter.
+  const pruned: HTMLElement[] = [];
+  for (const el of touched) {
+    while (pruned.length > 0 && pruned[pruned.length - 1]!.contains(el)) {
+      pruned.pop();
+    }
+    pruned.push(el);
+  }
+  touched = pruned;
+
+  // Triple-click / keyboard-extend selections often end at offset 0 of
+  // the *next* block; drop a trailing block that's only "touched"
+  // because the caret sits at its very start.
+  if (touched.length > 1) {
+    const last = touched[touched.length - 1]!;
+    if (
+      range.endOffset === 0 &&
+      (range.endContainer === last || last.contains(range.endContainer))
+    ) {
+      touched = touched.slice(0, -1);
+    }
+  }
+
+  if (touched.length === 0) {
+    // Fallback to the previous behavior: nearest block ancestor of the
+    // selection's start. Triple-click on a paragraph sets
+    // commonAncestorContainer to the parent, so this keeps that working.
+    const nearest =
+      closestBlock(range.commonAncestorContainer) ?? closestBlock(range.startContainer);
+    if (!nearest) return null;
+    const id = nearest.dataset.subblock ?? nearest.dataset.block ?? null;
+    if (!id) return null;
+    return { startId: id, endId: null, textEls: [nearest], blockCount: 1 };
+  }
+
+  // Sub-block-only selection.
+  const subBlocksOnly = touched.every(
+    (el) => !!el.dataset.subblock && !el.dataset.block,
+  );
+  if (subBlocksOnly) {
+    if (touched.length === 1) {
+      const only = touched[0]!;
+      const id = only.dataset.subblock!;
+      return { startId: id, endId: null, textEls: [only], blockCount: 1 };
+    }
+    // List items splice cleanly as a multi-block range in markdown
+    // only when the validator (`canMergeMultiBlock`) would accept the
+    // pair. We check directly against the block-range map so the UI
+    // doesn't propose splices the server then rejects:
+    //
+    //   1. Both items must be siblings at the same list level (same
+    //      direct parent `<ul>`/`<ol>`). Otherwise an
+    //      inner-bullet→outer-sibling span crosses the outer item's
+    //      closing.
+    //   2. Both items' resolved `BlockSourceRange.parentStart` must
+    //      be defined and equal. The locator only sets `parentStart`
+    //      for items in lists that begin at column 1 (offset 0 or
+    //      preceded by `\n`); indented or blockquoted lists leave it
+    //      unset, so this check naturally excludes them.
+    //
+    // The earlier `directParent.dataset.block` heuristic was close
+    // but not exact — a markdown list indented 1–3 spaces is still a
+    // top-level mdast node and gets `data-block`, yet its items lack
+    // `parentStart`. Going through `blockRanges` gives the same rule
+    // the validator uses.
+    const directParent = touched[0]?.parentElement;
+    const firstParentStart =
+      docFormat === 'markdown' &&
+      touched.length > 0 &&
+      touched.every((el) => el.tagName === 'LI') &&
+      touched.every((el) => el.parentElement === directParent)
+        ? blockRanges.get(touched[0]!.dataset.subblock ?? '')?.parentStart
+        : undefined;
+    const allSiblingListItems =
+      firstParentStart !== undefined &&
+      touched.every(
+        (el) =>
+          blockRanges.get(el.dataset.subblock ?? '')?.parentStart === firstParentStart,
+      );
+    if (allSiblingListItems) {
+      const first = touched[0]!;
+      const last = touched[touched.length - 1]!;
+      return {
+        startId: first.dataset.subblock!,
+        endId: last.dataset.subblock!,
+        textEls: touched,
+        blockCount: touched.length,
+      };
+    }
+    // Table cells: collapse to the shared `<table>` parent. A
+    // cell-level multi-block span would slice across `|` pipes.
+    const sharedParent = sharedTopLevelAncestor(touched);
+    if (sharedParent && sharedParent.dataset.block) {
+      return {
+        startId: sharedParent.dataset.block,
+        endId: null,
+        textEls: [sharedParent],
+        blockCount: 1,
+      };
+    }
+    // Different parents (e.g. cells from different tables): fall
+    // through to multi-block on the parents.
+    const parents = uniqueOrdered(
+      touched.map((el) => topLevelAncestor(el)).filter((el): el is HTMLElement => el !== null),
+    );
+    if (parents.length === 0) {
+      // No `[data-block]` ancestor exists for any touched sub-block
+      // (e.g. an asciidoc list whose enclosing `<ul>` had no
+      // extractable text and so wasn't recorded as a top-level block).
+      // Fall back to a single-block proposal on the first touched
+      // sub-block — better than hiding "Propose edit" entirely.
+      const only = touched[0]!;
+      const id = only.dataset.subblock;
+      if (!id) return null;
+      return { startId: id, endId: null, textEls: [only], blockCount: 1 };
+    }
+    const first = parents[0]!;
+    const lastP = parents[parents.length - 1]!;
+    if (parents.length === 1) {
+      return {
+        startId: first.dataset.block!,
+        endId: null,
+        textEls: [first],
+        blockCount: 1,
+      };
+    }
+    return {
+      startId: first.dataset.block!,
+      endId: lastP.dataset.block!,
+      textEls: parents,
+      blockCount: parents.length,
+    };
+  }
+
+  // Mixed or top-level: collapse each touched element to its top-level
+  // block (a top-level data-block element returns itself), then dedupe.
+  const tops = uniqueOrdered(
+    touched.map((el) => topLevelAncestor(el)).filter((el): el is HTMLElement => el !== null),
+  );
+  if (tops.length === 0) return null;
+  const firstTop = tops[0]!;
+  const lastTop = tops[tops.length - 1]!;
+  if (tops.length === 1) {
+    return { startId: firstTop.dataset.block!, endId: null, textEls: [firstTop], blockCount: 1 };
+  }
+  return {
+    startId: firstTop.dataset.block!,
+    endId: lastTop.dataset.block!,
+    textEls: tops,
+    blockCount: tops.length,
+  };
+}
+
+function intersectsRange(range: Range, el: HTMLElement): boolean {
+  // Range.intersectsNode is a non-standard but widely supported helper;
+  // fall back to manual comparison if missing.
+  if (typeof range.intersectsNode === 'function') return range.intersectsNode(el);
+  // Standard overlap test: range.start < el.end AND range.end > el.start.
+  // `compareBoundaryPoints(END_TO_START, other)` compares this.start to
+  // other.end; `START_TO_END` compares this.end to other.start.
+  // Returns -1 / 0 / +1 for before / equal / after, so strict inequality
+  // matches Range.intersectsNode (touching boundaries don't count).
+  const elRange = el.ownerDocument!.createRange();
+  elRange.selectNodeContents(el);
+  const startsBeforeElEnd =
+    range.compareBoundaryPoints(Range.END_TO_START, elRange) < 0;
+  const endsAfterElStart =
+    range.compareBoundaryPoints(Range.START_TO_END, elRange) > 0;
+  return startsBeforeElEnd && endsAfterElStart;
+}
+
+function topLevelAncestor(el: HTMLElement): HTMLElement | null {
+  // Walk upward looking for a [data-block] element. A sub-block-only
+  // node returns the enclosing top-level block; a top-level node
+  // returns itself.
+  let n: HTMLElement | null = el;
+  while (n) {
+    if (n.dataset.block) return n;
+    n = n.parentElement;
+  }
+  return null;
+}
+
+function sharedTopLevelAncestor(els: HTMLElement[]): HTMLElement | null {
+  if (els.length === 0) return null;
+  const first = topLevelAncestor(els[0]!);
+  if (!first) return null;
+  for (let i = 1; i < els.length; i++) {
+    if (topLevelAncestor(els[i]!) !== first) return null;
+  }
+  return first;
+}
+
+function uniqueOrdered<T>(arr: T[]): T[] {
+  const seen = new Set<T>();
+  const out: T[] = [];
+  for (const item of arr) {
+    if (!seen.has(item)) {
+      seen.add(item);
+      out.push(item);
+    }
+  }
+  return out;
 }
 
 function closestBlock(node: Node): HTMLElement | null {

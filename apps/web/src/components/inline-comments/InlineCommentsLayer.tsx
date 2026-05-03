@@ -16,6 +16,7 @@ import {
   reconcileThreadCollapseState,
   type ThreadCollapseState,
 } from '../threadCollapseState.js';
+import type { DocumentFormat } from '../../lib/api.js';
 import { InlineCommentsToolbar } from './InlineCommentsToolbar.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
@@ -29,6 +30,7 @@ interface Props {
   docElementRef: RefObject<HTMLElement | null>;
   scrollContainerRef: RefObject<HTMLDivElement | null>;
   blockRanges: Map<string, BlockSourceRange>;
+  docFormat: DocumentFormat;
   canComment: boolean;
   /**
    * When true: all cards are sticky-stacked at the top initially. As
@@ -124,6 +126,7 @@ export function InlineCommentsLayer({
   docElementRef,
   scrollContainerRef,
   blockRanges,
+  docFormat,
   canComment,
   stackingEnabled,
   onToggleStacking,
@@ -729,6 +732,7 @@ export function InlineCommentsLayer({
         needsName={!displayName}
         docSource={docSource}
         blockRanges={blockRanges}
+        docFormat={docFormat}
         focused={focusedId === id}
         flashPhase={flash?.id === id ? flash.phase : null}
         collapsed={collapsed.has(id)}

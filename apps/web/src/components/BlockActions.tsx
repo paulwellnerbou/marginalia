@@ -159,7 +159,7 @@ export function BlockActions({ rootRef, onPropose }: Props) {
     );
     if (!el) return;
     const blockText = (el.textContent ?? '').replace(/\s+/gu, ' ').trim();
-    onPropose({ block_id: renderedTarget.blockId, block_text: blockText });
+    onPropose({ block_id: renderedTarget.blockId, block_text: blockText, block_count: 1 });
     setHoveredTarget(null);
   }
 

@@ -8,6 +8,8 @@
   --ui-control-radius: 8px;
   --ui-control-font-size: 0.9375rem;
   --ui-control-line-height: 1.4;
+  --doc-floating-toolbar-height: 38px;
+  --doc-floating-toolbar-radius: var(--ui-control-radius);
 
   --app-bar-height: 48px;
   --doc-chrome-height: 44px;
@@ -428,7 +430,7 @@ button.primary:disabled {
 .doc-search-popover {
   position: absolute;
   top: calc(var(--doc-chrome-height));
-  right: 0.25rem;
+  right: calc(var(--doc-search-inline-comments-offset, 0px) + 0.25rem);
   left: 0;
   display: flex;
   justify-content: flex-end;
@@ -439,9 +441,10 @@ button.primary:disabled {
 
 .doc-search-toolbar {
   pointer-events: auto;
+  height: var(--doc-floating-toolbar-height);
   padding: 0.35rem 0.4rem;
   border: 1px solid var(--ui-border);
-  border-radius: calc(var(--ui-control-radius) + 2px);
+  border-radius: var(--doc-floating-toolbar-radius);
   background: color-mix(in srgb, var(--color-panel-solid) 94%, transparent);
   box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
   backdrop-filter: blur(14px);
@@ -467,11 +470,18 @@ button.primary:disabled {
   flex-shrink: 0;
 }
 
-.doc-search-option {
+.doc-toolbar-toggle {
   flex-shrink: 0;
+  inline-size: 24px;
+  block-size: 24px;
+  min-inline-size: 24px;
+  border-radius: var(--doc-floating-toolbar-radius);
+  color: var(--gray-11);
 }
 
-.doc-search-option.active {
+.doc-toolbar-toggle[aria-pressed="true"] {
+  background-color: color-mix(in srgb, var(--accent-a4) 75%, transparent);
+  color: var(--accent-11);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-a7) 45%, transparent);
 }
 
@@ -481,11 +491,10 @@ button.primary:disabled {
 }
 
 .doc-search-field .rt-TextFieldSlot svg,
-.doc-search-option svg,
+.doc-toolbar-toggle svg,
 .toc-search-icon {
   width: 16px;
   height: 16px;
-  color: var(--gray-11);
 }
 
 .doc-search-count {
@@ -1377,6 +1386,18 @@ button.primary:disabled {
 }
 
 .composer .composer-name-field :is(input, .rt-TextFieldInput),
+.composer .composer-body-field :is(textarea, .rt-TextAreaInput),
+.proposal-source-editor {
+  /* Shared "control chrome" for the composer text inputs and the
+     CodeMirror wrapper, so the textarea fallback and the editor look
+     identical. */
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-control-radius);
+  background: var(--color-surface);
+  box-shadow: none;
+}
+
+.composer .composer-name-field :is(input, .rt-TextFieldInput),
 .composer .composer-body-field :is(textarea, .rt-TextAreaInput) {
   width: 100%;
   box-sizing: border-box;
@@ -1386,10 +1407,6 @@ button.primary:disabled {
   line-height: var(--ui-control-line-height);
   letter-spacing: normal;
   padding: 0.65rem 0.85rem;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-control-radius);
-  background: var(--color-surface);
-  box-shadow: none;
   resize: vertical;
 }
 
@@ -1844,13 +1861,37 @@ button.primary:disabled {
  * Edit proposals
  * ============================================================ */
 
-/* The composer lives inside a Dialog; no extra frame needed. The
-   nested .composer .composer-body-field rule applies the same font /
-   padding / border / resize-vertical treatment the comment composer
-   uses, so the two look identical. */
-/* Markdown source deserves a monospace face so indentation and fences
-   are readable. Sized slightly larger than the rationale field for the
-   same reason — it's the primary field users type into. */
+/* CodeMirror editor used for the proposal source field (Markdown or
+   AsciiDoc, depending on the document format). Border, radius, and
+   surface come from the shared "control chrome" rule above so the
+   textarea fallback and the editor render identically; only the bits
+   that differ between a textarea and a div live here. While the
+   editor's lazy chunks are loading — or if they fail outright — the
+   field falls back to the textarea, so the dialog stays usable in
+   both transient and degraded states. */
+.proposal-source-editor {
+  /* `overflow: auto` + `resize: vertical` gives the wrapper a vertical
+     resize affordance, restoring the textarea's old `resize: vertical`
+     behavior so long or multi-block proposals can be expanded. */
+  overflow: auto;
+  resize: vertical;
+  min-height: calc(var(--ui-control-height) * 5);
+}
+
+.proposal-source-editor .cm-editor {
+  height: 100%;
+  min-height: calc(var(--ui-control-height) * 5);
+}
+
+.proposal-source-editor .cm-scroller {
+  /* Match the textarea fallback's 0.65rem 0.85rem padding so the
+     source text sits the same distance from the chrome both before
+     and after the CodeMirror swap. */
+  padding: 0.65rem 0.85rem;
+}
+
+/* Restore the markdown-source font face / size on the textarea
+   fallback, matching the CodeMirror editor's monospace styling. */
 .edit-proposal-composer .proposal-source-field :is(textarea, .rt-TextAreaInput) {
   font-family: var(--md-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-size: 0.875rem;
@@ -2017,11 +2058,13 @@ button.primary:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: 32px;
-  padding: 0 6px;
-  background: var(--ui-surface);
+  height: var(--doc-floating-toolbar-height);
+  padding: 0.35rem 0.4rem;
+  background: color-mix(in srgb, var(--color-panel-solid) 94%, transparent);
   border: 1px solid var(--ui-border);
-  border-radius: 6px;
+  border-radius: var(--doc-floating-toolbar-radius);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
+  backdrop-filter: blur(14px);
 }
 .ic-toolbar-group {
   display: flex;
@@ -2036,14 +2079,6 @@ button.primary:disabled {
   user-select: none;
   pointer-events: none;
 }
-/* Active toggle styling. Reuses Radix's ghost IconButton box exactly,
-   only swapping the background — so the click target, padding, and
-   bounds stay identical between the on and off states. */
-.ic-toolbar .rt-IconButton[aria-pressed="true"] {
-  background-color: var(--gray-a4);
-  color: var(--gray-12);
-}
-
 /* Each card lives inside an absolutely-positioned slot whose top and
    height are driven by JS to express the user's "all cards sticky at
    top → all unstick at first anchor → next card re-engages alone"
@@ -2290,8 +2325,11 @@ button.primary:disabled {
 .ic-row:focus-within .ic-row-meta-actions {
   opacity: 1;
 }
-/* Confirm prompts always visible regardless of hover state. */
-.ic-row-meta-actions:has(.ic-confirm-prompt) {
+/* Confirm prompts always visible regardless of hover state — keyboard
+   activation can move focus off the row when the originating button
+   unmounts, so we can't rely on :hover/:focus-within. */
+.ic-row-meta-actions:has(.ic-confirm-prompt),
+.ic-row-meta-actions[data-confirming='true'] {
   opacity: 1;
 }
 /* Touch / coarse-pointer devices don't have hover — keep the row
@@ -2583,4 +2621,3 @@ mark.comment-highlight-resolved {
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
 }
-

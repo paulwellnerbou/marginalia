@@ -9,6 +9,7 @@ import {
   rewriteAssetReferences,
   sanitizeDocumentFilename,
 } from '@marginalia/renderer';
+import type { BlockSourceRange } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
@@ -379,11 +380,11 @@ async function updateDocument(c: Context, deps: AppDeps) {
   // get orphaned after every save. Markdown uses the mdast-based locator;
   // asciidoc hands off to its own pipeline, and its locator also emits
   // sub-block ids for supported nested structures (e.g. list items).
-  const knownIds =
+  const knownBlocks =
     doc.format === 'asciidoc'
-      ? [...locateAllBlocksAsciidoc(nextSource).keys()]
-      : [...locateAllBlocks(nextSource).keys()];
-  await reanchorAndBroadcast(deps, doc, knownIds, now, decision.identity.clientId);
+      ? locateAllBlocksAsciidoc(nextSource)
+      : locateAllBlocks(nextSource);
+  await reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (isContentChange(previousSource, nextSource)) {
     realtime.broadcast(
@@ -1118,11 +1119,11 @@ function isBundleVersion(v: unknown): v is 1 | 2 | 3 | 4 {
 async function reanchorAndBroadcast(
   deps: AppDeps,
   doc: DocumentRow,
-  presentBlockIds: string[],
+  blocks: Map<string, BlockSourceRange>,
   now: number,
   exceptClientId: string,
 ): Promise<void> {
-  const orphaned = reanchorProposals(deps.db, doc.uid, presentBlockIds, now);
+  const orphaned = reanchorProposals(deps.db, doc.uid, blocks, doc.format, now);
   for (const row of orphaned) {
     deps.realtime.broadcast(
       doc.uid,
@@ -1340,11 +1341,11 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
     );
   }
 
-  const knownIds =
+  const knownBlocks =
     doc.format === 'asciidoc'
-      ? [...locateAllBlocksAsciidoc(restoredSource).keys()]
-      : [...locateAllBlocks(restoredSource).keys()];
-  await reanchorAndBroadcast(deps, doc, knownIds, now, decision.identity.clientId);
+      ? locateAllBlocksAsciidoc(restoredSource)
+      : locateAllBlocks(restoredSource);
+  await reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   realtime.broadcast(
     doc.uid,
@@ -1419,11 +1420,11 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
       ? (reopenAcceptedProposal(db, doc.uid, meta.proposalId, now)?.id ?? null)
       : null;
 
-  const knownIds =
+  const knownBlocks =
     doc.format === 'asciidoc'
-      ? [...locateAllBlocksAsciidoc(diff.before).keys()]
-      : [...locateAllBlocks(diff.before).keys()];
-  await reanchorAndBroadcast(deps, doc, knownIds, now, decision.identity.clientId);
+      ? locateAllBlocksAsciidoc(diff.before)
+      : locateAllBlocks(diff.before);
+  await reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (reopenedProposalId) {
     const reopened = loadProposalRow(db, reopenedProposalId, doc.uid);

@@ -1,6 +1,6 @@
 import Asciidoctor from '@asciidoctor/core';
 import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
-import type { BlockSourceRange } from './locate-block.js';
+import { canMergeMultiBlock, type BlockSourceRange } from './locate-block.js';
 
 declare global {
   var __asciidoctor: ReturnType<typeof Asciidoctor> | undefined;
@@ -26,6 +26,39 @@ export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSource
   walkTopLevel(doc, source, out);
   walkSubBlocks(doc, source, out);
   return out;
+}
+
+/**
+ * AsciiDoc twin of `locateBlockRange`. Same min/max merge semantics:
+ * the returned range covers everything from the earlier block's start
+ * to the later block's end (in source order). Inter-block whitespace
+ * is included so a server-side splice replaces the whole span atomically.
+ *
+ * `text` is intentionally '' for multi-block (matches the markdown
+ * twin); callers slice `source` with `start`/`end` themselves.
+ *
+ * Validation goes through the shared `canMergeMultiBlock` predicate,
+ * with one asciidoc-only difference: `listItem` is always rejected
+ * because `listItemSourceRange` is best-effort (single line, no
+ * continuation `+` lines), and we don't populate `parentStart` for
+ * asciidoc list items — so the markdown same-parent path can't admit
+ * them either. Re-allow once continuations are supported.
+ */
+export function locateBlockRangeAsciidoc(
+  source: string,
+  startId: string,
+  endId: string | null,
+): BlockSourceRange | null {
+  const all = locateAllBlocksAsciidoc(source);
+  const a = all.get(startId);
+  if (!a) return null;
+  if (!endId || endId === startId) return a;
+  const b = all.get(endId);
+  if (!b) return null;
+  if (!canMergeMultiBlock(a, b, 'asciidoc')) return null;
+  const start = Math.min(a.start, b.start);
+  const end = Math.max(a.end, b.end);
+  return { start, end, kind: 'multi', text: '' };
 }
 
 /**
@@ -72,6 +105,13 @@ function recordSubBlockRange(
   if (!range) return;
   // Every occurrence gets its own entry — counts suffixes duplicates
   // with `#2`, `#3`, …, so ids remain unique.
+  //
+  // Intentionally NOT setting `parentStart`: the multi-listItem path
+  // is unsafe in asciidoc (best-effort `listItemSourceRange` doesn't
+  // cover continuation lines), and `canMergeMultiBlock` rejects
+  // asciidoc listItems explicitly via its `format` argument. Don't
+  // start populating `parentStart` here without first making
+  // continuation ranges accurate.
   out.set(id, { ...range, kind: 'listItem', text });
 }
 
