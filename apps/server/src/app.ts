@@ -7,7 +7,6 @@ import { createBlobStore } from './blob-store.js';
 import type { ServerConfig } from './config.js';
 import { dropLegacyProposalColumns, openDatabase } from './db.js';
 import { GitStore } from './git-store.js';
-import { migrateSharedRepoToPerDoc } from './git-store-migration.js';
 import { backfillProposalBranches } from './proposal-branch-backfill.js';
 import { Realtime } from './realtime.js';
 import { closeExportBrowser } from './export/pdf.js';
@@ -38,9 +37,6 @@ export interface App {
 
 export async function createApp(config: ServerConfig): Promise<App> {
   const db = openDatabase(config.dbPath);
-  // One-shot: split the legacy shared repo into per-doc repos. Idempotent
-  // and a no-op when there's no legacy repo (fresh deploys, tests).
-  await migrateSharedRepoToPerDoc(db, config.legacyRepoDir, config.reposDir);
   const store = new GitStore(config.reposDir);
   await store.init();
   const backfill = await backfillProposalBranches(db, store);
