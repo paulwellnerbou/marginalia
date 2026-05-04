@@ -1821,10 +1821,98 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     const { documentXml } = await inspectComments(buf);
     expect(documentXml).toMatch(/<w:del\b[^>]*w:author="Editor"/);
     expect(documentXml).toMatch(/<w:ins\b[^>]*w:author="Editor"/);
-    // Original text still appears (inside <w:del>).
-    expect(documentXml).toContain('Original sentence');
-    // Proposed text appears (inside <w:ins>).
-    expect(documentXml).toContain('Revised sentence');
+    // The single-paragraph plain-prose proposal hits the inline
+    // word-diff path: only the changed token ("Original" vs
+    // "Revised") sits inside ins/del, the shared " sentence."
+    // suffix appears as a plain run.
+    expect(documentXml).toContain('Original');
+    expect(documentXml).toContain('Revised');
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*> sentence\.<\/w:t><\/w:r>/);
+  });
+
+  test('single-paragraph wording tweak emits inline word-level ins/del', async () => {
+    const md = 'The quick brown fox.\n';
+    const blockId = paragraphBlockId('The quick brown fox.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'tweak', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'The quick brown fox.',
+              proposed_text: 'The quick red fox.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Deleted runs use <w:delText>, inserted runs use <w:t>.
+    expect(documentXml).toMatch(/<w:del\b[^>]*>[\s\S]*?<w:delText[^>]*>brown<\/w:delText>/);
+    expect(documentXml).toMatch(/<w:ins\b[^>]*>[\s\S]*?<w:t[^>]*>red<\/w:t>/);
+    // The unchanged prefix "The quick " should appear as a plain run
+    // (this catches the "everything is wrapped" regression).
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*>The quick <\/w:t><\/w:r>/);
+    // Suffix " fox." also stays plain.
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*> fox\.<\/w:t><\/w:r>/);
+  });
+
+  test('multi-paragraph proposal still uses the structural two-pass path', async () => {
+    // Two paragraphs on the proposed side: the inline-diff guard
+    // should bail, and the original block becomes a single <w:del>
+    // chain followed by two inserted paragraphs.
+    const md = 'Original line.\n';
+    const blockId = paragraphBlockId('Original line.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'expand', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Original line.',
+              proposed_text: 'First line.\n\nSecond line.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).toMatch(/<w:del\b/);
+    expect(documentXml).toMatch(/<w:ins\b/);
+    // Both proposed paragraphs land in the body.
+    expect(documentXml).toContain('First line');
+    expect(documentXml).toContain('Second line');
+  });
+
+  test('proposal that adds inline formatting falls back to two-pass', async () => {
+    // The proposed side contains a `<strong>` — the inline-diff
+    // guard refuses to flatten formatting, so we expect the
+    // structural two-pass output (whole original deleted, whole
+    // proposed inserted with formatting preserved).
+    const md = 'Plain text here.\n';
+    const blockId = paragraphBlockId('Plain text here.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'bold it', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Plain text here.',
+              proposed_text: 'Plain **text** here.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Bold attribute survives → structural path was used.
+    expect(documentXml).toMatch(/<w:b\b/);
   });
 
   test('proposal thread body still becomes a comment on the inserted region', async () => {

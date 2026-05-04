@@ -32,6 +32,7 @@
  * - M5: BCP-47 language tag + `<w:bidi/>` for RTL frontmatter.
  */
 
+import { diffWordsWithSpace } from 'diff';
 import rehypeParse from 'rehype-parse';
 import rehypeStringify from 'rehype-stringify';
 import remarkFrontmatter from 'remark-frontmatter';
@@ -3109,6 +3110,39 @@ function emitProposalBlock(
   const author = opener.author || 'Markdowner reviewer';
   const date = new Date(opener.date).toISOString();
 
+  // Inline word-level diff path (Word's "Suggestions" UX): when the
+  // proposal sits inside a single plain-prose paragraph on both
+  // sides, splice ins/del runs at word boundaries instead of
+  // emitting two whole replacement blocks. Catches the common
+  // wording-tweak case where the author changed a few words and we
+  // want Word to highlight just those.
+  //
+  // Falls through to the structural two-pass path below for
+  // anything that isn't simple prose: headings, lists, code blocks,
+  // tables, multi-paragraph proposals, or any source/proposed text
+  // that contains markdown formatting we'd lose by flattening.
+  const inlineRuns = tryEmitInlineWordDiff(
+    node,
+    main,
+    propHast,
+    author,
+    date,
+    ctx,
+    walk,
+  );
+  if (inlineRuns) {
+    const commentIds: number[] = [];
+    for (const t of proposals) commentIds.push(...allocCommentIdsForThread(t, ctx));
+    for (const t of extraComments)
+      commentIds.push(...allocCommentIdsForThread(t, ctx));
+    const para = mkParagraph(
+      withParagraphContext({ children: inlineRuns }, ctx, walk),
+      ctx,
+    );
+    out.push(...wrapBufferWithCommentRanges([para], commentIds, ctx));
+    return;
+  }
+
   // Pass 1: original block, every text run wrapped in DeletedTextRun.
   const ctxDel: BuildCtx = {
     ...ctx,
@@ -3119,10 +3153,17 @@ function emitProposalBlock(
   out.push(...delBuf);
 
   // Pass 2: proposed_text (pre-parsed to HAST), every text run
-  // wrapped in InsertedTextRun.
+  // wrapped in InsertedTextRun. `review: null` disables the
+  // block-id review interception during this sub-walk — the
+  // proposed-text HAST gets `data-block` ids assigned by
+  // `remarkBlockIds`, and those ids hash the plain-text content
+  // (no markdown formatting), so a proposal that doesn't change
+  // the visible text would collide with the original block id and
+  // recurse into emitProposalBlock forever.
   const ctxIns: BuildCtx = {
     ...ctx,
     revision: { kind: 'insert', author, date, idAlloc: review.nextRevisionId },
+    review: null,
   };
   const insBuf: FileChild[] = hastToDocxChildren(propHast, ctxIns, {});
 
@@ -3134,6 +3175,107 @@ function emitProposalBlock(
   for (const t of extraComments)
     commentIds.push(...allocCommentIdsForThread(t, ctx));
   out.push(...wrapBufferWithCommentRanges(insBuf, commentIds, ctx));
+}
+
+/**
+ * Try to emit an inline word-level diff for a small wording-tweak
+ * proposal. Returns the diff-spliced ParagraphChild list when the
+ * proposal qualifies, or null when the structural two-pass path
+ * should handle it.
+ *
+ * Qualifies when ALL of:
+ *  - The original block is a single `<p>` (paragraph) — not a
+ *    heading, list, table, code block, blockquote, etc.
+ *  - The proposed text parses to a single paragraph too.
+ *  - Both sides contain only inline text (no `<strong>`, `<em>`,
+ *    `<a>`, `<code>`, `<img>`, etc.) — interleaving word-level
+ *    ins/del with formatting boundaries would require a much more
+ *    careful structural alignment.
+ *
+ * The diff itself is `diffWordsWithSpace`, which keeps whitespace as
+ * separate change tokens — gives Word's reviewer a tighter visual
+ * "added X / removed Y" pair than `diffWords` (which conflates
+ * adjacent whitespace into the surrounding word).
+ */
+function tryEmitInlineWordDiff(
+  node: Element,
+  thread: ReviewThread,
+  propHast: HastRoot,
+  author: string,
+  date: string,
+  ctx: BuildCtx,
+  _walk: WalkCtx,
+): ParagraphChild[] | null {
+  // Original side: must be a single <p> with only inline text content.
+  if (node.tagName !== 'p') return null;
+  const oldText = pureTextContent(node);
+  if (oldText === null) return null;
+
+  // Proposed side: must be a single <p> after the markdown→HAST
+  // pipeline, with only inline text content.
+  const propPara = singleParagraphElement(propHast);
+  if (!propPara) return null;
+  const newText = pureTextContent(propPara);
+  if (newText === null) return null;
+
+  // No-op proposal — punt to the structural path so it still emits
+  // ins/del attribution rather than silently rendering as plain text.
+  if (oldText === newText) return null;
+
+  const review = ctx.review!;
+  const out: ParagraphChild[] = [];
+  for (const change of diffWordsWithSpace(thread.proposal!.source_snapshot ?? oldText, thread.proposal!.proposed_text ?? newText)) {
+    if (change.value === '') continue;
+    const id = review.nextRevisionId.value++;
+    const attrs = { id, author, date };
+    if (change.added) {
+      out.push(new InsertedTextRun({ ...attrs, text: change.value }));
+    } else if (change.removed) {
+      out.push(new DeletedTextRun({ ...attrs, text: change.value }));
+    } else {
+      out.push(new TextRun({ text: change.value }));
+    }
+  }
+  return out;
+}
+
+/**
+ * Plain-text content of a HAST element, but only when the element
+ * contains exclusively text and `<br>` nodes (no inline formatting).
+ * Returns null if any other element is encountered — the inline-diff
+ * path bails out in that case rather than silently dropping the
+ * formatting.
+ */
+function pureTextContent(node: Element): string | null {
+  let out = '';
+  for (const child of node.children as HastNode[]) {
+    if (isText(child)) {
+      out += child.value;
+    } else if (isElement(child) && child.tagName === 'br') {
+      out += '\n';
+    } else {
+      return null;
+    }
+  }
+  return out;
+}
+
+/**
+ * If a HAST root reduces to exactly one `<p>` element (after peeling
+ * the usual `<html>`/`<body>` wrappers from `rehype-raw`), return it.
+ * Otherwise return null — the inline-diff path requires both sides
+ * to be a single paragraph for word-level alignment to make sense.
+ */
+function singleParagraphElement(root: HastRoot): Element | null {
+  const top = flattenRoot(root);
+  // Skip whitespace-only text nodes between blocks.
+  const meaningful = top.filter(
+    (n) => !(isText(n) && n.value.trim() === ''),
+  );
+  if (meaningful.length !== 1) return null;
+  const only = meaningful[0];
+  if (!only || !isElement(only) || only.tagName !== 'p') return null;
+  return only;
 }
 
 /**
@@ -3182,6 +3324,10 @@ function appendWholeDocProposals(
           date,
           idAlloc: review.nextRevisionId,
         },
+        // Same rationale as in `emitProposalBlock`: disable review
+        // interception during the sub-walk so a block-id collision
+        // between the appendix and the live document can't recurse.
+        review: null,
       };
       const insBuf = hastToDocxChildren(propHast, ctxIns, {});
       const commentIds = allocCommentIdsForThread(thread, ctx);
