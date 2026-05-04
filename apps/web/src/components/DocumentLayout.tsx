@@ -59,6 +59,7 @@ import {
   uploadAsset,
 } from '../lib/api.js';
 import { documentTitle } from '../lib/doc-title.js';
+import { expandAncestors } from '../lib/heading-collapse.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
@@ -591,16 +592,26 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     }
 
+    // Expand any collapsed `.collapse-section` ancestor before
+    // measuring — comment / thread anchors can sit inside a folded
+    // section, in which case `scrollIntoView` would land at the
+    // wrapper's pre-expansion position and the user would scroll to
+    // an empty spot. Wait for the expand animation to settle first.
     const scroll = docScrollRef.current;
-    if (scrollOffset > 0 && scroll) {
-      const targetTop =
-        target.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop;
-      scroll.scrollTo({ top: targetTop - scrollOffset, behavior: 'smooth' });
-    } else {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-    target.classList.add('anchor-flash');
-    window.setTimeout(() => target?.classList.remove('anchor-flash'), 1600);
+    const finalTarget = target;
+    void expandAncestors(target).then(() => {
+      if (scrollOffset > 0 && scroll) {
+        const targetTop =
+          finalTarget.getBoundingClientRect().top -
+          scroll.getBoundingClientRect().top +
+          scroll.scrollTop;
+        scroll.scrollTo({ top: targetTop - scrollOffset, behavior: 'smooth' });
+      } else {
+        finalTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      finalTarget.classList.add('anchor-flash');
+      window.setTimeout(() => finalTarget.classList.remove('anchor-flash'), 1600);
+    });
   }, []);
 
   const onCreate = useCallback(

@@ -185,12 +185,15 @@ export function RenderedDoc({
     if (!activeMark) return;
 
     // Cancel the deferred scroll if the user steps to another search
-    // hit before the previous expand animation settles — otherwise an
-    // older promise can resolve later and yank the previously-selected
-    // match back into view.
+    // hit before the previous expand animation settles. The local
+    // `cancelled` flag handles cleanup-on-deps-change, and the
+    // `scrollSeq` guard catches the case where a TOC link or
+    // in-document anchor click happens during the expand window
+    // (those don't change this effect's deps but do bump the seq).
     let cancelled = false;
+    const seq = ++scrollSeq.current;
     void expandAncestors(activeMark).then(() => {
-      if (cancelled) return;
+      if (cancelled || seq !== scrollSeq.current) return;
       activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
     return () => {

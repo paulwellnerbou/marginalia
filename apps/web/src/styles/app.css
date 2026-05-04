@@ -585,13 +585,6 @@ button.primary:disabled {
      `overflow: hidden` because per-axis overflow values are coerced
      back to `auto` when one side is `visible`. */
   clip-path: inset(0 -2em);
-}
-/* Mirror the `.marginalia > * + *` rhythm rule across the new
-   wrapper boundary. Without this, paragraphs / lists / code blocks
-   inside an expanded section lose the inter-block spacing because
-   they're no longer direct siblings of the article. */
-.marginalia .collapse-section-inner > * + * {
-  margin-top: var(--md-space-block);
   /* Cross-fade the content alongside the height change. The opacity
      transition runs slightly faster than the height one and is
      delayed when collapsing (so content fades after height starts
@@ -599,6 +592,13 @@ button.primary:disabled {
      "popping" feel at the endpoints. */
   opacity: 1;
   transition: opacity 220ms ease-out 80ms;
+}
+/* Mirror the `.marginalia > * + *` rhythm rule across the new
+   wrapper boundary. Without this, paragraphs / lists / code blocks
+   inside an expanded section lose the inter-block spacing because
+   they're no longer direct siblings of the article. */
+.marginalia .collapse-section-inner > * + * {
+  margin-top: var(--md-space-block);
 }
 .marginalia .collapse-section.is-collapsed > .collapse-section-inner {
   opacity: 0;
