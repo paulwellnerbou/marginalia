@@ -567,7 +567,12 @@ function applyDocumentSearchHighlights(
 ): DocumentSearchResult[] {
   if (!query) return [];
 
-  const textNodes = collectTextNodes(root);
+  // Mermaid diagram blocks contain their source as text until the client-side
+  // renderer swaps it for SVG; exclude that text (and any SVG internals after
+  // rendering) so search only matches what the reader can actually see.
+  const textNodes = collectTextNodes(root, (node) =>
+    node.parentElement?.closest('[data-block-kind="mermaid"]') != null,
+  );
   if (textNodes.length === 0) return [];
 
   let rawText = '';
@@ -727,8 +732,21 @@ function findHighlightBlock(
   return narrowed ?? block;
 }
 
-function collectTextNodes(root: HTMLElement): Array<{ node: Text; start: number; end: number }> {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+function collectTextNodes(
+  root: HTMLElement,
+  skip?: (node: Text) => boolean,
+): Array<{ node: Text; start: number; end: number }> {
+  const walker = document.createTreeWalker(
+    root,
+    NodeFilter.SHOW_TEXT,
+    skip
+      ? {
+          acceptNode(node) {
+            return skip(node as Text) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+          },
+        }
+      : null,
+  );
   const textNodes: Array<{ node: Text; start: number; end: number }> = [];
   let offset = 0;
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
