@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Dialog, Flex, Text, TextArea, TextField } from '@radix-ui/themes';
-import type { BlockSourceRange } from '@marginalia/renderer';
+import { Button, Dialog, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
+import type { BlockSourceRange, RenderResult } from '@marginalia/renderer';
+import { EnterFullScreenIcon, ExitFullScreenIcon } from '@radix-ui/react-icons';
 import type { DocumentFormat } from '../lib/api.js';
 import { loadEditorDeps, type EditorDeps } from '../lib/codemirror-loader.js';
 import { reportError } from '../lib/log.js';
 import { mergeBlockRanges } from './mergeBlockRanges.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
+import { RenderedDoc } from './RenderedDoc.js';
+
+let rendererPromise: Promise<typeof import('@marginalia/renderer')> | null = null;
+function loadRenderer() {
+  if (!rendererPromise) rendererPromise = import('@marginalia/renderer');
+  return rendererPromise;
+}
 
 function ProposalSourceField({
   id,
@@ -257,14 +265,26 @@ export function ProposalComposer({
   onSubmit,
 }: ProposalComposerProps) {
   const open = target !== null;
+  const [expanded, setExpanded] = useState(false);
+
   return (
     <Dialog.Root
       open={open}
       onOpenChange={(v) => {
-        if (!v) onCancel();
+        if (!v) {
+          // Reset on close so a fresh open always starts compact, rather
+          // than inheriting the prior session's expanded state.
+          setExpanded(false);
+          onCancel();
+        }
       }}
     >
-      <Dialog.Content size="3" maxWidth="720px">
+      <Dialog.Content
+        size="3"
+        maxWidth={expanded ? '95vw' : '720px'}
+        className={expanded ? 'proposal-dialog--expanded' : undefined}
+        style={expanded ? { width: '95vw', height: '90vh' } : undefined}
+      >
         {target && (
           <ProposalComposerBody
             target={target}
@@ -274,6 +294,8 @@ export function ProposalComposer({
             needsName={needsName}
             onCancel={onCancel}
             onSubmit={onSubmit}
+            expanded={expanded}
+            onToggleExpanded={() => setExpanded((v) => !v)}
           />
         )}
       </Dialog.Content>
@@ -289,6 +311,8 @@ function ProposalComposerBody({
   needsName,
   onCancel,
   onSubmit,
+  expanded,
+  onToggleExpanded,
 }: {
   target: ProposalTarget;
   docSource: string;
@@ -297,6 +321,8 @@ function ProposalComposerBody({
   needsName: boolean;
   onCancel: () => void;
   onSubmit: ProposalComposerProps['onSubmit'];
+  expanded: boolean;
+  onToggleExpanded: () => void;
 }) {
   const originalSource = useMemo(() => {
     const range = mergeBlockRanges(
@@ -312,6 +338,25 @@ function ProposalComposerBody({
   const [rationale, setRationale] = useState('');
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [rendered, setRendered] = useState<RenderResult | null>(null);
+  const renderReqRef = useRef(0);
+
+  useEffect(() => {
+    if (!expanded) return;
+    renderReqRef.current += 1;
+    const req = renderReqRef.current;
+    const handle = setTimeout(async () => {
+      try {
+        const { renderDocument } = await loadRenderer();
+        const r = await renderDocument(value, docFormat);
+        if (renderReqRef.current !== req) return;
+        setRendered(r);
+      } catch (err) {
+        reportError('ProposalComposer.preview', err);
+      }
+    }, 200);
+    return () => clearTimeout(handle);
+  }, [value, expanded, docFormat]);
 
   // Reset the proposal text + rationale synchronously when the
   // target changes. Doing this in a useEffect would leave `value`
@@ -336,6 +381,7 @@ function ProposalComposerBody({
     setTrackedTarget({ key: targetKey, source: originalSource });
     setValue(originalSource);
     setRationale('');
+    setRendered(null);
   }
 
   const changed = value !== originalSource;
@@ -358,20 +404,32 @@ function ProposalComposerBody({
   const blockNoun = target.block_count > 1 ? `${target.block_count} blocks` : 'this block';
 
   return (
-    <>
-      <Dialog.Title>Propose edit</Dialog.Title>
-      <Dialog.Description size="2" color="gray" mb="3">
-        Edit the {formatLabel} source of {blockNoun}. Editors will review the diff before accepting.
-      </Dialog.Description>
-
-      <Flex direction="column" gap="3" className="edit-proposal-composer composer">
-        <div className="composer-quote">
-          "{target.block_text.slice(0, 240)}
-          {target.block_text.length > 240 ? '…' : ''}"
-        </div>
-
+    <div className={`proposal-composer-layout composer${expanded ? ' proposal-composer-layout--expanded' : ''}`}>
+      <div className="proposal-composer-header">
+        <Flex align="center" gap="2" mb="1" className="proposal-composer-title-row">
+          <Dialog.Title className="proposal-composer-title">Propose edit</Dialog.Title>
+          <IconButton
+            size="1"
+            variant="ghost"
+            color="gray"
+            title={expanded ? 'Collapse editor' : 'Expand to split view'}
+            aria-label={expanded ? 'Collapse editor' : 'Expand to split view'}
+            onClick={onToggleExpanded}
+          >
+            {expanded ? <ExitFullScreenIcon /> : <EnterFullScreenIcon />}
+          </IconButton>
+        </Flex>
+        <Dialog.Description size="2" color="gray" mb="2">
+          Edit the {formatLabel} source of {blockNoun}. Editors will review the diff before accepting.
+        </Dialog.Description>
+        {!expanded && (
+          <div className="composer-quote">
+            &ldquo;{target.block_text.slice(0, 240)}
+            {target.block_text.length > 240 ? '…' : ''}&rdquo;
+          </div>
+        )}
         {needsName && (
-          <Flex direction="column" gap="1">
+          <Flex direction="column" gap="1" mt="2">
             <Text as="label" size="2" htmlFor="proposal-name">
               Your display name
             </Text>
@@ -387,13 +445,16 @@ function ProposalComposerBody({
             />
           </Flex>
         )}
+      </div>
 
-        <Flex direction="column" gap="1">
+      <div className="proposal-composer-split">
+        <div className="proposal-composer-source">
           <Text
             as="label"
             size="2"
             htmlFor="proposal-text"
             id="proposal-text-label"
+            className="proposal-composer-source-label"
             onClick={(e) => {
               // <label htmlFor> only natively focuses labelable form
               // controls; once the textarea swaps to CodeMirror's
@@ -423,8 +484,17 @@ function ProposalComposerBody({
             ariaLabelledBy="proposal-text-label"
             format={docFormat}
           />
-        </Flex>
+        </div>
+        <div className="proposal-composer-preview">
+          {rendered ? (
+            <RenderedDoc rendered={rendered} />
+          ) : (
+            <Text color="gray" size="2" as="p">Preview…</Text>
+          )}
+        </div>
+      </div>
 
+      <div className="proposal-composer-footer">
         <Flex direction="column" gap="1">
           <Text as="label" size="2" htmlFor="proposal-rationale">
             Reason (optional)
@@ -435,20 +505,19 @@ function ProposalComposerBody({
             value={rationale}
             onChange={(e) => setRationale(e.target.value)}
             placeholder="Why should this change be made?"
-            rows={3}
+            rows={expanded ? 2 : 3}
             size="1"
           />
         </Flex>
-      </Flex>
-
-      <Flex gap="2" justify="end" mt="4">
-        <Button variant="soft" color="gray" onClick={onCancel} disabled={submitting}>
-          Cancel
-        </Button>
-        <Button onClick={send} disabled={!ready || submitting}>
-          {submitting ? 'Submitting…' : 'Submit proposal'}
-        </Button>
-      </Flex>
-    </>
+        <Flex gap="2" justify="end" mt="3">
+          <Button variant="soft" color="gray" onClick={onCancel} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button onClick={send} disabled={!ready || submitting}>
+            {submitting ? 'Submitting…' : 'Submit proposal'}
+          </Button>
+        </Flex>
+      </div>
+    </div>
   );
 }
