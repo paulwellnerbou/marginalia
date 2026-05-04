@@ -172,6 +172,8 @@ export interface HistoryDiff {
  *   - the caller lacks edit permission and didn't opt in via
  *     `?mergeable=1` on the diff request (computing it under the
  *     per-doc lock is too expensive for read-only viewers)
+ *   - the caller opted in but lacks propose permission — readers can't
+ *     force the dry-run merge by spamming the query parameter
  *
  * A non-null value (`'clean' | 'conflict' | 'stale'`) only ever
  * appears for open proposals where the server actually ran the
@@ -1189,11 +1191,20 @@ export function rejectEditProposal(
   });
 }
 
-export function getEditProposalDiff(uid: string, pid: string): Promise<ProposalDiff> {
-  return request<ProposalDiff>(
-    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/diff`,
-    { method: 'GET', docUid: uid },
-  );
+/**
+ * Pass `{ mergeable: true }` to opt the diff response into a `mergeable`
+ * status (`'clean' | 'conflict' | 'stale'`). The server only honours the
+ * opt-in for callers with propose permission; read-only viewers still
+ * get `null`. Editors get a non-null status without the opt-in.
+ */
+export function getEditProposalDiff(
+  uid: string,
+  pid: string,
+  opts: { mergeable?: boolean } = {},
+): Promise<ProposalDiff> {
+  const path = `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/diff`;
+  const url = opts.mergeable ? `${path}?mergeable=1` : path;
+  return request<ProposalDiff>(url, { method: 'GET', docUid: uid });
 }
 
 export async function resolveThread(

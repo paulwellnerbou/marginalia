@@ -1409,6 +1409,24 @@ describe('threads API', () => {
       mergeable: 'clean',
     });
 
+    // Reader can read the diff but is denied the `?mergeable=1` opt-in:
+    // computing it under the per-doc lock is too expensive to expose to
+    // a role that can't act on the result.
+    const carolReaderInvite = await createInvite(uid, 'Carol', 'reader');
+    inviteByClientId.set(CAROL.id, carolReaderInvite);
+    const readerRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${uid}/threads/${thread.id}/diff?mergeable=1`,
+        { headers: headersFor(CAROL) },
+      ),
+    );
+    expect(readerRes.status).toBe(200);
+    expect(await readerRes.json()).toEqual({
+      before: '# Title',
+      after: '# Better title',
+      mergeable: null,
+    });
+
     // Capabilities: Bob is collaborator → can propose/reject own, but not accept (needs editor)
     expect(thread.capabilities.accept).toBe(false); // collaborator cannot accept
     expect(thread.capabilities.reject).toBe(true);  // root author may reject

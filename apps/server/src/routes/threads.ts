@@ -328,7 +328,9 @@ async function createThread(c: Context, deps: AppDeps) {
  * - For open proposals, only callers with edit permission (the ones
  *   the field would actually inform) trigger the dry-run. Read-only
  *   viewers also get `null` — they can't accept, so they don't need
- *   it. Clients can opt in explicitly with `?mergeable=1`.
+ *   it. Clients can opt in explicitly with `?mergeable=1`, but only
+ *   propose-capable callers can — otherwise a reader could force the
+ *   expensive dry-run by spamming the query parameter.
  */
 async function getThreadDiff(c: Context, deps: AppDeps) {
   const { db } = deps;
@@ -349,7 +351,8 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
   let mergeable: 'clean' | 'conflict' | 'stale' | null = null;
   const wantMergeable =
     proposal.proposal_status === 'open' &&
-    (canEdit(decision.role) || c.req.query('mergeable') === '1');
+    (canEdit(decision.role) ||
+      (c.req.query('mergeable') === '1' && canPropose(decision.role)));
   if (wantMergeable) {
     const status = await deps.store.proposalMergeStatus(doc, proposal.id);
     // `merged` and `absent` both collapse to `stale` — the proposal
