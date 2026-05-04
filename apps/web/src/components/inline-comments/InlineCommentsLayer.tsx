@@ -361,10 +361,15 @@ export function InlineCommentsLayer({
    * one down to the max of its anchor and the previous card's bottom
    * (plus the gap), so two cards anchored close together never
    * visually overlap. Used only when `stackingEnabled === false`.
+   *
+   * Seed `prevBottom` with the toolbar's bottom edge in column
+   * coordinates (its margin-top plus measured height, which equals
+   * `stickyTopPad - STACK_GAP_PX`) so the first card lands a full
+   * `STACK_GAP_PX` below the toolbar instead of touching it.
    */
   const noStackLayout = useMemo(() => {
     const tops: number[] = [];
-    let prevBottom = 0;
+    let prevBottom = stickyTopPad - STACK_GAP_PX;
     for (let k = 0; k < orderedMetrics.anchors.length; k++) {
       const natural = orderedMetrics.anchors[k] ?? 0;
       const h = orderedMetrics.heights[k] ?? 96;
@@ -373,7 +378,7 @@ export function InlineCommentsLayer({
       prevBottom = top + h;
     }
     return { tops, totalHeight: prevBottom };
-  }, [orderedMetrics]);
+  }, [orderedMetrics, stickyTopPad]);
 
   /**
    * Walk through the global lifecycle to find the current
