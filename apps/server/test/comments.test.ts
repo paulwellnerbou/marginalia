@@ -54,7 +54,7 @@ interface ThreadShape {
     reopen: boolean;
   };
   comments: [ThreadCommentNodeShape, ...ThreadCommentNodeShape[]];
-  proposal: { anchor_kind: string | null; source_snapshot: string | null; proposed_text: string } | null;
+  proposal: { whole_document?: boolean } | null;
 }
 
 function threadRootToComment(thread: ThreadShape): Record<string, unknown> {
@@ -1389,7 +1389,11 @@ describe('threads API', () => {
       }),
     );
     expect(diffRes.status).toBe(200);
-    expect(await diffRes.json()).toEqual({ before: '# Title', after: '# Better title' });
+    expect(await diffRes.json()).toEqual({
+      before: '# Title',
+      after: '# Better title',
+      mergeable: 'clean',
+    });
 
     // Capabilities: Bob is collaborator → can propose/reject own, but not accept (needs editor)
     expect(thread.capabilities.accept).toBe(false); // collaborator cannot accept
