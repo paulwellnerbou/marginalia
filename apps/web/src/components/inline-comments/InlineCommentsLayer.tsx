@@ -362,10 +362,13 @@ export function InlineCommentsLayer({
    * (plus the gap), so two cards anchored close together never
    * visually overlap. Used only when `stackingEnabled === false`.
    *
-   * Seed `prevBottom` with the toolbar's bottom edge in column
-   * coordinates (its margin-top plus measured height, which equals
-   * `stickyTopPad - STACK_GAP_PX`) so the first card lands a full
-   * `STACK_GAP_PX` below the toolbar instead of touching it.
+   * Seed `prevBottom` so the first card lands a full `STACK_GAP_PX`
+   * below the toolbar instead of touching it. The seed value
+   * (`TOOLBAR_TOP_OFFSET_PX + toolbarHeight`, written here as
+   * `stickyTopPad - STACK_GAP_PX`) is the toolbar's bottom edge using
+   * the same `top`-inset + measured-height arithmetic as
+   * `stickyTopPad`, so the two layouts stay aligned if either piece
+   * of the toolbar's CSS changes.
    */
   const noStackLayout = useMemo(() => {
     const tops: number[] = [];
