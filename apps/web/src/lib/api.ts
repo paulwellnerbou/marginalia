@@ -828,7 +828,7 @@ export interface Comment {
 }
 
 export interface ThreadProposalData {
-  whole_document?: boolean;
+  whole_document: boolean;
 }
 
 export interface Thread {
