@@ -423,8 +423,8 @@ function ProposalComposerBody({
         <Flex align="center" gap="2" mb="1" className="proposal-composer-title-row">
           <Dialog.Title className="proposal-composer-title">Propose edit</Dialog.Title>
           <IconButton
-            size="1"
-            variant="ghost"
+            size="2"
+            variant="soft"
             color="gray"
             title={expanded ? 'Collapse editor' : 'Expand to split view'}
             aria-label={expanded ? 'Collapse editor' : 'Expand to split view'}
