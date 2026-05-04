@@ -3074,12 +3074,17 @@ function allocCommentIdsForThread(thread: ReviewThread, ctx: BuildCtx): number[]
     const c = thread.comments[i]!;
     const id = review.nextCommentId.value++;
     ids.push(id);
+    // Normalise empty author strings (possible with degraded /
+    // migrated rows) to the same fallback the proposal /
+    // whole-doc paths use, so the reply prefix never reads
+    // "↳ Reply by : …" and Word never sees `w:author=""`.
+    const author = c.author || 'Unknown reviewer';
     const isOpener = i === 0;
-    const body = isOpener ? c.body : `↳ Reply by ${c.author}: ${c.body}`;
-    const initials = makeInitials(c.author);
+    const body = isOpener ? c.body : `↳ Reply by ${author}: ${c.body}`;
+    const initials = makeInitials(author);
     const opt: ICommentOptions = {
       id,
-      author: c.author,
+      author,
       date: new Date(c.date),
       ...(initials ? { initials } : {}),
       children: [new Paragraph({ children: [new TextRun({ text: body })] })],

@@ -2335,6 +2335,33 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(documentXml).toContain('Original');
   });
 
+  test('comment with empty author falls back to neutral attribution everywhere', async () => {
+    // Comments with no author shouldn't emit `w:author=""` in
+    // comments.xml or "↳ Reply by : …" in reply bodies — both
+    // of these confuse Word and look broken.
+    const md = 'A short paragraph.\n';
+    const blockId = paragraphBlockId('A short paragraph.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [
+              { body: 'opener body', author: '', date: 1 },
+              { body: 'reply body', author: '', date: 2 },
+            ],
+          },
+        ],
+      },
+    });
+    const { commentsXml } = await inspectComments(buf);
+    expect(commentsXml).not.toContain('w:author=""');
+    expect(commentsXml).not.toMatch(/↳ Reply by :/);
+    expect(commentsXml).toMatch(/w:author="Unknown reviewer"/);
+    expect(commentsXml).toContain('↳ Reply by Unknown reviewer: reply body');
+  });
+
   test('proposal with empty author falls back to a neutral attribution', async () => {
     const md = 'Original wording.\n';
     const blockId = paragraphBlockId('Original wording.');
