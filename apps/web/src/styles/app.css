@@ -562,6 +562,97 @@ button.primary:disabled {
   border-radius: 0.18rem;
 }
 
+/* Heading collapse / expand --------------------------------------- */
+
+.marginalia .collapse-section {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 240ms ease;
+}
+.marginalia .collapse-section.is-collapsed {
+  grid-template-rows: 0fr;
+}
+.marginalia .collapse-section > .collapse-section-inner {
+  min-height: 0;
+  /* Vertical clip drives the height-collapse animation; horizontal
+     slack keeps heading-anchor sigils visible — they sit at
+     `left: -0.9em` of each heading and would otherwise be cropped by
+     the inner's left edge. `clip-path` is used instead of
+     `overflow: hidden` because per-axis overflow values are coerced
+     back to `auto` when one side is `visible`. */
+  clip-path: inset(0 -2em);
+}
+@media (prefers-reduced-motion: reduce) {
+  .marginalia .collapse-section {
+    transition: none;
+  }
+}
+
+/* Reserve room on the right edge of every heading that owns a toggle
+   so long titles don't slip under the absolutely-positioned chevron. */
+.marginalia :is(h1, h2, h3, h4, h5, h6):has(> .heading-collapse-toggle) {
+  padding-right: 1.4em;
+}
+
+.marginalia .heading-collapse-toggle {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  color: var(--md-color-fg-muted, currentColor);
+  cursor: pointer;
+  border-radius: 0.2em;
+  transition: color 80ms ease;
+}
+.marginalia .heading-collapse-toggle:hover {
+  color: var(--md-color-accent, currentColor);
+}
+.marginalia .heading-collapse-toggle:focus-visible {
+  outline: 2px solid var(--md-color-accent, currentColor);
+  outline-offset: 2px;
+}
+.marginalia .heading-collapse-toggle svg {
+  display: block;
+  width: 0.85em;
+  height: 0.85em;
+  transition: transform 200ms ease;
+  transform: rotate(90deg);
+}
+.marginalia .heading-collapse-toggle[aria-expanded="false"] svg {
+  /* Chevron points left when the section is collapsed — toward the
+     toggle's own edge, signalling "fold back" rather than "drill in"
+     the way a left-side disclosure caret would. */
+  transform: rotate(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .marginalia .heading-collapse-toggle svg {
+    transition: none;
+  }
+}
+@media print {
+  .marginalia .heading-collapse-toggle {
+    display: none;
+  }
+  .marginalia :is(h1, h2, h3, h4, h5, h6):has(> .heading-collapse-toggle) {
+    padding-right: 0;
+  }
+  .marginalia .collapse-section.is-collapsed {
+    grid-template-rows: 1fr;
+  }
+  .marginalia .collapse-section > .collapse-section-inner {
+    clip-path: none;
+  }
+}
+
 .marginalia mark.doc-search-highlight {
   background: var(
     --md-color-search-highlight-bg,

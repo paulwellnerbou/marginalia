@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { RenderResult } from '@marginalia/renderer';
 import type { ThreadState } from '../lib/api.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
+import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
 
 export interface DocumentSearchResult {
@@ -112,6 +113,7 @@ export function RenderedDoc({
     lastHtml.current = rendered.html;
     void renderMermaidIn(el);
     replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
+    installHeadingCollapse(el);
   }, [rendered.html, ref, canUploadMissing]);
 
   // If canUploadMissing flips while `rendered.html` stays the same
@@ -170,8 +172,40 @@ export function RenderedDoc({
     );
     if (!activeMark) return;
 
+    expandAncestors(activeMark);
     activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [activeSearchResultId, activeSearchVersion, ref]);
+
+  // TOC links and other in-app navigation update `location.hash`
+  // directly (no click event on our article). The browser scrolls to
+  // the matching id, but if it sits inside a collapsed wrapper the
+  // section's grid-row collapses to 0 and the target stays hidden.
+  // Listen for hash changes ourselves and expand ancestors before the
+  // scroll lands.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onHashChange = () => {
+      const hash = window.location.hash.slice(1);
+      if (!hash) return;
+      let id = hash;
+      try {
+        id = decodeURIComponent(hash);
+      } catch {
+        id = hash;
+      }
+      const target = el.querySelector(`[id="${CSS.escape(id)}"]`);
+      if (!target) return;
+      expandAncestors(target);
+      // Allow the layout to settle before re-scrolling so the target is
+      // in its final position.
+      requestAnimationFrame(() => {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, [ref]);
 
   // Anchor-click scroll + image-click lightbox. Both live on a single
   // delegated click handler on the article.
@@ -240,6 +274,7 @@ export function RenderedDoc({
           const targetEl = el.querySelector(`[id="${CSS.escape(id)}"]`);
           if (targetEl) {
             e.preventDefault();
+            expandAncestors(targetEl);
             targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
             // Keep the URL in sync so copy-link / refresh / back-button
             // behaviour matches native anchor clicks. `pushState` rather
