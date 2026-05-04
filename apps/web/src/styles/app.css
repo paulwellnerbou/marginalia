@@ -567,10 +567,7 @@ button.primary:disabled {
 .marginalia .collapse-section {
   display: grid;
   grid-template-rows: 1fr;
-  /* Material-style "standard" ease-out: motion decelerates into rest,
-     which reads as smoother than symmetric `ease`. The duration is
-     long enough that nested sections don't snap, but short enough to
-     stay feeling responsive. */
+  /* Material-style ease-out: decelerates into rest. */
   transition: grid-template-rows 360ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .marginalia .collapse-section.is-collapsed {
@@ -578,25 +575,19 @@ button.primary:disabled {
 }
 .marginalia .collapse-section > .collapse-section-inner {
   min-height: 0;
-  /* Vertical clip drives the height-collapse animation; horizontal
-     slack keeps heading-anchor sigils visible — they sit at
-     `left: -0.9em` of each heading and would otherwise be cropped by
-     the inner's left edge. `clip-path` is used instead of
-     `overflow: hidden` because per-axis overflow values are coerced
-     back to `auto` when one side is `visible`. */
+  /* `clip-path` instead of `overflow: hidden`: vertical clip drives
+     the collapse animation, horizontal slack keeps the `#`
+     heading-anchors (positioned at `left: -0.9em`) from being
+     cropped. Per-axis `overflow` values get coerced to `auto` when
+     one side is `visible`, so this is the cleanest way. */
   clip-path: inset(0 -2em);
-  /* Cross-fade the content alongside the height change. The opacity
-     transition runs slightly faster than the height one and is
-     delayed when collapsing (so content fades after height starts
-     shrinking) and eager when expanding — produces a softer, less
-     "popping" feel at the endpoints. */
+  /* Cross-fade staggered behind the height: hides the visual snap
+     at the endpoints. */
   opacity: 1;
   transition: opacity 220ms ease-out 80ms;
 }
-/* Mirror the `.marginalia > * + *` rhythm rule across the new
-   wrapper boundary. Without this, paragraphs / lists / code blocks
-   inside an expanded section lose the inter-block spacing because
-   they're no longer direct siblings of the article. */
+/* Mirror `.marginalia > * + *` across the wrapper boundary so
+   blocks inside an expanded section keep their inter-block spacing. */
 .marginalia .collapse-section-inner > * + * {
   margin-top: var(--md-space-block);
 }
@@ -612,8 +603,7 @@ button.primary:disabled {
   }
 }
 
-/* Reserve room on the right edge of every heading that owns a toggle
-   so long titles don't slip under the absolutely-positioned chevron. */
+/* Reserve room for the absolutely-positioned chevron. */
 .marginalia :is(h1, h2, h3, h4, h5, h6):has(> .heading-collapse-toggle) {
   padding-right: 1.4em;
 }
@@ -652,9 +642,7 @@ button.primary:disabled {
   transform: rotate(90deg);
 }
 .marginalia .heading-collapse-toggle[aria-expanded="false"] svg {
-  /* Chevron points left when the section is collapsed — toward the
-     toggle's own edge, signalling "fold back" rather than "drill in"
-     the way a left-side disclosure caret would. */
+  /* Right-side chevron points left when collapsed ("fold back"). */
   transform: rotate(180deg);
 }
 @media (prefers-reduced-motion: reduce) {
@@ -674,9 +662,8 @@ button.primary:disabled {
   }
   .marginalia .collapse-section > .collapse-section-inner,
   .marginalia .collapse-section.is-collapsed > .collapse-section-inner {
+    /* Force-show sections that were closed at print time. */
     clip-path: none;
-    /* Override the screen rule's `opacity: 0` so a section that was
-       collapsed at print time still prints its body content. */
     opacity: 1;
   }
 }

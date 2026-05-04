@@ -1,30 +1,22 @@
 /**
- * Wraps the content under each heading in the rendered article so the
- * reader can collapse / expand sections by clicking a chevron.
+ * Wraps the content under each heading so the reader can collapse /
+ * expand sections by clicking a chevron.
  *
- * The renderer emits two different heading shapes:
- *   - Markdown: flat — `<h2>`, then a run of sibling content nodes,
- *     then the next heading at the same DOM depth.
- *   - AsciiDoc: nested — `<div class="sect1"><h2>…</h2><div class="
- *     sectionbody">…</div></div>`, with the heading sitting inside a
- *     wrapping section element.
+ * The renderer emits two heading shapes — Markdown's flat siblings
+ * (`<h2>` then sibling content) and AsciiDoc's nested
+ * `<div class="sectN">` containers. For each heading we gather the
+ * following siblings (within whatever element is the heading's parent)
+ * up to the next heading at the same-or-higher level, and move them
+ * into a `.collapse-section` wrapper. Iterating in document order
+ * makes deeper sections naturally end up nested inside their
+ * ancestor's wrapper.
  *
- * To handle both, we iterate every heading in document order via
- * `querySelectorAll` and, for each, gather its following siblings
- * (within whatever container the heading happens to live in) up to
- * the next heading at the same-or-higher level. Those siblings move
- * into a `.collapse-section` wrapper that is inserted right after the
- * heading. Outer headings are processed before inner ones so deeper
- * sections automatically end up nested inside their ancestor's
- * wrapper — collapsing an h2 also hides every h3 below it.
- *
- * Animation uses the `grid-template-rows: 1fr ↔ 0fr` trick: the
- * wrapper is a one-row grid whose row collapses smoothly. The inner
- * uses `clip-path: inset(0 -2em)` rather than `overflow: hidden` so
- * heading-anchor sigils (positioned at `left: -0.9em` of each
- * heading) remain visible — per-axis overflow values are coerced to
- * `auto` when one side is `visible`, so `clip-path` is the only way
- * to keep vertical clipping while permitting horizontal slack.
+ * The animation uses `grid-template-rows: 1fr ↔ 0fr`. The inner uses
+ * `clip-path: inset(0 -2em)` instead of `overflow: hidden` so
+ * heading-anchor `#` sigils (positioned at `left: -0.9em` of each
+ * heading) aren't cropped — per-axis overflow values get coerced to
+ * `auto` when one side is `visible`, so `clip-path` is the only clean
+ * way to keep the vertical clip while allowing horizontal slack.
  */
 
 const HEADING_TAGS = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
@@ -41,20 +33,11 @@ function headingLevel(node: Node): number | null {
 }
 
 /**
- * Return the heading level of an AsciiDoc-style section container,
- * or `null` if `node` isn't one. AsciiDoc renders sections as
- * `<div class="sectN"><hN+1>…</hN+1><div class="sectionbody">…</div></div>`
- * — these divs are real section boundaries and we want the
- * collection loop to stop at them.
- *
- * The check is deliberately narrow:
- *   - element must be a `<div>`,
- *   - with a `sectN` class (AsciiDoc's section wrappers),
- *   - whose first DIRECT child is a heading.
- *
- * Without this narrowness, a Markdown blockquote that happens to
- * contain a heading (`> ## inside`) would falsely mark itself as a
- * sibling section and stop collection too early.
+ * Heading level of an AsciiDoc-style `<div class="sectN">` container,
+ * or `null` if `node` isn't one. The check is deliberately narrow
+ * (DIV with `sectN` class whose first direct child is a heading) so
+ * a Markdown blockquote like `> ## inside` doesn't falsely terminate
+ * the parent section's collection.
  */
 const SECTION_DIV_CLASS_RE = /(?:^|\s)sect\d+(?:\s|$)/;
 function sectionContainerHeadingLevel(node: Node): number | null {
@@ -69,41 +52,22 @@ function sectionContainerHeadingLevel(node: Node): number | null {
   return null;
 }
 
-/**
- * Idempotent: safe to call repeatedly. Marks the article with
- * `data-collapse-installed` on first run; subsequent calls bail out.
- * A class-based check would false-positive on user-authored content
- * that happens to use the same name.
+/** Idempotent: an attribute-based marker is more robust than a
+ * class-based check, which could false-positive on user-authored
+ * content that happens to reuse the class name.
  */
 export function installHeadingCollapse(article: HTMLElement): void {
   if (article.getAttribute(INSTALLED_ATTR) === 'true') return;
   article.setAttribute(INSTALLED_ATTR, 'true');
 
-  // Capture all headings up front. The NodeList is static; subsequent
-  // DOM moves don't invalidate the references. Iterating in document
-  // order means each heading is processed before any heading nested
-  // inside its (forthcoming) section — so deeper sections naturally
-  // end up inside their parent's wrapper.
   const headings = Array.from(article.querySelectorAll<HTMLElement>(HEADING_SELECTOR));
 
-  // The opening h1 — and only the opening h1 — is treated as the
-  // document title and skipped. Wrapping it would re-parent its
-  // siblings, which breaks several theme selectors:
-  //   - AsciiDoc's `#header > #toc.toc2` (the desktop TOC) expects
-  //     #toc.toc2 to be a direct child of #header.
-  //   - The `beautiful` theme's drop-cap selector
-  //     `.marginalia > h1:first-child + p::first-letter` expects
-  //     the first paragraph to remain a direct sibling of the h1.
-  // Collapsing the entire document under its title is also rarely
-  // useful, so the trade-off favours keeping these theme rules
-  // working.
-  //
-  // The check looks at the first heading of any level: only an h1
-  // in that position counts as the title. A document whose first
-  // heading is an h2 (or that introduces an h1 mid-body) gets all
-  // its sections processed normally — we don't want to silently
-  // strip a collapse toggle from a real section heading just
-  // because no earlier heading happened to be an h1.
+  // Skip the opening h1 (and only the opening h1) — wrapping it
+  // re-parents its siblings, which breaks AsciiDoc's
+  // `#header > #toc.toc2` and the `beautiful` theme's
+  // `.marginalia > h1:first-child + p::first-letter` drop-cap. A doc
+  // that starts with h2, or introduces an h1 mid-body, isn't
+  // affected: only h1 at heading position 0 counts as a title.
   const firstHeading = headings[0];
   const documentTitle = firstHeading?.tagName === 'H1' ? firstHeading : null;
 
@@ -114,10 +78,8 @@ export function installHeadingCollapse(article: HTMLElement): void {
     if (lvl === null) continue;
 
     const sectionNodes = collectSectionNodes(heading, lvl);
-    // Leaf headings — those immediately followed by another heading
-    // at the same-or-higher level, with no body content of their
-    // own — get no toggle. There's nothing to collapse, and a
-    // chevron would be misleading.
+    // No content under this heading — no toggle. A chevron over an
+    // empty section would be misleading.
     if (sectionNodes.length === 0) continue;
 
     const wrapper = createWrapper(lvl);
@@ -128,13 +90,9 @@ export function installHeadingCollapse(article: HTMLElement): void {
   }
 }
 
-/**
- * Gather siblings following `heading` (within whatever element is its
- * parent) up to — but not including — the next heading at level
- * `<= ourLevel`. The boundary check considers two cases:
- *   - the sibling itself is such a heading (Markdown's flat layout),
- *   - the sibling is a container whose top heading is at our level
- *     (AsciiDoc's `.sect1` siblings, each holding their own h2).
+/** Boundary check considers a sibling that IS a heading (Markdown)
+ * AND a sibling container whose own heading is at our level
+ * (AsciiDoc's `.sect1` siblings, each holding their own h2).
  */
 function collectSectionNodes(heading: Element, ourLevel: number): Node[] {
   const nodes: Node[] = [];
@@ -171,11 +129,8 @@ function addToggleButton(heading: HTMLElement, wrapper: HTMLElement): void {
     toggleSection(button, wrapper);
   });
 
-  // Append as the last child. The button is absolutely positioned at
-  // the right of the heading via CSS, but DOM order still drives
-  // keyboard tab order and screen-reader announcement: putting the
-  // toggle after the heading text matches its visual position and
-  // reads as "[heading], Collapse section".
+  // Last child = matches the right-side visual position in tab order
+  // and screen-reader announcement ("[heading], Collapse section").
   heading.appendChild(button);
 }
 
@@ -184,13 +139,9 @@ function toggleSection(button: HTMLElement, wrapper: HTMLElement): void {
   applyCollapsedState(button, wrapper, collapsed);
 }
 
-/**
- * Mirror DOM/ARIA state to the visual collapsed/expanded state.
- * Setting `inert` on the inner wrapper takes the section's contents
- * out of the focus order and the accessibility tree, so links and
- * other interactive elements inside a closed section can't be
- * reached by Tab or announced by a screen reader. (CSS-only hiding
- * via `opacity: 0` and `grid-template-rows: 0fr` does not.)
+/** `inert` on the inner takes a closed section's contents out of the
+ * focus order and a11y tree — CSS-only hiding (`opacity: 0`,
+ * `grid-template-rows: 0fr`) doesn't.
  */
 function applyCollapsedState(button: HTMLElement, wrapper: HTMLElement, collapsed: boolean): void {
   button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
@@ -205,15 +156,11 @@ function applyCollapsedState(button: HTMLElement, wrapper: HTMLElement, collapse
 }
 
 /**
- * Walk up from `target` and expand every `.collapse-section` ancestor
- * that is currently collapsed. Used before scroll-into-view from TOC
- * links, in-doc anchors, and active search results so a hidden target
- * is revealed before being scrolled to.
- *
- * Returns a Promise that resolves once any expand animations have
- * settled, so callers can `await` it before computing the target's
- * final scroll position. With `prefers-reduced-motion: reduce`
- * (transitions disabled) the Promise resolves on the next tick.
+ * Reveal `target` by expanding every collapsed `.collapse-section`
+ * ancestor. Returns a Promise that resolves once the expand
+ * animations have settled, so callers can `await` it before
+ * `scrollIntoView` — measuring during the transition lands at the
+ * pre-expansion offset.
  */
 export function expandAncestors(target: Element): Promise<void> {
   const expanded: HTMLElement[] = [];
@@ -223,8 +170,6 @@ export function expandAncestors(target: Element): Promise<void> {
     if (!section) break;
     expanded.push(section);
     section.classList.remove('is-collapsed');
-    // The heading sitting just before the wrapper owns the toggle button;
-    // keep aria + inert state in sync.
     const heading = section.previousElementSibling;
     const button = heading
       ? (heading.querySelector(':scope > .heading-collapse-toggle') as HTMLButtonElement | null)
@@ -235,30 +180,23 @@ export function expandAncestors(target: Element): Promise<void> {
       const inner = section.firstElementChild as HTMLElement | null;
       inner?.removeAttribute('inert');
     }
-    // Continue walking from the section's parent — outer wrappers may
-    // also be collapsed.
     el = section.parentElement;
   }
   if (expanded.length === 0) return Promise.resolve();
-  // All ancestors animate in parallel (same duration, same start
-  // tick). Wait on the outermost — its `transitionend` lines up
-  // with the moment the deepest layout settles.
+  // All ancestors animate in parallel; the outermost is the last to
+  // settle, so it owns the scroll-ready moment.
   return waitForExpansionToSettle(expanded[expanded.length - 1] as HTMLElement);
 }
 
-/**
- * Resolve once the wrapper finishes its current `grid-template-rows`
- * transition. Falls back to a timeout slightly longer than the
- * computed duration so callers don't hang if `transitionend` is
- * suppressed (reduced-motion, hidden tab, etc.).
+/** Falls back to a timeout slightly longer than the computed duration
+ * so callers don't hang if `transitionend` is suppressed (reduced
+ * motion, hidden tab, Chrome under CDP).
  */
 export function waitForExpansionToSettle(wrapper: HTMLElement): Promise<void> {
   return new Promise((resolve) => {
     const cs = getComputedStyle(wrapper);
     const durationMs = Number.parseFloat(cs.transitionDuration) * 1000;
     if (!durationMs || Number.isNaN(durationMs)) {
-      // `transition: none` (reduced motion) or the wrapper has no
-      // animation declared — the new layout is already in effect.
       resolve();
       return;
     }
@@ -276,9 +214,6 @@ export function waitForExpansionToSettle(wrapper: HTMLElement): Promise<void> {
       finish();
     };
     wrapper.addEventListener('transitionend', onEnd);
-    // Buffer past the declared duration so a slightly delayed event
-    // (some browsers fire transitionend a beat after the visual
-    // settle) doesn't lose the race with our fallback.
     const fallbackId = setTimeout(finish, durationMs + 80);
   });
 }

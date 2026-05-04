@@ -93,10 +93,10 @@ export function RenderedDoc({
   const ref = elRef ?? internal;
   const lastHtml = useRef<string | null>(null);
   const [lightbox, setLightbox] = useState<LightboxImage | null>(null);
-  // Monotonic counter that gates the deferred scrolls launched by
-  // hashchange / anchor-click handlers. Any new reveal request bumps
-  // it; a Promise that resolves later than the latest request bails
-  // out instead of yanking the viewport back to a stale target.
+  // Gates the deferred scrolls launched by hashchange / anchor /
+  // search handlers — a stale `expandAncestors().then(scroll)` whose
+  // seq doesn't match the latest request bails out so it can't yank
+  // the viewport back to a previously-selected target.
   const scrollSeq = useRef(0);
   // Stash the upload callback in a ref so the placeholder post-process
   // can call the latest version without re-running when it changes —
@@ -115,12 +115,8 @@ export function RenderedDoc({
     if (!el) return;
     if (lastHtml.current === rendered.html) return;
     el.innerHTML = rendered.html;
-    // Setting innerHTML replaces the article's children but leaves
-    // its own attributes intact. Clear the install marker so the
-    // fresh DOM goes through `installHeadingCollapse` again — without
-    // this, navigating to a different document (or any html swap on
-    // the same article element) would leave the new headings
-    // un-wrapped and missing their toggle buttons.
+    // innerHTML replaces children but leaves the article's own
+    // attributes intact — clear the marker so a doc swap re-installs.
     el.removeAttribute('data-collapse-installed');
     lastHtml.current = rendered.html;
     void renderMermaidIn(el);
@@ -184,12 +180,9 @@ export function RenderedDoc({
     );
     if (!activeMark) return;
 
-    // Cancel the deferred scroll if the user steps to another search
-    // hit before the previous expand animation settles. The local
-    // `cancelled` flag handles cleanup-on-deps-change, and the
-    // `scrollSeq` guard catches the case where a TOC link or
-    // in-document anchor click happens during the expand window
-    // (those don't change this effect's deps but do bump the seq).
+    // `cancelled` handles deps-change; `scrollSeq` handles a TOC /
+    // anchor click landing during the expand window — those don't
+    // change this effect's deps but do bump the seq.
     let cancelled = false;
     const seq = ++scrollSeq.current;
     void expandAncestors(activeMark).then(() => {
@@ -201,15 +194,11 @@ export function RenderedDoc({
     };
   }, [activeSearchResultId, activeSearchVersion, ref]);
 
-  // TOC links and other in-app navigation update `location.hash`
-  // directly (no click event on our article). The browser scrolls to
-  // the matching id, but if it sits inside a collapsed wrapper the
-  // section's grid-row collapses to 0 and the target stays hidden.
-  // Listen for both `hashchange` (back/forward, programmatic hash
-  // updates, fresh anchor clicks) and document clicks on hash links
-  // — the latter catches the case where the user clicks a TOC link
-  // whose href already matches the current hash, which the browser
-  // does NOT report as a hash change.
+  // Reveal targets reached via in-app navigation: `hashchange`
+  // (back/forward, fresh anchor clicks) plus document clicks on
+  // hash links — the latter catches re-clicks where the link's hash
+  // already matches the current one (the browser doesn't fire
+  // `hashchange` then).
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -223,14 +212,6 @@ export function RenderedDoc({
       }
       const target = el.querySelector(`[id="${CSS.escape(id)}"]`);
       if (!target) return;
-      // Wait for any ancestor expand animation to settle before
-      // scrolling — `scrollIntoView` measures the current layout, so
-      // firing it during the 360ms transition would land at an
-      // intermediate position and look like the target "drifts" once
-      // the wrapper finishes opening. The seq guard prevents an older
-      // expand promise from yanking the viewport back to a stale
-      // target if the user follows a second link before the first
-      // animation settles.
       const seq = ++scrollSeq.current;
       void expandAncestors(target).then(() => {
         if (seq !== scrollSeq.current) return;
@@ -245,12 +226,8 @@ export function RenderedDoc({
       const href = a.getAttribute('href');
       if (!href || href.length <= 1) return;
       const linkHash = href.slice(1);
-      // If clicking would change the hash, the browser fires
-      // `hashchange` and `onHashChange` handles it. Re-clicking the
-      // same anchor (link's hash equals current) does not fire
-      // `hashchange`, so handle that case here. We compare the
-      // already-encoded forms to avoid mis-matching id strings that
-      // contain reserved characters.
+      // Different hash → `hashchange` will fire, handled there.
+      // Same hash → no `hashchange`, reveal here.
       const current = window.location.hash.slice(1);
       if (linkHash !== current) return;
       revealHash(linkHash);
@@ -330,10 +307,6 @@ export function RenderedDoc({
           const targetEl = el.querySelector(`[id="${CSS.escape(id)}"]`);
           if (targetEl) {
             e.preventDefault();
-            // Wait for any ancestor expand animation before scrolling
-            // (see the hashchange handler above for the same reason).
-            // Same seq guard discards a stale promise if the user
-            // clicks a second anchor mid-animation.
             const seq = ++scrollSeq.current;
             void expandAncestors(targetEl).then(() => {
               if (seq !== scrollSeq.current) return;

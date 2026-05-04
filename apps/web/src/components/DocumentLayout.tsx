@@ -592,11 +592,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     }
 
-    // Expand any collapsed `.collapse-section` ancestor before
-    // measuring — comment / thread anchors can sit inside a folded
-    // section, in which case `scrollIntoView` would land at the
-    // wrapper's pre-expansion position and the user would scroll to
-    // an empty spot. Wait for the expand animation to settle first.
+    // Reveal the target if it sits inside a folded section before
+    // measuring — otherwise the scroll lands at the pre-expansion
+    // offset and the user ends up at an empty spot.
     const scroll = docScrollRef.current;
     const finalTarget = target;
     void expandAncestors(target).then(() => {

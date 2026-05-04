@@ -101,12 +101,8 @@ function computeSectionContext(
 ): { headingPath: string[]; sectionIndex: number; sectionIndexPath: number[] } {
   // Block-IDs plugin only annotates top-level mdast children, which render as
   // direct descendants of the rendered container. Nested [data-block] would
-  // throw off the stack, so scope to direct children — but treat the
-  // `.collapse-section` / `.collapse-section-inner` wrappers added at runtime
-  // by `installHeadingCollapse` as transparent. They host top-level blocks
-  // as their own children; without this flatten step, comments created
-  // inside a folded section would be sent with empty section metadata
-  // (heading_path / section_index*) and lose their re-anchoring affinity.
+  // throw off the stack, so scope to direct children — `collectTopLevelBlocks`
+  // also steps through `.collapse-section[-inner]` wrappers transparently.
   const blocks = collectTopLevelBlocks(root);
   const stack: Array<{ level: number; text: string }> = [];
   const counts = new Map<string, number>();
@@ -136,13 +132,9 @@ function computeSectionContext(
   return result;
 }
 
-/**
- * Iterate `root.children` for `[data-block]` elements, but step
- * transparently into any `.collapse-section[-inner]` wrapper so blocks
- * nested under a runtime-added collapse wrapper participate in the
- * section-context walk. Mirrors the original "direct children of
- * `.marginalia` only" rule, just with the new wrapper layer treated
- * as if it weren't there.
+/** Direct `[data-block]` children, treating `.collapse-section[-inner]`
+ * wrappers as transparent so a comment captured inside a folded
+ * section keeps its heading-path metadata.
  */
 function collectTopLevelBlocks(root: HTMLElement): HTMLElement[] {
   const out: HTMLElement[] = [];

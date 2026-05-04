@@ -97,18 +97,10 @@ function TocItem({
   const hasActiveDescendant = containsNodeId(node.children, activeId);
   const queryActive = Boolean(query);
 
-  // Auto-expand on navigation: every time the active item lands
-  // inside this subtree, open up so the user can see where they
-  // are. We re-run on every `activeId` change (not just on the
-  // transition into the subtree) so scrolling between siblings
-  // inside this branch also re-reveals it.
-  //
-  // We deliberately do NOT include this in `effectiveOpen` as a
-  // continuous override — once the user clicks the chevron to
-  // collapse, that intent is honored until they navigate somewhere
-  // new. Earlier behaviour kept the section forced open whenever
-  // the active item was inside it, which made the toggle feel
-  // dead.
+  // Auto-expand on every `activeId` change that lands inside this
+  // subtree. Kept as a one-shot `setOpen(true)` rather than a
+  // continuous `effectiveOpen` override so a user's manual collapse
+  // is honored until the next navigation.
   useEffect(() => {
     if (hasActiveDescendant) setOpen(true);
   }, [activeId, hasActiveDescendant]);
@@ -131,17 +123,13 @@ function TocItem({
       link.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     };
 
-    // The parent's auto-expand effect runs AFTER this child effect
-    // (React fires effects child-first), then queues `setOpen(true)`.
-    // The wrapper loses `is-collapsed` on the next render and animates
-    // open over 360ms — measuring the link now would land at the
-    // pre-expansion offset. Defer one frame so the class swap commits,
-    // then wait only if an ancestor wrapper is actually mid-animation.
-    // Without the `getAnimations()` check we'd add a 360ms+ delay to
-    // every active-heading update, even when nothing is animating.
+    // Effects run child-first, so the parent's auto-expand hasn't
+    // committed yet. Defer one frame for the class swap, then wait
+    // only if an ancestor is actually mid-animation — without the
+    // `getAnimations()` check, every active-heading update would
+    // pay a 360ms+ wait even when nothing is animating.
     const raf = requestAnimationFrame(() => {
       if (cancelled) return;
-      // Find the outermost ancestor that's currently transitioning.
       let outermost: HTMLElement | null = null;
       let walker: Element | null = link.parentElement;
       while (walker) {
@@ -163,9 +151,8 @@ function TocItem({
     };
   }, [isActive, query]);
 
-  // Search-driven force-open stays in `effectiveOpen` only — we
-  // never write `open` for it, so a user's manual collapse is
-  // restored when they clear the query.
+  // Query force-open stays in `effectiveOpen` only — never written to
+  // `open`, so a manual collapse is restored when the query clears.
   const effectiveOpen = !hasChildren ? false : queryActive || open;
 
   return (
@@ -180,9 +167,8 @@ function TocItem({
             aria-expanded={effectiveOpen}
             className="toc-toggle"
           >
-            {/* One icon, rotated via CSS — keeps the chevron motion in
-                lockstep with the height/opacity animation below
-                instead of swapping two separate SVGs mid-transition. */}
+            {/* One icon rotated via CSS so the chevron animates in
+                lockstep with the height transition. */}
             <ChevronDownIcon />
           </IconButton>
         ) : (
@@ -193,12 +179,9 @@ function TocItem({
         </a>
       </div>
       {hasChildren && (
-        // Always rendered so the children animate in/out instead of
-        // popping. `is-collapsed` toggles the grid-row + opacity
-        // transitions defined in app.css. `inert` on the inner
-        // wrapper takes hidden links out of the focus order and the
-        // accessibility tree so keyboard and screen-reader users
-        // don't tab into a section that visually appears closed.
+        // Always rendered so children animate in/out (rather than
+        // popping); `inert` keeps closed-section links out of the
+        // focus order and a11y tree.
         <div className={`toc-collapse-section ${effectiveOpen ? '' : 'is-collapsed'}`}>
           <div className="toc-collapse-section-inner" inert={!effectiveOpen}>
             <TocList
