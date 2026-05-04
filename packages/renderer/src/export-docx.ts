@@ -2888,17 +2888,31 @@ function mkRun(
   return run;
 }
 
-/** Read the `data-block` id off a HAST element, if any. Empty → null. */
+/**
+ * Read the `data-block` id off a HAST element, if any. Empty → null.
+ *
+ * Two property-key spellings are accepted because the upstream
+ * plugins write hast differently — `remarkBlockIds` (markdown)
+ * sets `hProperties['data-block']` which `mdast-util-to-hast`
+ * normalises to the camelCase `dataBlock` key, but plugins that
+ * build hast Elements directly (e.g. an asciidoc path) keep the
+ * hyphenated key. Mirrors the dual-spelling lookup in
+ * `readMermaidIndex`.
+ */
 function readDataBlockId(node: Element): string | null {
   const props = node.properties ?? {};
-  const raw = (props as Record<string, unknown>)['dataBlock'];
+  const raw =
+    (props as Record<string, unknown>)['dataBlock'] ??
+    (props as Record<string, unknown>)['data-block'];
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 
-/** Read the `data-subblock` id off a HAST element, if any. */
+/** Read the `data-subblock` id off a HAST element, if any. Same dual-spelling rationale as `readDataBlockId`. */
 function readDataSubBlockId(node: Element): string | null {
   const props = node.properties ?? {};
-  const raw = (props as Record<string, unknown>)['dataSubblock'];
+  const raw =
+    (props as Record<string, unknown>)['dataSubblock'] ??
+    (props as Record<string, unknown>)['data-subblock'];
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 
@@ -2943,19 +2957,23 @@ async function buildReviewState(
   const wholeDoc: ReviewThread[] = [];
   const proposalHasts = new Map<string, HastRoot>();
 
+  // Pass 1 — synchronous classification: bucket every thread into
+  // commentsByBlockId / proposalsByBlockId / wholeDoc, and collect
+  // the proposed_text strings that need parsing. Doing this in a
+  // single sweep keeps the parallel parse pass below a pure
+  // string→HAST workload with no shared mutable state.
+  interface ParseTask {
+    readonly threadId: string;
+    readonly text: string;
+  }
+  const parseTasks: ParseTask[] = [];
+
   for (const thread of filtered) {
     let isProposal = !!thread.proposal;
 
     if (isProposal && thread.proposal!.whole_document) {
       wholeDoc.push(thread);
-      const parsed = await sourceToHast(
-        thread.proposal!.proposed_text,
-        options.format ?? 'markdown',
-        {
-          ...(options.highlight !== undefined ? { highlight: options.highlight } : {}),
-        },
-      );
-      proposalHasts.set(thread.id, parsed.hast);
+      parseTasks.push({ threadId: thread.id, text: thread.proposal!.proposed_text });
       continue;
     }
 
@@ -2984,15 +3002,28 @@ async function buildReviewState(
     else target.set(blockId, [thread]);
 
     if (isProposal) {
-      const parsed = await sourceToHast(
-        thread.proposal!.proposed_text,
-        options.format ?? 'markdown',
-        {
-          ...(options.highlight !== undefined ? { highlight: options.highlight } : {}),
-        },
-      );
-      proposalHasts.set(thread.id, parsed.hast);
+      parseTasks.push({ threadId: thread.id, text: thread.proposal!.proposed_text });
     }
+  }
+
+  // Pass 2 — parse all proposed_text strings in parallel with
+  // bounded concurrency. Sequential `await` over many proposals
+  // (each running the full markdown→HAST pipeline including
+  // shiki syntax highlighting) added noticeable latency to
+  // exports of long-discussion docs.
+  const PROPOSAL_PARSE_CONCURRENCY = 4;
+  const parsed = await mapWithConcurrency(
+    parseTasks,
+    PROPOSAL_PARSE_CONCURRENCY,
+    async ({ threadId, text }): Promise<[string, HastRoot]> => {
+      const result = await sourceToHast(text, options.format ?? 'markdown', {
+        ...(options.highlight !== undefined ? { highlight: options.highlight } : {}),
+      });
+      return [threadId, result.hast];
+    },
+  );
+  for (const [threadId, hastRoot] of parsed) {
+    proposalHasts.set(threadId, hastRoot);
   }
 
   return {

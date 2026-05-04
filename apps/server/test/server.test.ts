@@ -2526,9 +2526,10 @@ describe('documents API', () => {
   // rejected) must not appear in the exported DOCX by default.
   //
   // These tests exercise the full server route — they're the
-  // belt-and-braces that proves the SQL pre-filter in
-  // `loadReviewThreadsForExport` actually keeps closed threads out
-  // of `word/document.xml` and `word/comments.xml`.
+  // belt-and-braces that proves the in-memory `isThreadClosed`
+  // filter in `loadReviewThreadsForExport` (run after the SQL load,
+  // before `readProposalContent`) actually keeps closed threads
+  // out of `word/document.xml` and `word/comments.xml`.
 
   /**
    * Unzip an exported DOCX and return the concatenated text of the
