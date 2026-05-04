@@ -2134,6 +2134,35 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(documentXml).toMatch(/<w:commentReference\b/);
   });
 
+  test('substring wrap descends into a heading\'s Bookmark', async () => {
+    // Headings are wrapped in a Bookmark for internal-link targets;
+    // the substring wrap has to descend into it. Asserts the markers
+    // land INSIDE the bookmark element (not adjacent to it), and
+    // that the bookmark's id (heading slug) is preserved.
+    const md = '# The brown fox jumps\n\nBody.\n';
+    const blockId = headingBlockId('The brown fox jumps');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'brown fox',
+            comments: [{ body: 'on heading substring', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('on heading substring');
+    // Bookmark survives with its slug id.
+    expect(documentXml).toMatch(/<w:bookmarkStart\b[^>]*w:name="the-brown-fox-jumps"/);
+    // Markers land inside the bookmark, around "brown fox".
+    expect(documentXml).toMatch(
+      /<w:bookmarkStart\b[^>]*\/>[\s\S]*?<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>brown fox<\/w:t><\/w:r><w:commentRangeEnd\b[^>]*\/><w:commentReference\b[^>]*\/>[\s\S]*?<w:bookmarkEnd\b/,
+    );
+  });
+
   test('two precise comments sharing a boundary both wrap correctly', async () => {
     // Both comments anchor at adjacent regions: "first" at the very
     // start of the paragraph (offset 0), and the next region right

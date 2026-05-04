@@ -72,6 +72,7 @@ import {
   WidthType,
   convertMillimetersToTwip,
   type FileChild,
+  type IBookmarkOptions,
   type ICommentOptions,
   type IRunOptions,
   type ISectionOptions,
@@ -386,6 +387,7 @@ export async function exportDocx(
     TextRun | InsertedTextRun | DeletedTextRun,
     IRunOptions
   >();
+  const bookmarkOpts = new WeakMap<Bookmark, IBookmarkOptions>();
   const ctxWithoutFootnotes: BuildCtx = {
     tokens,
     images,
@@ -394,6 +396,7 @@ export async function exportDocx(
     footnoteIds: new Map(),
     paraOpts,
     runOpts,
+    bookmarkOpts,
     review,
   };
   const footnotes = extractFootnotes(hast, ctxWithoutFootnotes);
@@ -1543,6 +1546,18 @@ interface BuildCtx {
     IRunOptions
   >;
   /**
+   * Companion side-table for `Bookmark` instances. `buildHeading`
+   * wraps every heading's runs in a Bookmark for internal-link
+   * targets, which would otherwise opaque the substring-precise
+   * comment wrapper (it'd see only `[Bookmark]` as the paragraph's
+   * children and have no way to recover the bookmark id when it
+   * needs to rebuild the bookmark with the wrap markers spliced in).
+   * Mapping the Bookmark instance back to its options lets the
+   * wrapper descend into the bookmark, splice ranges around the
+   * matching substring, and re-wrap with the same id.
+   */
+  readonly bookmarkOpts: WeakMap<Bookmark, IBookmarkOptions>;
+  /**
    * Active revision wrapper, if any. When non-null, every text-run
    * the inline walker emits is wrapped in `InsertedTextRun` /
    * `DeletedTextRun` and attributed to the proposal opener. Set by
@@ -2098,7 +2113,7 @@ function buildHeading(node: Element, ctx: BuildCtx): Paragraph {
   // (`[Section](#section)`) can navigate to it inside Word. Without an
   // id we just emit the paragraph unwrapped — still valid.
   const children: ParagraphChild[] = id
-    ? [new Bookmark({ id, children: inline })]
+    ? [mkBookmark({ id, children: inline }, ctx)]
     : inline;
   return mkParagraph(
     {
@@ -2822,6 +2837,23 @@ function mkParagraph(opts: ParagraphOptions, ctx: BuildCtx): Paragraph {
 }
 
 /**
+ * Construct a `Bookmark` and stash its options in `ctx.bookmarkOpts`
+ * so the substring-precise comment wrapper can recover them when it
+ * needs to descend into the bookmark, splice range markers, and
+ * rebuild it with the same id. `buildHeading` wraps every heading's
+ * inline runs in a Bookmark for internal-link targets — without
+ * this side-table the wrapper would see a heading paragraph as
+ * `[Bookmark]` (a single zero-text-length child), conclude there's
+ * no text-bearing slot to wrap, and silently fall back to
+ * whole-paragraph wrap on every heading.
+ */
+function mkBookmark(opts: IBookmarkOptions, ctx: BuildCtx): Bookmark {
+  const b = new Bookmark(opts);
+  ctx.bookmarkOpts.set(b, opts);
+  return b;
+}
+
+/**
  * Build a TextRun, wrapping it in `InsertedTextRun` / `DeletedTextRun`
  * when the walker is currently inside a tracked-change pass. Every
  * wrapped run reuses the single revision id the caller stashed on
@@ -3197,9 +3229,84 @@ function tryWrapBufferAtSubstring(
   if (!opts || !opts.children) return null;
   const children = opts.children as ParagraphChild[];
 
-  // Build a flat list of (childIndex, textOffsetInsideChild, char) for
-  // every text-bearing child — we need character-level addressing
-  // across the run sequence to find the substring's boundaries.
+  const starts = commentIds.map((id) => new CommentRangeStart(id));
+  const ends = commentIds.flatMap((id) => [
+    new CommentRangeEnd(id),
+    new CommentReference(id),
+  ]);
+
+  // Headings always wrap their inline runs in a single Bookmark
+  // (`buildHeading` does this for internal-link targets), which
+  // would otherwise opaque the whole paragraph to the substring
+  // wrapper. Detect that shape and descend: do the substring search
+  // on the bookmark's children, splice the markers inside the
+  // bookmark, and rebuild the bookmark with the same id.
+  //
+  // Only the single-bookmark-child shape is recognised because
+  // that's what `buildHeading` emits. Mixed bookmark + other
+  // ParagraphChildren falls through to the standard path (markers
+  // can still land on text-bearing siblings outside the bookmark).
+  if (children.length === 1 && children[0] instanceof Bookmark) {
+    const bm = children[0];
+    const bmOpts = ctx.bookmarkOpts.get(bm);
+    if (!bmOpts) return null;
+    const wrappedInner = wrapChildrenAtSubstring(
+      bmOpts.children as ParagraphChild[],
+      substring,
+      starts,
+      ends,
+      ctx,
+    );
+    if (!wrappedInner) return null;
+    const newBookmark = mkBookmark({ ...bmOpts, children: wrappedInner }, ctx);
+    const newPara = mkParagraph({ ...opts, children: [newBookmark] }, ctx);
+    return [newPara, ...buf.slice(1)];
+  }
+
+  const wrapped = wrapChildrenAtSubstring(children, substring, starts, ends, ctx);
+  if (!wrapped) return null;
+  const newPara = mkParagraph({ ...opts, children: wrapped }, ctx);
+  return [newPara, ...buf.slice(1)];
+}
+
+/**
+ * Construct a plain `TextRun` and register its options in
+ * `ctx.runOpts` so a subsequent precise-wrap pass on the same
+ * paragraph can recover its text and split it again. `mkRun`
+ * would also wrap the run in InsertedTextRun/DeletedTextRun if
+ * we happened to be inside a revision pass; this helper is for
+ * the post-walk wrap path where revision attribution doesn't
+ * apply.
+ */
+function mkPlainTextRun(opts: IRunOptions, ctx: BuildCtx): TextRun {
+  const run = new TextRun(opts);
+  ctx.runOpts.set(run, opts);
+  return run;
+}
+
+/**
+ * Core substring-wrap algorithm. Operates on a flat ParagraphChild
+ * list — the caller decides whether to invoke it on a paragraph's
+ * direct children or on a Bookmark's children (so the same logic
+ * works for body paragraphs and headings).
+ *
+ * Returns a new ParagraphChild list with `starts` and `ends`
+ * spliced at the substring's boundaries when the substring matches
+ * exactly once across the joined text-bearing children. Returns
+ * null when the substring is missing, ambiguous, or its boundaries
+ * fall inside non-recoverable children (a non-Bookmark non-text
+ * child like an ImageRun or hyperlink).
+ */
+function wrapChildrenAtSubstring(
+  children: readonly ParagraphChild[],
+  substring: string,
+  starts: readonly ParagraphChild[],
+  ends: readonly ParagraphChild[],
+  ctx: BuildCtx,
+): ParagraphChild[] | null {
+  // Build a flat list of (childIndex, text, runOpts) for every
+  // text-bearing child — we need character-level addressing across
+  // the run sequence to find the substring's boundaries.
   interface Slot {
     readonly childIndex: number;
     readonly text: string;
@@ -3217,9 +3324,9 @@ function tryWrapBufferAtSubstring(
       if (!ro || typeof ro.text !== 'string') return null; // unrecoverable
       slots.push({ childIndex: i, text: ro.text, runOpts: ro });
     } else {
-      // Non-text child (Bookmark, ExternalHyperlink, ImageRun, …).
-      // Mark with empty text so we still preserve the child in the
-      // rebuild — but if the substring touches it, give up.
+      // Non-text child (ExternalHyperlink, ImageRun, CommentRange*,
+      // etc.). Mark with empty text so we still preserve the child
+      // in the rebuild — but if the substring touches it, give up.
       slots.push({ childIndex: i, text: '', runOpts: { text: '' } });
     }
   }
@@ -3235,13 +3342,12 @@ function tryWrapBufferAtSubstring(
   // Locate (slotIndex, intra-slot offset) for both ends.
   //
   // Skip zero-length / non-text slots — those are the
-  // CommentRangeStart/End/Reference (and Bookmark, ImageRun, …)
-  // markers that an earlier precise wrap may have left behind.
-  // They don't contribute to the global text offset, but if we
-  // matched them at boundary positions (`globalOffset === acc`)
-  // we'd return a non-text slot and the rebuild step would skip
-  // its `cutStart`/`cutEnd`, dropping one end of the new
-  // comment range.
+  // CommentRange* (and Bookmark, ImageRun, …) markers that an
+  // earlier precise wrap may have left behind. They don't
+  // contribute to the global text offset, but if we matched them
+  // at boundary positions (`globalOffset === acc`) we'd return a
+  // non-text slot and the rebuild step would skip its
+  // `cutStart`/`cutEnd`, dropping one end of the new comment range.
   function locate(globalOffset: number): { slot: number; intra: number } | null {
     let acc = 0;
     for (let s = 0; s < slots.length; s++) {
@@ -3258,13 +3364,7 @@ function tryWrapBufferAtSubstring(
   const endLoc = locate(endOffset);
   if (!startLoc || !endLoc) return null;
 
-  // Rebuild the paragraph's children with the markers spliced in.
-  const starts = commentIds.map((id) => new CommentRangeStart(id));
-  const ends = commentIds.flatMap((id) => [
-    new CommentRangeEnd(id),
-    new CommentReference(id),
-  ]);
-
+  // Rebuild the children list with the markers spliced in.
   const newChildren: ParagraphChild[] = [];
   for (let s = 0; s < slots.length; s++) {
     const slot = slots[s]!;
@@ -3307,24 +3407,7 @@ function tryWrapBufferAtSubstring(
     if (after.length > 0)
       newChildren.push(mkPlainTextRun({ ...slot.runOpts, text: after }, ctx));
   }
-
-  const newPara = mkParagraph({ ...opts, children: newChildren }, ctx);
-  return [newPara, ...buf.slice(1)];
-}
-
-/**
- * Construct a plain `TextRun` and register its options in
- * `ctx.runOpts` so a subsequent precise-wrap pass on the same
- * paragraph can recover its text and split it again. `mkRun`
- * would also wrap the run in InsertedTextRun/DeletedTextRun if
- * we happened to be inside a revision pass; this helper is for
- * the post-walk wrap path where revision attribution doesn't
- * apply.
- */
-function mkPlainTextRun(opts: IRunOptions, ctx: BuildCtx): TextRun {
-  const run = new TextRun(opts);
-  ctx.runOpts.set(run, opts);
-  return run;
+  return newChildren;
 }
 
 /**
