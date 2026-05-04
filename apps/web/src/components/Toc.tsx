@@ -92,8 +92,25 @@ function TocItem({
   const hasChildren = node.children.length > 0;
   const [open, setOpen] = useState(true);
   const linkRef = useRef<HTMLAnchorElement>(null);
-  const forceOpen = Boolean(query) || containsNodeId(node.children, activeId);
   const isActive = activeId === node.id;
+  const hasActiveDescendant = containsNodeId(node.children, activeId);
+  const queryActive = Boolean(query);
+
+  // Auto-expand on navigation: every time the active item lands
+  // inside this subtree, open up so the user can see where they
+  // are. We re-run on every `activeId` change (not just on the
+  // transition into the subtree) so scrolling between siblings
+  // inside this branch also re-reveals it.
+  //
+  // We deliberately do NOT include this in `effectiveOpen` as a
+  // continuous override — once the user clicks the chevron to
+  // collapse, that intent is honored until they navigate somewhere
+  // new. Earlier behaviour kept the section forced open whenever
+  // the active item was inside it, which made the toggle feel
+  // dead.
+  useEffect(() => {
+    if (hasActiveDescendant) setOpen(true);
+  }, [activeId, hasActiveDescendant]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -108,7 +125,10 @@ function TocItem({
     link.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [isActive, query]);
 
-  const effectiveOpen = !hasChildren ? false : forceOpen || open;
+  // Search-driven force-open stays in `effectiveOpen` only — we
+  // never write `open` for it, so a user's manual collapse is
+  // restored when they clear the query.
+  const effectiveOpen = !hasChildren ? false : queryActive || open;
 
   return (
     <li className={`toc-item toc-l${node.level} ${isActive ? 'active' : ''}`}>
