@@ -338,6 +338,14 @@ function ProposalComposerBody({
   const renderReqRef = useRef(0);
 
   useEffect(() => {
+    // Bump the request id on every effect run (and again in cleanup):
+    // any in-flight `renderDocument` from a previous run will see its
+    // captured `req` no longer match `renderReqRef.current` and skip
+    // its `setRendered`. Clearing the timer alone wouldn't cover the
+    // window where the timer already fired but `renderDocument` is
+    // still resolving, which would otherwise let a stale result land
+    // after collapse / unmount.
+    renderReqRef.current += 1;
     if (!expanded) {
       // Clear so a re-expand shows the loading state instead of HTML
       // left over from the previous expanded session — which would be
@@ -345,7 +353,6 @@ function ProposalComposerBody({
       setRendered(null);
       return;
     }
-    renderReqRef.current += 1;
     const req = renderReqRef.current;
     const handle = setTimeout(async () => {
       try {
@@ -357,7 +364,12 @@ function ProposalComposerBody({
         reportError('ProposalComposer.preview', err);
       }
     }, 200);
-    return () => clearTimeout(handle);
+    return () => {
+      clearTimeout(handle);
+      // Invalidate this run's id too, so a render that already passed
+      // the timer but hasn't resolved yet won't apply on unmount.
+      renderReqRef.current += 1;
+    };
   }, [value, expanded, docFormat]);
 
   // Reset the proposal text + rationale synchronously when the
