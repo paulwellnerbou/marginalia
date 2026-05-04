@@ -690,17 +690,17 @@ async function loadReviewThreadsForExport(
     else repliesByThread.set(tid, [r]);
   }
 
+  // Drop closed threads up-front so we don't pay `readProposalContent`
+  // (a per-row git read) for rows the export will discard. The
+  // `includeResolved` escape hatch keeps them in for the rare review
+  // workflow that wants the full audit trail.
+  const visibleRoots = roots.filter(
+    (row) => options.includeResolved || !isThreadClosed(row),
+  );
   // Resolve proposal content in parallel — each `readProposalContent`
   // call can hit git, so a doc with N proposals would otherwise pay
   // N sequential round-trips. Bound the concurrency so we don't fan
   // out unbounded fs/git work for very large threads tables.
-  const visibleRoots = roots.filter((row) => {
-    const isProposal = row.proposal_status !== null;
-    const resolved = isProposal
-      ? row.proposal_status !== 'open'
-      : row.resolved_at !== null;
-    return options.includeResolved || !resolved;
-  });
   const results = await mapWithConcurrency(visibleRoots, 4, async (row) => {
     const isProposal = row.proposal_status !== null;
     let proposal: ReviewThread['proposal'] = null;
@@ -728,28 +728,52 @@ async function loadReviewThreadsForExport(
       author: r.author_display_name,
       date: r.created_at,
     }));
-    const resolved = isProposal
-      ? row.proposal_status !== 'open'
-      : row.resolved_at !== null;
     const thread: ReviewThread = {
       id: row.id,
       block_id: row.anchor_block_id,
       end_block_id: row.anchor_end_block_id,
       comments: [opener, ...threadReplies],
       proposal,
-      resolved,
-      resolution_kind:
-        isProposal && row.proposal_status === 'accepted'
-          ? 'accept'
-          : isProposal && row.proposal_status === 'rejected'
-            ? 'reject'
-            : row.resolved_at !== null
-              ? 'resolve'
-              : null,
+      resolved: isThreadClosed(row),
+      resolution_kind: closedKind(row),
     };
     return thread;
   });
   return results;
+}
+
+/**
+ * A thread is "closed" — and therefore excluded from review
+ * exports by default — when:
+ *
+ *   - it's an edit proposal whose status moved off `open` (i.e.
+ *     `accepted` or `rejected`), or
+ *   - it's a plain comment thread whose `resolved_at` is set.
+ *
+ * Both states represent a finished discussion the export's reader
+ * shouldn't have to wade through; the `?include_resolved=1` query
+ * param is the user-facing escape hatch to surface them anyway.
+ */
+function isThreadClosed(row: {
+  proposal_status: EditProposalStatus | null;
+  resolved_at: number | null;
+}): boolean {
+  if (row.proposal_status !== null) return row.proposal_status !== 'open';
+  return row.resolved_at !== null;
+}
+
+/**
+ * Convert a closed thread's resolution into the renderer's
+ * `resolution_kind` discriminator. Open threads return null.
+ */
+function closedKind(row: {
+  proposal_status: EditProposalStatus | null;
+  resolved_at: number | null;
+}): 'accept' | 'reject' | 'resolve' | null {
+  if (row.proposal_status === 'accepted') return 'accept';
+  if (row.proposal_status === 'rejected') return 'reject';
+  if (row.resolved_at !== null) return 'resolve';
+  return null;
 }
 
 /**
