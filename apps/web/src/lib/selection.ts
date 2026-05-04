@@ -101,10 +101,13 @@ function computeSectionContext(
 ): { headingPath: string[]; sectionIndex: number; sectionIndexPath: number[] } {
   // Block-IDs plugin only annotates top-level mdast children, which render as
   // direct descendants of the rendered container. Nested [data-block] would
-  // throw off the stack, so scope to direct children.
-  const blocks = Array.from(root.children).filter(
-    (el): el is HTMLElement => el instanceof HTMLElement && el.hasAttribute('data-block'),
-  );
+  // throw off the stack, so scope to direct children — but treat the
+  // `.collapse-section` / `.collapse-section-inner` wrappers added at runtime
+  // by `installHeadingCollapse` as transparent. They host top-level blocks
+  // as their own children; without this flatten step, comments created
+  // inside a folded section would be sent with empty section metadata
+  // (heading_path / section_index*) and lose their re-anchoring affinity.
+  const blocks = collectTopLevelBlocks(root);
   const stack: Array<{ level: number; text: string }> = [];
   const counts = new Map<string, number>();
   let result = { headingPath: [] as string[], sectionIndex: 0, sectionIndexPath: [0] };
@@ -131,6 +134,32 @@ function computeSectionContext(
     }
   }
   return result;
+}
+
+/**
+ * Iterate `root.children` for `[data-block]` elements, but step
+ * transparently into any `.collapse-section[-inner]` wrapper so blocks
+ * nested under a runtime-added collapse wrapper participate in the
+ * section-context walk. Mirrors the original "direct children of
+ * `.marginalia` only" rule, just with the new wrapper layer treated
+ * as if it weren't there.
+ */
+function collectTopLevelBlocks(root: HTMLElement): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  for (const child of Array.from(root.children)) {
+    if (!(child instanceof HTMLElement)) continue;
+    if (child.hasAttribute('data-block')) {
+      out.push(child);
+      continue;
+    }
+    if (
+      child.classList.contains('collapse-section') ||
+      child.classList.contains('collapse-section-inner')
+    ) {
+      out.push(...collectTopLevelBlocks(child));
+    }
+  }
+  return out;
 }
 
 export function selectionRect(): DOMRect | null {
