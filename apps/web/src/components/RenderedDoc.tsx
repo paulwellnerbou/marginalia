@@ -179,8 +179,9 @@ export function RenderedDoc({
     );
     if (!activeMark) return;
 
-    expandAncestors(activeMark);
-    activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    void expandAncestors(activeMark).then(() => {
+      activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
   }, [activeSearchResultId, activeSearchVersion, ref]);
 
   // TOC links and other in-app navigation update `location.hash`
@@ -205,10 +206,12 @@ export function RenderedDoc({
       }
       const target = el.querySelector(`[id="${CSS.escape(id)}"]`);
       if (!target) return;
-      expandAncestors(target);
-      // Allow the layout to settle before re-scrolling so the target
-      // is in its final position.
-      requestAnimationFrame(() => {
+      // Wait for any ancestor expand animation to settle before
+      // scrolling — `scrollIntoView` measures the current layout, so
+      // firing it during the 360ms transition would land at an
+      // intermediate position and look like the target "drifts" once
+      // the wrapper finishes opening.
+      void expandAncestors(target).then(() => {
         target.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     };
@@ -305,8 +308,11 @@ export function RenderedDoc({
           const targetEl = el.querySelector(`[id="${CSS.escape(id)}"]`);
           if (targetEl) {
             e.preventDefault();
-            expandAncestors(targetEl);
-            targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            // Wait for any ancestor expand animation before scrolling
+            // (see the hashchange handler above for the same reason).
+            void expandAncestors(targetEl).then(() => {
+              targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
             // Keep the URL in sync so copy-link / refresh / back-button
             // behaviour matches native anchor clicks. `pushState` rather
             // than `replaceState` because the browser would also push a

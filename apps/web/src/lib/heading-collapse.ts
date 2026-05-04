@@ -177,12 +177,19 @@ function applyCollapsedState(button: HTMLElement, wrapper: HTMLElement, collapse
  * that is currently collapsed. Used before scroll-into-view from TOC
  * links, in-doc anchors, and active search results so a hidden target
  * is revealed before being scrolled to.
+ *
+ * Returns a Promise that resolves once any expand animations have
+ * settled, so callers can `await` it before computing the target's
+ * final scroll position. With `prefers-reduced-motion: reduce`
+ * (transitions disabled) the Promise resolves on the next tick.
  */
-export function expandAncestors(target: Element): void {
+export function expandAncestors(target: Element): Promise<void> {
+  const expanded: HTMLElement[] = [];
   let el: Element | null = target;
   while (el) {
     const section = el.closest('.collapse-section.is-collapsed') as HTMLElement | null;
     if (!section) break;
+    expanded.push(section);
     section.classList.remove('is-collapsed');
     // The heading sitting just before the wrapper owns the toggle button;
     // keep aria + inert state in sync.
@@ -200,4 +207,46 @@ export function expandAncestors(target: Element): void {
     // also be collapsed.
     el = section.parentElement;
   }
+  if (expanded.length === 0) return Promise.resolve();
+  // All ancestors animate in parallel (same duration, same start
+  // tick). Wait on the outermost — its `transitionend` lines up
+  // with the moment the deepest layout settles.
+  return waitForExpansionToSettle(expanded[expanded.length - 1] as HTMLElement);
+}
+
+/**
+ * Resolve once the wrapper finishes its current `grid-template-rows`
+ * transition. Falls back to a timeout slightly longer than the
+ * computed duration so callers don't hang if `transitionend` is
+ * suppressed (reduced-motion, hidden tab, etc.).
+ */
+export function waitForExpansionToSettle(wrapper: HTMLElement): Promise<void> {
+  return new Promise((resolve) => {
+    const cs = getComputedStyle(wrapper);
+    const durationMs = Number.parseFloat(cs.transitionDuration) * 1000;
+    if (!durationMs || Number.isNaN(durationMs)) {
+      // `transition: none` (reduced motion) or the wrapper has no
+      // animation declared — the new layout is already in effect.
+      resolve();
+      return;
+    }
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      wrapper.removeEventListener('transitionend', onEnd);
+      clearTimeout(fallbackId);
+      resolve();
+    };
+    const onEnd = (e: TransitionEvent) => {
+      if (e.target !== wrapper) return;
+      if (e.propertyName !== 'grid-template-rows') return;
+      finish();
+    };
+    wrapper.addEventListener('transitionend', onEnd);
+    // Buffer past the declared duration so a slightly delayed event
+    // (some browsers fire transitionend a beat after the visual
+    // settle) doesn't lose the race with our fallback.
+    const fallbackId = setTimeout(finish, durationMs + 80);
+  });
 }

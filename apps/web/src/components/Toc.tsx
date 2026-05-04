@@ -2,6 +2,7 @@ import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState, type 
 import { IconButton, Text, TextField } from '@radix-ui/themes';
 import { ChevronDownIcon, Cross2Icon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
 import type { TocNode } from '../lib/api.js';
+import { waitForExpansionToSettle } from '../lib/heading-collapse.js';
 
 export function Toc({ nodes, activeId }: { nodes: TocNode[]; activeId?: string | null }) {
   const [query, setQuery] = useState('');
@@ -115,14 +116,50 @@ function TocItem({
   useEffect(() => {
     if (!isActive) return;
     const link = linkRef.current;
-    const container = link?.closest<HTMLElement>('.toc')?.querySelector<HTMLElement>(':scope > .toc-list');
-    if (!link || !container) return;
+    if (!link) return;
 
-    const linkRect = link.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    if (linkRect.top >= containerRect.top && linkRect.bottom <= containerRect.bottom) return;
+    let cancelled = false;
+    const doScroll = () => {
+      if (cancelled) return;
+      const container = link
+        .closest<HTMLElement>('.toc')
+        ?.querySelector<HTMLElement>(':scope > .toc-list');
+      if (!container) return;
+      const linkRect = link.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      if (linkRect.top >= containerRect.top && linkRect.bottom <= containerRect.bottom) return;
+      link.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
 
-    link.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // The parent's auto-expand effect runs AFTER this child effect
+    // (React fires effects child-first), then queues `setOpen(true)`.
+    // The wrapper loses `is-collapsed` on the next render and animates
+    // open over 360ms — measuring the link now would land at the
+    // pre-expansion offset. Defer one frame so the class swap commits,
+    // then wait for any ancestor wrapper transition to settle.
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return;
+      // Find the outermost `.toc-collapse-section` ancestor — it's
+      // the slowest to settle in nested-collapse cases.
+      let outermost: HTMLElement | null = null;
+      let walker: Element | null = link.parentElement;
+      while (walker) {
+        const section = walker.closest<HTMLElement>('.toc-collapse-section');
+        if (!section) break;
+        outermost = section;
+        walker = section.parentElement;
+      }
+      if (outermost) {
+        void waitForExpansionToSettle(outermost).then(doScroll);
+      } else {
+        doScroll();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
   }, [isActive, query]);
 
   // Search-driven force-open stays in `effectiveOpen` only — we
