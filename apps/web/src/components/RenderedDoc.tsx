@@ -110,6 +110,13 @@ export function RenderedDoc({
     if (!el) return;
     if (lastHtml.current === rendered.html) return;
     el.innerHTML = rendered.html;
+    // Setting innerHTML replaces the article's children but leaves
+    // its own attributes intact. Clear the install marker so the
+    // fresh DOM goes through `installHeadingCollapse` again — without
+    // this, navigating to a different document (or any html swap on
+    // the same article element) would leave the new headings
+    // un-wrapped and missing their toggle buttons.
+    el.removeAttribute('data-collapse-installed');
     lastHtml.current = rendered.html;
     void renderMermaidIn(el);
     replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
@@ -180,31 +187,55 @@ export function RenderedDoc({
   // directly (no click event on our article). The browser scrolls to
   // the matching id, but if it sits inside a collapsed wrapper the
   // section's grid-row collapses to 0 and the target stays hidden.
-  // Listen for hash changes ourselves and expand ancestors before the
-  // scroll lands.
+  // Listen for both `hashchange` (back/forward, programmatic hash
+  // updates, fresh anchor clicks) and document clicks on hash links
+  // — the latter catches the case where the user clicks a TOC link
+  // whose href already matches the current hash, which the browser
+  // does NOT report as a hash change.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const onHashChange = () => {
-      const hash = window.location.hash.slice(1);
-      if (!hash) return;
-      let id = hash;
+    const revealHash = (rawHash: string) => {
+      if (!rawHash) return;
+      let id = rawHash;
       try {
-        id = decodeURIComponent(hash);
+        id = decodeURIComponent(rawHash);
       } catch {
-        id = hash;
+        id = rawHash;
       }
       const target = el.querySelector(`[id="${CSS.escape(id)}"]`);
       if (!target) return;
       expandAncestors(target);
-      // Allow the layout to settle before re-scrolling so the target is
-      // in its final position.
+      // Allow the layout to settle before re-scrolling so the target
+      // is in its final position.
       requestAnimationFrame(() => {
         target.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     };
+    const onHashChange = () => revealHash(window.location.hash.slice(1));
+    const onDocumentClick = (e: MouseEvent) => {
+      if (e.defaultPrevented) return;
+      const a = (e.target as Element | null)?.closest?.('a[href^="#"]');
+      if (!a) return;
+      const href = a.getAttribute('href');
+      if (!href || href.length <= 1) return;
+      const linkHash = href.slice(1);
+      // If clicking would change the hash, the browser fires
+      // `hashchange` and `onHashChange` handles it. Re-clicking the
+      // same anchor (link's hash equals current) does not fire
+      // `hashchange`, so handle that case here. We compare the
+      // already-encoded forms to avoid mis-matching id strings that
+      // contain reserved characters.
+      const current = window.location.hash.slice(1);
+      if (linkHash !== current) return;
+      revealHash(linkHash);
+    };
     window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    document.addEventListener('click', onDocumentClick);
+    return () => {
+      window.removeEventListener('hashchange', onHashChange);
+      document.removeEventListener('click', onDocumentClick);
+    };
   }, [ref]);
 
   // Anchor-click scroll + image-click lightbox. Both live on a single

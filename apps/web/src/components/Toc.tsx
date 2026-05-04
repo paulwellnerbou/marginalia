@@ -157,9 +157,12 @@ function TocItem({
       {hasChildren && (
         // Always rendered so the children animate in/out instead of
         // popping. `is-collapsed` toggles the grid-row + opacity
-        // transitions defined in app.css.
+        // transitions defined in app.css. `inert` on the inner
+        // wrapper takes hidden links out of the focus order and the
+        // accessibility tree so keyboard and screen-reader users
+        // don't tab into a section that visually appears closed.
         <div className={`toc-collapse-section ${effectiveOpen ? '' : 'is-collapsed'}`}>
-          <div className="toc-collapse-section-inner">
+          <div className="toc-collapse-section-inner" inert={!effectiveOpen}>
             <TocList
               nodes={node.children}
               activeId={activeId}
