@@ -45,6 +45,9 @@ interface CreateResponse {
   admin_invite: { token: string; url: string; display_name: string };
 }
 
+const CHROMIUM_PROFILE_ENABLED = process.env.MARGINALIA_TEST_PROFILE === 'chromium';
+const chromiumTest = CHROMIUM_PROFILE_ENABLED ? test : test.skip;
+
 describe('PDF export', () => {
   let dir: string;
   let webDir: string;
@@ -100,7 +103,7 @@ describe('PDF export', () => {
     return (await res.json()) as CreateResponse;
   }
 
-  test('GET /:uid/export.pdf returns a PDF with the expected headers', async () => {
+  chromiumTest('GET /:uid/export.pdf returns a PDF with the expected headers', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Export me\n\nA paragraph with **bold** text.\n',
       name: 'PDF fixture',
@@ -127,7 +130,7 @@ describe('PDF export', () => {
     expect(buf.length).toBeGreaterThan(1000);
   }, 30_000);
 
-  test('GET /:uid/export.pdf filename derives from the document title when name is unset', async () => {
+  chromiumTest('GET /:uid/export.pdf filename derives from the document title when name is unset', async () => {
     // Mirrors the DOCX test of the same name — the two downloads must
     // agree on the filename for the same doc.
     const created = await upload(CLIENT_A, {
@@ -142,7 +145,7 @@ describe('PDF export', () => {
     expect(res.headers.get('content-disposition')).toMatch(/filename="My_Great_Doc\.pdf"/);
   }, 30_000);
 
-  test('GET /:uid/export.pdf falls back to uid when no title is derivable', async () => {
+  chromiumTest('GET /:uid/export.pdf falls back to uid when no title is derivable', async () => {
     const created = await upload(CLIENT_A, {
       markdown: 'Just a paragraph, no heading, no frontmatter.\n',
     });
@@ -155,7 +158,7 @@ describe('PDF export', () => {
     expect(res.headers.get('content-disposition')).toContain(`filename="${created.uid}.pdf"`);
   }, 30_000);
 
-  test('GET /:uid/export.pdf rejects unknown UID with 404', async () => {
+  chromiumTest('GET /:uid/export.pdf rejects unknown UID with 404', async () => {
     const res = await app.hono.fetch(
       new Request('http://test/api/documents/does-not-exist/export.pdf', {
         headers: headersFor(CLIENT_A),
@@ -164,7 +167,7 @@ describe('PDF export', () => {
     expect(res.status).toBe(404);
   });
 
-  test('GET /:uid/export.pdf rejects a non-invited client with 401', async () => {
+  chromiumTest('GET /:uid/export.pdf rejects a non-invited client with 401', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Secret\n\nBody.\n',
       name: 'Private doc',
@@ -179,7 +182,7 @@ describe('PDF export', () => {
     expect(res.status).toBe(401);
   });
 
-  test('GET /:uid/export.pdf respects ?theme= and produces different bytes per theme', async () => {
+  chromiumTest('GET /:uid/export.pdf respects ?theme= and produces different bytes per theme', async () => {
     // Two very different themes (default vs. serif-print) should not
     // produce byte-identical PDFs. Ensures the theme CSS actually
     // threads through to `page.pdf()`.
@@ -209,7 +212,7 @@ describe('PDF export', () => {
     expect(a.equals(b)).toBe(false);
   }, 60_000);
 
-  test('GET /:uid/export.pdf embeds attached image assets as data URLs', async () => {
+  chromiumTest('GET /:uid/export.pdf embeds attached image assets as data URLs', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Doc\n\n![logo](logo.png)\n',
       name: 'With logo',
@@ -258,7 +261,7 @@ describe('PDF export', () => {
     expect(body).toMatch(/\/Subtype\s*\/Image/);
   }, 30_000);
 
-  test('GET /:uid/export.pdf renders a mermaid diagram to SVG on the page', async () => {
+  chromiumTest('GET /:uid/export.pdf renders a mermaid diagram to SVG on the page', async () => {
     // Document with one mermaid block → hasMermaid is true → the
     // envelope inlines the mermaid runtime → the export page runs
     // `mermaid.run()` before `page.pdf()`. We can't easily verify the
@@ -314,7 +317,7 @@ describe('PDF export', () => {
     expect(diagram.length - plain.length).toBeGreaterThan(2000);
   }, 45_000);
 
-  test('GET /:uid/export.pdf?mermaid=mmdr pre-rasterizes diagrams without the mermaid runtime', async () => {
+  chromiumTest('GET /:uid/export.pdf?mermaid=mmdr pre-rasterizes diagrams without the mermaid runtime', async () => {
     // Same fixture as the chromium-renderer test above. With `?mermaid=mmdr`
     // the route runs the pre-rasterizer over the body and replaces every
     // `<div class="mermaid">` with the SVG mmdr returned. The PDF should
@@ -358,7 +361,7 @@ describe('PDF export', () => {
     expect(buf.length).toBeGreaterThan(5_000);
   }, 45_000);
 
-  test('GET /:uid/export.pdf rejects path-traversal-shaped theme names cleanly', async () => {
+  chromiumTest('GET /:uid/export.pdf rejects path-traversal-shaped theme names cleanly', async () => {
     // An unknown theme name should fall back to default, not 500. The
     // CSS loader's `isValidThemeName` plus the ENOENT fallback cover
     // both "looks fine but doesn't exist" and "obvious attack".
@@ -376,7 +379,7 @@ describe('PDF export', () => {
     expect(buf.subarray(0, 5).toString('utf8')).toBe('%PDF-');
   }, 30_000);
 
-  test('GET /:uid/export.pdf blocks outbound requests to disallowed hosts (SSRF)', async () => {
+  chromiumTest('GET /:uid/export.pdf blocks outbound requests to disallowed hosts (SSRF)', async () => {
     // A doc authored with an absolute `<img src="http://…">` pointed
     // at an unroutable host. Without the request-routing firewall,
     // Chromium would try to fetch this during export and either hang
@@ -407,7 +410,7 @@ describe('PDF export', () => {
     expect(elapsed).toBeLessThan(10_000);
   }, 30_000);
 
-  test('firewall blocks http:// even to an allowlisted host', async () => {
+  chromiumTest('firewall blocks http:// even to an allowlisted host', async () => {
     // Defense-in-depth: the firewall only lets `https:` through,
     // even for names on ALLOWED_EXPORT_HOSTS. Proves the policy
     // isn't just hostname-based — a user-authored
@@ -437,7 +440,7 @@ describe('PDF export', () => {
     expect(elapsed).toBeLessThan(10_000);
   }, 30_000);
 
-  test('inlineImageAssets targets the src attribute even when alt text shares the ref name', async () => {
+  chromiumTest('inlineImageAssets targets the src attribute even when alt text shares the ref name', async () => {
     // Regression test for the pre-`d`-flag indexOf-based inliner,
     // which would have targeted the FIRST occurrence of "logo.png"
     // in the `<img>` tag — i.e. the alt text — leaving the real
@@ -487,7 +490,7 @@ describe('PDF export', () => {
     expect(buf.toString('latin1')).toMatch(/\/Subtype\s*\/Image/);
   }, 30_000);
 
-  test('mermaid-wait timeout is reported as 504 export-timeout, not 500', async () => {
+  chromiumTest('mermaid-wait timeout is reported as 504 export-timeout, not 500', async () => {
     // Regression: before pdf.ts distinguished Playwright's own
     // `TimeoutError` from unexpected errors, a mermaid bootstrap that
     // never resolved `__marginaliaMermaidReady` within `mermaidWaitMs`

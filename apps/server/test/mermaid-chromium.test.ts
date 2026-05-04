@@ -63,6 +63,8 @@ function chromiumAvailable(): boolean {
 }
 
 const CHROMIUM_AVAILABLE = chromiumAvailable();
+const CHROMIUM_PROFILE_ENABLED = process.env.MARGINALIA_TEST_PROFILE === 'chromium';
+const SHOULD_RUN_CHROMIUM_TESTS = CHROMIUM_PROFILE_ENABLED && CHROMIUM_AVAILABLE;
 
 const SAMPLE = `flowchart LR
   A[Start] --> B{Decision}
@@ -80,7 +82,7 @@ describe('renderMermaidWithChromium', () => {
     await closeExportBrowser();
   });
 
-  test.if(CHROMIUM_AVAILABLE)('produces an SVG with diagram content', async () => {
+  test.if(SHOULD_RUN_CHROMIUM_TESTS)('produces an SVG with diagram content', async () => {
     const result = await renderMermaidWithChromium(SAMPLE, 'svg');
     expect(result).not.toBeNull();
     expect(result!.mime).toBe('image/svg+xml');
@@ -92,7 +94,7 @@ describe('renderMermaidWithChromium', () => {
     expect(text).toMatch(/Start|Decision|OK|Stop/);
   }, 60_000);
 
-  test.if(CHROMIUM_AVAILABLE)('produces a PNG screenshot', async () => {
+  test.if(SHOULD_RUN_CHROMIUM_TESTS)('produces a PNG screenshot', async () => {
     const result = await renderMermaidWithChromium(SAMPLE, 'png');
     expect(result).not.toBeNull();
     expect(result!.mime).toBe('image/png');
@@ -105,7 +107,7 @@ describe('renderMermaidWithChromium', () => {
     expect(result!.bytes[3]).toBe(0x47);
   }, 60_000);
 
-  test.if(CHROMIUM_AVAILABLE)('PNG resolution scales with pngScale; natural dims stay fixed', async () => {
+  test.if(SHOULD_RUN_CHROMIUM_TESTS)('PNG resolution scales with pngScale; natural dims stay fixed', async () => {
     // Two renders of the same source at different scales: PNG actual
     // pixel count grows with `pngScale`, but `naturalWidth/Height`
     // (the CSS-px display size we hand back to docx) stays the same.
@@ -136,7 +138,7 @@ describe('renderMermaidWithChromium', () => {
     expect(at4x!.naturalWidth).toBeLessThan(dims4.w);
   }, 90_000);
 
-  test.if(CHROMIUM_AVAILABLE)('returns null on parse failure (graceful degrade)', async () => {
+  test.if(SHOULD_RUN_CHROMIUM_TESTS)('returns null on parse failure (graceful degrade)', async () => {
     // Garbage source — mermaid.render() rejects, the bootstrap
     // sets `__marginaliaMermaidError`, and we return null so the
     // caller can fall back to the placeholder.
