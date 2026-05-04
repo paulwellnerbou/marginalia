@@ -159,8 +159,16 @@ export interface HistoryEntry {
 export interface HistoryDiff {
   before: string;
   after: string;
-  /** Only present on the proposal diff endpoint for open proposals. */
-  mergeable?: 'clean' | 'conflict' | 'stale' | null;
+}
+
+/**
+ * Proposal diff payload. Mirrors `HistoryDiff` but adds a `mergeable`
+ * status so clients can disable accept/show a rebase hint without a
+ * second round-trip. Non-null only for open proposals — accepted /
+ * rejected rows return `null`.
+ */
+export interface ProposalDiff extends HistoryDiff {
+  mergeable: 'clean' | 'conflict' | 'stale' | null;
 }
 
 export interface UploadOptions {
@@ -1171,8 +1179,8 @@ export function rejectEditProposal(
   });
 }
 
-export function getEditProposalDiff(uid: string, pid: string): Promise<HistoryDiff> {
-  return request<HistoryDiff>(
+export function getEditProposalDiff(uid: string, pid: string): Promise<ProposalDiff> {
+  return request<ProposalDiff>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/diff`,
     { method: 'GET', docUid: uid },
   );

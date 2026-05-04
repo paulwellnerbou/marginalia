@@ -384,7 +384,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(nextSource)
       : locateAllBlocks(nextSource);
-  await reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
+  reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (isContentChange(previousSource, nextSource)) {
     realtime.broadcast(
@@ -1117,13 +1117,13 @@ function isBundleVersion(v: unknown): v is 1 | 2 | 3 | 4 {
   return v === 1 || v === 2 || v === 3 || v === 4;
 }
 
-async function reanchorAndBroadcast(
+function reanchorAndBroadcast(
   deps: AppDeps,
   doc: DocumentRow,
   blocks: Map<string, BlockSourceRange>,
   now: number,
   exceptClientId: string,
-): Promise<void> {
+): void {
   const orphaned = reanchorProposals(deps.db, doc.uid, blocks, doc.format, now);
   for (const row of orphaned) {
     deps.realtime.broadcast(
@@ -1346,7 +1346,7 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(restoredSource)
       : locateAllBlocks(restoredSource);
-  await reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
+  reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   realtime.broadcast(
     doc.uid,
@@ -1425,7 +1425,7 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(diff.before)
       : locateAllBlocks(diff.before);
-  await reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
+  reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (reopenedProposalId) {
     const reopened = loadProposalRow(db, reopenedProposalId, doc.uid);

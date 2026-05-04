@@ -333,6 +333,11 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
   const diff = await resolveProposalDiff(doc, proposal, deps);
   if (!diff) return c.json({ error: 'proposal-diff-unavailable' }, 410);
 
+  // Mergeability is only meaningful for open proposals. Accepted/rejected
+  // rows return `null` so clients can rely on the field's presence to
+  // decide whether to render an "accept" affordance. `merged` and `absent`
+  // both collapse to `stale` — the proposal can no longer be applied as-is
+  // and needs a rebase.
   let mergeable: 'clean' | 'conflict' | 'stale' | null = null;
   if (proposal.proposal_status === 'open') {
     const status = await deps.store.proposalMergeStatus(doc, proposal.id);
