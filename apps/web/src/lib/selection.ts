@@ -132,10 +132,15 @@ function computeSectionContext(
   return result;
 }
 
-/** Direct `[data-block]` children, treating `.collapse-section[-inner]`
- * wrappers as transparent so a comment captured inside a folded
- * section keeps its heading-path metadata.
+/** `[data-block]` descendants in document order, treating known
+ * structural containers as transparent: the runtime collapse
+ * wrappers (`.collapse-section[-inner]`) and AsciiDoc's section
+ * shape (`#content`, `#preamble`, `.sectN`, `.sectionbody`).
+ * Without those, comments captured inside a folded section or
+ * inside any AsciiDoc body would lose their heading-path metadata.
  */
+const TRANSPARENT_CONTAINER_RE =
+  /(?:^|\s)(?:collapse-section|collapse-section-inner|sect\d+|sectionbody)(?:\s|$)/;
 function collectTopLevelBlocks(root: HTMLElement): HTMLElement[] {
   const out: HTMLElement[] = [];
   for (const child of Array.from(root.children)) {
@@ -145,8 +150,9 @@ function collectTopLevelBlocks(root: HTMLElement): HTMLElement[] {
       continue;
     }
     if (
-      child.classList.contains('collapse-section') ||
-      child.classList.contains('collapse-section-inner')
+      child.id === 'content' ||
+      child.id === 'preamble' ||
+      TRANSPARENT_CONTAINER_RE.test(child.className)
     ) {
       out.push(...collectTopLevelBlocks(child));
     }

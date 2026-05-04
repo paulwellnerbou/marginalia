@@ -226,10 +226,27 @@ export function RenderedDoc({
       const href = a.getAttribute('href');
       if (!href || href.length <= 1) return;
       const linkHash = href.slice(1);
-      // Different hash → `hashchange` will fire, handled there.
-      // Same hash → no `hashchange`, reveal here.
+      // Resolve the target locally — if it isn't in our article we
+      // let the browser handle the link normally.
+      let id = linkHash;
+      try {
+        id = decodeURIComponent(linkHash);
+      } catch {
+        id = linkHash;
+      }
+      if (!el.querySelector(`[id="${CSS.escape(id)}"]`)) return;
+      // Intercept BOTH same-hash and different-hash clicks. Letting
+      // the browser's default fragment navigation run would jump
+      // instantly to the (still-folded) target before our
+      // `hashchange` handler gets a chance to expand and smooth-
+      // scroll, producing a visible "wrong-spot then snap" jolt.
+      e.preventDefault();
       const current = window.location.hash.slice(1);
-      if (linkHash !== current) return;
+      if (linkHash !== current) {
+        const next = new URL(window.location.href);
+        next.hash = linkHash;
+        window.history.pushState(null, '', next);
+      }
       revealHash(linkHash);
     };
     window.addEventListener('hashchange', onHashChange);

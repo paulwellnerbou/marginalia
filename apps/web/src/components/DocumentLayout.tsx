@@ -142,6 +142,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
   const [historyVersion, setHistoryVersion] = useState(0);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
+  // Gates the deferred scrolls launched by `scrollToAnchor` (now
+  // async because of the expand wait). A stale promise that resolves
+  // after the user clicks a different thread bails out instead of
+  // yanking the viewport back.
+  const scrollToAnchorSeq = useRef(0);
   const [docSearchOpen, setDocSearchOpen] = useState(false);
   const [docSearchQuery, setDocSearchQuery] = useState('');
   const [docSearchCaseSensitive, setDocSearchCaseSensitive] = useState(false);
@@ -365,9 +370,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       frame = 0;
       const containerTop = container.getBoundingClientRect().top;
       const threshold = containerTop + 96;
-      let current = headings[0]!.id;
+      // Skip headings hidden inside a folded `.collapse-section` —
+      // their `getBoundingClientRect()` still reports the wrapper's
+      // collapsed position, so without this filter the TOC would
+      // happily highlight a heading the reader can't see.
+      const visible = headings.filter((h) => !h.closest('.collapse-section.is-collapsed'));
+      if (visible.length === 0) return;
+      let current = visible[0]!.id;
 
-      for (const heading of headings) {
+      for (const heading of visible) {
         if (heading.getBoundingClientRect().top <= threshold) {
           current = heading.id;
           continue;
@@ -594,10 +605,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
     // Reveal the target if it sits inside a folded section before
     // measuring — otherwise the scroll lands at the pre-expansion
-    // offset and the user ends up at an empty spot.
+    // offset and the user ends up at an empty spot. The seq guard
+    // discards a stale promise if another thread is clicked during
+    // the expand window.
     const scroll = docScrollRef.current;
     const finalTarget = target;
+    const seq = ++scrollToAnchorSeq.current;
     void expandAncestors(target).then(() => {
+      if (seq !== scrollToAnchorSeq.current) return;
       if (scrollOffset > 0 && scroll) {
         const targetTop =
           finalTarget.getBoundingClientRect().top -
