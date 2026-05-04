@@ -2825,10 +2825,19 @@ function runOptions(style: InlineStyle, text: string, tokens: ThemeTokens): IRun
  * (b) emitting extra blank marker paragraphs (which produce visible
  * spacing in Word).
  *
- * Only call sites for paragraphs the review walker can wrap should go
- * through here. Paragraphs that exist purely as internal structure —
- * TOC blocks, footnote bodies, table cell contents — bypass this
- * helper because they're never the wrap target themselves.
+ * Most call sites for paragraphs the review walker can wrap go
+ * through here. Some paragraphs that exist purely as internal
+ * structure — TOC blocks, the bodies emitted directly by
+ * `appendFootnoteBlock`, and table cell contents — are
+ * constructed via `new Paragraph(...)` directly because they're
+ * never the wrap target themselves. The only exception is
+ * `buildCodeBlock`: it routes through `mkParagraph` because the
+ * same helper is used for top-level code blocks (which the wrap
+ * helper CAN target) as well as code blocks nested inside
+ * footnote bodies. The footnote-internal code-block paragraphs
+ * end up registered in `paraOpts` too, but the side-table is a
+ * WeakMap so it won't keep them alive past the export and the
+ * review walker simply never visits them.
  */
 function mkParagraph(opts: ParagraphOptions, ctx: BuildCtx): Paragraph {
   const p = new Paragraph(opts);

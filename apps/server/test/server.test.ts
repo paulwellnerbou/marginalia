@@ -2654,9 +2654,17 @@ describe('documents API', () => {
     expect(acceptRes.status).toBe(200);
 
     const docText = await exportReviewDocx(created.uid, created.admin_invite.token);
-    // Accepted proposal's body and proposed_text must NOT appear in
-    // the export — the change is already in the live document.
+    // Accepted proposal must NOT contribute review chrome to the
+    // export. The live doc already carries the proposed text
+    // (acceptance applied the change), so we assert:
+    //   - the rationale body is gone,
+    //   - the source_snapshot ('The original line.') doesn't sneak
+    //     back in via <w:del> — that would mean the closed-thread
+    //     filter let the proposal payload through and the renderer
+    //     re-emitted the pre-acceptance text as a tracked change.
     expect(docText).not.toContain('ACCEPTED_RATIONALE');
+    expect(docText).not.toContain('The original line.');
+    expect(docText).not.toMatch(/<w:del\b/);
   });
 
   test('GET /:uid/export.docx?review=both excludes rejected edit proposals', async () => {
