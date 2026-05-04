@@ -1,6 +1,6 @@
 import { FileTextIcon, PilcrowIcon } from '@radix-ui/react-icons';
 import { useMemo, useRef, useState } from 'react';
-import type { Comment, Thread } from '../../lib/api.js';
+import type { Comment, ProposalDiff, Thread } from '../../lib/api.js';
 import { getEditProposalDiff, isProposal, proposalStatus } from '../../lib/api.js';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import { reportError } from '../../lib/log.js';
@@ -50,7 +50,7 @@ export function InlineThreadCard({
   const [busy, setBusy] = useState(false);
 
   const [diffOpen, setDiffOpen] = useState(false);
-  const [resolvedDiff, setResolvedDiff] = useState<{ before: string; after: string } | null>(null);
+  const [resolvedDiff, setResolvedDiff] = useState<ProposalDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [loadingDiff, setLoadingDiff] = useState(false);
 

@@ -349,8 +349,17 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
   if (!diff) return c.json({ error: 'proposal-diff-unavailable' }, 410);
 
   let mergeable: 'clean' | 'conflict' | 'stale' | null = null;
-  const wantMergeable =
+  // Skip the dry-run merge when the proposal can't be accepted regardless
+  // of the result (orphaned anchor, missing block id) — running it would
+  // burn the per-doc lock and could surface a misleading 'clean' for a
+  // proposal that the accept path would refuse with proposal-orphaned.
+  // Whole-document proposals don't depend on `anchor_block_id`.
+  const isAcceptable =
     proposal.proposal_status === 'open' &&
+    proposal.link_status !== 'orphaned' &&
+    (proposal.is_whole_document === 1 || proposal.anchor_block_id !== null);
+  const wantMergeable =
+    isAcceptable &&
     (canEdit(decision.role) ||
       (c.req.query('mergeable') === '1' && canPropose(decision.role)));
   if (wantMergeable) {

@@ -1409,6 +1409,20 @@ describe('threads API', () => {
       mergeable: 'clean',
     });
 
+    // Admin (edit-capable) gets a non-null mergeable status by default —
+    // no `?mergeable=1` needed. Locks in the editor-default contract.
+    const adminRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${thread.id}/diff`, {
+        headers: headersFor(ALICE),
+      }),
+    );
+    expect(adminRes.status).toBe(200);
+    expect(await adminRes.json()).toEqual({
+      before: '# Title',
+      after: '# Better title',
+      mergeable: 'clean',
+    });
+
     // Reader can read the diff but is denied the `?mergeable=1` opt-in:
     // computing it under the per-doc lock is too expensive to expose to
     // a role that can't act on the result.
