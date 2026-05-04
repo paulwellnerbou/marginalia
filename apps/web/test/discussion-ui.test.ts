@@ -1,21 +1,21 @@
 import { describe, expect, test } from 'bun:test';
 
-import { avatarInitials } from '../src/components/DiscussionUi.tsx';
+import { inlineAvatarInitials } from '../src/components/inline-comments/inlineUtils.js';
 
-describe('avatarInitials', () => {
-  test('single names keep their first two letters as typed', () => {
-    expect(avatarInitials('Paul')).toBe('Pa');
-    expect(avatarInitials('Mario')).toBe('Ma');
-    expect(avatarInitials('PAUL')).toBe('PA');
+describe('inlineAvatarInitials', () => {
+  test('single names use their first two letters', () => {
+    expect(inlineAvatarInitials('Paul')).toBe('PA');
+    expect(inlineAvatarInitials('Mario')).toBe('MA');
+    expect(inlineAvatarInitials('PAUL')).toBe('PA');
   });
 
   test('multi-part names use uppercase initials from every part', () => {
-    expect(avatarInitials('Paul Wellner Bou')).toBe('PWB');
-    expect(avatarInitials('Martin Müller')).toBe('MM');
-    expect(avatarInitials('paul wellner bou')).toBe('PWB');
+    expect(inlineAvatarInitials('Paul Wellner Bou')).toBe('PW');
+    expect(inlineAvatarInitials('Martin Müller')).toBe('MM');
+    expect(inlineAvatarInitials('paul wellner bou')).toBe('PW');
   });
 
   test('blank names still fall back to a placeholder', () => {
-    expect(avatarInitials('   ')).toBe('?');
+    expect(inlineAvatarInitials('   ')).toBe('?');
   });
 });

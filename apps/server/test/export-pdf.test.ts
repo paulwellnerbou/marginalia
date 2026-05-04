@@ -508,7 +508,7 @@ describe('PDF export', () => {
         name: 'Timeout fixture',
       });
       const res = await app.hono.fetch(
-        new Request(`http://test/api/documents/${created.uid}/export.pdf`, {
+        new Request(`http://test/api/documents/${created.uid}/export.pdf?mermaid=chromium`, {
           headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
         }),
       );
