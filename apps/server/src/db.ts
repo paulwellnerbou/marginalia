@@ -361,6 +361,7 @@ export interface EditProposalThreadRow extends CommentRow {
   base_oid: string | null;
   base_block_start: number | null;
   base_block_end: number | null;
+  is_whole_document: number;
   decided_at: number | null;
   decided_by_name: string | null;
 }
@@ -389,6 +390,12 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments_edit_proposals', 'base_oid', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'base_block_start', 'INTEGER');
   ensureColumn(db, 'comments_edit_proposals', 'base_block_end', 'INTEGER');
+  ensureColumn(
+    db,
+    'comments_edit_proposals',
+    'is_whole_document',
+    'INTEGER NOT NULL DEFAULT 0',
+  );
   ensureColumn(db, 'sessions', 'persistent', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'sessions', 'invite_display_name', 'TEXT');
   ensureColumn(db, 'sessions', 'invite_role', 'TEXT');
