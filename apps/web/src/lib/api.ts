@@ -164,8 +164,18 @@ export interface HistoryDiff {
 /**
  * Proposal diff payload. Mirrors `HistoryDiff` but adds a `mergeable`
  * status so clients can disable accept/show a rebase hint without a
- * second round-trip. Non-null only for open proposals — accepted /
- * rejected rows return `null`.
+ * second round-trip.
+ *
+ * `mergeable` is `null` when the server doesn't compute it, which
+ * happens in any of:
+ *   - the proposal is accepted or rejected (mergeability is meaningless)
+ *   - the caller lacks edit permission and didn't opt in via
+ *     `?mergeable=1` on the diff request (computing it under the
+ *     per-doc lock is too expensive for read-only viewers)
+ *
+ * A non-null value (`'clean' | 'conflict' | 'stale'`) only ever
+ * appears for open proposals where the server actually ran the
+ * dry-run merge.
  */
 export interface ProposalDiff extends HistoryDiff {
   mergeable: 'clean' | 'conflict' | 'stale' | null;
