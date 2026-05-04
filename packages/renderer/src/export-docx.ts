@@ -3905,13 +3905,23 @@ function renderWholeDocBlockDiff(
 
   const changes = diffArrays(originalKeys, proposedKeys);
 
-  // Churn ratio: how many blocks are changed (added OR removed)
-  // relative to the larger side. Above this we fall back to the
-  // pre-diff wall-of-insertion path so a complete rewrite isn't
-  // rendered as a sea of revision marks.
-  const totalChanged = changes
-    .filter((c) => c.added || c.removed)
-    .reduce((n, c) => n + c.value.length, 0);
+  // Churn ratio: the proportion of blocks that differ between
+  // sides, relative to the larger side. Above this we fall back
+  // to the pre-diff wall-of-insertion path so a complete rewrite
+  // isn't rendered as a sea of revision marks.
+  //
+  // Use `max(removed, added)` rather than `removed + added` so a
+  // pure block-level replacement (one removed + one added) counts
+  // as ONE differing block, not two — otherwise a 35% replacement
+  // rate would already cross the 70% threshold and the cutoff
+  // would be tighter than the comment claims.
+  let totalRemoved = 0;
+  let totalAdded = 0;
+  for (const c of changes) {
+    if (c.removed) totalRemoved += c.value.length;
+    else if (c.added) totalAdded += c.value.length;
+  }
+  const totalChanged = Math.max(totalRemoved, totalAdded);
   const denom = Math.max(originalKeys.length, proposedKeys.length, 1);
   if (totalChanged / denom > 0.7) {
     return renderWholeDocAsInsertion(proposedHast, author, date, ctx);
