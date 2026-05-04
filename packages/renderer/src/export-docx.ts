@@ -2778,10 +2778,13 @@ function mkParagraph(opts: ParagraphOptions, ctx: BuildCtx): Paragraph {
 
 /**
  * Build a TextRun, wrapping it in `InsertedTextRun` / `DeletedTextRun`
- * when the walker is currently inside a tracked-change pass. Each
- * wrap consumes one revision id from the document-scoped allocator,
- * which Word uses to group adjacent runs into a single visual change
- * when their author + date match.
+ * when the walker is currently inside a tracked-change pass. Every
+ * wrapped run reuses the single revision id the caller stashed on
+ * `ctx.revision.id` when it entered the pass — Word groups runs
+ * sharing `(w:id, w:author, w:date)` into one Accept/Reject unit,
+ * and a structural delete/insert is one logical change, not one per
+ * text fragment. Allocation of that id (one per pass, drawn from
+ * `review.nextRevisionId`) is the caller's responsibility.
  *
  * Behaves identically to `new TextRun(opts)` outside revision mode,
  * so call sites can route through it unconditionally.
@@ -3234,7 +3237,7 @@ function emitProposalBlock(
  */
 function tryEmitInlineWordDiff(
   node: Element,
-  thread: ReviewThread,
+  _thread: ReviewThread,
   propHast: HastRoot,
   author: string,
   date: string,
@@ -3257,12 +3260,47 @@ function tryEmitInlineWordDiff(
   // ins/del attribution rather than silently rendering as plain text.
   if (oldText === newText) return null;
 
+  // Diff the rendered text on both sides — NOT the proposal's
+  // raw `source_snapshot`/`proposed_text` source slices. The
+  // qualification check above used `oldText` from the live HAST,
+  // and the unchanged segments emit as plain `<w:r>` runs that
+  // sit inline in the body, so they have to match what the live
+  // doc shows. If we diffed `source_snapshot` instead, a stale
+  // snapshot (proposal authored against an older revision of the
+  // block) would emit equal runs that contradict the live doc.
+  return runsForInlineWordDiff(oldText, newText, author, date, ctx);
+}
+
+/**
+ * Apply jsdiff's word-with-space diff to two plain-text strings
+ * and emit the resulting sequence as a flat ParagraphChild list:
+ *
+ *   - unchanged tokens become normal `TextRun`s,
+ *   - removed tokens become `DeletedTextRun`s,
+ *   - added tokens become `InsertedTextRun`s.
+ *
+ * One revision id is allocated for the whole diff and shared
+ * across every ins/del run it emits, so Word groups them under
+ * one Accept/Reject unit instead of N separate revisions per
+ * word — matching what the structural delete/insert pass does.
+ */
+function runsForInlineWordDiff(
+  oldText: string,
+  newText: string,
+  author: string,
+  date: string,
+  ctx: BuildCtx,
+): ParagraphChild[] {
   const review = ctx.review!;
+  // One id for the whole inline diff. Word groups runs sharing
+  // the same (id, author, date) into a single Accept/Reject unit;
+  // a fresh id per token would shatter one logical wording tweak
+  // into one revision per word.
+  const id = review.nextRevisionId.value++;
+  const attrs = { id, author, date };
   const out: ParagraphChild[] = [];
-  for (const change of diffWordsWithSpace(thread.proposal!.source_snapshot ?? oldText, thread.proposal!.proposed_text ?? newText)) {
+  for (const change of diffWordsWithSpace(oldText, newText)) {
     if (change.value === '') continue;
-    const id = review.nextRevisionId.value++;
-    const attrs = { id, author, date };
     if (change.added) {
       out.push(new InsertedTextRun({ ...attrs, text: change.value }));
     } else if (change.removed) {
@@ -3553,21 +3591,10 @@ function tryEmitInlineWordDiffForPair(
   const newText = pureTextContent(after);
   if (oldText === null || newText === null) return null;
   if (oldText === newText) return null;
-  const review = ctx.review!;
-  const out: ParagraphChild[] = [];
-  for (const change of diffWordsWithSpace(oldText, newText)) {
-    if (change.value === '') continue;
-    const id = review.nextRevisionId.value++;
-    const attrs = { id, author, date };
-    if (change.added) {
-      out.push(new InsertedTextRun({ ...attrs, text: change.value }));
-    } else if (change.removed) {
-      out.push(new DeletedTextRun({ ...attrs, text: change.value }));
-    } else {
-      out.push(new TextRun({ text: change.value }));
-    }
-  }
-  return out;
+  // Reuse the shared helper so both block-level and whole-doc
+  // word-diff paths share the "one revision id per logical change"
+  // invariant.
+  return runsForInlineWordDiff(oldText, newText, author, date, ctx);
 }
 
 /**
@@ -3615,10 +3642,18 @@ function topLevelBlocks(root: HastRoot): readonly Element[] {
  * its normalized plain-text content — collapses whitespace so two
  * blocks that only differ in spacing match, but distinguishes a
  * `<p>` from an `<h2>` even when the text is identical.
+ *
+ * The tag-name and text are joined by the explicit Unicode Unit
+ * Separator (`U+001F`). Sanitize strips control characters from
+ * HAST text before this point, so the separator can't appear in
+ * the payload — the key stays unambiguous even if a block's text
+ * happens to start with another tag's name (e.g. a `<p>` whose
+ * text begins with "h2 ").
  */
+const BLOCK_DIFF_KEY_SEP = '\u001F';
 function blockDiffKey(node: Element): string {
   const text = hastTextContent(node).replace(/\s+/gu, ' ').trim();
-  return `${node.tagName} ${text}`;
+  return `${node.tagName}${BLOCK_DIFF_KEY_SEP}${text}`;
 }
 
 function formatDate(ms: number): string {
