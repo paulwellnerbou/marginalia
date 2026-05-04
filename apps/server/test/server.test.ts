@@ -2198,6 +2198,7 @@ describe('documents API', () => {
     expect(importedProposalThread.proposal).toEqual({
       source_snapshot: '# Hi',
       proposed_text: '# Better Hi',
+      whole_document: false,
     });
     expect(importedProposalThread.state).toBe('resolved');
     expect(importedProposalThread.resolution?.kind).toBe('reject');
