@@ -2636,17 +2636,6 @@ button.primary:disabled {
   border-left: 2px solid var(--ui-border);
 }
 
-/* ---------- Proposal-specific ---------- */
-
-.ic-proposal-rationale {
-  font-size: 0.85rem;
-  line-height: 1.45;
-}
-.ic-proposal-rationale.ic-empty {
-  color: var(--ui-fg-muted);
-  font-style: italic;
-}
-
 .ic-card-workflow {
   display: flex;
   gap: 0.4rem;

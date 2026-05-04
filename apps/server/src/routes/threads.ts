@@ -217,6 +217,7 @@ async function createThread(c: Context, deps: AppDeps) {
         id,
         nextSource,
         identity,
+        rootBody.body ?? null,
       );
       branchRef = branch.refName;
     } catch (err) {

@@ -237,6 +237,7 @@ export class GitStore {
     proposalId: string,
     nextSource: string,
     identity: { displayName: string; clientId: string },
+    rationale?: string | null,
   ): Promise<{ commitOid: string; refName: string }> {
     return this.withLock(doc.uid, async () => {
       await this.ensureDocRepo(doc.uid);
@@ -268,8 +269,14 @@ export class GitStore {
       };
       // Subject is pre-styled as `accept-proposal:` so a FF accept lands
       // a commit `parseHistoryAction` (routes/documents.ts) recognizes.
+      // The rationale (proposal opener body) is embedded in the commit
+      // body so accepted proposals leave a self-describing entry in the
+      // git log — and so editing the rationale after accept/reject would
+      // diverge from the historical record.
+      const trimmedRationale = rationale?.trim() ?? '';
       const message =
         `accept-proposal: ${proposalId}\n\n` +
+        (trimmedRationale.length > 0 ? `${trimmedRationale}\n\n` : '') +
         `X-Marginalia-Client-ID: ${identity.clientId}\n` +
         `X-Marginalia-Proposal-ID: ${proposalId}\n`;
       const commitOid = await git.writeCommit({

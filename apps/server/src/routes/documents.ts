@@ -1076,6 +1076,7 @@ async function importDocument(c: Context, deps: AppDeps) {
           newId,
           nextSource,
           { clientId: row.author_client_id, displayName: row.author_display_name },
+          typeof row.body === 'string' ? row.body : null,
         );
         insertEditProposal.run(
           newId,

@@ -1116,25 +1116,6 @@ export function createDocumentProposal(
   });
 }
 
-export function updateEditProposal(
-  uid: string,
-  pid: string,
-  patch: { rationale: string | null },
-  identity: Identity,
-): Promise<void> {
-  return request<ThreadMutationResponse>(
-    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}`,
-    {
-      method: 'PATCH',
-      body: JSON.stringify({ body: patch.rationale }),
-      identity,
-      docUid: uid,
-    },
-  ).then((res) => {
-    rememberThread(uid, res.thread);
-  });
-}
-
 export function deleteEditProposal(uid: string, pid: string, identity: Identity): Promise<void> {
   return request<void>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}`,
