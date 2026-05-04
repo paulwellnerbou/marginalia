@@ -650,9 +650,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       kind: 'resolve' | 'reopen' | 'accept' | 'reject',
       body?: string,
       name?: string,
-    ) => {
+    ): Promise<boolean> => {
       const identity = resolveIdentity(name);
-      if (!identity) return;
+      if (!identity) {
+        // Match the other identity-gated actions in this file — without
+        // this, the diff dialog's Accept/Reject just silently no-ops for
+        // generic invitees who haven't set a display name yet.
+        setError('Please set your display name first.');
+        return false;
+      }
       try {
         if (kind === 'resolve' || kind === 'reopen') {
           await apiResolve(doc.uid, id, kind === 'resolve', identity, body);
@@ -665,9 +671,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           await apiRejectProposal(doc.uid, id, identity, body);
           await refreshThreads();
         }
+        // Clear any stale error (e.g. an earlier missing-display-name
+        // toast) so the toolbar doesn't keep showing it after a later
+        // successful workflow action.
+        setError(null);
+        return true;
       } catch (err) {
         reportError('DocumentLayout.resolveThread', err, { id, kind });
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : `${kind} failed`);
+        // Signal failure so callers (composer / diff dialog) don't clear
+        // drafts or close on a failed accept/reject. Don't re-throw —
+        // `void runWorkflow(...)` callsites would surface the rejection
+        // through `unhandledrejection` even though it's already toasted.
+        return false;
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

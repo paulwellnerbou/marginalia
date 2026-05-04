@@ -48,7 +48,7 @@ interface Props {
     kind: 'resolve' | 'reopen' | 'accept' | 'reject',
     body?: string,
     name?: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
 }
 

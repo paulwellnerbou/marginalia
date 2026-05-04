@@ -2306,6 +2306,9 @@ button.primary:disabled {
 .ic-card-anchor:hover:not(:disabled) {
   color: var(--ui-fg);
 }
+.ic-card-anchor:active:not(:disabled) {
+  opacity: 0.6;
+}
 
 .ic-card-collapse {
   align-self: flex-start;
@@ -2480,8 +2483,36 @@ button.primary:disabled {
 
 /* ---------- Buttons ---------- */
 
+@keyframes ic-spin {
+  to { transform: rotate(360deg); }
+}
+
+.ic-spinner {
+  display: inline-block;
+  width: 0.7em;
+  height: 0.7em;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: ic-spin 0.55s linear infinite;
+  vertical-align: -0.1em;
+}
+/* Honor the OS-level reduced-motion setting: drop the spin and close the
+   gap so the indicator is still visible (full ring with currentColor),
+   but with no continuous motion. */
+@media (prefers-reduced-motion: reduce) {
+  .ic-spinner {
+    animation: none;
+    border-top-color: currentColor;
+  }
+}
+
 .ic-btn {
   appearance: none;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid transparent;
   background: transparent;
   cursor: pointer;
@@ -2496,6 +2527,23 @@ button.primary:disabled {
 .ic-btn:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+.ic-btn:active:not(:disabled) {
+  filter: brightness(0.88);
+}
+
+/* When a workflow button is in flight, the label is hidden but kept in
+   the DOM so the button retains its original width — neighbors don't
+   shift — and a spinner is overlaid in the center. */
+.ic-btn-label-hidden {
+  visibility: hidden;
+}
+.ic-btn-spinner-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .ic-btn-link {
@@ -2529,6 +2577,12 @@ button.primary:disabled {
 }
 .ic-btn-primary:hover:not(:disabled) {
   filter: brightness(0.95);
+}
+/* The base `.ic-btn:active` rule has equal specificity to the hover rule
+   above and would lose the cascade tie when both match (hover + press),
+   so primary buttons need their own active rule that comes *after* hover. */
+.ic-btn-primary:active:not(:disabled) {
+  filter: brightness(0.85);
 }
 
 .ic-btn-resolve {
