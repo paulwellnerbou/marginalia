@@ -32,7 +32,7 @@
  * - M5: BCP-47 language tag + `<w:bidi/>` for RTL frontmatter.
  */
 
-import { diffWordsWithSpace } from 'diff';
+import { diffArrays, diffWordsWithSpace } from 'diff';
 import rehypeParse from 'rehype-parse';
 import rehypeStringify from 'rehype-stringify';
 import remarkFrontmatter from 'remark-frontmatter';
@@ -400,10 +400,13 @@ export async function exportDocx(
       : body;
 
   // Whole-document proposals are emitted as an "alternative-version"
-  // section appended to the body. Inline tracked changes against the
-  // entire doc would dwarf the original; a labeled appendix keeps the
-  // export readable while still surfacing the proposed alternative.
-  const blocks = appendWholeDocProposals(bodyBlocks, ctx);
+  // section appended to the body. The appendix content itself is a
+  // block-level diff (equal blocks plain, removed blocks in <w:del>,
+  // added blocks in <w:ins>) so reviewers can scan change-by-change
+  // instead of being shown the entire alternative as wall-to-wall
+  // insertion. The original `hast` is passed through so the diff
+  // walker can compare block-for-block against the live document.
+  const blocks = appendWholeDocProposals(bodyBlocks, hast, ctx);
 
   const doc = buildDocument(blocks, tokens, options, footnotes.content, {
     language,
@@ -3280,17 +3283,27 @@ function singleParagraphElement(root: HastRoot): Element | null {
 
 /**
  * Append whole-document proposals as a labeled "Alternative version"
- * section at the end of the body. Inline tracked changes against the
- * entire doc would dwarf the original; an appendix keeps both
- * versions readable while still surfacing the reviewer's proposal.
+ * section at the end of the body. The appendix's content is a
+ * block-level diff between the original document and the proposed
+ * one: unchanged blocks render as plain text, removed blocks in
+ * `<w:del>`, added blocks in `<w:ins>`. Reviewers can scan
+ * change-by-change instead of being shown the entire alternative
+ * as wall-to-wall insertion.
  *
- * Each whole-doc proposal renders the proposed body in an INSERT
- * pass (so the appendix carries the same review-attribution metadata
- * a block-level proposal would) and is preceded by a heading-style
- * "Alternative version proposed by {author} ({date})" paragraph.
+ * Replacement pairs (a removed block followed immediately by an
+ * added block) get inline word-level diff via `tryEmitInlineWordDiff`
+ * when both sides are single plain-prose paragraphs — same path the
+ * block-level proposal handler uses. Otherwise the pair degrades to
+ * sequential delete + insert blocks.
+ *
+ * If the diff churn dominates the document (most blocks changed),
+ * the appendix falls back to the original wall-to-wall insertion —
+ * a near-total rewrite is more readable as one alternative version
+ * than as a sea of revision marks against a phantom original.
  */
 function appendWholeDocProposals(
   body: readonly FileChild[],
+  originalHast: HastRoot,
   ctx: BuildCtx,
 ): FileChild[] {
   const review = ctx.review;
@@ -3315,26 +3328,242 @@ function appendWholeDocProposals(
       ),
     );
     const propHast = review.proposalHasts.get(thread.id);
-    if (propHast) {
-      const ctxIns: BuildCtx = {
-        ...ctx,
-        revision: {
-          kind: 'insert',
+    if (!propHast) continue;
+    const commentIds = allocCommentIdsForThread(thread, ctx);
+    const diffBlocks = renderWholeDocBlockDiff(
+      originalHast,
+      propHast,
+      author,
+      date,
+      ctx,
+    );
+    out.push(...wrapBufferWithCommentRanges(diffBlocks, commentIds, ctx));
+  }
+  return out;
+}
+
+/**
+ * Block-level diff between the original document HAST and a
+ * proposal's pre-parsed `proposed_text` HAST. Returns FileChildren
+ * suitable for the appendix:
+ *
+ *   - unchanged top-level blocks render as plain text (no revision
+ *     wrapping at all — they really are unchanged content);
+ *   - blocks present only in the original render in DELETE mode;
+ *   - blocks present only in the proposal render in INSERT mode;
+ *   - adjacent removed+added pairs route through
+ *     `tryEmitInlineWordDiff` for word-level inline diff when both
+ *     sides are single plain-prose paragraphs.
+ *
+ * The diff itself is `diffArrays` over a normalized plain-text key
+ * per block — the same kind of key `remarkBlockIds` uses to compute
+ * its content hash. That gives stable matching for unchanged blocks
+ * even when surrounding structure shifts (a paragraph re-numbered
+ * in a list, etc.).
+ *
+ * Falls back to the original "wall-to-wall insertion" path when
+ * the change ratio dominates: a near-total rewrite reads better as
+ * one alternative version than as a sea of revision marks against
+ * a near-empty unchanged scaffold.
+ */
+function renderWholeDocBlockDiff(
+  originalHast: HastRoot,
+  proposedHast: HastRoot,
+  author: string,
+  date: string,
+  ctx: BuildCtx,
+): FileChild[] {
+  const originalBlocks = topLevelBlocks(originalHast);
+  const proposedBlocks = topLevelBlocks(proposedHast);
+  const originalKeys = originalBlocks.map(blockDiffKey);
+  const proposedKeys = proposedBlocks.map(blockDiffKey);
+
+  const changes = diffArrays(originalKeys, proposedKeys);
+
+  // Churn ratio: how many blocks are changed (added OR removed)
+  // relative to the larger side. Above this we fall back to the
+  // pre-diff wall-of-insertion path so a complete rewrite isn't
+  // rendered as a sea of revision marks.
+  const totalChanged = changes
+    .filter((c) => c.added || c.removed)
+    .reduce((n, c) => n + c.value.length, 0);
+  const denom = Math.max(originalKeys.length, proposedKeys.length, 1);
+  if (totalChanged / denom > 0.7) {
+    return renderWholeDocAsInsertion(proposedHast, author, date, ctx);
+  }
+
+  const review = ctx.review!;
+  const ctxDel: BuildCtx = {
+    ...ctx,
+    revision: { kind: 'delete', author, date, idAlloc: review.nextRevisionId },
+  };
+  const ctxIns: BuildCtx = {
+    ...ctx,
+    revision: { kind: 'insert', author, date, idAlloc: review.nextRevisionId },
+    // Disable review interception during the sub-walk so a block-id
+    // collision between the appendix and the live document can't
+    // recurse through emitProposalBlock.
+    review: null,
+  };
+  const ctxEqual: BuildCtx = { ...ctx, review: null };
+  const defaultWalk: WalkCtx = { listDepth: 0, blockquoteDepth: 0 };
+
+  const out: FileChild[] = [];
+  let origIdx = 0;
+  let propIdx = 0;
+  for (let i = 0; i < changes.length; i++) {
+    const change = changes[i]!;
+    const next = changes[i + 1];
+    if (!change.added && !change.removed) {
+      for (let k = 0; k < change.value.length; k++) {
+        convertBlockInner(
+          originalBlocks[origIdx]!,
+          ctxEqual,
+          out,
+          defaultWalk,
+        );
+        origIdx++;
+      }
+      propIdx += change.value.length;
+      continue;
+    }
+
+    // Replacement: a `removed` immediately followed by an `added`.
+    // Try inline word-diff per matching pair before falling back to
+    // sequential delete + insert.
+    if (change.removed && next?.added) {
+      const removedSlice = originalBlocks.slice(origIdx, origIdx + change.value.length);
+      const addedSlice = proposedBlocks.slice(propIdx, propIdx + next.value.length);
+      const pairCount = Math.min(removedSlice.length, addedSlice.length);
+      for (let k = 0; k < pairCount; k++) {
+        const inline = tryEmitInlineWordDiffForPair(
+          removedSlice[k]!,
+          addedSlice[k]!,
           author,
           date,
-          idAlloc: review.nextRevisionId,
-        },
-        // Same rationale as in `emitProposalBlock`: disable review
-        // interception during the sub-walk so a block-id collision
-        // between the appendix and the live document can't recurse.
-        review: null,
-      };
-      const insBuf = hastToDocxChildren(propHast, ctxIns, {});
-      const commentIds = allocCommentIdsForThread(thread, ctx);
-      out.push(...wrapBufferWithCommentRanges(insBuf, commentIds, ctx));
+          ctx,
+          defaultWalk,
+        );
+        if (inline) {
+          out.push(
+            mkParagraph(
+              withParagraphContext({ children: inline }, ctx, defaultWalk),
+              ctx,
+            ),
+          );
+        } else {
+          convertBlockInner(removedSlice[k]!, ctxDel, out, defaultWalk);
+          convertBlockInner(addedSlice[k]!, ctxIns, out, defaultWalk);
+        }
+      }
+      // Tail: leftover removed blocks (when removedSlice is longer).
+      for (let k = pairCount; k < removedSlice.length; k++) {
+        convertBlockInner(removedSlice[k]!, ctxDel, out, defaultWalk);
+      }
+      // Tail: leftover added blocks (when addedSlice is longer).
+      for (let k = pairCount; k < addedSlice.length; k++) {
+        convertBlockInner(addedSlice[k]!, ctxIns, out, defaultWalk);
+      }
+      origIdx += change.value.length;
+      propIdx += next.value.length;
+      i++; // also consumed `next`.
+      continue;
+    }
+
+    if (change.removed) {
+      for (let k = 0; k < change.value.length; k++) {
+        convertBlockInner(originalBlocks[origIdx]!, ctxDel, out, defaultWalk);
+        origIdx++;
+      }
+      continue;
+    }
+    // change.added without a preceding `removed`.
+    for (let k = 0; k < change.value.length; k++) {
+      convertBlockInner(proposedBlocks[propIdx]!, ctxIns, out, defaultWalk);
+      propIdx++;
     }
   }
   return out;
+}
+
+/**
+ * Inline word-diff variant that takes two HAST elements (the
+ * "before" and "after" blocks) instead of a ReviewThread. Same
+ * qualification rules as `tryEmitInlineWordDiff` — returns null
+ * when the pair is too structural to flatten safely.
+ */
+function tryEmitInlineWordDiffForPair(
+  before: HastNode,
+  after: HastNode,
+  author: string,
+  date: string,
+  ctx: BuildCtx,
+  _walk: WalkCtx,
+): ParagraphChild[] | null {
+  if (!isElement(before) || !isElement(after)) return null;
+  if (before.tagName !== 'p' || after.tagName !== 'p') return null;
+  const oldText = pureTextContent(before);
+  const newText = pureTextContent(after);
+  if (oldText === null || newText === null) return null;
+  if (oldText === newText) return null;
+  const review = ctx.review!;
+  const out: ParagraphChild[] = [];
+  for (const change of diffWordsWithSpace(oldText, newText)) {
+    if (change.value === '') continue;
+    const id = review.nextRevisionId.value++;
+    const attrs = { id, author, date };
+    if (change.added) {
+      out.push(new InsertedTextRun({ ...attrs, text: change.value }));
+    } else if (change.removed) {
+      out.push(new DeletedTextRun({ ...attrs, text: change.value }));
+    } else {
+      out.push(new TextRun({ text: change.value }));
+    }
+  }
+  return out;
+}
+
+/**
+ * Whole-document proposal fallback: render the entire proposed
+ * body in INSERT mode with no diff alignment. Used when the change
+ * ratio is so high that a block-level diff would be more noise
+ * than signal — a complete rewrite is clearer as one alternative
+ * version than as a series of delete-block / insert-block pairs.
+ */
+function renderWholeDocAsInsertion(
+  proposedHast: HastRoot,
+  author: string,
+  date: string,
+  ctx: BuildCtx,
+): FileChild[] {
+  const review = ctx.review!;
+  const ctxIns: BuildCtx = {
+    ...ctx,
+    revision: { kind: 'insert', author, date, idAlloc: review.nextRevisionId },
+    review: null,
+  };
+  return hastToDocxChildren(proposedHast, ctxIns, {});
+}
+
+/** Top-level meaningful blocks of a HAST root, skipping whitespace text. */
+function topLevelBlocks(root: HastRoot): readonly Element[] {
+  const out: Element[] = [];
+  for (const node of flattenRoot(root)) {
+    if (isText(node) && node.value.trim() === '') continue;
+    if (isElement(node)) out.push(node);
+  }
+  return out;
+}
+
+/**
+ * Diff key for a top-level block. Compares the block's tag-name and
+ * its normalized plain-text content — collapses whitespace so two
+ * blocks that only differ in spacing match, but distinguishes a
+ * `<p>` from an `<h2>` even when the text is identical.
+ */
+function blockDiffKey(node: Element): string {
+  const text = hastTextContent(node).replace(/\s+/gu, ' ').trim();
+  return `${node.tagName} ${text}`;
 }
 
 function formatDate(ms: number): string {

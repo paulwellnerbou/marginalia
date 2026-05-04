@@ -1960,9 +1960,96 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     const { documentXml } = await inspectComments(buf);
     expect(documentXml).toContain('Alternative version proposed by Drafter');
     expect(documentXml).toContain('Entirely fresh draft');
-    // Appendix body wrapped in <w:ins>.
+    // The appendix carries tracked changes (this proposal has 100%
+    // churn so the renderer takes the wall-of-insertion fallback,
+    // which still wraps everything in <w:ins>).
     expect(documentXml).toMatch(/<w:ins\b/);
   });
+
+  test('whole-document proposal renders unchanged blocks plain', async () => {
+    // Three paragraphs original; only the middle one changes in the
+    // proposal. Reviewers should see the unchanged paragraphs as
+    // plain text in the appendix, with revision marks only around
+    // the changed one.
+    const md = [
+      'Intro paragraph stays put.',
+      '',
+      'Middle paragraph rewritten.',
+      '',
+      'Closing paragraph stays put.',
+      '',
+    ].join('\n');
+    const proposed = [
+      'Intro paragraph stays put.',
+      '',
+      'Middle paragraph entirely replaced.',
+      '',
+      'Closing paragraph stays put.',
+      '',
+    ].join('\n');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: null,
+            comments: [{ body: 'tweak middle', author: 'Editor', date: 0 }],
+            proposal: {
+              source_snapshot: md,
+              proposed_text: proposed,
+              whole_document: true,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Appendix exists.
+    expect(documentXml).toContain('Alternative version proposed by Editor');
+    // Unchanged paragraphs appear as a plain run inside the
+    // appendix (NOT inside <w:ins> or <w:del>). The body also
+    // contains them, so we can't just assertContain — assert there
+    // is at least one plain run carrying the unchanged text.
+    expect(documentXml).toMatch(
+      /<w:r><w:t[^>]*>Intro paragraph stays put\.<\/w:t><\/w:r>[\s\S]*?<w:r><w:t[^>]*>Intro paragraph stays put\.<\/w:t><\/w:r>/,
+    );
+    // The changed middle paragraph is now a replacement pair —
+    // single plain prose on both sides, so it goes through the
+    // inline word-diff path.
+    expect(documentXml).toMatch(
+      /<w:del\b[^>]*>[\s\S]*?<w:delText[^>]*>rewritten/,
+    );
+    expect(documentXml).toMatch(
+      /<w:ins\b[^>]*>[\s\S]*?<w:t[^>]*>entirely replaced/,
+    );
+  });
+
+  test('whole-document proposal: pure addition emits only <w:ins> at end', async () => {
+    const md = 'Existing paragraph.\n';
+    const proposed = ['Existing paragraph.', '', 'Newly appended paragraph.', ''].join('\n');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: null,
+            comments: [{ body: 'add', author: 'Editor', date: 0 }],
+            proposal: {
+              source_snapshot: md,
+              proposed_text: proposed,
+              whole_document: true,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).toContain('Newly appended paragraph');
+    // The addition lands inside <w:ins>; the kept paragraph appears
+    // plain in the appendix (no <w:del>, no <w:ins> on its run).
+    expect(documentXml).toMatch(/<w:ins\b[^>]*>[\s\S]*?Newly appended paragraph/);
+  });
+
 
   test('block with both proposal and side-comment keeps both visible', async () => {
     const md = 'Shared block.\n';
