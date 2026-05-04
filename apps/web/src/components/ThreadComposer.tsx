@@ -8,12 +8,7 @@ import { reportError } from '../lib/log.js';
 import { mergeBlockRanges } from './mergeBlockRanges.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 import { RenderedDoc } from './RenderedDoc.js';
-
-let rendererPromise: Promise<typeof import('@marginalia/renderer')> | null = null;
-function loadRenderer() {
-  if (!rendererPromise) rendererPromise = import('@marginalia/renderer');
-  return rendererPromise;
-}
+import { loadRenderer } from '../lib/renderer-loader.js';
 
 function ProposalSourceField({
   id,
@@ -266,17 +261,18 @@ export function ProposalComposer({
 }: ProposalComposerProps) {
   const open = target !== null;
   const [expanded, setExpanded] = useState(false);
+  // Reset expanded whenever the dialog is closed (any path: Cancel
+  // button, Escape, overlay click, parent clearing the target after
+  // submit). Doing this in an effect on `open` catches every close
+  // path; a wrapper around `onCancel` would miss the post-submit
+  // close where the parent clears the target without calling cancel.
+  useEffect(() => { if (!open) setExpanded(false); }, [open]);
 
   return (
     <Dialog.Root
       open={open}
       onOpenChange={(v) => {
-        if (!v) {
-          // Reset on close so a fresh open always starts compact, rather
-          // than inheriting the prior session's expanded state.
-          setExpanded(false);
-          onCancel();
-        }
+        if (!v) onCancel();
       }}
     >
       <Dialog.Content

@@ -1991,6 +1991,8 @@ button.primary:disabled {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 0;
+  min-width: 0;
   border-right: 1px solid var(--ui-border);
 }
 
@@ -2011,10 +2013,15 @@ button.primary:disabled {
   min-height: 0;
 }
 
-/* Preview pane visible in expanded mode. */
+/* Preview pane visible in expanded mode. `min-height: 0` / `min-width: 0`
+   let the grid item shrink below its content's intrinsic size so
+   `overflow-y: auto` actually scrolls instead of being clipped by the
+   parent's `overflow: hidden`. */
 .proposal-composer-layout--expanded .proposal-composer-preview {
   display: block;
   overflow-y: auto;
+  min-height: 0;
+  min-width: 0;
   padding: 1rem 1.5rem;
   background: var(--ui-bg);
 }
