@@ -652,7 +652,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       name?: string,
     ): Promise<boolean> => {
       const identity = resolveIdentity(name);
-      if (!identity) return false;
+      if (!identity) {
+        // Match the other identity-gated actions in this file — without
+        // this, the diff dialog's Accept/Reject just silently no-ops for
+        // generic invitees who haven't set a display name yet.
+        setError('Please set your display name first.');
+        return false;
+      }
       try {
         if (kind === 'resolve' || kind === 'reopen') {
           await apiResolve(doc.uid, id, kind === 'resolve', identity, body);

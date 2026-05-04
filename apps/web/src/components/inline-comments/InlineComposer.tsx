@@ -76,7 +76,10 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
 ) {
   const [value, setValue] = useState('');
   const [name, setName] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  // Track which path is in flight so we don't flip the Reply/Post label
+  // to `…` while a sibling left-action (Accept/Reject/Resolve/Reopen) is
+  // running. Both paths still gate the same disabled checks.
+  const [submitting, setSubmitting] = useState<'reply' | 'action' | false>(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -113,12 +116,13 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
   const displayName = name.trim();
   const hasDraft = body.length > 0;
   const canIdentify = !needsName || displayName.length > 0;
-  const ready = hasDraft && canIdentify && !submitting;
-  const canRunAction = canIdentify && !submitting;
+  const isBusy = submitting !== false;
+  const ready = hasDraft && canIdentify && !isBusy;
+  const canRunAction = canIdentify && !isBusy;
 
   async function send() {
     if (!ready) return;
-    setSubmitting(true);
+    setSubmitting('reply');
     try {
       await onSubmit(body, needsName ? displayName : undefined);
       setValue('');
@@ -131,7 +135,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
     action: (body?: string, name?: string) => Promise<boolean | void> | boolean | void,
   ) {
     if (!canRunAction) return;
-    setSubmitting(true);
+    setSubmitting('action');
     try {
       const ok = await action(hasDraft ? body : undefined, needsName ? displayName : undefined);
       // Actions that return `false` failed (and surfaced their own error);
@@ -180,7 +184,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
         <span className="ic-composer-hint">⌘/Ctrl+Enter</span>
         {leftActions && (
           <div className="ic-composer-left-actions">
-            {leftActions({ hasDraft, submitting, canRunAction, runAction })}
+            {leftActions({ hasDraft, submitting: isBusy, canRunAction, runAction })}
           </div>
         )}
         {(showCancel || onCancel) && (
@@ -188,7 +192,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
             type="button"
             className="ic-btn ic-btn-ghost"
             onClick={handleCancel}
-            disabled={submitting}
+            disabled={isBusy}
           >
             Cancel
           </button>
@@ -199,7 +203,10 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
           disabled={!ready}
           onClick={() => void send()}
         >
-          {submitting ? '…' : submitLabel}
+          {/* Only flip the label while *this* button's submit is in flight —
+              a sibling left-action being busy disables Reply but keeps the
+              label, so two controls don't both look like they're loading. */}
+          {submitting === 'reply' ? '…' : submitLabel}
         </button>
       </div>
     </div>

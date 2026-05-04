@@ -2497,6 +2497,15 @@ button.primary:disabled {
   animation: ic-spin 0.55s linear infinite;
   vertical-align: -0.1em;
 }
+/* Honor the OS-level reduced-motion setting: drop the spin and close the
+   gap so the indicator is still visible (full ring with currentColor),
+   but with no continuous motion. */
+@media (prefers-reduced-motion: reduce) {
+  .ic-spinner {
+    animation: none;
+    border-top-color: currentColor;
+  }
+}
 
 .ic-btn {
   appearance: none;
