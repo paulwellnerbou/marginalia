@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Dialog, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { BlockSourceRange, RenderResult } from '@marginalia/renderer';
 import { EnterFullScreenIcon, ExitFullScreenIcon } from '@radix-ui/react-icons';
-import type { DocumentFormat } from '../lib/api.js';
+import type { AttachedAsset, DocumentFormat } from '../lib/api.js';
 import { loadEditorDeps, type EditorDeps } from '../lib/codemirror-loader.js';
 import { reportError } from '../lib/log.js';
 import { mergeBlockRanges } from './mergeBlockRanges.js';
@@ -238,9 +238,13 @@ function ProposalSourceField({
 
 interface ProposalComposerProps {
   target: ProposalTarget | null;
+  docUid: string;
   docSource: string;
   docFormat: DocumentFormat;
   blockRanges: Map<string, BlockSourceRange>;
+  /** Drives the preview's asset rewrite so attached images render as
+   *  `/d/<uid>/asset/<id>` instead of broken `cat.png` refs. */
+  attachedAssets: AttachedAsset[];
   needsName: boolean;
   onCancel: () => void;
   onSubmit: (payload: {
@@ -252,9 +256,11 @@ interface ProposalComposerProps {
 
 export function ProposalComposer({
   target,
+  docUid,
   docSource,
   docFormat,
   blockRanges,
+  attachedAssets,
   needsName,
   onCancel,
   onSubmit,
@@ -284,9 +290,11 @@ export function ProposalComposer({
         {target && (
           <ProposalComposerBody
             target={target}
+            docUid={docUid}
             docSource={docSource}
             docFormat={docFormat}
             blockRanges={blockRanges}
+            attachedAssets={attachedAssets}
             needsName={needsName}
             onCancel={onCancel}
             onSubmit={onSubmit}
@@ -301,9 +309,11 @@ export function ProposalComposer({
 
 function ProposalComposerBody({
   target,
+  docUid,
   docSource,
   docFormat,
   blockRanges,
+  attachedAssets,
   needsName,
   onCancel,
   onSubmit,
@@ -311,9 +321,11 @@ function ProposalComposerBody({
   onToggleExpanded,
 }: {
   target: ProposalTarget;
+  docUid: string;
   docSource: string;
   docFormat: DocumentFormat;
   blockRanges: Map<string, BlockSourceRange>;
+  attachedAssets: AttachedAsset[];
   needsName: boolean;
   onCancel: () => void;
   onSubmit: ProposalComposerProps['onSubmit'];
@@ -337,6 +349,18 @@ function ProposalComposerBody({
   const [rendered, setRendered] = useState<RenderResult | null>(null);
   const renderReqRef = useRef(0);
 
+  // Memoize the inputs to `rewriteAssetReferences` so the preview
+  // effect only re-fires when the underlying asset set actually
+  // changes — not on every render of the parent.
+  const attachedRefs = useMemo(
+    () => new Set(attachedAssets.map((a) => a.ref_name)),
+    [attachedAssets],
+  );
+  const assetVersions = useMemo(
+    () => new Map(attachedAssets.map((a) => [a.ref_name, a.asset_id])),
+    [attachedAssets],
+  );
+
   useEffect(() => {
     // Bump the request id on every effect run (and again in cleanup):
     // any in-flight `renderDocument` from a previous run will see its
@@ -356,8 +380,16 @@ function ProposalComposerBody({
     const req = renderReqRef.current;
     const handle = setTimeout(async () => {
       try {
-        const { renderDocument } = await loadRenderer();
+        const { renderDocument, rewriteAssetReferences } = await loadRenderer();
         const r = await renderDocument(value, docFormat);
+        // Match EditPage's preview: rewrite `cat.png` → `/d/<uid>/asset/<id>`
+        // and surface missing-asset placeholders, so the preview matches
+        // what the viewer will see after the proposal is accepted.
+        r.html = await rewriteAssetReferences(r.html, {
+          docUid,
+          attached: attachedRefs,
+          assetVersions,
+        });
         if (renderReqRef.current !== req) return;
         setRendered(r);
       } catch (err) {
@@ -370,7 +402,7 @@ function ProposalComposerBody({
       // the timer but hasn't resolved yet won't apply on unmount.
       renderReqRef.current += 1;
     };
-  }, [value, expanded, docFormat]);
+  }, [value, expanded, docFormat, docUid, attachedRefs, assetVersions]);
 
   // Reset the proposal text + rationale synchronously when the
   // target changes. Doing this in a useEffect would leave `value`
@@ -438,8 +470,7 @@ function ProposalComposerBody({
         </Dialog.Description>
         {!expanded && (
           <div className="composer-quote">
-            &ldquo;{target.block_text.slice(0, 240)}
-            {target.block_text.length > 240 ? '…' : ''}&rdquo;
+            {`“${target.block_text.slice(0, 240)}${target.block_text.length > 240 ? '…' : ''}”`}
           </div>
         )}
         {needsName && (
