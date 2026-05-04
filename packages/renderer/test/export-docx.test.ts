@@ -2134,6 +2134,40 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(documentXml).toMatch(/<w:commentReference\b/);
   });
 
+  test('substring matching multiple paragraphs of a multi-paragraph block falls back to whole-block wrap', async () => {
+    // Two list items both contain "TODO" exactly once. The
+    // substring uniquely matches each individual paragraph but
+    // matches twice across the block — anchoring to the first
+    // would silently land the comment on the wrong location, so
+    // the wrap helper must give up and let the caller fall back.
+    const md = '- TODO write the intro.\n- TODO add the conclusion.\n';
+    const listBlockId = hashBlock('list', 'TODO write the intro.TODO add the conclusion.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: listBlockId,
+            anchor_quote: 'TODO',
+            comments: [{ body: 'which one?', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { documentXml, commentsXml } = await inspectComments(buf);
+    // Comment still surfaced via whole-block fallback.
+    expect(commentsXml).toContain('which one?');
+    // No <w:r>TODO</w:r> appears between range markers — i.e. the
+    // wrapper did NOT splice "TODO" inline; both paragraphs'
+    // text remained as single TextRuns.
+    expect(documentXml).not.toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>TODO<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+    // Paragraph texts survive intact (no mid-paragraph splits).
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*>TODO write the intro\.<\/w:t><\/w:r>/);
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*>TODO add the conclusion\.<\/w:t><\/w:r>/);
+  });
+
   test('substring wrap finds the quote in a later paragraph of a multi-paragraph block', async () => {
     // A list block renders to multiple Paragraphs (one per item)
     // but the anchor is a single `data-block` on the `<ul>`. The

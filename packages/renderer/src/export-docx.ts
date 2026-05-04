@@ -3268,11 +3268,20 @@ function tryWrapBufferAtSubstring(
 
   // Scan every Paragraph in the buffer — a single block can render
   // to multiple paragraphs (blockquotes, multi-`<p>` list items,
-  // code blocks). Try each paragraph in turn; the first one whose
-  // wrap succeeds is the one we replace. If two paragraphs both
-  // match, the per-paragraph wrap will report ambiguous (multiple
-  // hits within itself); cross-paragraph ambiguity falls through
-  // to the whole-block fallback in the caller.
+  // code blocks). Two-pass:
+  //
+  //   1. Pre-scan to find which paragraphs contain the substring
+  //      (anywhere inside, exactly once). If zero match, give up
+  //      and let the caller fall back. If MORE than one paragraph
+  //      contains the substring (e.g. two list items both
+  //      containing the same word), give up too — anchoring to
+  //      the first match would silently land the comment on the
+  //      wrong location.
+  //
+  //   2. Wrap the single matching paragraph. The per-paragraph
+  //      wrap also rejects intra-paragraph ambiguity (substring
+  //      appears multiple times inside one paragraph).
+  let candidate: { index: number; opts: ParagraphOptions; children: readonly ParagraphChild[]; bookmark: { bm: Bookmark; opts: IBookmarkOptions } | null } | null = null;
   for (let i = 0; i < buf.length; i++) {
     const fc = buf[i];
     if (!(fc instanceof Paragraph)) continue;
@@ -3281,44 +3290,85 @@ function tryWrapBufferAtSubstring(
     const children = opts.children as ParagraphChild[];
 
     // Headings always wrap their inline runs in a single Bookmark
-    // (`buildHeading` does this for internal-link targets), which
-    // would otherwise opaque the whole paragraph to the substring
-    // wrapper. Detect that shape and descend: do the substring
-    // search on the bookmark's children, splice the markers inside
-    // the bookmark, and rebuild it with the same id.
-    //
-    // Only the single-bookmark-child shape is recognised because
-    // that's what `buildHeading` emits. Mixed bookmark + other
-    // ParagraphChildren falls through to the standard path
-    // (markers can still land on text-bearing siblings outside
-    // the bookmark).
+    // (`buildHeading` does this for internal-link targets). Look
+    // through the bookmark when computing the paragraph's text so
+    // headings participate in the multi-paragraph scan, then
+    // remember the bookmark for the wrap step.
+    let scanChildren: readonly ParagraphChild[] = children;
+    let bookmark: { bm: Bookmark; opts: IBookmarkOptions } | null = null;
     if (children.length === 1 && children[0] instanceof Bookmark) {
       const bm = children[0];
       const bmOpts = ctx.bookmarkOpts.get(bm);
       if (!bmOpts) continue;
-      const wrappedInner = wrapChildrenAtSubstring(
-        bmOpts.children as ParagraphChild[],
-        substring,
-        starts,
-        ends,
-        ctx,
-      );
-      if (!wrappedInner) continue;
-      const newBookmark = mkBookmark({ ...bmOpts, children: wrappedInner }, ctx);
-      const newPara = mkParagraph({ ...opts, children: [newBookmark] }, ctx);
-      const out = [...buf];
-      out[i] = newPara;
-      return out;
+      scanChildren = bmOpts.children as ParagraphChild[];
+      bookmark = { bm, opts: bmOpts };
     }
 
-    const wrapped = wrapChildrenAtSubstring(children, substring, starts, ends, ctx);
-    if (!wrapped) continue;
-    const newPara = mkParagraph({ ...opts, children: wrapped }, ctx);
+    if (!paragraphContainsSubstringUniquely(scanChildren, substring, ctx)) continue;
+    if (candidate !== null) {
+      // Cross-paragraph ambiguity — the substring uniquely matches
+      // both `candidate` and this paragraph. Anchoring would have
+      // to pick one, which is wrong; let the caller fall back to
+      // whole-block wrap.
+      return null;
+    }
+    candidate = { index: i, opts, children, bookmark };
+  }
+  if (candidate === null) return null;
+
+  const { index, opts, children, bookmark } = candidate;
+  if (bookmark !== null) {
+    const wrappedInner = wrapChildrenAtSubstring(
+      bookmark.opts.children as ParagraphChild[],
+      substring,
+      starts,
+      ends,
+      ctx,
+    );
+    if (!wrappedInner) return null;
+    const newBookmark = mkBookmark(
+      { ...bookmark.opts, children: wrappedInner },
+      ctx,
+    );
+    const newPara = mkParagraph({ ...opts, children: [newBookmark] }, ctx);
     const out = [...buf];
-    out[i] = newPara;
+    out[index] = newPara;
     return out;
   }
-  return null;
+  const wrapped = wrapChildrenAtSubstring(children, substring, starts, ends, ctx);
+  if (!wrapped) return null;
+  const newPara = mkParagraph({ ...opts, children: wrapped }, ctx);
+  const out = [...buf];
+  out[index] = newPara;
+  return out;
+}
+
+/**
+ * Cheap pre-check: does the given inline children list have the
+ * substring exactly once when its TextRun contents are joined?
+ * Used by the multi-paragraph scan to detect cross-paragraph
+ * ambiguity before paying for the run-splitting rebuild.
+ */
+function paragraphContainsSubstringUniquely(
+  children: readonly ParagraphChild[],
+  substring: string,
+  ctx: BuildCtx,
+): boolean {
+  let text = '';
+  for (const c of children) {
+    if (
+      c instanceof TextRun ||
+      c instanceof InsertedTextRun ||
+      c instanceof DeletedTextRun
+    ) {
+      const ro = ctx.runOpts.get(c);
+      if (ro && typeof ro.text === 'string') text += ro.text;
+    }
+  }
+  if (text.length === 0) return false;
+  const first = text.indexOf(substring);
+  if (first === -1) return false;
+  return text.indexOf(substring, first + 1) === -1;
 }
 
 /**
