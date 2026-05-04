@@ -2007,10 +2007,15 @@ button.primary:disabled {
   border-radius: 0;
 }
 
+/* Mirror the editor's chrome reset on the textarea fallback so the
+   loading / failed states don't show a doubled border inside the
+   surrounding `.proposal-composer-split` chrome. */
 .proposal-composer-layout--expanded .proposal-source-field :is(textarea, .rt-TextAreaInput) {
   flex: 1;
   resize: none;
   min-height: 0;
+  border: 0;
+  border-radius: 0;
 }
 
 /* Preview pane visible in expanded mode. `min-height: 0` / `min-width: 0`

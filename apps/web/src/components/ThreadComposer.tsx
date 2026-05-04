@@ -338,7 +338,13 @@ function ProposalComposerBody({
   const renderReqRef = useRef(0);
 
   useEffect(() => {
-    if (!expanded) return;
+    if (!expanded) {
+      // Clear so a re-expand shows the loading state instead of HTML
+      // left over from the previous expanded session — which would be
+      // stale if the user edited in compact mode in between.
+      setRendered(null);
+      return;
+    }
     renderReqRef.current += 1;
     const req = renderReqRef.current;
     const handle = setTimeout(async () => {
