@@ -23,6 +23,14 @@ export function resolveProposalDiffBefore({
     return quoteSnapshot;
   }
 
+  // Whole-document proposals replace the full source — diff "before" is
+  // the live document (or, if the doc has moved on, the snapshot taken
+  // when the proposal was created). Slicing a single block's range here
+  // would make the rest of the document look like additions.
+  if (proposal.whole_document) {
+    return docSource.length > 0 ? docSource : quoteSnapshot;
+  }
+
   const blockId = thread.anchor.block_id;
   if (!blockId) return quoteSnapshot;
 

@@ -22,6 +22,7 @@ const PROPOSAL_SELECT = `
     cep.base_oid,
     cep.base_block_start,
     cep.base_block_end,
+    cep.is_whole_document,
     c.resolved_at AS decided_at,
     c.resolved_by_name AS decided_by_name
   FROM comments c
@@ -60,6 +61,9 @@ export function reanchorProposals(
   );
   const orphaned: EditProposalThreadRow[] = [];
   for (const p of open) {
+    // Whole-document proposals replace the entire source — there's no
+    // anchor block whose disappearance should orphan them.
+    if (p.is_whole_document === 1) continue;
     const startBlock = p.anchor_block_id ? blocks.get(p.anchor_block_id) : undefined;
     const startMissing = !p.anchor_block_id || !startBlock;
     let endMissing = false;
@@ -231,6 +235,7 @@ export async function toWire(
     decided_by_name: row.decided_by_name,
     source_snapshot: content?.source_snapshot ?? null,
     proposed_text: content?.proposed_text ?? null,
+    whole_document: row.is_whole_document === 1,
   };
 }
 

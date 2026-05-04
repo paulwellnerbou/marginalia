@@ -43,6 +43,7 @@ interface ThreadRow extends CommentRow {
   base_oid: string | null;
   base_block_start: number | null;
   base_block_end: number | null;
+  is_whole_document: number | null;
   decided_at: number | null;
   decided_by_name: string | null;
 }
@@ -65,6 +66,7 @@ const THREAD_SELECT = `
     cep.base_oid,
     cep.base_block_start,
     cep.base_block_end,
+    cep.is_whole_document,
     c.resolved_at AS decided_at,
     c.resolved_by_name AS decided_by_name
   FROM comments c
@@ -198,8 +200,12 @@ async function createThread(c: Context, deps: AppDeps) {
       );
       return c.json({ error: 'proposal-storage-unavailable' }, 503);
     }
-    blockRange = locateAnchorRange(doc, currentSource, anchor.blockId, anchor.endBlockId);
-    if (!blockRange) return c.json({ error: 'anchor-block-not-found' }, 400);
+    if (proposal.wholeDocument) {
+      blockRange = { start: 0, end: currentSource.length, kind: 'multi', text: '' };
+    } else {
+      blockRange = locateAnchorRange(doc, currentSource, anchor.blockId, anchor.endBlockId);
+      if (!blockRange) return c.json({ error: 'anchor-block-not-found' }, 400);
+    }
     const nextSource =
       currentSource.slice(0, blockRange.start) +
       proposal.proposedText +
@@ -260,14 +266,16 @@ async function createThread(c: Context, deps: AppDeps) {
       db.prepare(
         `INSERT INTO comments_edit_proposals
            (comment_id, status, accepted_oid,
-            branch_ref, base_oid, base_block_start, base_block_end)
-         VALUES (?, 'open', NULL, ?, ?, ?, ?)`,
+            branch_ref, base_oid, base_block_start, base_block_end,
+            is_whole_document)
+         VALUES (?, 'open', NULL, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         branchRef,
         baseOid,
         blockRange?.start ?? null,
         blockRange?.end ?? null,
+        proposal.wholeDocument ? 1 : 0,
       );
     }
     db.exec('COMMIT');
@@ -837,13 +845,16 @@ async function prepareAcceptProposalThread(
   deps: AppDeps,
   identity: Identity,
 ): Promise<PreparedThreadWorkflow> {
+  const isWholeDoc = row.is_whole_document === 1;
   if (
-    !row.anchor_block_id ||
     !row.branch_ref ||
     !row.base_oid ||
     row.base_block_start === null ||
     row.base_block_end === null
   ) {
+    throw new ThreadActionError(409, 'proposal-orphaned');
+  }
+  if (!isWholeDoc && !row.anchor_block_id) {
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
 
@@ -855,12 +866,18 @@ async function prepareAcceptProposalThread(
   const proposedText = content.proposed_text;
 
   const preMergeSource = deps.store.read(doc);
-  const preMergeRange = locateAnchorRange(
-    doc,
-    preMergeSource,
-    row.anchor_block_id,
-    row.anchor_end_block_id,
-  );
+  // Whole-document proposals splice the full source. Skip the anchor
+  // block lookup — it has no meaning here, and the proposal is never
+  // orphaned by anchor drift.
+  let preMergeRange: BlockSourceRange | null;
+  if (isWholeDoc) {
+    preMergeRange = { start: 0, end: preMergeSource.length, kind: 'multi', text: '' };
+  } else {
+    // Guard above ensures anchor_block_id is non-null in this branch.
+    const blockId = row.anchor_block_id;
+    if (!blockId) throw new ThreadActionError(409, 'proposal-orphaned');
+    preMergeRange = locateAnchorRange(doc, preMergeSource, blockId, row.anchor_end_block_id);
+  }
   if (!preMergeRange) {
     const now = Date.now();
     deps.db
@@ -894,12 +911,9 @@ async function prepareAcceptProposalThread(
   }
   const oid = merge.oid;
   const nextSource = deps.store.read(doc);
-  const spliceStart = locatePostMergeSpliceStart(
-    doc,
-    nextSource,
-    proposedText,
-    preMergeRange.start,
-  );
+  const spliceStart = isWholeDoc
+    ? 0
+    : locatePostMergeSpliceStart(doc, nextSource, proposedText, preMergeRange.start);
 
   const rendered = await renderDocument(nextSource, doc.format);
   const presentBlocks = locateDocumentBlocks(doc, nextSource);
@@ -1224,7 +1238,7 @@ async function toThreadWire(
         decision.ok &&
         canEdit(decision.role) &&
         row.link_status !== 'orphaned' &&
-        row.anchor_block_id !== null,
+        (row.is_whole_document === 1 || row.anchor_block_id !== null),
       reject:
         proposal && state === 'open' && decision.ok && (canEdit(decision.role) || isRootAuthor),
       reopen:
@@ -1238,9 +1252,12 @@ async function toThreadWire(
               : false),
     },
     proposal: proposalRow
-      ? (await readProposalContent(store, doc, proposalRow)) ?? {
-          source_snapshot: null,
-          proposed_text: null,
+      ? {
+          ...((await readProposalContent(store, doc, proposalRow)) ?? {
+            source_snapshot: null,
+            proposed_text: null,
+          }),
+          whole_document: proposalRow.is_whole_document === 1,
         }
       : null,
     comments: [
@@ -1465,7 +1482,7 @@ const MAX_PROPOSED_TEXT_LENGTH = 60000;
 function asProposal(
   v: unknown,
 ):
-  | { ok: true; proposal: { proposedText: string } | null }
+  | { ok: true; proposal: { proposedText: string; wholeDocument: boolean } | null }
   | { ok: false; error: 'proposal-text-required' | 'proposal-text-too-long' } {
   if (v === null || v === undefined) return { ok: true, proposal: null };
   if (typeof v !== 'object') return { ok: false, error: 'proposal-text-required' };
@@ -1475,7 +1492,8 @@ function asProposal(
   if (proposedText.length > MAX_PROPOSED_TEXT_LENGTH) {
     return { ok: false, error: 'proposal-text-too-long' };
   }
-  return { ok: true, proposal: { proposedText } };
+  const wholeDocument = proposal.whole_document === true;
+  return { ok: true, proposal: { proposedText, wholeDocument } };
 }
 
 function parseHeadingPath(raw: string | null): string[] | null {

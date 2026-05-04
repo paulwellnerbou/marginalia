@@ -1,45 +1,50 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Button, Text, TextField, Dialog, Flex } from '@radix-ui/themes';
+import { Button, Text, TextArea, Dialog, Flex } from '@radix-ui/themes';
 import { Cross2Icon } from '@radix-ui/react-icons';
 
 interface EditToolbarProps {
   docUid: string;
   canSave: boolean;
+  canPropose: boolean;
   hasChanges: boolean;
   saving: boolean;
   displayName: string;
   error: string | null;
-  onSave: () => void;
-  onSaveAndClose: () => void;
-  onSaveWithComment: (comment: string) => void;
+  onSave: (comment: string) => void;
+  onProposeEdit: (rationale: string) => void;
 }
 
 export function EditToolbar({
   docUid,
   canSave,
+  canPropose,
   hasChanges,
   saving,
   displayName,
   error,
   onSave,
-  onSaveAndClose,
-  onSaveWithComment,
+  onProposeEdit,
 }: EditToolbarProps) {
-  const [commentDialogOpen, setCommentDialogOpen] = useState(false);
+  const [open, setOpen] = useState(false);
   const [comment, setComment] = useState('');
 
-  function handleSaveWithComment() {
-    onSaveWithComment(comment);
+  const disabled = !hasChanges || saving || !displayName.trim() || (!canSave && !canPropose);
+
+  function handleSave() {
+    onSave(comment);
     setComment('');
-    setCommentDialogOpen(false);
+    setOpen(false);
   }
 
-  const saveDisabled = !canSave || !hasChanges || saving || !displayName.trim();
+  function handlePropose() {
+    onProposeEdit(comment);
+    setComment('');
+    setOpen(false);
+  }
 
   return (
     <div className="edit-toolbar">
-
       <div className="edit-toolbar__right">
         {error && (
           <Text size="1" color="red">
@@ -54,59 +59,57 @@ export function EditToolbar({
             </Link>
           </Button>
 
-          <Button
-            size="2"
-            variant="soft"
-            disabled={saveDisabled}
-            onClick={onSave}
-          >
-            {saving ? 'Saving…' : 'Save'}
-          </Button>
-
-          <Dialog.Root open={commentDialogOpen} onOpenChange={setCommentDialogOpen}>
+          <Dialog.Root open={open} onOpenChange={setOpen}>
             <Dialog.Trigger>
-              <Button size="2" variant="soft" disabled={saveDisabled}>
-                Save with comment
+              <Button size="2" variant={canSave ? 'solid' : 'soft'} disabled={disabled}>
+                {saving ? 'Saving…' : canSave ? 'Save…' : canPropose ? 'Propose edit…' : 'Read-only'}
               </Button>
             </Dialog.Trigger>
-            <Dialog.Content maxWidth="420px">
-              <Dialog.Title>Save with comment</Dialog.Title>
-              <Dialog.Description size="2" mb="4" color="gray">
-                Add a commit message describing this change.
+            <Dialog.Content maxWidth="460px">
+              <Dialog.Title>
+                {canSave && canPropose
+                  ? 'Save or propose change'
+                  : canSave
+                    ? 'Save change'
+                    : 'Propose change'}
+              </Dialog.Title>
+              <Dialog.Description size="2" mb="3" color="gray">
+                {canSave && canPropose
+                  ? 'Add an optional commit message, then save directly or propose the edit for review.'
+                  : canSave
+                    ? 'Add an optional commit message describing this change.'
+                    : 'Add a rationale describing why this change should be made.'}
               </Dialog.Description>
-              <TextField.Root
-                placeholder="e.g. Fix typo in introduction"
+              <TextArea
+                placeholder={canSave ? 'e.g. Fix typo in introduction (optional)' : 'Why this change?'}
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey && comment.trim() && !saveDisabled) {
-                    e.preventDefault();
-                    handleSaveWithComment();
-                  }
-                }}
+                rows={3}
                 autoFocus
               />
-              <Flex gap="3" mt="4" justify="end">
+              <Flex gap="3" mt="4" justify="end" wrap="wrap">
                 <Dialog.Close>
                   <Button variant="soft" color="gray">
                     Cancel
                   </Button>
                 </Dialog.Close>
-                <Button onClick={handleSaveWithComment} disabled={!comment.trim()}>
-                  Save
-                </Button>
+                {canPropose && (
+                  <Button
+                    variant={canSave ? 'soft' : 'solid'}
+                    onClick={handlePropose}
+                    disabled={saving}
+                  >
+                    Propose edit
+                  </Button>
+                )}
+                {canSave && (
+                  <Button onClick={handleSave} disabled={saving}>
+                    Save
+                  </Button>
+                )}
               </Flex>
             </Dialog.Content>
           </Dialog.Root>
-
-          <Button
-            size="2"
-            disabled={saveDisabled}
-            onClick={onSaveAndClose}
-            variant={canSave ? 'solid' : 'soft'}
-          >
-            {saving ? 'Saving…' : canSave ? 'Save and close Editor' : 'Read-only'}
-          </Button>
         </Flex>
       </div>
     </div>

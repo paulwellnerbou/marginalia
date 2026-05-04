@@ -1,4 +1,5 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
+import { FileTextIcon, PilcrowIcon } from '@radix-ui/react-icons';
 import { useMemo, useRef, useState } from 'react';
 import type { Thread } from '../../lib/api.js';
 import { getEditProposalDiff, isProposal, proposalStatus } from '../../lib/api.js';
@@ -160,7 +161,23 @@ export function InlineThreadCard({
       <header className="ic-card-header">
         <div className="ic-card-header-top">
           <div className="ic-card-badges">
-            {proposal && <span className="ic-badge ic-badge-proposal">Proposed change</span>}
+            {proposalThread && (
+              <span
+                className="ic-badge ic-badge-proposal"
+                title={
+                  proposalThread.proposal.whole_document
+                    ? 'Whole-document proposal'
+                    : 'Block proposal'
+                }
+              >
+                {proposalThread.proposal.whole_document ? (
+                  <FileTextIcon className="ic-badge-icon" aria-hidden="true" />
+                ) : (
+                  <PilcrowIcon className="ic-badge-icon" aria-hidden="true" />
+                )}
+                Proposed change
+              </span>
+            )}
             {proposal && status === 'accepted' && (
               <span className="ic-badge ic-badge-accepted">Accepted</span>
             )}

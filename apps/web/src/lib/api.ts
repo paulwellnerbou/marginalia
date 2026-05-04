@@ -805,6 +805,7 @@ export interface ThreadProposalData {
   anchor_kind: string | null;
   source_snapshot: string | null;
   proposed_text: string;
+  whole_document?: boolean;
 }
 
 export interface Thread {
@@ -1068,6 +1069,44 @@ export function createEditProposal(
       proposal: {
         anchor_kind: payload.anchor_kind ?? null,
         proposed_text: payload.proposed_text,
+      },
+    }),
+    identity,
+    docUid: uid,
+  }).then((res) => {
+    rememberThread(uid, res.thread);
+  });
+}
+
+/**
+ * Create a whole-document proposal — replaces the entire source on accept.
+ * Anchored at the first block of the current document so the thread renders
+ * at the very top of the inline-comment column. The "Proposed document
+ * change" badge is driven by `whole_document = true` on the proposal row.
+ */
+export function createDocumentProposal(
+  uid: string,
+  payload: {
+    proposed_text: string;
+    rationale?: string | null;
+    anchor_block_id: string;
+    anchor_quote: string;
+  },
+  identity: Identity,
+): Promise<void> {
+  return request<ThreadMutationResponse>(`/api/documents/${encodeURIComponent(uid)}/threads`, {
+    method: 'POST',
+    body: JSON.stringify({
+      anchor: {
+        block_id: payload.anchor_block_id,
+        end_block_id: null,
+        quote: payload.anchor_quote,
+      },
+      body: payload.rationale,
+      proposal: {
+        anchor_kind: null,
+        proposed_text: payload.proposed_text,
+        whole_document: true,
       },
     }),
     identity,
