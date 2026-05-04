@@ -93,6 +93,11 @@ export function RenderedDoc({
   const ref = elRef ?? internal;
   const lastHtml = useRef<string | null>(null);
   const [lightbox, setLightbox] = useState<LightboxImage | null>(null);
+  // Monotonic counter that gates the deferred scrolls launched by
+  // hashchange / anchor-click handlers. Any new reveal request bumps
+  // it; a Promise that resolves later than the latest request bails
+  // out instead of yanking the viewport back to a stale target.
+  const scrollSeq = useRef(0);
   // Stash the upload callback in a ref so the placeholder post-process
   // can call the latest version without re-running when it changes —
   // the DOM-mutation effect only cares about whether uploads are enabled.
@@ -219,8 +224,13 @@ export function RenderedDoc({
       // scrolling — `scrollIntoView` measures the current layout, so
       // firing it during the 360ms transition would land at an
       // intermediate position and look like the target "drifts" once
-      // the wrapper finishes opening.
+      // the wrapper finishes opening. The seq guard prevents an older
+      // expand promise from yanking the viewport back to a stale
+      // target if the user follows a second link before the first
+      // animation settles.
+      const seq = ++scrollSeq.current;
       void expandAncestors(target).then(() => {
+        if (seq !== scrollSeq.current) return;
         target.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     };
@@ -319,7 +329,11 @@ export function RenderedDoc({
             e.preventDefault();
             // Wait for any ancestor expand animation before scrolling
             // (see the hashchange handler above for the same reason).
+            // Same seq guard discards a stale promise if the user
+            // clicks a second anchor mid-animation.
+            const seq = ++scrollSeq.current;
             void expandAncestors(targetEl).then(() => {
+              if (seq !== scrollSeq.current) return;
               targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
             });
             // Keep the URL in sync so copy-link / refresh / back-button

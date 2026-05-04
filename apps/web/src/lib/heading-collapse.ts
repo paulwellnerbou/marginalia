@@ -86,7 +86,22 @@ export function installHeadingCollapse(article: HTMLElement): void {
   // end up inside their parent's wrapper.
   const headings = Array.from(article.querySelectorAll<HTMLElement>(HEADING_SELECTOR));
 
+  // The very first h1 in document order is treated as the document
+  // title and skipped. Wrapping it would re-parent its siblings,
+  // which breaks several theme selectors:
+  //   - AsciiDoc's `#header > #toc.toc2` (the desktop TOC) expects
+  //     #toc.toc2 to be a direct child of #header.
+  //   - The `beautiful` theme's drop-cap selector
+  //     `.marginalia > h1:first-child + p::first-letter` expects
+  //     the first paragraph to remain a direct sibling of the h1.
+  // Collapsing the entire document under its title is also rarely
+  // useful, so the trade-off favours keeping these theme rules
+  // working.
+  const documentTitle = headings.find((h) => h.tagName === 'H1') ?? null;
+
   for (const heading of headings) {
+    if (heading === documentTitle) continue;
+
     const lvl = headingLevel(heading);
     if (lvl === null) continue;
 
