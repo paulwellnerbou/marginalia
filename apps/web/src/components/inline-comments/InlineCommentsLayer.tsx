@@ -97,6 +97,14 @@ const STACK_GAP_PX = 8;
  */
 const TOOLBAR_TOP_OFFSET_PX = 8;
 const TOOLBAR_BASE_TOP_PAD_PX = TOOLBAR_TOP_OFFSET_PX + STACK_GAP_PX;
+/**
+ * Initial guess for the toolbar's measured height before the
+ * `useLayoutEffect` measurement runs. Matches the CSS variable
+ * `--doc-floating-toolbar-height` in app.css so the first-render
+ * layout already accounts for the toolbar and the no-stacking pass
+ * doesn't push the first card up into it.
+ */
+const TOOLBAR_DEFAULT_HEIGHT_PX = 38;
 const FOCUS_MS = 1800;
 
 /**
@@ -145,7 +153,7 @@ export function InlineCommentsLayer({
 }: Props) {
   const rootRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
-  const [toolbarHeight, setToolbarHeight] = useState(0);
+  const [toolbarHeight, setToolbarHeight] = useState(TOOLBAR_DEFAULT_HEIGHT_PX);
   const stickyTopPad = TOOLBAR_BASE_TOP_PAD_PX + toolbarHeight;
 
   /**
