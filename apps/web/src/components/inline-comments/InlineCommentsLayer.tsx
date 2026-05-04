@@ -364,7 +364,7 @@ export function InlineCommentsLayer({
    */
   const noStackLayout = useMemo(() => {
     const tops: number[] = [];
-    let prevBottom = 0;
+    let prevBottom = stickyTopPad - STACK_GAP_PX;
     for (let k = 0; k < orderedMetrics.anchors.length; k++) {
       const natural = orderedMetrics.anchors[k] ?? 0;
       const h = orderedMetrics.heights[k] ?? 96;
@@ -373,7 +373,7 @@ export function InlineCommentsLayer({
       prevBottom = top + h;
     }
     return { tops, totalHeight: prevBottom };
-  }, [orderedMetrics]);
+  }, [orderedMetrics, stickyTopPad]);
 
   /**
    * Walk through the global lifecycle to find the current
