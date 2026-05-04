@@ -443,11 +443,21 @@ button.primary:disabled {
   pointer-events: auto;
   height: var(--doc-floating-toolbar-height);
   padding: 0.35rem 0.4rem;
+  /* Match the 3px gap between toggle edges and bar edges, so spacing is
+   * uniform on all sides. The button-margin override below keeps the
+   * Radix ghost variant's negative margins from eating into this gap. */
+  gap: 3px;
   border: 1px solid var(--ui-border);
   border-radius: var(--doc-floating-toolbar-radius);
   background: color-mix(in srgb, var(--color-panel-solid) 94%, transparent);
   box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
   backdrop-filter: blur(14px);
+}
+/* All buttons in the search toolbar — toggles and nav — drop the Radix
+ * ghost variant's -4px horizontal margins so the parent's `gap` reflects
+ * the actual visual spacing instead of being eaten into. */
+.doc-search-toolbar > button {
+  margin-inline: 0;
 }
 
 .doc-search-field {
@@ -477,6 +487,18 @@ button.primary:disabled {
   min-inline-size: 24px;
   border-radius: var(--doc-floating-toolbar-radius);
   color: var(--gray-11);
+  /* Drop Radix's ghost-variant -4px horizontal margins; spacing between
+   * toggles is controlled by the parent group's `gap` instead. */
+  margin-inline: 0;
+}
+/* Modifier: lets a `.doc-toolbar-toggle` grow to fit an icon plus a short
+ * text label (e.g. "Resolved"). The fixed inline-size is replaced with
+ * `auto`; padding and inner gap match the small button's icon scale. */
+.doc-toolbar-toggle--labeled {
+  inline-size: auto;
+  padding-inline: 6px;
+  gap: 3px;
+  font-size: 0.7rem;
 }
 
 .doc-toolbar-toggle[aria-pressed="true"] {
@@ -2081,6 +2103,12 @@ button.primary:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+/* The right group only contains toggle buttons; we want them spaced by the
+ * same 3px that separates a toggle edge from the bar edge. The default 8px
+ * group gap is right for the chevron pair on the left. */
+.ic-toolbar-group-right {
+  gap: 3px;
 }
 .ic-toolbar-count {
   flex: 1;
