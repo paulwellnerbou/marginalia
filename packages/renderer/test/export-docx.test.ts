@@ -1624,3 +1624,329 @@ describe('exportDocx — mermaid resolveMermaid', () => {
     expect(highWatermark).toBeGreaterThan(1);
   });
 });
+
+// --- Review-mode export -----------------------------------------------
+// Comments + edit proposals (tracked changes) folded into the DOCX.
+// Anchors come from the same `data-block` ids the renderer's
+// `remarkBlockIds` plugin writes onto every top-level block, so we
+// extract those from a probe render before constructing the threads.
+
+import { hashBlock, normalizeBlockText } from '../src/block-ids-shared.js';
+
+/** Compute the block-id `remarkBlockIds` would assign to a markdown paragraph. */
+function paragraphBlockId(text: string): string {
+  return hashBlock('paragraph', normalizeBlockText(text));
+}
+
+/** Compute the block-id for a markdown heading. */
+function headingBlockId(text: string): string {
+  return hashBlock('heading', normalizeBlockText(text));
+}
+
+async function inspectComments(buf: Buffer): Promise<{
+  commentsXml: string;
+  documentXml: string;
+}> {
+  const zip = await JSZip.loadAsync(buf);
+  const commentsXml = (await zip.file('word/comments.xml')?.async('string')) ?? '';
+  const documentXml = (await zip.file('word/document.xml')?.async('string')) ?? '';
+  return { commentsXml, documentXml };
+}
+
+/** Count `<w:comment …>` entries in word/comments.xml (excluding empty docx-default). */
+function countComments(commentsXml: string): number {
+  return (commentsXml.match(/<w:comment\s/g) ?? []).length;
+}
+
+describe('exportDocx — review mode (comments)', () => {
+  test('vanilla export contains no comment entries', async () => {
+    const buf = await exportDocx('# Doc\n\nHello.\n');
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(countComments(commentsXml)).toBe(0);
+    expect(documentXml).not.toMatch(/<w:commentReference\b/);
+  });
+
+  test('comment thread emits a comments.xml entry anchored to its block', async () => {
+    const md = '# Title\n\nThis is the target paragraph.\n';
+    const blockId = paragraphBlockId('This is the target paragraph.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [
+              { body: 'Looks good to me', author: 'Alice', date: 1700000000000 },
+            ],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('Looks good to me');
+    expect(commentsXml).toMatch(/w:author="Alice"/);
+    // Both range markers + the inline reference made it into the body.
+    expect(documentXml).toMatch(/<w:commentRangeStart\b/);
+    expect(documentXml).toMatch(/<w:commentRangeEnd\b/);
+    expect(documentXml).toMatch(/<w:commentReference\b/);
+  });
+
+  test('replies render as flat additional comments with reply prefix', async () => {
+    const md = 'Single block.\n';
+    const blockId = paragraphBlockId('Single block.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [
+              { body: 'Opener', author: 'Alice', date: 1700000000000 },
+              { body: 'first reply', author: 'Bob', date: 1700000100000 },
+              { body: 'second reply', author: 'Carol', date: 1700000200000 },
+            ],
+          },
+        ],
+      },
+    });
+    const { commentsXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('Opener');
+    expect(commentsXml).toContain('↳ Reply by Bob: first reply');
+    expect(commentsXml).toContain('↳ Reply by Carol: second reply');
+  });
+
+  test('resolved threads are skipped by default', async () => {
+    const md = 'Block.\n';
+    const blockId = paragraphBlockId('Block.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            resolved: true,
+            resolution_kind: 'resolve',
+            comments: [{ body: 'Old comment', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml } = await inspectComments(buf);
+    expect(countComments(commentsXml)).toBe(0);
+  });
+
+  test('includeResolved opts resolved threads back in', async () => {
+    const md = 'Block.\n';
+    const blockId = paragraphBlockId('Block.');
+    const buf = await exportDocx(md, {
+      review: {
+        includeResolved: true,
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            resolved: true,
+            comments: [{ body: 'Old comment', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('Old comment');
+  });
+
+  test('comment anchored to a heading lands on the heading paragraph', async () => {
+    const md = '# Heading One\n\nBody.\n';
+    const blockId = headingBlockId('Heading One');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'About the heading', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('About the heading');
+    // The comment range markers should land inside the heading paragraph.
+    const headingPara = paragraphContaining(documentXml, 'Heading One');
+    expect(headingPara).toMatch(/<w:commentRangeStart\b/);
+    expect(headingPara).toMatch(/<w:commentReference\b/);
+  });
+
+  test('thread with no resolvable block id is silently dropped', async () => {
+    const md = 'Block.\n';
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: 'no-such-id',
+            comments: [{ body: 'orphaned', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    // No matching anchor → comment is allocated but no range markers
+    // appear in the body. (The unanchored comment is still legal OOXML;
+    // Word shows it in the comment pane without a highlight.)
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).not.toMatch(/<w:commentReference\b/);
+  });
+});
+
+describe('exportDocx — review mode (proposals as tracked changes)', () => {
+  test('block-level proposal emits w:del for original and w:ins for proposed', async () => {
+    const md = 'Original sentence.\n';
+    const blockId = paragraphBlockId('Original sentence.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'Wording tweak', author: 'Editor', date: 1700000000000 }],
+            proposal: {
+              source_snapshot: 'Original sentence.',
+              proposed_text: 'Revised sentence.',
+              whole_document: false,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).toMatch(/<w:del\b[^>]*w:author="Editor"/);
+    expect(documentXml).toMatch(/<w:ins\b[^>]*w:author="Editor"/);
+    // Original text still appears (inside <w:del>).
+    expect(documentXml).toContain('Original sentence');
+    // Proposed text appears (inside <w:ins>).
+    expect(documentXml).toContain('Revised sentence');
+  });
+
+  test('proposal thread body still becomes a comment on the inserted region', async () => {
+    const md = 'Old line.\n';
+    const blockId = paragraphBlockId('Old line.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [
+              { body: 'Reason: clearer phrasing', author: 'Editor', date: 1 },
+            ],
+            proposal: {
+              source_snapshot: 'Old line.',
+              proposed_text: 'New line.',
+            },
+          },
+        ],
+      },
+    });
+    const { commentsXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('Reason: clearer phrasing');
+  });
+
+  test('whole-document proposal appears as a labeled appendix', async () => {
+    const md = 'Body of original doc.\n';
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: null,
+            comments: [{ body: 'Full rewrite', author: 'Drafter', date: 0 }],
+            proposal: {
+              source_snapshot: 'Body of original doc.',
+              proposed_text: 'Entirely fresh draft.',
+              whole_document: true,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).toContain('Alternative version proposed by Drafter');
+    expect(documentXml).toContain('Entirely fresh draft');
+    // Appendix body wrapped in <w:ins>.
+    expect(documentXml).toMatch(/<w:ins\b/);
+  });
+
+  test('block with both proposal and side-comment keeps both visible', async () => {
+    const md = 'Shared block.\n';
+    const blockId = paragraphBlockId('Shared block.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 'p1',
+            block_id: blockId,
+            comments: [{ body: 'Reword', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Shared block.',
+              proposed_text: 'Reworded block.',
+            },
+          },
+          {
+            id: 'c1',
+            block_id: blockId,
+            comments: [{ body: 'Side note', author: 'Reader', date: 2 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('Reword');
+    expect(commentsXml).toContain('Side note');
+    // Both proposal and side comment exist, and the proposal's
+    // tracked-change pair is still emitted.
+    expect(documentXml).toMatch(/<w:del\b/);
+    expect(documentXml).toMatch(/<w:ins\b/);
+  });
+
+  test('proposal with unreachable content degrades to comment + normal block', async () => {
+    const md = 'Original.\n';
+    const blockId = paragraphBlockId('Original.');
+    // Force the unreachable path by feeding an empty proposed_text
+    // — buildReviewState still parses it (yielding an empty HAST),
+    // so we instead exercise the runtime fallback by passing
+    // `proposed_text` = '' (parses but produces no children) and
+    // verifying the export still contains the original text.
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'Maybe drop this', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Original.',
+              proposed_text: '',
+            },
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    // Comment is preserved.
+    expect(commentsXml).toContain('Maybe drop this');
+    // Original text still appears (either inside <w:del> or untouched).
+    expect(documentXml).toContain('Original');
+  });
+
+  test('omitting the review payload leaves the document body unchanged', async () => {
+    // Byte-level equality is not safe (docx writes timestamps into
+    // core.xml), so compare the document.xml text — that's what the
+    // renderer actually controls.
+    const md = '# Plain\n\nBody text here.\n';
+    const a = await exportDocx(md);
+    const b = await exportDocx(md, {});
+    const da = (await inspectComments(a)).documentXml;
+    const db = (await inspectComments(b)).documentXml;
+    expect(da).toBe(db);
+  });
+});

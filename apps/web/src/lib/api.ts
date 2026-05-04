@@ -428,13 +428,32 @@ export function exportDocumentBundle(uid: string): Promise<DocumentBundle> {
  * server; passing an explicit id overrides it (matches viewer
  * behavior: the user's selected theme gets baked into the export).
  */
+export type DocxReviewMode = 'comments' | 'proposals' | 'both';
+
+export interface DocxExportClientOptions {
+  theme?: string;
+  /**
+   * Fold the document's open threads into the DOCX as native Word
+   * features — comment threads become `word/comments.xml` entries,
+   * edit proposals become tracked changes (`<w:ins>` / `<w:del>`).
+   * Omit for a vanilla export.
+   */
+  review?: DocxReviewMode;
+  /** Include resolved threads in the review payload. Default false. */
+  includeResolved?: boolean;
+}
+
 export async function downloadDocumentDocx(
   uid: string,
-  theme?: string,
+  options: DocxExportClientOptions = {},
 ): Promise<{ blob: Blob; filename: string }> {
-  const params = theme ? `?theme=${encodeURIComponent(theme)}` : '';
+  const params = new URLSearchParams();
+  if (options.theme) params.set('theme', options.theme);
+  if (options.review) params.set('review', options.review);
+  if (options.includeResolved) params.set('include_resolved', '1');
+  const qs = params.toString();
   const res = await requestBinary(
-    `/api/documents/${encodeURIComponent(uid)}/export.docx${params}`,
+    `/api/documents/${encodeURIComponent(uid)}/export.docx${qs ? `?${qs}` : ''}`,
     { method: 'GET', docUid: uid },
   );
   const blob = await res.blob();

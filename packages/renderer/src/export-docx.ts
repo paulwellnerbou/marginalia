@@ -47,11 +47,16 @@ import {
   AlignmentType,
   Bookmark,
   BorderStyle,
+  CommentRangeEnd,
+  CommentRangeStart,
+  CommentReference,
+  DeletedTextRun,
   Document,
   ExternalHyperlink,
   FootnoteReferenceRun,
   HeadingLevel,
   ImageRun,
+  InsertedTextRun,
   InternalHyperlink,
   LevelFormat,
   Packer,
@@ -66,6 +71,7 @@ import {
   WidthType,
   convertMillimetersToTwip,
   type FileChild,
+  type ICommentOptions,
   type IRunOptions,
   type ISectionOptions,
   type ParagraphChild,
@@ -226,6 +232,71 @@ export interface DocxExportOptions {
    * to Letter for our US office").
    */
   pageSize?: 'A4' | 'Letter' | 'A5' | 'B5';
+
+  /**
+   * Optional review-mode payload. When set, the exporter folds the
+   * supplied threads into the DOCX as native Word features:
+   *
+   *   - Comment threads → `word/comments.xml` entries anchored to the
+   *     block they target. Replies emit as additional flat comments
+   *     anchored to the same range, prefixed `↳ Reply by …` (true
+   *     threaded replies need a `commentsExtended` part not exposed
+   *     by the `docx` library at v9.x).
+   *
+   *   - Edit proposals → tracked changes (`<w:ins>` / `<w:del>` runs)
+   *     attributed to the proposal opener. Block-level proposals
+   *     render the original block as deleted text and the proposed
+   *     text as inserted text. Whole-document proposals use the same
+   *     mechanism applied to the entire body — noisy in Word's
+   *     "All Markup" view, intentional.
+   *
+   * When `null`/undefined the exporter behaves exactly as before;
+   * the live document is rendered with no review chrome.
+   */
+  review?: ReviewExportData;
+}
+
+// -- Review-mode payloads ----------------------------------------------
+
+/**
+ * One person's contribution to a review thread (opener or reply).
+ * Mirrors the server's wire shape minus the bits the export doesn't
+ * use (capabilities, client_id), so callers don't have to massage the
+ * payload before handing it to `exportDocx`.
+ */
+export interface ReviewComment {
+  readonly body: string;
+  readonly author: string;
+  /** Unix epoch ms. Converted to `Date` when emitted into comments.xml. */
+  readonly date: number;
+}
+
+/**
+ * A review thread to fold into the export. `block_id` should match the
+ * `data-block` (or `data-subblock`) id assigned by `remarkBlockIds`;
+ * threads with no resolvable block id are dropped silently.
+ */
+export interface ReviewThread {
+  readonly id: string;
+  readonly block_id: string | null;
+  readonly end_block_id?: string | null;
+  /** Oldest first; index 0 is the opener, the rest are replies. */
+  readonly comments: readonly [ReviewComment, ...ReviewComment[]];
+  /** Present iff this thread is an edit proposal. */
+  readonly proposal?: {
+    readonly source_snapshot: string | null;
+    readonly proposed_text: string;
+    readonly whole_document?: boolean;
+  } | null;
+  /** Resolved threads are skipped unless `includeResolved` is set. */
+  readonly resolved?: boolean;
+  readonly resolution_kind?: 'accept' | 'reject' | 'resolve' | null;
+}
+
+export interface ReviewExportData {
+  readonly threads: readonly ReviewThread[];
+  /** Include resolved threads. Default: false. */
+  readonly includeResolved?: boolean;
 }
 
 /**
@@ -264,17 +335,26 @@ export async function exportDocx(
     resolveAllMermaid(hast, options.resolveMermaid, options.mermaidConcurrency),
   ]);
 
+  // Build review-mode indexes up-front so the walker can do O(1)
+  // lookups by block id. This also pre-parses every proposal's
+  // `proposed_text` to HAST so the synchronous walker can render
+  // tracked-change content without re-entering the async pipeline.
+  const review = await buildReviewState(options.review, hast, options);
+
   // Pull GFM footnotes out of the body: build their DOCX paragraphs,
   // assign each a numeric id, and remove the `<section>` so it won't
   // appear inline. The walker later turns `<sup>` refs into
   // `FootnoteReferenceRun`s pointed at those ids.
   const effectivePageSize = options.pageSize ?? tokens.page.size;
+  const paraOpts = new WeakMap<Paragraph, ParagraphOptions>();
   const ctxWithoutFootnotes: BuildCtx = {
     tokens,
     images,
     mermaidImages,
     pageWidthPx: contentWidthPx(effectivePageSize, tokens.page.marginPt),
     footnoteIds: new Map(),
+    paraOpts,
+    review,
   };
   const footnotes = extractFootnotes(hast, ctxWithoutFootnotes);
   const ctx: BuildCtx = { ...ctxWithoutFootnotes, footnoteIds: footnotes.ids };
@@ -313,14 +393,21 @@ export async function exportDocx(
     injectAfterTopLevelIndex: leadingHeadingIdx,
     injectedBlocks: hasMarker ? [] : tocBlocks,
   });
-  const blocks: FileChild[] =
+  const bodyBlocks: FileChild[] =
     !hasMarker && shouldIncludeToc && leadingHeadingIdx < 0
       ? [...tocBlocks, ...body]
       : body;
 
+  // Whole-document proposals are emitted as an "alternative-version"
+  // section appended to the body. Inline tracked changes against the
+  // entire doc would dwarf the original; a labeled appendix keeps the
+  // export readable while still surfacing the proposed alternative.
+  const blocks = appendWholeDocProposals(bodyBlocks, ctx);
+
   const doc = buildDocument(blocks, tokens, options, footnotes.content, {
     language,
     rtl,
+    comments: review ? review.commentChildren : [],
   });
   return Packer.toBuffer(doc);
 }
@@ -999,7 +1086,7 @@ function appendFootnoteBlock(
     case 'pre':
       // Reuses the CodeBlock style built for the body; still valid
       // inside footnote paragraphs.
-      out.push(...buildCodeBlock(node, ctx.tokens));
+      out.push(...buildCodeBlock(node, ctx));
       return;
     case 'blockquote':
       // Same nested-content concern as the main walker's
@@ -1074,6 +1161,15 @@ function appendFootnoteBlock(
 interface DocumentLang {
   readonly language: string | null;
   readonly rtl: boolean;
+  /**
+   * Comments emitted by the review-mode walker. Empty when no review
+   * payload was supplied or no thread anchored to any block. Becomes
+   * the `comments` field on the `Document` constructor — docx writes
+   * this out as `word/comments.xml` plus the matching relationship
+   * entry. Skipped entirely when the array is empty so vanilla
+   * exports don't ship an empty comments part.
+   */
+  readonly comments: readonly ICommentOptions[];
 }
 
 function buildDocument(
@@ -1103,6 +1199,7 @@ function buildDocument(
   };
 
   const hasFootnotes = Object.keys(footnotes).length > 0;
+  const hasComments = lang.comments.length > 0;
   return new Document({
     ...(options.title !== undefined ? { title: options.title } : {}),
     ...(options.author !== undefined
@@ -1111,6 +1208,7 @@ function buildDocument(
     styles: buildStyles(tokens, lang),
     numbering: buildNumbering(),
     ...(hasFootnotes ? { footnotes } : {}),
+    ...(hasComments ? { comments: { children: lang.comments } } : {}),
     sections: [section],
   });
 }
@@ -1376,6 +1474,64 @@ interface BuildCtx {
    *  - `includeToc: false` (markers should be ignored).
    */
   readonly pendingToc?: { blocks: FileChild[]; consumed: boolean } | null;
+  /**
+   * Side-table mapping every paragraph emitted via `mkParagraph` to
+   * the options it was constructed with. Lets the review-mode
+   * post-processing step rebuild paragraphs with comment-range
+   * markers spliced into their inline children — the docx Paragraph
+   * object's children are private after construction, so reading the
+   * options back from this map is the only way to wrap them losslessly.
+   */
+  readonly paraOpts: WeakMap<Paragraph, ParagraphOptions>;
+  /**
+   * Active revision wrapper, if any. When non-null, every text-run
+   * the inline walker emits is wrapped in `InsertedTextRun` /
+   * `DeletedTextRun` and attributed to the proposal opener. Set by
+   * the proposal-block handler around its delete pass and insert pass.
+   */
+  revision?: RevisionMode | null;
+  /**
+   * Pre-resolved review state: per-block thread index, parsed
+   * proposal HASTs, the comment-children accumulator that becomes
+   * `word/comments.xml`, and revision-id allocators. Null when the
+   * caller didn't pass `review` to `exportDocx`.
+   */
+  readonly review: ReviewState | null;
+}
+
+/**
+ * Per-block index of review threads plus the bookkeeping the walker
+ * uses while emitting them. Built once per export by
+ * `buildReviewState` and shared across the whole document.
+ *
+ * - `commentsByBlockId` / `proposalsByBlockId` key on the same
+ *   `data-block`/`data-subblock` ids that `remarkBlockIds` writes
+ *   into the HAST. Threads with no resolvable id are dropped.
+ * - `wholeDoc` proposals get appended as an "Alternative version"
+ *   section at the end of the body — see `appendWholeDocProposals`.
+ * - `proposalHasts` carries the HAST parsed from each proposal's
+ *   `proposed_text` so the walker can render it inline without
+ *   re-entering the async pipeline.
+ * - `commentChildren` is the running list passed to docx's `Comments`
+ *   collection; the walker pushes into it as it wraps anchored blocks.
+ * - `nextCommentId` / `nextRevisionId` are document-scoped counters.
+ */
+interface ReviewState {
+  readonly commentsByBlockId: Map<string, ReviewThread[]>;
+  readonly proposalsByBlockId: Map<string, ReviewThread[]>;
+  readonly wholeDoc: ReviewThread[];
+  readonly proposalHasts: Map<string, HastRoot>;
+  readonly commentChildren: ICommentOptions[];
+  readonly nextCommentId: { value: number };
+  readonly nextRevisionId: { value: number };
+}
+
+interface RevisionMode {
+  readonly kind: 'insert' | 'delete';
+  readonly author: string;
+  /** ISO date string. OOXML wants `xsd:dateTime`. */
+  readonly date: string;
+  readonly idAlloc: { value: number };
 }
 
 type InlineStyle = {
@@ -1505,6 +1661,14 @@ interface WalkCtx {
   readonly inOrderedList?: boolean;
   readonly blockquoteDepth: number;
   readonly afterTable?: boolean;
+  /**
+   * Block id whose review wrapping is currently in progress. The
+   * wrap helpers re-enter `convertBlock` for the same block to do
+   * the inner conversion; this flag tells the entry guard to skip
+   * the review check on that recursion and fall through to the
+   * normal switch-on-tagName path.
+   */
+  readonly reviewWrappedBlockId?: string | null;
 }
 
 type ParagraphOptions = Exclude<ConstructorParameters<typeof Paragraph>[0], string>;
@@ -1610,13 +1774,48 @@ function convertBlock(
   out: FileChild[],
   walk: WalkCtx,
 ): void {
+  // Review-mode interception. If the block has an id matching a
+  // review thread, route through the wrapping/replacement path
+  // instead of normal rendering. The `reviewWrappedBlockId` flag
+  // breaks recursion: the wrap helpers re-enter convertBlock for
+  // the same block to do the inner conversion, and we don't want
+  // to wrap it again.
+  if (ctx.review && isElement(node)) {
+    const blockId = readDataBlockId(node);
+    if (blockId && walk.reviewWrappedBlockId !== blockId) {
+      const proposals = ctx.review.proposalsByBlockId.get(blockId) ?? [];
+      const comments = ctx.review.commentsByBlockId.get(blockId) ?? [];
+      if (proposals.length > 0 || comments.length > 0) {
+        const innerWalk: WalkCtx = { ...walk, reviewWrappedBlockId: blockId };
+        if (proposals.length > 0) {
+          // Pass comment-only threads through so they're attached to
+          // the same insertion region and not silently dropped when a
+          // block has both a proposal and side discussion.
+          emitProposalBlock(node, proposals, comments, ctx, out, innerWalk);
+        } else {
+          emitCommentedBlock(node, comments, ctx, out, innerWalk);
+        }
+        return;
+      }
+    }
+  }
+  convertBlockInner(node, ctx, out, walk);
+}
+
+function convertBlockInner(
+  node: HastNode,
+  ctx: BuildCtx,
+  out: FileChild[],
+  walk: WalkCtx,
+): void {
   const tokens = ctx.tokens;
   if (!isElement(node)) {
     // Bare text at block level → wrap in a paragraph.
     if (isText(node) && node.value.trim()) {
       out.push(
-        new Paragraph(
-          withParagraphContext({ children: [new TextRun({ text: node.value })] }, ctx, walk),
+        mkParagraph(
+          withParagraphContext({ children: [mkRun({ text: node.value }, ctx)] }, ctx, walk),
+          ctx,
         ),
       );
     }
@@ -1635,7 +1834,10 @@ function convertBlock(
 
     case 'p':
       out.push(
-        new Paragraph(withParagraphContext({ children: collectInline(node, ctx, {}) }, ctx, walk)),
+        mkParagraph(
+          withParagraphContext({ children: collectInline(node, ctx, {}) }, ctx, walk),
+          ctx,
+        ),
       );
       return;
 
@@ -1664,7 +1866,7 @@ function convertBlock(
       return;
 
     case 'pre':
-      out.push(...buildCodeBlock(node, tokens));
+      out.push(...buildCodeBlock(node, ctx));
       return;
 
     case 'table':
@@ -1673,20 +1875,23 @@ function convertBlock(
 
     case 'hr':
       out.push(
-        new Paragraph({
-          border: {
-            top: {
-              style: BorderStyle.SINGLE,
-              size: 6,
-              color: hex(tokens.colors.border),
-              space: 1,
+        mkParagraph(
+          {
+            border: {
+              top: {
+                style: BorderStyle.SINGLE,
+                size: 6,
+                color: hex(tokens.colors.border),
+                space: 1,
+              },
+            },
+            spacing: {
+              before: pt2twip(tokens.spacing.blockEm * tokens.fontSize.basePt * 0.5),
+              after: pt2twip(tokens.spacing.blockEm * tokens.fontSize.basePt * 0.5),
             },
           },
-          spacing: {
-            before: pt2twip(tokens.spacing.blockEm * tokens.fontSize.basePt * 0.5),
-            after: pt2twip(tokens.spacing.blockEm * tokens.fontSize.basePt * 0.5),
-          },
-        }),
+          ctx,
+        ),
       );
       return;
 
@@ -1738,31 +1943,43 @@ function convertBlock(
         if (resolved) {
           const run = buildMermaidImageRun(resolved, ctx);
           out.push(
-            new Paragraph({
-              alignment: AlignmentType.CENTER,
-              children: [run],
-            }),
+            mkParagraph(
+              {
+                alignment: AlignmentType.CENTER,
+                children: [run],
+              },
+              ctx,
+            ),
           );
           return;
         }
         const source = hastTextContent(node);
         out.push(
-          new Paragraph({
-            children: [
-              new TextRun({
-                text: '◇ mermaid diagram',
-                italics: true,
-                color: hex(tokens.colors.fgMuted),
-              }),
-            ],
-          }),
+          mkParagraph(
+            {
+              children: [
+                mkRun(
+                  {
+                    text: '◇ mermaid diagram',
+                    italics: true,
+                    color: hex(tokens.colors.fgMuted),
+                  },
+                  ctx,
+                ),
+              ],
+            },
+            ctx,
+          ),
         );
         for (const line of source.split('\n')) {
           out.push(
-            new Paragraph({
-              style: 'CodeBlock',
-              children: [new TextRun({ text: line })],
-            }),
+            mkParagraph(
+              {
+                style: 'CodeBlock',
+                children: [mkRun({ text: line }, ctx)],
+              },
+              ctx,
+            ),
           );
         }
         return;
@@ -1790,7 +2007,9 @@ function convertBlock(
       if (node.children && node.children.length > 0) {
         const inline = collectInline(node, ctx, {});
         if (inline.length > 0) {
-          out.push(new Paragraph(withParagraphContext({ children: inline }, ctx, walk)));
+          out.push(
+            mkParagraph(withParagraphContext({ children: inline }, ctx, walk), ctx),
+          );
         }
       }
       return;
@@ -1812,11 +2031,14 @@ function buildHeading(node: Element, ctx: BuildCtx): Paragraph {
   const children: ParagraphChild[] = id
     ? [new Bookmark({ id, children: inline })]
     : inline;
-  return new Paragraph({
-    style: styleId,
-    heading: headingLevelOf(level),
-    children,
-  });
+  return mkParagraph(
+    {
+      style: styleId,
+      heading: headingLevelOf(level),
+      children,
+    },
+    ctx,
+  );
 }
 
 /**
@@ -1828,23 +2050,32 @@ function buildHeading(node: Element, ctx: BuildCtx): Paragraph {
 function buildImageParagraph(node: Element, ctx: BuildCtx): Paragraph {
   const run = maybeBuildImageRun(node, ctx);
   if (run) {
-    return new Paragraph({
-      alignment: AlignmentType.CENTER,
-      children: [run],
-    });
+    return mkParagraph(
+      {
+        alignment: AlignmentType.CENTER,
+        children: [run],
+      },
+      ctx,
+    );
   }
   // Unresolvable → placeholder paragraph (same visual as a broken
   // inline image, but promoted to a full paragraph since that's the
   // context we're in).
-  return new Paragraph({
-    children: [
-      new TextRun({
-        text: `[image: ${imagePlaceholderLabel(node)}]`,
-        italics: true,
-        color: hex(ctx.tokens.colors.fgMuted),
-      }),
-    ],
-  });
+  return mkParagraph(
+    {
+      children: [
+        mkRun(
+          {
+            text: `[image: ${imagePlaceholderLabel(node)}]`,
+            italics: true,
+            color: hex(ctx.tokens.colors.fgMuted),
+          },
+          ctx,
+        ),
+      ],
+    },
+    ctx,
+  );
 }
 
 /**
@@ -2003,7 +2234,7 @@ function convertList(
       const children = collectInlineFromMany(pendingInline, ctx, {});
       if (!firstParaEmitted) {
         out.push(
-          new Paragraph(
+          mkParagraph(
             withParagraphContext(
               {
                 numbering: { reference, level },
@@ -2016,12 +2247,13 @@ function convertList(
               ctx,
               { ...walk, afterTable },
             ),
+            ctx,
           ),
         );
         firstParaEmitted = true;
       } else {
         out.push(
-          new Paragraph(
+          mkParagraph(
             withParagraphContext(
               {
                 indent: { left: continuationIndent },
@@ -2031,6 +2263,7 @@ function convertList(
               ctx,
               { ...walk, afterTable },
             ),
+            ctx,
           ),
         );
       }
@@ -2074,7 +2307,7 @@ function convertList(
     // intact — emit a numbered paragraph with no content.
     if (!firstParaEmitted) {
       out.push(
-        new Paragraph(
+        mkParagraph(
           withParagraphContext(
             {
               numbering: { reference, level },
@@ -2087,6 +2320,7 @@ function convertList(
             ctx,
             { ...walk, afterTable },
           ),
+          ctx,
         ),
       );
       afterTable = false;
@@ -2094,7 +2328,7 @@ function convertList(
   }
 }
 
-function buildCodeBlock(node: Element, tokens: ThemeTokens): Paragraph[] {
+function buildCodeBlock(node: Element, ctx: BuildCtx): Paragraph[] {
   // A `<pre>` wraps either a `<code>` (plain) or directly Shiki-produced
   // spans. For each logical line (separated by '\n' in text nodes) we
   // emit one paragraph styled as CodeBlock.
@@ -2103,19 +2337,25 @@ function buildCodeBlock(node: Element, tokens: ThemeTokens): Paragraph[] {
       ? (node.children[0] as Element)
       : node;
 
-  const lines = splitCodeLines(inner, tokens);
-  if (lines.length === 0) return [new Paragraph({ style: 'CodeBlock', text: '' })];
-  return lines.map((runs) => new Paragraph({ style: 'CodeBlock', children: runs }));
+  const lines = splitCodeLines(inner, ctx);
+  if (lines.length === 0) return [mkParagraph({ style: 'CodeBlock', text: '' }, ctx)];
+  return lines.map((runs) => mkParagraph({ style: 'CodeBlock', children: runs }, ctx));
 }
 
 /**
- * Split Shiki-highlighted HAST into arrays of TextRuns, one array per
+ * Split Shiki-highlighted HAST into arrays of runs, one array per
  * source line. Each token inherits its Shiki color (via the
  * `--shiki-light: #xxxxxx` inline style) so the DOCX output preserves
- * the highlight palette of the active Shiki theme.
+ * the highlight palette of the active Shiki theme. Runs route through
+ * `mkRun` so they participate in the active tracked-change pass when
+ * the code block is part of an edit proposal.
  */
-function splitCodeLines(node: Element, tokens: ThemeTokens): TextRun[][] {
-  const lines: TextRun[][] = [[]];
+function splitCodeLines(
+  node: Element,
+  ctx: BuildCtx,
+): (TextRun | InsertedTextRun | DeletedTextRun)[][] {
+  const tokens = ctx.tokens;
+  const lines: (TextRun | InsertedTextRun | DeletedTextRun)[][] = [[]];
 
   function push(text: string, style: InlineStyle): void {
     if (text === '') return;
@@ -2130,7 +2370,7 @@ function splitCodeLines(node: Element, tokens: ThemeTokens): TextRun[][] {
         // which already sets font and size on the style; a run-level
         // override would just show up as "CodeBlock + 11pt" in
         // Word's style inspector.
-        lines[lines.length - 1]!.push(new TextRun(runOptions(style, part, tokens)));
+        lines[lines.length - 1]!.push(mkRun(runOptions(style, part, tokens), ctx));
       if (i < parts.length - 1) lines.push([]);
     }
   }
@@ -2306,7 +2546,7 @@ function walkInline(
   const tokens = ctx.tokens;
   if (isText(n)) {
     if (n.value === '') return;
-    out.push(new TextRun(runOptions(style, n.value, tokens)));
+    out.push(mkRun(runOptions(style, n.value, tokens), ctx));
     return;
   }
   if (!isElement(n)) return;
@@ -2380,7 +2620,7 @@ function walkInline(
       };
       const linkChildren: ParagraphChild[] = [];
       walkChildren(n, ctx, linkStyle, linkChildren);
-      const fallbackChildren = [new TextRun(runOptions(linkStyle, href, tokens))];
+      const fallbackChildren = [mkRun(runOptions(linkStyle, href, tokens), ctx)];
 
       if (href.startsWith('#') && href.length > 1) {
         // Internal anchor link — points at a heading bookmark in this
@@ -2404,7 +2644,7 @@ function walkInline(
       return;
     }
     case 'br':
-      out.push(new TextRun({ break: 1 }));
+      out.push(mkRun({ break: 1 }, ctx));
       return;
     case 'span':
     case 'mark':
@@ -2421,12 +2661,13 @@ function walkInline(
         return;
       }
       out.push(
-        new TextRun(
+        mkRun(
           runOptions(
             { ...style, italic: true, color: tokens.colors.fgMuted },
             `[image: ${imagePlaceholderLabel(n)}]`,
             tokens,
           ),
+          ctx,
         ),
       );
       return;
@@ -2487,6 +2728,472 @@ function runOptions(style: InlineStyle, text: string, tokens: ThemeTokens): IRun
   // override the style and show up as "Heading1 + 12pt" in Word's
   // style inspector, even when the intent is the style alone.
   return opts as IRunOptions;
+}
+
+// -- Review-mode helpers -----------------------------------------------
+
+/**
+ * Track a Paragraph's options at construction time so the review-mode
+ * post-processor can rebuild it with comment-range markers spliced in
+ * later. docx Paragraphs are sealed after construction; without this
+ * side-table the only ways to "wrap" them would be (a) `addRunToFront`
+ * (which is start-only and can't take CommentRange* nodes) or
+ * (b) emitting extra blank marker paragraphs (which produce visible
+ * spacing in Word).
+ *
+ * Only call sites for paragraphs the review walker can wrap should go
+ * through here. Paragraphs that exist purely as internal structure —
+ * TOC blocks, footnote bodies, table cell contents — bypass this
+ * helper because they're never the wrap target themselves.
+ */
+function mkParagraph(opts: ParagraphOptions, ctx: BuildCtx): Paragraph {
+  const p = new Paragraph(opts);
+  ctx.paraOpts.set(p, opts);
+  return p;
+}
+
+/**
+ * Build a TextRun, wrapping it in `InsertedTextRun` / `DeletedTextRun`
+ * when the walker is currently inside a tracked-change pass. Each
+ * wrap consumes one revision id from the document-scoped allocator,
+ * which Word uses to group adjacent runs into a single visual change
+ * when their author + date match.
+ *
+ * Behaves identically to `new TextRun(opts)` outside revision mode,
+ * so call sites can route through it unconditionally.
+ */
+function mkRun(
+  opts: IRunOptions,
+  ctx: BuildCtx,
+): TextRun | InsertedTextRun | DeletedTextRun {
+  const rev = ctx.revision;
+  if (!rev) return new TextRun(opts);
+  const id = rev.idAlloc.value++;
+  const attrs = { id, author: rev.author, date: rev.date };
+  return rev.kind === 'insert'
+    ? new InsertedTextRun({ ...attrs, ...opts })
+    : new DeletedTextRun({ ...attrs, ...opts });
+}
+
+/** Read the `data-block` id off a HAST element, if any. Empty → null. */
+function readDataBlockId(node: Element): string | null {
+  const props = node.properties ?? {};
+  const raw = (props as Record<string, unknown>)['dataBlock'];
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+/** Read the `data-subblock` id off a HAST element, if any. */
+function readDataSubBlockId(node: Element): string | null {
+  const props = node.properties ?? {};
+  const raw = (props as Record<string, unknown>)['dataSubblock'];
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+/**
+ * Pre-resolve the review payload into the indexes the synchronous
+ * walker reads from. Threads with no anchor block id are dropped
+ * (we have nowhere to attach them); resolved threads are dropped
+ * unless `includeResolved` is set.
+ *
+ * Threads anchored to a sub-block (list item, table cell) are
+ * promoted to their enclosing top-level block's index. Sub-block
+ * granularity inside Word would require splitting list/table cell
+ * content along run boundaries, which is more invasive than v1
+ * scope; the parent-block fallback keeps the comment near the
+ * right text without tearing the structure.
+ *
+ * For each proposal we also pre-parse the `proposed_text` through
+ * the same markdown→HAST pipeline as the main document so the
+ * walker can emit it inline as InsertedTextRun-wrapped paragraphs
+ * during the proposal's "insert pass" without re-entering the
+ * async machinery.
+ */
+async function buildReviewState(
+  reviewData: ReviewExportData | undefined,
+  hast: HastRoot,
+  options: DocxExportOptions,
+): Promise<ReviewState | null> {
+  if (!reviewData || reviewData.threads.length === 0) return null;
+
+  const includeResolved = reviewData.includeResolved === true;
+  const filtered = reviewData.threads.filter(
+    (t) => includeResolved || !t.resolved,
+  );
+  if (filtered.length === 0) return null;
+
+  // Sub-block id → top-level block id, so sub-block-anchored threads
+  // can promote up. Built by walking the HAST once.
+  const subToParent = buildSubBlockParentIndex(hast);
+
+  const commentsByBlockId = new Map<string, ReviewThread[]>();
+  const proposalsByBlockId = new Map<string, ReviewThread[]>();
+  const wholeDoc: ReviewThread[] = [];
+  const proposalHasts = new Map<string, HastRoot>();
+
+  for (const thread of filtered) {
+    const isProposal = !!thread.proposal;
+
+    if (isProposal && thread.proposal!.whole_document) {
+      wholeDoc.push(thread);
+      const parsed = await sourceToHast(
+        thread.proposal!.proposed_text,
+        options.format ?? 'markdown',
+        {
+          ...(options.highlight !== undefined ? { highlight: options.highlight } : {}),
+        },
+      );
+      proposalHasts.set(thread.id, parsed.hast);
+      continue;
+    }
+
+    const rawId = thread.block_id;
+    if (!rawId) continue;
+    // Promote sub-block anchors to their parent block.
+    const blockId = subToParent.get(rawId) ?? rawId;
+    const target = isProposal ? proposalsByBlockId : commentsByBlockId;
+    const list = target.get(blockId);
+    if (list) list.push(thread);
+    else target.set(blockId, [thread]);
+
+    if (isProposal) {
+      const parsed = await sourceToHast(
+        thread.proposal!.proposed_text,
+        options.format ?? 'markdown',
+        {
+          ...(options.highlight !== undefined ? { highlight: options.highlight } : {}),
+        },
+      );
+      proposalHasts.set(thread.id, parsed.hast);
+    }
+  }
+
+  return {
+    commentsByBlockId,
+    proposalsByBlockId,
+    wholeDoc,
+    proposalHasts,
+    commentChildren: [],
+    nextCommentId: { value: 1 },
+    nextRevisionId: { value: 1 },
+  };
+}
+
+/**
+ * Walk the HAST once, return a map from each `data-subblock` id to
+ * its enclosing top-level `data-block` id. Threads anchored to a
+ * sub-block (list item, table cell) use this to promote up to the
+ * parent block's wrap point.
+ */
+function buildSubBlockParentIndex(root: HastRoot): Map<string, string> {
+  const out = new Map<string, string>();
+  function walk(node: HastNode, parentBlockId: string | null): void {
+    if (!isElement(node)) return;
+    const id = readDataBlockId(node);
+    const sub = readDataSubBlockId(node);
+    const nextParent = id ?? parentBlockId;
+    if (sub && nextParent) out.set(sub, nextParent);
+    for (const c of node.children as HastNode[]) walk(c, nextParent);
+  }
+  for (const c of root.children as HastNode[]) walk(c, null);
+  return out;
+}
+
+/**
+ * Allocate a comment id and push the rendered Comment payload onto
+ * the document's comments-children accumulator. Replies render as
+ * additional flat comments anchored to the same block-level range,
+ * each with `↳ Reply by …` prefixed to the body — the docx library
+ * at v9.x doesn't expose `commentsExtended.xml`, which is what Word
+ * needs to render true threaded replies in the review pane. Flat
+ * fallback keeps the conversation visible without requiring a raw
+ * OOXML post-processing pass.
+ */
+function allocCommentIdsForThread(thread: ReviewThread, ctx: BuildCtx): number[] {
+  const review = ctx.review!;
+  const ids: number[] = [];
+  for (let i = 0; i < thread.comments.length; i++) {
+    const c = thread.comments[i]!;
+    const id = review.nextCommentId.value++;
+    ids.push(id);
+    const isOpener = i === 0;
+    const body = isOpener ? c.body : `↳ Reply by ${c.author}: ${c.body}`;
+    const initials = makeInitials(c.author);
+    const opt: ICommentOptions = {
+      id,
+      author: c.author,
+      date: new Date(c.date),
+      ...(initials ? { initials } : {}),
+      children: [new Paragraph({ children: [new TextRun({ text: body })] })],
+    };
+    review.commentChildren.push(opt);
+  }
+  return ids;
+}
+
+/** Best-effort 2–3 letter initials from a display name. */
+function makeInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase();
+}
+
+/**
+ * Wrap a contiguous range of paragraphs with comment-range markers
+ * for one or more comment ids. The first paragraph in the range gets
+ * each `CommentRangeStart` prepended; the last paragraph gets each
+ * `CommentRangeEnd` and `CommentReference` appended.
+ *
+ * Non-Paragraph FileChildren (Tables, TableOfContents) inside the
+ * range are passed through unchanged — wrapping them would require
+ * descending into the cells. The first/last *Paragraph* in the range
+ * is used as the wrap point instead, which keeps the comment near
+ * the right text for tables without tearing the cell structure.
+ *
+ * Returns a fresh array; original paragraphs whose options can be
+ * recovered via `ctx.paraOpts` are rebuilt with augmented children.
+ */
+function wrapBufferWithCommentRanges(
+  buf: FileChild[],
+  commentIds: readonly number[],
+  ctx: BuildCtx,
+): FileChild[] {
+  if (commentIds.length === 0) return buf;
+  const starts = commentIds.map((id) => new CommentRangeStart(id));
+  const ends = commentIds.flatMap((id) => [
+    new CommentRangeEnd(id),
+    new CommentReference(id),
+  ]);
+
+  // Find the first and last Paragraph in the buffer — those are the
+  // wrap points. Tables / TOC fields can't host CommentRange* nodes
+  // directly (they're ParagraphChildren), so we anchor on adjacent
+  // paragraphs instead of descending into cells.
+  let firstP = -1;
+  let lastP = -1;
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i] instanceof Paragraph) {
+      if (firstP === -1) firstP = i;
+      lastP = i;
+    }
+  }
+
+  // No paragraph in the buffer (e.g. comment anchored to a table-only
+  // block). Emit a synthetic empty marker paragraph carrying both
+  // ends so the comment still has an anchor in the doc — Word shows
+  // it as a tiny visual marker rather than dropping the comment to
+  // an orphan in the review pane.
+  if (firstP === -1) {
+    return [
+      ...buf,
+      mkParagraph({ children: [...starts, ...ends] }, ctx),
+    ];
+  }
+
+  const out = [...buf];
+  if (firstP === lastP) {
+    // Single paragraph: prepend starts and append ends in one rebuild
+    // so the second augment doesn't overwrite the first.
+    out[firstP] = augmentParagraph(buf[firstP] as Paragraph, ctx, {
+      prepend: starts,
+      append: ends,
+    });
+  } else {
+    out[firstP] = augmentParagraph(buf[firstP] as Paragraph, ctx, {
+      prepend: starts,
+    });
+    out[lastP] = augmentParagraph(buf[lastP] as Paragraph, ctx, {
+      append: ends,
+    });
+  }
+  return out;
+}
+
+/**
+ * Rebuild a Paragraph with extra inline children prepended/appended.
+ * Reads the original options out of the side-table populated by
+ * `mkParagraph`. Falls back to the original Paragraph if no options
+ * were recorded (e.g. the paragraph came from a code path that
+ * bypassed `mkParagraph`); the comment range markers are then
+ * silently dropped for that paragraph rather than throwing — losing
+ * one comment anchor is better than failing the whole export.
+ */
+function augmentParagraph(
+  p: Paragraph,
+  ctx: BuildCtx,
+  patch: {
+    prepend?: readonly ParagraphChild[];
+    append?: readonly ParagraphChild[];
+  },
+): Paragraph {
+  const opts = ctx.paraOpts.get(p);
+  if (!opts) return p;
+  const original = (opts.children ?? []) as ParagraphChild[];
+  const next: ParagraphChild[] = [
+    ...(patch.prepend ?? []),
+    ...original,
+    ...(patch.append ?? []),
+  ];
+  return mkParagraph({ ...opts, children: next }, ctx);
+}
+
+/**
+ * Render a block targeted by one or more comment threads. The block
+ * is converted normally into a fresh sub-buffer; the resulting
+ * paragraphs are then post-wrapped with `CommentRangeStart` /
+ * `CommentRangeEnd` / `CommentReference` markers tied to each
+ * thread's freshly-allocated comment ids.
+ */
+function emitCommentedBlock(
+  node: Element,
+  threads: readonly ReviewThread[],
+  ctx: BuildCtx,
+  out: FileChild[],
+  walk: WalkCtx,
+): void {
+  const sub: FileChild[] = [];
+  convertBlockInner(node, ctx, sub, walk);
+  const commentIds: number[] = [];
+  for (const t of threads) commentIds.push(...allocCommentIdsForThread(t, ctx));
+  out.push(...wrapBufferWithCommentRanges(sub, commentIds, ctx));
+}
+
+/**
+ * Render an edit-proposal block as Word tracked changes. Emits the
+ * original block in DELETE mode (every text run wrapped in
+ * `<w:del>`) followed by the proposed text in INSERT mode
+ * (`<w:ins>`). The proposal opener is set as the change author.
+ *
+ * Multiple proposals targeting the same block use the FIRST proposal
+ * as the active one; the others render as flat comments attached to
+ * the inserted region — overlapping `<w:ins>` from different authors
+ * tends to confuse Word's "Accept/Reject all" UI, so we explicitly
+ * serialize them.
+ *
+ * `extraComments` carries comment-only threads anchored to the same
+ * block so they're not dropped when a block has both a proposal and
+ * a side discussion. They're attached to the inserted region with
+ * the same flat-comments treatment.
+ *
+ * The thread body (and any replies) are emitted as a Word comment
+ * anchored to the inserted-text region so reviewers can see the
+ * rationale alongside the change in the comment pane.
+ *
+ * If the proposal's `proposed_text` couldn't be pre-parsed (rare —
+ * branch ref orphaned, parse failed), we degrade to rendering the
+ * original block normally and attaching the thread bodies as
+ * comments. Showing struck-through original with no replacement
+ * would just confuse reviewers.
+ */
+function emitProposalBlock(
+  node: Element,
+  proposals: readonly ReviewThread[],
+  extraComments: readonly ReviewThread[],
+  ctx: BuildCtx,
+  out: FileChild[],
+  walk: WalkCtx,
+): void {
+  const review = ctx.review!;
+  const main = proposals[0]!;
+  const propHast = review.proposalHasts.get(main.id);
+
+  // Fallback path: no parsed proposed-text HAST available. Render
+  // the block normally and attach all related threads as comments
+  // so the discussion is still visible.
+  if (!propHast) {
+    emitCommentedBlock(node, [...proposals, ...extraComments], ctx, out, walk);
+    return;
+  }
+
+  const opener = main.comments[0];
+  const author = opener.author || 'Markdowner reviewer';
+  const date = new Date(opener.date).toISOString();
+
+  // Pass 1: original block, every text run wrapped in DeletedTextRun.
+  const ctxDel: BuildCtx = {
+    ...ctx,
+    revision: { kind: 'delete', author, date, idAlloc: review.nextRevisionId },
+  };
+  const delBuf: FileChild[] = [];
+  convertBlockInner(node, ctxDel, delBuf, walk);
+  out.push(...delBuf);
+
+  // Pass 2: proposed_text (pre-parsed to HAST), every text run
+  // wrapped in InsertedTextRun.
+  const ctxIns: BuildCtx = {
+    ...ctx,
+    revision: { kind: 'insert', author, date, idAlloc: review.nextRevisionId },
+  };
+  const insBuf: FileChild[] = hastToDocxChildren(propHast, ctxIns, {});
+
+  // Attach the thread's comments to the inserted region (last
+  // paragraph) so the rationale is visible. Replies become flat
+  // additional comments — same range, "↳ Reply by …" prefix.
+  const commentIds: number[] = [];
+  for (const t of proposals) commentIds.push(...allocCommentIdsForThread(t, ctx));
+  for (const t of extraComments)
+    commentIds.push(...allocCommentIdsForThread(t, ctx));
+  out.push(...wrapBufferWithCommentRanges(insBuf, commentIds, ctx));
+}
+
+/**
+ * Append whole-document proposals as a labeled "Alternative version"
+ * section at the end of the body. Inline tracked changes against the
+ * entire doc would dwarf the original; an appendix keeps both
+ * versions readable while still surfacing the reviewer's proposal.
+ *
+ * Each whole-doc proposal renders the proposed body in an INSERT
+ * pass (so the appendix carries the same review-attribution metadata
+ * a block-level proposal would) and is preceded by a heading-style
+ * "Alternative version proposed by {author} ({date})" paragraph.
+ */
+function appendWholeDocProposals(
+  body: readonly FileChild[],
+  ctx: BuildCtx,
+): FileChild[] {
+  const review = ctx.review;
+  if (!review || review.wholeDoc.length === 0) return [...body];
+  const out: FileChild[] = [...body];
+  for (const thread of review.wholeDoc) {
+    const opener = thread.comments[0];
+    const author = opener.author || 'Markdowner reviewer';
+    const date = new Date(opener.date).toISOString();
+    out.push(
+      mkParagraph(
+        {
+          style: 'Heading2',
+          heading: HeadingLevel.HEADING_2,
+          children: [
+            new TextRun({
+              text: `Alternative version proposed by ${author} (${formatDate(opener.date)})`,
+            }),
+          ],
+        },
+        ctx,
+      ),
+    );
+    const propHast = review.proposalHasts.get(thread.id);
+    if (propHast) {
+      const ctxIns: BuildCtx = {
+        ...ctx,
+        revision: {
+          kind: 'insert',
+          author,
+          date,
+          idAlloc: review.nextRevisionId,
+        },
+      };
+      const insBuf = hastToDocxChildren(propHast, ctxIns, {});
+      const commentIds = allocCommentIdsForThread(thread, ctx);
+      out.push(...wrapBufferWithCommentRanges(insBuf, commentIds, ctx));
+    }
+  }
+  return out;
+}
+
+function formatDate(ms: number): string {
+  const d = new Date(ms);
+  return d.toISOString().slice(0, 10);
 }
 
 // Silence a type-only export if docx's Paragraph constructor parameter is

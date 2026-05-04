@@ -3,7 +3,12 @@ import { DropdownMenu, IconButton } from '@radix-ui/themes';
 import { useState } from 'react';
 import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer';
 import type { Document } from '../lib/api.js';
-import { ApiError, downloadDocumentDocx, downloadDocumentPdf } from '../lib/api.js';
+import {
+  ApiError,
+  type DocxReviewMode,
+  downloadDocumentDocx,
+  downloadDocumentPdf,
+} from '../lib/api.js';
 import { reportError } from '../lib/log.js';
 import { showToast } from '../lib/notifications.js';
 
@@ -25,12 +30,20 @@ export function DownloadMenu({
   doc,
   source,
   theme,
+  reviewExportEnabled,
 }: {
   doc: Document;
   /** Live source — may differ from doc.source after an applied edit proposal. */
   source: string;
   /** Currently-selected viewer theme, baked into the DOCX / PDF exports. */
   theme: string;
+  /**
+   * When true, the DOCX submenu offers extra entries that fold the
+   * document's open threads into the export (comments + tracked
+   * changes). Wired to whether the user has the inline-comments pane
+   * visible — i.e. they're in review mode.
+   */
+  reviewExportEnabled?: boolean;
 }) {
   const [busy, setBusy] = useState<null | 'source' | 'docx' | 'pdf'>(null);
 
@@ -70,13 +83,16 @@ export function DownloadMenu({
     }
   }
 
-  async function downloadDocx(): Promise<void> {
+  async function downloadDocx(review?: DocxReviewMode): Promise<void> {
     setBusy('docx');
     try {
-      const { blob, filename } = await downloadDocumentDocx(doc.uid, theme);
+      const { blob, filename } = await downloadDocumentDocx(doc.uid, {
+        theme,
+        ...(review ? { review } : {}),
+      });
       downloadBlob(blob, filename);
     } catch (err) {
-      reportError('DownloadMenu.docx', err, { uid: doc.uid });
+      reportError('DownloadMenu.docx', err, { uid: doc.uid, review });
       showToast({ title: 'DOCX export failed', body: 'Try again in a moment.' });
     } finally {
       setBusy(null);
@@ -141,9 +157,34 @@ export function DownloadMenu({
         <DropdownMenu.Item onSelect={downloadSource} disabled={busy !== null}>
           {sourceLabel} (.{sourceExt})
         </DropdownMenu.Item>
-        <DropdownMenu.Item onSelect={downloadDocx} disabled={busy !== null}>
+        <DropdownMenu.Item onSelect={() => downloadDocx()} disabled={busy !== null}>
           Word document (.docx)
         </DropdownMenu.Item>
+        {reviewExportEnabled && (
+          <>
+            <DropdownMenu.Separator />
+            <DropdownMenu.Label>With review</DropdownMenu.Label>
+            <DropdownMenu.Item
+              onSelect={() => downloadDocx('comments')}
+              disabled={busy !== null}
+            >
+              Word — with comments
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              onSelect={() => downloadDocx('proposals')}
+              disabled={busy !== null}
+            >
+              Word — with edit proposals (tracked changes)
+            </DropdownMenu.Item>
+            <DropdownMenu.Item
+              onSelect={() => downloadDocx('both')}
+              disabled={busy !== null}
+            >
+              Word — with comments + tracked changes
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator />
+          </>
+        )}
         <DropdownMenu.Item onSelect={downloadPdf} disabled={busy !== null}>
           PDF document (.pdf)
         </DropdownMenu.Item>

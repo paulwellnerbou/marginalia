@@ -9,7 +9,11 @@ import {
   rewriteAssetReferences,
   sanitizeDocumentFilename,
 } from '@marginalia/renderer';
-import type { BlockSourceRange } from '@marginalia/renderer';
+import type {
+  BlockSourceRange,
+  ReviewExportData,
+  ReviewThread,
+} from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
@@ -606,6 +610,195 @@ async function exportDocument(c: Context, deps: AppDeps) {
   return c.json(bundle);
 }
 
+// --- Review-mode export payload --------------------------------------
+
+/**
+ * Load every (open) thread for a document and shape it for the
+ * renderer's `review` option. Includes both pure comment threads and
+ * edit proposals. Replies are folded into each thread's `comments`
+ * array oldest-first so the renderer's flat-replies fallback stays
+ * in author order.
+ *
+ * Resolved threads are loaded too, but flagged `resolved: true` so
+ * the renderer can drop them unless the caller passed
+ * `?review=both&include_resolved=1`.
+ *
+ * Proposal payloads (`source_snapshot` / `proposed_text`) come from
+ * the same `readProposalContent` helper the threads route uses, so
+ * a proposal whose branch tip is unreachable (rare; orphaned ref)
+ * silently degrades: we keep the thread but drop its `proposal`
+ * field, demoting it to a comment-only export entry.
+ */
+async function loadReviewThreadsForExport(
+  deps: AppDeps,
+  doc: DocumentRow,
+  options: { includeResolved: boolean },
+): Promise<ReviewThread[]> {
+  const { db, store } = deps;
+
+  // Root threads: top-level comment rows joined with their proposal
+  // metadata when present. Same shape as the listThreads endpoint.
+  interface Row extends CommentRow {
+    proposal_status: EditProposalStatus | null;
+    accepted_oid: string | null;
+    branch_ref: string | null;
+    base_oid: string | null;
+    base_block_start: number | null;
+    base_block_end: number | null;
+    is_whole_document: number | null;
+  }
+  const roots = db
+    .prepare(
+      `SELECT c.*,
+              cep.status AS proposal_status,
+              cep.accepted_oid,
+              cep.branch_ref,
+              cep.base_oid,
+              cep.base_block_start,
+              cep.base_block_end,
+              cep.is_whole_document
+         FROM comments c
+         LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.doc_uid = ?
+          AND c.parent_id IS NULL
+          AND c.parent_proposal_id IS NULL
+          AND c.deleted_at IS NULL
+        ORDER BY c.created_at ASC`,
+    )
+    .all(doc.uid) as Row[];
+
+  // Replies (one DB hit, group in memory). Drop deleted rows so they
+  // don't appear as ghost replies in the exported comment thread.
+  const replies = db
+    .prepare(
+      `SELECT *
+         FROM comments
+        WHERE doc_uid = ?
+          AND deleted_at IS NULL
+          AND (parent_id IS NOT NULL OR parent_proposal_id IS NOT NULL)
+        ORDER BY created_at ASC`,
+    )
+    .all(doc.uid) as CommentRow[];
+  const repliesByThread = new Map<string, CommentRow[]>();
+  for (const r of replies) {
+    const tid = r.parent_id ?? r.parent_proposal_id;
+    if (!tid) continue;
+    const list = repliesByThread.get(tid);
+    if (list) list.push(r);
+    else repliesByThread.set(tid, [r]);
+  }
+
+  // Resolve proposal content in parallel — each `readProposalContent`
+  // call can hit git, so a doc with N proposals would otherwise pay
+  // N sequential round-trips. Bound the concurrency so we don't fan
+  // out unbounded fs/git work for very large threads tables.
+  const visibleRoots = roots.filter((row) => {
+    const isProposal = row.proposal_status !== null;
+    const resolved = isProposal
+      ? row.proposal_status !== 'open'
+      : row.resolved_at !== null;
+    return options.includeResolved || !resolved;
+  });
+  const results = await mapWithConcurrency(visibleRoots, 4, async (row) => {
+    const isProposal = row.proposal_status !== null;
+    let proposal: ReviewThread['proposal'] = null;
+    if (isProposal) {
+      // `readProposalContent` returns null when the branch ref is
+      // unreachable (e.g. legacy rows missing branch metadata).
+      // Demote to a comment-only entry rather than dropping the
+      // thread — the discussion may still be useful context.
+      const content = await readProposalContent(store, doc, row);
+      if (content) {
+        proposal = {
+          source_snapshot: content.source_snapshot,
+          proposed_text: content.proposed_text,
+          whole_document: row.is_whole_document === 1,
+        };
+      }
+    }
+    const opener = {
+      body: row.body,
+      author: row.author_display_name,
+      date: row.created_at,
+    };
+    const threadReplies = (repliesByThread.get(row.id) ?? []).map((r) => ({
+      body: r.body,
+      author: r.author_display_name,
+      date: r.created_at,
+    }));
+    const resolved = isProposal
+      ? row.proposal_status !== 'open'
+      : row.resolved_at !== null;
+    const thread: ReviewThread = {
+      id: row.id,
+      block_id: row.anchor_block_id,
+      end_block_id: row.anchor_end_block_id,
+      comments: [opener, ...threadReplies],
+      proposal,
+      resolved,
+      resolution_kind:
+        isProposal && row.proposal_status === 'accepted'
+          ? 'accept'
+          : isProposal && row.proposal_status === 'rejected'
+            ? 'reject'
+            : row.resolved_at !== null
+              ? 'resolve'
+              : null,
+    };
+    return thread;
+  });
+  return results;
+}
+
+/**
+ * Parse the `?review=` query into a ReviewExportData payload, or
+ * null when the caller didn't ask for review chrome. Recognised values:
+ *   - `comments`   → only comment threads (proposals demoted to none)
+ *   - `proposals`  → only edit proposals (comment threads dropped)
+ *   - `both`/`1`/`true` → everything
+ *   - anything else (incl. unset) → null
+ *
+ * `?include_resolved=1` (or `=true`) flips on resolved threads.
+ */
+function parseReviewQuery(
+  c: Context,
+): { mode: 'comments' | 'proposals' | 'both'; includeResolved: boolean } | null {
+  const raw = c.req.query('review');
+  if (!raw) return null;
+  const v = raw.toLowerCase();
+  let mode: 'comments' | 'proposals' | 'both';
+  if (v === 'comments') mode = 'comments';
+  else if (v === 'proposals') mode = 'proposals';
+  else if (v === 'both' || v === '1' || v === 'true') mode = 'both';
+  else return null;
+  const irRaw = (c.req.query('include_resolved') ?? '').toLowerCase();
+  const includeResolved = irRaw === '1' || irRaw === 'true';
+  return { mode, includeResolved };
+}
+
+/**
+ * Shape a ReviewThread[] for the requested review mode.
+ *
+ * - `both`: keep everything as-is.
+ * - `comments`: keep all threads, but demote proposals by stripping
+ *   their `proposal` payload — the discussion stays visible as a
+ *   plain comment, no tracked changes get emitted.
+ * - `proposals`: keep only threads that carry a proposal payload.
+ *   Pure-comment threads are dropped because the user explicitly
+ *   asked for the proposals view.
+ */
+function filterReviewThreadsByMode(
+  threads: ReviewThread[],
+  mode: 'comments' | 'proposals' | 'both',
+): ReviewThread[] {
+  if (mode === 'both') return threads;
+  if (mode === 'comments') {
+    return threads.map((t) => (t.proposal ? { ...t, proposal: null } : t));
+  }
+  // mode === 'proposals'
+  return threads.filter((t) => !!t.proposal);
+}
+
 // --- GET /api/documents/:uid/export.docx -----------------------------
 
 /**
@@ -665,11 +858,28 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
     console.warn(`[docx-export] mermaid renderer (${mermaidChoice}):`, msg);
   };
   const renderMermaidPng = makeMermaidResolver(mermaidChoice, 'png', onceWarn);
+
+  // Optional review-mode payload. Loads the document's threads and
+  // shapes them for the renderer when the caller asked for it via
+  // `?review=comments|proposals|both`. Unset → vanilla export.
+  const reviewQuery = parseReviewQuery(c);
+  let review: ReviewExportData | undefined;
+  if (reviewQuery) {
+    const all = await loadReviewThreadsForExport(deps, doc, {
+      includeResolved: reviewQuery.includeResolved,
+    });
+    const threads = filterReviewThreadsByMode(all, reviewQuery.mode);
+    if (threads.length > 0) {
+      review = { threads, includeResolved: reviewQuery.includeResolved };
+    }
+  }
+
   const buf = await exportDocx(source, {
     theme,
     format: doc.format,
     ...(derivedTitle ? { title: derivedTitle } : {}),
     ...(identity?.displayName ? { author: identity.displayName } : {}),
+    ...(review ? { review } : {}),
     resolveAsset: async (src) => {
       const hit = attached.get(src);
       if (!hit) return null;
