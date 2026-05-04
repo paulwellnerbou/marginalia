@@ -47,7 +47,16 @@ export function InlineThreadCard({
   onResolveThread,
 }: Props) {
   const composerRef = useRef<InlineComposerHandle>(null);
-  const [busy, setBusy] = useState<'accept' | 'reject' | 'resolve' | 'reopen' | false>(false);
+  // Track BOTH the kind and the render location that started the action.
+  // The same proposal can render Accept/Reject in up to two places at
+  // once (the underlying card + the open diff dialog); without `source`
+  // a single click would put the spinner in both copies of the matching
+  // button instead of only the one the user actually pressed.
+  type WorkflowKind = 'accept' | 'reject' | 'resolve' | 'reopen';
+  type WorkflowSource = 'composer' | 'standalone' | 'dialog';
+  const [busy, setBusy] = useState<{ kind: WorkflowKind; source: WorkflowSource } | null>(null);
+  const isRunning = (kind: WorkflowKind, source: WorkflowSource) =>
+    busy !== null && busy.kind === kind && busy.source === source;
 
   const [diffOpen, setDiffOpen] = useState(false);
   const [resolvedDiff, setResolvedDiff] = useState<ProposalDiff | null>(null);
@@ -117,7 +126,8 @@ export function InlineThreadCard({
   }
 
   async function runWorkflow(
-    kind: 'resolve' | 'reopen' | 'accept' | 'reject',
+    kind: WorkflowKind,
+    source: WorkflowSource,
     body?: string,
     name?: string,
   ): Promise<boolean> {
@@ -126,11 +136,11 @@ export function InlineThreadCard({
     // resolving immediately and tricking callers into post-success steps
     // (e.g. closing the diff dialog before the original request finishes).
     if (busy) return false;
-    setBusy(kind);
+    setBusy({ kind, source });
     try {
       return await onResolveThread(thread.id, kind, body, name);
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
@@ -278,8 +288,8 @@ export function InlineThreadCard({
                       // `canRunAction` is false while submitting OR while the
                       // composer still needs a display name — gate inactive
                       // buttons in both cases.
-                      const isDisabledFor = (kind: typeof busy) =>
-                        busy === false ? !canRunAction : busy !== kind;
+                      const isDisabledFor = (kind: WorkflowKind) =>
+                        busy === null ? !canRunAction : !isRunning(kind, 'composer');
                       return (
                         <>
                           {canAccept && (
@@ -287,13 +297,15 @@ export function InlineThreadCard({
                               type="button"
                               className="ic-btn ic-btn-accept"
                               onClick={() =>
-                                void runAction((body, name) => runWorkflow('accept', body, name))
+                                void runAction((body, name) =>
+                                  runWorkflow('accept', 'composer', body, name),
+                                )
                               }
                               disabled={isDisabledFor('accept')}
-                              aria-busy={busy === 'accept'}
+                              aria-busy={isRunning('accept', 'composer')}
                               aria-label="Accept"
                             >
-                              {workflowContent('Accept', busy === 'accept')}
+                              {workflowContent('Accept', isRunning('accept', 'composer'))}
                             </button>
                           )}
                           {canReject && (
@@ -301,13 +313,15 @@ export function InlineThreadCard({
                               type="button"
                               className="ic-btn ic-btn-reject"
                               onClick={() =>
-                                void runAction((body, name) => runWorkflow('reject', body, name))
+                                void runAction((body, name) =>
+                                  runWorkflow('reject', 'composer', body, name),
+                                )
                               }
                               disabled={isDisabledFor('reject')}
-                              aria-busy={busy === 'reject'}
+                              aria-busy={isRunning('reject', 'composer')}
                               aria-label="Reject"
                             >
-                              {workflowContent('Reject', busy === 'reject')}
+                              {workflowContent('Reject', isRunning('reject', 'composer'))}
                             </button>
                           )}
                           {canResolve && (
@@ -315,13 +329,15 @@ export function InlineThreadCard({
                               type="button"
                               className="ic-btn ic-btn-resolve"
                               onClick={() =>
-                                void runAction((body, name) => runWorkflow('resolve', body, name))
+                                void runAction((body, name) =>
+                                  runWorkflow('resolve', 'composer', body, name),
+                                )
                               }
                               disabled={isDisabledFor('resolve')}
-                              aria-busy={busy === 'resolve'}
+                              aria-busy={isRunning('resolve', 'composer')}
                               aria-label="Resolve"
                             >
-                              {workflowContent('Resolve', busy === 'resolve')}
+                              {workflowContent('Resolve', isRunning('resolve', 'composer'))}
                             </button>
                           )}
                           {canReopen && (
@@ -329,13 +345,15 @@ export function InlineThreadCard({
                               type="button"
                               className="ic-btn ic-btn-ghost"
                               onClick={() =>
-                                void runAction((body, name) => runWorkflow('reopen', body, name))
+                                void runAction((body, name) =>
+                                  runWorkflow('reopen', 'composer', body, name),
+                                )
                               }
                               disabled={isDisabledFor('reopen')}
-                              aria-busy={busy === 'reopen'}
+                              aria-busy={isRunning('reopen', 'composer')}
                               aria-label="Reopen"
                             >
-                              {workflowContent('Reopen', busy === 'reopen')}
+                              {workflowContent('Reopen', isRunning('reopen', 'composer'))}
                             </button>
                           )}
                         </>
@@ -351,48 +369,48 @@ export function InlineThreadCard({
                   <button
                     type="button"
                     className="ic-btn ic-btn-accept"
-                    onClick={() => void runWorkflow('accept')}
-                    disabled={busy !== false && busy !== 'accept'}
-                    aria-busy={busy === 'accept'}
+                    onClick={() => void runWorkflow('accept', 'standalone')}
+                    disabled={busy !== null && !isRunning('accept', 'standalone')}
+                    aria-busy={isRunning('accept', 'standalone')}
                     aria-label="Accept"
                   >
-                    {workflowContent('Accept', busy === 'accept')}
+                    {workflowContent('Accept', isRunning('accept', 'standalone'))}
                   </button>
                 )}
                 {canReject && (
                   <button
                     type="button"
                     className="ic-btn ic-btn-reject"
-                    onClick={() => void runWorkflow('reject')}
-                    disabled={busy !== false && busy !== 'reject'}
-                    aria-busy={busy === 'reject'}
+                    onClick={() => void runWorkflow('reject', 'standalone')}
+                    disabled={busy !== null && !isRunning('reject', 'standalone')}
+                    aria-busy={isRunning('reject', 'standalone')}
                     aria-label="Reject"
                   >
-                    {workflowContent('Reject', busy === 'reject')}
+                    {workflowContent('Reject', isRunning('reject', 'standalone'))}
                   </button>
                 )}
                 {canResolve && (
                   <button
                     type="button"
                     className="ic-btn ic-btn-resolve"
-                    onClick={() => void runWorkflow('resolve')}
-                    disabled={busy !== false && busy !== 'resolve'}
-                    aria-busy={busy === 'resolve'}
+                    onClick={() => void runWorkflow('resolve', 'standalone')}
+                    disabled={busy !== null && !isRunning('resolve', 'standalone')}
+                    aria-busy={isRunning('resolve', 'standalone')}
                     aria-label="Resolve"
                   >
-                    {workflowContent('Resolve', busy === 'resolve')}
+                    {workflowContent('Resolve', isRunning('resolve', 'standalone'))}
                   </button>
                 )}
                 {canReopen && (
                   <button
                     type="button"
                     className="ic-btn ic-btn-ghost"
-                    onClick={() => void runWorkflow('reopen')}
-                    disabled={busy !== false && busy !== 'reopen'}
-                    aria-busy={busy === 'reopen'}
+                    onClick={() => void runWorkflow('reopen', 'standalone')}
+                    disabled={busy !== null && !isRunning('reopen', 'standalone')}
+                    aria-busy={isRunning('reopen', 'standalone')}
                     aria-label="Reopen"
                   >
-                    {workflowContent('Reopen', busy === 'reopen')}
+                    {workflowContent('Reopen', isRunning('reopen', 'standalone'))}
                   </button>
                 )}
               </div>
@@ -419,13 +437,13 @@ export function InlineThreadCard({
                       // Only close when the action actually succeeded.
                       // A re-entry click while busy returns false too, so
                       // the dialog stays open until the original finishes.
-                      if (await runWorkflow('accept')) setDiffOpen(false);
+                      if (await runWorkflow('accept', 'dialog')) setDiffOpen(false);
                     }}
-                    disabled={busy !== false && busy !== 'accept'}
-                    aria-busy={busy === 'accept'}
+                    disabled={busy !== null && !isRunning('accept', 'dialog')}
+                    aria-busy={isRunning('accept', 'dialog')}
                     aria-label="Accept"
                   >
-                    {workflowContent('Accept', busy === 'accept')}
+                    {workflowContent('Accept', isRunning('accept', 'dialog'))}
                   </button>
                 )}
                 {canReject && (
@@ -433,13 +451,13 @@ export function InlineThreadCard({
                     type="button"
                     className="ic-btn ic-btn-reject"
                     onClick={async () => {
-                      if (await runWorkflow('reject')) setDiffOpen(false);
+                      if (await runWorkflow('reject', 'dialog')) setDiffOpen(false);
                     }}
-                    disabled={busy !== false && busy !== 'reject'}
-                    aria-busy={busy === 'reject'}
+                    disabled={busy !== null && !isRunning('reject', 'dialog')}
+                    aria-busy={isRunning('reject', 'dialog')}
                     aria-label="Reject"
                   >
-                    {workflowContent('Reject', busy === 'reject')}
+                    {workflowContent('Reject', isRunning('reject', 'dialog'))}
                   </button>
                 )}
               </>

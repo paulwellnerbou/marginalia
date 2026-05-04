@@ -671,6 +671,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           await apiRejectProposal(doc.uid, id, identity, body);
           await refreshThreads();
         }
+        // Clear any stale error (e.g. an earlier missing-display-name
+        // toast) so the toolbar doesn't keep showing it after a later
+        // successful workflow action.
+        setError(null);
         return true;
       } catch (err) {
         reportError('DocumentLayout.resolveThread', err, { id, kind });
