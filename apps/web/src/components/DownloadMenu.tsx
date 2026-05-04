@@ -46,6 +46,11 @@ export function DownloadMenu({
   reviewExportEnabled?: boolean;
 }) {
   const [busy, setBusy] = useState<null | 'source' | 'docx' | 'pdf'>(null);
+  // Opt-in to surface resolved comment threads / accepted+rejected
+  // proposals in the review export. Off by default — closed threads
+  // are usually noise to the next reviewer; the checkbox is for the
+  // "give me the full audit trail" workflow.
+  const [includeResolved, setIncludeResolved] = useState<boolean>(false);
 
   const sourceExt = doc.format === 'asciidoc' ? 'adoc' : 'md';
   const sourceLabel = doc.format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source';
@@ -89,6 +94,10 @@ export function DownloadMenu({
       const { blob, filename } = await downloadDocumentDocx(doc.uid, {
         theme,
         ...(review ? { review } : {}),
+        // Only forward includeResolved when the caller actually
+        // chose a review mode — passing it on a vanilla export is
+        // a server-side no-op but the wire stays cleaner.
+        ...(review && includeResolved ? { includeResolved: true } : {}),
       });
       downloadBlob(blob, filename);
     } catch (err) {
@@ -182,6 +191,16 @@ export function DownloadMenu({
             >
               Word — with comments + tracked changes
             </DropdownMenu.Item>
+            {/* CheckboxItem keeps the menu open after toggling
+                (Radix default for checkbox items) so the user can
+                flip the option on, then pick a review-mode entry. */}
+            <DropdownMenu.CheckboxItem
+              checked={includeResolved}
+              onCheckedChange={(v) => setIncludeResolved(v === true)}
+              disabled={busy !== null}
+            >
+              Include resolved / accepted / rejected
+            </DropdownMenu.CheckboxItem>
             <DropdownMenu.Separator />
           </>
         )}
