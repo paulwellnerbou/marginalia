@@ -316,7 +316,20 @@ async function createThread(c: Context, deps: AppDeps) {
   return c.json({ thread }, 201);
 }
 
-/** `GET /:uid/threads/:tid/diff` — before/after diff for a proposal thread. */
+/**
+ * `GET /:uid/threads/:tid/diff` — before/after diff for a proposal thread.
+ *
+ * `mergeable` is computed via a `git merge --dry-run` under the per-doc
+ * lock, which serializes with every repo write for this document. To
+ * avoid loading that path on every viewer:
+ *
+ * - Accepted / rejected rows skip the merge entirely (the field is
+ *   meaningful only for open proposals) and return `null`.
+ * - For open proposals, only callers with edit permission (the ones
+ *   the field would actually inform) trigger the dry-run. Read-only
+ *   viewers also get `null` — they can't accept, so they don't need
+ *   it. Clients can opt in explicitly with `?mergeable=1`.
+ */
 async function getThreadDiff(c: Context, deps: AppDeps) {
   const { db } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
@@ -333,14 +346,14 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
   const diff = await resolveProposalDiff(doc, proposal, deps);
   if (!diff) return c.json({ error: 'proposal-diff-unavailable' }, 410);
 
-  // Mergeability is only meaningful for open proposals. Accepted/rejected
-  // rows return `null` so clients can rely on the field's presence to
-  // decide whether to render an "accept" affordance. `merged` and `absent`
-  // both collapse to `stale` — the proposal can no longer be applied as-is
-  // and needs a rebase.
   let mergeable: 'clean' | 'conflict' | 'stale' | null = null;
-  if (proposal.proposal_status === 'open') {
+  const wantMergeable =
+    proposal.proposal_status === 'open' &&
+    (canEdit(decision.role) || c.req.query('mergeable') === '1');
+  if (wantMergeable) {
     const status = await deps.store.proposalMergeStatus(doc, proposal.id);
+    // `merged` and `absent` both collapse to `stale` — the proposal
+    // can no longer be applied as-is and needs a rebase.
     mergeable =
       status === 'clean' ? 'clean' : status === 'conflict' ? 'conflict' : 'stale';
   }

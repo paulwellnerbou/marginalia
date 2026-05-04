@@ -1389,7 +1389,21 @@ describe('threads API', () => {
       }),
     );
     expect(diffRes.status).toBe(200);
+    // Bob is a collaborator — no edit permission, so mergeable defaults
+    // to null (skips the dry-run merge). Opt in with ?mergeable=1 below.
     expect(await diffRes.json()).toEqual({
+      before: '# Title',
+      after: '# Better title',
+      mergeable: null,
+    });
+    const mergeableRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${uid}/threads/${thread.id}/diff?mergeable=1`,
+        { headers: headersFor(BOB) },
+      ),
+    );
+    expect(mergeableRes.status).toBe(200);
+    expect(await mergeableRes.json()).toEqual({
       before: '# Title',
       after: '# Better title',
       mergeable: 'clean',

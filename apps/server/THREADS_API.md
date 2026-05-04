@@ -106,7 +106,12 @@ interface CommentCapabilities {
 interface EditProposalData {
   whole_document?: boolean;
   // Content (before/after text) is no longer inlined here.
-  // Fetch it on demand via GET /:uid/threads/:tid/diff.
+  // Fetch it on demand via GET /:uid/threads/:tid/diff. That endpoint
+  // returns { before, after, mergeable }, where `mergeable` is one of
+  // 'clean' | 'conflict' | 'stale' | null. The dry-run merge that powers
+  // it serializes with all repo writes for the document, so it is only
+  // computed when the caller has edit permission OR opts in explicitly
+  // with `?mergeable=1`. All other cases return `null`.
 }
 ```
 
