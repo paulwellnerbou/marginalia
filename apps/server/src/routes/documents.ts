@@ -636,7 +636,17 @@ async function exportDocument(c: Context, deps: AppDeps) {
 async function loadReviewThreadsForExport(
   deps: AppDeps,
   doc: DocumentRow,
-  options: { includeResolved: boolean },
+  options: {
+    includeResolved: boolean;
+    /**
+     * Skip `readProposalContent` (a per-row git read) when the
+     * caller already knows the proposal payload will be discarded
+     * later — `?review=comments` strips it via
+     * `filterReviewThreadsByMode` and pays the I/O for nothing.
+     * Default: false (always load proposal content).
+     */
+    skipProposalContent?: boolean;
+  },
 ): Promise<ReviewThread[]> {
   const { db, store } = deps;
 
@@ -706,7 +716,7 @@ async function loadReviewThreadsForExport(
   const results = await mapWithConcurrency(visibleRoots, 4, async (row) => {
     const isProposal = row.proposal_status !== null;
     let proposal: ReviewThread['proposal'] = null;
-    if (isProposal) {
+    if (isProposal && !options.skipProposalContent) {
       // `readProposalContent` returns null when the branch ref is
       // unreachable (e.g. legacy rows missing branch metadata).
       // Demote to a comment-only entry rather than dropping the
@@ -908,6 +918,11 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
   if (reviewQuery) {
     const all = await loadReviewThreadsForExport(deps, doc, {
       includeResolved: reviewQuery.includeResolved,
+      // `comments` mode demotes proposals via
+      // `filterReviewThreadsByMode` and discards their payload, so
+      // we can skip the per-row git read entirely. `proposals` and
+      // `both` need the content for tracked-change rendering.
+      skipProposalContent: reviewQuery.mode === 'comments',
     });
     const threads = filterReviewThreadsByMode(all, reviewQuery.mode);
     if (threads.length > 0) {

@@ -3259,11 +3259,6 @@ function tryWrapBufferAtSubstring(
   ctx: BuildCtx,
 ): FileChild[] | null {
   if (buf.length === 0 || commentIds.length === 0) return null;
-  const first = buf[0];
-  if (!(first instanceof Paragraph)) return null;
-  const opts = ctx.paraOpts.get(first);
-  if (!opts || !opts.children) return null;
-  const children = opts.children as ParagraphChild[];
 
   const starts = commentIds.map((id) => new CommentRangeStart(id));
   const ends = commentIds.flatMap((id) => [
@@ -3271,38 +3266,59 @@ function tryWrapBufferAtSubstring(
     new CommentReference(id),
   ]);
 
-  // Headings always wrap their inline runs in a single Bookmark
-  // (`buildHeading` does this for internal-link targets), which
-  // would otherwise opaque the whole paragraph to the substring
-  // wrapper. Detect that shape and descend: do the substring search
-  // on the bookmark's children, splice the markers inside the
-  // bookmark, and rebuild the bookmark with the same id.
-  //
-  // Only the single-bookmark-child shape is recognised because
-  // that's what `buildHeading` emits. Mixed bookmark + other
-  // ParagraphChildren falls through to the standard path (markers
-  // can still land on text-bearing siblings outside the bookmark).
-  if (children.length === 1 && children[0] instanceof Bookmark) {
-    const bm = children[0];
-    const bmOpts = ctx.bookmarkOpts.get(bm);
-    if (!bmOpts) return null;
-    const wrappedInner = wrapChildrenAtSubstring(
-      bmOpts.children as ParagraphChild[],
-      substring,
-      starts,
-      ends,
-      ctx,
-    );
-    if (!wrappedInner) return null;
-    const newBookmark = mkBookmark({ ...bmOpts, children: wrappedInner }, ctx);
-    const newPara = mkParagraph({ ...opts, children: [newBookmark] }, ctx);
-    return [newPara, ...buf.slice(1)];
-  }
+  // Scan every Paragraph in the buffer — a single block can render
+  // to multiple paragraphs (blockquotes, multi-`<p>` list items,
+  // code blocks). Try each paragraph in turn; the first one whose
+  // wrap succeeds is the one we replace. If two paragraphs both
+  // match, the per-paragraph wrap will report ambiguous (multiple
+  // hits within itself); cross-paragraph ambiguity falls through
+  // to the whole-block fallback in the caller.
+  for (let i = 0; i < buf.length; i++) {
+    const fc = buf[i];
+    if (!(fc instanceof Paragraph)) continue;
+    const opts = ctx.paraOpts.get(fc);
+    if (!opts || !opts.children) continue;
+    const children = opts.children as ParagraphChild[];
 
-  const wrapped = wrapChildrenAtSubstring(children, substring, starts, ends, ctx);
-  if (!wrapped) return null;
-  const newPara = mkParagraph({ ...opts, children: wrapped }, ctx);
-  return [newPara, ...buf.slice(1)];
+    // Headings always wrap their inline runs in a single Bookmark
+    // (`buildHeading` does this for internal-link targets), which
+    // would otherwise opaque the whole paragraph to the substring
+    // wrapper. Detect that shape and descend: do the substring
+    // search on the bookmark's children, splice the markers inside
+    // the bookmark, and rebuild it with the same id.
+    //
+    // Only the single-bookmark-child shape is recognised because
+    // that's what `buildHeading` emits. Mixed bookmark + other
+    // ParagraphChildren falls through to the standard path
+    // (markers can still land on text-bearing siblings outside
+    // the bookmark).
+    if (children.length === 1 && children[0] instanceof Bookmark) {
+      const bm = children[0];
+      const bmOpts = ctx.bookmarkOpts.get(bm);
+      if (!bmOpts) continue;
+      const wrappedInner = wrapChildrenAtSubstring(
+        bmOpts.children as ParagraphChild[],
+        substring,
+        starts,
+        ends,
+        ctx,
+      );
+      if (!wrappedInner) continue;
+      const newBookmark = mkBookmark({ ...bmOpts, children: wrappedInner }, ctx);
+      const newPara = mkParagraph({ ...opts, children: [newBookmark] }, ctx);
+      const out = [...buf];
+      out[i] = newPara;
+      return out;
+    }
+
+    const wrapped = wrapChildrenAtSubstring(children, substring, starts, ends, ctx);
+    if (!wrapped) continue;
+    const newPara = mkParagraph({ ...opts, children: wrapped }, ctx);
+    const out = [...buf];
+    out[i] = newPara;
+    return out;
+  }
+  return null;
 }
 
 /**
@@ -3429,8 +3445,20 @@ function wrapChildrenAtSubstring(
       continue;
     }
 
-    // Build up to three pieces from this run, with markers between them.
-    const before = text.slice(0, cutStart ?? text.length);
+    // Build up to three pieces from this run, with markers between
+    // them. Slot semantics:
+    //   - cutStart  set / cutEnd null: substring starts inside this
+    //     slot and continues into a later slot. Anything BEFORE
+    //     cutStart is outside the comment range, anything AFTER is
+    //     inside (and still inside when the slot ends).
+    //   - cutStart null / cutEnd  set: substring started in an
+    //     earlier slot and ends inside this one. Anything BEFORE
+    //     cutEnd is inside, anything AFTER is outside. `before`
+    //     must be empty here — using `text.length` as the fallback
+    //     would copy the whole text into both `before` AND
+    //     `middle` and emit it twice in the rebuilt paragraph.
+    //   - both set: substring fits inside this slot.
+    const before = text.slice(0, cutStart ?? 0);
     const middle = text.slice(cutStart ?? 0, cutEnd ?? text.length);
     const after = text.slice(cutEnd ?? text.length);
 

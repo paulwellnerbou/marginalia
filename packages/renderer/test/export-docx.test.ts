@@ -2134,6 +2134,89 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(documentXml).toMatch(/<w:commentReference\b/);
   });
 
+  test('substring wrap finds the quote in a later paragraph of a multi-paragraph block', async () => {
+    // A list block renders to multiple Paragraphs (one per item)
+    // but the anchor is a single `data-block` on the `<ul>`. The
+    // quote only appears in the second list item; the wrap must
+    // scan past the first paragraph instead of falling back when
+    // `buf[0]` doesn't match.
+    const md = '- First item.\n- Second item with frobnicate.\n';
+    // mdastToString concatenates list items WITHOUT a separator,
+    // so the normalized text the block-id hash sees is the raw
+    // concatenation of item texts.
+    const listBlockId = hashBlock('list', 'First item.Second item with frobnicate.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: listBlockId,
+            anchor_quote: 'frobnicate',
+            comments: [{ body: 'on second item', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // The wrap landed on the SECOND list item — markers wrap
+    // just "frobnicate".
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>frobnicate<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+    // First item appears as a plain run (no markers around its text).
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*>First item\.<\/w:t><\/w:r>/);
+  });
+
+  test('substring wrap does not duplicate text when the range crosses a run boundary', async () => {
+    // Block-level proposal first establishes ins/del runs in the
+    // paragraph (via the inline word-diff path), then a comment
+    // anchored to a substring that spans into a later run must
+    // not duplicate the text in the rebuild — a regression of
+    // the `before = text.slice(0, cutStart ?? text.length)` bug,
+    // which copied a whole slot's text into both `before` and
+    // `middle` when only `cutEnd` was set.
+    //
+    // Easiest reproduction: a paragraph with three plain runs
+    // (`A `, `B`, ` C`) by emitting a hard line break and a
+    // comment whose substring spans `A B` (ends inside the third
+    // run's slot). We exercise this via a multi-comment scenario:
+    // the first comment splits the paragraph into multiple text
+    // runs, the second wraps a substring that spans into one of
+    // those runs.
+    const md = 'one two three four five six seven.\n';
+    const blockId = paragraphBlockId('one two three four five six seven.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'two',
+            comments: [{ body: 'split run', author: 'A', date: 1 }],
+          },
+          {
+            id: 't2',
+            block_id: blockId,
+            // Spans across the boundary the previous wrap created.
+            anchor_quote: 'three four five',
+            comments: [{ body: 'cross-run wrap', author: 'B', date: 2 }],
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Each word from the original paragraph appears EXACTLY once
+    // across all <w:t>/<w:delText> elements.
+    const tHits: string[] = documentXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) ?? [];
+    const delHits: string[] =
+      documentXml.match(/<w:delText[^>]*>([^<]*)<\/w:delText>/g) ?? [];
+    const allRunText = [...tHits, ...delHits].join('');
+    for (const word of ['one', 'two', 'three', 'four', 'five', 'six', 'seven']) {
+      const occurrences = allRunText.split(word).length - 1;
+      expect(occurrences).toBe(1);
+    }
+  });
+
   test('substring wrap descends into a heading\'s Bookmark', async () => {
     // Headings are wrapped in a Bookmark for internal-link targets;
     // the substring wrap has to descend into it. Asserts the markers
