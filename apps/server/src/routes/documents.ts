@@ -613,15 +613,17 @@ async function exportDocument(c: Context, deps: AppDeps) {
 // --- Review-mode export payload --------------------------------------
 
 /**
- * Load every (open) thread for a document and shape it for the
- * renderer's `review` option. Includes both pure comment threads and
- * edit proposals. Replies are folded into each thread's `comments`
- * array oldest-first so the renderer's flat-replies fallback stays
- * in author order.
+ * Load every thread for a document (filtered by `options.includeResolved`)
+ * and shape it for the renderer's `review` option. Includes both pure
+ * comment threads and edit proposals. Replies are folded into each
+ * thread's `comments` array oldest-first so the renderer's flat-replies
+ * fallback stays in author order.
  *
- * Resolved threads are loaded too, but flagged `resolved: true` so
- * the renderer can drop them unless the caller passed
- * `?review=both&include_resolved=1`.
+ * Resolved threads are dropped from the SQL pre-filter unless
+ * `options.includeResolved` is true — keeps `readProposalContent`
+ * (a per-row git read) off rows the export will discard. The
+ * renderer's `includeResolved` flag is the user-facing escape
+ * hatch surfaced as `?review=both&include_resolved=1`.
  *
  * Proposal payloads (`source_snapshot` / `proposed_text`) come from
  * the same `readProposalContent` helper the threads route uses, so

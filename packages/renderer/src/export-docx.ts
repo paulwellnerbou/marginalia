@@ -244,12 +244,22 @@ export interface DocxExportOptions {
    *     threaded replies need a `commentsExtended` part not exposed
    *     by the `docx` library at v9.x).
    *
-   *   - Edit proposals → tracked changes (`<w:ins>` / `<w:del>` runs)
-   *     attributed to the proposal opener. Block-level proposals
-   *     render the original block as deleted text and the proposed
-   *     text as inserted text. Whole-document proposals use the same
-   *     mechanism applied to the entire body — noisy in Word's
-   *     "All Markup" view, intentional.
+   *   - Block-level edit proposals → tracked changes (`<w:ins>` /
+   *     `<w:del>` runs) attributed to the proposal opener. Single-
+   *     paragraph plain-prose tweaks get word-level inline diff via
+   *     `tryEmitInlineWordDiff`; structural proposals (multi-paragraph,
+   *     headings, lists, tables, anything with inline formatting) use
+   *     the whole-block delete + insert two-pass path.
+   *
+   *   - Whole-document proposals → labeled "Alternative version
+   *     proposed by …" appendix appended to the body. The appendix
+   *     content is itself a block-level diff (equal blocks plain,
+   *     removed in `<w:del>`, added in `<w:ins>`, replacement pairs
+   *     through inline word-diff) so reviewers can scan
+   *     change-by-change. Above 70% churn the appendix falls back
+   *     to wall-to-wall insertion — a near-total rewrite reads
+   *     better as one alternative version than as a sea of
+   *     revision marks against an unchanged scaffold.
    *
    * When `null`/undefined the exporter behaves exactly as before;
    * the live document is rendered with no review chrome.
@@ -1535,7 +1545,17 @@ interface RevisionMode {
   readonly author: string;
   /** ISO date string. OOXML wants `xsd:dateTime`. */
   readonly date: string;
-  readonly idAlloc: { value: number };
+  /**
+   * Single revision id shared by every run emitted during this
+   * pass. OOXML / Word groups runs into one Accept/Reject unit by
+   * `(w:id, w:author, w:date)` triple — using a different id per
+   * run would fragment a single proposal's deletion (or insertion)
+   * into N separate revisions in Word's review pane, one per text
+   * fragment, which is unusable for accept/reject all. The pass
+   * caller allocates one id from `review.nextRevisionId` when
+   * entering the mode and passes it through here.
+   */
+  readonly id: number;
 }
 
 type InlineStyle = {
@@ -2772,8 +2792,7 @@ function mkRun(
 ): TextRun | InsertedTextRun | DeletedTextRun {
   const rev = ctx.revision;
   if (!rev) return new TextRun(opts);
-  const id = rev.idAlloc.value++;
-  const attrs = { id, author: rev.author, date: rev.date };
+  const attrs = { id: rev.id, author: rev.author, date: rev.date };
   return rev.kind === 'insert'
     ? new InsertedTextRun({ ...attrs, ...opts })
     : new DeletedTextRun({ ...attrs, ...opts });
@@ -3147,9 +3166,17 @@ function emitProposalBlock(
   }
 
   // Pass 1: original block, every text run wrapped in DeletedTextRun.
+  // One revision id for the whole pass — Word groups (id, author,
+  // date) into a single Accept/Reject unit, and a structural
+  // proposal IS one logical change, not one per text fragment.
   const ctxDel: BuildCtx = {
     ...ctx,
-    revision: { kind: 'delete', author, date, idAlloc: review.nextRevisionId },
+    revision: {
+      kind: 'delete',
+      author,
+      date,
+      id: review.nextRevisionId.value++,
+    },
   };
   const delBuf: FileChild[] = [];
   convertBlockInner(node, ctxDel, delBuf, walk);
@@ -3165,7 +3192,12 @@ function emitProposalBlock(
   // recurse into emitProposalBlock forever.
   const ctxIns: BuildCtx = {
     ...ctx,
-    revision: { kind: 'insert', author, date, idAlloc: review.nextRevisionId },
+    revision: {
+      kind: 'insert',
+      author,
+      date,
+      id: review.nextRevisionId.value++,
+    },
     review: null,
   };
   const insBuf: FileChild[] = hastToDocxChildren(propHast, ctxIns, {});
@@ -3393,20 +3425,35 @@ function renderWholeDocBlockDiff(
   }
 
   const review = ctx.review!;
-  const ctxDel: BuildCtx = {
+  const ctxEqual: BuildCtx = { ...ctx, review: null };
+  const defaultWalk: WalkCtx = { listDepth: 0, blockquoteDepth: 0 };
+
+  // Each removed/added block is its OWN logical change in Word's
+  // accept/reject UX (a reviewer can keep one paragraph's deletion
+  // and reject another's insertion independently). Build a fresh
+  // BuildCtx with a freshly-allocated revision id per block.
+  const delCtx = (): BuildCtx => ({
     ...ctx,
-    revision: { kind: 'delete', author, date, idAlloc: review.nextRevisionId },
-  };
-  const ctxIns: BuildCtx = {
+    revision: {
+      kind: 'delete',
+      author,
+      date,
+      id: review.nextRevisionId.value++,
+    },
+  });
+  const insCtx = (): BuildCtx => ({
     ...ctx,
-    revision: { kind: 'insert', author, date, idAlloc: review.nextRevisionId },
+    revision: {
+      kind: 'insert',
+      author,
+      date,
+      id: review.nextRevisionId.value++,
+    },
     // Disable review interception during the sub-walk so a block-id
     // collision between the appendix and the live document can't
     // recurse through emitProposalBlock.
     review: null,
-  };
-  const ctxEqual: BuildCtx = { ...ctx, review: null };
-  const defaultWalk: WalkCtx = { listDepth: 0, blockquoteDepth: 0 };
+  });
 
   const out: FileChild[] = [];
   let origIdx = 0;
@@ -3452,17 +3499,17 @@ function renderWholeDocBlockDiff(
             ),
           );
         } else {
-          convertBlockInner(removedSlice[k]!, ctxDel, out, defaultWalk);
-          convertBlockInner(addedSlice[k]!, ctxIns, out, defaultWalk);
+          convertBlockInner(removedSlice[k]!, delCtx(), out, defaultWalk);
+          convertBlockInner(addedSlice[k]!, insCtx(), out, defaultWalk);
         }
       }
       // Tail: leftover removed blocks (when removedSlice is longer).
       for (let k = pairCount; k < removedSlice.length; k++) {
-        convertBlockInner(removedSlice[k]!, ctxDel, out, defaultWalk);
+        convertBlockInner(removedSlice[k]!, delCtx(), out, defaultWalk);
       }
       // Tail: leftover added blocks (when addedSlice is longer).
       for (let k = pairCount; k < addedSlice.length; k++) {
-        convertBlockInner(addedSlice[k]!, ctxIns, out, defaultWalk);
+        convertBlockInner(addedSlice[k]!, insCtx(), out, defaultWalk);
       }
       origIdx += change.value.length;
       propIdx += next.value.length;
@@ -3472,14 +3519,14 @@ function renderWholeDocBlockDiff(
 
     if (change.removed) {
       for (let k = 0; k < change.value.length; k++) {
-        convertBlockInner(originalBlocks[origIdx]!, ctxDel, out, defaultWalk);
+        convertBlockInner(originalBlocks[origIdx]!, delCtx(), out, defaultWalk);
         origIdx++;
       }
       continue;
     }
     // change.added without a preceding `removed`.
     for (let k = 0; k < change.value.length; k++) {
-      convertBlockInner(proposedBlocks[propIdx]!, ctxIns, out, defaultWalk);
+      convertBlockInner(proposedBlocks[propIdx]!, insCtx(), out, defaultWalk);
       propIdx++;
     }
   }
@@ -3537,9 +3584,17 @@ function renderWholeDocAsInsertion(
   ctx: BuildCtx,
 ): FileChild[] {
   const review = ctx.review!;
+  // Wall-of-insertion is one logical change ("insert this entire
+  // alternative version"), so the whole pass shares a single
+  // revision id — accepting it should accept the whole alternative.
   const ctxIns: BuildCtx = {
     ...ctx,
-    revision: { kind: 'insert', author, date, idAlloc: review.nextRevisionId },
+    revision: {
+      kind: 'insert',
+      author,
+      date,
+      id: review.nextRevisionId.value++,
+    },
     review: null,
   };
   return hastToDocxChildren(proposedHast, ctxIns, {});

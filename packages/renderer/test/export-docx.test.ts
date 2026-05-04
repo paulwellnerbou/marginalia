@@ -1790,11 +1790,14 @@ describe('exportDocx — review mode (comments)', () => {
         ],
       },
     });
-    // No matching anchor → comment is allocated but no range markers
-    // appear in the body. (The unanchored comment is still legal OOXML;
-    // Word shows it in the comment pane without a highlight.)
-    const { documentXml } = await inspectComments(buf);
+    // The thread's block_id matches no element in the rendered HAST,
+    // so `convertBlock` never enters the wrap path and no comment id
+    // is allocated. word/comments.xml stays empty and no range
+    // markers appear in the body.
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(countComments(commentsXml)).toBe(0);
     expect(documentXml).not.toMatch(/<w:commentReference\b/);
+    expect(documentXml).not.toMatch(/<w:commentRangeStart\b/);
   });
 });
 
