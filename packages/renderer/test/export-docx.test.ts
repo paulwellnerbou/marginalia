@@ -1891,6 +1891,41 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(documentXml).toContain('Second line');
   });
 
+  test('proposal whose proposed_text contains a hard break falls back to two-pass', async () => {
+    // The inline-diff path can't represent a `<br>` because OOXML
+    // hard breaks need their own `<w:br/>` run, not an embedded
+    // `\n` inside a TextRun's text. The qualification check
+    // disqualifies paragraphs that contain `<br>` so the export
+    // falls through to the structural delete-then-insert path,
+    // which emits the break correctly.
+    const md = 'Single line.\n';
+    const blockId = paragraphBlockId('Single line.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'split it', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Single line.',
+              // Two trailing spaces + newline = markdown hard break → <br>
+              proposed_text: 'First half  \nsecond half.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Structural path emits a real <w:br/> for the hard break,
+    // wrapped in <w:ins> attribution. The inline-diff path would
+    // have emitted the break as a literal `\n` inside <w:t>.
+    expect(documentXml).toMatch(/<w:ins\b[\s\S]*?<w:br\b/);
+    // The hard break ITSELF doesn't appear as a literal newline
+    // co-located with the surrounding text in the same run.
+    expect(documentXml).not.toMatch(/<w:t[^>]*>[^<]*First half\n/);
+  });
+
   test('proposal that adds inline formatting falls back to two-pass', async () => {
     // The proposed side contains a `<strong>` — the inline-diff
     // guard refuses to flatten formatting, so we expect the

@@ -3237,17 +3237,26 @@ function emitCommentedBlock(
 }
 
 /**
- * Try to wrap a substring of the sub-buffer's first Paragraph with
+ * Try to wrap a substring of one Paragraph in the sub-buffer with
  * comment range markers. Returns a fresh buffer when:
  *
- *   - the buffer's first FileChild is a Paragraph,
- *   - the paragraph's children come from `mkParagraph` (so the
+ *   - exactly one Paragraph in the buffer contains the substring
+ *     (multi-paragraph blocks like lists, blockquotes, and code
+ *     blocks are scanned end-to-end; cross-paragraph ambiguity
+ *     returns null so the caller can fall back),
+ *   - that paragraph's children come from `mkParagraph` (so the
  *     options are recoverable from `ctx.paraOpts`),
- *   - the concatenation of TextRun text contains the substring
- *     exactly once (>1 occurrences would be ambiguous),
+ *   - the substring matches exactly once inside the paragraph's
+ *     joined TextRun text (>1 occurrences inside one paragraph
+ *     would also be ambiguous),
  *   - and every child the substring touches is a TextRun whose
  *     `IRunOptions` are recoverable from `ctx.runOpts` (so we can
  *     split it at character boundaries while keeping its style).
+ *
+ * Headings are handled specially: `buildHeading` wraps the
+ * heading's runs in a single Bookmark, and the wrapper descends
+ * into it so the markers land inside the bookmark and the
+ * heading-anchor id is preserved.
  *
  * Returns null when any of those conditions fails — the caller
  * falls back to whole-paragraph wrap so the comment still surfaces.
@@ -3754,18 +3763,24 @@ function runsForInlineWordDiff(
 
 /**
  * Plain-text content of a HAST element, but only when the element
- * contains exclusively text and `<br>` nodes (no inline formatting).
- * Returns null if any other element is encountered — the inline-diff
- * path bails out in that case rather than silently dropping the
- * formatting.
+ * contains exclusively text nodes (no inline formatting AND no
+ * `<br>` hard breaks). Returns null otherwise — the inline-diff
+ * path bails out so the caller can fall back to the structural
+ * two-pass.
+ *
+ * `<br>` is disqualifying because the inline-diff path would emit
+ * the break as a literal `\n` inside a `TextRun`/`InsertedTextRun`
+ * `text` field. OOXML doesn't render embedded newlines as line
+ * breaks inside `<w:t>` — breaks need their own `<w:br/>` run
+ * (the structural walker emits one via `mkRun({ break: 1 }, ctx)`),
+ * so flattening a `<br>`-containing paragraph through the diff
+ * would lose the break in the output.
  */
 function pureTextContent(node: Element): string | null {
   let out = '';
   for (const child of node.children as HastNode[]) {
     if (isText(child)) {
       out += child.value;
-    } else if (isElement(child) && child.tagName === 'br') {
-      out += '\n';
     } else {
       return null;
     }
