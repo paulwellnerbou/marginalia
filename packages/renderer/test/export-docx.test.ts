@@ -2134,6 +2134,51 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(documentXml).toMatch(/<w:commentReference\b/);
   });
 
+  test('two precise comments sharing a boundary both wrap correctly', async () => {
+    // Both comments anchor at adjacent regions: "first" at the very
+    // start of the paragraph (offset 0), and the next region right
+    // after. After the first wrap, the paragraph contains
+    // CommentRange* zero-length children at offset 0; the second
+    // wrap's locate must skip those instead of returning a
+    // non-text slot at offset 0 that would silently drop the
+    // marker.
+    const md = 'first second third fourth.\n';
+    const blockId = paragraphBlockId('first second third fourth.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'first',
+            comments: [{ body: 'on first', author: 'A', date: 1 }],
+          },
+          {
+            id: 't2',
+            block_id: blockId,
+            // Adjacent to the first wrap's end — exercises the
+            // shared-boundary case.
+            anchor_quote: 'second',
+            comments: [{ body: 'on second', author: 'B', date: 2 }],
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Both substrings end up between matched range markers.
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>first<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>second<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+    // No unpaired range markers — every Start has a matching End.
+    const starts = (documentXml.match(/<w:commentRangeStart\b/g) ?? []).length;
+    const ends = (documentXml.match(/<w:commentRangeEnd\b/g) ?? []).length;
+    expect(starts).toBe(ends);
+    expect(starts).toBe(2);
+  });
+
   test('two precise comments on the same block both wrap their substrings', async () => {
     const md = 'Alpha bravo charlie delta echo foxtrot.\n';
     const blockId = paragraphBlockId('Alpha bravo charlie delta echo foxtrot.');
@@ -2259,6 +2304,29 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(commentsXml).toContain('Maybe drop this');
     // Original text still appears (either inside <w:del> or untouched).
     expect(documentXml).toContain('Original');
+  });
+
+  test('proposal with empty author falls back to a neutral attribution', async () => {
+    const md = 'Original wording.\n';
+    const blockId = paragraphBlockId('Original wording.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'tweak', author: '', date: 1 }],
+            proposal: {
+              source_snapshot: 'Original wording.',
+              proposed_text: 'Revised wording.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).toMatch(/<w:ins\b[^>]*w:author="Unknown reviewer"/);
+    expect(documentXml).not.toContain('Markdowner reviewer');
   });
 
   test('multi-block proposal (end_block_id != block_id) demotes to comment-only', async () => {

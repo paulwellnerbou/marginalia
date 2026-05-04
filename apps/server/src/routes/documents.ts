@@ -741,6 +741,10 @@ async function loadReviewThreadsForExport(
       anchor_quote: row.anchor_quote,
       comments: [opener, ...threadReplies],
       proposal,
+      // Set even when `proposal` is null (degraded): the
+      // `?review=proposals` filter uses this to keep the thread
+      // visible despite the missing diff payload.
+      was_proposal: isProposal,
       resolved: isThreadClosed(row),
       resolution_kind: closedKind(row),
     };
@@ -816,9 +820,11 @@ function parseReviewQuery(
  * - `comments`: keep all threads, but demote proposals by stripping
  *   their `proposal` payload — the discussion stays visible as a
  *   plain comment, no tracked changes get emitted.
- * - `proposals`: keep only threads that carry a proposal payload.
- *   Pure-comment threads are dropped because the user explicitly
- *   asked for the proposals view.
+ * - `proposals`: keep every thread the source row marked as a
+ *   proposal (`was_proposal`), including ones whose content
+ *   couldn't be loaded — the discussion still belongs in this
+ *   view. Pure-comment threads are dropped because the user
+ *   explicitly asked for the proposals view.
  */
 function filterReviewThreadsByMode(
   threads: ReviewThread[],
@@ -828,8 +834,10 @@ function filterReviewThreadsByMode(
   if (mode === 'comments') {
     return threads.map((t) => (t.proposal ? { ...t, proposal: null } : t));
   }
-  // mode === 'proposals'
-  return threads.filter((t) => !!t.proposal);
+  // mode === 'proposals' — `was_proposal` keeps degraded entries
+  // (proposal content unreachable, server set proposal=null) in
+  // the export so reviewers see the discussion regardless.
+  return threads.filter((t) => !!t.was_proposal);
 }
 
 // --- GET /api/documents/:uid/export.docx -----------------------------

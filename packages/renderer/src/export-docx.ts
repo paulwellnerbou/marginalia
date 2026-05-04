@@ -311,6 +311,15 @@ export interface ReviewThread {
   /** Resolved threads are skipped unless `includeResolved` is set. */
   readonly resolved?: boolean;
   readonly resolution_kind?: 'accept' | 'reject' | 'resolve' | null;
+  /**
+   * `true` when the underlying database row is an edit proposal —
+   * even when `proposal` itself is `null` because the branch ref
+   * was unreachable and the server demoted the entry. Keeps
+   * `?review=proposals` mode showing the discussion of every
+   * proposal thread (including degraded ones) instead of dropping
+   * them silently when the diff payload couldn't be loaded.
+   */
+  readonly was_proposal?: boolean;
 }
 
 export interface ReviewExportData {
@@ -3224,10 +3233,20 @@ function tryWrapBufferAtSubstring(
   const endOffset = firstHit + substring.length;
 
   // Locate (slotIndex, intra-slot offset) for both ends.
+  //
+  // Skip zero-length / non-text slots — those are the
+  // CommentRangeStart/End/Reference (and Bookmark, ImageRun, …)
+  // markers that an earlier precise wrap may have left behind.
+  // They don't contribute to the global text offset, but if we
+  // matched them at boundary positions (`globalOffset === acc`)
+  // we'd return a non-text slot and the rebuild step would skip
+  // its `cutStart`/`cutEnd`, dropping one end of the new
+  // comment range.
   function locate(globalOffset: number): { slot: number; intra: number } | null {
     let acc = 0;
     for (let s = 0; s < slots.length; s++) {
       const t = slots[s]!.text;
+      if (t.length === 0) continue;
       if (globalOffset <= acc + t.length) {
         return { slot: s, intra: globalOffset - acc };
       }
@@ -3238,21 +3257,6 @@ function tryWrapBufferAtSubstring(
   const startLoc = locate(startOffset);
   const endLoc = locate(endOffset);
   if (!startLoc || !endLoc) return null;
-
-  // Refuse if either end falls inside a non-text-bearing slot (we
-  // can't split a Bookmark or ImageRun mid-character).
-  const slotIsTextBearing = (s: Slot): boolean => s.text.length > 0;
-  if (
-    (startLoc.intra > 0 && startLoc.intra < (slots[startLoc.slot]?.text.length ?? 0)) ||
-    (endLoc.intra > 0 && endLoc.intra < (slots[endLoc.slot]?.text.length ?? 0))
-  ) {
-    if (
-      !slotIsTextBearing(slots[startLoc.slot]!) ||
-      !slotIsTextBearing(slots[endLoc.slot]!)
-    ) {
-      return null;
-    }
-  }
 
   // Rebuild the paragraph's children with the markers spliced in.
   const starts = commentIds.map((id) => new CommentRangeStart(id));
@@ -3371,7 +3375,7 @@ function emitProposalBlock(
   }
 
   const opener = main.comments[0];
-  const author = opener.author || 'Markdowner reviewer';
+  const author = opener.author || 'Unknown reviewer';
   const date = new Date(opener.date).toISOString();
 
   // Inline word-level diff path (Word's "Suggestions" UX): when the
@@ -3620,7 +3624,7 @@ function appendWholeDocProposals(
   const out: FileChild[] = [...body];
   for (const thread of review.wholeDoc) {
     const opener = thread.comments[0];
-    const author = opener.author || 'Markdowner reviewer';
+    const author = opener.author || 'Unknown reviewer';
     const date = new Date(opener.date).toISOString();
     out.push(
       mkParagraph(
