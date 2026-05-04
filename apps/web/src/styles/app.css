@@ -793,6 +793,47 @@ button.primary:disabled {
 .toc-toggle-spacer {
   display: inline-block;
 }
+.toc-toggle svg {
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.toc-toggle[aria-expanded="false"] svg {
+  transform: rotate(-90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .toc-toggle svg {
+    transition: none;
+  }
+}
+
+/* TOC subtree collapse — same height + opacity choreography as the
+   document-view section collapse, just with `overflow: hidden` rather
+   than the heading-anchor `clip-path` since the TOC has no left-side
+   sigils to preserve. */
+.toc-collapse-section {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.toc-collapse-section.is-collapsed {
+  grid-template-rows: 0fr;
+}
+.toc-collapse-section > .toc-collapse-section-inner {
+  min-height: 0;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 220ms ease-out 80ms;
+}
+.toc-collapse-section.is-collapsed > .toc-collapse-section-inner {
+  opacity: 0;
+  transition: opacity 180ms ease-in;
+}
+@media (prefers-reduced-motion: reduce) {
+  .toc-collapse-section,
+  .toc-collapse-section > .toc-collapse-section-inner,
+  .toc-collapse-section.is-collapsed > .toc-collapse-section-inner {
+    transition: none;
+  }
+}
 .toc a {
   color: inherit;
   text-decoration: none;

@@ -1,6 +1,6 @@
 import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { IconButton, Text, TextField } from '@radix-ui/themes';
-import { ChevronDownIcon, ChevronRightIcon, Cross2Icon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
+import { ChevronDownIcon, Cross2Icon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
 import type { TocNode } from '../lib/api.js';
 
 export function Toc({ nodes, activeId }: { nodes: TocNode[]; activeId?: string | null }) {
@@ -119,9 +119,13 @@ function TocItem({
             variant="ghost"
             onClick={() => setOpen((v) => !v)}
             aria-label={effectiveOpen ? 'Collapse' : 'Expand'}
+            aria-expanded={effectiveOpen}
             className="toc-toggle"
           >
-            {effectiveOpen ? <ChevronDownIcon /> : <ChevronRightIcon />}
+            {/* One icon, rotated via CSS — keeps the chevron motion in
+                lockstep with the height/opacity animation below
+                instead of swapping two separate SVGs mid-transition. */}
+            <ChevronDownIcon />
           </IconButton>
         ) : (
           <span className="toc-toggle-spacer" aria-hidden />
@@ -130,12 +134,19 @@ function TocItem({
           {renderHighlightedText(stripHtml(node.text), query)}
         </a>
       </div>
-      {hasChildren && effectiveOpen && (
-        <TocList
-          nodes={node.children}
-          activeId={activeId}
-          query={query}
-        />
+      {hasChildren && (
+        // Always rendered so the children animate in/out instead of
+        // popping. `is-collapsed` toggles the grid-row + opacity
+        // transitions defined in app.css.
+        <div className={`toc-collapse-section ${effectiveOpen ? '' : 'is-collapsed'}`}>
+          <div className="toc-collapse-section-inner">
+            <TocList
+              nodes={node.children}
+              activeId={activeId}
+              query={query}
+            />
+          </div>
+        </div>
       )}
     </li>
   );
