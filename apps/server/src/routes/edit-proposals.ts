@@ -221,20 +221,13 @@ export function findBlockBySourceSpan(
   return null;
 }
 
-export async function toWire(
-  store: GitStore,
-  doc: DocumentRow,
-  row: EditProposalThreadRow,
-): Promise<Record<string, unknown>> {
-  const content = await readProposalContent(store, doc, row);
+export function toWire(row: EditProposalThreadRow): Record<string, unknown> {
   return {
     id: row.id,
     comment: toCommentWire(row),
     status: row.proposal_status,
     decided_at: row.decided_at,
     decided_by_name: row.decided_by_name,
-    source_snapshot: content?.source_snapshot ?? null,
-    proposed_text: content?.proposed_text ?? null,
     whole_document: row.is_whole_document === 1,
   };
 }

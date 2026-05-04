@@ -161,6 +161,32 @@ export interface HistoryDiff {
   after: string;
 }
 
+/**
+ * Proposal diff payload. Mirrors `HistoryDiff` but adds a `mergeable`
+ * status so clients can disable accept/show a rebase hint without a
+ * second round-trip.
+ *
+ * `mergeable` is `null` when the server doesn't compute it, which
+ * happens in any of:
+ *   - the proposal is accepted or rejected (mergeability is meaningless)
+ *   - the proposal is not currently acceptable — `link_status` is
+ *     `'orphaned'`, or a non-whole-document proposal lost its anchor
+ *     block. Accept would refuse these regardless of the merge result,
+ *     so the server skips the dry-run even for editors
+ *   - the caller lacks edit permission and didn't opt in via
+ *     `?mergeable=1` on the diff request (computing it under the
+ *     per-doc lock is too expensive for read-only viewers)
+ *   - the caller opted in but lacks propose permission — readers can't
+ *     force the dry-run merge by spamming the query parameter
+ *
+ * A non-null value (`'clean' | 'conflict' | 'stale'`) only ever
+ * appears for open, acceptable proposals where the server actually
+ * ran the dry-run merge.
+ */
+export interface ProposalDiff extends HistoryDiff {
+  mergeable: 'clean' | 'conflict' | 'stale' | null;
+}
+
 export interface UploadOptions {
   /** Raw source text. */
   source: string;
@@ -802,10 +828,7 @@ export interface Comment {
 }
 
 export interface ThreadProposalData {
-  anchor_kind: string | null;
-  source_snapshot: string | null;
-  proposed_text: string;
-  whole_document?: boolean;
+  whole_document: boolean;
 }
 
 export interface Thread {
@@ -1051,7 +1074,6 @@ export function createEditProposal(
     anchor_block_id: string;
     anchor_end_block_id?: string | null;
     anchor_quote: string;
-    anchor_kind?: string | null;
     proposed_text: string;
     rationale?: string | null;
   },
@@ -1066,10 +1088,7 @@ export function createEditProposal(
         quote: payload.anchor_quote,
       },
       body: payload.rationale,
-      proposal: {
-        anchor_kind: payload.anchor_kind ?? null,
-        proposed_text: payload.proposed_text,
-      },
+      proposal: { proposed_text: payload.proposed_text },
     }),
     identity,
     docUid: uid,
@@ -1103,11 +1122,7 @@ export function createDocumentProposal(
         quote: payload.anchor_quote,
       },
       body: payload.rationale,
-      proposal: {
-        anchor_kind: null,
-        proposed_text: payload.proposed_text,
-        whole_document: true,
-      },
+      proposal: { proposed_text: payload.proposed_text, whole_document: true },
     }),
     identity,
     docUid: uid,
@@ -1180,11 +1195,22 @@ export function rejectEditProposal(
   });
 }
 
-export function getEditProposalDiff(uid: string, pid: string): Promise<HistoryDiff> {
-  return request<HistoryDiff>(
-    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/diff`,
-    { method: 'GET', docUid: uid },
-  );
+/**
+ * Pass `{ mergeable: true }` to opt the diff response into a `mergeable`
+ * status (`'clean' | 'conflict' | 'stale'`). The server only honours the
+ * opt-in for callers with propose permission; read-only viewers still
+ * get `null`. Editors get a non-null status without the opt-in for
+ * open, acceptable proposals; accepted/rejected and orphaned/unanchored
+ * proposals always return `null` regardless of caller role.
+ */
+export function getEditProposalDiff(
+  uid: string,
+  pid: string,
+  opts: { mergeable?: boolean } = {},
+): Promise<ProposalDiff> {
+  const path = `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/diff`;
+  const url = opts.mergeable ? `${path}?mergeable=1` : path;
+  return request<ProposalDiff>(url, { method: 'GET', docUid: uid });
 }
 
 export async function resolveThread(

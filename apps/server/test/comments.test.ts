@@ -54,7 +54,7 @@ interface ThreadShape {
     reopen: boolean;
   };
   comments: [ThreadCommentNodeShape, ...ThreadCommentNodeShape[]];
-  proposal: { anchor_kind: string | null; source_snapshot: string | null; proposed_text: string } | null;
+  proposal: { whole_document?: boolean } | null;
 }
 
 function threadRootToComment(thread: ThreadShape): Record<string, unknown> {
@@ -1389,7 +1389,57 @@ describe('threads API', () => {
       }),
     );
     expect(diffRes.status).toBe(200);
-    expect(await diffRes.json()).toEqual({ before: '# Title', after: '# Better title' });
+    // Bob is a collaborator — no edit permission, so mergeable defaults
+    // to null (skips the dry-run merge). Opt in with ?mergeable=1 below.
+    expect(await diffRes.json()).toEqual({
+      before: '# Title',
+      after: '# Better title',
+      mergeable: null,
+    });
+    const mergeableRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${uid}/threads/${thread.id}/diff?mergeable=1`,
+        { headers: headersFor(BOB) },
+      ),
+    );
+    expect(mergeableRes.status).toBe(200);
+    expect(await mergeableRes.json()).toEqual({
+      before: '# Title',
+      after: '# Better title',
+      mergeable: 'clean',
+    });
+
+    // Admin (edit-capable) gets a non-null mergeable status by default —
+    // no `?mergeable=1` needed. Locks in the editor-default contract.
+    const adminRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${thread.id}/diff`, {
+        headers: headersFor(ALICE),
+      }),
+    );
+    expect(adminRes.status).toBe(200);
+    expect(await adminRes.json()).toEqual({
+      before: '# Title',
+      after: '# Better title',
+      mergeable: 'clean',
+    });
+
+    // Reader can read the diff but is denied the `?mergeable=1` opt-in:
+    // computing it under the per-doc lock is too expensive to expose to
+    // a role that can't act on the result.
+    const carolReaderInvite = await createInvite(uid, 'Carol', 'reader');
+    inviteByClientId.set(CAROL.id, carolReaderInvite);
+    const readerRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${uid}/threads/${thread.id}/diff?mergeable=1`,
+        { headers: headersFor(CAROL) },
+      ),
+    );
+    expect(readerRes.status).toBe(200);
+    expect(await readerRes.json()).toEqual({
+      before: '# Title',
+      after: '# Better title',
+      mergeable: null,
+    });
 
     // Capabilities: Bob is collaborator → can propose/reject own, but not accept (needs editor)
     expect(thread.capabilities.accept).toBe(false); // collaborator cannot accept

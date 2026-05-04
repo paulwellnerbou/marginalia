@@ -1,13 +1,10 @@
-import type { BlockSourceRange } from '@marginalia/renderer';
 import { FileTextIcon, PilcrowIcon } from '@radix-ui/react-icons';
 import { useMemo, useRef, useState } from 'react';
-import type { Comment, Thread } from '../../lib/api.js';
+import type { Comment, ProposalDiff, Thread } from '../../lib/api.js';
 import { getEditProposalDiff, isProposal, proposalStatus } from '../../lib/api.js';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import { reportError } from '../../lib/log.js';
 import { DiffDialog } from '../DiffDialog.js';
-import type { DocumentFormat } from '../../lib/api.js';
-import { resolveProposalDiffBefore } from '../proposalDiff.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
 import { InlineComposer, type InlineComposerHandle } from './InlineComposer.js';
 
@@ -16,9 +13,6 @@ interface Props {
   thread: Thread;
   canComment: boolean;
   needsName: boolean;
-  docSource: string;
-  blockRanges: Map<string, BlockSourceRange>;
-  docFormat: DocumentFormat;
   focused: boolean;
   flashPhase: 'a' | 'b' | null;
   collapsed: boolean;
@@ -41,9 +35,6 @@ export function InlineThreadCard({
   thread,
   canComment,
   needsName,
-  docSource,
-  blockRanges,
-  docFormat,
   focused,
   flashPhase,
   collapsed,
@@ -59,7 +50,7 @@ export function InlineThreadCard({
   const [busy, setBusy] = useState(false);
 
   const [diffOpen, setDiffOpen] = useState(false);
-  const [resolvedDiff, setResolvedDiff] = useState<{ before: string; after: string } | null>(null);
+  const [resolvedDiff, setResolvedDiff] = useState<ProposalDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [loadingDiff, setLoadingDiff] = useState(false);
 
@@ -72,14 +63,6 @@ export function InlineThreadCard({
   const proposalThread = proposal
     ? (thread as Thread & { proposal: NonNullable<Thread['proposal']> })
     : null;
-
-  const originalSource = useMemo(() => {
-    if (!proposalThread) return '';
-    return resolveProposalDiffBefore({ thread: proposalThread, docSource, blockRanges, docFormat });
-  }, [proposalThread, docSource, blockRanges, docFormat]);
-
-  const diffBefore = resolvedDiff?.before ?? originalSource;
-  const diffAfter = resolvedDiff?.after ?? proposalThread?.proposal.proposed_text ?? '';
 
   const canAccept = proposal && thread.capabilities.accept;
   const canReject = proposal && thread.capabilities.reject;
@@ -113,29 +96,24 @@ export function InlineThreadCard({
   async function showDiff() {
     if (!proposalThread || loadingDiff) return;
     setDiffError(null);
-    if (status === 'accepted' && !proposalThread.proposal.source_snapshot) {
-      if (resolvedDiff) {
-        setDiffOpen(true);
-        return;
-      }
-      setLoadingDiff(true);
-      try {
-        const diff = await getEditProposalDiff(uid, thread.id);
-        setResolvedDiff(diff);
-        setDiffOpen(true);
-      } catch (err) {
-        reportError('InlineThreadCard.getEditProposalDiff', err, {
-          uid,
-          threadId: thread.id,
-        });
-        setDiffError('Could not load diff');
-      } finally {
-        setLoadingDiff(false);
-      }
+    if (resolvedDiff) {
+      setDiffOpen(true);
       return;
     }
-    setResolvedDiff(null);
-    setDiffOpen(true);
+    setLoadingDiff(true);
+    try {
+      const diff = await getEditProposalDiff(uid, thread.id);
+      setResolvedDiff(diff);
+      setDiffOpen(true);
+    } catch (err) {
+      reportError('InlineThreadCard.getEditProposalDiff', err, {
+        uid,
+        threadId: thread.id,
+      });
+      setDiffError('Could not load diff');
+    } finally {
+      setLoadingDiff(false);
+    }
   }
 
   async function runWorkflow(
@@ -386,8 +364,8 @@ export function InlineThreadCard({
           open={diffOpen}
           onOpenChange={setDiffOpen}
           title="Proposed change"
-          before={diffBefore}
-          after={diffAfter}
+          before={resolvedDiff?.before ?? ''}
+          after={resolvedDiff?.after ?? ''}
           actions={
             status === 'open' && (canAccept || canReject) ? (
               <>

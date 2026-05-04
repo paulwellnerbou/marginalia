@@ -2198,11 +2198,7 @@ describe('documents API', () => {
     const importedProposalThread = importedThreads.threads.find(
       (thread) => thread.comments[0].body === 'please improve this heading',
     )!;
-    expect(importedProposalThread.proposal).toEqual({
-      source_snapshot: '# Hi',
-      proposed_text: '# Better Hi',
-      whole_document: false,
-    });
+    expect(importedProposalThread.proposal).toEqual({ whole_document: false });
     expect(importedProposalThread.state).toBe('resolved');
     expect(importedProposalThread.resolution?.kind).toBe('reject');
     expect(importedProposalThread.comments.slice(1).map((reply) => reply.body)).toEqual([
@@ -2217,7 +2213,12 @@ describe('documents API', () => {
       ),
     );
     expect(importedDiffRes.status).toBe(200);
-    expect(await importedDiffRes.json()).toEqual({ before: '# Hi', after: '# Better Hi' });
+    // Rejected proposals don't carry a mergeable status — only open ones do.
+    expect(await importedDiffRes.json()).toEqual({
+      before: '# Hi',
+      after: '# Better Hi',
+      mergeable: null,
+    });
   });
 
   test('export + import of an open proposal rebuilds the branch on import so accept goes through git.merge (#25)', async () => {
