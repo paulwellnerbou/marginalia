@@ -169,6 +169,10 @@ export interface HistoryDiff {
  * `mergeable` is `null` when the server doesn't compute it, which
  * happens in any of:
  *   - the proposal is accepted or rejected (mergeability is meaningless)
+ *   - the proposal is not currently acceptable — `link_status` is
+ *     `'orphaned'`, or a non-whole-document proposal lost its anchor
+ *     block. Accept would refuse these regardless of the merge result,
+ *     so the server skips the dry-run even for editors
  *   - the caller lacks edit permission and didn't opt in via
  *     `?mergeable=1` on the diff request (computing it under the
  *     per-doc lock is too expensive for read-only viewers)
@@ -176,8 +180,8 @@ export interface HistoryDiff {
  *     force the dry-run merge by spamming the query parameter
  *
  * A non-null value (`'clean' | 'conflict' | 'stale'`) only ever
- * appears for open proposals where the server actually ran the
- * dry-run merge.
+ * appears for open, acceptable proposals where the server actually
+ * ran the dry-run merge.
  */
 export interface ProposalDiff extends HistoryDiff {
   mergeable: 'clean' | 'conflict' | 'stale' | null;
@@ -1195,7 +1199,9 @@ export function rejectEditProposal(
  * Pass `{ mergeable: true }` to opt the diff response into a `mergeable`
  * status (`'clean' | 'conflict' | 'stale'`). The server only honours the
  * opt-in for callers with propose permission; read-only viewers still
- * get `null`. Editors get a non-null status without the opt-in.
+ * get `null`. Editors get a non-null status without the opt-in for
+ * open, acceptable proposals; accepted/rejected and orphaned/unanchored
+ * proposals always return `null` regardless of caller role.
  */
 export function getEditProposalDiff(
   uid: string,

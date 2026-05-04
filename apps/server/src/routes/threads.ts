@@ -321,16 +321,22 @@ async function createThread(c: Context, deps: AppDeps) {
  *
  * `mergeable` is computed via a `git merge --dry-run` under the per-doc
  * lock, which serializes with every repo write for this document. To
- * avoid loading that path on every viewer:
+ * avoid loading that path on every viewer, `mergeable` is `null` in
+ * any of:
  *
- * - Accepted / rejected rows skip the merge entirely (the field is
- *   meaningful only for open proposals) and return `null`.
- * - For open proposals, only callers with edit permission (the ones
- *   the field would actually inform) trigger the dry-run. Read-only
- *   viewers also get `null` — they can't accept, so they don't need
- *   it. Clients can opt in explicitly with `?mergeable=1`, but only
- *   propose-capable callers can — otherwise a reader could force the
- *   expensive dry-run by spamming the query parameter.
+ * - the row is accepted / rejected (the field is meaningful only for
+ *   open proposals)
+ * - the proposal is not currently acceptable: `link_status='orphaned'`,
+ *   or a non-whole-document proposal whose `anchor_block_id` has been
+ *   nulled out. Accept would refuse these with `proposal-orphaned`, so
+ *   surfacing a `'clean'` status would mislead the UI
+ * - the caller has read-only access — they can't accept, so they don't
+ *   need it. Propose-capable callers can opt in explicitly with
+ *   `?mergeable=1`; readers can't, otherwise a reader could force the
+ *   expensive dry-run by spamming the query parameter
+ *
+ * Editors with an acceptable, open proposal get a non-null status by
+ * default, no opt-in required.
  */
 async function getThreadDiff(c: Context, deps: AppDeps) {
   const { db } = deps;
