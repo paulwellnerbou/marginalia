@@ -1562,9 +1562,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       */}
       <ProposalComposer
         target={pendingProposalTarget}
+        docUid={doc.uid}
         docSource={liveSource}
         docFormat={doc.format}
         blockRanges={blockRanges}
+        attachedAssets={doc.attached_assets}
         needsName={!displayName}
         onCancel={() => setPendingDraft(null)}
         onSubmit={onCreateProposal}

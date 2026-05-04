@@ -1925,10 +1925,110 @@ button.primary:disabled {
 
 /* Restore the markdown-source font face / size on the textarea
    fallback, matching the CodeMirror editor's monospace styling. */
-.edit-proposal-composer .proposal-source-field :is(textarea, .rt-TextAreaInput) {
+.proposal-composer-layout .proposal-source-field :is(textarea, .rt-TextAreaInput) {
   font-family: var(--md-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
   font-size: 0.875rem;
   min-height: calc(var(--ui-control-height) * 5);
+}
+
+/* Proposal composer layout wrapper — shared by normal and expanded modes.
+   The `composer` class is applied alongside this one to inherit the shared
+   composer-field chrome rules above. */
+.proposal-composer-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+/* Title + expand/collapse toggle: title takes the row, button hugs the end.
+   Radix's Dialog.Title is a Heading with an `mb-3` margin baked in via the
+   `mb` prop default; reset it here so the row aligns cleanly. */
+.proposal-composer-title {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.proposal-composer-source-label {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+/* In normal mode the preview pane is hidden — `display: none` removes it
+   from layout *and* the accessibility tree, so no `aria-hidden` is needed. */
+.proposal-composer-preview {
+  display: none;
+}
+
+/* ---- Expanded (split-view) mode ---- */
+
+/* Override Radix's defaults so the dialog can fill the declared height
+   and the inner panes can scroll independently. `!important` is needed
+   because Radix ships these on the `.rt-DialogContent` selector with
+   higher specificity than a single-class override here. */
+.proposal-dialog--expanded {
+  display: flex !important;
+  flex-direction: column !important;
+  max-height: 90vh !important;
+  overflow: hidden !important;
+}
+
+.proposal-composer-layout--expanded {
+  flex: 1;
+  min-height: 0;
+}
+
+.proposal-composer-layout--expanded .proposal-composer-split {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--radius-3);
+  overflow: hidden;
+}
+
+.proposal-composer-layout--expanded .proposal-composer-source {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  min-width: 0;
+  border-right: 1px solid var(--ui-border);
+}
+
+/* Source editor fills the pane height; disable manual resize. */
+.proposal-composer-layout--expanded .proposal-source-editor {
+  flex: 1;
+  resize: none;
+  min-height: 0;
+  /* Suppress the editor's own border in expanded mode — the parent
+     `.proposal-composer-split` already provides the surrounding chrome. */
+  border: 0;
+  border-radius: 0;
+}
+
+/* Mirror the editor's chrome reset on the textarea fallback so the
+   loading / failed states don't show a doubled border inside the
+   surrounding `.proposal-composer-split` chrome. */
+.proposal-composer-layout--expanded .proposal-source-field :is(textarea, .rt-TextAreaInput) {
+  flex: 1;
+  resize: none;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+/* Preview pane visible in expanded mode. `min-height: 0` / `min-width: 0`
+   let the grid item shrink below its content's intrinsic size so
+   `overflow-y: auto` actually scrolls instead of being clipped by the
+   parent's `overflow: hidden`. */
+.proposal-composer-layout--expanded .proposal-composer-preview {
+  display: block;
+  overflow-y: auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 1rem 1.5rem;
+  background: var(--ui-bg);
 }
 
 /* ============================================================

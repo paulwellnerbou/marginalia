@@ -17,6 +17,7 @@ import {
   deleteAttachedAsset,
 } from '../lib/api.js';
 import { loadEditorDeps, type EditorDeps } from '../lib/codemirror-loader.js';
+import { loadRenderer } from '../lib/renderer-loader.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { reportError } from '../lib/log.js';
 import {
@@ -39,8 +40,6 @@ const LS_ASSETS_WIDTH = 'marginalia.editAssetsWidth';
 const LS_EDITOR_WIDTH = 'marginalia.editEditorWidth';
 const LS_TEXT_ZOOM = 'marginalia.textZoom';
 const LS_WORD_WRAP = 'marginalia.editWordWrap';
-
-let rendererPromise: Promise<typeof import('@marginalia/renderer')> | null = null;
 
 /**
  * Scan the source for local asset references — `![alt](filename)` in
@@ -71,11 +70,6 @@ function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'):
     out.add(raw);
   }
   return out;
-}
-
-function loadRenderer(): Promise<typeof import('@marginalia/renderer')> {
-  if (!rendererPromise) rendererPromise = import('@marginalia/renderer');
-  return rendererPromise;
 }
 
 export function EditPage() {
