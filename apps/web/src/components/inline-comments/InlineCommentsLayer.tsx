@@ -86,7 +86,7 @@ interface RenderItem {
 }
 
 const PENDING_ID = '__pending__';
-const STACK_GAP_PX = 8;
+const STACK_GAP_PX = 16;
 /**
  * Base offset above each sticky card: the toolbar's own CSS `top`
  * (8px, see `.ic-toolbar` in app.css) plus a `STACK_GAP_PX` gap below
