@@ -668,6 +668,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       } catch (err) {
         reportError('DocumentLayout.resolveThread', err, { id, kind });
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : `${kind} failed`);
+        // Surface the failure so callers (composer / diff dialog) don't
+        // clear drafts or close on a failed accept/reject.
+        throw err;
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps

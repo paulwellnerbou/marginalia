@@ -2500,6 +2500,7 @@ button.primary:disabled {
 
 .ic-btn {
   appearance: none;
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2520,6 +2521,20 @@ button.primary:disabled {
 }
 .ic-btn:active:not(:disabled) {
   filter: brightness(0.88);
+}
+
+/* When a workflow button is in flight, the label is hidden but kept in
+   the DOM so the button retains its original width — neighbors don't
+   shift — and a spinner is overlaid in the center. */
+.ic-btn-label-hidden {
+  visibility: hidden;
+}
+.ic-btn-spinner-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .ic-btn-link {

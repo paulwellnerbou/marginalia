@@ -128,6 +128,9 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
     try {
       await action(hasDraft ? body : undefined, needsName ? displayName : undefined);
       setValue('');
+    } catch {
+      // The action surfaced its own error (toast / inline). Keep the draft
+      // so the user can retry without retyping their reply.
     } finally {
       setSubmitting(false);
     }
