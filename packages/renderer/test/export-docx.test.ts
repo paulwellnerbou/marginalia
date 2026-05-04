@@ -2054,6 +2054,116 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
   });
 
 
+  test('comment with anchor_quote wraps just the highlighted substring', async () => {
+    const md = 'The quick brown fox jumps over the lazy dog.\n';
+    const blockId = paragraphBlockId('The quick brown fox jumps over the lazy dog.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'brown fox',
+            comments: [{ body: 'spelling?', author: 'Alice', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Substring is wrapped — "brown fox" sits in its own run between
+    // the two range markers.
+    expect(documentXml).toMatch(
+      /<w:r><w:t[^>]*>The quick <\/w:t><\/w:r><w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>brown fox<\/w:t><\/w:r><w:commentRangeEnd\b[^>]*\/><w:commentReference\b/,
+    );
+    // Suffix follows after the markers.
+    expect(documentXml).toMatch(
+      /<w:commentReference\b[^>]*\/><w:r><w:t[^>]*> jumps over the lazy dog\.<\/w:t><\/w:r>/,
+    );
+  });
+
+  test('comment with anchor_quote that no longer matches falls back to whole-paragraph wrap', async () => {
+    const md = 'A short and unchanged paragraph.\n';
+    const blockId = paragraphBlockId('A short and unchanged paragraph.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'this text is no longer in the block',
+            comments: [{ body: 'stale anchor', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    // Comment still emitted (substring not found → whole-paragraph
+    // fallback). The whole paragraph carries the start/end markers.
+    expect(commentsXml).toContain('stale anchor');
+    expect(documentXml).toMatch(/<w:commentRangeStart\b/);
+    expect(documentXml).toMatch(/<w:commentRangeEnd\b/);
+    // The full text is still present as a single plain run (the
+    // precise wrap would have split it; the fallback didn't).
+    expect(documentXml).toMatch(
+      /<w:r><w:t[^>]*>A short and unchanged paragraph\.<\/w:t><\/w:r>/,
+    );
+  });
+
+  test('comment with anchor_quote that matches multiple times falls back', async () => {
+    // "the" appears three times — ambiguous → whole-paragraph wrap.
+    const md = 'The cat saw the dog near the tree.\n';
+    const blockId = paragraphBlockId('The cat saw the dog near the tree.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'the',
+            comments: [{ body: 'which one?', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // The full text stays as one run (no per-substring split).
+    expect(documentXml).toMatch(
+      /<w:r><w:t[^>]*>The cat saw the dog near the tree\.<\/w:t><\/w:r>/,
+    );
+    // But the comment is still anchored on the whole paragraph.
+    expect(documentXml).toMatch(/<w:commentReference\b/);
+  });
+
+  test('two comments on the same block, one precise + one stale, both render', async () => {
+    const md = 'The frobnicate operation runs nightly.\n';
+    const blockId = paragraphBlockId('The frobnicate operation runs nightly.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'frobnicate',
+            comments: [{ body: 'precise', author: 'A', date: 1 }],
+          },
+          {
+            id: 't2',
+            block_id: blockId,
+            anchor_quote: 'something that is not in the text',
+            comments: [{ body: 'stale', author: 'B', date: 2 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('precise');
+    expect(commentsXml).toContain('stale');
+    // The precise one wraps only "frobnicate".
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/>[\s\S]*?<w:t[^>]*>frobnicate<\/w:t>/,
+    );
+  });
+
   test('block with both proposal and side-comment keeps both visible', async () => {
     const md = 'Shared block.\n';
     const blockId = paragraphBlockId('Shared block.');

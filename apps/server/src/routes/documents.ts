@@ -732,6 +732,11 @@ async function loadReviewThreadsForExport(
       id: row.id,
       block_id: row.anchor_block_id,
       end_block_id: row.anchor_end_block_id,
+      // The exporter uses `anchor_quote` to wrap just the
+      // highlighted substring (instead of the whole paragraph).
+      // Stale quotes that no longer match the live block degrade
+      // to whole-paragraph wrap inside the renderer.
+      anchor_quote: row.anchor_quote,
       comments: [opener, ...threadReplies],
       proposal,
       resolved: isThreadClosed(row),

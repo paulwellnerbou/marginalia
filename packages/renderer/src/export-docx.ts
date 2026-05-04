@@ -291,6 +291,15 @@ export interface ReviewThread {
   readonly id: string;
   readonly block_id: string | null;
   readonly end_block_id?: string | null;
+  /**
+   * The substring of the anchored block's text the user originally
+   * highlighted. When set and the substring still appears (exactly
+   * once) in the rendered block, the exporter wraps just that
+   * substring with `<w:commentRange*>` markers instead of the whole
+   * paragraph. Stale or ambiguous quotes degrade to the
+   * whole-paragraph fallback so the comment still surfaces.
+   */
+  readonly anchor_quote?: string | null;
   /** Oldest first; index 0 is the opener, the rest are replies. */
   readonly comments: readonly [ReviewComment, ...ReviewComment[]];
   /** Present iff this thread is an edit proposal. */
@@ -358,6 +367,10 @@ export async function exportDocx(
   // `FootnoteReferenceRun`s pointed at those ids.
   const effectivePageSize = options.pageSize ?? tokens.page.size;
   const paraOpts = new WeakMap<Paragraph, ParagraphOptions>();
+  const runOpts = new WeakMap<
+    TextRun | InsertedTextRun | DeletedTextRun,
+    IRunOptions
+  >();
   const ctxWithoutFootnotes: BuildCtx = {
     tokens,
     images,
@@ -365,6 +378,7 @@ export async function exportDocx(
     pageWidthPx: contentWidthPx(effectivePageSize, tokens.page.marginPt),
     footnoteIds: new Map(),
     paraOpts,
+    runOpts,
     review,
   };
   const footnotes = extractFootnotes(hast, ctxWithoutFootnotes);
@@ -1497,6 +1511,16 @@ interface BuildCtx {
    * options back from this map is the only way to wrap them losslessly.
    */
   readonly paraOpts: WeakMap<Paragraph, ParagraphOptions>;
+  /**
+   * Companion side-table for `mkRun`-built runs. Lets the
+   * substring-precise comment wrapper recover a TextRun's text
+   * content (and the IRunOptions used to style it) so it can split
+   * the run at character boundaries that fall mid-text.
+   */
+  readonly runOpts: WeakMap<
+    TextRun | InsertedTextRun | DeletedTextRun,
+    IRunOptions
+  >;
   /**
    * Active revision wrapper, if any. When non-null, every text-run
    * the inline walker emits is wrapped in `InsertedTextRun` /
@@ -2794,11 +2818,21 @@ function mkRun(
   ctx: BuildCtx,
 ): TextRun | InsertedTextRun | DeletedTextRun {
   const rev = ctx.revision;
-  if (!rev) return new TextRun(opts);
-  const attrs = { id: rev.id, author: rev.author, date: rev.date };
-  return rev.kind === 'insert'
-    ? new InsertedTextRun({ ...attrs, ...opts })
-    : new DeletedTextRun({ ...attrs, ...opts });
+  let run: TextRun | InsertedTextRun | DeletedTextRun;
+  if (!rev) {
+    run = new TextRun(opts);
+  } else {
+    const attrs = { id: rev.id, author: rev.author, date: rev.date };
+    run =
+      rev.kind === 'insert'
+        ? new InsertedTextRun({ ...attrs, ...opts })
+        : new DeletedTextRun({ ...attrs, ...opts });
+  }
+  // Stash the source options so the substring-precise comment
+  // wrapper can read the run's text back and split it at character
+  // boundaries that fall mid-text.
+  ctx.runOpts.set(run, opts);
+  return run;
 }
 
 /** Read the `data-block` id off a HAST element, if any. Empty → null. */
@@ -3065,10 +3099,17 @@ function augmentParagraph(
 
 /**
  * Render a block targeted by one or more comment threads. The block
- * is converted normally into a fresh sub-buffer; the resulting
- * paragraphs are then post-wrapped with `CommentRangeStart` /
- * `CommentRangeEnd` / `CommentReference` markers tied to each
- * thread's freshly-allocated comment ids.
+ * is converted normally into a fresh sub-buffer; each thread is
+ * then wrapped in turn, preferring substring-precise wrap when
+ * the thread carries an `anchor_quote` that still appears (exactly
+ * once) in the rendered block. Threads that can't be placed
+ * precisely fall back to the whole-block wrap.
+ *
+ * Per-thread wrapping is incremental: each iteration mutates the
+ * sub-buffer with that thread's comment range markers, and the
+ * next iteration sees those markers as already-present children.
+ * Comment ranges in OOXML are allowed to overlap arbitrarily, so
+ * stacking them is safe.
  */
 function emitCommentedBlock(
   node: Element,
@@ -3077,11 +3118,164 @@ function emitCommentedBlock(
   out: FileChild[],
   walk: WalkCtx,
 ): void {
-  const sub: FileChild[] = [];
+  let sub: FileChild[] = [];
   convertBlockInner(node, ctx, sub, walk);
-  const commentIds: number[] = [];
-  for (const t of threads) commentIds.push(...allocCommentIdsForThread(t, ctx));
-  out.push(...wrapBufferWithCommentRanges(sub, commentIds, ctx));
+  for (const t of threads) {
+    const ids = allocCommentIdsForThread(t, ctx);
+    const quote = t.anchor_quote ?? null;
+    const precise =
+      quote && quote.length > 0
+        ? tryWrapBufferAtSubstring(sub, quote, ids, ctx)
+        : null;
+    sub = precise ?? wrapBufferWithCommentRanges(sub, ids, ctx);
+  }
+  out.push(...sub);
+}
+
+/**
+ * Try to wrap a substring of the sub-buffer's first Paragraph with
+ * comment range markers. Returns a fresh buffer when:
+ *
+ *   - the buffer's first FileChild is a Paragraph,
+ *   - the paragraph's children come from `mkParagraph` (so the
+ *     options are recoverable from `ctx.paraOpts`),
+ *   - the concatenation of TextRun text contains the substring
+ *     exactly once (>1 occurrences would be ambiguous),
+ *   - and every child the substring touches is a TextRun whose
+ *     `IRunOptions` are recoverable from `ctx.runOpts` (so we can
+ *     split it at character boundaries while keeping its style).
+ *
+ * Returns null when any of those conditions fails — the caller
+ * falls back to whole-paragraph wrap so the comment still surfaces.
+ */
+function tryWrapBufferAtSubstring(
+  buf: readonly FileChild[],
+  substring: string,
+  commentIds: readonly number[],
+  ctx: BuildCtx,
+): FileChild[] | null {
+  if (buf.length === 0 || commentIds.length === 0) return null;
+  const first = buf[0];
+  if (!(first instanceof Paragraph)) return null;
+  const opts = ctx.paraOpts.get(first);
+  if (!opts || !opts.children) return null;
+  const children = opts.children as ParagraphChild[];
+
+  // Build a flat list of (childIndex, textOffsetInsideChild, char) for
+  // every text-bearing child — we need character-level addressing
+  // across the run sequence to find the substring's boundaries.
+  interface Slot {
+    readonly childIndex: number;
+    readonly text: string;
+    readonly runOpts: IRunOptions;
+  }
+  const slots: Slot[] = [];
+  for (let i = 0; i < children.length; i++) {
+    const c = children[i]!;
+    if (
+      c instanceof TextRun ||
+      c instanceof InsertedTextRun ||
+      c instanceof DeletedTextRun
+    ) {
+      const ro = ctx.runOpts.get(c);
+      if (!ro || typeof ro.text !== 'string') return null; // unrecoverable
+      slots.push({ childIndex: i, text: ro.text, runOpts: ro });
+    } else {
+      // Non-text child (Bookmark, ExternalHyperlink, ImageRun, …).
+      // Mark with empty text so we still preserve the child in the
+      // rebuild — but if the substring touches it, give up.
+      slots.push({ childIndex: i, text: '', runOpts: { text: '' } });
+    }
+  }
+
+  const concatenated = slots.map((s) => s.text).join('');
+  const firstHit = concatenated.indexOf(substring);
+  if (firstHit === -1) return null;
+  const lastHit = concatenated.lastIndexOf(substring);
+  if (lastHit !== firstHit) return null; // ambiguous — multiple matches
+  const startOffset = firstHit;
+  const endOffset = firstHit + substring.length;
+
+  // Locate (slotIndex, intra-slot offset) for both ends.
+  function locate(globalOffset: number): { slot: number; intra: number } | null {
+    let acc = 0;
+    for (let s = 0; s < slots.length; s++) {
+      const t = slots[s]!.text;
+      if (globalOffset <= acc + t.length) {
+        return { slot: s, intra: globalOffset - acc };
+      }
+      acc += t.length;
+    }
+    return null;
+  }
+  const startLoc = locate(startOffset);
+  const endLoc = locate(endOffset);
+  if (!startLoc || !endLoc) return null;
+
+  // Refuse if either end falls inside a non-text-bearing slot (we
+  // can't split a Bookmark or ImageRun mid-character).
+  const slotIsTextBearing = (s: Slot): boolean => s.text.length > 0;
+  if (
+    (startLoc.intra > 0 && startLoc.intra < (slots[startLoc.slot]?.text.length ?? 0)) ||
+    (endLoc.intra > 0 && endLoc.intra < (slots[endLoc.slot]?.text.length ?? 0))
+  ) {
+    if (
+      !slotIsTextBearing(slots[startLoc.slot]!) ||
+      !slotIsTextBearing(slots[endLoc.slot]!)
+    ) {
+      return null;
+    }
+  }
+
+  // Rebuild the paragraph's children with the markers spliced in.
+  const starts = commentIds.map((id) => new CommentRangeStart(id));
+  const ends = commentIds.flatMap((id) => [
+    new CommentRangeEnd(id),
+    new CommentReference(id),
+  ]);
+
+  const newChildren: ParagraphChild[] = [];
+  for (let s = 0; s < slots.length; s++) {
+    const slot = slots[s]!;
+    const childIdx = slot.childIndex;
+    const child = children[childIdx]!;
+    const isTextRun =
+      child instanceof TextRun ||
+      child instanceof InsertedTextRun ||
+      child instanceof DeletedTextRun;
+
+    if (!isTextRun || slot.text.length === 0) {
+      // Non-text passthrough.
+      newChildren.push(child);
+      continue;
+    }
+
+    // Compute split points within this slot.
+    const cutStart = s === startLoc.slot ? startLoc.intra : null;
+    const cutEnd = s === endLoc.slot ? endLoc.intra : null;
+    const text = slot.text;
+
+    if (cutStart === null && cutEnd === null) {
+      // Slot is entirely outside or entirely inside the comment range.
+      // (Inside is handled by the wrap markers placed at boundaries.)
+      newChildren.push(child);
+      continue;
+    }
+
+    // Build up to three pieces from this run, with markers between them.
+    const before = text.slice(0, cutStart ?? text.length);
+    const middle = text.slice(cutStart ?? 0, cutEnd ?? text.length);
+    const after = text.slice(cutEnd ?? text.length);
+
+    if (before.length > 0) newChildren.push(new TextRun({ ...slot.runOpts, text: before }));
+    if (cutStart !== null) newChildren.push(...starts);
+    if (middle.length > 0) newChildren.push(new TextRun({ ...slot.runOpts, text: middle }));
+    if (cutEnd !== null) newChildren.push(...ends);
+    if (after.length > 0) newChildren.push(new TextRun({ ...slot.runOpts, text: after }));
+  }
+
+  const newPara = mkParagraph({ ...opts, children: newChildren }, ctx);
+  return [newPara, ...buf.slice(1)];
 }
 
 /**
