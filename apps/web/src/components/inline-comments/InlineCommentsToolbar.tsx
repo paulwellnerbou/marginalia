@@ -1,7 +1,8 @@
 import {
-  CheckCircledIcon,
   ChevronDownIcon,
   ChevronUpIcon,
+  EyeClosedIcon,
+  EyeOpenIcon,
   LayersIcon,
 } from '@radix-ui/react-icons';
 import { IconButton } from '@radix-ui/themes';
@@ -125,7 +126,7 @@ export function InlineCommentsToolbar({
           size="1"
           variant="ghost"
           color="gray"
-          className="doc-toolbar-toggle"
+          className="doc-toolbar-toggle doc-toolbar-toggle--labeled"
           onClick={onToggleHideResolved}
           aria-label={
             hideResolved
@@ -139,7 +140,8 @@ export function InlineCommentsToolbar({
               : 'Hide resolved, accepted, and rejected threads'
           }
         >
-          <CheckCircledIcon />
+          {hideResolved ? <EyeClosedIcon /> : <EyeOpenIcon />}
+          <span>Resolved</span>
         </IconButton>
         <IconButton
           size="1"

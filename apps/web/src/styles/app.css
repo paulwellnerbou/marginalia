@@ -443,6 +443,7 @@ button.primary:disabled {
   pointer-events: auto;
   height: var(--doc-floating-toolbar-height);
   padding: 0.35rem 0.4rem;
+  gap: 3px;
   border: 1px solid var(--ui-border);
   border-radius: var(--doc-floating-toolbar-radius);
   background: color-mix(in srgb, var(--color-panel-solid) 94%, transparent);
@@ -477,6 +478,13 @@ button.primary:disabled {
   min-inline-size: 24px;
   border-radius: var(--doc-floating-toolbar-radius);
   color: var(--gray-11);
+  margin-inline: 0;
+}
+.doc-toolbar-toggle--labeled {
+  inline-size: auto;
+  padding-inline: 6px;
+  gap: 3px;
+  font-size: 0.7rem;
 }
 
 .doc-toolbar-toggle[aria-pressed="true"] {
@@ -2070,6 +2078,9 @@ button.primary:disabled {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.ic-toolbar-group-right {
+  gap: 3px;
 }
 .ic-toolbar-count {
   flex: 1;
