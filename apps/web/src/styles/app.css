@@ -567,7 +567,11 @@ button.primary:disabled {
 .marginalia .collapse-section {
   display: grid;
   grid-template-rows: 1fr;
-  transition: grid-template-rows 240ms ease;
+  /* Material-style "standard" ease-out: motion decelerates into rest,
+     which reads as smoother than symmetric `ease`. The duration is
+     long enough that nested sections don't snap, but short enough to
+     stay feeling responsive. */
+  transition: grid-template-rows 360ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .marginalia .collapse-section.is-collapsed {
   grid-template-rows: 0fr;
@@ -581,9 +585,22 @@ button.primary:disabled {
      `overflow: hidden` because per-axis overflow values are coerced
      back to `auto` when one side is `visible`. */
   clip-path: inset(0 -2em);
+  /* Cross-fade the content alongside the height change. The opacity
+     transition runs slightly faster than the height one and is
+     delayed when collapsing (so content fades after height starts
+     shrinking) and eager when expanding — produces a softer, less
+     "popping" feel at the endpoints. */
+  opacity: 1;
+  transition: opacity 220ms ease-out 80ms;
+}
+.marginalia .collapse-section.is-collapsed > .collapse-section-inner {
+  opacity: 0;
+  transition: opacity 180ms ease-in;
 }
 @media (prefers-reduced-motion: reduce) {
-  .marginalia .collapse-section {
+  .marginalia .collapse-section,
+  .marginalia .collapse-section > .collapse-section-inner,
+  .marginalia .collapse-section.is-collapsed > .collapse-section-inner {
     transition: none;
   }
 }
