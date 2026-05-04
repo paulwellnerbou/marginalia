@@ -32,6 +32,7 @@ export async function backfillProposalBranches(
                   c.anchor_block_id       AS anchor_block_id,
                   c.author_client_id      AS author_client_id,
                   c.author_display_name   AS author_display_name,
+                  c.body                  AS body,
                   cep.proposed_text       AS proposed_text,
                   cep.base_oid            AS base_oid,
                   cep.base_block_start    AS base_block_start,
@@ -73,6 +74,7 @@ export async function backfillProposalBranches(
     anchor_block_id: string;
     author_client_id: string;
     author_display_name: string;
+    body: string;
     proposed_text: string;
     base_oid: string | null;
     base_block_start: number | null;
@@ -140,10 +142,17 @@ export async function backfillProposalBranches(
       baseSource.slice(0, rangeStart) + row.proposed_text + baseSource.slice(rangeEnd);
 
     try {
-      const { refName } = await store.createProposalBranch(doc, baseOid, row.id, nextSource, {
-        clientId: row.author_client_id,
-        displayName: row.author_display_name,
-      });
+      const { refName } = await store.createProposalBranch(
+        doc,
+        baseOid,
+        row.id,
+        nextSource,
+        {
+          clientId: row.author_client_id,
+          displayName: row.author_display_name,
+        },
+        row.body,
+      );
       persist.push({ id: row.id, refName, baseOid, rangeStart, rangeEnd });
     } catch (err) {
       console.warn(

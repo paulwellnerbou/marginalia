@@ -80,6 +80,53 @@ Para C baseline.
     expect(store.read(doc)).toBe(INITIAL);
   });
 
+  test('createProposalBranch embeds the rationale in the commit message body', async () => {
+    const baseOid = await mainOid();
+    const proposed = INITIAL.replace('Para B baseline.', 'Para B from p2.');
+    const rationale = 'Para B was vague — clarify it to mention p2.';
+    const { commitOid } = await store.createProposalBranch(
+      doc,
+      baseOid,
+      'p2',
+      proposed,
+      author,
+      rationale,
+    );
+
+    const { commit } = await git.readCommit({
+      fs,
+      dir: store.repoDir(doc.uid),
+      oid: commitOid,
+    });
+    expect(commit.message).toContain('accept-proposal: p2');
+    expect(commit.message).toContain(rationale);
+    // Trailers must remain at the end so any tooling that reads them works.
+    const trailerStart = commit.message.indexOf('X-Marginalia-Client-ID:');
+    expect(trailerStart).toBeGreaterThan(commit.message.indexOf(rationale));
+  });
+
+  test('createProposalBranch omits an empty rationale (no blank paragraph)', async () => {
+    const baseOid = await mainOid();
+    const proposed = INITIAL.replace('Para B baseline.', 'Para B from p3.');
+    const { commitOid } = await store.createProposalBranch(
+      doc,
+      baseOid,
+      'p3',
+      proposed,
+      author,
+      '   ',
+    );
+
+    const { commit } = await git.readCommit({
+      fs,
+      dir: store.repoDir(doc.uid),
+      oid: commitOid,
+    });
+    expect(commit.message).toBe(
+      `accept-proposal: p3\n\nX-Marginalia-Client-ID: ${author.clientId}\nX-Marginalia-Proposal-ID: p3\n`,
+    );
+  });
+
   test('mergeProposalBranch fast-forwards when main has not moved', async () => {
     const baseOid = await mainOid();
     const proposed = INITIAL.replace('Para B baseline.', 'Para B accepted.');

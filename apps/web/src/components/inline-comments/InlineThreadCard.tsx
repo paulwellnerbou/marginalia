@@ -1,7 +1,7 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
 import { FileTextIcon, PilcrowIcon } from '@radix-ui/react-icons';
 import { useMemo, useRef, useState } from 'react';
-import type { Thread } from '../../lib/api.js';
+import type { Comment, Thread } from '../../lib/api.js';
 import { getEditProposalDiff, isProposal, proposalStatus } from '../../lib/api.js';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import { reportError } from '../../lib/log.js';
@@ -10,7 +10,6 @@ import type { DocumentFormat } from '../../lib/api.js';
 import { resolveProposalDiffBefore } from '../proposalDiff.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
 import { InlineComposer, type InlineComposerHandle } from './InlineComposer.js';
-import { InlineProposalEntry } from './InlineProposalEntry.js';
 
 interface Props {
   uid: string;
@@ -35,7 +34,6 @@ interface Props {
     body?: string,
     name?: string,
   ) => Promise<void>;
-  onEditProposalRationale: (id: string, rationale: string | null) => Promise<void>;
 }
 
 export function InlineThreadCard({
@@ -56,7 +54,6 @@ export function InlineThreadCard({
   onDeleteNode,
   onDeleteThread,
   onResolveThread,
-  onEditProposalRationale,
 }: Props) {
   const composerRef = useRef<InlineComposerHandle>(null);
   const [busy, setBusy] = useState(false);
@@ -88,6 +85,21 @@ export function InlineThreadCard({
   const canReject = proposal && thread.capabilities.reject;
   const canResolve = !proposal && !isResolved && thread.capabilities.resolve;
   const canReopen = !proposal && isResolved && thread.capabilities.reopen;
+
+  // Once a proposal leaves the open state, its rationale is part of the
+  // accept-commit message in git — freeze edits, and freeze deletes once
+  // accepted so the recorded history can't be erased from this UI.
+  const openerNode: Comment = useMemo(() => {
+    if (!proposal) return thread.comments[0];
+    const base = thread.comments[0];
+    return {
+      ...base,
+      capabilities: {
+        edit: base.capabilities.edit && status === 'open',
+        delete: base.capabilities.delete && status !== 'accepted',
+      },
+    };
+  }, [thread.comments, proposal, status]);
 
   function handleQuote(text: string) {
     const quoted = text
@@ -227,22 +239,14 @@ export function InlineThreadCard({
 
       {!collapsed && (
         <div className="ic-card-body">
-          {proposalThread ? (
-            <InlineProposalEntry
-              thread={proposalThread}
-              onEditRationale={onEditProposalRationale}
-              onDeleteThread={onDeleteThread}
-            />
-          ) : (
-            <InlineCommentRow
-              node={thread.comments[0]}
-              variant="opener"
-              canQuote={canComment}
-              onEdit={onEdit}
-              onDelete={() => onDeleteThread(thread.id)}
-              onQuote={canComment ? handleQuote : undefined}
-            />
-          )}
+          <InlineCommentRow
+            node={openerNode}
+            variant="opener"
+            canQuote={canComment}
+            onEdit={onEdit}
+            onDelete={() => onDeleteThread(thread.id)}
+            onQuote={canComment ? handleQuote : undefined}
+          />
 
           {replies.map((reply) => (
             <InlineCommentRow

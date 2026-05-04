@@ -69,7 +69,6 @@ interface Props {
     body?: string,
     name?: string,
   ) => Promise<void>;
-  onEditProposalRationale: (id: string, rationale: string | null) => Promise<void>;
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string, scrollOffset?: number) => void;
 }
 
@@ -142,7 +141,6 @@ export function InlineCommentsLayer({
   onDeleteNode,
   onDeleteThread,
   onResolveThread,
-  onEditProposalRationale,
   onScrollToAnchor,
 }: Props) {
   const rootRef = useRef<HTMLElement>(null);
@@ -743,7 +741,6 @@ export function InlineCommentsLayer({
         onDeleteNode={onDeleteNode}
         onDeleteThread={onDeleteThread}
         onResolveThread={onResolveThread}
-        onEditProposalRationale={onEditProposalRationale}
       />
     );
   }

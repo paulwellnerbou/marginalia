@@ -52,7 +52,6 @@ import {
   restoreHistoryVersion as apiRestoreHistoryVersion,
   revertHistoryVersion as apiRevertHistoryVersion,
   updateComment as apiUpdate,
-  updateEditProposal as apiUpdateProposal,
   getDocument,
   getHistoryDiff,
   isProposal,
@@ -765,21 +764,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [doc.uid, displayName, pendingProposalTarget],
   );
 
-  const onEditProposalRationale = useCallback(
-    async (id: string, rationale: string | null) => {
-      const identity = resolveIdentity();
-      if (!identity) return;
-      try {
-        await apiUpdateProposal(doc.uid, id, { rationale }, identity);
-        await refreshThreads();
-      } catch (err) {
-        reportError('DocumentLayout.editProposalRationale', err, { id });
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName],
-  );
-
   const onDeleteThread = useCallback(
     async (threadId: string) => {
       const identity = resolveIdentity();
@@ -1441,7 +1425,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onDeleteNode={onDeleteNode}
                   onDeleteThread={onDeleteThread}
                   onResolveThread={onResolveThread}
-                  onEditProposalRationale={onEditProposalRationale}
                   onScrollToAnchor={scrollToAnchor}
                 />
               )}
@@ -1517,7 +1500,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onDeleteNode={onDeleteNode}
                   onDeleteThread={onDeleteThread}
                   onResolveThread={onResolveThread}
-                  onEditProposalRationale={onEditProposalRationale}
                   onScrollToAnchor={scrollToAnchor}
                 />
               </Tabs.Content>

@@ -49,7 +49,6 @@ interface Props {
     body?: string,
     name?: string,
   ) => Promise<void>;
-  onEditProposalRationale: (id: string, rationale: string | null) => Promise<void>;
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
 }
 
@@ -86,7 +85,6 @@ export function InlineCommentsList({
   onDeleteNode,
   onDeleteThread,
   onResolveThread,
-  onEditProposalRationale,
   onScrollToAnchor,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -262,7 +260,6 @@ export function InlineCommentsList({
         onDeleteNode={onDeleteNode}
         onDeleteThread={onDeleteThread}
         onResolveThread={onResolveThread}
-        onEditProposalRationale={onEditProposalRationale}
       />
     );
   }
