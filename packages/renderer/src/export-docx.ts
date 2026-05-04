@@ -341,25 +341,31 @@ export async function exportDocx(
   // writers can set direction without touching any UI.
   const language = resolveLanguage(options.language, frontmatter);
   const rtl = isRtlLanguage(language);
-  // Resolve images up-front in parallel so the HAST walker can stay
-  // synchronous. docx construction is CPU-bound and sync; doing the
-  // async I/O here keeps the walker tidy.
-  //
-  // Mermaid blocks resolve through the same machinery: each
-  // `<div class="mermaid" data-mermaid-index="N">` is handed to
-  // `options.resolveMermaid()` and the resulting bytes are probed
-  // exactly like an `<img>` (same image-size + ImageRun path), keyed
-  // by the numeric index from `remarkMermaid`.
-  const [images, mermaidImages] = await Promise.all([
-    resolveAllImages(hast, options.resolveAsset),
-    resolveAllMermaid(hast, options.resolveMermaid, options.mermaidConcurrency),
-  ]);
-
   // Build review-mode indexes up-front so the walker can do O(1)
   // lookups by block id. This also pre-parses every proposal's
   // `proposed_text` to HAST so the synchronous walker can render
   // tracked-change content without re-entering the async pipeline.
   const review = await buildReviewState(options.review, hast, options);
+
+  // Resolve images up-front in parallel so the HAST walker can stay
+  // synchronous. docx construction is CPU-bound and sync; doing the
+  // async I/O here keeps the walker tidy. The image resolve sweeps
+  // every HAST that the export will render — main document plus
+  // every proposal's parsed `proposed_text` — so an `<img>` inside
+  // a proposal renders with real bytes instead of a placeholder.
+  //
+  // Mermaid resolution is keyed by the per-HAST `data-mermaid-index`
+  // numeric, so proposal HASTs would collide with the main document
+  // (each plugin pass restarts indices at 0). Resolving mermaid
+  // across proposals safely needs an HAST-disambiguating key —
+  // tracked separately; for now mermaid only resolves on the main
+  // doc and proposal-side mermaid blocks fall back to the labeled-
+  // code-block stopgap.
+  const proposalHastList = review ? [...review.proposalHasts.values()] : [];
+  const [images, mermaidImages] = await Promise.all([
+    resolveAllImages([hast, ...proposalHastList], options.resolveAsset),
+    resolveAllMermaid(hast, options.resolveMermaid, options.mermaidConcurrency),
+  ]);
 
   // Pull GFM footnotes out of the body: build their DOCX paragraphs,
   // assign each a numeric id, and remove the `<section>` so it won't
@@ -704,15 +710,21 @@ interface ResolvedImage {
  * walker renders a placeholder.
  */
 async function resolveAllImages(
-  root: HastRoot,
+  roots: HastRoot | readonly HastRoot[],
   resolve: DocxExportOptions['resolveAsset'],
 ): Promise<Map<string, ResolvedImage | null>> {
   const srcs = new Set<string>();
-  visit(root, 'element', (node: Element) => {
-    if (node.tagName !== 'img') return;
-    const src = typeof node.properties?.src === 'string' ? node.properties.src : '';
-    if (src) srcs.add(src);
-  });
+  // Accept either a single root or a list — proposal HASTs participate
+  // in the same resolve pass as the main document so an `<img>` inside
+  // a proposed_text or whole-doc appendix renders with real bytes
+  // instead of a placeholder.
+  for (const root of Array.isArray(roots) ? roots : [roots]) {
+    visit(root, 'element', (node: Element) => {
+      if (node.tagName !== 'img') return;
+      const src = typeof node.properties?.src === 'string' ? node.properties.src : '';
+      if (src) srcs.add(src);
+    });
+  }
 
   const entries = await Promise.all(
     [...srcs].map(async (src): Promise<[string, ResolvedImage | null]> => {
@@ -2891,7 +2903,7 @@ async function buildReviewState(
   const proposalHasts = new Map<string, HastRoot>();
 
   for (const thread of filtered) {
-    const isProposal = !!thread.proposal;
+    let isProposal = !!thread.proposal;
 
     if (isProposal && thread.proposal!.whole_document) {
       wholeDoc.push(thread);
@@ -2904,6 +2916,21 @@ async function buildReviewState(
       );
       proposalHasts.set(thread.id, parsed.hast);
       continue;
+    }
+
+    // Multi-block proposals span from `block_id` through
+    // `end_block_id`. The walker would render the first block as
+    // delete/insert and leave the remaining original blocks in
+    // place — duplicating content and misrepresenting the proposal.
+    // Demote to a comment-only entry so the discussion still
+    // surfaces while the body text stays correct. Multi-block
+    // span replacement is a separate piece of work.
+    if (
+      isProposal &&
+      thread.end_block_id &&
+      thread.end_block_id !== thread.block_id
+    ) {
+      isProposal = false;
     }
 
     const rawId = thread.block_id;
@@ -3267,15 +3294,33 @@ function tryWrapBufferAtSubstring(
     const middle = text.slice(cutStart ?? 0, cutEnd ?? text.length);
     const after = text.slice(cutEnd ?? text.length);
 
-    if (before.length > 0) newChildren.push(new TextRun({ ...slot.runOpts, text: before }));
+    if (before.length > 0)
+      newChildren.push(mkPlainTextRun({ ...slot.runOpts, text: before }, ctx));
     if (cutStart !== null) newChildren.push(...starts);
-    if (middle.length > 0) newChildren.push(new TextRun({ ...slot.runOpts, text: middle }));
+    if (middle.length > 0)
+      newChildren.push(mkPlainTextRun({ ...slot.runOpts, text: middle }, ctx));
     if (cutEnd !== null) newChildren.push(...ends);
-    if (after.length > 0) newChildren.push(new TextRun({ ...slot.runOpts, text: after }));
+    if (after.length > 0)
+      newChildren.push(mkPlainTextRun({ ...slot.runOpts, text: after }, ctx));
   }
 
   const newPara = mkParagraph({ ...opts, children: newChildren }, ctx);
   return [newPara, ...buf.slice(1)];
+}
+
+/**
+ * Construct a plain `TextRun` and register its options in
+ * `ctx.runOpts` so a subsequent precise-wrap pass on the same
+ * paragraph can recover its text and split it again. `mkRun`
+ * would also wrap the run in InsertedTextRun/DeletedTextRun if
+ * we happened to be inside a revision pass; this helper is for
+ * the post-walk wrap path where revision attribution doesn't
+ * apply.
+ */
+function mkPlainTextRun(opts: IRunOptions, ctx: BuildCtx): TextRun {
+  const run = new TextRun(opts);
+  ctx.runOpts.set(run, opts);
+  return run;
 }
 
 /**

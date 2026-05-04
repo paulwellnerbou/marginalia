@@ -619,11 +619,13 @@ async function exportDocument(c: Context, deps: AppDeps) {
  * thread's `comments` array oldest-first so the renderer's flat-replies
  * fallback stays in author order.
  *
- * Resolved threads are dropped from the SQL pre-filter unless
- * `options.includeResolved` is true — keeps `readProposalContent`
- * (a per-row git read) off rows the export will discard. The
- * renderer's `includeResolved` flag is the user-facing escape
- * hatch surfaced as `?review=both&include_resolved=1`.
+ * Closed threads (resolved comments + accepted/rejected proposals)
+ * are filtered out in-memory after the SQL load — see
+ * `visibleRoots` below — unless `options.includeResolved` is true.
+ * Filtering before `readProposalContent` keeps the per-row git read
+ * off rows the export would have discarded anyway. The renderer's
+ * `includeResolved` flag is the user-facing escape hatch surfaced
+ * as `?review=both&include_resolved=1`.
  *
  * Proposal payloads (`source_snapshot` / `proposed_text`) come from
  * the same `readProposalContent` helper the threads route uses, so

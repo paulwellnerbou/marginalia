@@ -2134,6 +2134,41 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(documentXml).toMatch(/<w:commentReference\b/);
   });
 
+  test('two precise comments on the same block both wrap their substrings', async () => {
+    const md = 'Alpha bravo charlie delta echo foxtrot.\n';
+    const blockId = paragraphBlockId('Alpha bravo charlie delta echo foxtrot.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'bravo',
+            comments: [{ body: 'comment on bravo', author: 'A', date: 1 }],
+          },
+          {
+            id: 't2',
+            block_id: blockId,
+            anchor_quote: 'echo',
+            comments: [{ body: 'comment on echo', author: 'B', date: 2 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('comment on bravo');
+    expect(commentsXml).toContain('comment on echo');
+    // Both substrings are wrapped (precise wrap on the second
+    // thread requires the first wrap's split TextRuns to also be
+    // recoverable from runOpts).
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>bravo<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>echo<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+  });
+
   test('two comments on the same block, one precise + one stale, both render', async () => {
     const md = 'The frobnicate operation runs nightly.\n';
     const blockId = paragraphBlockId('The frobnicate operation runs nightly.');
@@ -2224,6 +2259,72 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(commentsXml).toContain('Maybe drop this');
     // Original text still appears (either inside <w:del> or untouched).
     expect(documentXml).toContain('Original');
+  });
+
+  test('multi-block proposal (end_block_id != block_id) demotes to comment-only', async () => {
+    // The renderer doesn't yet support replacing a span of blocks;
+    // attempting to render a multi-block proposal as tracked changes
+    // would emit the first block as ins/del and leave the rest
+    // duplicated. Demote to a comment so the discussion is visible
+    // and the body text stays correct.
+    const md = 'Block one.\n\nBlock two.\n';
+    const startBlockId = paragraphBlockId('Block one.');
+    const endBlockId = paragraphBlockId('Block two.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: startBlockId,
+            end_block_id: endBlockId,
+            comments: [
+              { body: 'replace both with one', author: 'A', date: 1 },
+            ],
+            proposal: {
+              source_snapshot: 'Block one.\n\nBlock two.',
+              proposed_text: 'Merged block.',
+            },
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    // Comment surfaced, no ins/del runs, both original blocks intact.
+    expect(commentsXml).toContain('replace both with one');
+    expect(documentXml).not.toMatch(/<w:ins\b/);
+    expect(documentXml).not.toMatch(/<w:del\b/);
+    expect(documentXml).toContain('Block one');
+    expect(documentXml).toContain('Block two');
+    expect(documentXml).not.toContain('Merged block');
+  });
+
+  test('proposal containing an image triggers resolveAsset for the proposal too', async () => {
+    const md = 'Plain original.\n';
+    const blockId = paragraphBlockId('Plain original.');
+    const seen: string[] = [];
+    const buf = await exportDocx(md, {
+      resolveAsset: async (src) => {
+        seen.push(src);
+        return { bytes: PNG_1x1_BYTES, mime: 'image/png' };
+      },
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'add a logo', author: 'A', date: 1 }],
+            proposal: {
+              source_snapshot: 'Plain original.',
+              proposed_text: '![logo](logo.png)',
+            },
+          },
+        ],
+      },
+    });
+    expect(seen).toContain('logo.png');
+    // The resolved image actually landed in the export.
+    const { mediaFiles } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBeGreaterThanOrEqual(1);
   });
 
   test('omitting the review payload leaves the document body unchanged', async () => {
