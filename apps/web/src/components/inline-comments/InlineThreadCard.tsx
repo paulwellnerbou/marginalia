@@ -47,7 +47,7 @@ export function InlineThreadCard({
   onResolveThread,
 }: Props) {
   const composerRef = useRef<InlineComposerHandle>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'accept' | 'reject' | 'resolve' | 'reopen' | false>(false);
 
   const [diffOpen, setDiffOpen] = useState(false);
   const [resolvedDiff, setResolvedDiff] = useState<ProposalDiff | null>(null);
@@ -121,7 +121,7 @@ export function InlineThreadCard({
     body?: string,
     name?: string,
   ) {
-    setBusy(true);
+    setBusy(kind);
     try {
       await onResolveThread(thread.id, kind, body, name);
     } finally {
@@ -253,7 +253,7 @@ export function InlineThreadCard({
                       // while the composer still needs a display name
                       // — disable the workflow buttons in both cases
                       // so they don't look clickable but silently no-op.
-                      const disabled = !canRunAction || busy;
+                      const disabled = !canRunAction || busy !== false;
                       return (
                         <>
                           {canAccept && (
@@ -264,8 +264,10 @@ export function InlineThreadCard({
                                 void runAction((body, name) => runWorkflow('accept', body, name))
                               }
                               disabled={disabled}
+                              aria-busy={busy === 'accept'}
+                              aria-label="Accept"
                             >
-                              Accept
+                              {busy === 'accept' ? <span className="ic-spinner" aria-hidden="true" /> : 'Accept'}
                             </button>
                           )}
                           {canReject && (
@@ -276,8 +278,10 @@ export function InlineThreadCard({
                                 void runAction((body, name) => runWorkflow('reject', body, name))
                               }
                               disabled={disabled}
+                              aria-busy={busy === 'reject'}
+                              aria-label="Reject"
                             >
-                              Reject
+                              {busy === 'reject' ? <span className="ic-spinner" aria-hidden="true" /> : 'Reject'}
                             </button>
                           )}
                           {canResolve && (
@@ -288,8 +292,10 @@ export function InlineThreadCard({
                                 void runAction((body, name) => runWorkflow('resolve', body, name))
                               }
                               disabled={disabled}
+                              aria-busy={busy === 'resolve'}
+                              aria-label="Resolve"
                             >
-                              Resolve
+                              {busy === 'resolve' ? <span className="ic-spinner" aria-hidden="true" /> : 'Resolve'}
                             </button>
                           )}
                           {canReopen && (
@@ -300,8 +306,10 @@ export function InlineThreadCard({
                                 void runAction((body, name) => runWorkflow('reopen', body, name))
                               }
                               disabled={disabled}
+                              aria-busy={busy === 'reopen'}
+                              aria-label="Reopen"
                             >
-                              Reopen
+                              {busy === 'reopen' ? <span className="ic-spinner" aria-hidden="true" /> : 'Reopen'}
                             </button>
                           )}
                         </>
@@ -318,9 +326,11 @@ export function InlineThreadCard({
                     type="button"
                     className="ic-btn ic-btn-accept"
                     onClick={() => void runWorkflow('accept')}
-                    disabled={busy}
+                    disabled={!!busy}
+                    aria-busy={busy === 'accept'}
+                    aria-label="Accept"
                   >
-                    Accept
+                    {busy === 'accept' ? <span className="ic-spinner" aria-hidden="true" /> : 'Accept'}
                   </button>
                 )}
                 {canReject && (
@@ -328,9 +338,11 @@ export function InlineThreadCard({
                     type="button"
                     className="ic-btn ic-btn-reject"
                     onClick={() => void runWorkflow('reject')}
-                    disabled={busy}
+                    disabled={!!busy}
+                    aria-busy={busy === 'reject'}
+                    aria-label="Reject"
                   >
-                    Reject
+                    {busy === 'reject' ? <span className="ic-spinner" aria-hidden="true" /> : 'Reject'}
                   </button>
                 )}
                 {canResolve && (
@@ -338,9 +350,11 @@ export function InlineThreadCard({
                     type="button"
                     className="ic-btn ic-btn-resolve"
                     onClick={() => void runWorkflow('resolve')}
-                    disabled={busy}
+                    disabled={!!busy}
+                    aria-busy={busy === 'resolve'}
+                    aria-label="Resolve"
                   >
-                    Resolve
+                    {busy === 'resolve' ? <span className="ic-spinner" aria-hidden="true" /> : 'Resolve'}
                   </button>
                 )}
                 {canReopen && (
@@ -348,9 +362,11 @@ export function InlineThreadCard({
                     type="button"
                     className="ic-btn ic-btn-ghost"
                     onClick={() => void runWorkflow('reopen')}
-                    disabled={busy}
+                    disabled={!!busy}
+                    aria-busy={busy === 'reopen'}
+                    aria-label="Reopen"
                   >
-                    Reopen
+                    {busy === 'reopen' ? <span className="ic-spinner" aria-hidden="true" /> : 'Reopen'}
                   </button>
                 )}
               </div>
@@ -377,8 +393,11 @@ export function InlineThreadCard({
                       await runWorkflow('accept');
                       setDiffOpen(false);
                     }}
+                    disabled={!!busy}
+                    aria-busy={busy === 'accept'}
+                    aria-label="Accept"
                   >
-                    Accept
+                    {busy === 'accept' ? <span className="ic-spinner" aria-hidden="true" /> : 'Accept'}
                   </button>
                 )}
                 {canReject && (
@@ -389,8 +408,11 @@ export function InlineThreadCard({
                       await runWorkflow('reject');
                       setDiffOpen(false);
                     }}
+                    disabled={!!busy}
+                    aria-busy={busy === 'reject'}
+                    aria-label="Reject"
                   >
-                    Reject
+                    {busy === 'reject' ? <span className="ic-spinner" aria-hidden="true" /> : 'Reject'}
                   </button>
                 )}
               </>
