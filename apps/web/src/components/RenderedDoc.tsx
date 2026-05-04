@@ -179,9 +179,18 @@ export function RenderedDoc({
     );
     if (!activeMark) return;
 
+    // Cancel the deferred scroll if the user steps to another search
+    // hit before the previous expand animation settles — otherwise an
+    // older promise can resolve later and yank the previously-selected
+    // match back into view.
+    let cancelled = false;
     void expandAncestors(activeMark).then(() => {
+      if (cancelled) return;
       activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
     });
+    return () => {
+      cancelled = true;
+    };
   }, [activeSearchResultId, activeSearchVersion, ref]);
 
   // TOC links and other in-app navigation update `location.hash`

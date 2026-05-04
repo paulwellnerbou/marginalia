@@ -41,23 +41,32 @@ function headingLevel(node: Node): number | null {
 }
 
 /**
- * Return the level of the first heading appearing in DOM order
- * inside `node`, or `null` if there is none. This is the heading
- * the container "introduces" — the boundary between sections.
- * Used to decide whether a non-heading sibling element (e.g. an
- * AsciiDoc `<div class="sect1">`) should terminate the current
- * section's collection: a sect1 sibling whose own h2 sits at the
- * same level as our heading marks the boundary.
+ * Return the heading level of an AsciiDoc-style section container,
+ * or `null` if `node` isn't one. AsciiDoc renders sections as
+ * `<div class="sectN"><hN+1>…</hN+1><div class="sectionbody">…</div></div>`
+ * — these divs are real section boundaries and we want the
+ * collection loop to stop at them.
  *
- * Note: this is the FIRST heading in DOM order, not necessarily
- * the prominentmost in level — but for the rendered shapes we
- * support (AsciiDoc sect divs, Markdown flat headings) the first
- * heading in a container IS the section's heading.
+ * The check is deliberately narrow:
+ *   - element must be a `<div>`,
+ *   - with a `sectN` class (AsciiDoc's section wrappers),
+ *   - whose first DIRECT child is a heading.
+ *
+ * Without this narrowness, a Markdown blockquote that happens to
+ * contain a heading (`> ## inside`) would falsely mark itself as a
+ * sibling section and stop collection too early.
  */
-function leadingHeadingLevel(node: Node): number | null {
+const SECTION_DIV_CLASS_RE = /(?:^|\s)sect\d+(?:\s|$)/;
+function sectionContainerHeadingLevel(node: Node): number | null {
   if (node.nodeType !== Node.ELEMENT_NODE) return null;
-  const inner = (node as Element).querySelector(HEADING_SELECTOR);
-  return inner ? headingLevel(inner) : null;
+  const el = node as Element;
+  if (el.tagName !== 'DIV' || !SECTION_DIV_CLASS_RE.test(el.className)) return null;
+  for (const child of el.children) {
+    if (HEADING_TAGS.has(child.tagName)) {
+      return Number.parseInt(child.tagName.slice(1), 10);
+    }
+  }
+  return null;
 }
 
 /**
@@ -108,7 +117,7 @@ function collectSectionNodes(heading: Element, ourLevel: number): Node[] {
   const nodes: Node[] = [];
   let cursor: Node | null = heading.nextSibling;
   while (cursor) {
-    const lvl = headingLevel(cursor) ?? leadingHeadingLevel(cursor);
+    const lvl = headingLevel(cursor) ?? sectionContainerHeadingLevel(cursor);
     if (lvl !== null && lvl <= ourLevel) break;
     nodes.push(cursor);
     cursor = cursor.nextSibling;

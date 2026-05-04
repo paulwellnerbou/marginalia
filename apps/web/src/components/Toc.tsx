@@ -136,17 +136,18 @@ function TocItem({
     // The wrapper loses `is-collapsed` on the next render and animates
     // open over 360ms — measuring the link now would land at the
     // pre-expansion offset. Defer one frame so the class swap commits,
-    // then wait for any ancestor wrapper transition to settle.
+    // then wait only if an ancestor wrapper is actually mid-animation.
+    // Without the `getAnimations()` check we'd add a 360ms+ delay to
+    // every active-heading update, even when nothing is animating.
     const raf = requestAnimationFrame(() => {
       if (cancelled) return;
-      // Find the outermost `.toc-collapse-section` ancestor — it's
-      // the slowest to settle in nested-collapse cases.
+      // Find the outermost ancestor that's currently transitioning.
       let outermost: HTMLElement | null = null;
       let walker: Element | null = link.parentElement;
       while (walker) {
         const section = walker.closest<HTMLElement>('.toc-collapse-section');
         if (!section) break;
-        outermost = section;
+        if (section.getAnimations().length > 0) outermost = section;
         walker = section.parentElement;
       }
       if (outermost) {
