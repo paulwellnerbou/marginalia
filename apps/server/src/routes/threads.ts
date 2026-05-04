@@ -5,7 +5,6 @@ import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
-import { mapWithConcurrency } from '../concurrency.js';
 import {
   type Identity,
   INVITE_SESSION_COOKIE,
@@ -17,7 +16,6 @@ import {
   parseCookie,
 } from '../auth.js';
 import type { CommentRow, DocumentRow, EditProposalStatus, EditProposalThreadRow } from '../db.js';
-import type { GitStore } from '../git-store.js';
 import {
   consumePendingMentions,
   listMentionCandidates,
@@ -123,16 +121,8 @@ async function listThreads(c: Context, deps: AppDeps) {
   const repliesByThread = groupRepliesByThread(replies);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, roots);
 
-  const { store } = deps;
-  const threads = await mapWithConcurrency(roots, 4, (root) =>
-    toThreadWire(
-      store,
-      doc,
-      root,
-      repliesByThread.get(root.id) ?? [],
-      decision,
-      reopenableAccepted,
-    ),
+  const threads = roots.map((root) =>
+    toThreadWire(root, repliesByThread.get(root.id) ?? [], decision, reopenableAccepted),
   );
   return c.json({
     threads,
@@ -288,7 +278,7 @@ async function createThread(c: Context, deps: AppDeps) {
 
   const root = loadThreadRow(db, id, doc.uid);
   if (!root) return c.json({ error: 'not-found' }, 404);
-  const thread = await toThreadWire(store, doc, root, [], decision, new Set<string>());
+  const thread = toThreadWire(root, [], decision, new Set<string>());
   const rootComment = db.prepare('SELECT * FROM comments WHERE id = ?').get(id) as CommentRow;
   const mentionTargets = storeMentionsForComment(
     db,
@@ -303,7 +293,7 @@ async function createThread(c: Context, deps: AppDeps) {
       doc.uid,
       {
         type: 'edit_proposal.created',
-        edit_proposal: await toProposalWire(store, doc, root),
+        edit_proposal: toProposalWire(root),
       },
       identity.clientId,
     );
@@ -342,7 +332,14 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
 
   const diff = await resolveProposalDiff(doc, proposal, deps);
   if (!diff) return c.json({ error: 'proposal-diff-unavailable' }, 410);
-  return c.json(diff);
+
+  let mergeable: 'clean' | 'conflict' | 'stale' | null = null;
+  if (proposal.proposal_status === 'open') {
+    const status = await deps.store.proposalMergeStatus(doc, proposal.id);
+    mergeable =
+      status === 'clean' ? 'clean' : status === 'conflict' ? 'conflict' : 'stale';
+  }
+  return c.json({ ...diff, mergeable });
 }
 
 /**
@@ -410,7 +407,7 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
       doc.uid,
       {
         type: 'edit_proposal.updated',
-        edit_proposal: await toProposalWire(store, doc, updated),
+        edit_proposal: toProposalWire(updated),
       },
       decision.identity.clientId,
     );
@@ -433,7 +430,7 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const replies = loadReplies(db, doc.uid, tid);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updated]);
   return c.json({
-    thread: await toThreadWire(store, doc, updated, replies, decision, reopenableAccepted),
+    thread: toThreadWire(updated, replies, decision, reopenableAccepted),
   });
 }
 
@@ -556,7 +553,7 @@ async function editThreadReply(c: Context, deps: AppDeps) {
   const replies = loadReplies(db, doc.uid, tid);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updatedThread]);
   return c.json({
-    thread: await toThreadWire(store, doc, updatedThread, replies, decision, reopenableAccepted),
+    thread: toThreadWire(updatedThread, replies, decision, reopenableAccepted),
   });
 }
 
@@ -797,7 +794,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
       doc.uid,
       {
         type: 'edit_proposal.updated',
-        edit_proposal: await toProposalWire(deps.store, doc, proposal),
+        edit_proposal: toProposalWire(proposal),
       },
       identity.clientId,
     );
@@ -814,7 +811,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
         doc.uid,
         {
           type: 'edit_proposal.updated',
-          edit_proposal: await toProposalWire(deps.store, doc, updated),
+          edit_proposal: toProposalWire(updated),
         },
         identity.clientId,
       );
@@ -835,7 +832,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
   }
 
   return c.json({
-    thread: await toThreadWire(deps.store, doc, updated, replies, decision, reopenableAccepted),
+    thread: toThreadWire(updated, replies, decision, reopenableAccepted),
     created_reply_id: createdReplyId,
   });
 }
@@ -895,7 +892,7 @@ async function prepareAcceptProposalThread(
         doc.uid,
         {
           type: 'edit_proposal.updated',
-          edit_proposal: await toProposalWire(deps.store, doc, updated),
+          edit_proposal: toProposalWire(updated),
         },
         identity.clientId,
       );
@@ -1193,14 +1190,12 @@ async function loadReopenableAcceptedThreadIds(
   );
 }
 
-async function toThreadWire(
-  store: GitStore,
-  doc: DocumentRow,
+function toThreadWire(
   row: ThreadRow,
   replies: CommentRow[],
   decision: ReturnType<typeof authorize>,
   reopenableAccepted: Set<string>,
-): Promise<Record<string, unknown>> {
+): Record<string, unknown> {
   const state = threadState(row);
   const resolution = threadResolution(row);
   const rootAuthor = row.author_client_id;
@@ -1253,13 +1248,7 @@ async function toThreadWire(
               : false),
     },
     proposal: proposalRow
-      ? {
-          ...((await readProposalContent(store, doc, proposalRow)) ?? {
-            source_snapshot: null,
-            proposed_text: null,
-          }),
-          whole_document: proposalRow.is_whole_document === 1,
-        }
+      ? { whole_document: proposalRow.is_whole_document === 1 }
       : null,
     comments: [
       {

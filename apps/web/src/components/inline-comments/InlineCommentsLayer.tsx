@@ -728,9 +728,6 @@ export function InlineCommentsLayer({
         thread={item.thread}
         canComment={canComment}
         needsName={!displayName}
-        docSource={docSource}
-        blockRanges={blockRanges}
-        docFormat={docFormat}
         focused={focusedId === id}
         flashPhase={flash?.id === id ? flash.phase : null}
         collapsed={collapsed.has(id)}

@@ -159,6 +159,8 @@ export interface HistoryEntry {
 export interface HistoryDiff {
   before: string;
   after: string;
+  /** Only present on the proposal diff endpoint for open proposals. */
+  mergeable?: 'clean' | 'conflict' | 'stale' | null;
 }
 
 export interface UploadOptions {
@@ -802,9 +804,6 @@ export interface Comment {
 }
 
 export interface ThreadProposalData {
-  anchor_kind: string | null;
-  source_snapshot: string | null;
-  proposed_text: string;
   whole_document?: boolean;
 }
 
@@ -1051,7 +1050,6 @@ export function createEditProposal(
     anchor_block_id: string;
     anchor_end_block_id?: string | null;
     anchor_quote: string;
-    anchor_kind?: string | null;
     proposed_text: string;
     rationale?: string | null;
   },
@@ -1066,10 +1064,7 @@ export function createEditProposal(
         quote: payload.anchor_quote,
       },
       body: payload.rationale,
-      proposal: {
-        anchor_kind: payload.anchor_kind ?? null,
-        proposed_text: payload.proposed_text,
-      },
+      proposal: { proposed_text: payload.proposed_text },
     }),
     identity,
     docUid: uid,
@@ -1103,11 +1098,7 @@ export function createDocumentProposal(
         quote: payload.anchor_quote,
       },
       body: payload.rationale,
-      proposal: {
-        anchor_kind: null,
-        proposed_text: payload.proposed_text,
-        whole_document: true,
-      },
+      proposal: { proposed_text: payload.proposed_text, whole_document: true },
     }),
     identity,
     docUid: uid,

@@ -247,9 +247,6 @@ export function InlineCommentsList({
         thread={item.thread}
         canComment={canComment}
         needsName={!displayName}
-        docSource={docSource}
-        blockRanges={blockRanges}
-        docFormat={docFormat}
         focused={focusedId === item.id}
         flashPhase={flash?.id === item.id ? flash.phase : null}
         collapsed={collapsed.has(item.id)}

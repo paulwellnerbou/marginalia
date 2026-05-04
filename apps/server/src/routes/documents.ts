@@ -1130,7 +1130,7 @@ async function reanchorAndBroadcast(
       doc.uid,
       {
         type: 'edit_proposal.updated',
-        edit_proposal: await toEditProposalWire(deps.store, doc, row),
+        edit_proposal: toEditProposalWire(row),
       },
       exceptClientId,
     );
@@ -1434,7 +1434,7 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
         doc.uid,
         {
           type: 'edit_proposal.updated',
-          edit_proposal: await toEditProposalWire(deps.store, doc, reopened),
+          edit_proposal: toEditProposalWire(reopened),
         },
         decision.identity.clientId,
       );

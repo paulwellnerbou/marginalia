@@ -104,9 +104,9 @@ interface CommentCapabilities {
 }
 
 interface EditProposalData {
-  anchor_kind: string | null;
-  source_snapshot: string | null;
-  proposed_text: string;
+  whole_document?: boolean;
+  // Content (before/after text) is no longer inlined here.
+  // Fetch it on demand via GET /:uid/threads/:tid/diff.
 }
 ```
 
@@ -210,9 +210,7 @@ interface EditProposalData {
     "updated_at": 1710000000100
   },
   "proposal": {
-    "anchor_kind": "paragraph",
-    "source_snapshot": "Old paragraph",
-    "proposed_text": "New paragraph"
+    "whole_document": false
   },
   "replies": []
 }
@@ -251,8 +249,8 @@ interface CreateThreadAnchor {
 }
 
 interface CreateThreadProposal {
-  anchor_kind?: string | null;
   proposed_text: string;
+  whole_document?: boolean;
 }
 ```
 
@@ -325,7 +323,6 @@ These are the stable semantic errors for the endpoint:
   },
   "body": "Suggested rewrite.",
   "proposal": {
-    "anchor_kind": "paragraph",
     "proposed_text": "New paragraph"
   }
 }
@@ -526,10 +523,11 @@ proposal thread and the row only contributes proposal-specific data.
 The public `proposal` object maps as:
 
 ```ts
-proposal.anchor_kind     <- comments_edit_proposals.anchor_kind
-proposal.source_snapshot <- comments_edit_proposals.source_snapshot
-proposal.proposed_text   <- comments_edit_proposals.proposed_text
+proposal.whole_document <- comments_edit_proposals.is_whole_document == 1
 ```
+
+Diff content (`before`/`after` text) is no longer inlined in the thread list.
+Fetch it on demand via `GET /:uid/threads/:tid/diff`.
 
 No proposal capabilities live inside `proposal`; workflow capabilities are
 always exposed on `thread.capabilities`.
@@ -538,8 +536,6 @@ Important:
 
 - the thread anchor does NOT come from `comments_edit_proposals`
 - the thread anchor comes from the root `comments` row
-- `anchor_kind` is only extra proposal metadata describing what kind of anchor
-  the proposal was created against
 
 ### 4. Anchor and link state mapping
 
@@ -750,9 +746,9 @@ If `proposal` is present:
 - if `request.body` is absent, store `body = ''`
 - insert one extension row into `comments_edit_proposals`
 - `comment_id = root_comment.id`
-- `anchor_kind = request.proposal.anchor_kind ?? null`
-- `source_snapshot = current block source when available, otherwise anchor.quote`
-- `proposed_text = request.proposal.proposed_text`
+- `branch_ref = refs/proposals/<id>` (one-commit branch in the doc repo)
+- `base_oid = current main HEAD`
+- `base_block_start`, `base_block_end` = character offsets of replaced block span
 - `status = 'open'`
 - decision metadata `NULL`
 
