@@ -2402,11 +2402,7 @@ describe('documents API', () => {
         link_status: string;
         anchor: { block_id: string | null };
         capabilities: { accept: boolean; reject: boolean };
-        proposal: {
-          source_snapshot: string | null;
-          proposed_text: string | null;
-          whole_document: boolean;
-        } | null;
+        proposal: { whole_document: boolean } | null;
         comments: [{ body: string }];
       }>;
     };
@@ -2414,11 +2410,12 @@ describe('documents API', () => {
     const [thread] = importedThreads.threads;
     expect(thread!.link_status).toBe('orphaned');
     expect(thread!.anchor.block_id).toBeNull();
-    expect(thread!.proposal).toEqual({
-      source_snapshot: null,
-      proposed_text: null,
-      whole_document: false,
-    });
+    // Wire shape exposes only `whole_document` here — the
+    // `source_snapshot` / `proposed_text` legacy fields were
+    // dropped from the threads-list payload by an earlier change
+    // (matches the sibling assertion at line ~2202). Without
+    // this fix, main's CI fails on every PR.
+    expect(thread!.proposal).toEqual({ whole_document: false });
     expect(thread!.capabilities.accept).toBe(false);
     expect(thread!.capabilities.reject).toBe(true);
 
