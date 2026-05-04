@@ -899,7 +899,7 @@ describe('documents API', () => {
     expect(accepted?.proposal).toEqual({
       id: proposal.thread.id,
       author: { client_id: CLIENT_B.id, display_name: 'Robert' },
-      summary: 'First replacement',
+      summary: 'Proposed change',
     });
   });
 
@@ -1522,7 +1522,10 @@ describe('documents API', () => {
       }),
     );
     expect(res.status).toBe(201);
-    const { thread } = (await res.json()) as { thread: { id: string } };
+    const { thread } = (await res.json()) as {
+      thread: { id: string; comments: [{ body: string }] };
+    };
+    expect(thread.comments[0].body).toBe('Proposed change');
 
     const row = app.db
       .prepare(
@@ -2335,6 +2338,95 @@ describe('documents API', () => {
     );
     const docBody = (await docAfter.json()) as { source: string };
     expect(docBody.source).toBe('# Title\n\nbeta');
+  });
+
+  test('import preserves orphaned open proposals as proposal threads', async () => {
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: headersFor(CLIENT_C),
+        body: JSON.stringify({
+          version: 4,
+          kind: 'marginalia.document-bundle',
+          exported_at: Date.now(),
+          document: {
+            name: 'Orphaned proposal bundle',
+            source: '# Imported\n\nCurrent text.\n',
+            format: 'markdown',
+            default_theme: 'default',
+          },
+          comments: [
+            {
+              id: 'orphan-proposal',
+              parent_id: null,
+              parent_proposal_id: null,
+              anchor_block_id: null,
+              anchor_quote: 'Old text that no longer exists.',
+              author_client_id: CLIENT_A.id,
+              author_display_name: CLIENT_A.name,
+              body: '',
+              link_status: 'orphaned',
+              created_at: 1,
+              updated_at: 1,
+              edit_proposal: {
+                source_snapshot: 'Old text that no longer exists.',
+                proposed_text: 'Replacement text.',
+                status: 'open',
+                accepted_oid: null,
+              },
+            },
+          ],
+        }),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as {
+      uid: string;
+      admin_invite: { token: string };
+      imported_comments: number;
+      imported_edit_proposals: number;
+    };
+    expect(imported.imported_comments).toBe(1);
+    expect(imported.imported_edit_proposals).toBe(1);
+
+    const threadsRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/threads`, {
+        headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
+      }),
+    );
+    expect(threadsRes.status).toBe(200);
+    const importedThreads = (await threadsRes.json()) as {
+      threads: Array<{
+        id: string;
+        link_status: string;
+        anchor: { block_id: string | null };
+        capabilities: { accept: boolean; reject: boolean };
+        proposal: {
+          source_snapshot: string | null;
+          proposed_text: string | null;
+          whole_document: boolean;
+        } | null;
+        comments: [{ body: string }];
+      }>;
+    };
+    expect(importedThreads.threads).toHaveLength(1);
+    const [thread] = importedThreads.threads;
+    expect(thread!.link_status).toBe('orphaned');
+    expect(thread!.anchor.block_id).toBeNull();
+    expect(thread!.proposal).toEqual({
+      source_snapshot: null,
+      proposed_text: null,
+      whole_document: false,
+    });
+    expect(thread!.capabilities.accept).toBe(false);
+    expect(thread!.capabilities.reject).toBe(true);
+
+    const diffRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/threads/${thread!.id}/diff`, {
+        headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
+      }),
+    );
+    expect(diffRes.status).toBe(410);
   });
 
   test('GET /:uid/export.docx returns a themed Word document (binary)', async () => {

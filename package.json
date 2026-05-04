@@ -8,7 +8,7 @@
     "dev:server": "bun --hot apps/server/src/main.ts",
     "dev:web": "bun --filter @marginalia/web dev",
     "dev": "sh ./scripts/dev.sh",
-    "dev:kill": "pkill -f 'bun.*(marginalia/(web|server)|apps/server/src/main)' || true",
+    "dev:kill": "sh ./scripts/kill-dev.sh",
     "build": "bun --filter @marginalia/web build",
     "start": "bun --bun apps/server/src/main.ts",
     "typecheck": "bun run --filter '*' typecheck",

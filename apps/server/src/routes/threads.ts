@@ -57,6 +57,8 @@ interface PreparedThreadWorkflow {
   applyDb: () => EditProposalThreadRow[];
 }
 
+const DEFAULT_PROPOSAL_BODY = 'Proposed change';
+
 const THREAD_SELECT = `
   SELECT
     c.*,
@@ -172,6 +174,7 @@ async function createThread(c: Context, deps: AppDeps) {
   const parsedProposal = asProposal(body.proposal);
   if (!parsedProposal.ok) return c.json({ error: parsedProposal.error }, 400);
   const proposal = parsedProposal.proposal;
+  const storedRootBody = proposal ? (rootBody.body ?? DEFAULT_PROPOSAL_BODY) : rootBody.body;
 
   if (!proposal) {
     if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
@@ -217,7 +220,7 @@ async function createThread(c: Context, deps: AppDeps) {
         id,
         nextSource,
         identity,
-        rootBody.body ?? null,
+        storedRootBody,
       );
       branchRef = branch.refName;
     } catch (err) {
@@ -258,7 +261,7 @@ async function createThread(c: Context, deps: AppDeps) {
       anchor.sectionIndexPath ? JSON.stringify(anchor.sectionIndexPath) : null,
       identity.clientId,
       identity.displayName,
-      proposal ? (rootBody.body ?? '') : rootBody.body,
+      storedRootBody,
       now,
       now,
     );

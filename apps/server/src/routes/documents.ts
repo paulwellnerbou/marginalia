@@ -1053,16 +1053,26 @@ async function importDocument(c: Context, deps: AppDeps) {
         continue;
       }
 
-      // Open and rejected proposals: branch creation is mandatory.
-      // Without a branch the row is permanently undiffable + un-
-      // acceptable (Phase 3 dropped the column fallback). Skip the
-      // proposal row on failure rather than insert a broken one.
+      // Open and rejected proposals: rebuild a branch when the imported
+      // anchor still resolves. If the bundle already carries an orphaned
+      // proposal (or its anchor no longer resolves in the imported source),
+      // preserve the proposal row with null branch metadata so the thread
+      // stays a proposal in the UI, even though diff/accept remain unavailable.
       const anchorBlockId = typeof row.anchor_block_id === 'string' ? row.anchor_block_id : null;
       const range = anchorBlockId ? importBlocks.get(anchorBlockId) : undefined;
       if (!range) {
         console.warn(
-          `[marginalia] import skipped proposal ${newId} (${uid}): anchor block not found in source`,
+          `[marginalia] import preserved orphaned proposal ${newId} (${uid}): anchor block not found in source`,
         );
+        db.prepare(
+          `UPDATE comments
+              SET link_status = 'orphaned',
+                  anchor_block_id = NULL,
+                  anchor_end_block_id = NULL
+            WHERE id = ?`,
+        ).run(newId);
+        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null);
+        importedEditProposals += 1;
         continue;
       }
       const nextSource =
@@ -1090,9 +1100,11 @@ async function importDocument(c: Context, deps: AppDeps) {
         importedEditProposals += 1;
       } catch (err) {
         console.warn(
-          `[marginalia] import skipped proposal ${newId} (${uid}): branch creation failed:`,
+          `[marginalia] import preserved undiffable proposal ${newId} (${uid}): branch creation failed:`,
           err,
         );
+        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null);
+        importedEditProposals += 1;
       }
     }
   }
