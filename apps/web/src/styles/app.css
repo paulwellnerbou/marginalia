@@ -2569,6 +2569,12 @@ button.primary:disabled {
 .ic-btn-primary:hover:not(:disabled) {
   filter: brightness(0.95);
 }
+/* The base `.ic-btn:active` rule has equal specificity to the hover rule
+   above and would lose the cascade tie when both match (hover + press),
+   so primary buttons need their own active rule that comes *after* hover. */
+.ic-btn-primary:active:not(:disabled) {
+  filter: brightness(0.85);
+}
 
 .ic-btn-resolve {
   background: rgba(34, 197, 94, 0.14);

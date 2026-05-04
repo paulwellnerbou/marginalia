@@ -28,10 +28,15 @@ export interface InlineComposerLeftActionsContext {
   canRunAction: boolean;
   /**
    * Run an action that may optionally consume the current draft body /
-   * display name. The composer clears the textarea on success and
-   * mirrors the submitting state. No-op when `canRunAction` is false.
+   * display name. The composer mirrors the submitting state and clears
+   * the textarea on success — actions that return `false` keep the
+   * draft (e.g. a failed accept/reject), so the user can retry without
+   * retyping. Returning void or `true` clears as before.
+   * No-op when `canRunAction` is false.
    */
-  runAction: (action: (body?: string, name?: string) => Promise<void> | void) => Promise<void>;
+  runAction: (
+    action: (body?: string, name?: string) => Promise<boolean | void> | boolean | void,
+  ) => Promise<void>;
 }
 
 interface Props {
@@ -122,15 +127,16 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
     }
   }
 
-  async function runAction(action: (body?: string, name?: string) => Promise<void> | void) {
+  async function runAction(
+    action: (body?: string, name?: string) => Promise<boolean | void> | boolean | void,
+  ) {
     if (!canRunAction) return;
     setSubmitting(true);
     try {
-      await action(hasDraft ? body : undefined, needsName ? displayName : undefined);
-      setValue('');
-    } catch {
-      // The action surfaced its own error (toast / inline). Keep the draft
-      // so the user can retry without retyping their reply.
+      const ok = await action(hasDraft ? body : undefined, needsName ? displayName : undefined);
+      // Actions that return `false` failed (and surfaced their own error);
+      // keep the draft so the user can retry. `void` / `true` = success.
+      if (ok !== false) setValue('');
     } finally {
       setSubmitting(false);
     }

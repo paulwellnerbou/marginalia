@@ -27,7 +27,7 @@ interface Props {
     kind: 'resolve' | 'reopen' | 'accept' | 'reject',
     body?: string,
     name?: string,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
 }
 
 export function InlineThreadCard({
@@ -120,11 +120,15 @@ export function InlineThreadCard({
     kind: 'resolve' | 'reopen' | 'accept' | 'reject',
     body?: string,
     name?: string,
-  ) {
-    if (busy) return;
+  ): Promise<boolean> {
+    // Returning false on the re-entry guard (rather than the in-flight
+    // promise) prevents a second click on a still-busy button from
+    // resolving immediately and tricking callers into post-success steps
+    // (e.g. closing the diff dialog before the original request finishes).
+    if (busy) return false;
     setBusy(kind);
     try {
-      await onResolveThread(thread.id, kind, body, name);
+      return await onResolveThread(thread.id, kind, body, name);
     } finally {
       setBusy(false);
     }
@@ -412,13 +416,10 @@ export function InlineThreadCard({
                     type="button"
                     className="ic-btn ic-btn-accept"
                     onClick={async () => {
-                      try {
-                        await runWorkflow('accept');
-                        setDiffOpen(false);
-                      } catch {
-                        // Keep the dialog open on failure so the diff context
-                        // stays visible while the user retries.
-                      }
+                      // Only close when the action actually succeeded.
+                      // A re-entry click while busy returns false too, so
+                      // the dialog stays open until the original finishes.
+                      if (await runWorkflow('accept')) setDiffOpen(false);
                     }}
                     disabled={busy !== false && busy !== 'accept'}
                     aria-busy={busy === 'accept'}
@@ -432,13 +433,7 @@ export function InlineThreadCard({
                     type="button"
                     className="ic-btn ic-btn-reject"
                     onClick={async () => {
-                      try {
-                        await runWorkflow('reject');
-                        setDiffOpen(false);
-                      } catch {
-                        // Keep the dialog open on failure so the diff context
-                        // stays visible while the user retries.
-                      }
+                      if (await runWorkflow('reject')) setDiffOpen(false);
                     }}
                     disabled={busy !== false && busy !== 'reject'}
                     aria-busy={busy === 'reject'}
