@@ -2,8 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { canMergeMultiBlock, locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import type { BlockSourceRange } from '@marginalia/renderer';
 import type { DocumentRow, EditProposalThreadRow } from '../db.js';
-import type { Realtime } from '../realtime.js';
-import type { AppDeps } from './documents.js';
+import type { GitStore } from '../git-store.js';
 import { toWire as toCommentWire } from './comments.js';
 
 /**
@@ -17,9 +16,6 @@ import { toWire as toCommentWire } from './comments.js';
 const PROPOSAL_SELECT = `
   SELECT
     c.*,
-    cep.anchor_kind,
-    cep.source_snapshot,
-    cep.proposed_text,
     cep.status AS proposal_status,
     cep.accepted_oid,
     cep.branch_ref,
@@ -48,8 +44,7 @@ export function reanchorProposals(
   blocks: Map<string, BlockSourceRange>,
   format: 'markdown' | 'asciidoc',
   now: number,
-  realtime?: Realtime,
-  exceptClientId?: string,
+  broadcast?: (row: EditProposalThreadRow) => void,
 ): EditProposalThreadRow[] {
   const open = db
     .prepare(
@@ -88,13 +83,7 @@ export function reanchorProposals(
       const fresh = loadProposalRow(db, p.id, docUid);
       if (fresh) {
         orphaned.push(fresh);
-        if (realtime) {
-          realtime.broadcast(
-            docUid,
-            { type: 'edit_proposal.updated', edit_proposal: toWire(fresh) },
-            exceptClientId,
-          );
-        }
+        if (broadcast) broadcast(fresh);
       }
     }
   }
@@ -136,128 +125,6 @@ export function reopenAcceptedProposal(
   ).run(now, proposalId);
 
   return loadProposalRow(db, proposalId, docUid) ?? null;
-}
-
-export async function resolveProposalDiffBefore(
-  doc: DocumentRow,
-  proposal: EditProposalThreadRow,
-  deps: AppDeps,
-): Promise<string> {
-  const snapshot = proposal.source_snapshot ?? proposal.anchor_quote ?? '';
-
-  if (proposal.proposal_status !== 'accepted') {
-    const liveSource = deps.store.read(doc);
-    const liveBlock = readProposalBlockSource(
-      doc,
-      liveSource,
-      proposal.anchor_block_id,
-      proposal.anchor_end_block_id,
-    );
-    if (!liveBlock) return snapshot;
-    if (liveBlock === proposal.proposed_text && snapshot !== proposal.proposed_text)
-      return snapshot;
-    return liveBlock;
-  }
-
-  if (proposal.source_snapshot) return proposal.source_snapshot;
-
-  const repaired = await resolveAcceptedProposalSnapshot(doc, proposal, deps);
-  return repaired ?? snapshot;
-}
-
-async function resolveAcceptedProposalSnapshot(
-  doc: DocumentRow,
-  proposal: EditProposalThreadRow,
-  deps: AppDeps,
-): Promise<string | null> {
-  if (!proposal.anchor_block_id) return null;
-
-  const exact = proposal.accepted_oid
-    ? await readAcceptedProposalSnapshotAtCommit(doc, proposal, proposal.accepted_oid, deps)
-    : null;
-  if (exact) {
-    persistResolvedProposalSnapshot(deps.db, proposal.id, exact, proposal.accepted_oid);
-    return exact;
-  }
-
-  if (!proposal.decided_at) return null;
-
-  const history = await deps.store.history(doc);
-  const candidates = history
-    .filter((entry) => entry.message.startsWith('accept-proposal:'))
-    .sort(
-      (a, b) =>
-        Math.abs(a.timestamp - proposal.decided_at!) - Math.abs(b.timestamp - proposal.decided_at!),
-    );
-
-  for (const entry of candidates) {
-    const snapshot = await readAcceptedProposalSnapshotAtCommit(doc, proposal, entry.oid, deps);
-    if (!snapshot) continue;
-    persistResolvedProposalSnapshot(deps.db, proposal.id, snapshot, entry.oid);
-    return snapshot;
-  }
-
-  return null;
-}
-
-async function readAcceptedProposalSnapshotAtCommit(
-  doc: DocumentRow,
-  proposal: EditProposalThreadRow,
-  acceptedOid: string,
-  deps: AppDeps,
-): Promise<string | null> {
-  const diff = await deps.store.diffAt(doc, acceptedOid);
-  if (!diff) return null;
-
-  // Fast path: block ID is stable across the accept — find the pre-accept source
-  // directly by the same block ID in the before-snapshot.
-  const before = readProposalBlockSource(doc, diff.before, proposal.anchor_block_id);
-  if (before) {
-    if (!diff.after.includes(proposal.proposed_text)) return null;
-    return before;
-  }
-
-  // Fallback: the block ID changed across the accept commit (block IDs are
-  // derived from content, so replacing content changes the ID). We recover the
-  // pre-accept text by locating the accepted block in the *after* snapshot to
-  // get its character span, then using findBlockBySourceSpan to find whichever
-  // block occupied that same span in the *before* snapshot. This works because
-  // accepting a proposal replaces a block's content in-place: the byte offsets
-  // of the surrounding blocks are unchanged, so the pre-accept block sits at
-  // exactly the position the post-accept block now occupies.
-  const afterRanges = locateDocumentBlocks(doc, diff.after);
-  const afterRange = proposal.anchor_block_id ? afterRanges.get(proposal.anchor_block_id) : null;
-  if (!afterRange) return null;
-  const beforeRanges = locateDocumentBlocks(doc, diff.before);
-  const previousRange = findBlockBySourceSpan(beforeRanges, afterRange.start, afterRange.end);
-  if (!previousRange) return null;
-  if (!diff.after.includes(proposal.proposed_text)) return null;
-  return diff.before.slice(previousRange.range.start, previousRange.range.end);
-}
-
-function persistResolvedProposalSnapshot(
-  db: Database,
-  proposalId: string,
-  snapshot: string,
-  acceptedOid: string | null,
-): void {
-  db.prepare(
-    `UPDATE comments_edit_proposals
-        SET source_snapshot = COALESCE(source_snapshot, ?),
-            accepted_oid = COALESCE(accepted_oid, ?)
-      WHERE comment_id = ?`,
-  ).run(snapshot, acceptedOid, proposalId);
-}
-
-function readProposalBlockSource(
-  doc: DocumentRow,
-  source: string,
-  blockId: string | null,
-  endBlockId: string | null = null,
-): string | null {
-  if (!blockId) return null;
-  const range = locateAnchorRange(doc, source, blockId, endBlockId);
-  return range ? source.slice(range.start, range.end) : null;
 }
 
 /**
@@ -350,15 +217,77 @@ export function findBlockBySourceSpan(
   return null;
 }
 
-export function toWire(row: EditProposalThreadRow): Record<string, unknown> {
+export async function toWire(
+  store: GitStore,
+  doc: DocumentRow,
+  row: EditProposalThreadRow,
+): Promise<Record<string, unknown>> {
+  const content = await readProposalContent(store, doc, row);
   return {
     id: row.id,
     comment: toCommentWire(row),
-    anchor_kind: row.anchor_kind,
-    source_snapshot: row.source_snapshot,
-    proposed_text: row.proposed_text,
     status: row.proposal_status,
     decided_at: row.decided_at,
     decided_by_name: row.decided_by_name,
+    source_snapshot: content?.source_snapshot ?? null,
+    proposed_text: content?.proposed_text ?? null,
   };
+}
+
+/**
+ * Recover the legacy `source_snapshot` + `proposed_text` fields from
+ * the proposal's branch tip and base blob. Returns `null` when the
+ * row lacks the metadata to address the splice range or git is
+ * unreachable — the caller surfaces null fields so clients can
+ * distinguish "diff unavailable" from a legitimate empty proposal.
+ * Phase 4 will drop these from the wire entirely.
+ *
+ * `base_block_{start,end}` are character offsets into the decoded
+ * source string (matching unist `position.offset`), not raw byte
+ * offsets — `String.prototype.slice` is the right operator, not a
+ * `Buffer` slice.
+ *
+ * Takes the minimal structural shape so callers with different row
+ * types (thread, bundle export, history) can use the same recovery
+ * helper without casts.
+ */
+export async function readProposalContent(
+  store: GitStore,
+  doc: DocumentRow,
+  row: {
+    id: string;
+    branch_ref: string | null;
+    base_oid: string | null;
+    base_block_start: number | null;
+    base_block_end: number | null;
+  },
+): Promise<{ source_snapshot: string; proposed_text: string } | null> {
+  if (
+    !row.branch_ref ||
+    !row.base_oid ||
+    row.base_block_start === null ||
+    row.base_block_end === null
+  ) {
+    return null;
+  }
+  // GitStore derives the ref name from the proposal id internally
+  // (`refs/proposals/<id>`). Refuse to read if the row's stored
+  // `branch_ref` doesn't match — guards against silently reading a
+  // different ref if the persisted shape ever drifts (e.g. future
+  // synthesized historical refs).
+  if (row.branch_ref !== `refs/proposals/${row.id}`) return null;
+  try {
+    const tip = await store.readProposalTip(doc, row.id);
+    if (tip === null) return null;
+    const base = await store.readAt(doc, row.base_oid);
+    const start = row.base_block_start;
+    const end = row.base_block_end;
+    const proposedLen = tip.length - base.length + (end - start);
+    return {
+      source_snapshot: base.slice(start, end),
+      proposed_text: tip.slice(start, start + proposedLen),
+    };
+  } catch {
+    return null;
+  }
 }

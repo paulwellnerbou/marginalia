@@ -9,13 +9,16 @@ import {
   rewriteAssetReferences,
   sanitizeDocumentFilename,
 } from '@marginalia/renderer';
+import type { BlockSourceRange } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
+import { mapWithConcurrency } from '../concurrency.js';
 import {
   loadProposalRow,
   reopenAcceptedProposal,
   reanchorProposals,
+  readProposalContent,
   toWire as toEditProposalWire,
 } from './edit-proposals.js';
 import {
@@ -48,7 +51,6 @@ import type {
 import { isDocumentFormat, isInviteKind, isInviteRole, isMermaidRenderer } from '../db.js';
 import type { MermaidRenderer } from '../db.js';
 import type { HistoryEntry as GitHistoryEntry, GitStore } from '../git-store.js';
-import { backfillProposalBranches } from '../proposal-branch-backfill.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
 import type { Realtime } from '../realtime.js';
 import { listDocUserNameMap, upsertDocUser } from '../users.js';
@@ -140,9 +142,6 @@ export interface AppDeps {
 }
 
 interface BundleCommentRow extends CommentRow {
-  anchor_kind: string | null;
-  source_snapshot: string | null;
-  proposed_text: string | null;
   proposal_status: EditProposalStatus | null;
   accepted_oid: string | null;
   branch_ref: string | null;
@@ -385,7 +384,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(nextSource)
       : locateAllBlocks(nextSource);
-  reanchorProposals(db, doc.uid, knownBlocks, doc.format, now, realtime, decision.identity.clientId);
+  await reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (isContentChange(previousSource, nextSource)) {
     realtime.broadcast(
@@ -563,9 +562,6 @@ async function exportDocument(c: Context, deps: AppDeps) {
     .prepare(
       `SELECT
          c.*,
-         cep.anchor_kind,
-         cep.source_snapshot,
-         cep.proposed_text,
          cep.status AS proposal_status,
          cep.accepted_oid,
          cep.branch_ref,
@@ -969,9 +965,19 @@ async function importDocument(c: Context, deps: AppDeps) {
   );
   const insertEditProposal = db.prepare(
     `INSERT INTO comments_edit_proposals
-       (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+       (comment_id, status, accepted_oid, branch_ref, base_oid, base_block_start, base_block_end)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
+
+  // Imported proposals get their branch built here from the bundle's
+  // `proposed_text` rather than via the boot-time backfill (which reads
+  // a column that's no longer in the schema). Single base read per doc.
+  const importBaseOid = await store.mainOid({ uid, format });
+  const importBaseSource = docSpec.source;
+  const importBlocks =
+    format === 'asciidoc'
+      ? locateAllBlocksAsciidoc(importBaseSource)
+      : locateAllBlocks(importBaseSource);
   for (const raw of commentRows) {
     const row = raw as Record<string, unknown>;
     if (
@@ -1029,22 +1035,66 @@ async function importDocument(c: Context, deps: AppDeps) {
         ? (row.edit_proposal as Record<string, unknown>)
         : null;
     if (isRootComment && proposal && typeof proposal.proposed_text === 'string') {
-      insertEditProposal.run(
-        newId,
-        typeof proposal.anchor_kind === 'string' ? proposal.anchor_kind : null,
-        typeof proposal.source_snapshot === 'string' ? proposal.source_snapshot : null,
-        proposal.proposed_text,
-        normalizeImportedProposalStatus(
-          typeof proposal.status === 'string' ? proposal.status : null,
-        ),
-        typeof proposal.accepted_oid === 'string' ? proposal.accepted_oid : null,
+      const status = normalizeImportedProposalStatus(
+        typeof proposal.status === 'string' ? proposal.status : null,
       );
-      importedEditProposals += 1;
+      const acceptedOid =
+        typeof proposal.accepted_oid === 'string' ? proposal.accepted_oid : null;
+
+      // Accepted proposals: skip branch creation. The bundle's source
+      // is post-accept, so splicing `proposed_text` into it would
+      // produce a no-op branch (tip == base). Insert as a historical
+      // row with null branch metadata; the diff endpoint returns
+      // unavailable, matching the issue's "default null + block reopen
+      // for pre-migration rows" stance.
+      if (status === 'accepted') {
+        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null);
+        importedEditProposals += 1;
+        continue;
+      }
+
+      // Open and rejected proposals: branch creation is mandatory.
+      // Without a branch the row is permanently undiffable + un-
+      // acceptable (Phase 3 dropped the column fallback). Skip the
+      // proposal row on failure rather than insert a broken one.
+      const anchorBlockId = typeof row.anchor_block_id === 'string' ? row.anchor_block_id : null;
+      const range = anchorBlockId ? importBlocks.get(anchorBlockId) : undefined;
+      if (!range) {
+        console.warn(
+          `[marginalia] import skipped proposal ${newId} (${uid}): anchor block not found in source`,
+        );
+        continue;
+      }
+      const nextSource =
+        importBaseSource.slice(0, range.start) +
+        proposal.proposed_text +
+        importBaseSource.slice(range.end);
+      try {
+        const result = await store.createProposalBranch(
+          { uid, format },
+          importBaseOid,
+          newId,
+          nextSource,
+          { clientId: row.author_client_id, displayName: row.author_display_name },
+        );
+        insertEditProposal.run(
+          newId,
+          status,
+          acceptedOid,
+          result.refName,
+          importBaseOid,
+          range.start,
+          range.end,
+        );
+        importedEditProposals += 1;
+      } catch (err) {
+        console.warn(
+          `[marginalia] import skipped proposal ${newId} (${uid}): branch creation failed:`,
+          err,
+        );
+      }
     }
   }
-
-  // Bundles carry proposed_text but no branch refs (refs are per-repo).
-  await backfillProposalBranches(db, store, uid);
 
   return c.json(
     {
@@ -1066,6 +1116,26 @@ function isBundleVersion(v: unknown): v is 1 | 2 | 3 | 4 {
   return v === 1 || v === 2 || v === 3 || v === 4;
 }
 
+async function reanchorAndBroadcast(
+  deps: AppDeps,
+  doc: DocumentRow,
+  blocks: Map<string, BlockSourceRange>,
+  now: number,
+  exceptClientId: string,
+): Promise<void> {
+  const orphaned = reanchorProposals(deps.db, doc.uid, blocks, doc.format, now);
+  for (const row of orphaned) {
+    deps.realtime.broadcast(
+      doc.uid,
+      {
+        type: 'edit_proposal.updated',
+        edit_proposal: await toEditProposalWire(deps.store, doc, row),
+      },
+      exceptClientId,
+    );
+  }
+}
+
 /**
  * Sequential `for...of` rather than `Promise.all`: each branch-backed
  * proposal does git reads, and a doc with hundreds of proposals would
@@ -1076,33 +1146,29 @@ async function mapBundleComments(
   store: GitStore,
   doc: DocumentRow,
 ): Promise<unknown[]> {
-  const out: unknown[] = [];
-  for (const row of comments) {
-    out.push({
-      id: row.id,
-      parent_id: row.parent_id,
-      parent_proposal_id: row.parent_proposal_id,
-      anchor_block_id: row.anchor_block_id,
-      anchor_quote: row.anchor_quote,
-      anchor_prefix: row.anchor_prefix,
-      anchor_suffix: row.anchor_suffix,
-      anchor_start_offset: row.anchor_start_offset,
-      anchor_end_offset: row.anchor_end_offset,
-      anchor_heading_path: parseStringArray(row.anchor_heading_path),
-      anchor_section_index: row.anchor_section_index,
-      anchor_section_index_path: parseNumberArray(row.anchor_section_index_path),
-      author_client_id: row.author_client_id,
-      author_display_name: row.author_display_name,
-      body: row.body,
-      link_status: row.link_status,
-      resolved_at: row.resolved_at,
-      resolved_by_name: row.resolved_by_name,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-      edit_proposal: await bundleProposalPayload(store, doc, row),
-    });
-  }
-  return out;
+  return mapWithConcurrency(comments, 4, async (row) => ({
+    id: row.id,
+    parent_id: row.parent_id,
+    parent_proposal_id: row.parent_proposal_id,
+    anchor_block_id: row.anchor_block_id,
+    anchor_quote: row.anchor_quote,
+    anchor_prefix: row.anchor_prefix,
+    anchor_suffix: row.anchor_suffix,
+    anchor_start_offset: row.anchor_start_offset,
+    anchor_end_offset: row.anchor_end_offset,
+    anchor_heading_path: parseStringArray(row.anchor_heading_path),
+    anchor_section_index: row.anchor_section_index,
+    anchor_section_index_path: parseNumberArray(row.anchor_section_index_path),
+    author_client_id: row.author_client_id,
+    author_display_name: row.author_display_name,
+    body: row.body,
+    link_status: row.link_status,
+    resolved_at: row.resolved_at,
+    resolved_by_name: row.resolved_by_name,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    edit_proposal: await bundleProposalPayload(store, doc, row),
+  }));
 }
 
 async function bundleProposalPayload(
@@ -1110,48 +1176,31 @@ async function bundleProposalPayload(
   doc: DocumentRow,
   row: BundleCommentRow,
 ): Promise<{
-  anchor_kind: string | null;
-  source_snapshot: string | null;
+  source_snapshot: string;
   proposed_text: string;
   status: EditProposalStatus;
   accepted_oid: string | null;
 } | null> {
   if (row.proposal_status === null) return null;
-
-  // For branch-backed rows, derive proposed_text and source_snapshot
-  // from git via the persisted byte range. The DB columns are a
-  // denormalized cache that Phase 3 drops; the bundle stays correct
-  // after that drop because git is the source of truth here.
-  if (
-    row.branch_ref &&
-    row.base_oid &&
-    row.base_block_start !== null &&
-    row.base_block_end !== null
-  ) {
-    try {
-      const tip = await store.readProposalTip(doc, row.id);
-      if (tip !== null) {
-        const base = await store.readAt(doc, row.base_oid);
-        const proposedLen =
-          tip.length - base.length + (row.base_block_end - row.base_block_start);
-        return {
-          anchor_kind: row.anchor_kind,
-          source_snapshot: base.slice(row.base_block_start, row.base_block_end),
-          proposed_text: tip.slice(row.base_block_start, row.base_block_start + proposedLen),
-          status: row.proposal_status,
-          accepted_oid: row.accepted_oid,
-        };
-      }
-    } catch {
-      // fall through to columns
-    }
+  const content = await readProposalContent(store, doc, row);
+  if (content) {
+    return {
+      source_snapshot: content.source_snapshot,
+      proposed_text: content.proposed_text,
+      status: row.proposal_status,
+      accepted_oid: row.accepted_oid,
+    };
   }
-
-  if (row.proposed_text === null) return null;
+  // Historical row without recoverable content (legacy accepted, or
+  // an import that landed without a branch). Preserve status +
+  // accepted_oid so a round-trip doesn't drop the proposal record;
+  // empty placeholders keep the bundle schema stable. Open and
+  // rejected rows without a branch can't be safely reconstructed
+  // (no diff content to splice on re-import) so they're dropped.
+  if (row.proposal_status !== 'accepted') return null;
   return {
-    anchor_kind: row.anchor_kind,
-    source_snapshot: row.source_snapshot,
-    proposed_text: row.proposed_text,
+    source_snapshot: '',
+    proposed_text: '',
     status: row.proposal_status,
     accepted_oid: row.accepted_oid,
   };
@@ -1210,8 +1259,13 @@ async function getHistory(c: Context, deps: AppDeps) {
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
   const userNames = listDocUserNameMap(db, doc.uid);
-  const history = (await store.history(doc)).map((entry) =>
-    toHistoryWire(db, doc.uid, entry, userNames),
+  const entries = await store.history(doc);
+  // Per-entry mapping does git reads only for `accept-proposal` entries
+  // (loadAcceptedProposalHistory may read base + tip blobs). Run with a
+  // small concurrency cap so `/history` doesn't get linear-in-history
+  // latency, but doesn't open unbounded fds either.
+  const history = await mapWithConcurrency(entries, 4, (entry) =>
+    toHistoryWire(db, store, doc, entry, userNames),
   );
   return c.json({ history });
 }
@@ -1291,7 +1345,7 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(restoredSource)
       : locateAllBlocks(restoredSource);
-  reanchorProposals(db, doc.uid, knownBlocks, doc.format, now, realtime, decision.identity.clientId);
+  await reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   realtime.broadcast(
     doc.uid,
@@ -1370,14 +1424,17 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(diff.before)
       : locateAllBlocks(diff.before);
-  reanchorProposals(db, doc.uid, knownBlocks, doc.format, now, realtime, decision.identity.clientId);
+  await reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (reopenedProposalId) {
     const reopened = loadProposalRow(db, reopenedProposalId, doc.uid);
     if (reopened && reopened.proposal_status === 'open') {
       realtime.broadcast(
         doc.uid,
-        { type: 'edit_proposal.updated', edit_proposal: toEditProposalWire(reopened) },
+        {
+          type: 'edit_proposal.updated',
+          edit_proposal: await toEditProposalWire(deps.store, doc, reopened),
+        },
         decision.identity.clientId,
       );
     }
@@ -1723,24 +1780,28 @@ type HistoryAction = 'upload' | 'update' | 'restore' | 'accept-proposal' | 'unkn
 interface AcceptedProposalHistoryRow {
   id: string;
   rationale: string | null;
-  proposed_text: string;
   author_client_id: string;
   author_display_name: string;
+  branch_ref: string | null;
+  base_oid: string | null;
+  base_block_start: number | null;
+  base_block_end: number | null;
 }
 
-function toHistoryWire(
+async function toHistoryWire(
   db: Database,
-  docUid: string,
+  store: GitStore,
+  doc: DocumentRow,
   entry: GitHistoryEntry,
   userNames: Map<string, string>,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const meta = parseHistoryMetadata(entry);
   const actorDisplayName = meta.clientId
     ? (userNames.get(meta.clientId) ?? fallbackHistoryAuthorName(entry.author.name, meta.clientId))
     : fallbackHistoryAuthorName(entry.author.name, null);
   const proposal =
     meta.action === 'accept-proposal'
-      ? loadAcceptedProposalHistory(db, docUid, entry.oid, userNames, meta.proposalId)
+      ? await loadAcceptedProposalHistory(db, store, doc, entry.oid, userNames, meta.proposalId)
       : null;
 
   return {
@@ -1817,67 +1878,68 @@ function fallbackHistoryAuthorName(authorName: string, clientId: string | null):
   return trimmed;
 }
 
-function loadAcceptedProposalHistory(
+async function loadAcceptedProposalHistory(
   db: Database,
-  docUid: string,
+  store: GitStore,
+  doc: DocumentRow,
   acceptedOid: string,
   userNames: Map<string, string>,
   proposalId: string | null,
-): Record<string, unknown> | null {
-  const row = proposalId
-    ? (db
-        .prepare(
-          `SELECT
-           c.id,
-           NULLIF(c.body, '') AS rationale,
-           cep.proposed_text,
-           c.author_client_id,
-           c.author_display_name
-         FROM comments c
-         INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
-        WHERE c.doc_uid = ?
-          AND c.id = ?
-          AND c.deleted_at IS NULL
-        LIMIT 1`,
-        )
-        .get(docUid, proposalId) as AcceptedProposalHistoryRow | null | undefined)
-    : (db
-        .prepare(
-          `SELECT
-           c.id,
-           NULLIF(c.body, '') AS rationale,
-           cep.proposed_text,
-           c.author_client_id,
-           c.author_display_name
-         FROM comments c
-         INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
-        WHERE c.doc_uid = ?
-          AND cep.accepted_oid = ?
-          AND c.deleted_at IS NULL
-        LIMIT 1`,
-        )
-        .get(docUid, acceptedOid) as AcceptedProposalHistoryRow | null | undefined);
+): Promise<Record<string, unknown> | null> {
+  const select = `
+    SELECT
+      c.id,
+      NULLIF(c.body, '') AS rationale,
+      c.author_client_id,
+      c.author_display_name,
+      cep.branch_ref,
+      cep.base_oid,
+      cep.base_block_start,
+      cep.base_block_end
+    FROM comments c
+    INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+    WHERE c.doc_uid = ?
+      AND c.deleted_at IS NULL
+  `;
+  const row = (
+    proposalId
+      ? db.prepare(`${select} AND c.id = ? LIMIT 1`).get(doc.uid, proposalId)
+      : db.prepare(`${select} AND cep.accepted_oid = ? LIMIT 1`).get(doc.uid, acceptedOid)
+  ) as AcceptedProposalHistoryRow | null | undefined;
   if (!row) return null;
 
+  // Skip the git read when rationale is non-empty — summarize prefers
+  // it and proposedText is only the fallback.
+  const proposedText = row.rationale?.trim()
+    ? null
+    : await readProposedTextFromBranch(store, doc, row);
   return {
     id: row.id,
     author: {
       client_id: row.author_client_id,
       display_name: userNames.get(row.author_client_id) ?? row.author_display_name,
     },
-    summary: summarizeProposalHistory(row),
+    summary: summarizeProposalHistory(row.rationale, proposedText),
   };
 }
 
-function summarizeProposalHistory(row: AcceptedProposalHistoryRow): string {
-  const rationale = row.rationale?.trim();
-  if (rationale) return clipHistoryText(rationale, 160);
+async function readProposedTextFromBranch(
+  store: GitStore,
+  doc: DocumentRow,
+  row: AcceptedProposalHistoryRow,
+): Promise<string | null> {
+  return (await readProposalContent(store, doc, row))?.proposed_text ?? null;
+}
 
+function summarizeProposalHistory(rationale: string | null, proposedText: string | null): string {
+  const trimmed = rationale?.trim();
+  if (trimmed) return clipHistoryText(trimmed, 160);
+  if (!proposedText) return '(proposal)';
   const firstLine =
-    row.proposed_text
+    proposedText
       .split('\n')
       .map((line) => line.trim())
-      .find((line) => line.length > 0) ?? row.proposed_text.trim();
+      .find((line) => line.length > 0) ?? proposedText.trim();
   return clipHistoryText(firstLine || '(empty proposal)', 160);
 }
 

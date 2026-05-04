@@ -1,21 +1,29 @@
 import type { Database } from 'bun:sqlite';
 import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
-import type { DocumentFormat } from './db.js';
+import { columnExists, type DocumentFormat } from './db.js';
 import type { GitStore } from './git-store.js';
 
 /**
- * Build `refs/proposals/<pid>` for every open proposal whose row is missing
- * a `branch_ref`. Idempotent. `docUid`, when set, scopes the scan to one
- * document (used by the import path to skip scanning the whole DB).
+ * Build `refs/proposals/<pid>` for every open or rejected proposal whose
+ * row is missing a `branch_ref`. Rejected rows are included because the
+ * Phase-2 reject-deletes-branch behavior left them without a ref but
+ * with `proposed_text` still in the column — last chance to capture
+ * before `dropLegacyProposalColumns`. Idempotent. `docUid`, when set,
+ * scopes the scan to one document.
  *
- * Rows whose anchor block can't be located in current source are left
- * alone; the existing block-id orphan check surfaces them at accept time.
+ * Reads `proposed_text` from the legacy column to splice the branch tip,
+ * so this is a no-op once `dropLegacyProposalColumns` has run — fresh
+ * databases never had the column, and post-migration databases have all
+ * applicable rows already carrying a `branch_ref`.
  */
 export async function backfillProposalBranches(
   db: Database,
   store: GitStore,
   docUid?: string,
 ): Promise<{ migrated: number; skipped: number }> {
+  if (!columnExists(db, 'comments_edit_proposals', 'proposed_text')) {
+    return { migrated: 0, skipped: 0 };
+  }
   const rows = (
     docUid === undefined
       ? db.prepare(
@@ -32,7 +40,7 @@ export async function backfillProposalBranches(
              FROM comments_edit_proposals cep
              JOIN comments c   ON c.id  = cep.comment_id
              JOIN documents d  ON d.uid = c.doc_uid
-            WHERE cep.status = 'open'
+            WHERE cep.status IN ('open', 'rejected')
               AND cep.branch_ref IS NULL
               AND c.deleted_at IS NULL
               AND c.anchor_block_id IS NOT NULL`,
@@ -52,7 +60,7 @@ export async function backfillProposalBranches(
                FROM comments_edit_proposals cep
                JOIN comments c   ON c.id  = cep.comment_id
                JOIN documents d  ON d.uid = c.doc_uid
-              WHERE cep.status = 'open'
+              WHERE cep.status IN ('open', 'rejected')
                 AND cep.branch_ref IS NULL
                 AND c.deleted_at IS NULL
                 AND c.anchor_block_id IS NOT NULL
@@ -92,7 +100,7 @@ export async function backfillProposalBranches(
 
     // base_oid alone is authoritative for the proposal's base — the
     // original base must not silently re-anchor onto current main. If
-    // it's set but the byte range isn't (e.g. a post-#25 createThread
+    // it's set but the splice range isn't (e.g. a post-#25 createThread
     // where base reads succeeded but `locateBlockRange` returned null),
     // recompute the range from the source at the stored baseOid, not
     // from current main.

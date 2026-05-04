@@ -880,7 +880,14 @@ describe('threads API', () => {
 
     expect(res.status).toBe(201);
     const created = (await res.json()) as { thread: ThreadShape };
-    expect(created.thread.proposal?.proposed_text).toBe('');
+    expect(created.thread.proposal).toBeDefined();
+    const diffRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${created.thread.id}/diff`, {
+        headers: headersFor(BOB),
+      }),
+    );
+    expect(diffRes.status).toBe(200);
+    expect(((await diffRes.json()) as { after: string }).after).toBe('');
   });
 
   test('invalid proposal rationale is rejected instead of silently dropped', async () => {
@@ -971,9 +978,11 @@ describe('threads API', () => {
     const subBlockId = docJson.rendered.html.match(/data-subblock="([^"]+)"/)?.[1];
     expect(subBlockId).toBeDefined();
 
-    // Create the proposal with a sub-block as `end_block_id`. The
-    // server stores it (validation lives in the locator), but accept
-    // must orphan the row instead of splicing.
+    // Multi-block range across a table cell is structurally invalid
+    // (`canMergeMultiBlock` rejects table-cell endpoints). Phase 3
+    // makes the branch + base metadata mandatory at create time, so
+    // the locator's null result becomes a 400 at create rather than
+    // an orphan at accept.
     const proposeRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
@@ -988,18 +997,8 @@ describe('threads API', () => {
         }),
       }),
     );
-    expect(proposeRes.status).toBe(201);
-    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
-
-    const acceptRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
-        method: 'POST',
-        headers: asAdmin(),
-        body: JSON.stringify({ action: 'accept' }),
-      }),
-    );
-    expect(acceptRes.status).toBe(409);
-    expect(await acceptRes.json()).toEqual({ error: 'proposal-orphaned' });
+    expect(proposeRes.status).toBe(400);
+    expect(await proposeRes.json()).toEqual({ error: 'anchor-block-not-found' });
   });
 
   test('over-long anchor.quote / prefix / suffix is rejected with anchor-too-long', async () => {
@@ -1384,8 +1383,13 @@ describe('threads API', () => {
     expect(thread.state).toBe('open');
     expect(thread.resolution).toBeNull();
     expect(thread.proposal).not.toBeNull();
-    expect(thread.proposal!.proposed_text).toBe('# Better title');
-    expect(thread.proposal!.anchor_kind).toBe('heading');
+    const diffRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${thread.id}/diff`, {
+        headers: headersFor(BOB),
+      }),
+    );
+    expect(diffRes.status).toBe(200);
+    expect(await diffRes.json()).toEqual({ before: '# Title', after: '# Better title' });
 
     // Capabilities: Bob is collaborator → can propose/reject own, but not accept (needs editor)
     expect(thread.capabilities.accept).toBe(false); // collaborator cannot accept

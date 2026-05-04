@@ -86,15 +86,14 @@ CREATE INDEX IF NOT EXISTS idx_comments_parent ON comments(parent_id);
 
 CREATE TABLE IF NOT EXISTS comments_edit_proposals (
   comment_id             TEXT PRIMARY KEY,
-  anchor_kind            TEXT,
-  source_snapshot        TEXT,
-  proposed_text          TEXT NOT NULL,
   status                 TEXT NOT NULL DEFAULT 'open',
   accepted_oid           TEXT,
   -- branch_ref points at one commit on top of base_oid that holds the
-  -- full proposed source. base_block_{start,end} are source offsets in
-  -- base_oid's source that the branch replaces — used for diff rendering
-  -- regardless of whether the proposal is still open. Nullable: backfilled.
+  -- full proposed source. base_block_{start,end} are character offsets
+  -- (UTF-16 indices into the JS string, matching unist position.offset)
+  -- into base_oid's source — the range the branch replaces. Used for
+  -- diff rendering regardless of whether the proposal is still open.
+  -- Nullable: backfilled.
   branch_ref             TEXT,
   base_oid               TEXT,
   base_block_start       INTEGER,
@@ -346,9 +345,6 @@ export type EditProposalStatus = 'open' | 'accepted' | 'rejected';
 
 export interface EditProposalRow {
   comment_id: string;
-  anchor_kind: string | null;
-  source_snapshot: string | null;
-  proposed_text: string;
   status: EditProposalStatus;
   accepted_oid: string | null;
   branch_ref: string | null;
@@ -359,9 +355,6 @@ export interface EditProposalRow {
 
 export interface EditProposalThreadRow extends CommentRow {
   id: string;
-  anchor_kind: string | null;
-  source_snapshot: string | null;
-  proposed_text: string;
   proposal_status: EditProposalStatus;
   accepted_oid: string | null;
   branch_ref: string | null;
@@ -391,7 +384,6 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'documents', 'password_recovery_ciphertext', 'TEXT');
   ensureColumn(db, 'documents', 'password_recovery_iv', 'TEXT');
   ensureColumn(db, 'documents', 'mermaid_renderer', 'TEXT');
-  ensureColumn(db, 'comments_edit_proposals', 'source_snapshot', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'accepted_oid', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'branch_ref', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'base_oid', 'TEXT');
@@ -484,8 +476,33 @@ function dropColumnIfExists(db: Database, table: string, column: string): void {
   db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
 }
 
+export function columnExists(db: Database, table: string, column: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return cols.some((c) => c.name === column);
+}
+
+/**
+ * Drop the legacy `comments_edit_proposals` columns whose data has been
+ * superseded by `branch_ref` / `base_oid` / `base_block_{start,end}` +
+ * the proposal branch in git. Idempotent. Must run AFTER any backfill
+ * that still needs to read `proposed_text`.
+ */
+export function dropLegacyProposalColumns(db: Database): void {
+  dropColumnIfExists(db, 'comments_edit_proposals', 'anchor_kind');
+  dropColumnIfExists(db, 'comments_edit_proposals', 'source_snapshot');
+  dropColumnIfExists(db, 'comments_edit_proposals', 'proposed_text');
+}
+
 function migrateEditProposalsToCommentExtensions(db: Database): void {
   if (!tableExists(db, 'edit_proposals')) return;
+
+  // The current schema doesn't carry these columns on
+  // `comments_edit_proposals` — this migration writes into them
+  // because the legacy data lives there. createApp drops them again
+  // after backfilling via `dropLegacyProposalColumns`.
+  ensureColumn(db, 'comments_edit_proposals', 'anchor_kind', 'TEXT');
+  ensureColumn(db, 'comments_edit_proposals', 'source_snapshot', 'TEXT');
+  ensureColumn(db, 'comments_edit_proposals', 'proposed_text', 'TEXT');
 
   db.exec('BEGIN');
   try {

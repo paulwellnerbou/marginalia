@@ -5,6 +5,7 @@ import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
+import { mapWithConcurrency } from '../concurrency.js';
 import {
   type Identity,
   INVITE_SESSION_COOKIE,
@@ -16,6 +17,7 @@ import {
   parseCookie,
 } from '../auth.js';
 import type { CommentRow, DocumentRow, EditProposalStatus, EditProposalThreadRow } from '../db.js';
+import type { GitStore } from '../git-store.js';
 import {
   consumePendingMentions,
   listMentionCandidates,
@@ -29,15 +31,12 @@ import {
   locateAnchorRange,
   locateDocumentBlocks,
   reanchorProposals,
+  readProposalContent,
   reopenAcceptedProposal,
-  resolveProposalDiffBefore,
   toWire as toProposalWire,
 } from './edit-proposals.js';
 
 interface ThreadRow extends CommentRow {
-  anchor_kind: string | null;
-  source_snapshot: string | null;
-  proposed_text: string | null;
   proposal_status: EditProposalStatus | null;
   accepted_oid: string | null;
   branch_ref: string | null;
@@ -60,9 +59,6 @@ interface PreparedThreadWorkflow {
 const THREAD_SELECT = `
   SELECT
     c.*,
-    cep.anchor_kind,
-    cep.source_snapshot,
-    cep.proposed_text,
     cep.status AS proposal_status,
     cep.accepted_oid,
     cep.branch_ref,
@@ -125,10 +121,19 @@ async function listThreads(c: Context, deps: AppDeps) {
   const repliesByThread = groupRepliesByThread(replies);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, roots);
 
-  return c.json({
-    threads: roots.map((root) =>
-      toThreadWire(root, repliesByThread.get(root.id) ?? [], decision, reopenableAccepted),
+  const { store } = deps;
+  const threads = await mapWithConcurrency(roots, 4, (root) =>
+    toThreadWire(
+      store,
+      doc,
+      root,
+      repliesByThread.get(root.id) ?? [],
+      decision,
+      reopenableAccepted,
     ),
+  );
+  return c.json({
+    threads,
     mention_candidates: listMentionCandidates(db, doc.uid),
     pending_mentions:
       c.req.query('consume_mentions') === 'false'
@@ -175,7 +180,6 @@ async function createThread(c: Context, deps: AppDeps) {
 
   const id = newCommentId();
 
-  let sourceSnapshot: string | null = null;
   let blockRange: BlockSourceRange | null = null;
   let branchRef: string | null = null;
   let baseOid: string | null = null;
@@ -183,52 +187,38 @@ async function createThread(c: Context, deps: AppDeps) {
     // Read source AT baseOid — reading the working tree separately
     // from `mainOid()` would race with concurrent accepts and parent
     // the branch on a different commit than the spliced content.
-    let currentSource: string | null = null;
+    let currentSource: string;
     try {
       baseOid = await store.mainOid(doc);
       currentSource = await store.readAt(doc, baseOid);
     } catch (err) {
       console.warn(
-        `[marginalia] reading base for proposal ${id} (${doc.uid}) failed; falling back to legacy splice metadata:`,
+        `[marginalia] reading base for proposal ${id} (${doc.uid}) failed:`,
         err,
       );
-      baseOid = null;
+      return c.json({ error: 'proposal-storage-unavailable' }, 503);
     }
-    if (currentSource) {
-      blockRange = locateAnchorRange(
+    blockRange = locateAnchorRange(doc, currentSource, anchor.blockId, anchor.endBlockId);
+    if (!blockRange) return c.json({ error: 'anchor-block-not-found' }, 400);
+    const nextSource =
+      currentSource.slice(0, blockRange.start) +
+      proposal.proposedText +
+      currentSource.slice(blockRange.end);
+    try {
+      const branch = await store.createProposalBranch(
         doc,
-        currentSource,
-        anchor.blockId,
-        anchor.endBlockId,
+        baseOid as string,
+        id,
+        nextSource,
+        identity,
       );
-      sourceSnapshot = blockRange
-        ? currentSource.slice(blockRange.start, blockRange.end)
-        : null;
-      // Branch creation can fail independently (disk, permissions,
-      // corruption). Keep the already-derived snapshot + source offsets
-      // so the row still gets the better data — only branch_ref is
-      // nulled. Accept's legacy splice fallback handles the rest.
-      if (blockRange) {
-        const nextSource =
-          currentSource.slice(0, blockRange.start) +
-          proposal.proposedText +
-          currentSource.slice(blockRange.end);
-        try {
-          const branch = await store.createProposalBranch(
-            doc,
-            baseOid as string,
-            id,
-            nextSource,
-            identity,
-          );
-          branchRef = branch.refName;
-        } catch (err) {
-          console.warn(
-            `[marginalia] proposal-branch creation failed for ${id} (${doc.uid}); proposal stored without ref:`,
-            err,
-          );
-        }
-      }
+      branchRef = branch.refName;
+    } catch (err) {
+      console.warn(
+        `[marginalia] proposal-branch creation failed for ${id} (${doc.uid}):`,
+        err,
+      );
+      return c.json({ error: 'proposal-storage-unavailable' }, 503);
     }
   }
 
@@ -269,14 +259,11 @@ async function createThread(c: Context, deps: AppDeps) {
     if (proposal) {
       db.prepare(
         `INSERT INTO comments_edit_proposals
-           (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid,
+           (comment_id, status, accepted_oid,
             branch_ref, base_oid, base_block_start, base_block_end)
-         VALUES (?, ?, ?, ?, 'open', NULL, ?, ?, ?, ?)`,
+         VALUES (?, 'open', NULL, ?, ?, ?, ?)`,
       ).run(
         id,
-        proposal.anchorKind,
-        sourceSnapshot ?? anchor.quote,
-        proposal.proposedText,
         branchRef,
         baseOid,
         blockRange?.start ?? null,
@@ -292,7 +279,7 @@ async function createThread(c: Context, deps: AppDeps) {
 
   const root = loadThreadRow(db, id, doc.uid);
   if (!root) return c.json({ error: 'not-found' }, 404);
-  const thread = toThreadWire(root, [], decision, new Set<string>());
+  const thread = await toThreadWire(store, doc, root, [], decision, new Set<string>());
   const rootComment = db.prepare('SELECT * FROM comments WHERE id = ?').get(id) as CommentRow;
   const mentionTargets = storeMentionsForComment(
     db,
@@ -302,10 +289,13 @@ async function createThread(c: Context, deps: AppDeps) {
     rootComment.author_display_name,
   );
 
-  if (proposal) {
+  if (proposal && isProposalRow(root)) {
     realtime.broadcast(
       doc.uid,
-      { type: 'edit_proposal.created', edit_proposal: toProposalWire(root as never) },
+      {
+        type: 'edit_proposal.created',
+        edit_proposal: await toProposalWire(store, doc, root),
+      },
       identity.clientId,
     );
   } else {
@@ -341,28 +331,27 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
   const proposal = loadProposalRow(db, tid, doc.uid);
   if (!proposal) return c.json({ error: 'proposal-required' }, 400);
 
-  const before = await resolveDiffBefore(doc, proposal, deps);
-  return c.json({ before, after: proposal.proposed_text });
+  const diff = await resolveProposalDiff(doc, proposal, deps);
+  if (!diff) return c.json({ error: 'proposal-diff-unavailable' }, 410);
+  return c.json(diff);
 }
 
-async function resolveDiffBefore(
+/**
+ * Recover the {before, after} pair for a proposal from git: `before` is
+ * the anchor block at `base_oid`, `after` is the corresponding range at
+ * the proposal branch tip. Returns null when the row lacks the columns
+ * needed to address the splice range (legacy pre-#25 rows that escaped
+ * boot backfill, or branch creation failed at create time without
+ * recovery).
+ */
+async function resolveProposalDiff(
   doc: DocumentRow,
   proposal: EditProposalThreadRow,
   deps: AppDeps,
-): Promise<string> {
-  if (
-    proposal.base_oid &&
-    proposal.base_block_start !== null &&
-    proposal.base_block_end !== null
-  ) {
-    try {
-      const baseSource = await deps.store.readAt(doc, proposal.base_oid);
-      return baseSource.slice(proposal.base_block_start, proposal.base_block_end);
-    } catch {
-      // fall through
-    }
-  }
-  return resolveProposalDiffBefore(doc, proposal, deps);
+): Promise<{ before: string; after: string } | null> {
+  const content = await readProposalContent(deps.store, doc, proposal);
+  if (!content) return null;
+  return { before: content.source_snapshot, after: content.proposed_text };
 }
 
 /**
@@ -372,7 +361,7 @@ async function resolveDiffBefore(
  * rationale edits; plain threads use it for the root comment text.
  */
 async function editThreadRoot(c: Context, deps: AppDeps) {
-  const { db, realtime } = deps;
+  const { db, realtime, store } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
@@ -410,7 +399,10 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   if (isProposalRow(updated)) {
     realtime.broadcast(
       doc.uid,
-      { type: 'edit_proposal.updated', edit_proposal: toProposalWire(updated as never) },
+      {
+        type: 'edit_proposal.updated',
+        edit_proposal: await toProposalWire(store, doc, updated),
+      },
       decision.identity.clientId,
     );
   } else {
@@ -432,7 +424,7 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const replies = loadReplies(db, doc.uid, tid);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updated]);
   return c.json({
-    thread: toThreadWire(updated, replies, decision, reopenableAccepted),
+    thread: await toThreadWire(store, doc, updated, replies, decision, reopenableAccepted),
   });
 }
 
@@ -496,7 +488,7 @@ async function deleteThread(c: Context, deps: AppDeps) {
  * Edits one reply node under a thread. Root comments use `PATCH /:uid/threads/:tid`.
  */
 async function editThreadReply(c: Context, deps: AppDeps) {
-  const { db, realtime } = deps;
+  const { db, realtime, store } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
@@ -555,7 +547,7 @@ async function editThreadReply(c: Context, deps: AppDeps) {
   const replies = loadReplies(db, doc.uid, tid);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updatedThread]);
   return c.json({
-    thread: toThreadWire(updatedThread, replies, decision, reopenableAccepted),
+    thread: await toThreadWire(store, doc, updatedThread, replies, decision, reopenableAccepted),
   });
 }
 
@@ -675,8 +667,6 @@ async function respondToThread(c: Context, deps: AppDeps) {
       preparedWorkflow = await prepareAcceptProposalThread(doc, row, deps, identity);
     } else if (action === 'reopen' && resolution?.kind === 'accept') {
       preparedWorkflow = await prepareReopenAcceptedProposalThread(doc, row, deps, identity);
-    } else if (action === 'reopen' && resolution?.kind === 'reject') {
-      await ensureProposalBranchExists(doc, row, deps, identity);
     }
   } catch (err) {
     if (err instanceof ThreadActionError) {
@@ -778,10 +768,6 @@ async function respondToThread(c: Context, deps: AppDeps) {
     throw err;
   }
 
-  if (action === 'reject' && row.branch_ref) {
-    await deps.store.deleteProposalBranch(doc, row.id).catch(() => undefined);
-  }
-
   if (createdReply) {
     realtime.broadcast(
       doc.uid,
@@ -800,7 +786,10 @@ async function respondToThread(c: Context, deps: AppDeps) {
   for (const proposal of reanchoredProposalUpdates) {
     realtime.broadcast(
       doc.uid,
-      { type: 'edit_proposal.updated', edit_proposal: toProposalWire(proposal) },
+      {
+        type: 'edit_proposal.updated',
+        edit_proposal: await toProposalWire(deps.store, doc, proposal),
+      },
       identity.clientId,
     );
   }
@@ -814,7 +803,10 @@ async function respondToThread(c: Context, deps: AppDeps) {
     if (isProposalRow(updated)) {
       realtime.broadcast(
         doc.uid,
-        { type: 'edit_proposal.updated', edit_proposal: toProposalWire(updated as never) },
+        {
+          type: 'edit_proposal.updated',
+          edit_proposal: await toProposalWire(deps.store, doc, updated),
+        },
         identity.clientId,
       );
     } else {
@@ -834,53 +826,9 @@ async function respondToThread(c: Context, deps: AppDeps) {
   }
 
   return c.json({
-    thread: toThreadWire(updated, replies, decision, reopenableAccepted),
+    thread: await toThreadWire(deps.store, doc, updated, replies, decision, reopenableAccepted),
     created_reply_id: createdReplyId,
   });
-}
-
-/**
- * Recreate the proposal's branch ref from `base_oid` + `proposed_text`
- * if it's missing. Used by reopen-after-reject (reject deletes the ref).
- */
-async function ensureProposalBranchExists(
-  doc: DocumentRow,
-  row: ThreadRow,
-  deps: AppDeps,
-  _identity: Identity,
-): Promise<void> {
-  if (
-    !row.branch_ref ||
-    !row.base_oid ||
-    !row.proposed_text ||
-    row.base_block_start === null ||
-    row.base_block_end === null
-  ) {
-    return;
-  }
-  const tip = await deps.store.readProposalTip(doc, row.id);
-  if (tip !== null) return;
-  let baseSource: string;
-  try {
-    baseSource = await deps.store.readAt(doc, row.base_oid);
-  } catch {
-    return;
-  }
-  const nextSource =
-    baseSource.slice(0, row.base_block_start) +
-    row.proposed_text +
-    baseSource.slice(row.base_block_end);
-  try {
-    // Use the original proposer's identity so a FF accept of the
-    // recreated branch attributes the resulting `accept-proposal:`
-    // commit to the proposer rather than whoever reopened the thread.
-    await deps.store.createProposalBranch(doc, row.base_oid, row.id, nextSource, {
-      clientId: row.author_client_id,
-      displayName: row.author_display_name,
-    });
-  } catch {
-    // fall through
-  }
 }
 
 async function prepareAcceptProposalThread(
@@ -889,9 +837,22 @@ async function prepareAcceptProposalThread(
   deps: AppDeps,
   identity: Identity,
 ): Promise<PreparedThreadWorkflow> {
-  if (!row.anchor_block_id || !row.proposed_text) {
+  if (
+    !row.anchor_block_id ||
+    !row.branch_ref ||
+    !row.base_oid ||
+    row.base_block_start === null ||
+    row.base_block_end === null
+  ) {
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
+
+  // Recover proposedText from the branch tip and base blob — needed
+  // for post-merge anchor relocation. Done before the merge so we
+  // don't depend on git state mutated by the merge call.
+  const content = await readProposalContent(deps.store, doc, row);
+  if (!content) throw new ThreadActionError(409, 'proposal-orphaned');
+  const proposedText = content.proposed_text;
 
   const preMergeSource = deps.store.read(doc);
   const preMergeRange = locateAnchorRange(
@@ -914,44 +875,31 @@ async function prepareAcceptProposalThread(
     if (updated) {
       deps.realtime.broadcast(
         doc.uid,
-        { type: 'edit_proposal.updated', edit_proposal: toProposalWire(updated) },
+        {
+          type: 'edit_proposal.updated',
+          edit_proposal: await toProposalWire(deps.store, doc, updated),
+        },
         identity.clientId,
       );
     }
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
 
-  let oid: string;
-  let nextSource: string;
-  let spliceStart: number;
-  const merge =
-    row.branch_ref && row.base_oid
-      ? await deps.store.mergeProposalBranch(doc, row.id, identity)
-      : null;
-  if (merge?.ok) {
-    oid = merge.oid;
-    nextSource = deps.store.read(doc);
-    spliceStart = locatePostMergeSpliceStart(
-      doc,
-      nextSource,
-      row.proposed_text,
-      preMergeRange.start,
-    );
-  } else if (merge && merge.reason === 'conflict') {
-    throw new ThreadActionError(409, 'proposal-conflict');
-  } else {
-    // Legacy row, or branch ref vanished out from under us — splice
-    // proposed_text into preMergeSource and write a regular commit.
-    nextSource =
-      preMergeSource.slice(0, preMergeRange.start) +
-      row.proposed_text +
-      preMergeSource.slice(preMergeRange.end);
-    const written = await deps.store.write(doc, nextSource, identity, 'accept-proposal', {
-      proposalId: row.id,
-    });
-    oid = written.oid;
-    spliceStart = preMergeRange.start;
+  const merge = await deps.store.mergeProposalBranch(doc, row.id, identity);
+  if (!merge.ok) {
+    if (merge.reason === 'conflict') {
+      throw new ThreadActionError(409, 'proposal-conflict');
+    }
+    throw new ThreadActionError(409, 'proposal-orphaned');
   }
+  const oid = merge.oid;
+  const nextSource = deps.store.read(doc);
+  const spliceStart = locatePostMergeSpliceStart(
+    doc,
+    nextSource,
+    proposedText,
+    preMergeRange.start,
+  );
 
   const rendered = await renderDocument(nextSource, doc.format);
   const presentBlocks = locateDocumentBlocks(doc, nextSource);
@@ -976,7 +924,7 @@ async function prepareAcceptProposalThread(
     presentBlocks,
     rendered.blocks,
     spliceStart,
-    spliceStart + row.proposed_text.length,
+    spliceStart + proposedText.length,
   );
 
   return {
@@ -1212,22 +1160,40 @@ async function loadReopenableAcceptedThreadIds(
   const parent = history[1];
   if (!latest || !parent) return new Set<string>();
 
-  return new Set(accepted.filter((row) => row.accepted_oid === latest.oid).map((row) => row.id));
+  // Reopen makes the proposal `status='open'` again; without recoverable
+  // branch metadata the row is permanently undiffable + unacceptable
+  // (accept would 409 proposal-orphaned, diff 410). Block reopen for
+  // legacy accepted rows that don't carry the metadata to be operational.
+  return new Set(
+    accepted
+      .filter(
+        (row) =>
+          row.accepted_oid === latest.oid &&
+          row.branch_ref !== null &&
+          row.base_oid !== null &&
+          row.base_block_start !== null &&
+          row.base_block_end !== null,
+      )
+      .map((row) => row.id),
+  );
 }
 
-function toThreadWire(
+async function toThreadWire(
+  store: GitStore,
+  doc: DocumentRow,
   row: ThreadRow,
   replies: CommentRow[],
   decision: ReturnType<typeof authorize>,
   reopenableAccepted: Set<string>,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const state = threadState(row);
   const resolution = threadResolution(row);
   const rootAuthor = row.author_client_id;
   const viewerId = decision.ok ? (decision.identity?.clientId ?? null) : null;
   const isRootAuthor = viewerId !== null && viewerId === rootAuthor;
   const isAdmin = decision.ok && decision.role === 'admin';
-  const proposal = isProposalRow(row);
+  const proposalRow: EditProposalThreadRow | null = isProposalRow(row) ? row : null;
+  const proposal = proposalRow !== null;
   const canReply = decision.ok && canComment(decision.role);
   const canRootEdit = viewerId !== null && viewerId === row.author_client_id;
   const canRootDelete = canRootEdit || isAdmin;
@@ -1271,11 +1237,10 @@ function toThreadWire(
               ? decision.ok && canEdit(decision.role) && reopenableAccepted.has(row.id)
               : false),
     },
-    proposal: proposal
-      ? {
-          anchor_kind: row.anchor_kind,
-          source_snapshot: row.source_snapshot,
-          proposed_text: row.proposed_text,
+    proposal: proposalRow
+      ? (await readProposalContent(store, doc, proposalRow)) ?? {
+          source_snapshot: null,
+          proposed_text: null,
         }
       : null,
     comments: [
@@ -1341,7 +1306,7 @@ function threadResolution(
   return null;
 }
 
-function isProposalRow(row: ThreadRow): boolean {
+function isProposalRow(row: ThreadRow): row is EditProposalThreadRow {
   return row.proposal_status !== null;
 }
 
@@ -1500,7 +1465,7 @@ const MAX_PROPOSED_TEXT_LENGTH = 60000;
 function asProposal(
   v: unknown,
 ):
-  | { ok: true; proposal: { anchorKind: string | null; proposedText: string } | null }
+  | { ok: true; proposal: { proposedText: string } | null }
   | { ok: false; error: 'proposal-text-required' | 'proposal-text-too-long' } {
   if (v === null || v === undefined) return { ok: true, proposal: null };
   if (typeof v !== 'object') return { ok: false, error: 'proposal-text-required' };
@@ -1510,13 +1475,7 @@ function asProposal(
   if (proposedText.length > MAX_PROPOSED_TEXT_LENGTH) {
     return { ok: false, error: 'proposal-text-too-long' };
   }
-  return {
-    ok: true,
-    proposal: {
-      anchorKind: typeof proposal.anchor_kind === 'string' ? proposal.anchor_kind : null,
-      proposedText,
-    },
-  };
+  return { ok: true, proposal: { proposedText } };
 }
 
 function parseHeadingPath(raw: string | null): string[] | null {

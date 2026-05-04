@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Database } from 'bun:sqlite';
 import * as git from 'isomorphic-git';
 import { locateAllBlocks } from '@marginalia/renderer';
 import { openDatabase } from '../src/db.js';
@@ -10,9 +11,10 @@ import { GitStore } from '../src/git-store.js';
 import { backfillProposalBranches } from '../src/proposal-branch-backfill.js';
 
 /**
- * Boot-time backfill: legacy pending proposals (created before #25, no
- * branch_ref) get a `refs/proposals/<pid>` branch built retroactively
- * from their stored `proposed_text`, so accept can use git.merge.
+ * Boot-time backfill for pre-#25 / pre-Phase-3 databases: open proposal
+ * rows that still have `proposed_text` in the column get a one-commit
+ * `refs/proposals/<pid>` branch built from it. Once Phase 3 has run,
+ * the column is dropped and backfill becomes a no-op.
  */
 describe('backfillProposalBranches', () => {
   let dir: string;
@@ -24,6 +26,26 @@ describe('backfillProposalBranches', () => {
     dbPath = join(dir, 'db.sqlite');
     reposDir = join(dir, 'repos');
   });
+
+  /**
+   * Re-add the legacy columns the production schema dropped, so these
+   * tests can seed a pre-Phase-3 row layout. Idempotent.
+   */
+  function reinstateLegacyColumns(db: Database): void {
+    const cols = db.prepare(`PRAGMA table_info(comments_edit_proposals)`).all() as Array<{
+      name: string;
+    }>;
+    const has = new Set(cols.map((c) => c.name));
+    if (!has.has('anchor_kind')) {
+      db.exec(`ALTER TABLE comments_edit_proposals ADD COLUMN anchor_kind TEXT`);
+    }
+    if (!has.has('source_snapshot')) {
+      db.exec(`ALTER TABLE comments_edit_proposals ADD COLUMN source_snapshot TEXT`);
+    }
+    if (!has.has('proposed_text')) {
+      db.exec(`ALTER TABLE comments_edit_proposals ADD COLUMN proposed_text TEXT`);
+    }
+  }
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
@@ -41,6 +63,7 @@ describe('backfillProposalBranches', () => {
     blockText: string;
   }): Promise<{ blockId: string }> {
     const db = openDatabase(dbPath);
+    reinstateLegacyColumns(db);
     db.prepare(
       `INSERT INTO documents (uid, repo_dir, format, default_theme, created_at, updated_at)
        VALUES (?, ?, 'markdown', 'default', 0, 0)`,
@@ -170,6 +193,7 @@ describe('backfillProposalBranches', () => {
     // current source (the doc was edited after the proposal was made,
     // before #25 added orphan tracking on every edit).
     const db = openDatabase(dbPath);
+    reinstateLegacyColumns(db);
     db.prepare(
       `INSERT INTO documents (uid, repo_dir, format, default_theme, created_at, updated_at)
        VALUES ('doc-1', 'doc-1', 'markdown', 'default', 0, 0)`,
@@ -246,6 +270,7 @@ describe('backfillProposalBranches', () => {
     // base_oid as the splice base and locate the block in *that*
     // source — not silently re-anchor onto current main.
     const db = openDatabase(dbPath);
+    reinstateLegacyColumns(db);
     db.prepare(
       `INSERT INTO documents (uid, repo_dir, format, default_theme, created_at, updated_at)
        VALUES ('doc-1', 'doc-1', 'markdown', 'default', 0, 0)`,
@@ -322,6 +347,7 @@ describe('backfillProposalBranches', () => {
     // null. Backfill must NOT re-base it onto current main; the
     // original base is the proposal's stable parent.
     const db = openDatabase(dbPath);
+    reinstateLegacyColumns(db);
     db.prepare(
       `INSERT INTO documents (uid, repo_dir, format, default_theme, created_at, updated_at)
        VALUES ('doc-1', 'doc-1', 'markdown', 'default', 0, 0)`,
