@@ -665,8 +665,12 @@ button.primary:disabled {
   .marginalia .collapse-section.is-collapsed {
     grid-template-rows: 1fr;
   }
-  .marginalia .collapse-section > .collapse-section-inner {
+  .marginalia .collapse-section > .collapse-section-inner,
+  .marginalia .collapse-section.is-collapsed > .collapse-section-inner {
     clip-path: none;
+    /* Override the screen rule's `opacity: 0` so a section that was
+       collapsed at print time still prints its body content. */
+    opacity: 1;
   }
 }
 

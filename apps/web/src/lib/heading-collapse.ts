@@ -2,21 +2,34 @@
  * Wraps the content under each heading in the rendered article so the
  * reader can collapse / expand sections by clicking a chevron.
  *
- * The server emits flat HTML — `<h2>`, then a run of siblings, then the
- * next heading. To make the run collapsible as a unit (and to nest
- * subheadings inside their parent's collapse), we walk the article's
- * direct children and group everything between a heading and the next
- * heading of equal-or-higher level into a `<div class="collapse-section">`.
- * The grouping is recursive, so collapsing an h2 also hides every h3
- * section inside it.
+ * The renderer emits two different heading shapes:
+ *   - Markdown: flat — `<h2>`, then a run of sibling content nodes,
+ *     then the next heading at the same DOM depth.
+ *   - AsciiDoc: nested — `<div class="sect1"><h2>…</h2><div class="
+ *     sectionbody">…</div></div>`, with the heading sitting inside a
+ *     wrapping section element.
  *
- * Animation uses the `grid-template-rows: 1fr ↔ 0fr` trick: the wrapper
- * is a one-row grid whose row collapses smoothly, and the child has
- * `overflow: hidden`. Works in all modern browsers without measuring
- * the content height ahead of time, unlike a `height: auto` transition.
+ * To handle both, we iterate every heading in document order via
+ * `querySelectorAll` and, for each, gather its following siblings
+ * (within whatever container the heading happens to live in) up to
+ * the next heading at the same-or-higher level. Those siblings move
+ * into a `.collapse-section` wrapper that is inserted right after the
+ * heading. Outer headings are processed before inner ones so deeper
+ * sections automatically end up nested inside their ancestor's
+ * wrapper — collapsing an h2 also hides every h3 below it.
+ *
+ * Animation uses the `grid-template-rows: 1fr ↔ 0fr` trick: the
+ * wrapper is a one-row grid whose row collapses smoothly. The inner
+ * uses `clip-path: inset(0 -2em)` rather than `overflow: hidden` so
+ * heading-anchor sigils (positioned at `left: -0.9em` of each
+ * heading) remain visible — per-axis overflow values are coerced to
+ * `auto` when one side is `visible`, so `clip-path` is the only way
+ * to keep vertical clipping while permitting horizontal slack.
  */
 
 const HEADING_TAGS = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
+const HEADING_SELECTOR = 'h1, h2, h3, h4, h5, h6';
+const INSTALLED_ATTR = 'data-collapse-installed';
 
 const CHEVRON_SVG = `<svg viewBox="0 0 15 15" width="14" height="14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M6.1584 3.13508C6.35985 2.94621 6.67627 2.95642 6.86514 3.15788L10.6151 7.15788C10.7954 7.3502 10.7954 7.64949 10.6151 7.84182L6.86514 11.8418C6.67627 12.0433 6.35985 12.0535 6.1584 11.8646C5.95694 11.6757 5.94673 11.3593 6.1356 11.1579L9.565 7.49985L6.1356 3.84182C5.94673 3.64036 5.95694 3.32394 6.1584 3.13508Z" fill="currentColor" fill-rule="evenodd" clip-rule="evenodd"/></svg>`;
 
@@ -28,63 +41,69 @@ function headingLevel(node: Node): number | null {
 }
 
 /**
- * Idempotent: safe to call repeatedly. If wrappers already exist (e.g.
- * the html effect re-ran in strict mode without changing the html), the
- * function bails so collapse state isn't reset.
+ * Find the highest-level heading anywhere inside `node` (smallest
+ * level number = most prominent). Returns `null` if `node` contains
+ * no heading. Used to decide whether a non-heading sibling element
+ * (e.g. an AsciiDoc `<div class="sect1">`) should terminate the
+ * current section's collection — a sect1 sibling whose own h2 is at
+ * the same level as our heading marks the boundary.
  */
-export function installHeadingCollapse(article: HTMLElement): void {
-  // Any heading with content produces a `.collapse-section` placed at
-  // the top of the article (subsequent same-or-higher headings start
-  // their own top-level wrapper). If we find one, we've already
-  // installed.
-  if (article.querySelector(':scope > .collapse-section')) return;
-
-  const grouped = groupChildren(Array.from(article.childNodes), 0);
-
-  // After `groupChildren`, some original nodes have already moved into
-  // wrapper subtrees. `replaceChildren` reattaches everything in the
-  // new order in one shot.
-  article.replaceChildren(...grouped);
+function topmostHeadingLevel(node: Node): number | null {
+  if (node.nodeType !== Node.ELEMENT_NODE) return null;
+  const inner = (node as Element).querySelector(HEADING_SELECTOR);
+  return inner ? headingLevel(inner) : null;
 }
 
 /**
- * Recursively groups a flat list of sibling nodes. For each heading at
- * a level greater than `parentLevel`, gathers the following siblings
- * (until the next heading at level <= the heading's level) into a
- * collapsible wrapper attached after the heading. Subheadings inside
- * that range are processed recursively, producing nested wrappers.
+ * Idempotent: safe to call repeatedly. Marks the article with
+ * `data-collapse-installed` on first run; subsequent calls bail out.
+ * A class-based check would false-positive on user-authored content
+ * that happens to use the same name.
  */
-function groupChildren(children: Node[], parentLevel: number): Node[] {
-  const result: Node[] = [];
-  let i = 0;
-  while (i < children.length) {
-    const node = children[i] as Node;
-    const lvl = headingLevel(node);
+export function installHeadingCollapse(article: HTMLElement): void {
+  if (article.getAttribute(INSTALLED_ATTR) === 'true') return;
+  article.setAttribute(INSTALLED_ATTR, 'true');
 
-    if (lvl !== null && lvl > parentLevel) {
-      result.push(node);
-      let j = i + 1;
-      while (j < children.length) {
-        const nextLvl = headingLevel(children[j] as Node);
-        if (nextLvl !== null && nextLvl <= lvl) break;
-        j++;
-      }
-      const sectionChildren = children.slice(i + 1, j);
-      if (sectionChildren.length > 0) {
-        const processed = groupChildren(sectionChildren, lvl);
-        const wrapper = createWrapper(lvl);
-        const inner = wrapper.firstElementChild as HTMLElement;
-        for (const n of processed) inner.appendChild(n);
-        result.push(wrapper);
-        addToggleButton(node as HTMLElement, wrapper);
-      }
-      i = j;
-    } else {
-      result.push(node);
-      i++;
-    }
+  // Capture all headings up front. The NodeList is static; subsequent
+  // DOM moves don't invalidate the references. Iterating in document
+  // order means each heading is processed before any heading nested
+  // inside its (forthcoming) section — so deeper sections naturally
+  // end up inside their parent's wrapper.
+  const headings = Array.from(article.querySelectorAll<HTMLElement>(HEADING_SELECTOR));
+
+  for (const heading of headings) {
+    const lvl = headingLevel(heading);
+    if (lvl === null) continue;
+
+    const sectionNodes = collectSectionNodes(heading, lvl);
+    if (sectionNodes.length === 0) continue;
+
+    const wrapper = createWrapper(lvl);
+    const inner = wrapper.firstElementChild as HTMLElement;
+    for (const node of sectionNodes) inner.appendChild(node);
+    heading.after(wrapper);
+    addToggleButton(heading, wrapper);
   }
-  return result;
+}
+
+/**
+ * Gather siblings following `heading` (within whatever element is its
+ * parent) up to — but not including — the next heading at level
+ * `<= ourLevel`. The boundary check considers two cases:
+ *   - the sibling itself is such a heading (Markdown's flat layout),
+ *   - the sibling is a container whose top heading is at our level
+ *     (AsciiDoc's `.sect1` siblings, each holding their own h2).
+ */
+function collectSectionNodes(heading: Element, ourLevel: number): Node[] {
+  const nodes: Node[] = [];
+  let cursor: Node | null = heading.nextSibling;
+  while (cursor) {
+    const lvl = headingLevel(cursor) ?? topmostHeadingLevel(cursor);
+    if (lvl !== null && lvl <= ourLevel) break;
+    nodes.push(cursor);
+    cursor = cursor.nextSibling;
+  }
+  return nodes;
 }
 
 function createWrapper(level: number): HTMLDivElement {
@@ -120,8 +139,27 @@ function addToggleButton(heading: HTMLElement, wrapper: HTMLElement): void {
 
 function toggleSection(button: HTMLElement, wrapper: HTMLElement): void {
   const collapsed = wrapper.classList.toggle('is-collapsed');
+  applyCollapsedState(button, wrapper, collapsed);
+}
+
+/**
+ * Mirror DOM/ARIA state to the visual collapsed/expanded state.
+ * Setting `inert` on the inner wrapper takes the section's contents
+ * out of the focus order and the accessibility tree, so links and
+ * other interactive elements inside a closed section can't be
+ * reached by Tab or announced by a screen reader. (CSS-only hiding
+ * via `opacity: 0` and `grid-template-rows: 0fr` does not.)
+ */
+function applyCollapsedState(button: HTMLElement, wrapper: HTMLElement, collapsed: boolean): void {
   button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   button.setAttribute('aria-label', collapsed ? 'Expand section' : 'Collapse section');
+  const inner = wrapper.firstElementChild as HTMLElement | null;
+  if (!inner) return;
+  if (collapsed) {
+    inner.setAttribute('inert', '');
+  } else {
+    inner.removeAttribute('inert');
+  }
 }
 
 /**
@@ -137,14 +175,16 @@ export function expandAncestors(target: Element): void {
     if (!section) break;
     section.classList.remove('is-collapsed');
     // The heading sitting just before the wrapper owns the toggle button;
-    // keep aria state in sync.
+    // keep aria + inert state in sync.
     const heading = section.previousElementSibling;
     const button = heading
       ? (heading.querySelector(':scope > .heading-collapse-toggle') as HTMLButtonElement | null)
       : null;
     if (button) {
-      button.setAttribute('aria-expanded', 'true');
-      button.setAttribute('aria-label', 'Collapse section');
+      applyCollapsedState(button, section, false);
+    } else {
+      const inner = section.firstElementChild as HTMLElement | null;
+      inner?.removeAttribute('inert');
     }
     // Continue walking from the section's parent — outer wrappers may
     // also be collapsed.
