@@ -9,6 +9,7 @@ import {
   getDocument,
   updateDocument,
   claimInvite,
+  createDocumentProposal,
   ApiError,
   type Document,
   type AttachedAsset,
@@ -146,6 +147,13 @@ export function EditPage() {
   const canEdit = useMemo(() => {
     if (!doc) return false;
     return doc.role === 'admin' || doc.role === 'editor';
+  }, [doc]);
+
+  // Collaborators are allowed into edit mode but can only Propose, not
+  // Save. Asset upload/delete stays gated on `canEdit` (Save rights).
+  const canEnterEditor = useMemo(() => {
+    if (!doc) return false;
+    return doc.role === 'admin' || doc.role === 'editor' || doc.role === 'collaborator';
   }, [doc]);
 
   const attachedRefs = useMemo(() => new Set(attached.map((a) => a.ref_name)), [attached]);
@@ -423,7 +431,7 @@ export function EditPage() {
     return () => root.removeEventListener('paste', handler as EventListener);
   }, [canEdit, uid, uploadAndAttach, doc?.format]);
 
-  async function handleSave(opts?: { commitMessage?: string; closeAfter?: boolean }) {
+  async function handleSave(comment: string) {
     if (!uid) return;
     const resolved = displayName.trim();
     if (!resolved) {
@@ -435,9 +443,10 @@ export function EditPage() {
     setSaving(true);
     setError(null);
     try {
-      await updateDocument(uid, source, identity, opts?.commitMessage);
+      const trimmed = comment.trim();
+      await updateDocument(uid, source, identity, trimmed || undefined);
       setSavedSource(source);
-      if (opts?.closeAfter) navigate(`/d/${uid}`);
+      navigate(`/d/${uid}`);
     } catch (err) {
       reportError('EditPage.save', err, { uid });
       if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
@@ -447,7 +456,56 @@ export function EditPage() {
     }
   }
 
+  async function handleProposeEdit(rationale: string) {
+    if (!uid || !doc) return;
+    const resolved = displayName.trim();
+    if (!resolved) {
+      setError('Enter a display name to propose an edit.');
+      return;
+    }
+    setDisplayName(resolved);
+    const identity = { clientId: getClientId(), displayName: resolved };
+    setSaving(true);
+    setError(null);
+    try {
+      // Anchor the proposal at the first block of the *current saved*
+      // source so the thread renders at the very top of the document.
+      // Using savedSource (not source) keeps the anchor consistent with
+      // what the server has at base — the proposed_text is the user's
+      // new full source.
+      const renderer = await loadRenderer();
+      const blocks = doc.format === 'asciidoc'
+        ? renderer.locateAllBlocksAsciidoc(savedSource)
+        : renderer.locateAllBlocks(savedSource);
+      const first = blocks.entries().next();
+      if (first.done) {
+        setError('Cannot propose an edit on an empty document.');
+        return;
+      }
+      const [firstBlockId, firstRange] = first.value;
+      const anchorQuote = savedSource.slice(firstRange.start, firstRange.end).slice(0, 200);
+      await createDocumentProposal(
+        uid,
+        {
+          proposed_text: source,
+          rationale: rationale.trim() || null,
+          anchor_block_id: firstBlockId,
+          anchor_quote: anchorQuote,
+        },
+        identity,
+      );
+      navigate(`/d/${uid}`);
+    } catch (err) {
+      reportError('EditPage.proposeEdit', err, { uid });
+      if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
+      else setError(err instanceof Error ? `Propose failed: ${err.message}` : 'Propose failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
   const canSave = canEdit;
+  const canPropose = canEnterEditor;
   const hasChanges = source !== savedSource;
 
   if (error && !doc) {
@@ -505,7 +563,7 @@ export function EditPage() {
           />
         )}
         <div className="edit-source">
-          {canEdit && (
+          {canEnterEditor && (
             <MarkdownToolbar
               viewRef={viewRef}
               format={doc.format}
@@ -517,13 +575,13 @@ export function EditPage() {
           <EditToolbar
             docUid={doc.uid}
             canSave={canSave}
+            canPropose={canPropose}
             hasChanges={hasChanges}
             saving={saving}
             displayName={displayName}
             error={error}
-            onSave={() => handleSave()}
-            onSaveAndClose={() => handleSave({ closeAfter: true })}
-            onSaveWithComment={(comment) => handleSave({ commitMessage: comment })}
+            onSave={(comment) => handleSave(comment)}
+            onProposeEdit={(rationale) => handleProposeEdit(rationale)}
           />
           <ResizeHandle side="left" width={editorWidth} onResize={setEditorWidth} min={200} max={1800} label="Resize editor panel" />
         </div>
