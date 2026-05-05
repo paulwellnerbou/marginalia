@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Dialog, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { BlockSourceRange, RenderResult } from '@marginalia/renderer';
 import { EnterFullScreenIcon, ExitFullScreenIcon } from '@radix-ui/react-icons';
@@ -267,12 +267,73 @@ export function ProposalComposer({
 }: ProposalComposerProps) {
   const open = target !== null;
   const [expanded, setExpanded] = useState(false);
-  // Reset expanded whenever the dialog is closed (any path: Cancel
-  // button, Escape, overlay click, parent clearing the target after
-  // submit). Doing this in an effect on `open` catches every close
-  // path; a wrapper around `onCancel` would miss the post-submit
-  // close where the parent clears the target without calling cancel.
-  useEffect(() => { if (!open) setExpanded(false); }, [open]);
+  // User-applied drag offset on top of Radix's centered position. Lets
+  // the user shove the dialog aside to read the document underneath
+  // without dismissing it.
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  // Mirror of `offset` for the drag handler — pointermove fires faster
+  // than React state updates, so we read the latest value from a ref
+  // rather than capturing a stale closure value.
+  const offsetRef = useRef(offset);
+  useEffect(() => { offsetRef.current = offset; }, [offset]);
+  // Reset expanded + drag offset whenever the dialog is closed (any
+  // path: Cancel button, Escape, overlay click, parent clearing the
+  // target after submit). Doing this in an effect on `open` catches
+  // every close path; a wrapper around `onCancel` would miss the
+  // post-submit close where the parent clears the target without
+  // calling cancel.
+  useEffect(() => {
+    if (!open) {
+      setExpanded(false);
+      setOffset({ x: 0, y: 0 });
+    }
+  }, [open]);
+  // In expanded mode the dialog fills 95vw/90vh, so any drag offset
+  // would just push it off-screen. Snap back to centered when the user
+  // toggles expand.
+  useEffect(() => {
+    if (expanded) setOffset({ x: 0, y: 0 });
+  }, [expanded]);
+
+  const handleTitlePointerDown = useCallback((e: React.PointerEvent) => {
+    if (expanded) return;
+    if (e.button !== 0) return;
+    // Don't hijack clicks on interactive controls inside the header —
+    // the expand toggle, the display-name field, focusable text, etc.
+    // Anything that the user is reasonably trying to *interact with*
+    // rather than grab the window by.
+    if ((e.target as HTMLElement).closest(
+      'button, [role="button"], a, input, textarea, select, [contenteditable="true"]',
+    )) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const baseX = offsetRef.current.x;
+    const baseY = offsetRef.current.y;
+    const onMove = (ev: PointerEvent) => {
+      setOffset({ x: baseX + ev.clientX - startX, y: baseY + ev.clientY - startY });
+    };
+    const onUp = () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
+      document.removeEventListener('pointercancel', onUp);
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+    document.addEventListener('pointercancel', onUp);
+  }, [expanded]);
+
+  const dragged = offset.x !== 0 || offset.y !== 0;
+  const contentStyle: React.CSSProperties = {
+    ...(expanded ? { width: '95vw', height: '90vh' } : {}),
+    // Use the CSS `translate` longhand (not `transform`) so the drag
+    // offset composes *on top of* Radix's centering — Radix Themes
+    // centers `.rt-DialogContent` via `transform: translate(-50%, -50%)`
+    // (or a flexbox overlay, depending on viewport size), and overriding
+    // `transform` here was clobbering whichever centering scheme was in
+    // play, snapping the dialog to the upper-left on first drag.
+    ...(dragged ? { translate: `${offset.x}px ${offset.y}px` } : {}),
+  };
 
   return (
     <Dialog.Root
@@ -285,7 +346,7 @@ export function ProposalComposer({
         size="3"
         maxWidth={expanded ? '95vw' : '720px'}
         className={expanded ? 'proposal-dialog--expanded' : undefined}
-        style={expanded ? { width: '95vw', height: '90vh' } : undefined}
+        style={Object.keys(contentStyle).length > 0 ? contentStyle : undefined}
       >
         {target && (
           <ProposalComposerBody
@@ -300,6 +361,7 @@ export function ProposalComposer({
             onSubmit={onSubmit}
             expanded={expanded}
             onToggleExpanded={() => setExpanded((v) => !v)}
+            onTitlePointerDown={handleTitlePointerDown}
           />
         )}
       </Dialog.Content>
@@ -319,6 +381,7 @@ function ProposalComposerBody({
   onSubmit,
   expanded,
   onToggleExpanded,
+  onTitlePointerDown,
 }: {
   target: ProposalTarget;
   docUid: string;
@@ -331,6 +394,7 @@ function ProposalComposerBody({
   onSubmit: ProposalComposerProps['onSubmit'];
   expanded: boolean;
   onToggleExpanded: () => void;
+  onTitlePointerDown: (e: React.PointerEvent) => void;
 }) {
   const originalSource = useMemo(() => {
     const range = mergeBlockRanges(
@@ -451,8 +515,16 @@ function ProposalComposerBody({
 
   return (
     <div className={`proposal-composer-layout composer${expanded ? ' proposal-composer-layout--expanded' : ''}`}>
-      <div className="proposal-composer-header">
-        <Flex align="center" gap="2" mb="1" className="proposal-composer-title-row">
+      <div
+        className={`proposal-composer-header${expanded ? '' : ' proposal-drag-handle'}`}
+        onPointerDown={expanded ? undefined : onTitlePointerDown}
+      >
+        <Flex
+          align="center"
+          gap="2"
+          mb="1"
+          className="proposal-composer-title-row"
+        >
           <Dialog.Title className="proposal-composer-title">Propose edit</Dialog.Title>
           <IconButton
             size="2"

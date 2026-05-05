@@ -2095,6 +2095,43 @@ button.primary:disabled {
   margin-bottom: 0;
 }
 
+/* The whole top of the dialog doubles as a drag handle in compact mode
+   so the user can shove the dialog aside to read the document
+   underneath without dismissing it. Negative margins + matching
+   internal padding bleed the header element into Radix's
+   `.rt-DialogContent` padding (`var(--space-5)` at size 3) so the
+   *visible* dialog padding above and to either side of the title is
+   also grabbable — clicking the empty padding band at the top now
+   starts a drag, which is what users expect from window-style chrome.
+   Disabled in expanded mode (95vw fills the viewport, nowhere useful
+   to drag to). */
+.proposal-drag-handle {
+  margin: calc(var(--space-5) * -1) calc(var(--space-5) * -1) 0;
+  padding: var(--space-5) var(--space-5) 0;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.proposal-drag-handle:active {
+  cursor: grabbing;
+}
+/* Re-enable the normal cursor on interactive children — the IconButton
+   in the row, the title text itself — so they don't all advertise drag. */
+.proposal-drag-handle button,
+.proposal-drag-handle [role='button'],
+.proposal-drag-handle input,
+.proposal-drag-handle textarea,
+.proposal-drag-handle select,
+.proposal-drag-handle a {
+  cursor: auto;
+}
+.proposal-drag-handle button,
+.proposal-drag-handle [role='button'],
+.proposal-drag-handle a {
+  cursor: pointer;
+}
+
 .proposal-composer-source-label {
   display: block;
   margin-bottom: 0.35rem;
