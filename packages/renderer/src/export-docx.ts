@@ -1298,17 +1298,18 @@ function buildStyles(
     ? { language: { value: lang.language, bidirectional: lang.language } }
     : {};
 
-  const heading = (
-    id: string,
-    level: keyof typeof HeadingLevel,
+  // Build OVERRIDES of the docx library's built-in Heading1..6
+  // styles. Earlier we pushed `paragraphStyles: [{ id: 'Heading1',
+  // ... }, ...]` which APPENDED a second style with the same
+  // styleId on top of the library's defaults — invalid OOXML
+  // (`w:styleId` must be unique) and Word's strict reader flagged
+  // it as "unreadable content" requiring repair. Using
+  // `default.headingN` overrides the built-in style in-place.
+  const headingDefault = (
+    level: 1 | 2 | 3 | 4 | 5 | 6,
     multiplier: number,
     uppercase: boolean,
   ) => ({
-    id,
-    name: id,
-    basedOn: 'Normal',
-    next: 'Normal',
-    quickFormat: true,
     run: {
       font: headingFont,
       color: hex(tokens.colors.fg),
@@ -1325,7 +1326,7 @@ function buildStyles(
       },
       keepNext: true,
       keepLines: true,
-      outlineLevel: HeadingLevel[level] === HeadingLevel.TITLE ? 0 : parseInt(id.slice(-1), 10) - 1,
+      outlineLevel: level - 1,
     },
   });
 
@@ -1349,14 +1350,14 @@ function buildStyles(
           ...(lang.rtl ? { bidirectional: true } : {}),
         },
       },
+      heading1: headingDefault(1, tokens.fontSize.h1Em, tokens.headingUppercase.h1),
+      heading2: headingDefault(2, tokens.fontSize.h2Em, tokens.headingUppercase.h2),
+      heading3: headingDefault(3, tokens.fontSize.h3Em, tokens.headingUppercase.h3),
+      heading4: headingDefault(4, tokens.fontSize.h4Em, tokens.headingUppercase.h4),
+      heading5: headingDefault(5, tokens.fontSize.h5Em, tokens.headingUppercase.h5),
+      heading6: headingDefault(6, tokens.fontSize.h6Em, tokens.headingUppercase.h6),
     },
     paragraphStyles: [
-      heading('Heading1', 'HEADING_1', tokens.fontSize.h1Em, tokens.headingUppercase.h1),
-      heading('Heading2', 'HEADING_2', tokens.fontSize.h2Em, tokens.headingUppercase.h2),
-      heading('Heading3', 'HEADING_3', tokens.fontSize.h3Em, tokens.headingUppercase.h3),
-      heading('Heading4', 'HEADING_4', tokens.fontSize.h4Em, tokens.headingUppercase.h4),
-      heading('Heading5', 'HEADING_5', tokens.fontSize.h5Em, tokens.headingUppercase.h5),
-      heading('Heading6', 'HEADING_6', tokens.fontSize.h6Em, tokens.headingUppercase.h6),
       {
         id: 'Blockquote',
         name: 'Blockquote',
