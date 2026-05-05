@@ -105,6 +105,7 @@ const TOOLBAR_TOP_OFFSET_PX = 8;
 const TOOLBAR_BASE_TOP_PAD_PX = TOOLBAR_TOP_OFFSET_PX + STACK_GAP_PX;
 const FOCUS_MS = 1800;
 const DEFAULT_OPEN_COLUMN_WIDTH_PX = 320;
+const MIN_OPEN_COLUMN_WIDTH_PX = 240;
 
 /**
  * Global state shared by all cards.
@@ -554,7 +555,7 @@ export function InlineCommentsLayer({
     const el = rootRef.current;
     if (!el) return;
     const next = el.getBoundingClientRect().width;
-    if (next <= 0) return;
+    if (next < MIN_OPEN_COLUMN_WIDTH_PX) return;
     setOpenColumnWidth((prev) => (Math.abs(prev - next) > 0.5 ? next : prev));
   }, []);
 
