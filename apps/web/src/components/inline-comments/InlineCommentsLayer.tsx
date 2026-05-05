@@ -9,14 +9,13 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { CommentAnchor, Thread } from '../../lib/api.js';
+import type { CommentAnchor, DocumentFormat, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import {
+  type ThreadCollapseState,
   buildThreadCollapseState,
   reconcileThreadCollapseState,
-  type ThreadCollapseState,
 } from '../threadCollapseState.js';
-import type { DocumentFormat } from '../../lib/api.js';
 import { InlineCommentsToolbar } from './InlineCommentsToolbar.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
@@ -32,6 +31,8 @@ interface Props {
   blockRanges: Map<string, BlockSourceRange>;
   docFormat: DocumentFormat;
   canComment: boolean;
+  open: boolean;
+  onToggleOpen: () => void;
   /**
    * When true: all cards are sticky-stacked at the top initially. As
    * scroll reaches each card's anchor in turn, all currently-stacked
@@ -69,7 +70,12 @@ interface Props {
     body?: string,
     name?: string,
   ) => Promise<boolean>;
-  onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string, scrollOffset?: number) => void;
+  onScrollToAnchor: (
+    blockId: string,
+    quote?: string | null,
+    threadId?: string,
+    scrollOffset?: number,
+  ) => void;
 }
 
 interface OrderItem {
@@ -98,6 +104,10 @@ const STACK_GAP_PX = 8;
 const TOOLBAR_TOP_OFFSET_PX = 8;
 const TOOLBAR_BASE_TOP_PAD_PX = TOOLBAR_TOP_OFFSET_PX + STACK_GAP_PX;
 const FOCUS_MS = 1800;
+const DEFAULT_OPEN_COLUMN_WIDTH_PX = 280;
+const MIN_OPEN_COLUMN_WIDTH_PX = 240;
+const COLUMN_WIDTH_TRANSITION_MS = 180;
+const COLUMN_WIDTH_TRANSITION_FALLBACK_MS = COLUMN_WIDTH_TRANSITION_MS + 80;
 
 /**
  * Global state shared by all cards.
@@ -127,6 +137,8 @@ export function InlineCommentsLayer({
   blockRanges,
   docFormat,
   canComment,
+  open,
+  onToggleOpen,
   stackingEnabled,
   onToggleStacking,
   hideResolved,
@@ -146,6 +158,7 @@ export function InlineCommentsLayer({
   const rootRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(0);
+  const [openColumnWidth, setOpenColumnWidth] = useState(DEFAULT_OPEN_COLUMN_WIDTH_PX);
   const stickyTopPad = TOOLBAR_BASE_TOP_PAD_PX + toolbarHeight;
 
   /**
@@ -304,6 +317,8 @@ export function InlineCommentsLayer({
   const cardHeights = useRef<Map<string, number>>(new Map());
   const naturalTops = useRef<Map<string, number>>(new Map());
   const observerRef = useRef<ResizeObserver | null>(null);
+  const hasTrackedColumnOpen = useRef(false);
+  const columnWidthTransitioning = useRef(false);
 
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [columnHeight, setColumnHeight] = useState<number>(0);
@@ -510,6 +525,7 @@ export function InlineCommentsLayer({
   }, []);
 
   useEffect(() => {
+    if (!open) return;
     if (typeof ResizeObserver === 'undefined') return;
     const obs = new ResizeObserver((entries) => {
       let changed = false;
@@ -532,13 +548,59 @@ export function InlineCommentsLayer({
       obs.disconnect();
       observerRef.current = null;
     };
-  }, [requestRemeasure]);
+  }, [open, requestRemeasure]);
 
   useEffect(() => {
+    if (!open) return;
     const handler = () => requestRemeasure();
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
-  }, [requestRemeasure]);
+  }, [open, requestRemeasure]);
+
+  const measureOpenColumnWidth = useCallback(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const next = el.getBoundingClientRect().width;
+    if (next < MIN_OPEN_COLUMN_WIDTH_PX) return;
+    setOpenColumnWidth((prev) => (Math.abs(prev - next) > 0.5 ? next : prev));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!hasTrackedColumnOpen.current) {
+      hasTrackedColumnOpen.current = true;
+      return;
+    }
+
+    columnWidthTransitioning.current = true;
+    const timeout = window.setTimeout(() => {
+      columnWidthTransitioning.current = false;
+      if (open) measureOpenColumnWidth();
+    }, COLUMN_WIDTH_TRANSITION_FALLBACK_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [open, measureOpenColumnWidth]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    if (columnWidthTransitioning.current) return;
+    measureOpenColumnWidth();
+  }, [open, measureOpenColumnWidth]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+
+    const measureIfStable = () => {
+      if (columnWidthTransitioning.current) return;
+      measureOpenColumnWidth();
+    };
+
+    measureIfStable();
+    const obs = new ResizeObserver(measureIfStable);
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [open, measureOpenColumnWidth]);
 
   // Measure the toolbar height so cards can stack below it. Re-runs on
   // any toolbar resize (e.g. theme/font changes that nudge the icon row).
@@ -560,6 +622,7 @@ export function InlineCommentsLayer({
   }, []);
 
   useEffect(() => {
+    if (!open) return;
     const doc = docElementRef.current;
     if (!doc || typeof MutationObserver === 'undefined') return;
     // Coalesce bursts of mutations (e.g. when applyCommentHighlights
@@ -579,7 +642,7 @@ export function InlineCommentsLayer({
       if (raf) window.cancelAnimationFrame(raf);
       obs.disconnect();
     };
-  }, [docElementRef, requestRemeasure, docHtml]);
+  }, [docElementRef, open, requestRemeasure, docHtml]);
 
   // Scroll listener — only setStates when the (epoch, isSticky) tuple
   // actually flips, which is at most 2N events for the whole document.
@@ -590,7 +653,7 @@ export function InlineCommentsLayer({
   // recomputation per animation frame so the O(N) global-state scan
   // doesn't run multiple times per painted frame on long docs.
   useEffect(() => {
-    if (!stackingEnabled) return;
+    if (!open || !stackingEnabled) return;
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
     let raf = 0;
@@ -606,9 +669,10 @@ export function InlineCommentsLayer({
       if (raf) window.cancelAnimationFrame(raf);
       scroll.removeEventListener('scroll', onScroll);
     };
-  }, [recomputeGlobalState, scrollContainerRef, stackingEnabled]);
+  }, [open, recomputeGlobalState, scrollContainerRef, stackingEnabled]);
 
   useLayoutEffect(() => {
+    if (!open) return;
     let heightsChanged = false;
     for (const [id, el] of cardEls.current) {
       const h = el.offsetHeight;
@@ -629,7 +693,7 @@ export function InlineCommentsLayer({
     // infinite loop.
     if (heightsChanged || naturalsChanged) requestRemeasure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [measureNaturalTops, recomputeGlobalState, layoutVersion, docHtml]);
+  }, [measureNaturalTops, recomputeGlobalState, layoutVersion, docHtml, open]);
 
   // ----- focus animation -----
 
@@ -743,17 +807,19 @@ export function InlineCommentsLayer({
   }
 
   const showEmpty = sorted.length === 0 && !pendingAnchor;
-  const minHeight = Math.max(
-    columnHeight,
-    stackingEnabled ? 0 : noStackLayout.totalHeight,
-  );
+  const minHeight = Math.max(columnHeight, stackingEnabled ? 0 : noStackLayout.totalHeight);
 
   return (
     <aside
       ref={rootRef}
-      className={`ic-column${stackingEnabled ? '' : ' ic-column-no-stacking'}`}
+      className={`ic-column${stackingEnabled ? '' : ' ic-column-no-stacking'}${open ? '' : ' ic-column-collapsed'}`}
       aria-label="Inline comments"
-      style={{ minHeight: `${minHeight}px` }}
+      style={open ? { minHeight: `${minHeight}px` } : undefined}
+      onTransitionEnd={(event) => {
+        if (event.target !== event.currentTarget || event.propertyName !== 'flex-basis') return;
+        columnWidthTransitioning.current = false;
+        if (open) measureOpenColumnWidth();
+      }}
     >
       <InlineCommentsToolbar
         rootRef={toolbarRef}
@@ -761,90 +827,98 @@ export function InlineCommentsLayer({
         scrollContainerRef={scrollContainerRef}
         cardNaturalTops={naturalTops.current}
         stickyTopPad={stickyTopPad}
+        open={open}
+        onToggleOpen={onToggleOpen}
         stackingEnabled={stackingEnabled}
         onToggleStacking={onToggleStacking}
         hideResolved={hideResolved}
         onToggleHideResolved={onToggleHideResolved}
         onScrollToAnchor={scrollToAnchorWithOffset}
       />
-      {renderItems.map((item, k) => {
-        const naturalTop = orderedMetrics.anchors[k] ?? 0;
-        const cardHeight = orderedMetrics.heights[k] ?? 96;
-        const { epoch, isSticky } = globalState;
+      <div className="ic-column-clip" aria-hidden={!open}>
+        <div className="ic-column-content" style={{ inlineSize: `${openColumnWidth}px` }}>
+          {renderItems.map((item, k) => {
+            const naturalTop = orderedMetrics.anchors[k] ?? 0;
+            const cardHeight = orderedMetrics.heights[k] ?? 96;
+            const { epoch, isSticky } = globalState;
 
-        let containerTop: number;
-        let containerHeight: number;
-        let useSticky: boolean;
-        let stickyTop = 0;
+            let containerTop: number;
+            let containerHeight: number;
+            let useSticky: boolean;
+            let stickyTop = 0;
 
-        if (!stackingEnabled) {
-          // No sticky behaviour: card sits at its anchor (or pushed
-          // down by the previous card if they would overlap) and
-          // scrolls with the document.
-          containerTop = noStackLayout.tops[k] ?? naturalTop;
-          containerHeight = cardHeight;
-          useSticky = false;
-        } else if (k < epoch) {
-          // Card has already passed its anchor and landed. We add the
-          // sticky top-pad to the landed scroll-y so the transition
-          // out of the SCROLLING phase is continuous (the card sat at
-          // viewport-y=stickyTopPad while sticky and stays at the
-          // same screen position when it lands).
-          containerTop = naturalTop + stickyTopPad;
-          containerHeight = cardHeight;
-          useSticky = false;
-        } else if (isSticky) {
-          // Stacked phase for the current stack [epoch..N-1].
-          //   container.top    = phaseStart + T
-          //   container.height = phaseEnd  - phaseStart + cardHeight
-          // chosen so the inner sticks at viewport-y = T from
-          // scrollTop=phaseStart and disengages at scrollTop=phaseEnd.
-          const T = stackOffset(k, epoch);
-          const phaseStart =
-            epoch === 0
-              ? 0
-              : (orderedMetrics.anchors[epoch - 1] ?? 0) +
-                (orderedMetrics.heights[epoch - 1] ?? 96) +
-                STACK_GAP_PX;
-          const phaseEnd = orderedMetrics.anchors[epoch] ?? naturalTop;
-          containerTop = phaseStart + T;
-          containerHeight = Math.max(phaseEnd - phaseStart + cardHeight, cardHeight);
-          stickyTop = T;
-          useSticky = true;
-        } else {
-          // Scrolling phase: cards in [epoch..N-1] ride the document
-          // with their stacked offsets between anchor[epoch] and the
-          // moment card_epoch leaves the viewport.
-          const T = stackOffset(k, epoch);
-          containerTop = (orderedMetrics.anchors[epoch] ?? 0) + T;
-          containerHeight = cardHeight;
-          useSticky = false;
-        }
+            if (!stackingEnabled) {
+              // No sticky behaviour: card sits at its anchor (or pushed
+              // down by the previous card if they would overlap) and
+              // scrolls with the document.
+              containerTop = noStackLayout.tops[k] ?? naturalTop;
+              containerHeight = cardHeight;
+              useSticky = false;
+            } else if (k < epoch) {
+              // Card has already passed its anchor and landed. We add the
+              // sticky top-pad to the landed scroll-y so the transition
+              // out of the SCROLLING phase is continuous (the card sat at
+              // viewport-y=stickyTopPad while sticky and stays at the
+              // same screen position when it lands).
+              containerTop = naturalTop + stickyTopPad;
+              containerHeight = cardHeight;
+              useSticky = false;
+            } else if (isSticky) {
+              // Stacked phase for the current stack [epoch..N-1].
+              //   container.top    = phaseStart + T
+              //   container.height = phaseEnd  - phaseStart + cardHeight
+              // chosen so the inner sticks at viewport-y = T from
+              // scrollTop=phaseStart and disengages at scrollTop=phaseEnd.
+              const T = stackOffset(k, epoch);
+              const phaseStart =
+                epoch === 0
+                  ? 0
+                  : (orderedMetrics.anchors[epoch - 1] ?? 0) +
+                    (orderedMetrics.heights[epoch - 1] ?? 96) +
+                    STACK_GAP_PX;
+              const phaseEnd = orderedMetrics.anchors[epoch] ?? naturalTop;
+              containerTop = phaseStart + T;
+              containerHeight = Math.max(phaseEnd - phaseStart + cardHeight, cardHeight);
+              stickyTop = T;
+              useSticky = true;
+            } else {
+              // Scrolling phase: cards in [epoch..N-1] ride the document
+              // with their stacked offsets between anchor[epoch] and the
+              // moment card_epoch leaves the viewport.
+              const T = stackOffset(k, epoch);
+              containerTop = (orderedMetrics.anchors[epoch] ?? 0) + T;
+              containerHeight = cardHeight;
+              useSticky = false;
+            }
 
-        return (
-          <div
-            key={item.id}
-            className="ic-anchor-slot"
-            style={{ top: `${containerTop}px`, height: `${containerHeight}px` }}
-          >
-            <div
-              ref={getRefCallback(item.id)}
-              className="ic-sticky-card"
-              style={
-                useSticky ? { position: 'sticky', top: `${stickyTop}px` } : { position: 'static' }
-              }
-            >
-              {renderCardById(item.id)}
+            return (
+              <div
+                key={item.id}
+                className="ic-anchor-slot"
+                style={{ top: `${containerTop}px`, height: `${containerHeight}px` }}
+              >
+                <div
+                  ref={getRefCallback(item.id)}
+                  className="ic-sticky-card"
+                  style={
+                    useSticky
+                      ? { position: 'sticky', top: `${stickyTop}px` }
+                      : { position: 'static' }
+                  }
+                >
+                  {renderCardById(item.id)}
+                </div>
+              </div>
+            );
+          })}
+
+          {showEmpty && (
+            <div className="ic-empty-state">
+              {canComment ? 'Select text in the document to comment.' : 'No comments yet.'}
             </div>
-          </div>
-        );
-      })}
-
-      {showEmpty && (
-        <div className="ic-empty-state">
-          {canComment ? 'Select text in the document to comment.' : 'No comments yet.'}
+          )}
         </div>
-      )}
+      </div>
     </aside>
   );
 }

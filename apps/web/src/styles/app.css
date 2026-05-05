@@ -2321,6 +2321,10 @@ button.primary:disabled {
   position: relative;
   font-size: 0.85rem;
   color: var(--ui-fg);
+  transition: flex-basis 180ms ease;
+}
+.ic-column-collapsed {
+  flex-basis: calc(64px + 1.5rem);
 }
 
 /* Sticky toolbar pinned near the top of the comment column, with a
@@ -2345,25 +2349,98 @@ button.primary:disabled {
   border-radius: var(--doc-floating-toolbar-radius);
   box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
   backdrop-filter: blur(14px);
+  overflow: hidden;
+  transition: margin 180ms ease, padding 180ms ease;
 }
 .ic-toolbar-group {
   display: flex;
   align-items: center;
   gap: 8px;
 }
+.ic-toolbar-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  transition: opacity 140ms ease, visibility 140ms ease;
+}
 /* The right group only contains toggle buttons; we want them spaced by the
  * same 3px that separates a toggle edge from the bar edge. The default 8px
  * group gap is right for the chevron pair on the left. */
 .ic-toolbar-group-right {
   gap: 3px;
+  transition: opacity 140ms ease, visibility 140ms ease;
 }
 .ic-toolbar-count {
-  flex: 1;
+  flex: 0 0 auto;
   text-align: center;
   font-size: 0.75rem;
   color: var(--ui-fg-muted);
   user-select: none;
   pointer-events: none;
+}
+.ic-column-collapsed .ic-toolbar {
+  inline-size: 64px;
+  padding: 0;
+}
+.ic-toolbar-collapsed {
+  justify-content: center;
+  gap: 0;
+}
+.ic-toolbar-collapsed .ic-toolbar-group-left {
+  inline-size: 100%;
+  justify-content: center;
+}
+.ic-toolbar-collapsed .ic-toolbar-collapse {
+  inline-size: 56px;
+  block-size: 28px;
+  min-inline-size: 56px;
+  margin: 0;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding-inline: 0;
+}
+.ic-toolbar-collapse-comment-icon {
+  inline-size: 16px;
+  block-size: 16px;
+}
+.ic-toolbar-collapsed .ic-toolbar-main,
+.ic-toolbar-collapsed .ic-toolbar-group-right {
+  flex: 0 0 0;
+  inline-size: 0;
+  min-inline-size: 0;
+  gap: 0;
+  opacity: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+.ic-column-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 180ms ease,
+    visibility 0s linear 0s;
+}
+.ic-column-collapsed .ic-column-clip {
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 180ms ease,
+    visibility 0s linear 180ms;
+}
+.ic-column-content {
+  position: relative;
+  min-height: 100%;
 }
 /* Each card lives inside an absolutely-positioned slot whose top and
    height are driven by JS to express the user's "all cards sticky at
@@ -2624,7 +2701,7 @@ button.primary:disabled {
    activation can move focus off the row when the originating button
    unmounts, so we can't rely on :hover/:focus-within. */
 .ic-row-meta-actions:has(.ic-confirm-prompt),
-.ic-row-meta-actions[data-confirming='true'] {
+.ic-row-meta-actions[data-confirming="true"] {
   opacity: 1;
 }
 /* Touch / coarse-pointer devices don't have hover — keep the row
