@@ -47,6 +47,7 @@ import {
   deleteComment as apiDelete,
   deleteThread as apiDeleteThread,
   rejectEditProposal as apiRejectProposal,
+  repairEditProposalAnchor as apiRepairProposalAnchor,
   resolveThread as apiResolve,
   restoreHistoryVersion as apiRestoreHistoryVersion,
   revertHistoryVersion as apiRevertHistoryVersion,
@@ -58,8 +59,8 @@ import {
   uploadAsset,
 } from '../lib/api.js';
 import { documentTitle } from '../lib/doc-title.js';
-import { expandAncestors } from '../lib/heading-collapse.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
+import { expandAncestors } from '../lib/heading-collapse.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
@@ -72,6 +73,7 @@ import {
 } from '../lib/themes.js';
 import { APP_ACCENT_COLOR } from '../styles/theme.js';
 import { AccessControlDialog } from './AccessControlDialog.js';
+import { ActivityList } from './ActivityList.js';
 import { AppBar } from './AppBar.js';
 import { BlockActions } from './BlockActions.js';
 import {
@@ -81,7 +83,6 @@ import {
 import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
 import { DownloadMenu } from './DownloadMenu.js';
 import { HistoryList } from './HistoryList.js';
-import { ActivityList } from './ActivityList.js';
 import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
@@ -725,6 +726,36 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [doc.uid, displayName, effectiveDisplayName],
   );
 
+  const onRepairThread = useCallback(
+    async (id: string): Promise<boolean> => {
+      const identity = resolveIdentity();
+      if (!identity) {
+        setError('Please set your display name first.');
+        return false;
+      }
+      try {
+        const repaired = await apiRepairProposalAnchor(doc.uid, id, identity);
+        setThreads((prev) => {
+          const index = prev.findIndex((thread) => thread.id === repaired.id);
+          const next =
+            index >= 0
+              ? prev.map((thread, idx) => (idx === index ? repaired : thread))
+              : [...prev, repaired];
+          next.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
+          return next;
+        });
+        setError(null);
+        return true;
+      } catch (err) {
+        reportError('DocumentLayout.repairThread', err, { id });
+        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Repair failed');
+        return false;
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName, effectiveDisplayName],
+  );
+
   const onEdit = useCallback(
     async (id: string, body: string) => {
       const identity = resolveIdentity();
@@ -1256,7 +1287,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 access control which are admin-only. Sits next to the
                 gear so the whole toolbar cluster reads as a single set
                 of per-document actions. */}
-            <DownloadMenu doc={doc} source={liveSource} theme={theme} />
+            <DownloadMenu
+              doc={doc}
+              source={liveSource}
+              theme={theme}
+              reviewExportEnabled={inlineCommentsOpen}
+            />
             {children}
             {doc.role === 'admin' && onDocSettingsChanged && (
               <>
@@ -1465,6 +1501,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 onDeleteNode={onDeleteNode}
                 onDeleteThread={onDeleteThread}
                 onResolveThread={onResolveThread}
+                onRepairThread={onRepairThread}
                 onScrollToAnchor={scrollToAnchor}
               />
             </div>
@@ -1541,6 +1578,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onDeleteNode={onDeleteNode}
                   onDeleteThread={onDeleteThread}
                   onResolveThread={onResolveThread}
+                  onRepairThread={onRepairThread}
                   onScrollToAnchor={scrollToAnchor}
                 />
               </Tabs.Content>

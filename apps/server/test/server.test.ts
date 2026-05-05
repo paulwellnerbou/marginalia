@@ -3,8 +3,15 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { locateAllBlocks } from '@marginalia/renderer';
+import JSZip from 'jszip';
 import { type App, createApp } from '../src/app.js';
-import { CLIENT_HEADER, CLIENT_NAME_HEADER, INVITE_HEADER, INVITE_SESSION_COOKIE, SESSION_COOKIE } from '../src/auth.js';
+import {
+  CLIENT_HEADER,
+  CLIENT_NAME_HEADER,
+  INVITE_HEADER,
+  INVITE_SESSION_COOKIE,
+  SESSION_COOKIE,
+} from '../src/auth.js';
 import { loadConfig } from '../src/config.js';
 
 const CLIENT_A = { id: 'aaaaaaaaaaaaaaaaaaaa', name: 'Alice' };
@@ -291,7 +298,6 @@ describe('documents API', () => {
     const docBody = (await getRes.json()) as { role: string };
     expect(docBody.role).toBe('admin');
   });
-
 
   test('upload returns an admin invite URL; admin access via that invite', async () => {
     const created = await upload(CLIENT_A, { markdown: '# Original\n\nBody.' });
@@ -748,7 +754,8 @@ describe('documents API', () => {
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
         body: JSON.stringify({
           markdown: '# Updated',
-          commit_message: 'Legit message\nX-Marginalia-Client-ID: spoofed-id\n  X-Marginalia-Client-ID: whitespace-spoofed',
+          commit_message:
+            'Legit message\nX-Marginalia-Client-ID: spoofed-id\n  X-Marginalia-Client-ID: whitespace-spoofed',
         }),
       }),
     );
@@ -931,9 +938,10 @@ describe('documents API', () => {
     };
 
     const acceptedSource = '## 2. Loesungskonzept & App-Architektur (Q1 - 30%)\n\nBody.\n';
-    const expectedAcceptedBlockId = [...locateAllBlocks(acceptedSource).entries()].find(
-      ([, range]) => range.kind === 'heading' && range.text.includes('30%'),
-    )?.[0] ?? null;
+    const expectedAcceptedBlockId =
+      [...locateAllBlocks(acceptedSource).entries()].find(
+        ([, range]) => range.kind === 'heading' && range.text.includes('30%'),
+      )?.[0] ?? null;
     expect(expectedAcceptedBlockId).toBeString();
 
     const acceptRes = await app.hono.fetch(
@@ -1290,9 +1298,7 @@ describe('documents API', () => {
     const proposal = (await proposeRes.json()) as { thread: { id: string } };
 
     const docLocator = { uid: created.uid, format: 'markdown' as const };
-    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe(
-      '# Title\n\nbeta',
-    );
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe('# Title\n\nbeta');
 
     const rejectRes = await app.hono.fetch(
       new Request(
@@ -1309,9 +1315,7 @@ describe('documents API', () => {
     // The branch ref is intentionally kept after reject so reopen +
     // accept don't have to reconstruct it from columns that Phase 3
     // drops. The proposal is just status='rejected' in the DB.
-    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe(
-      '# Title\n\nbeta',
-    );
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe('# Title\n\nbeta');
 
     const reopenRes = await app.hono.fetch(
       new Request(
@@ -1325,9 +1329,7 @@ describe('documents API', () => {
     );
     expect(reopenRes.status).toBe(200);
 
-    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe(
-      '# Title\n\nbeta',
-    );
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe('# Title\n\nbeta');
 
     const acceptRes = await app.hono.fetch(
       new Request(
@@ -1374,13 +1376,10 @@ describe('documents API', () => {
     expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeString();
 
     const deleteRes = await app.hono.fetch(
-      new Request(
-        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}`,
-        {
-          method: 'DELETE',
-          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
-        },
-      ),
+      new Request(`http://test/api/documents/${created.uid}/threads/${proposal.thread.id}`, {
+        method: 'DELETE',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
     );
     expect(deleteRes.status).toBe(204);
 
@@ -1486,12 +1485,9 @@ describe('documents API', () => {
     // Diff renders the original block content from base_oid using the
     // stored byte range — no anchor_block_id lookup, no source_snapshot.
     const diffRes = await app.hono.fetch(
-      new Request(
-        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/diff`,
-        {
-          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
-        },
-      ),
+      new Request(`http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/diff`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
     );
     expect(diffRes.status).toBe(200);
     const diff = (await diffRes.json()) as { before: string; after: string };
@@ -1528,9 +1524,7 @@ describe('documents API', () => {
     expect(thread.comments[0].body).toBe('Proposed change');
 
     const row = app.db
-      .prepare(
-        `SELECT branch_ref, base_oid FROM comments_edit_proposals WHERE comment_id = ?`,
-      )
+      .prepare(`SELECT branch_ref, base_oid FROM comments_edit_proposals WHERE comment_id = ?`)
       .get(thread.id) as { branch_ref: string | null; base_oid: string | null };
     expect(row.branch_ref).toBe(`refs/proposals/${thread.id}`);
     expect(row.base_oid).toBeString();
@@ -1577,14 +1571,11 @@ describe('documents API', () => {
 
     for (const id of [a, b]) {
       const acceptRes = await app.hono.fetch(
-        new Request(
-          `http://test/api/documents/${created.uid}/threads/${id}/respond`,
-          {
-            method: 'POST',
-            headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
-            body: JSON.stringify({ action: 'accept' }),
-          },
-        ),
+        new Request(`http://test/api/documents/${created.uid}/threads/${id}/respond`, {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        }),
       );
       expect(acceptRes.status).toBe(200);
     }
@@ -1657,7 +1648,9 @@ describe('documents API', () => {
       }),
     );
     expect(r1.status).toBe(200);
-    expect(((await r1.json()) as { mermaid_renderer: string | null }).mermaid_renderer).toBe('mmdr');
+    expect(((await r1.json()) as { mermaid_renderer: string | null }).mermaid_renderer).toBe(
+      'mmdr',
+    );
 
     // chromium override
     const r2 = await app.hono.fetch(
@@ -1668,7 +1661,9 @@ describe('documents API', () => {
       }),
     );
     expect(r2.status).toBe(200);
-    expect(((await r2.json()) as { mermaid_renderer: string | null }).mermaid_renderer).toBe('chromium');
+    expect(((await r2.json()) as { mermaid_renderer: string | null }).mermaid_renderer).toBe(
+      'chromium',
+    );
 
     // explicit null clears the override
     const r3 = await app.hono.fetch(
@@ -2221,6 +2216,10 @@ describe('documents API', () => {
     expect(await importedDiffRes.json()).toEqual({
       before: '# Hi',
       after: '# Better Hi',
+      original: {
+        before: '# Hi\n\nOriginal.\n',
+        after: '# Better Hi\n\nOriginal.\n',
+      },
       mergeable: null,
     });
   });
@@ -2307,9 +2306,7 @@ describe('documents API', () => {
       base_block_start: number;
       base_block_end: number;
     };
-    expect(importedProposalRow.branch_ref).toBe(
-      `refs/proposals/${importedProposalRow.comment_id}`,
-    );
+    expect(importedProposalRow.branch_ref).toBe(`refs/proposals/${importedProposalRow.comment_id}`);
     expect(importedProposalRow.base_oid).toBeString();
     expect(importedProposalRow.base_block_start).toBeNumber();
     expect(importedProposalRow.base_block_end).toBeNumber();
@@ -2518,6 +2515,238 @@ describe('documents API', () => {
     const cd = res.headers.get('content-disposition') ?? '';
     expect(cd).not.toMatch(/filename="\.docx"/);
     expect(cd).toContain(`filename="${created.uid}.docx"`);
+  });
+
+  // ---------------------------------------------------------------
+  // Review-mode export — closed threads (resolved / accepted /
+  // rejected) must not appear in the exported DOCX by default.
+  //
+  // These tests exercise the full server route — they're the
+  // belt-and-braces that proves the in-memory `isThreadClosed`
+  // filter in `loadReviewThreadsForExport` (run after the SQL load,
+  // before `readProposalContent`) actually keeps closed threads
+  // out of `word/document.xml` and `word/comments.xml`.
+
+  /**
+   * Unzip an exported DOCX and return the concatenated text of the
+   * parts review-mode tests care about (`word/document.xml` for
+   * tracked-change runs, `word/comments.xml` for comment bodies).
+   * Substring-asserting against the concatenation is enough for
+   * "the closed thread's body must not appear anywhere" checks.
+   */
+  async function readDocxReviewParts(buf: Buffer): Promise<string> {
+    const zip = await JSZip.loadAsync(buf);
+    const document = (await zip.file('word/document.xml')?.async('string')) ?? '';
+    const comments = (await zip.file('word/comments.xml')?.async('string')) ?? '';
+    return `${document}\n${comments}`;
+  }
+
+  async function exportReviewDocx(
+    uid: string,
+    inviteToken: string,
+  ): Promise<string> {
+    const res = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${uid}/export.docx?review=both`,
+        { headers: withInvite(headersFor(CLIENT_A), inviteToken) },
+      ),
+    );
+    expect(res.status).toBe(200);
+    return readDocxReviewParts(Buffer.from(await res.arrayBuffer()));
+  }
+
+  test('GET /:uid/export.docx?review=both excludes resolved comment threads', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Doc\n\nFirst paragraph.\n\nSecond paragraph.\n',
+      name: 'Resolved comment fixture',
+    });
+    const blocks = [...locateAllBlocks('# Doc\n\nFirst paragraph.\n\nSecond paragraph.\n').entries()];
+    const firstParaId = blocks.find(([, r]) => r.text === 'First paragraph.')![0];
+    const secondParaId = blocks.find(([, r]) => r.text === 'Second paragraph.')![0];
+
+    // Two comment threads: one will stay open, one will be resolved.
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    const openRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          anchor: { block_id: firstParaId, quote: 'First paragraph.' },
+          body: 'OPEN_DISCUSSION',
+        }),
+      }),
+    );
+    expect(openRes.status).toBe(201);
+
+    const closedRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          anchor: { block_id: secondParaId, quote: 'Second paragraph.' },
+          body: 'CLOSED_DISCUSSION',
+        }),
+      }),
+    );
+    expect(closedRes.status).toBe(201);
+    const closedThread = (await closedRes.json()) as { thread: { id: string } };
+    const resolveRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${closedThread.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: adminHeaders,
+          body: JSON.stringify({ action: 'resolve' }),
+        },
+      ),
+    );
+    expect(resolveRes.status).toBe(200);
+
+    const docText = await exportReviewDocx(created.uid, created.admin_invite.token);
+    expect(docText).toContain('OPEN_DISCUSSION');
+    expect(docText).not.toContain('CLOSED_DISCUSSION');
+  });
+
+  test('GET /:uid/export.docx?review=both excludes accepted edit proposals', async () => {
+    const source = '# Doc\n\nThe original line.\n';
+    const created = await upload(CLIENT_A, { markdown: source, name: 'Accepted prop fixture' });
+    const blocks = [...locateAllBlocks(source).entries()];
+    const blockId = blocks.find(([, r]) => r.text === 'The original line.')![0];
+
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'The original line.' },
+          body: 'ACCEPTED_RATIONALE',
+          proposal: { proposed_text: 'The accepted line.' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: adminHeaders,
+          body: JSON.stringify({ action: 'accept' }),
+        },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    const docText = await exportReviewDocx(created.uid, created.admin_invite.token);
+    // Accepted proposal must NOT contribute review chrome to the
+    // export. The live doc already carries the proposed text
+    // (acceptance applied the change), so we assert:
+    //   - the rationale body is gone,
+    //   - the source_snapshot ('The original line.') doesn't sneak
+    //     back in via <w:del> — that would mean the closed-thread
+    //     filter let the proposal payload through and the renderer
+    //     re-emitted the pre-acceptance text as a tracked change.
+    expect(docText).not.toContain('ACCEPTED_RATIONALE');
+    expect(docText).not.toContain('The original line.');
+    expect(docText).not.toMatch(/<w:del\b/);
+  });
+
+  test('GET /:uid/export.docx?review=both excludes rejected edit proposals', async () => {
+    const source = '# Doc\n\nThe original wording.\n';
+    const created = await upload(CLIENT_A, { markdown: source, name: 'Rejected prop fixture' });
+    const blocks = [...locateAllBlocks(source).entries()];
+    const blockId = blocks.find(([, r]) => r.text === 'The original wording.')![0];
+
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'The original wording.' },
+          body: 'REJECTED_RATIONALE',
+          proposal: { proposed_text: 'A wording the team chose to skip.' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+    const rejectRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: adminHeaders,
+          body: JSON.stringify({ action: 'reject' }),
+        },
+      ),
+    );
+    expect(rejectRes.status).toBe(200);
+
+    const docText = await exportReviewDocx(created.uid, created.admin_invite.token);
+    expect(docText).not.toContain('REJECTED_RATIONALE');
+    expect(docText).not.toContain('A wording the team chose to skip.');
+  });
+
+  test('GET /:uid/export.docx?review=both keeps open proposals visible alongside resolved threads', async () => {
+    // Sanity: with one open proposal AND one resolved comment thread
+    // on the same doc, the export carries the open proposal but
+    // drops the resolved comment.
+    const source = '# Doc\n\nKeep me open.\n\nThis got resolved.\n';
+    const created = await upload(CLIENT_A, { markdown: source, name: 'Mixed fixture' });
+    const blocks = [...locateAllBlocks(source).entries()];
+    const openId = blocks.find(([, r]) => r.text === 'Keep me open.')![0];
+    const resolvedId = blocks.find(([, r]) => r.text === 'This got resolved.')![0];
+
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          anchor: { block_id: openId, quote: 'Keep me open.' },
+          body: 'OPEN_PROPOSAL_BODY',
+          proposal: { proposed_text: 'Tightened wording.' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+
+    const closedRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          anchor: { block_id: resolvedId, quote: 'This got resolved.' },
+          body: 'OLD_DEBATE',
+        }),
+      }),
+    );
+    expect(closedRes.status).toBe(201);
+    const closed = (await closedRes.json()) as { thread: { id: string } };
+    const resolveRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${closed.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: adminHeaders,
+          body: JSON.stringify({ action: 'resolve' }),
+        },
+      ),
+    );
+    expect(resolveRes.status).toBe(200);
+
+    const docText = await exportReviewDocx(created.uid, created.admin_invite.token);
+    expect(docText).toContain('OPEN_PROPOSAL_BODY');
+    // The proposed text is split across runs by the inline word-diff
+    // path (Keep↔Tightened, " ", me open↔wording, "."), so assert
+    // both new tokens land in <w:ins> rather than expecting the
+    // contiguous substring "Tightened wording".
+    expect(docText).toMatch(/<w:ins\b[^>]*>[\s\S]*?Tightened/);
+    expect(docText).toMatch(/<w:ins\b[^>]*>[\s\S]*?wording/);
+    expect(docText).not.toContain('OLD_DEBATE');
   });
 
   test('GET /:uid/export.docx sets X-Content-Type-Options: nosniff', async () => {

@@ -3,34 +3,48 @@ import { DropdownMenu, IconButton } from '@radix-ui/themes';
 import { useState } from 'react';
 import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer';
 import type { Document } from '../lib/api.js';
-import { ApiError, downloadDocumentDocx, downloadDocumentPdf } from '../lib/api.js';
+import {
+  ApiError,
+  downloadDocumentDocx,
+  downloadDocumentPdf,
+} from '../lib/api.js';
 import { reportError } from '../lib/log.js';
 import { showToast } from '../lib/notifications.js';
 
 /**
  * Download affordance in the document toolbar. Opens a small menu with
  * "source" (the raw markdown or AsciiDoc), "DOCX" (server-side themed
- * Word export), and "PDF" (server-side themed PDF export via headless
- * Chromium).
+ * Word export, with an optional review-mode variant that folds the
+ * document's open comments + edit proposals into native Word features),
+ * and "PDF" (server-side themed PDF export via headless Chromium).
  *
  * The JSON bundle export stays in the admin-only Document Settings
  * dialog; it's a tooling/re-import feature, not a day-to-day download.
  *
  * Filename derivation mirrors the server: explicit `doc.name` first,
  * otherwise the document's own title (frontmatter `title:` or first
- * H1 / `= Header`), otherwise the opaque uid. Keeps all three download
+ * H1 / `= Header`), otherwise the opaque uid. Keeps all download
  * paths producing the same filenames.
  */
 export function DownloadMenu({
   doc,
   source,
   theme,
+  reviewExportEnabled,
 }: {
   doc: Document;
   /** Live source — may differ from doc.source after an applied edit proposal. */
   source: string;
   /** Currently-selected viewer theme, baked into the DOCX / PDF exports. */
   theme: string;
+  /**
+   * When true, the menu shows the "with comments & change proposals"
+   * Word entry alongside the vanilla one. Wired to whether the user
+   * has the inline-comments pane visible — i.e. they're in review
+   * mode. Closed (resolved / accepted / rejected) threads are never
+   * included; only open ones make it into the export.
+   */
+  reviewExportEnabled?: boolean;
 }) {
   const [busy, setBusy] = useState<null | 'source' | 'docx' | 'pdf'>(null);
 
@@ -70,13 +84,16 @@ export function DownloadMenu({
     }
   }
 
-  async function downloadDocx(): Promise<void> {
+  async function downloadDocx(withReview: boolean): Promise<void> {
     setBusy('docx');
     try {
-      const { blob, filename } = await downloadDocumentDocx(doc.uid, theme);
+      const { blob, filename } = await downloadDocumentDocx(doc.uid, {
+        theme,
+        ...(withReview ? { review: 'both' as const } : {}),
+      });
       downloadBlob(blob, filename);
     } catch (err) {
-      reportError('DownloadMenu.docx', err, { uid: doc.uid });
+      reportError('DownloadMenu.docx', err, { uid: doc.uid, withReview });
       showToast({ title: 'DOCX export failed', body: 'Try again in a moment.' });
     } finally {
       setBusy(null);
@@ -141,9 +158,24 @@ export function DownloadMenu({
         <DropdownMenu.Item onSelect={downloadSource} disabled={busy !== null}>
           {sourceLabel} (.{sourceExt})
         </DropdownMenu.Item>
-        <DropdownMenu.Item onSelect={downloadDocx} disabled={busy !== null}>
+        {/* Word entries grouped between separators so the toolbar
+            visually pairs them as one feature. */}
+        <DropdownMenu.Separator />
+        <DropdownMenu.Item
+          onSelect={() => downloadDocx(false)}
+          disabled={busy !== null}
+        >
           Word document (.docx)
         </DropdownMenu.Item>
+        {reviewExportEnabled && (
+          <DropdownMenu.Item
+            onSelect={() => downloadDocx(true)}
+            disabled={busy !== null}
+          >
+            Word document with comments &amp; change proposals
+          </DropdownMenu.Item>
+        )}
+        <DropdownMenu.Separator />
         <DropdownMenu.Item onSelect={downloadPdf} disabled={busy !== null}>
           PDF document (.pdf)
         </DropdownMenu.Item>

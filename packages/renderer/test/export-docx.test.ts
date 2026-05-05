@@ -1624,3 +1624,992 @@ describe('exportDocx — mermaid resolveMermaid', () => {
     expect(highWatermark).toBeGreaterThan(1);
   });
 });
+
+// --- Review-mode export -----------------------------------------------
+// Comments + edit proposals (tracked changes) folded into the DOCX.
+// Anchors come from the same `data-block` ids the renderer's
+// `remarkBlockIds` plugin writes onto every top-level block, so we
+// extract those from a probe render before constructing the threads.
+
+import { hashBlock, normalizeBlockText } from '../src/block-ids-shared.js';
+
+/** Compute the block-id `remarkBlockIds` would assign to a markdown paragraph. */
+function paragraphBlockId(text: string): string {
+  return hashBlock('paragraph', normalizeBlockText(text));
+}
+
+/** Compute the block-id for a markdown heading. */
+function headingBlockId(text: string): string {
+  return hashBlock('heading', normalizeBlockText(text));
+}
+
+async function inspectComments(buf: Buffer): Promise<{
+  commentsXml: string;
+  documentXml: string;
+}> {
+  const zip = await JSZip.loadAsync(buf);
+  const commentsXml = (await zip.file('word/comments.xml')?.async('string')) ?? '';
+  const documentXml = (await zip.file('word/document.xml')?.async('string')) ?? '';
+  return { commentsXml, documentXml };
+}
+
+/** Count `<w:comment …>` entries in word/comments.xml (excluding empty docx-default). */
+function countComments(commentsXml: string): number {
+  return (commentsXml.match(/<w:comment\s/g) ?? []).length;
+}
+
+/** Read word/settings.xml as text. */
+async function readSettingsXml(buf: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buf);
+  return (await zip.file('word/settings.xml')?.async('string')) ?? '';
+}
+
+describe('exportDocx — review mode (comments)', () => {
+  test('vanilla export contains no comment entries', async () => {
+    const buf = await exportDocx('# Doc\n\nHello.\n');
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(countComments(commentsXml)).toBe(0);
+    expect(documentXml).not.toMatch(/<w:commentReference\b/);
+  });
+
+  test('vanilla export does NOT enable trackRevisions in settings.xml', async () => {
+    // OOXML element is `w:trackRevisions` (Word's UI labels it
+    // "Track Changes"). Vanilla exports must not flip it on.
+    const buf = await exportDocx('# Doc\n\nHello.\n');
+    const settings = await readSettingsXml(buf);
+    expect(settings).not.toMatch(/<w:trackRevisions\b/);
+  });
+
+  test('review-mode export turns on <w:trackRevisions/> so Word opens with markup visible', async () => {
+    const md = '# Doc\n\nHello.\n';
+    const blockId = paragraphBlockId('Hello.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'note', author: 'Alice', date: 1 }],
+          },
+        ],
+      },
+    });
+    const settings = await readSettingsXml(buf);
+    expect(settings).toMatch(/<w:trackRevisions\b/);
+  });
+
+  test('comment thread emits a comments.xml entry anchored to its block', async () => {
+    const md = '# Title\n\nThis is the target paragraph.\n';
+    const blockId = paragraphBlockId('This is the target paragraph.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [
+              { body: 'Looks good to me', author: 'Alice', date: 1700000000000 },
+            ],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('Looks good to me');
+    expect(commentsXml).toMatch(/w:author="Alice"/);
+    // Both range markers + the inline reference made it into the body.
+    expect(documentXml).toMatch(/<w:commentRangeStart\b/);
+    expect(documentXml).toMatch(/<w:commentRangeEnd\b/);
+    expect(documentXml).toMatch(/<w:commentReference\b/);
+  });
+
+  test('replies render as flat additional comments with reply prefix', async () => {
+    const md = 'Single block.\n';
+    const blockId = paragraphBlockId('Single block.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [
+              { body: 'Opener', author: 'Alice', date: 1700000000000 },
+              { body: 'first reply', author: 'Bob', date: 1700000100000 },
+              { body: 'second reply', author: 'Carol', date: 1700000200000 },
+            ],
+          },
+        ],
+      },
+    });
+    const { commentsXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('Opener');
+    expect(commentsXml).toContain('↳ Reply by Bob: first reply');
+    expect(commentsXml).toContain('↳ Reply by Carol: second reply');
+  });
+
+  // Renderer-side resolved-thread filtering was removed: closed
+  // threads are filtered out server-side (in
+  // `loadReviewThreadsForExport`) and the renderer trusts what
+  // the caller hands it. Server-side exclusion is exercised by
+  // the e2e tests in apps/server/test/server.test.ts.
+
+  test('comment anchored to a heading lands on the heading paragraph', async () => {
+    const md = '# Heading One\n\nBody.\n';
+    const blockId = headingBlockId('Heading One');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'About the heading', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('About the heading');
+    // The comment range markers should land inside the heading paragraph.
+    const headingPara = paragraphContaining(documentXml, 'Heading One');
+    expect(headingPara).toMatch(/<w:commentRangeStart\b/);
+    expect(headingPara).toMatch(/<w:commentReference\b/);
+  });
+
+  test('thread with no resolvable block id is silently dropped', async () => {
+    const md = 'Block.\n';
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: 'no-such-id',
+            comments: [{ body: 'orphaned', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    // The thread's block_id matches no element in the rendered HAST,
+    // so `convertBlock` never enters the wrap path and no comment id
+    // is allocated. word/comments.xml stays empty and no range
+    // markers appear in the body.
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(countComments(commentsXml)).toBe(0);
+    expect(documentXml).not.toMatch(/<w:commentReference\b/);
+    expect(documentXml).not.toMatch(/<w:commentRangeStart\b/);
+  });
+});
+
+describe('exportDocx — review mode (proposals as tracked changes)', () => {
+  test('block-level proposal emits w:del for original and w:ins for proposed', async () => {
+    const md = 'Original sentence.\n';
+    const blockId = paragraphBlockId('Original sentence.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'Wording tweak', author: 'Editor', date: 1700000000000 }],
+            proposal: {
+              source_snapshot: 'Original sentence.',
+              proposed_text: 'Revised sentence.',
+              whole_document: false,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).toMatch(/<w:del\b[^>]*w:author="Editor"/);
+    expect(documentXml).toMatch(/<w:ins\b[^>]*w:author="Editor"/);
+    // The single-paragraph plain-prose proposal hits the inline
+    // word-diff path: only the changed token ("Original" vs
+    // "Revised") sits inside ins/del, the shared " sentence."
+    // suffix appears as a plain run.
+    expect(documentXml).toContain('Original');
+    expect(documentXml).toContain('Revised');
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*> sentence\.<\/w:t><\/w:r>/);
+  });
+
+  test('single-paragraph wording tweak emits inline word-level ins/del', async () => {
+    const md = 'The quick brown fox.\n';
+    const blockId = paragraphBlockId('The quick brown fox.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'tweak', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'The quick brown fox.',
+              proposed_text: 'The quick red fox.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Deleted runs use <w:delText>, inserted runs use <w:t>.
+    expect(documentXml).toMatch(/<w:del\b[^>]*>[\s\S]*?<w:delText[^>]*>brown<\/w:delText>/);
+    expect(documentXml).toMatch(/<w:ins\b[^>]*>[\s\S]*?<w:t[^>]*>red<\/w:t>/);
+    // The unchanged prefix "The quick " should appear as a plain run
+    // (this catches the "everything is wrapped" regression).
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*>The quick <\/w:t><\/w:r>/);
+    // Suffix " fox." also stays plain.
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*> fox\.<\/w:t><\/w:r>/);
+  });
+
+  test('multi-paragraph proposal still uses the structural two-pass path', async () => {
+    // Two paragraphs on the proposed side: the inline-diff guard
+    // should bail, and the original block becomes a single <w:del>
+    // chain followed by two inserted paragraphs.
+    const md = 'Original line.\n';
+    const blockId = paragraphBlockId('Original line.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'expand', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Original line.',
+              proposed_text: 'First line.\n\nSecond line.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).toMatch(/<w:del\b/);
+    expect(documentXml).toMatch(/<w:ins\b/);
+    // Both proposed paragraphs land in the body.
+    expect(documentXml).toContain('First line');
+    expect(documentXml).toContain('Second line');
+  });
+
+  test('proposal whose proposed_text contains a hard break falls back to two-pass', async () => {
+    // The inline-diff path can't represent a `<br>` because OOXML
+    // hard breaks need their own `<w:br/>` run, not an embedded
+    // `\n` inside a TextRun's text. The qualification check
+    // disqualifies paragraphs that contain `<br>` so the export
+    // falls through to the structural delete-then-insert path,
+    // which emits the break correctly.
+    const md = 'Single line.\n';
+    const blockId = paragraphBlockId('Single line.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'split it', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Single line.',
+              // Two trailing spaces + newline = markdown hard break → <br>
+              proposed_text: 'First half  \nsecond half.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Structural path emits a real <w:br/> for the hard break,
+    // wrapped in <w:ins> attribution. The inline-diff path would
+    // have emitted the break as a literal `\n` inside <w:t>.
+    expect(documentXml).toMatch(/<w:ins\b[\s\S]*?<w:br\b/);
+    // The hard break ITSELF doesn't appear as a literal newline
+    // co-located with the surrounding text in the same run.
+    expect(documentXml).not.toMatch(/<w:t[^>]*>[^<]*First half\n/);
+  });
+
+  test('proposal that adds inline formatting falls back to two-pass', async () => {
+    // The proposed side contains a `<strong>` — the inline-diff
+    // guard refuses to flatten formatting, so we expect the
+    // structural two-pass output (whole original deleted, whole
+    // proposed inserted with formatting preserved).
+    const md = 'Plain text here.\n';
+    const blockId = paragraphBlockId('Plain text here.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'bold it', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Plain text here.',
+              proposed_text: 'Plain **text** here.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Bold attribute survives → structural path was used.
+    expect(documentXml).toMatch(/<w:b\b/);
+  });
+
+  test('proposal thread body still becomes a comment on the inserted region', async () => {
+    const md = 'Old line.\n';
+    const blockId = paragraphBlockId('Old line.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [
+              { body: 'Reason: clearer phrasing', author: 'Editor', date: 1 },
+            ],
+            proposal: {
+              source_snapshot: 'Old line.',
+              proposed_text: 'New line.',
+            },
+          },
+        ],
+      },
+    });
+    const { commentsXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('Reason: clearer phrasing');
+  });
+
+  test('whole-document proposal appears as a labeled appendix', async () => {
+    const md = 'Body of original doc.\n';
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: null,
+            comments: [{ body: 'Full rewrite', author: 'Drafter', date: 0 }],
+            proposal: {
+              source_snapshot: 'Body of original doc.',
+              proposed_text: 'Entirely fresh draft.',
+              whole_document: true,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).toContain('Alternative version proposed by Drafter');
+    expect(documentXml).toContain('Entirely fresh draft');
+    // The appendix carries tracked changes (this proposal has 100%
+    // churn so the renderer takes the wall-of-insertion fallback,
+    // which still wraps everything in <w:ins>).
+    expect(documentXml).toMatch(/<w:ins\b/);
+  });
+
+  test('whole-document proposal renders unchanged blocks plain', async () => {
+    // Three paragraphs original; only the middle one changes in the
+    // proposal. Reviewers should see the unchanged paragraphs as
+    // plain text in the appendix, with revision marks only around
+    // the changed one.
+    const md = [
+      'Intro paragraph stays put.',
+      '',
+      'Middle paragraph rewritten.',
+      '',
+      'Closing paragraph stays put.',
+      '',
+    ].join('\n');
+    const proposed = [
+      'Intro paragraph stays put.',
+      '',
+      'Middle paragraph entirely replaced.',
+      '',
+      'Closing paragraph stays put.',
+      '',
+    ].join('\n');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: null,
+            comments: [{ body: 'tweak middle', author: 'Editor', date: 0 }],
+            proposal: {
+              source_snapshot: md,
+              proposed_text: proposed,
+              whole_document: true,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Appendix exists.
+    expect(documentXml).toContain('Alternative version proposed by Editor');
+    // Unchanged paragraphs appear as a plain run inside the
+    // appendix (NOT inside <w:ins> or <w:del>). The body also
+    // contains them, so we can't just assertContain — assert there
+    // is at least one plain run carrying the unchanged text.
+    expect(documentXml).toMatch(
+      /<w:r><w:t[^>]*>Intro paragraph stays put\.<\/w:t><\/w:r>[\s\S]*?<w:r><w:t[^>]*>Intro paragraph stays put\.<\/w:t><\/w:r>/,
+    );
+    // The changed middle paragraph is now a replacement pair —
+    // single plain prose on both sides, so it goes through the
+    // inline word-diff path.
+    expect(documentXml).toMatch(
+      /<w:del\b[^>]*>[\s\S]*?<w:delText[^>]*>rewritten/,
+    );
+    expect(documentXml).toMatch(
+      /<w:ins\b[^>]*>[\s\S]*?<w:t[^>]*>entirely replaced/,
+    );
+  });
+
+  test('whole-document proposal: pure addition emits only <w:ins> at end', async () => {
+    const md = 'Existing paragraph.\n';
+    const proposed = ['Existing paragraph.', '', 'Newly appended paragraph.', ''].join('\n');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: null,
+            comments: [{ body: 'add', author: 'Editor', date: 0 }],
+            proposal: {
+              source_snapshot: md,
+              proposed_text: proposed,
+              whole_document: true,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).toContain('Newly appended paragraph');
+    // The addition lands inside <w:ins>; the kept paragraph appears
+    // plain in the appendix (no <w:del>, no <w:ins> on its run).
+    expect(documentXml).toMatch(/<w:ins\b[^>]*>[\s\S]*?Newly appended paragraph/);
+  });
+
+
+  test('comment with anchor_quote wraps just the highlighted substring', async () => {
+    const md = 'The quick brown fox jumps over the lazy dog.\n';
+    const blockId = paragraphBlockId('The quick brown fox jumps over the lazy dog.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'brown fox',
+            comments: [{ body: 'spelling?', author: 'Alice', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Substring is wrapped — "brown fox" sits in its own run between
+    // the two range markers.
+    expect(documentXml).toMatch(
+      /<w:r><w:t[^>]*>The quick <\/w:t><\/w:r><w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>brown fox<\/w:t><\/w:r><w:commentRangeEnd\b[^>]*\/><w:commentReference\b/,
+    );
+    // Suffix follows after the markers.
+    expect(documentXml).toMatch(
+      /<w:commentReference\b[^>]*\/><w:r><w:t[^>]*> jumps over the lazy dog\.<\/w:t><\/w:r>/,
+    );
+  });
+
+  test('comment with anchor_quote that no longer matches falls back to whole-paragraph wrap', async () => {
+    const md = 'A short and unchanged paragraph.\n';
+    const blockId = paragraphBlockId('A short and unchanged paragraph.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'this text is no longer in the block',
+            comments: [{ body: 'stale anchor', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    // Comment still emitted (substring not found → whole-paragraph
+    // fallback). The whole paragraph carries the start/end markers.
+    expect(commentsXml).toContain('stale anchor');
+    expect(documentXml).toMatch(/<w:commentRangeStart\b/);
+    expect(documentXml).toMatch(/<w:commentRangeEnd\b/);
+    // The full text is still present as a single plain run (the
+    // precise wrap would have split it; the fallback didn't).
+    expect(documentXml).toMatch(
+      /<w:r><w:t[^>]*>A short and unchanged paragraph\.<\/w:t><\/w:r>/,
+    );
+  });
+
+  test('comment with anchor_quote that matches multiple times falls back', async () => {
+    // "the" appears three times — ambiguous → whole-paragraph wrap.
+    const md = 'The cat saw the dog near the tree.\n';
+    const blockId = paragraphBlockId('The cat saw the dog near the tree.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'the',
+            comments: [{ body: 'which one?', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // The full text stays as one run (no per-substring split).
+    expect(documentXml).toMatch(
+      /<w:r><w:t[^>]*>The cat saw the dog near the tree\.<\/w:t><\/w:r>/,
+    );
+    // But the comment is still anchored on the whole paragraph.
+    expect(documentXml).toMatch(/<w:commentReference\b/);
+  });
+
+  test('substring matching multiple paragraphs of a multi-paragraph block falls back to whole-block wrap', async () => {
+    // Two list items both contain "TODO" exactly once. The
+    // substring uniquely matches each individual paragraph but
+    // matches twice across the block — anchoring to the first
+    // would silently land the comment on the wrong location, so
+    // the wrap helper must give up and let the caller fall back.
+    const md = '- TODO write the intro.\n- TODO add the conclusion.\n';
+    const listBlockId = hashBlock('list', 'TODO write the intro.TODO add the conclusion.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: listBlockId,
+            anchor_quote: 'TODO',
+            comments: [{ body: 'which one?', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { documentXml, commentsXml } = await inspectComments(buf);
+    // Comment still surfaced via whole-block fallback.
+    expect(commentsXml).toContain('which one?');
+    // No <w:r>TODO</w:r> appears between range markers — i.e. the
+    // wrapper did NOT splice "TODO" inline; both paragraphs'
+    // text remained as single TextRuns.
+    expect(documentXml).not.toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>TODO<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+    // Paragraph texts survive intact (no mid-paragraph splits).
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*>TODO write the intro\.<\/w:t><\/w:r>/);
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*>TODO add the conclusion\.<\/w:t><\/w:r>/);
+  });
+
+  test('substring wrap finds the quote in a later paragraph of a multi-paragraph block', async () => {
+    // A list block renders to multiple Paragraphs (one per item)
+    // but the anchor is a single `data-block` on the `<ul>`. The
+    // quote only appears in the second list item; the wrap must
+    // scan past the first paragraph instead of falling back when
+    // `buf[0]` doesn't match.
+    const md = '- First item.\n- Second item with frobnicate.\n';
+    // mdastToString concatenates list items WITHOUT a separator,
+    // so the normalized text the block-id hash sees is the raw
+    // concatenation of item texts.
+    const listBlockId = hashBlock('list', 'First item.Second item with frobnicate.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: listBlockId,
+            anchor_quote: 'frobnicate',
+            comments: [{ body: 'on second item', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // The wrap landed on the SECOND list item — markers wrap
+    // just "frobnicate".
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>frobnicate<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+    // First item appears as a plain run (no markers around its text).
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*>First item\.<\/w:t><\/w:r>/);
+  });
+
+  test('substring wrap does not duplicate text when the range crosses a run boundary', async () => {
+    // Block-level proposal first establishes ins/del runs in the
+    // paragraph (via the inline word-diff path), then a comment
+    // anchored to a substring that spans into a later run must
+    // not duplicate the text in the rebuild — a regression of
+    // the `before = text.slice(0, cutStart ?? text.length)` bug,
+    // which copied a whole slot's text into both `before` and
+    // `middle` when only `cutEnd` was set.
+    //
+    // Easiest reproduction: a paragraph with three plain runs
+    // (`A `, `B`, ` C`) by emitting a hard line break and a
+    // comment whose substring spans `A B` (ends inside the third
+    // run's slot). We exercise this via a multi-comment scenario:
+    // the first comment splits the paragraph into multiple text
+    // runs, the second wraps a substring that spans into one of
+    // those runs.
+    const md = 'one two three four five six seven.\n';
+    const blockId = paragraphBlockId('one two three four five six seven.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'two',
+            comments: [{ body: 'split run', author: 'A', date: 1 }],
+          },
+          {
+            id: 't2',
+            block_id: blockId,
+            // Spans across the boundary the previous wrap created.
+            anchor_quote: 'three four five',
+            comments: [{ body: 'cross-run wrap', author: 'B', date: 2 }],
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Each word from the original paragraph appears EXACTLY once
+    // across all <w:t>/<w:delText> elements.
+    const tHits: string[] = documentXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) ?? [];
+    const delHits: string[] =
+      documentXml.match(/<w:delText[^>]*>([^<]*)<\/w:delText>/g) ?? [];
+    const allRunText = [...tHits, ...delHits].join('');
+    for (const word of ['one', 'two', 'three', 'four', 'five', 'six', 'seven']) {
+      const occurrences = allRunText.split(word).length - 1;
+      expect(occurrences).toBe(1);
+    }
+  });
+
+  test('substring wrap descends into a heading\'s Bookmark', async () => {
+    // Headings are wrapped in a Bookmark for internal-link targets;
+    // the substring wrap has to descend into it. Asserts the markers
+    // land INSIDE the bookmark element (not adjacent to it), and
+    // that the bookmark's id (heading slug) is preserved.
+    const md = '# The brown fox jumps\n\nBody.\n';
+    const blockId = headingBlockId('The brown fox jumps');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'brown fox',
+            comments: [{ body: 'on heading substring', author: 'A', date: 1 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('on heading substring');
+    // Bookmark survives with its slug id.
+    expect(documentXml).toMatch(/<w:bookmarkStart\b[^>]*w:name="the-brown-fox-jumps"/);
+    // Markers land inside the bookmark, around "brown fox".
+    expect(documentXml).toMatch(
+      /<w:bookmarkStart\b[^>]*\/>[\s\S]*?<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>brown fox<\/w:t><\/w:r><w:commentRangeEnd\b[^>]*\/><w:commentReference\b[^>]*\/>[\s\S]*?<w:bookmarkEnd\b/,
+    );
+  });
+
+  test('two precise comments sharing a boundary both wrap correctly', async () => {
+    // Both comments anchor at adjacent regions: "first" at the very
+    // start of the paragraph (offset 0), and the next region right
+    // after. After the first wrap, the paragraph contains
+    // CommentRange* zero-length children at offset 0; the second
+    // wrap's locate must skip those instead of returning a
+    // non-text slot at offset 0 that would silently drop the
+    // marker.
+    const md = 'first second third fourth.\n';
+    const blockId = paragraphBlockId('first second third fourth.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'first',
+            comments: [{ body: 'on first', author: 'A', date: 1 }],
+          },
+          {
+            id: 't2',
+            block_id: blockId,
+            // Adjacent to the first wrap's end — exercises the
+            // shared-boundary case.
+            anchor_quote: 'second',
+            comments: [{ body: 'on second', author: 'B', date: 2 }],
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Both substrings end up between matched range markers.
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>first<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>second<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+    // No unpaired range markers — every Start has a matching End.
+    const starts = (documentXml.match(/<w:commentRangeStart\b/g) ?? []).length;
+    const ends = (documentXml.match(/<w:commentRangeEnd\b/g) ?? []).length;
+    expect(starts).toBe(ends);
+    expect(starts).toBe(2);
+  });
+
+  test('two precise comments on the same block both wrap their substrings', async () => {
+    const md = 'Alpha bravo charlie delta echo foxtrot.\n';
+    const blockId = paragraphBlockId('Alpha bravo charlie delta echo foxtrot.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'bravo',
+            comments: [{ body: 'comment on bravo', author: 'A', date: 1 }],
+          },
+          {
+            id: 't2',
+            block_id: blockId,
+            anchor_quote: 'echo',
+            comments: [{ body: 'comment on echo', author: 'B', date: 2 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('comment on bravo');
+    expect(commentsXml).toContain('comment on echo');
+    // Both substrings are wrapped (precise wrap on the second
+    // thread requires the first wrap's split TextRuns to also be
+    // recoverable from runOpts).
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>bravo<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/><w:r><w:t[^>]*>echo<\/w:t><\/w:r><w:commentRangeEnd\b/,
+    );
+  });
+
+  test('two comments on the same block, one precise + one stale, both render', async () => {
+    const md = 'The frobnicate operation runs nightly.\n';
+    const blockId = paragraphBlockId('The frobnicate operation runs nightly.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            anchor_quote: 'frobnicate',
+            comments: [{ body: 'precise', author: 'A', date: 1 }],
+          },
+          {
+            id: 't2',
+            block_id: blockId,
+            anchor_quote: 'something that is not in the text',
+            comments: [{ body: 'stale', author: 'B', date: 2 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('precise');
+    expect(commentsXml).toContain('stale');
+    // The precise one wraps only "frobnicate".
+    expect(documentXml).toMatch(
+      /<w:commentRangeStart\b[^>]*\/>[\s\S]*?<w:t[^>]*>frobnicate<\/w:t>/,
+    );
+  });
+
+  test('block with both proposal and side-comment keeps both visible', async () => {
+    const md = 'Shared block.\n';
+    const blockId = paragraphBlockId('Shared block.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 'p1',
+            block_id: blockId,
+            comments: [{ body: 'Reword', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Shared block.',
+              proposed_text: 'Reworded block.',
+            },
+          },
+          {
+            id: 'c1',
+            block_id: blockId,
+            comments: [{ body: 'Side note', author: 'Reader', date: 2 }],
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(commentsXml).toContain('Reword');
+    expect(commentsXml).toContain('Side note');
+    // Both proposal and side comment exist, and the proposal's
+    // tracked-change pair is still emitted.
+    expect(documentXml).toMatch(/<w:del\b/);
+    expect(documentXml).toMatch(/<w:ins\b/);
+  });
+
+  test('proposal with unreachable content degrades to comment + normal block', async () => {
+    const md = 'Original.\n';
+    const blockId = paragraphBlockId('Original.');
+    // Force the unreachable path by feeding an empty proposed_text
+    // — buildReviewState still parses it (yielding an empty HAST),
+    // so we instead exercise the runtime fallback by passing
+    // `proposed_text` = '' (parses but produces no children) and
+    // verifying the export still contains the original text.
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'Maybe drop this', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Original.',
+              proposed_text: '',
+            },
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    // Comment is preserved.
+    expect(commentsXml).toContain('Maybe drop this');
+    // Original text still appears (either inside <w:del> or untouched).
+    expect(documentXml).toContain('Original');
+  });
+
+  test('comment with empty author falls back to neutral attribution everywhere', async () => {
+    // Comments with no author shouldn't emit `w:author=""` in
+    // comments.xml or "↳ Reply by : …" in reply bodies — both
+    // of these confuse Word and look broken.
+    const md = 'A short paragraph.\n';
+    const blockId = paragraphBlockId('A short paragraph.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [
+              { body: 'opener body', author: '', date: 1 },
+              { body: 'reply body', author: '', date: 2 },
+            ],
+          },
+        ],
+      },
+    });
+    const { commentsXml } = await inspectComments(buf);
+    expect(commentsXml).not.toContain('w:author=""');
+    expect(commentsXml).not.toMatch(/↳ Reply by :/);
+    expect(commentsXml).toMatch(/w:author="Unknown reviewer"/);
+    expect(commentsXml).toContain('↳ Reply by Unknown reviewer: reply body');
+  });
+
+  test('proposal with empty author falls back to a neutral attribution', async () => {
+    const md = 'Original wording.\n';
+    const blockId = paragraphBlockId('Original wording.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'tweak', author: '', date: 1 }],
+            proposal: {
+              source_snapshot: 'Original wording.',
+              proposed_text: 'Revised wording.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).toMatch(/<w:ins\b[^>]*w:author="Unknown reviewer"/);
+    expect(documentXml).not.toContain('Markdowner reviewer');
+  });
+
+  test('multi-block proposal (end_block_id != block_id) demotes to comment-only', async () => {
+    // The renderer doesn't yet support replacing a span of blocks;
+    // attempting to render a multi-block proposal as tracked changes
+    // would emit the first block as ins/del and leave the rest
+    // duplicated. Demote to a comment so the discussion is visible
+    // and the body text stays correct.
+    const md = 'Block one.\n\nBlock two.\n';
+    const startBlockId = paragraphBlockId('Block one.');
+    const endBlockId = paragraphBlockId('Block two.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: startBlockId,
+            end_block_id: endBlockId,
+            comments: [
+              { body: 'replace both with one', author: 'A', date: 1 },
+            ],
+            proposal: {
+              source_snapshot: 'Block one.\n\nBlock two.',
+              proposed_text: 'Merged block.',
+            },
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    // Comment surfaced, no ins/del runs, both original blocks intact.
+    expect(commentsXml).toContain('replace both with one');
+    expect(documentXml).not.toMatch(/<w:ins\b/);
+    expect(documentXml).not.toMatch(/<w:del\b/);
+    expect(documentXml).toContain('Block one');
+    expect(documentXml).toContain('Block two');
+    expect(documentXml).not.toContain('Merged block');
+  });
+
+  test('proposal containing an image triggers resolveAsset for the proposal too', async () => {
+    const md = 'Plain original.\n';
+    const blockId = paragraphBlockId('Plain original.');
+    const seen: string[] = [];
+    const buf = await exportDocx(md, {
+      resolveAsset: async (src) => {
+        seen.push(src);
+        return { bytes: PNG_1x1_BYTES, mime: 'image/png' };
+      },
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'add a logo', author: 'A', date: 1 }],
+            proposal: {
+              source_snapshot: 'Plain original.',
+              proposed_text: '![logo](logo.png)',
+            },
+          },
+        ],
+      },
+    });
+    expect(seen).toContain('logo.png');
+    // The resolved image actually landed in the export.
+    const { mediaFiles } = await inspectDocx(buf);
+    expect(mediaFiles.length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('omitting the review payload leaves the document body unchanged', async () => {
+    // Byte-level equality is not safe (docx writes timestamps into
+    // core.xml), so compare the document.xml text — that's what the
+    // renderer actually controls.
+    const md = '# Plain\n\nBody text here.\n';
+    const a = await exportDocx(md);
+    const b = await exportDocx(md, {});
+    const da = (await inspectComments(a)).documentXml;
+    const db = (await inspectComments(b)).documentXml;
+    expect(da).toBe(db);
+  });
+});

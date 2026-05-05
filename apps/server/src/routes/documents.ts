@@ -9,7 +9,11 @@ import {
   rewriteAssetReferences,
   sanitizeDocumentFilename,
 } from '@marginalia/renderer';
-import type { BlockSourceRange } from '@marginalia/renderer';
+import type {
+  BlockSourceRange,
+  ReviewExportData,
+  ReviewThread,
+} from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
@@ -90,10 +94,7 @@ import { loadPrintCss, loadThemeCss } from '../export/theme-css.js';
  *
  * Returns the choice + a short label for telemetry / log lines.
  */
-function effectiveMermaidRenderer(
-  doc: DocumentRow,
-  c: Context,
-): MermaidRenderer {
+function effectiveMermaidRenderer(doc: DocumentRow, c: Context): MermaidRenderer {
   const queryRaw = c.req.query('mermaid');
   if (typeof queryRaw === 'string' && isMermaidRenderer(queryRaw)) return queryRaw;
   if (doc.mermaid_renderer) return doc.mermaid_renderer;
@@ -117,8 +118,7 @@ function makeMermaidResolver(
   format: MermaidImageFormat,
   onceWarn: (msg: string) => void,
 ): (source: string) => Promise<RenderedMermaidImage | null> {
-  const impl =
-    choice === 'chromium' ? renderMermaidWithChromium : renderMermaidToImage;
+  const impl = choice === 'chromium' ? renderMermaidWithChromium : renderMermaidToImage;
   return async (source) => {
     try {
       return await impl(source, format);
@@ -328,10 +328,11 @@ async function updateDocument(c: Context, deps: AppDeps) {
     return c.json({ error: 'source-required' }, 400);
   }
   const rawCommitMessage = typeof body?.commit_message === 'string' ? body.commit_message : '';
-  const commitMessage = rawCommitMessage
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
-    .trim()
-    .slice(0, 1000) || undefined;
+  const commitMessage =
+    rawCommitMessage
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+      .trim()
+      .slice(0, 1000) || undefined;
 
   let previousSource = '';
   try {
@@ -341,13 +342,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
   }
 
   const writeOptions = commitMessage ? { commitMessage } : undefined;
-  const { oid } = await store.write(
-    doc,
-    nextSource,
-    decision.identity,
-    'update',
-    writeOptions,
-  );
+  const { oid } = await store.write(doc, nextSource, decision.identity, 'update', writeOptions);
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
   const rendered = await renderDocument(nextSource, doc.format);
@@ -366,14 +361,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
   const now = Date.now();
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(
-      upd.blockId,
-      upd.startOffset,
-      upd.endOffset,
-      upd.linkStatus,
-      now,
-      comment.id,
-    );
+    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
   }
 
   // Include sub-block ids so proposals on list items / table cells don't
@@ -381,9 +369,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
   // asciidoc hands off to its own pipeline, and its locator also emits
   // sub-block ids for supported nested structures (e.g. list items).
   const knownBlocks =
-    doc.format === 'asciidoc'
-      ? locateAllBlocksAsciidoc(nextSource)
-      : locateAllBlocks(nextSource);
+    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(nextSource) : locateAllBlocks(nextSource);
   reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (isContentChange(previousSource, nextSource)) {
@@ -606,6 +592,175 @@ async function exportDocument(c: Context, deps: AppDeps) {
   return c.json(bundle);
 }
 
+// --- Review-mode export payload --------------------------------------
+
+/**
+ * Load every OPEN thread for a document and shape it for the
+ * renderer's `review` option. Includes both pure comment threads
+ * and edit proposals. Replies are folded into each thread's
+ * `comments` array oldest-first so the renderer's flat-replies
+ * fallback stays in author order.
+ *
+ * Closed threads (resolved comments + accepted/rejected
+ * proposals) are filtered out in-memory after the SQL load — see
+ * `visibleRoots` below. There's no opt-in to include them: a
+ * review-mode export is always a snapshot of what's still open
+ * for the next reviewer to act on.
+ *
+ * Proposal payloads (`source_snapshot` / `proposed_text`) come from
+ * the same `readProposalContent` helper the threads route uses, so
+ * a proposal whose branch tip is unreachable (rare; orphaned ref)
+ * silently degrades: we keep the thread but drop its `proposal`
+ * field, demoting it to a comment-only export entry.
+ */
+async function loadReviewThreadsForExport(
+  deps: AppDeps,
+  doc: DocumentRow,
+): Promise<ReviewThread[]> {
+  const { db, store } = deps;
+
+  // Root threads: top-level comment rows joined with their proposal
+  // metadata when present. Same shape as the listThreads endpoint.
+  interface Row extends CommentRow {
+    proposal_status: EditProposalStatus | null;
+    accepted_oid: string | null;
+    branch_ref: string | null;
+    base_oid: string | null;
+    base_block_start: number | null;
+    base_block_end: number | null;
+    is_whole_document: number | null;
+  }
+  const roots = db
+    .prepare(
+      `SELECT c.*,
+              cep.status AS proposal_status,
+              cep.accepted_oid,
+              cep.branch_ref,
+              cep.base_oid,
+              cep.base_block_start,
+              cep.base_block_end,
+              cep.is_whole_document
+         FROM comments c
+         LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.doc_uid = ?
+          AND c.parent_id IS NULL
+          AND c.parent_proposal_id IS NULL
+          AND c.deleted_at IS NULL
+        ORDER BY c.created_at ASC`,
+    )
+    .all(doc.uid) as Row[];
+
+  // Replies (one DB hit, group in memory). Drop deleted rows so they
+  // don't appear as ghost replies in the exported comment thread.
+  const replies = db
+    .prepare(
+      `SELECT *
+         FROM comments
+        WHERE doc_uid = ?
+          AND deleted_at IS NULL
+          AND (parent_id IS NOT NULL OR parent_proposal_id IS NOT NULL)
+        ORDER BY created_at ASC`,
+    )
+    .all(doc.uid) as CommentRow[];
+  const repliesByThread = new Map<string, CommentRow[]>();
+  for (const r of replies) {
+    const tid = r.parent_id ?? r.parent_proposal_id;
+    if (!tid) continue;
+    const list = repliesByThread.get(tid);
+    if (list) list.push(r);
+    else repliesByThread.set(tid, [r]);
+  }
+
+  // Drop closed threads up-front so we don't pay `readProposalContent`
+  // (a per-row git read) for rows the export will discard. There's
+  // no escape hatch — the export is always a snapshot of what's
+  // still open.
+  const visibleRoots = roots.filter((row) => !isThreadClosed(row));
+  // Resolve proposal content in parallel — each `readProposalContent`
+  // call can hit git, so a doc with N proposals would otherwise pay
+  // N sequential round-trips. Bound the concurrency so we don't fan
+  // out unbounded fs/git work for very large threads tables.
+  const results = await mapWithConcurrency(visibleRoots, 4, async (row) => {
+    const isProposal = row.proposal_status !== null;
+    let proposal: ReviewThread['proposal'] = null;
+    if (isProposal) {
+      // `readProposalContent` returns null when the branch ref is
+      // unreachable (e.g. legacy rows missing branch metadata).
+      // Demote to a comment-only entry rather than dropping the
+      // thread — the discussion may still be useful context.
+      const content = await readProposalContent(store, doc, row);
+      if (content) {
+        proposal = {
+          source_snapshot: content.source_snapshot,
+          proposed_text: content.proposed_text,
+          whole_document: row.is_whole_document === 1,
+        };
+      }
+    }
+    const opener = {
+      body: row.body,
+      author: row.author_display_name,
+      date: row.created_at,
+    };
+    const threadReplies = (repliesByThread.get(row.id) ?? []).map((r) => ({
+      body: r.body,
+      author: r.author_display_name,
+      date: r.created_at,
+    }));
+    const thread: ReviewThread = {
+      id: row.id,
+      block_id: row.anchor_block_id,
+      end_block_id: row.anchor_end_block_id,
+      // The exporter uses `anchor_quote` to wrap just the
+      // highlighted substring (instead of the whole paragraph).
+      // Stale quotes that no longer match the live block degrade
+      // to whole-paragraph wrap inside the renderer.
+      anchor_quote: row.anchor_quote,
+      comments: [opener, ...threadReplies],
+      proposal,
+    };
+    return thread;
+  });
+  return results;
+}
+
+/**
+ * A thread is "closed" — and therefore excluded from the review
+ * export — when:
+ *
+ *   - it's an edit proposal whose status moved off `open` (i.e.
+ *     `accepted` or `rejected`), or
+ *   - it's a plain comment thread whose `resolved_at` is set.
+ *
+ * Both states represent a finished discussion the export's reader
+ * shouldn't have to wade through. There's no opt-in to bring them
+ * back: a review-mode export is always a snapshot of what's still
+ * open for the next reviewer to act on.
+ */
+function isThreadClosed(row: {
+  proposal_status: EditProposalStatus | null;
+  resolved_at: number | null;
+}): boolean {
+  if (row.proposal_status !== null) return row.proposal_status !== 'open';
+  return row.resolved_at !== null;
+}
+
+/**
+ * Returns true iff the caller asked for the review-mode export
+ * via `?review=both|1|true`. Anything else (including unset)
+ * returns false → vanilla export with no review chrome.
+ *
+ * Only one mode is supported by the route: BOTH open comments
+ * and open proposals. There is no comments-only or proposals-only
+ * mode (and no `?include_resolved` flag) — keeping the surface
+ * narrow makes the UI semantics unambiguous and avoids closed
+ * threads ever reaching the wire.
+ */
+function wantsReviewExport(c: Context): boolean {
+  const raw = (c.req.query('review') ?? '').toLowerCase();
+  return raw === 'both' || raw === '1' || raw === 'true';
+}
+
 // --- GET /api/documents/:uid/export.docx -----------------------------
 
 /**
@@ -665,11 +820,25 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
     console.warn(`[docx-export] mermaid renderer (${mermaidChoice}):`, msg);
   };
   const renderMermaidPng = makeMermaidResolver(mermaidChoice, 'png', onceWarn);
+
+  // Optional review-mode payload. Loads the document's open
+  // threads (closed ones are dropped server-side, no opt-in)
+  // when the caller asked for the review export via `?review=both`.
+  // Unset → vanilla export.
+  let review: ReviewExportData | undefined;
+  if (wantsReviewExport(c)) {
+    const threads = await loadReviewThreadsForExport(deps, doc);
+    if (threads.length > 0) {
+      review = { threads };
+    }
+  }
+
   const buf = await exportDocx(source, {
     theme,
     format: doc.format,
     ...(derivedTitle ? { title: derivedTitle } : {}),
     ...(identity?.displayName ? { author: identity.displayName } : {}),
+    ...(review ? { review } : {}),
     resolveAsset: async (src) => {
       const hit = attached.get(src);
       if (!hit) return null;
@@ -1038,8 +1207,7 @@ async function importDocument(c: Context, deps: AppDeps) {
       const status = normalizeImportedProposalStatus(
         typeof proposal.status === 'string' ? proposal.status : null,
       );
-      const acceptedOid =
-        typeof proposal.accepted_oid === 'string' ? proposal.accepted_oid : null;
+      const acceptedOid = typeof proposal.accepted_oid === 'string' ? proposal.accepted_oid : null;
 
       // Accepted proposals: skip branch creation. The bundle's source
       // is post-accept, so splicing `proposed_text` into it would
@@ -1229,8 +1397,10 @@ function parseStringArray(raw: string | null): string[] | null {
   }
 }
 
-function normalizeImportedLinkStatus(raw: string | null): 'linked' | 'low-confidence' | 'orphaned' {
-  if (raw === 'low-confidence' || raw === 'orphaned') return raw;
+function normalizeImportedLinkStatus(
+  raw: string | null,
+): 'linked' | 'low-confidence' | 'conflict' | 'orphaned' {
+  if (raw === 'low-confidence' || raw === 'conflict' || raw === 'orphaned') return raw;
   return 'linked';
 }
 
@@ -1317,15 +1487,9 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
     return c.json({ error: 'not-found' }, 404);
   }
 
-  const { oid } = await store.write(
-    doc,
-    restoredSource,
-    decision.identity,
-    'restore',
-    {
-      restoredFromOid: targetOid,
-    },
-  );
+  const { oid } = await store.write(doc, restoredSource, decision.identity, 'restore', {
+    restoredFromOid: targetOid,
+  });
   const now = Date.now();
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
@@ -1344,14 +1508,7 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   );
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(
-      upd.blockId,
-      upd.startOffset,
-      upd.endOffset,
-      upd.linkStatus,
-      now,
-      comment.id,
-    );
+    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
   }
 
   const knownBlocks =
@@ -1391,15 +1548,9 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
   if (!diff) return c.json({ error: 'not-found' }, 404);
 
   const meta = parseHistoryMetadata(latest);
-  const { oid } = await store.write(
-    doc,
-    diff.before,
-    decision.identity,
-    'restore',
-    {
-      restoredFromOid: parent.oid,
-    },
-  );
+  const { oid } = await store.write(doc, diff.before, decision.identity, 'restore', {
+    restoredFromOid: parent.oid,
+  });
   const now = Date.now();
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
@@ -1418,14 +1569,7 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
   );
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(
-      upd.blockId,
-      upd.startOffset,
-      upd.endOffset,
-      upd.linkStatus,
-      now,
-      comment.id,
-    );
+    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
   }
 
   const reopenedProposalId =
@@ -1434,9 +1578,7 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
       : null;
 
   const knownBlocks =
-    doc.format === 'asciidoc'
-      ? locateAllBlocksAsciidoc(diff.before)
-      : locateAllBlocks(diff.before);
+    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(diff.before) : locateAllBlocks(diff.before);
   reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (reopenedProposalId) {

@@ -1,14 +1,13 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import { renderDocument } from '@marginalia/renderer';
+import { canMergeMultiBlock, renderDocument } from '@marginalia/renderer';
 import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
-import { mapWithConcurrency } from '../concurrency.js';
 import {
-  type Identity,
   INVITE_SESSION_COOKIE,
+  type Identity,
   SESSION_COOKIE,
   authorize,
   canComment,
@@ -16,7 +15,15 @@ import {
   canPropose,
   parseCookie,
 } from '../auth.js';
-import type { CommentRow, DocumentRow, EditProposalStatus, EditProposalThreadRow } from '../db.js';
+import { mapWithConcurrency } from '../concurrency.js';
+import type {
+  CommentLinkStatus,
+  CommentRow,
+  DocumentRow,
+  EditProposalStatus,
+  EditProposalThreadRow,
+} from '../db.js';
+import type { GitStore } from '../git-store.js';
 import {
   consumePendingMentions,
   listMentionCandidates,
@@ -29,8 +36,9 @@ import {
   loadProposalRow,
   locateAnchorRange,
   locateDocumentBlocks,
-  reanchorProposals,
   readProposalContent,
+  readProposalFullContent,
+  reanchorProposals,
   reopenAcceptedProposal,
   toWire as toProposalWire,
 } from './edit-proposals.js';
@@ -87,6 +95,7 @@ export function threadsRouter(deps: AppDeps): Hono {
   r.get('/:uid/threads', async (c) => listThreads(c, deps));
   r.post('/:uid/threads', async (c) => createThread(c, deps));
   r.get('/:uid/threads/:tid/diff', async (c) => getThreadDiff(c, deps));
+  r.post('/:uid/threads/:tid/repair', async (c) => repairThreadAnchor(c, deps));
   r.patch('/:uid/threads/:tid', async (c) => editThreadRoot(c, deps));
   r.delete('/:uid/threads/:tid', async (c) => deleteThread(c, deps));
   r.patch('/:uid/threads/:tid/comments/:cid', async (c) => editThreadReply(c, deps));
@@ -195,10 +204,7 @@ async function createThread(c: Context, deps: AppDeps) {
       baseOid = await store.mainOid(doc);
       currentSource = await store.readAt(doc, baseOid);
     } catch (err) {
-      console.warn(
-        `[marginalia] reading base for proposal ${id} (${doc.uid}) failed:`,
-        err,
-      );
+      console.warn(`[marginalia] reading base for proposal ${id} (${doc.uid}) failed:`, err);
       return c.json({ error: 'proposal-storage-unavailable' }, 503);
     }
     if (proposal.wholeDocument) {
@@ -222,10 +228,7 @@ async function createThread(c: Context, deps: AppDeps) {
       );
       branchRef = branch.refName;
     } catch (err) {
-      console.warn(
-        `[marginalia] proposal-branch creation failed for ${id} (${doc.uid}):`,
-        err,
-      );
+      console.warn(`[marginalia] proposal-branch creation failed for ${id} (${doc.uid}):`, err);
       return c.json({ error: 'proposal-storage-unavailable' }, 503);
     }
   }
@@ -373,18 +376,16 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
   // Whole-document proposals don't depend on `anchor_block_id`.
   const isAcceptable =
     proposal.proposal_status === 'open' &&
-    proposal.link_status !== 'orphaned' &&
+    isProposalAnchorAcceptable(proposal) &&
     (proposal.is_whole_document === 1 || proposal.anchor_block_id !== null);
   const wantMergeable =
     isAcceptable &&
-    (canEdit(decision.role) ||
-      (c.req.query('mergeable') === '1' && canPropose(decision.role)));
+    (canEdit(decision.role) || (c.req.query('mergeable') === '1' && canPropose(decision.role)));
   if (wantMergeable) {
     const status = await deps.store.proposalMergeStatus(doc, proposal.id);
     // `merged` and `absent` both collapse to `stale` — the proposal
     // can no longer be applied as-is and needs a rebase.
-    mergeable =
-      status === 'clean' ? 'clean' : status === 'conflict' ? 'conflict' : 'stale';
+    mergeable = status === 'clean' ? 'clean' : status === 'conflict' ? 'conflict' : 'stale';
   }
   return c.json({ ...diff, mergeable });
 }
@@ -401,10 +402,140 @@ async function resolveProposalDiff(
   doc: DocumentRow,
   proposal: EditProposalThreadRow,
   deps: AppDeps,
-): Promise<{ before: string; after: string } | null> {
+): Promise<{
+  before: string;
+  after: string;
+  original: { before: string; after: string } | null;
+} | null> {
   const content = await readProposalContent(deps.store, doc, proposal);
   if (!content) return null;
-  return { before: content.source_snapshot, after: content.proposed_text };
+  const original = await readProposalFullContent(deps.store, doc, proposal);
+  return { before: content.source_snapshot, after: content.proposed_text, original };
+}
+
+async function repairThreadAnchor(c: Context, deps: AppDeps) {
+  const { db, realtime, store } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  const identity = decision.identity;
+  if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
+
+  const tid = c.req.param('tid');
+  if (!tid) return c.json({ error: 'not-found' }, 404);
+  const row = loadProposalRow(db, tid, doc.uid);
+  if (!row) return c.json({ error: 'proposal-required' }, 400);
+  if (row.proposal_status !== 'open') return c.json({ error: 'not-open' }, 400);
+  if (row.is_whole_document === 1) return c.json({ error: 'proposal-repair-unavailable' }, 409);
+  if (row.link_status !== 'orphaned') return c.json({ error: 'not-orphaned' }, 400);
+  if (row.branch_ref !== `refs/proposals/${row.id}` || !row.base_oid) {
+    return c.json({ error: 'proposal-repair-unavailable' }, 409);
+  }
+
+  return store.withProposalRepair(doc, row.id, identity, async ({ preview, rewrite }) => {
+    let anchor: RepairAnchor | null = null;
+    let linkStatus: CommentLinkStatus | null = null;
+    let repairedBranch: { baseOid: string; baseBlockStart: number; baseBlockEnd: number } | null =
+      null;
+    if (preview.ok) {
+      const changed = changedSpan(preview.before, preview.after);
+      if (!changed) return c.json({ error: 'proposal-repair-unavailable' }, 409);
+      if (!rewrite?.ok) return c.json({ error: 'proposal-repair-unavailable' }, 409);
+      repairedBranch = {
+        baseOid: rewrite.baseOid,
+        baseBlockStart: changed.beforeStart,
+        baseBlockEnd: changed.beforeEnd,
+      };
+
+      const rendered = await renderDocument(preview.before, doc.format);
+      const blocks = locateDocumentBlocks(doc, preview.before);
+      anchor = locateRepairAnchor(
+        blocks,
+        rendered.blocks,
+        preview.before,
+        changed.beforeStart,
+        changed.beforeEnd,
+        doc.format,
+      );
+      linkStatus = anchor?.linkStatus ?? null;
+    } else if (preview.reason === 'conflict') {
+      anchor = await locateConflictRepairAnchor(doc, row, store);
+      linkStatus = anchor ? 'conflict' : null;
+    } else {
+      const code =
+        preview.reason === 'absent' ? 'proposal-repair-unavailable' : 'proposal-already-merged';
+      return c.json({ error: code }, 409);
+    }
+    if (!anchor || !linkStatus) {
+      return c.json(
+        { error: preview.ok ? 'proposal-repair-unavailable' : 'proposal-conflict' },
+        409,
+      );
+    }
+
+    const now = Date.now();
+    if (repairedBranch) {
+      db.prepare(
+        `UPDATE comments_edit_proposals
+            SET base_oid = ?,
+                base_block_start = ?,
+                base_block_end = ?
+          WHERE comment_id = ?`,
+      ).run(
+        repairedBranch.baseOid,
+        repairedBranch.baseBlockStart,
+        repairedBranch.baseBlockEnd,
+        row.id,
+      );
+    }
+    db.prepare(
+      `UPDATE comments
+          SET anchor_block_id = ?,
+              anchor_end_block_id = ?,
+              anchor_quote = ?,
+              anchor_prefix = '',
+              anchor_suffix = '',
+              anchor_start_offset = NULL,
+              anchor_end_offset = NULL,
+              anchor_heading_path = ?,
+              anchor_section_index = ?,
+              anchor_section_index_path = ?,
+              link_status = ?,
+              updated_at = ?
+        WHERE id = ? AND doc_uid = ?`,
+    ).run(
+      anchor.block.id,
+      anchor.endBlock?.id ?? null,
+      anchor.quote,
+      JSON.stringify(anchor.block.headingPath),
+      anchor.block.sectionIndex,
+      JSON.stringify(anchor.block.sectionIndexPath),
+      linkStatus,
+      now,
+      row.id,
+      doc.uid,
+    );
+
+    const updated = loadThreadRow(db, row.id, doc.uid);
+    if (!updated) return c.json({ error: 'not-found' }, 404);
+    const replies = loadReplies(db, doc.uid, row.id);
+    const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updated]);
+
+    if (isProposalRow(updated)) {
+      realtime.broadcast(
+        doc.uid,
+        { type: 'edit_proposal.updated', edit_proposal: toProposalWire(updated) },
+        identity.clientId,
+      );
+    }
+
+    return c.json({
+      thread: await toThreadWire(store, doc, updated, replies, decision, reopenableAccepted),
+    });
+  });
 }
 
 /**
@@ -688,6 +819,9 @@ async function respondToThread(c: Context, deps: AppDeps) {
     if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
     if (row.link_status === 'orphaned' || !row.anchor_block_id) {
       return c.json({ error: 'proposal-orphaned' }, 409);
+    }
+    if (row.link_status === 'conflict') {
+      return c.json({ error: 'proposal-conflict' }, 409);
     }
   } else if (action === 'reject') {
     if (!isProposal) return c.json({ error: 'proposal-required' }, 400);
@@ -1282,10 +1416,19 @@ async function toThreadWire(
         state === 'open' &&
         decision.ok &&
         canEdit(decision.role) &&
-        row.link_status !== 'orphaned' &&
+        isProposalAnchorAcceptable(row) &&
         (row.is_whole_document === 1 || row.anchor_block_id !== null),
       reject:
         proposal && state === 'open' && decision.ok && (canEdit(decision.role) || isRootAuthor),
+      repair:
+        proposal &&
+        state === 'open' &&
+        decision.ok &&
+        canPropose(decision.role) &&
+        row.link_status === 'orphaned' &&
+        row.is_whole_document !== 1 &&
+        row.branch_ref !== null &&
+        row.base_oid !== null,
       reopen:
         state === 'resolved' &&
         (!proposal
@@ -1416,6 +1559,180 @@ function locateAcceptedProposalAnchor(
   const rendered = renderedBlocks.find((block) => block.id === located.id);
   if (!rendered) return null;
   return { block: rendered, linkStatus: located.confidence };
+}
+
+function changedSpan(
+  before: string,
+  after: string,
+): { beforeStart: number; beforeEnd: number } | null {
+  if (before === after) return null;
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) start++;
+  let suffix = 0;
+  while (
+    suffix < before.length - start &&
+    suffix < after.length - start &&
+    before[before.length - 1 - suffix] === after[after.length - 1 - suffix]
+  ) {
+    suffix++;
+  }
+  return {
+    beforeStart: start,
+    beforeEnd: before.length - suffix,
+  };
+}
+
+function locateRepairAnchor(
+  blocks: Map<string, BlockSourceRange>,
+  renderedBlocks: BlockInfo[],
+  source: string,
+  start: number,
+  end: number,
+  format: DocumentRow['format'],
+): {
+  block: BlockInfo;
+  endBlock: BlockInfo | null;
+  quote: string;
+  linkStatus: 'linked' | 'low-confidence';
+} | null {
+  const renderedById = new Map(renderedBlocks.map((block) => [block.id, block]));
+  const sorted = Array.from(blocks.entries()).sort((a, b) => a[1].start - b[1].start);
+
+  for (const [id, range] of sorted) {
+    if (range.start !== start || range.end !== end) continue;
+    const block = renderedById.get(id);
+    if (!block) return null;
+    return {
+      block,
+      endBlock: null,
+      quote: source.slice(range.start, range.end),
+      linkStatus: 'linked',
+    };
+  }
+
+  let best: {
+    startId: string;
+    startRange: BlockSourceRange;
+    endId: string;
+    endRange: BlockSourceRange;
+    span: number;
+  } | null = null;
+  for (const [startId, startRange] of sorted) {
+    if (startRange.start !== start) continue;
+    for (const [endId, endRange] of sorted) {
+      if (endRange.end !== end) continue;
+      if (!canMergeMultiBlock(startRange, endRange, format)) continue;
+      const span =
+        Math.max(startRange.end, endRange.end) - Math.min(startRange.start, endRange.start);
+      if (!best || span < best.span) {
+        best = { startId, startRange, endId, endRange, span };
+      }
+    }
+  }
+  if (best) {
+    const block = renderedById.get(best.startId);
+    const endBlock = renderedById.get(best.endId);
+    if (!block || !endBlock) return null;
+    return {
+      block,
+      endBlock: best.endId === best.startId ? null : endBlock,
+      quote: source.slice(
+        Math.min(best.startRange.start, best.endRange.start),
+        Math.max(best.startRange.end, best.endRange.end),
+      ),
+      linkStatus: 'linked',
+    };
+  }
+
+  const located = findBlockBySourceSpan(blocks, start, end);
+  if (!located) return null;
+  const block = renderedById.get(located.id);
+  if (!block) return null;
+  return {
+    block,
+    endBlock: null,
+    quote: source.slice(start, end) || located.range.text,
+    linkStatus: located.confidence,
+  };
+}
+
+type RepairAnchor = NonNullable<ReturnType<typeof locateRepairAnchor>>;
+
+async function locateConflictRepairAnchor(
+  doc: DocumentRow,
+  row: EditProposalThreadRow,
+  store: GitStore,
+): Promise<RepairAnchor | null> {
+  if (row.base_block_start === null || row.base_block_end === null) return null;
+  const original = await readProposalFullContent(store, doc, row);
+  if (!original) return null;
+  const lineSpan = lineSpanForOffsets(original.before, row.base_block_start, row.base_block_end);
+  if (!lineSpan) return null;
+
+  const currentSource = store.read(doc);
+  const currentSpan = sourceSpanForLineSpan(currentSource, lineSpan.startLine, lineSpan.endLine);
+  if (!currentSpan) return null;
+
+  const rendered = await renderDocument(currentSource, doc.format);
+  const blocks = locateDocumentBlocks(doc, currentSource);
+  return locateRepairAnchor(
+    blocks,
+    rendered.blocks,
+    currentSource,
+    currentSpan.start,
+    currentSpan.end,
+    doc.format,
+  );
+}
+
+function lineSpanForOffsets(
+  source: string,
+  start: number,
+  end: number,
+): { startLine: number; endLine: number } | null {
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  const safeStart = Math.max(0, Math.min(source.length, start));
+  const safeEnd = Math.max(safeStart, Math.min(source.length, end));
+  const endProbe = safeEnd > safeStart ? safeEnd - 1 : safeStart;
+  return {
+    startLine: lineNumberAtOffset(source, safeStart),
+    endLine: lineNumberAtOffset(source, endProbe),
+  };
+}
+
+function lineNumberAtOffset(source: string, offset: number): number {
+  let line = 1;
+  for (let i = 0; i < offset; i += 1) {
+    if (source.charCodeAt(i) === 10) line += 1;
+  }
+  return line;
+}
+
+function sourceSpanForLineSpan(
+  source: string,
+  startLine: number,
+  endLine: number,
+): { start: number; end: number } | null {
+  if (startLine < 1 || endLine < startLine) return null;
+  const lineStarts = [0];
+  for (let i = 0; i < source.length; i += 1) {
+    if (source.charCodeAt(i) === 10) lineStarts.push(i + 1);
+  }
+  if (startLine > lineStarts.length) return null;
+  const clampedEndLine = Math.min(endLine, lineStarts.length);
+  const start = lineStarts[startLine - 1];
+  if (start === undefined) return null;
+  const nextLineStart = lineStarts[clampedEndLine];
+  let end =
+    clampedEndLine < lineStarts.length && nextLineStart !== undefined
+      ? nextLineStart - 1
+      : source.length;
+  if (end > start && source.charCodeAt(end - 1) === 13) end -= 1;
+  return end >= start ? { start, end } : null;
+}
+
+function isProposalAnchorAcceptable(row: Pick<CommentRow, 'link_status'>): boolean {
+  return row.link_status !== 'orphaned' && row.link_status !== 'conflict';
 }
 
 async function safeJson(c: Context): Promise<Record<string, unknown> | null> {

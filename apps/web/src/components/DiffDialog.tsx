@@ -7,11 +7,21 @@ interface Props {
   title?: string;
   before: string;
   after: string;
+  /** Number of unchanged lines to show around each changed hunk. `null` shows the full diff. */
+  contextLines?: number | null;
   /** Rendered in the dialog footer. E.g. Accept/Reject buttons. */
   actions?: React.ReactNode;
 }
 
-export function DiffDialog({ open, onOpenChange, title, before, after, actions }: Props) {
+export function DiffDialog({
+  open,
+  onOpenChange,
+  title,
+  before,
+  after,
+  contextLines = null,
+  actions,
+}: Props) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Content size="3" maxWidth="900px">
@@ -21,7 +31,7 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
           shown for context.
         </Dialog.Description>
 
-        <DiffView before={before} after={after} active={open} />
+        <DiffView before={before} after={after} contextLines={contextLines} active={open} />
 
         <Flex gap="2" justify="end" mt="4" align="center">
           {actions}

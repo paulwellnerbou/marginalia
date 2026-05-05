@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createApp, type App } from '../src/app.js';
-import { loadConfig } from '../src/config.js';
+import { type App, createApp } from '../src/app.js';
 import { CLIENT_HEADER, CLIENT_NAME_HEADER, INVITE_HEADER } from '../src/auth.js';
+import { loadConfig } from '../src/config.js';
 
 const ALICE = { id: 'aaaaaaaaaaaaaaaaaaaa', name: 'Alice' };
 const BOB = { id: 'bbbbbbbbbbbbbbbbbbbb', name: 'Bob' };
@@ -51,6 +51,7 @@ interface ThreadShape {
     resolve: boolean;
     accept: boolean;
     reject: boolean;
+    repair: boolean;
     reopen: boolean;
   };
   comments: [ThreadCommentNodeShape, ...ThreadCommentNodeShape[]];
@@ -74,7 +75,10 @@ function threadRootToComment(thread: ThreadShape): Record<string, unknown> {
   };
 }
 
-function threadReplyToComment(thread: ThreadShape, reply: ThreadCommentNodeShape): Record<string, unknown> {
+function threadReplyToComment(
+  thread: ThreadShape,
+  reply: ThreadCommentNodeShape,
+): Record<string, unknown> {
   return {
     id: reply.id,
     parent_id: thread.proposal ? null : thread.id,
@@ -94,7 +98,8 @@ function flattenThreadComments(threads: ThreadShape[]): Array<Record<string, unk
   const comments: Array<Record<string, unknown>> = [];
   for (const thread of threads) {
     if (!thread.proposal) comments.push(threadRootToComment(thread));
-    for (const reply of thread.comments.slice(1)) comments.push(threadReplyToComment(thread, reply));
+    for (const reply of thread.comments.slice(1))
+      comments.push(threadReplyToComment(thread, reply));
   }
   comments.sort(
     (a, b) =>
@@ -224,7 +229,9 @@ describe('threads API', () => {
       }),
     );
     const json = (await res.json()) as { thread: ThreadShape; created_reply_id: string | null };
-    const comment = json.created_reply_id ? findThreadComment(json.thread, json.created_reply_id) : null;
+    const comment = json.created_reply_id
+      ? findThreadComment(json.thread, json.created_reply_id)
+      : null;
     return {
       status: res.status,
       body: { comment },
@@ -283,7 +290,7 @@ describe('threads API', () => {
     const topId = (r1.body as { comment: { id: string } }).comment.id;
 
     const r2 = await addReply(uid, BOB, topId, 'reply');
-    const replyId = ((r2.body as { comment: { id: string } }).comment).id;
+    const replyId = (r2.body as { comment: { id: string } }).comment.id;
 
     const r3 = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/threads/${replyId}/respond`, {
@@ -328,7 +335,7 @@ describe('threads API', () => {
 
     const reply = await addReply(uid, BOB, threadId, 'reply');
     expect(reply.status).toBe(200);
-    const replyId = ((reply.body as { comment: { id: string } }).comment).id;
+    const replyId = (reply.body as { comment: { id: string } }).comment.id;
 
     const editByAlice = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/threads/${threadId}/comments/${replyId}`, {
@@ -959,6 +966,156 @@ describe('threads API', () => {
     });
   });
 
+  test('orphaned proposal repair uses git merge placement to restore its anchor', async () => {
+    const uid = await newDoc('alpha\n\nbeta\n');
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const docJson = (await docRes.json()) as {
+      rendered: { blocks: Array<{ id: string; text: string }> };
+    };
+    const alpha = docJson.rendered.blocks.find((block) => block.text === 'alpha');
+    expect(alpha).toBeDefined();
+    if (!alpha) throw new Error('alpha block missing');
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: alpha.id, quote: 'alpha' },
+          proposal: { proposed_text: 'ALPHA' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
+
+    const updateRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, {
+        method: 'PUT',
+        headers: asAdmin(),
+        body: JSON.stringify({ markdown: 'alpha\n\nbeta\n\noutro\n' }),
+      }),
+    );
+    expect(updateRes.status).toBe(200);
+
+    app.db
+      .prepare(
+        `UPDATE comments
+            SET link_status = 'orphaned',
+                anchor_block_id = NULL,
+                anchor_end_block_id = NULL
+          WHERE id = ?`,
+      )
+      .run(proposed.thread.id);
+
+    const repairRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/repair`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+      }),
+    );
+    expect(repairRes.status).toBe(200);
+    const repaired = (await repairRes.json()) as { thread: ThreadShape };
+    expect(repaired.thread.link_status).toBe('linked');
+    expect(repaired.thread.anchor.block_id).toBeString();
+    expect(repaired.thread.anchor.quote).toBe('alpha');
+    expect(repaired.thread.capabilities.repair).toBe(false);
+
+    const beforeAcceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: asAdmin() }),
+    );
+    const beforeAccept = (await beforeAcceptRes.json()) as { source: string };
+    expect(beforeAccept.source).toBe('alpha\n\nbeta\n\noutro\n');
+
+    const acceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    const afterRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: asAdmin() }),
+    );
+    const after = (await afterRes.json()) as { source: string };
+    expect(after.source).toBe('ALPHA\n\nbeta\n\noutro\n');
+  });
+
+  test('conflicting proposal repair falls back to original line number anchor', async () => {
+    const uid = await newDoc('# Welcome\n\nThreaded comments you can resolve\n\nTail\n');
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const docJson = (await docRes.json()) as {
+      rendered: { blocks: Array<{ id: string; text: string }> };
+    };
+    const target = docJson.rendered.blocks.find(
+      (block) => block.text === 'Threaded comments you can resolve',
+    );
+    expect(target).toBeDefined();
+    if (!target) throw new Error('target block missing');
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: target.id, quote: 'Threaded comments you can resolve' },
+          proposal: { proposed_text: 'Threaded comments you can resolve or reject' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
+
+    const updateRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, {
+        method: 'PUT',
+        headers: asAdmin(),
+        body: JSON.stringify({ markdown: '# Welcome\n\nThese comments you can resolve\n\nTail\n' }),
+      }),
+    );
+    expect(updateRes.status).toBe(200);
+
+    app.db
+      .prepare(
+        `UPDATE comments
+            SET link_status = 'orphaned',
+                anchor_block_id = NULL,
+                anchor_end_block_id = NULL
+          WHERE id = ?`,
+      )
+      .run(proposed.thread.id);
+
+    const repairRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/repair`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+      }),
+    );
+    expect(repairRes.status).toBe(200);
+    const repaired = (await repairRes.json()) as { thread: ThreadShape };
+    expect(repaired.thread.link_status).toBe('conflict');
+    expect(repaired.thread.anchor.block_id).toBeString();
+    expect(repaired.thread.anchor.quote).toBe('These comments you can resolve');
+    expect(repaired.thread.capabilities.accept).toBe(false);
+    expect(repaired.thread.capabilities.repair).toBe(false);
+
+    const acceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(acceptRes.status).toBe(409);
+    expect(await acceptRes.json()).toEqual({ error: 'proposal-conflict' });
+  });
+
   test('multi-block proposal: rejects table-cell endpoints as orphaned', async () => {
     // A table-cell id sneaking in as the end of a multi-block range
     // would splice mid-row through `|` pipes and corrupt the table.
@@ -1211,7 +1368,8 @@ describe('threads API', () => {
       threads: Array<{ id: string; comments: [{ capabilities: { delete: boolean } }] }>;
     };
     expect(
-      bobBody.threads.find((thread) => thread.id === proposed.thread.id)?.comments[0].capabilities.delete,
+      bobBody.threads.find((thread) => thread.id === proposed.thread.id)?.comments[0].capabilities
+        .delete,
     ).toBe(false);
 
     const adminList = await app.hono.fetch(
@@ -1223,7 +1381,8 @@ describe('threads API', () => {
       threads: Array<{ id: string; comments: [{ capabilities: { delete: boolean } }] }>;
     };
     expect(
-      adminBody.threads.find((thread) => thread.id === proposed.thread.id)?.comments[0].capabilities.delete,
+      adminBody.threads.find((thread) => thread.id === proposed.thread.id)?.comments[0].capabilities
+        .delete,
     ).toBe(true);
   });
 
@@ -1234,7 +1393,7 @@ describe('threads API', () => {
     const topId = (r1.body as { comment: { id: string } }).comment.id;
 
     const replyRes = await addReply(uid, BOB, topId, 'reply');
-    const replyId = ((replyRes.body as { comment: { id: string } }).comment).id;
+    const replyId = (replyRes.body as { comment: { id: string } }).comment.id;
 
     const resolveRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/threads/${replyId}/respond`, {
@@ -1342,10 +1501,10 @@ describe('threads API', () => {
 
     // Thread-level capabilities (Alice is the root author and also admin here)
     expect(thread.capabilities.reply).toBe(true);
-    expect(thread.capabilities.resolve).toBe(true);   // author may resolve
-    expect(thread.capabilities.accept).toBe(false);   // not a proposal
-    expect(thread.capabilities.reject).toBe(false);   // not a proposal
-    expect(thread.capabilities.reopen).toBe(false);   // not yet resolved
+    expect(thread.capabilities.resolve).toBe(true); // author may resolve
+    expect(thread.capabilities.accept).toBe(false); // not a proposal
+    expect(thread.capabilities.reject).toBe(false); // not a proposal
+    expect(thread.capabilities.reopen).toBe(false); // not yet resolved
 
     // Opener comment node (comments[0])
     expect(thread.comments[0].id).toBe(thread.id);
@@ -1354,7 +1513,7 @@ describe('threads API', () => {
     expect(thread.comments[0].author.display_name).toBe('Alice');
     expect(typeof thread.comments[0].created_at).toBe('number');
     expect(typeof thread.comments[0].updated_at).toBe('number');
-    expect(thread.comments[0].capabilities.edit).toBe(true);   // own comment
+    expect(thread.comments[0].capabilities.edit).toBe(true); // own comment
     expect(thread.comments[0].capabilities.delete).toBe(true); // own comment
 
     // No proposal, no replies on creation
@@ -1383,6 +1542,10 @@ describe('threads API', () => {
     expect(thread.state).toBe('open');
     expect(thread.resolution).toBeNull();
     expect(thread.proposal).not.toBeNull();
+    const original = {
+      before: '# Title\n\nA paragraph.\n',
+      after: '# Better title\n\nA paragraph.\n',
+    };
     const diffRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/threads/${thread.id}/diff`, {
         headers: headersFor(BOB),
@@ -1394,18 +1557,19 @@ describe('threads API', () => {
     expect(await diffRes.json()).toEqual({
       before: '# Title',
       after: '# Better title',
+      original,
       mergeable: null,
     });
     const mergeableRes = await app.hono.fetch(
-      new Request(
-        `http://test/api/documents/${uid}/threads/${thread.id}/diff?mergeable=1`,
-        { headers: headersFor(BOB) },
-      ),
+      new Request(`http://test/api/documents/${uid}/threads/${thread.id}/diff?mergeable=1`, {
+        headers: headersFor(BOB),
+      }),
     );
     expect(mergeableRes.status).toBe(200);
     expect(await mergeableRes.json()).toEqual({
       before: '# Title',
       after: '# Better title',
+      original,
       mergeable: 'clean',
     });
 
@@ -1420,6 +1584,7 @@ describe('threads API', () => {
     expect(await adminRes.json()).toEqual({
       before: '# Title',
       after: '# Better title',
+      original,
       mergeable: 'clean',
     });
 
@@ -1429,21 +1594,21 @@ describe('threads API', () => {
     const carolReaderInvite = await createInvite(uid, 'Carol', 'reader');
     inviteByClientId.set(CAROL.id, carolReaderInvite);
     const readerRes = await app.hono.fetch(
-      new Request(
-        `http://test/api/documents/${uid}/threads/${thread.id}/diff?mergeable=1`,
-        { headers: headersFor(CAROL) },
-      ),
+      new Request(`http://test/api/documents/${uid}/threads/${thread.id}/diff?mergeable=1`, {
+        headers: headersFor(CAROL),
+      }),
     );
     expect(readerRes.status).toBe(200);
     expect(await readerRes.json()).toEqual({
       before: '# Title',
       after: '# Better title',
+      original,
       mergeable: null,
     });
 
     // Capabilities: Bob is collaborator → can propose/reject own, but not accept (needs editor)
     expect(thread.capabilities.accept).toBe(false); // collaborator cannot accept
-    expect(thread.capabilities.reject).toBe(true);  // root author may reject
+    expect(thread.capabilities.reject).toBe(true); // root author may reject
 
     expect(thread.comments).toHaveLength(1);
   });
@@ -1585,12 +1750,7 @@ describe('threads API', () => {
     const blockId = await firstBlockId(uid);
 
     // Alice mentions Bob (unambiguous — only one "Bob" in the doc).
-    const c1 = await addComment(
-      uid,
-      ALICE,
-      { block_id: blockId, quote: 'Title' },
-      'hello @Bob',
-    );
+    const c1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hello @Bob');
     expect(c1.status).toBe(201);
 
     // Bob renames to "Bobby". The mention row targeting "Bob" should be
@@ -1622,20 +1782,9 @@ describe('threads API', () => {
     // first prime her doc_users row as "Carol" via a regular post, then
     // rename her to "Bobby" on a subsequent request.
     await addComment(uid, CAROL, { block_id: blockId, quote: 'Title' }, 'first as carol');
-    await addCommentAs(
-      uid,
-      CAROL,
-      'Bobby',
-      { block_id: blockId, quote: 'Title' },
-      'me too',
-    );
+    await addCommentAs(uid, CAROL, 'Bobby', { block_id: blockId, quote: 'Title' }, 'me too');
     // Alice mentions @Bobby — ambiguous now.
-    const c2 = await addComment(
-      uid,
-      ALICE,
-      { block_id: blockId, quote: 'Title' },
-      '@Bobby look',
-    );
+    const c2 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, '@Bobby look');
     expect(c2.status).toBe(201);
 
     // Bob renames back to "Bob" (leaving Carol as the only "Bobby").
