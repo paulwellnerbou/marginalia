@@ -2548,13 +2548,10 @@ describe('documents API', () => {
   async function exportReviewDocx(
     uid: string,
     inviteToken: string,
-    options: { includeResolved?: boolean } = {},
   ): Promise<string> {
-    const qs = new URLSearchParams({ review: 'both' });
-    if (options.includeResolved) qs.set('include_resolved', '1');
     const res = await app.hono.fetch(
       new Request(
-        `http://test/api/documents/${uid}/export.docx?${qs.toString()}`,
+        `http://test/api/documents/${uid}/export.docx?review=both`,
         { headers: withInvite(headersFor(CLIENT_A), inviteToken) },
       ),
     );
@@ -2612,13 +2609,6 @@ describe('documents API', () => {
     const docText = await exportReviewDocx(created.uid, created.admin_invite.token);
     expect(docText).toContain('OPEN_DISCUSSION');
     expect(docText).not.toContain('CLOSED_DISCUSSION');
-
-    // Opt back in via include_resolved → both should appear.
-    const withResolved = await exportReviewDocx(created.uid, created.admin_invite.token, {
-      includeResolved: true,
-    });
-    expect(withResolved).toContain('OPEN_DISCUSSION');
-    expect(withResolved).toContain('CLOSED_DISCUSSION');
   });
 
   test('GET /:uid/export.docx?review=both excludes accepted edit proposals', async () => {

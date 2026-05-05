@@ -1715,45 +1715,11 @@ describe('exportDocx — review mode (comments)', () => {
     expect(commentsXml).toContain('↳ Reply by Carol: second reply');
   });
 
-  test('resolved threads are skipped by default', async () => {
-    const md = 'Block.\n';
-    const blockId = paragraphBlockId('Block.');
-    const buf = await exportDocx(md, {
-      review: {
-        threads: [
-          {
-            id: 't1',
-            block_id: blockId,
-            resolved: true,
-            resolution_kind: 'resolve',
-            comments: [{ body: 'Old comment', author: 'A', date: 1 }],
-          },
-        ],
-      },
-    });
-    const { commentsXml } = await inspectComments(buf);
-    expect(countComments(commentsXml)).toBe(0);
-  });
-
-  test('includeResolved opts resolved threads back in', async () => {
-    const md = 'Block.\n';
-    const blockId = paragraphBlockId('Block.');
-    const buf = await exportDocx(md, {
-      review: {
-        includeResolved: true,
-        threads: [
-          {
-            id: 't1',
-            block_id: blockId,
-            resolved: true,
-            comments: [{ body: 'Old comment', author: 'A', date: 1 }],
-          },
-        ],
-      },
-    });
-    const { commentsXml } = await inspectComments(buf);
-    expect(commentsXml).toContain('Old comment');
-  });
+  // Renderer-side resolved-thread filtering was removed: closed
+  // threads are filtered out server-side (in
+  // `loadReviewThreadsForExport`) and the renderer trusts what
+  // the caller hands it. Server-side exclusion is exercised by
+  // the e2e tests in apps/server/test/server.test.ts.
 
   test('comment anchored to a heading lands on the heading paragraph', async () => {
     const md = '# Heading One\n\nBody.\n';

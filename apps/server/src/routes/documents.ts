@@ -613,19 +613,17 @@ async function exportDocument(c: Context, deps: AppDeps) {
 // --- Review-mode export payload --------------------------------------
 
 /**
- * Load every thread for a document (filtered by `options.includeResolved`)
- * and shape it for the renderer's `review` option. Includes both pure
- * comment threads and edit proposals. Replies are folded into each
- * thread's `comments` array oldest-first so the renderer's flat-replies
+ * Load every OPEN thread for a document and shape it for the
+ * renderer's `review` option. Includes both pure comment threads
+ * and edit proposals. Replies are folded into each thread's
+ * `comments` array oldest-first so the renderer's flat-replies
  * fallback stays in author order.
  *
- * Closed threads (resolved comments + accepted/rejected proposals)
- * are filtered out in-memory after the SQL load — see
- * `visibleRoots` below — unless `options.includeResolved` is true.
- * Filtering before `readProposalContent` keeps the per-row git read
- * off rows the export would have discarded anyway. The renderer's
- * `includeResolved` flag is the user-facing escape hatch surfaced
- * as `?review=both&include_resolved=1`.
+ * Closed threads (resolved comments + accepted/rejected
+ * proposals) are filtered out in-memory after the SQL load — see
+ * `visibleRoots` below. There's no opt-in to include them: a
+ * review-mode export is always a snapshot of what's still open
+ * for the next reviewer to act on.
  *
  * Proposal payloads (`source_snapshot` / `proposed_text`) come from
  * the same `readProposalContent` helper the threads route uses, so
@@ -636,17 +634,6 @@ async function exportDocument(c: Context, deps: AppDeps) {
 async function loadReviewThreadsForExport(
   deps: AppDeps,
   doc: DocumentRow,
-  options: {
-    includeResolved: boolean;
-    /**
-     * Skip `readProposalContent` (a per-row git read) when the
-     * caller already knows the proposal payload will be discarded
-     * later — `?review=comments` strips it via
-     * `filterReviewThreadsByMode` and pays the I/O for nothing.
-     * Default: false (always load proposal content).
-     */
-    skipProposalContent?: boolean;
-  },
 ): Promise<ReviewThread[]> {
   const { db, store } = deps;
 
@@ -703,12 +690,10 @@ async function loadReviewThreadsForExport(
   }
 
   // Drop closed threads up-front so we don't pay `readProposalContent`
-  // (a per-row git read) for rows the export will discard. The
-  // `includeResolved` escape hatch keeps them in for the rare review
-  // workflow that wants the full audit trail.
-  const visibleRoots = roots.filter(
-    (row) => options.includeResolved || !isThreadClosed(row),
-  );
+  // (a per-row git read) for rows the export will discard. There's
+  // no escape hatch — the export is always a snapshot of what's
+  // still open.
+  const visibleRoots = roots.filter((row) => !isThreadClosed(row));
   // Resolve proposal content in parallel — each `readProposalContent`
   // call can hit git, so a doc with N proposals would otherwise pay
   // N sequential round-trips. Bound the concurrency so we don't fan
@@ -716,7 +701,7 @@ async function loadReviewThreadsForExport(
   const results = await mapWithConcurrency(visibleRoots, 4, async (row) => {
     const isProposal = row.proposal_status !== null;
     let proposal: ReviewThread['proposal'] = null;
-    if (isProposal && !options.skipProposalContent) {
+    if (isProposal) {
       // `readProposalContent` returns null when the branch ref is
       // unreachable (e.g. legacy rows missing branch metadata).
       // Demote to a comment-only entry rather than dropping the
@@ -751,12 +736,6 @@ async function loadReviewThreadsForExport(
       anchor_quote: row.anchor_quote,
       comments: [opener, ...threadReplies],
       proposal,
-      // Set even when `proposal` is null (degraded): the
-      // `?review=proposals` filter uses this to keep the thread
-      // visible despite the missing diff payload.
-      was_proposal: isProposal,
-      resolved: isThreadClosed(row),
-      resolution_kind: closedKind(row),
     };
     return thread;
   });
@@ -764,16 +743,17 @@ async function loadReviewThreadsForExport(
 }
 
 /**
- * A thread is "closed" — and therefore excluded from review
- * exports by default — when:
+ * A thread is "closed" — and therefore excluded from the review
+ * export — when:
  *
  *   - it's an edit proposal whose status moved off `open` (i.e.
  *     `accepted` or `rejected`), or
  *   - it's a plain comment thread whose `resolved_at` is set.
  *
  * Both states represent a finished discussion the export's reader
- * shouldn't have to wade through; the `?include_resolved=1` query
- * param is the user-facing escape hatch to surface them anyway.
+ * shouldn't have to wade through. There's no opt-in to bring them
+ * back: a review-mode export is always a snapshot of what's still
+ * open for the next reviewer to act on.
  */
 function isThreadClosed(row: {
   proposal_status: EditProposalStatus | null;
@@ -784,70 +764,19 @@ function isThreadClosed(row: {
 }
 
 /**
- * Convert a closed thread's resolution into the renderer's
- * `resolution_kind` discriminator. Open threads return null.
- */
-function closedKind(row: {
-  proposal_status: EditProposalStatus | null;
-  resolved_at: number | null;
-}): 'accept' | 'reject' | 'resolve' | null {
-  if (row.proposal_status === 'accepted') return 'accept';
-  if (row.proposal_status === 'rejected') return 'reject';
-  if (row.resolved_at !== null) return 'resolve';
-  return null;
-}
-
-/**
- * Parse the `?review=` query into a ReviewExportData payload, or
- * null when the caller didn't ask for review chrome. Recognised values:
- *   - `comments`   → only comment threads (proposals demoted to none)
- *   - `proposals`  → only edit proposals (comment threads dropped)
- *   - `both`/`1`/`true` → everything
- *   - anything else (incl. unset) → null
+ * Returns true iff the caller asked for the review-mode export
+ * via `?review=both|1|true`. Anything else (including unset)
+ * returns false → vanilla export with no review chrome.
  *
- * `?include_resolved=1` (or `=true`) flips on resolved threads.
+ * Only one mode is supported by the route: BOTH open comments
+ * and open proposals. There is no comments-only or proposals-only
+ * mode (and no `?include_resolved` flag) — keeping the surface
+ * narrow makes the UI semantics unambiguous and avoids closed
+ * threads ever reaching the wire.
  */
-function parseReviewQuery(
-  c: Context,
-): { mode: 'comments' | 'proposals' | 'both'; includeResolved: boolean } | null {
-  const raw = c.req.query('review');
-  if (!raw) return null;
-  const v = raw.toLowerCase();
-  let mode: 'comments' | 'proposals' | 'both';
-  if (v === 'comments') mode = 'comments';
-  else if (v === 'proposals') mode = 'proposals';
-  else if (v === 'both' || v === '1' || v === 'true') mode = 'both';
-  else return null;
-  const irRaw = (c.req.query('include_resolved') ?? '').toLowerCase();
-  const includeResolved = irRaw === '1' || irRaw === 'true';
-  return { mode, includeResolved };
-}
-
-/**
- * Shape a ReviewThread[] for the requested review mode.
- *
- * - `both`: keep everything as-is.
- * - `comments`: keep all threads, but demote proposals by stripping
- *   their `proposal` payload — the discussion stays visible as a
- *   plain comment, no tracked changes get emitted.
- * - `proposals`: keep every thread the source row marked as a
- *   proposal (`was_proposal`), including ones whose content
- *   couldn't be loaded — the discussion still belongs in this
- *   view. Pure-comment threads are dropped because the user
- *   explicitly asked for the proposals view.
- */
-function filterReviewThreadsByMode(
-  threads: ReviewThread[],
-  mode: 'comments' | 'proposals' | 'both',
-): ReviewThread[] {
-  if (mode === 'both') return threads;
-  if (mode === 'comments') {
-    return threads.map((t) => (t.proposal ? { ...t, proposal: null } : t));
-  }
-  // mode === 'proposals' — `was_proposal` keeps degraded entries
-  // (proposal content unreachable, server set proposal=null) in
-  // the export so reviewers see the discussion regardless.
-  return threads.filter((t) => !!t.was_proposal);
+function wantsReviewExport(c: Context): boolean {
+  const raw = (c.req.query('review') ?? '').toLowerCase();
+  return raw === 'both' || raw === '1' || raw === 'true';
 }
 
 // --- GET /api/documents/:uid/export.docx -----------------------------
@@ -910,23 +839,15 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
   };
   const renderMermaidPng = makeMermaidResolver(mermaidChoice, 'png', onceWarn);
 
-  // Optional review-mode payload. Loads the document's threads and
-  // shapes them for the renderer when the caller asked for it via
-  // `?review=comments|proposals|both`. Unset → vanilla export.
-  const reviewQuery = parseReviewQuery(c);
+  // Optional review-mode payload. Loads the document's open
+  // threads (closed ones are dropped server-side, no opt-in)
+  // when the caller asked for the review export via `?review=both`.
+  // Unset → vanilla export.
   let review: ReviewExportData | undefined;
-  if (reviewQuery) {
-    const all = await loadReviewThreadsForExport(deps, doc, {
-      includeResolved: reviewQuery.includeResolved,
-      // `comments` mode demotes proposals via
-      // `filterReviewThreadsByMode` and discards their payload, so
-      // we can skip the per-row git read entirely. `proposals` and
-      // `both` need the content for tracked-change rendering.
-      skipProposalContent: reviewQuery.mode === 'comments',
-    });
-    const threads = filterReviewThreadsByMode(all, reviewQuery.mode);
+  if (wantsReviewExport(c)) {
+    const threads = await loadReviewThreadsForExport(deps, doc);
     if (threads.length > 0) {
-      review = { threads, includeResolved: reviewQuery.includeResolved };
+      review = { threads };
     }
   }
 

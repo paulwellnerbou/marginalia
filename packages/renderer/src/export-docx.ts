@@ -303,30 +303,27 @@ export interface ReviewThread {
   readonly anchor_quote?: string | null;
   /** Oldest first; index 0 is the opener, the rest are replies. */
   readonly comments: readonly [ReviewComment, ...ReviewComment[]];
-  /** Present iff this thread is an edit proposal. */
+  /**
+   * Present iff this thread is an edit proposal. `null` for an
+   * open proposal whose content couldn't be loaded — the renderer
+   * still surfaces the discussion as a plain comment so the
+   * thread isn't silently lost.
+   */
   readonly proposal?: {
     readonly source_snapshot: string | null;
     readonly proposed_text: string;
     readonly whole_document?: boolean;
   } | null;
-  /** Resolved threads are skipped unless `includeResolved` is set. */
-  readonly resolved?: boolean;
-  readonly resolution_kind?: 'accept' | 'reject' | 'resolve' | null;
-  /**
-   * `true` when the underlying database row is an edit proposal —
-   * even when `proposal` itself is `null` because the branch ref
-   * was unreachable and the server demoted the entry. Keeps
-   * `?review=proposals` mode showing the discussion of every
-   * proposal thread (including degraded ones) instead of dropping
-   * them silently when the diff payload couldn't be loaded.
-   */
-  readonly was_proposal?: boolean;
 }
 
 export interface ReviewExportData {
+  /**
+   * Threads to fold into the export. Callers must filter out
+   * closed (resolved / accepted / rejected) threads — the
+   * exporter doesn't second-guess what's in this list and emits
+   * everything verbatim.
+   */
   readonly threads: readonly ReviewThread[];
-  /** Include resolved threads. Default: false. */
-  readonly includeResolved?: boolean;
 }
 
 /**
@@ -2928,15 +2925,15 @@ function readDataSubBlockId(node: Element): string | null {
 /**
  * Pre-resolve the review payload into the indexes the synchronous
  * walker reads from. Threads with no anchor block id are dropped
- * (we have nowhere to attach them); resolved threads are dropped
- * unless `includeResolved` is set.
+ * (we have nowhere to attach them); the caller is responsible
+ * for not handing in closed (resolved / accepted / rejected)
+ * threads — the renderer doesn't second-guess what's in the list.
  *
  * Threads anchored to a sub-block (list item, table cell) are
  * promoted to their enclosing top-level block's index. Sub-block
  * granularity inside Word would require splitting list/table cell
- * content along run boundaries, which is more invasive than v1
- * scope; the parent-block fallback keeps the comment near the
- * right text without tearing the structure.
+ * content along run boundaries; the parent-block fallback keeps
+ * the comment near the right text without tearing the structure.
  *
  * For each proposal we also pre-parse the `proposed_text` through
  * the same markdown→HAST pipeline as the main document so the
@@ -2951,11 +2948,7 @@ async function buildReviewState(
 ): Promise<ReviewState | null> {
   if (!reviewData || reviewData.threads.length === 0) return null;
 
-  const includeResolved = reviewData.includeResolved === true;
-  const filtered = reviewData.threads.filter(
-    (t) => includeResolved || !t.resolved,
-  );
-  if (filtered.length === 0) return null;
+  const filtered = reviewData.threads;
 
   // Sub-block id → top-level block id, so sub-block-anchored threads
   // can promote up. Built by walking the HAST once.

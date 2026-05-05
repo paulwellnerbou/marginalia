@@ -5,7 +5,6 @@ import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/rend
 import type { Document } from '../lib/api.js';
 import {
   ApiError,
-  type DocxReviewMode,
   downloadDocumentDocx,
   downloadDocumentPdf,
 } from '../lib/api.js';
@@ -15,15 +14,16 @@ import { showToast } from '../lib/notifications.js';
 /**
  * Download affordance in the document toolbar. Opens a small menu with
  * "source" (the raw markdown or AsciiDoc), "DOCX" (server-side themed
- * Word export), and "PDF" (server-side themed PDF export via headless
- * Chromium).
+ * Word export, with an optional review-mode variant that folds the
+ * document's open comments + edit proposals into native Word features),
+ * and "PDF" (server-side themed PDF export via headless Chromium).
  *
  * The JSON bundle export stays in the admin-only Document Settings
  * dialog; it's a tooling/re-import feature, not a day-to-day download.
  *
  * Filename derivation mirrors the server: explicit `doc.name` first,
  * otherwise the document's own title (frontmatter `title:` or first
- * H1 / `= Header`), otherwise the opaque uid. Keeps all three download
+ * H1 / `= Header`), otherwise the opaque uid. Keeps all download
  * paths producing the same filenames.
  */
 export function DownloadMenu({
@@ -38,19 +38,15 @@ export function DownloadMenu({
   /** Currently-selected viewer theme, baked into the DOCX / PDF exports. */
   theme: string;
   /**
-   * When true, the DOCX submenu offers extra entries that fold the
-   * document's open threads into the export (comments + tracked
-   * changes). Wired to whether the user has the inline-comments pane
-   * visible — i.e. they're in review mode.
+   * When true, the menu shows the "with comments & change proposals"
+   * Word entry alongside the vanilla one. Wired to whether the user
+   * has the inline-comments pane visible — i.e. they're in review
+   * mode. Closed (resolved / accepted / rejected) threads are never
+   * included; only open ones make it into the export.
    */
   reviewExportEnabled?: boolean;
 }) {
   const [busy, setBusy] = useState<null | 'source' | 'docx' | 'pdf'>(null);
-  // Opt-in to surface resolved comment threads / accepted+rejected
-  // proposals in the review export. Off by default — closed threads
-  // are usually noise to the next reviewer; the checkbox is for the
-  // "give me the full audit trail" workflow.
-  const [includeResolved, setIncludeResolved] = useState<boolean>(false);
 
   const sourceExt = doc.format === 'asciidoc' ? 'adoc' : 'md';
   const sourceLabel = doc.format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source';
@@ -88,20 +84,16 @@ export function DownloadMenu({
     }
   }
 
-  async function downloadDocx(review?: DocxReviewMode): Promise<void> {
+  async function downloadDocx(withReview: boolean): Promise<void> {
     setBusy('docx');
     try {
       const { blob, filename } = await downloadDocumentDocx(doc.uid, {
         theme,
-        ...(review ? { review } : {}),
-        // Only forward includeResolved when the caller actually
-        // chose a review mode — passing it on a vanilla export is
-        // a server-side no-op but the wire stays cleaner.
-        ...(review && includeResolved ? { includeResolved: true } : {}),
+        ...(withReview ? { review: 'both' as const } : {}),
       });
       downloadBlob(blob, filename);
     } catch (err) {
-      reportError('DownloadMenu.docx', err, { uid: doc.uid, review });
+      reportError('DownloadMenu.docx', err, { uid: doc.uid, withReview });
       showToast({ title: 'DOCX export failed', body: 'Try again in a moment.' });
     } finally {
       setBusy(null);
@@ -166,44 +158,24 @@ export function DownloadMenu({
         <DropdownMenu.Item onSelect={downloadSource} disabled={busy !== null}>
           {sourceLabel} (.{sourceExt})
         </DropdownMenu.Item>
-        <DropdownMenu.Item onSelect={() => downloadDocx()} disabled={busy !== null}>
+        {/* Word entries grouped between separators so the toolbar
+            visually pairs them as one feature. */}
+        <DropdownMenu.Separator />
+        <DropdownMenu.Item
+          onSelect={() => downloadDocx(false)}
+          disabled={busy !== null}
+        >
           Word document (.docx)
         </DropdownMenu.Item>
         {reviewExportEnabled && (
-          <>
-            <DropdownMenu.Separator />
-            <DropdownMenu.Label>With review</DropdownMenu.Label>
-            <DropdownMenu.Item
-              onSelect={() => downloadDocx('comments')}
-              disabled={busy !== null}
-            >
-              Word — with comments
-            </DropdownMenu.Item>
-            <DropdownMenu.Item
-              onSelect={() => downloadDocx('proposals')}
-              disabled={busy !== null}
-            >
-              Word — with edit proposals (tracked changes)
-            </DropdownMenu.Item>
-            <DropdownMenu.Item
-              onSelect={() => downloadDocx('both')}
-              disabled={busy !== null}
-            >
-              Word — with comments + tracked changes
-            </DropdownMenu.Item>
-            {/* CheckboxItem keeps the menu open after toggling
-                (Radix default for checkbox items) so the user can
-                flip the option on, then pick a review-mode entry. */}
-            <DropdownMenu.CheckboxItem
-              checked={includeResolved}
-              onCheckedChange={(v) => setIncludeResolved(v === true)}
-              disabled={busy !== null}
-            >
-              Include resolved / accepted / rejected
-            </DropdownMenu.CheckboxItem>
-            <DropdownMenu.Separator />
-          </>
+          <DropdownMenu.Item
+            onSelect={() => downloadDocx(true)}
+            disabled={busy !== null}
+          >
+            Word document with comments &amp; change proposals
+          </DropdownMenu.Item>
         )}
+        <DropdownMenu.Separator />
         <DropdownMenu.Item onSelect={downloadPdf} disabled={busy !== null}>
           PDF document (.pdf)
         </DropdownMenu.Item>

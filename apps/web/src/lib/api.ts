@@ -428,19 +428,23 @@ export function exportDocumentBundle(uid: string): Promise<DocumentBundle> {
  * server; passing an explicit id overrides it (matches viewer
  * behavior: the user's selected theme gets baked into the export).
  */
-export type DocxReviewMode = 'comments' | 'proposals' | 'both';
+/**
+ * Server-side review mode the renderer always emits when asked:
+ * BOTH open comments and open edit proposals fold into the export
+ * as native Word features. Resolved / accepted / rejected threads
+ * are excluded server-side and there is no opt-in to bring them
+ * back — the export is always a snapshot of what's still open.
+ */
+export type DocxReviewMode = 'both';
 
 export interface DocxExportClientOptions {
   theme?: string;
   /**
-   * Fold the document's open threads into the DOCX as native Word
-   * features — comment threads become `word/comments.xml` entries,
-   * edit proposals become tracked changes (`<w:ins>` / `<w:del>`).
-   * Omit for a vanilla export.
+   * Fold the document's open comments + edit proposals into the
+   * DOCX as native Word features. Omit (or pass undefined) for a
+   * vanilla export with no review chrome.
    */
   review?: DocxReviewMode;
-  /** Include resolved threads in the review payload. Default false. */
-  includeResolved?: boolean;
 }
 
 export async function downloadDocumentDocx(
@@ -450,7 +454,6 @@ export async function downloadDocumentDocx(
   const params = new URLSearchParams();
   if (options.theme) params.set('theme', options.theme);
   if (options.review) params.set('review', options.review);
-  if (options.includeResolved) params.set('include_resolved', '1');
   const qs = params.toString();
   const res = await requestBinary(
     `/api/documents/${encodeURIComponent(uid)}/export.docx${qs ? `?${qs}` : ''}`,
