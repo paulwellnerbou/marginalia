@@ -16,6 +16,7 @@ interface Props {
   focused: boolean;
   flashPhase: 'a' | 'b' | null;
   collapsed: boolean;
+  mentionCandidates: string[];
   onToggleCollapsed: () => void;
   onJump?: (() => void) | undefined;
   onReply: (threadId: string, body: string, name?: string) => Promise<void>;
@@ -39,6 +40,7 @@ export function InlineThreadCard({
   focused,
   flashPhase,
   collapsed,
+  mentionCandidates,
   onToggleCollapsed,
   onJump,
   onReply,
@@ -306,6 +308,7 @@ export function InlineThreadCard({
               ref={composerRef}
               placeholder="Reply…"
               needsName={needsName}
+              mentionCandidates={mentionCandidates}
               rows={2}
               submitLabel="Reply"
               onSubmit={(body, name) => onReply(thread.id, body, name)}

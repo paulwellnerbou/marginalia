@@ -2124,7 +2124,7 @@ button.primary:disabled {
 /* Re-enable the normal cursor on interactive children — the IconButton
    in the row, the title text itself — so they don't all advertise drag. */
 .proposal-drag-handle button,
-.proposal-drag-handle [role='button'],
+.proposal-drag-handle [role="button"],
 .proposal-drag-handle input,
 .proposal-drag-handle textarea,
 .proposal-drag-handle select,
@@ -2132,7 +2132,7 @@ button.primary:disabled {
   cursor: auto;
 }
 .proposal-drag-handle button,
-.proposal-drag-handle [role='button'],
+.proposal-drag-handle [role="button"],
 .proposal-drag-handle a {
   cursor: pointer;
 }
@@ -3042,6 +3042,35 @@ button.primary:disabled {
   outline: none;
   border-color: var(--ui-accent, #3b82f6);
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+}
+
+.ic-mention-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.35rem;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ui-bg) 94%, white);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.12);
+}
+
+.ic-mention-option {
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 0.35rem 0.45rem;
+  text-align: left;
+  font: inherit;
+  font-size: 0.82rem;
+  color: inherit;
+  cursor: pointer;
+}
+
+.ic-mention-option:hover,
+.ic-mention-option.active {
+  background: var(--accent-3);
 }
 
 .ic-composer-actions {

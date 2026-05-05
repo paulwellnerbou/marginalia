@@ -176,6 +176,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   });
 
   const [threads, setThreads] = useState<Thread[]>([]);
+  const [mentionCandidates, setMentionCandidates] = useState<string[]>([]);
   const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
   const pendingAnchor = pendingDraft?.mode === 'comment' ? pendingDraft.anchor : null;
   const pendingProposalTarget = pendingDraft?.mode === 'proposal' ? pendingDraft.target : null;
@@ -448,6 +449,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       (r) => {
         if (cancelled) return;
         setThreads(r.threads);
+        setMentionCandidates(r.mention_candidates);
         notifyPendingMentions(r.threads, r.pending_mentions);
       },
       (err) => reportError('DocumentLayout.listThreads', err, { uid: doc.uid }),
@@ -531,6 +533,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             .then((res) => {
               if (cancelled) return;
               setThreads(res.threads);
+              setMentionCandidates(res.mention_candidates);
               notifyPendingMentions(res.threads, res.pending_mentions);
             })
             .catch((err) => reportError('DocumentLayout.mention.created', err, { uid: doc.uid }));
@@ -785,6 +788,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     try {
       const res = await listThreads(doc.uid, { consumeMentions: false });
       setThreads(res.threads);
+      setMentionCandidates(res.mention_candidates);
     } catch (err) {
       reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
     }
@@ -1494,6 +1498,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 pendingAnchor={canComment ? pendingAnchor : null}
                 focusedThread={focusedThread}
                 displayName={effectiveDisplayName}
+                mentionCandidates={mentionCandidates}
                 onCancelPending={() => setPendingDraft(null)}
                 onCreate={onCreate}
                 onReply={onReply}
@@ -1572,6 +1577,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   focusedThread={focusedThread}
                   onCancelPending={() => setPendingDraft(null)}
                   displayName={effectiveDisplayName}
+                  mentionCandidates={mentionCandidates}
                   onCreate={onCreate}
                   onReply={onReply}
                   onEdit={onEdit}

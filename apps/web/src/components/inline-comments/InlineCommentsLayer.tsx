@@ -54,6 +54,7 @@ interface Props {
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number; scroll: boolean } | null;
   displayName: string | null;
+  mentionCandidates: string[];
   onCancelPending: () => void;
   onCreate: (payload: {
     anchor: CommentAnchor;
@@ -147,6 +148,7 @@ export function InlineCommentsLayer({
   pendingAnchor,
   focusedThread,
   displayName,
+  mentionCandidates,
   onCancelPending,
   onCreate,
   onReply,
@@ -772,6 +774,7 @@ export function InlineCommentsLayer({
           <InlineComposer
             placeholder="Your comment…"
             needsName={!displayName}
+            mentionCandidates={mentionCandidates}
             rows={3}
             submitLabel="Post"
             showCancel
@@ -797,6 +800,7 @@ export function InlineCommentsLayer({
         focused={focusedId === id}
         flashPhase={flash?.id === id ? flash.phase : null}
         collapsed={collapsed.has(id)}
+        mentionCandidates={mentionCandidates}
         onToggleCollapsed={() => toggle(id)}
         onJump={onJump}
         onReply={onReply}
