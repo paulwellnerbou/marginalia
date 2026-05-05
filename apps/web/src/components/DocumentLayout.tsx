@@ -1,6 +1,5 @@
 import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import {
-  ChatBubbleIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   Cross2Icon,
@@ -306,11 +305,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [canComment]);
 
   useLayoutEffect(() => {
-    if (!inlineCommentsOpen) {
-      setInlineCommentsColumnWidth(0);
-      return;
-    }
-
     const scroll = docScrollRef.current;
     const column = scroll?.querySelector<HTMLElement>('.ic-column') ?? null;
 
@@ -578,66 +572,71 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return { clientId: getClientId(), displayName: name };
   }
 
-  const scrollToAnchor = useCallback((blockId: string, quote?: string | null, threadId?: string, scrollOffset = 0) => {
-    const root = docRef.current;
-    if (!root) return;
+  const scrollToAnchor = useCallback(
+    (blockId: string, quote?: string | null, threadId?: string, scrollOffset = 0) => {
+      const root = docRef.current;
+      if (!root) return;
 
-    let target: HTMLElement | null = null;
-    if (threadId) {
-      target = root.querySelector<HTMLElement>(`mark[data-comment-thread-id="${CSS.escape(threadId)}"]`);
-    }
+      let target: HTMLElement | null = null;
+      if (threadId) {
+        target = root.querySelector<HTMLElement>(
+          `mark[data-comment-thread-id="${CSS.escape(threadId)}"]`,
+        );
+      }
 
-    if (!target) {
-      const escaped = CSS.escape(blockId);
-      target = root.querySelector<HTMLElement>(
-        `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-      );
-      if (!target) return;
-      // Recovery for comments anchored before sub-block-aware capture
-      // landed: their stored block_id points at the enclosing top-level
-      // block. If the quote uniquely identifies one sub-block, flash
-      // that one instead of the whole container.
-      if (target.dataset.block && quote) {
-        const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
-        let narrowed: HTMLElement | null = null;
-        let unique = true;
-        for (const sub of subEls) {
-          const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
-          if (text.includes(quote)) {
-            if (narrowed) {
-              unique = false;
-              break;
+      if (!target) {
+        const escaped = CSS.escape(blockId);
+        target = root.querySelector<HTMLElement>(
+          `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
+        );
+        if (!target) return;
+        // Recovery for comments anchored before sub-block-aware capture
+        // landed: their stored block_id points at the enclosing top-level
+        // block. If the quote uniquely identifies one sub-block, flash
+        // that one instead of the whole container.
+        if (target.dataset.block && quote) {
+          const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
+          let narrowed: HTMLElement | null = null;
+          let unique = true;
+          for (const sub of subEls) {
+            const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
+            if (text.includes(quote)) {
+              if (narrowed) {
+                unique = false;
+                break;
+              }
+              narrowed = sub;
             }
-            narrowed = sub;
           }
+          if (unique && narrowed) target = narrowed;
         }
-        if (unique && narrowed) target = narrowed;
       }
-    }
 
-    // Reveal the target if it sits inside a folded section before
-    // measuring — otherwise the scroll lands at the pre-expansion
-    // offset and the user ends up at an empty spot. The seq guard
-    // discards a stale promise if another thread is clicked during
-    // the expand window.
-    const scroll = docScrollRef.current;
-    const finalTarget = target;
-    const seq = ++scrollToAnchorSeq.current;
-    void expandAncestors(target).then(() => {
-      if (seq !== scrollToAnchorSeq.current) return;
-      if (scrollOffset > 0 && scroll) {
-        const targetTop =
-          finalTarget.getBoundingClientRect().top -
-          scroll.getBoundingClientRect().top +
-          scroll.scrollTop;
-        scroll.scrollTo({ top: targetTop - scrollOffset, behavior: 'smooth' });
-      } else {
-        finalTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-      finalTarget.classList.add('anchor-flash');
-      window.setTimeout(() => finalTarget.classList.remove('anchor-flash'), 1600);
-    });
-  }, []);
+      // Reveal the target if it sits inside a folded section before
+      // measuring — otherwise the scroll lands at the pre-expansion
+      // offset and the user ends up at an empty spot. The seq guard
+      // discards a stale promise if another thread is clicked during
+      // the expand window.
+      const scroll = docScrollRef.current;
+      const finalTarget = target;
+      const seq = ++scrollToAnchorSeq.current;
+      void expandAncestors(target).then(() => {
+        if (seq !== scrollToAnchorSeq.current) return;
+        if (scrollOffset > 0 && scroll) {
+          const targetTop =
+            finalTarget.getBoundingClientRect().top -
+            scroll.getBoundingClientRect().top +
+            scroll.scrollTop;
+          scroll.scrollTo({ top: targetTop - scrollOffset, behavior: 'smooth' });
+        } else {
+          finalTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        finalTarget.classList.add('anchor-flash');
+        window.setTimeout(() => finalTarget.classList.remove('anchor-flash'), 1600);
+      });
+    },
+    [],
+  );
 
   const onCreate = useCallback(
     async (payload: { anchor: CommentAnchor; body: string; display_name?: string }) => {
@@ -1265,19 +1264,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 <AccessControlDialog doc={doc} onChange={onDocSettingsChanged} />
               </>
             )}
-            <Tooltip content={inlineCommentsOpen ? 'Hide comments' : 'Show comments'}>
-              <IconButton
-                variant={inlineCommentsOpen ? 'soft' : 'ghost'}
-                color={APP_ACCENT_COLOR}
-                size="2"
-                className={`inline-comments-trigger ${inlineCommentsOpen ? 'active' : ''}`}
-                aria-label={inlineCommentsOpen ? 'Hide comments' : 'Show comments'}
-                aria-pressed={inlineCommentsOpen}
-                onClick={() => setInlineCommentsOpen((v) => !v)}
-              >
-                <ChatBubbleIcon />
-              </IconButton>
-            </Tooltip>
             <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
               <IconButton
                 variant="soft"
@@ -1433,7 +1419,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   activeSearchVersion={activeSearchTarget?.nonce ?? 0}
                   onSearchResultsChange={updateSearchResults}
                   onHighlightClick={(threadId) =>
-                    openCommentThread(threadId, { scroll: false, jumpToAnchor: false })}
+                    openCommentThread(threadId, { scroll: false, jumpToAnchor: false })
+                  }
                   onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
                 />
                 {canComment && (
@@ -1452,34 +1439,34 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   />
                 )}
               </div>
-              {inlineCommentsOpen && (
-                <InlineCommentsLayer
-                  uid={doc.uid}
-                  threads={threads}
-                  docSource={liveSource}
-                  docHtml={liveRendered.html}
-                  docElementRef={docRef}
-                  scrollContainerRef={docScrollRef}
-                  blockRanges={blockRanges}
-                  docFormat={doc.format}
-                  canComment={canComment}
-                  stackingEnabled={inlineCommentsStacking}
-                  onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
-                  hideResolved={inlineCommentsHideResolved}
-                  onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
-                  pendingAnchor={canComment ? pendingAnchor : null}
-                  focusedThread={focusedThread}
-                  displayName={effectiveDisplayName}
-                  onCancelPending={() => setPendingDraft(null)}
-                  onCreate={onCreate}
-                  onReply={onReply}
-                  onEdit={onEdit}
-                  onDeleteNode={onDeleteNode}
-                  onDeleteThread={onDeleteThread}
-                  onResolveThread={onResolveThread}
-                  onScrollToAnchor={scrollToAnchor}
-                />
-              )}
+              <InlineCommentsLayer
+                uid={doc.uid}
+                threads={threads}
+                docSource={liveSource}
+                docHtml={liveRendered.html}
+                docElementRef={docRef}
+                scrollContainerRef={docScrollRef}
+                blockRanges={blockRanges}
+                docFormat={doc.format}
+                canComment={canComment}
+                open={inlineCommentsOpen}
+                onToggleOpen={() => setInlineCommentsOpen((v) => !v)}
+                stackingEnabled={inlineCommentsStacking}
+                onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
+                hideResolved={inlineCommentsHideResolved}
+                onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
+                pendingAnchor={canComment ? pendingAnchor : null}
+                focusedThread={focusedThread}
+                displayName={effectiveDisplayName}
+                onCancelPending={() => setPendingDraft(null)}
+                onCreate={onCreate}
+                onReply={onReply}
+                onEdit={onEdit}
+                onDeleteNode={onDeleteNode}
+                onDeleteThread={onDeleteThread}
+                onResolveThread={onResolveThread}
+                onScrollToAnchor={scrollToAnchor}
+              />
             </div>
           </div>
         </main>
@@ -1491,7 +1478,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           {commentsOpen ? (
             <Tabs.Root
               value={rightTab}
-              onValueChange={(v) => setRightTab(v as 'comments' | 'history' | 'search' | 'activities')}
+              onValueChange={(v) =>
+                setRightTab(v as 'comments' | 'history' | 'search' | 'activities')
+              }
               className="right-tabs"
             >
               <Flex align="center" px="2" pt="2" className="pane-header">

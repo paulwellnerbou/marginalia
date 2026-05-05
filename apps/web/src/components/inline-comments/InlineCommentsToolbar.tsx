@@ -1,11 +1,12 @@
 import {
   ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ChevronUpIcon,
-  EyeClosedIcon,
-  EyeOpenIcon,
-  LayersIcon,
+  ChatBubbleIcon,
+  DotsHorizontalIcon,
 } from '@radix-ui/react-icons';
-import { IconButton } from '@radix-ui/themes';
+import { DropdownMenu, IconButton } from '@radix-ui/themes';
 import { type RefObject, useCallback } from 'react';
 import type { Thread } from '../../lib/api.js';
 
@@ -19,6 +20,8 @@ interface Props {
   /** Effective sticky-top offset (base pad + toolbar height) — used so a card
    *  partly hidden under the toolbar still counts as "current," not "next". */
   stickyTopPad: number;
+  open: boolean;
+  onToggleOpen: () => void;
   stackingEnabled: boolean;
   onToggleStacking: () => void;
   hideResolved: boolean;
@@ -36,6 +39,8 @@ export function InlineCommentsToolbar({
   scrollContainerRef,
   cardNaturalTops,
   stickyTopPad,
+  open,
+  onToggleOpen,
   stackingEnabled,
   onToggleStacking,
   hideResolved,
@@ -93,8 +98,31 @@ export function InlineCommentsToolbar({
   const countLabel = count === 1 ? '1 thread' : `${count} threads`;
 
   return (
-    <div ref={rootRef} className="ic-toolbar" role="toolbar" aria-label="Comment column actions">
+    <div
+      ref={rootRef}
+      className={`ic-toolbar${open ? '' : ' ic-toolbar-collapsed'}`}
+      role="toolbar"
+      aria-label="Comment column actions"
+    >
       <div className="ic-toolbar-group ic-toolbar-group-left">
+        <IconButton
+          size="1"
+          variant="ghost"
+          color="gray"
+          className="ic-toolbar-collapse"
+          onClick={onToggleOpen}
+          aria-label={open ? 'Hide comments' : 'Show comments'}
+          aria-expanded={open}
+          title={open ? 'Hide comments' : 'Show comments'}
+        >
+          {open ? <ChevronRightIcon /> : <ChevronLeftIcon />}
+          {!open && <ChatBubbleIcon className="ic-toolbar-collapse-comment-icon" />}
+        </IconButton>
+      </div>
+      <div className="ic-toolbar-main" aria-hidden={!open}>
+        <span className="ic-toolbar-count" aria-live="polite">
+          {countLabel}
+        </span>
         <IconButton
           size="1"
           variant="ghost"
@@ -118,45 +146,32 @@ export function InlineCommentsToolbar({
           <ChevronDownIcon />
         </IconButton>
       </div>
-      <span className="ic-toolbar-count" aria-live="polite">
-        {countLabel}
-      </span>
       <div className="ic-toolbar-group ic-toolbar-group-right">
-        <IconButton
-          size="1"
-          variant="ghost"
-          color="gray"
-          className="doc-toolbar-toggle doc-toolbar-toggle--labeled"
-          onClick={onToggleHideResolved}
-          aria-label={
-            hideResolved
-              ? 'Show resolved, accepted, and rejected threads'
-              : 'Hide resolved, accepted, and rejected threads'
-          }
-          aria-pressed={hideResolved}
-          title={
-            hideResolved
-              ? 'Show resolved, accepted, and rejected threads'
-              : 'Hide resolved, accepted, and rejected threads'
-          }
-        >
-          {hideResolved ? <EyeClosedIcon /> : <EyeOpenIcon />}
-          <span>Resolved</span>
-        </IconButton>
-        <IconButton
-          size="1"
-          variant="ghost"
-          color="gray"
-          className="doc-toolbar-toggle"
-          onClick={onToggleStacking}
-          aria-label={
-            stackingEnabled ? 'Disable stacking' : 'Stack comments at top while scrolling'
-          }
-          aria-pressed={stackingEnabled}
-          title={stackingEnabled ? 'Disable stacking' : 'Stack comments at top while scrolling'}
-        >
-          <LayersIcon />
-        </IconButton>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger>
+            <IconButton
+              size="1"
+              variant="ghost"
+              color="gray"
+              className="doc-toolbar-toggle"
+              aria-label="Comment display options"
+              title="Comment display options"
+            >
+              <DotsHorizontalIcon />
+            </IconButton>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content align="end">
+            <DropdownMenu.CheckboxItem
+              checked={!hideResolved}
+              onCheckedChange={onToggleHideResolved}
+            >
+              Show resolved
+            </DropdownMenu.CheckboxItem>
+            <DropdownMenu.CheckboxItem checked={stackingEnabled} onCheckedChange={onToggleStacking}>
+              Stack comments at top
+            </DropdownMenu.CheckboxItem>
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
       </div>
     </div>
   );
