@@ -2424,13 +2424,19 @@ button.primary:disabled {
   position: absolute;
   inset: 0;
   overflow: hidden;
+  opacity: 1;
   visibility: visible;
-  transition: visibility 0s linear 0s;
+  transition:
+    opacity 180ms ease,
+    visibility 0s linear 0s;
 }
 .ic-column-collapsed .ic-column-clip {
   pointer-events: none;
+  opacity: 0;
   visibility: hidden;
-  transition-delay: 180ms;
+  transition:
+    opacity 180ms ease,
+    visibility 0s linear 180ms;
 }
 .ic-column-content {
   position: relative;
