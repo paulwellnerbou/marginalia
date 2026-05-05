@@ -2423,7 +2423,7 @@ button.primary:disabled {
 .ic-column-clip {
   position: absolute;
   inset: 0;
-  overflow: hidden;
+  clip-path: inset(0);
   opacity: 1;
   visibility: visible;
   transition:
