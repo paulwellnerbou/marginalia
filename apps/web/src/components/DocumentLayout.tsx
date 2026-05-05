@@ -375,7 +375,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       // collapsed position, so without this filter the TOC would
       // happily highlight a heading the reader can't see.
       const visible = headings.filter((h) => !h.closest('.collapse-section.is-collapsed'));
-      if (visible.length === 0) return;
+      if (visible.length === 0) {
+        // Every heading is currently inside a folded section — clear
+        // the highlight so the TOC doesn't keep pointing at one of
+        // them.
+        setActiveHeadingId(null);
+        return;
+      }
       let current = visible[0]!.id;
 
       for (const heading of visible) {

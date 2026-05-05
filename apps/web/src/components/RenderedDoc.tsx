@@ -122,6 +122,29 @@ export function RenderedDoc({
     void renderMermaidIn(el);
     replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
     installHeadingCollapse(el);
+    // Replay the current hash after the article is populated. Opening
+    // a deep link directly (`/d/...#section`) lets the browser fire
+    // its initial fragment jump *before* React renders, so without
+    // this the target stays unscrolled-to (and unrevealed if it sits
+    // inside a folded section). hashchange doesn't fire on its own
+    // here either — the hash isn't changing.
+    const initialHash = window.location.hash.slice(1);
+    if (initialHash) {
+      let id = initialHash;
+      try {
+        id = decodeURIComponent(initialHash);
+      } catch {
+        id = initialHash;
+      }
+      const target = el.querySelector(`[id="${CSS.escape(id)}"]`);
+      if (target) {
+        const seq = ++scrollSeq.current;
+        void expandAncestors(target).then(() => {
+          if (seq !== scrollSeq.current) return;
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      }
+    }
   }, [rendered.html, ref, canUploadMissing]);
 
   // If canUploadMissing flips while `rendered.html` stays the same

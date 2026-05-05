@@ -73,13 +73,19 @@ export function installHeadingCollapse(article: HTMLElement): void {
   // and breaks AsciiDoc's `#header > #toc.toc2` and the `beautiful`
   // theme's `.marginalia > h1:first-child + p::first-letter`
   // drop-cap. The h1 only counts as a title if it's the FIRST
-  // heading in document order AND sits at a top-level structural
-  // position (direct child of `.marginalia` for Markdown, or inside
-  // `#header` for AsciiDoc). A nested h1 inside a blockquote or
-  // other wrapper isn't structural and shouldn't trigger the skip.
+  // heading in document order, sits at a top-level structural
+  // position (direct child of `.marginalia` or inside `#header`),
+  // AND is the doc's only h1 — otherwise we'd silently strip the
+  // toggle from a real section in a doc that intentionally uses
+  // multiple h1s as section headers.
   const firstHeading = headings[0];
+  const h1Count = headings.reduce((n, h) => (h.tagName === 'H1' ? n + 1 : n), 0);
   const documentTitle =
-    firstHeading?.tagName === 'H1' && isDocumentTitle(firstHeading, article) ? firstHeading : null;
+    h1Count === 1 &&
+    firstHeading?.tagName === 'H1' &&
+    isDocumentTitle(firstHeading, article)
+      ? firstHeading
+      : null;
 
   for (const heading of headings) {
     if (heading === documentTitle) continue;
