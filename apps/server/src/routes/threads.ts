@@ -421,6 +421,7 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  const identity = decision.identity;
   if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   const tid = c.req.param('tid');
@@ -434,111 +435,106 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
     return c.json({ error: 'proposal-repair-unavailable' }, 409);
   }
 
-  const preview = await store.previewProposalMerge(doc, row.id);
-  let anchor: RepairAnchor | null = null;
-  let linkStatus: CommentLinkStatus | null = null;
-  let repairedBranch: { baseOid: string; baseBlockStart: number; baseBlockEnd: number } | null =
-    null;
-  if (preview.ok) {
-    const changed = changedSpan(preview.before, preview.after);
-    if (!changed) return c.json({ error: 'proposal-repair-unavailable' }, 409);
-    if (preview.strategy === 'native-git') {
-      const rewrite = await store.rewriteProposalBranchToMergedSource(
-        doc,
-        row.id,
-        preview.after,
-        decision.identity,
-        preview.mainOid,
-      );
-      if (!rewrite.ok) return c.json({ error: 'proposal-repair-unavailable' }, 409);
+  return store.withProposalRepair(doc, row.id, identity, async ({ preview, rewrite }) => {
+    let anchor: RepairAnchor | null = null;
+    let linkStatus: CommentLinkStatus | null = null;
+    let repairedBranch: { baseOid: string; baseBlockStart: number; baseBlockEnd: number } | null =
+      null;
+    if (preview.ok) {
+      const changed = changedSpan(preview.before, preview.after);
+      if (!changed) return c.json({ error: 'proposal-repair-unavailable' }, 409);
+      if (!rewrite?.ok) return c.json({ error: 'proposal-repair-unavailable' }, 409);
       repairedBranch = {
         baseOid: rewrite.baseOid,
         baseBlockStart: changed.beforeStart,
         baseBlockEnd: changed.beforeEnd,
       };
+
+      const rendered = await renderDocument(preview.before, doc.format);
+      const blocks = locateDocumentBlocks(doc, preview.before);
+      anchor = locateRepairAnchor(
+        blocks,
+        rendered.blocks,
+        preview.before,
+        changed.beforeStart,
+        changed.beforeEnd,
+        doc.format,
+      );
+      linkStatus = anchor?.linkStatus ?? null;
+    } else if (preview.reason === 'conflict') {
+      anchor = await locateConflictRepairAnchor(doc, row, store);
+      linkStatus = anchor ? 'conflict' : null;
+    } else {
+      const code =
+        preview.reason === 'absent' ? 'proposal-repair-unavailable' : 'proposal-already-merged';
+      return c.json({ error: code }, 409);
+    }
+    if (!anchor || !linkStatus) {
+      return c.json(
+        { error: preview.ok ? 'proposal-repair-unavailable' : 'proposal-conflict' },
+        409,
+      );
     }
 
-    const rendered = await renderDocument(preview.before, doc.format);
-    const blocks = locateDocumentBlocks(doc, preview.before);
-    anchor = locateRepairAnchor(
-      blocks,
-      rendered.blocks,
-      preview.before,
-      changed.beforeStart,
-      changed.beforeEnd,
-      doc.format,
-    );
-    linkStatus = anchor?.linkStatus ?? null;
-  } else if (preview.reason === 'conflict') {
-    anchor = await locateConflictRepairAnchor(doc, row, store);
-    linkStatus = anchor ? 'conflict' : null;
-  } else {
-    const code =
-      preview.reason === 'absent' ? 'proposal-repair-unavailable' : 'proposal-already-merged';
-    return c.json({ error: code }, 409);
-  }
-  if (!anchor || !linkStatus) {
-    return c.json({ error: preview.ok ? 'proposal-repair-unavailable' : 'proposal-conflict' }, 409);
-  }
-
-  const now = Date.now();
-  if (repairedBranch) {
+    const now = Date.now();
+    if (repairedBranch) {
+      db.prepare(
+        `UPDATE comments_edit_proposals
+            SET base_oid = ?,
+                base_block_start = ?,
+                base_block_end = ?
+          WHERE comment_id = ?`,
+      ).run(
+        repairedBranch.baseOid,
+        repairedBranch.baseBlockStart,
+        repairedBranch.baseBlockEnd,
+        row.id,
+      );
+    }
     db.prepare(
-      `UPDATE comments_edit_proposals
-          SET base_oid = ?,
-              base_block_start = ?,
-              base_block_end = ?
-        WHERE comment_id = ?`,
+      `UPDATE comments
+          SET anchor_block_id = ?,
+              anchor_end_block_id = ?,
+              anchor_quote = ?,
+              anchor_prefix = '',
+              anchor_suffix = '',
+              anchor_start_offset = NULL,
+              anchor_end_offset = NULL,
+              anchor_heading_path = ?,
+              anchor_section_index = ?,
+              anchor_section_index_path = ?,
+              link_status = ?,
+              updated_at = ?
+        WHERE id = ? AND doc_uid = ?`,
     ).run(
-      repairedBranch.baseOid,
-      repairedBranch.baseBlockStart,
-      repairedBranch.baseBlockEnd,
+      anchor.block.id,
+      anchor.endBlock?.id ?? null,
+      anchor.quote,
+      JSON.stringify(anchor.block.headingPath),
+      anchor.block.sectionIndex,
+      JSON.stringify(anchor.block.sectionIndexPath),
+      linkStatus,
+      now,
       row.id,
-    );
-  }
-  db.prepare(
-    `UPDATE comments
-        SET anchor_block_id = ?,
-            anchor_end_block_id = ?,
-            anchor_quote = ?,
-            anchor_prefix = '',
-            anchor_suffix = '',
-            anchor_start_offset = NULL,
-            anchor_end_offset = NULL,
-            anchor_heading_path = ?,
-            anchor_section_index = ?,
-            anchor_section_index_path = ?,
-            link_status = ?,
-            updated_at = ?
-      WHERE id = ? AND doc_uid = ?`,
-  ).run(
-    anchor.block.id,
-    anchor.endBlock?.id ?? null,
-    anchor.quote,
-    JSON.stringify(anchor.block.headingPath),
-    anchor.block.sectionIndex,
-    JSON.stringify(anchor.block.sectionIndexPath),
-    linkStatus,
-    now,
-    row.id,
-    doc.uid,
-  );
-
-  const updated = loadThreadRow(db, row.id, doc.uid);
-  if (!updated) return c.json({ error: 'not-found' }, 404);
-  const replies = loadReplies(db, doc.uid, row.id);
-  const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updated]);
-
-  if (isProposalRow(updated)) {
-    realtime.broadcast(
       doc.uid,
-      { type: 'edit_proposal.updated', edit_proposal: toProposalWire(updated) },
-      decision.identity.clientId,
     );
-  }
 
-  return c.json({
-    thread: await toThreadWire(store, doc, updated, replies, decision, reopenableAccepted),
+    const updated = loadThreadRow(db, row.id, doc.uid);
+    if (!updated) return c.json({ error: 'not-found' }, 404);
+    const replies = loadReplies(db, doc.uid, row.id);
+    const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updated]);
+
+    if (isProposalRow(updated)) {
+      realtime.broadcast(
+        doc.uid,
+        { type: 'edit_proposal.updated', edit_proposal: toProposalWire(updated) },
+        identity.clientId,
+      );
+    }
+
+    return c.json({
+      thread: await toThreadWire(store, doc, updated, replies, decision, reopenableAccepted),
+    });
   });
 }
 

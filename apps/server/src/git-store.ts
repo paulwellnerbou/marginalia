@@ -457,56 +457,44 @@ export class GitStore {
 
   /**
    * Materialize the result of merging a proposal branch into current main
-   * without leaving main advanced. Used by repair flows that need git's
-   * real 3-way placement to discover where an orphaned proposal applies
-   * in the current source.
+   * without mutating refs or the working tree. Used by repair flows that
+   * need git's real 3-way placement to discover where an orphaned proposal
+   * applies in the current source.
    */
   async previewProposalMerge(
     doc: DocLocator,
     proposalId: string,
   ): Promise<PreviewProposalMergeResult> {
-    return this.withLock(doc.uid, async () => {
-      const dir = this.repoDir(doc.uid);
-      if (!existsSync(join(dir, '.git'))) return { ok: false, reason: 'absent' };
-      const refName = proposalRef(proposalId);
-      let mainOid: string;
-      let tipOid: string;
-      try {
-        mainOid = await git.resolveRef({ fs, dir, ref: 'main' });
-        tipOid = await git.resolveRef({ fs, dir, ref: refName });
-      } catch {
-        return { ok: false, reason: 'absent' };
-      }
-      if (tipOid === mainOid) return { ok: false, reason: 'merged' };
+    return this.withLock(doc.uid, async () =>
+      this.previewProposalMergeWithGitUnlocked(doc, proposalId),
+    );
+  }
 
-      const before = await this.readAt(doc, mainOid);
-      try {
-        await git.merge({
-          fs,
-          dir,
-          ours: 'main',
-          theirs: refName,
-          author: { name: 'preview', email: 'preview@local', timestamp: 0, timezoneOffset: 0 },
-          message: `preview-proposal: ${proposalId}\n`,
-        });
-        await git.checkout({ fs, dir, ref: 'main', force: true });
-        const mergedOid = await git.resolveRef({ fs, dir, ref: 'main' });
-        const after = await this.readAt(doc, mergedOid);
-        await git.writeRef({ fs, dir, ref: 'main', value: mainOid, force: true });
-        await git.checkout({ fs, dir, ref: 'main', force: true });
-        return { ok: true, before, after, mainOid, strategy: 'isomorphic-git' };
-      } catch (err) {
-        await git
-          .writeRef({ fs, dir, ref: 'main', value: mainOid, force: true })
-          .catch(() => undefined);
-        await git.checkout({ fs, dir, ref: 'main', force: true }).catch(() => undefined);
-        const e = err as { code?: string };
-        if (e.code === 'MergeConflictError') {
-          return this.previewProposalMergeWithGitUnlocked(doc, proposalId);
-        }
-        if (e.code === 'NotFoundError') return { ok: false, reason: 'absent' };
-        throw err;
+  /**
+   * Run repair's merge preview and optional branch rewrite under the same
+   * per-document lock as document writes. The callback runs before the
+   * lock is released, so callers can commit DB anchor updates against the
+   * exact main oid used for the preview.
+   */
+  async withProposalRepair<T>(
+    doc: DocLocator,
+    proposalId: string,
+    identity: { displayName: string; clientId: string },
+    apply: (result: ProposalRepairBranchResult) => Promise<T>,
+  ): Promise<T> {
+    return this.withLock(doc.uid, async () => {
+      const preview = await this.previewProposalMergeWithGitUnlocked(doc, proposalId);
+      let rewrite: RewriteProposalBranchResult | null = null;
+      if (preview.ok && preview.before !== preview.after) {
+        rewrite = await this.rewriteProposalBranchToMergedSourceUnlocked(
+          doc,
+          proposalId,
+          preview.after,
+          identity,
+          preview.mainOid,
+        );
       }
+      return apply({ preview, rewrite });
     });
   }
 
@@ -524,62 +512,78 @@ export class GitStore {
     identity: { displayName: string; clientId: string },
     expectedMainOid?: string,
   ): Promise<RewriteProposalBranchResult> {
-    return this.withLock(doc.uid, async () => {
-      await this.ensureDocRepo(doc.uid);
-      const dir = this.repoDir(doc.uid);
-      const filename = this.filename(doc.format);
-      const refName = proposalRef(proposalId);
+    return this.withLock(doc.uid, async () =>
+      this.rewriteProposalBranchToMergedSourceUnlocked(
+        doc,
+        proposalId,
+        mergedSource,
+        identity,
+        expectedMainOid,
+      ),
+    );
+  }
 
-      let mainOid: string;
-      let tipOid: string;
-      try {
-        mainOid = await git.resolveRef({ fs, dir, ref: 'main' });
-        tipOid = await git.resolveRef({ fs, dir, ref: refName });
-      } catch {
-        return { ok: false, reason: 'absent' };
-      }
-      if (expectedMainOid && mainOid !== expectedMainOid) {
-        return { ok: false, reason: 'stale' };
-      }
+  private async rewriteProposalBranchToMergedSourceUnlocked(
+    doc: DocLocator,
+    proposalId: string,
+    mergedSource: string,
+    identity: { displayName: string; clientId: string },
+    expectedMainOid?: string,
+  ): Promise<RewriteProposalBranchResult> {
+    await this.ensureDocRepo(doc.uid);
+    const dir = this.repoDir(doc.uid);
+    const filename = this.filename(doc.format);
+    const refName = proposalRef(proposalId);
 
-      const { commit: tipCommit } = await git.readCommit({ fs, dir, oid: tipOid });
-      const { commit: mainCommit } = await git.readCommit({ fs, dir, oid: mainOid });
-      const { tree } = await git.readTree({ fs, dir, oid: mainCommit.tree });
-      const blobOid = await git.writeBlob({
-        fs,
-        dir,
-        blob: new TextEncoder().encode(mergedSource),
-      });
-      const hasEntry = tree.some((e) => e.path === filename);
-      const newTree = hasEntry
-        ? tree.map((e) => (e.path === filename ? { ...e, oid: blobOid } : e))
-        : [...tree, { path: filename, mode: '100644', type: 'blob' as const, oid: blobOid }];
-      const newTreeOid = await git.writeTree({ fs, dir, tree: newTree });
+    let mainOid: string;
+    let tipOid: string;
+    try {
+      mainOid = await git.resolveRef({ fs, dir, ref: 'main' });
+      tipOid = await git.resolveRef({ fs, dir, ref: refName });
+    } catch {
+      return { ok: false, reason: 'absent' };
+    }
+    if (expectedMainOid && mainOid !== expectedMainOid) {
+      return { ok: false, reason: 'stale' };
+    }
 
-      const ts = Math.floor(Date.now() / 1000);
-      const committer = {
-        name: identity.clientId,
-        email: `${identity.clientId}@marginalia.local`,
-        timestamp: ts,
-        timezoneOffset: 0,
-      };
-      const commitOid = await git.writeCommit({
-        fs,
-        dir,
-        commit: {
-          tree: newTreeOid,
-          parent: [mainOid],
-          author: tipCommit.author,
-          committer,
-          message: tipCommit.message,
-        },
-      });
-
-      const backupRef = `refs/proposals-original/${proposalId}/${tipOid}`;
-      await git.writeRef({ fs, dir, ref: backupRef, value: tipOid, force: true });
-      await git.writeRef({ fs, dir, ref: refName, value: commitOid, force: true });
-      return { ok: true, commitOid, baseOid: mainOid, backupRef };
+    const { commit: tipCommit } = await git.readCommit({ fs, dir, oid: tipOid });
+    const { commit: mainCommit } = await git.readCommit({ fs, dir, oid: mainOid });
+    const { tree } = await git.readTree({ fs, dir, oid: mainCommit.tree });
+    const blobOid = await git.writeBlob({
+      fs,
+      dir,
+      blob: new TextEncoder().encode(mergedSource),
     });
+    const hasEntry = tree.some((e) => e.path === filename);
+    const newTree = hasEntry
+      ? tree.map((e) => (e.path === filename ? { ...e, oid: blobOid } : e))
+      : [...tree, { path: filename, mode: '100644', type: 'blob' as const, oid: blobOid }];
+    const newTreeOid = await git.writeTree({ fs, dir, tree: newTree });
+
+    const ts = Math.floor(Date.now() / 1000);
+    const committer = {
+      name: identity.clientId,
+      email: `${identity.clientId}@marginalia.local`,
+      timestamp: ts,
+      timezoneOffset: 0,
+    };
+    const commitOid = await git.writeCommit({
+      fs,
+      dir,
+      commit: {
+        tree: newTreeOid,
+        parent: [mainOid],
+        author: tipCommit.author,
+        committer,
+        message: tipCommit.message,
+      },
+    });
+
+    const backupRef = `refs/proposals-original/${proposalId}/${tipOid}`;
+    await git.writeRef({ fs, dir, ref: backupRef, value: tipOid, force: true });
+    await git.writeRef({ fs, dir, ref: refName, value: commitOid, force: true });
+    return { ok: true, commitOid, baseOid: mainOid, backupRef };
   }
 
   /**
@@ -664,6 +668,11 @@ export type PreviewProposalMergeResult =
 export type RewriteProposalBranchResult =
   | { ok: true; commitOid: string; baseOid: string; backupRef: string }
   | { ok: false; reason: 'absent' | 'stale' };
+
+export interface ProposalRepairBranchResult {
+  preview: PreviewProposalMergeResult;
+  rewrite: RewriteProposalBranchResult | null;
+}
 
 async function mergeTextWithNativeGit(
   ours: string,

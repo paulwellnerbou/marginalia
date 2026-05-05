@@ -22,15 +22,13 @@ interface Props {
   actions?: React.ReactNode;
 }
 
-const DEFAULT_CONTEXT_LINES = 3;
-
 export function DiffDialog({
   open,
   onOpenChange,
   title,
   before,
   after,
-  contextLines = DEFAULT_CONTEXT_LINES,
+  contextLines = null,
   actions,
 }: Props) {
   const lines = useMemo(() => diffLines(before, after), [before, after]);

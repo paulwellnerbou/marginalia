@@ -457,6 +457,7 @@ export function InlineThreadCard({
           title="Proposed change"
           before={resolvedDiff?.original?.before ?? resolvedDiff?.before ?? ''}
           after={resolvedDiff?.original?.after ?? resolvedDiff?.after ?? ''}
+          contextLines={3}
           actions={
             status === 'open' && (canAccept || canReject) ? (
               <>
