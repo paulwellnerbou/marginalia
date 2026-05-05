@@ -1,12 +1,14 @@
+import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer';
 import { DownloadIcon } from '@radix-ui/react-icons';
 import { DropdownMenu, IconButton } from '@radix-ui/themes';
 import { useState } from 'react';
-import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer';
 import type { Document } from '../lib/api.js';
 import {
   ApiError,
   downloadDocumentDocx,
+  downloadDocumentDocxWithAcceptedProposals,
   downloadDocumentPdf,
+  downloadDocumentSourceWithAcceptedProposals,
 } from '../lib/api.js';
 import { reportError } from '../lib/log.js';
 import { showToast } from '../lib/notifications.js';
@@ -46,10 +48,16 @@ export function DownloadMenu({
    */
   reviewExportEnabled?: boolean;
 }) {
-  const [busy, setBusy] = useState<null | 'source' | 'docx' | 'pdf'>(null);
+  const [busy, setBusy] = useState<
+    null | 'source' | 'accepted-source' | 'docx' | 'accepted-docx' | 'pdf'
+  >(null);
 
   const sourceExt = doc.format === 'asciidoc' ? 'adoc' : 'md';
   const sourceLabel = doc.format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source';
+  const acceptedSourceLabel =
+    doc.format === 'asciidoc'
+      ? 'AsciiDoc with proposals accepted'
+      : 'Markdown with proposals accepted';
 
   function downloadBlob(blob: Blob, filename: string): void {
     const url = URL.createObjectURL(blob);
@@ -72,10 +80,7 @@ export function DownloadMenu({
     try {
       const base = sanitizeDocumentFilename(resolveTitle(doc, source), doc.uid);
       const mime = doc.format === 'asciidoc' ? 'text/asciidoc' : 'text/markdown';
-      downloadBlob(
-        new Blob([source], { type: `${mime};charset=utf-8` }),
-        `${base}.${sourceExt}`,
-      );
+      downloadBlob(new Blob([source], { type: `${mime};charset=utf-8` }), `${base}.${sourceExt}`);
     } catch (err) {
       reportError('DownloadMenu.source', err, { uid: doc.uid });
       showToast({ title: 'Download failed', body: 'Could not save the source file.' });
@@ -94,6 +99,48 @@ export function DownloadMenu({
       downloadBlob(blob, filename);
     } catch (err) {
       reportError('DownloadMenu.docx', err, { uid: doc.uid, withReview });
+      showToast({ title: 'DOCX export failed', body: 'Try again in a moment.' });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function downloadAcceptedSource(): Promise<void> {
+    setBusy('accepted-source');
+    try {
+      const { blob, filename, skippedProposals } =
+        await downloadDocumentSourceWithAcceptedProposals(doc.uid);
+      downloadBlob(blob, filename);
+      if (skippedProposals > 0) {
+        showToast({
+          title: 'Partial download',
+          body: `${skippedProposals} proposal${skippedProposals === 1 ? '' : 's'} could not be applied cleanly.`,
+        });
+      }
+    } catch (err) {
+      reportError('DownloadMenu.acceptedSource', err, { uid: doc.uid });
+      showToast({ title: 'Download failed', body: 'Could not save the source file.' });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function downloadAcceptedDocx(): Promise<void> {
+    setBusy('accepted-docx');
+    try {
+      const { blob, filename, skippedProposals } = await downloadDocumentDocxWithAcceptedProposals(
+        doc.uid,
+        theme,
+      );
+      downloadBlob(blob, filename);
+      if (skippedProposals > 0) {
+        showToast({
+          title: 'Partial DOCX export',
+          body: `${skippedProposals} proposal${skippedProposals === 1 ? '' : 's'} could not be applied cleanly.`,
+        });
+      }
+    } catch (err) {
+      reportError('DownloadMenu.acceptedDocx', err, { uid: doc.uid });
       showToast({ title: 'DOCX export failed', body: 'Try again in a moment.' });
     } finally {
       setBusy(null);
@@ -158,20 +205,20 @@ export function DownloadMenu({
         <DropdownMenu.Item onSelect={downloadSource} disabled={busy !== null}>
           {sourceLabel} (.{sourceExt})
         </DropdownMenu.Item>
+        <DropdownMenu.Item onSelect={downloadAcceptedSource} disabled={busy !== null}>
+          {acceptedSourceLabel} (.{sourceExt})
+        </DropdownMenu.Item>
         {/* Word entries grouped between separators so the toolbar
             visually pairs them as one feature. */}
         <DropdownMenu.Separator />
-        <DropdownMenu.Item
-          onSelect={() => downloadDocx(false)}
-          disabled={busy !== null}
-        >
+        <DropdownMenu.Item onSelect={() => downloadDocx(false)} disabled={busy !== null}>
           Word document (.docx)
         </DropdownMenu.Item>
+        <DropdownMenu.Item onSelect={downloadAcceptedDocx} disabled={busy !== null}>
+          Word document with proposals accepted
+        </DropdownMenu.Item>
         {reviewExportEnabled && (
-          <DropdownMenu.Item
-            onSelect={() => downloadDocx(true)}
-            disabled={busy !== null}
-          >
+          <DropdownMenu.Item onSelect={() => downloadDocx(true)} disabled={busy !== null}>
             Word document with comments &amp; change proposals
           </DropdownMenu.Item>
         )}
@@ -180,9 +227,7 @@ export function DownloadMenu({
           PDF document (.pdf)
         </DropdownMenu.Item>
         {doc.mermaid_renderer === 'chromium' && (
-          <DropdownMenu.Label>
-            Diagrams: Chromium (high fidelity, slower)
-          </DropdownMenu.Label>
+          <DropdownMenu.Label>Diagrams: Chromium (high fidelity, slower)</DropdownMenu.Label>
         )}
       </DropdownMenu.Content>
     </DropdownMenu.Root>
@@ -190,6 +235,7 @@ export function DownloadMenu({
 }
 
 function resolveTitle(doc: Document, source: string): string | null {
-  if (doc.name && doc.name.trim()) return doc.name.trim();
+  const name = doc.name?.trim();
+  if (name) return name;
   return extractDocumentTitle(source, doc.format);
 }

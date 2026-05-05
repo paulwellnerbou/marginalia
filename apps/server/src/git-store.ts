@@ -1,10 +1,10 @@
-import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import {
   existsSync,
-  mkdtempSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -601,6 +601,44 @@ export class GitStore {
     );
   }
 
+  /**
+   * Materialize the result of applying one proposal branch onto an
+   * arbitrary source string without mutating refs or the working tree.
+   * Export flows use this to build a temporary "all proposals accepted"
+   * snapshot by folding open proposal branches into an in-memory source.
+   */
+  async previewProposalMergeIntoSource(
+    doc: DocLocator,
+    proposalId: string,
+    source: string,
+  ): Promise<PreviewProposalMergeIntoSourceResult> {
+    return this.withLock(doc.uid, async () => {
+      const dir = this.repoDir(doc.uid);
+      if (!existsSync(join(dir, '.git'))) return { ok: false, reason: 'absent' };
+      const refName = proposalRef(proposalId);
+      let tipOid: string;
+      try {
+        tipOid = await git.resolveRef({ fs, dir, ref: refName });
+      } catch {
+        return { ok: false, reason: 'absent' };
+      }
+
+      let baseOid: string | undefined;
+      try {
+        const { commit } = await git.readCommit({ fs, dir, oid: tipOid });
+        baseOid = commit.parent[0];
+      } catch {
+        return { ok: false, reason: 'absent' };
+      }
+      if (!baseOid) return { ok: false, reason: 'absent' };
+
+      const base = await this.readAt(doc, baseOid);
+      const proposed = await this.readAt(doc, tipOid);
+      const after = await mergeTextWithNativeGit(source, base, proposed);
+      return after === null ? { ok: false, reason: 'conflict' } : { ok: true, after };
+    });
+  }
+
   private async previewProposalMergeWithGitUnlocked(
     doc: DocLocator,
     proposalId: string,
@@ -664,6 +702,10 @@ export type PreviewProposalMergeResult =
       strategy: 'isomorphic-git' | 'native-git';
     }
   | { ok: false; reason: 'conflict' | 'absent' | 'merged' };
+
+export type PreviewProposalMergeIntoSourceResult =
+  | { ok: true; after: string }
+  | { ok: false; reason: 'conflict' | 'absent' };
 
 export type RewriteProposalBranchResult =
   | { ok: true; commitOid: string; baseOid: string; backupRef: string }

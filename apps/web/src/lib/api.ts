@@ -467,6 +467,42 @@ export async function downloadDocumentDocx(
   return { blob, filename };
 }
 
+export async function downloadDocumentSourceWithAcceptedProposals(
+  uid: string,
+): Promise<{ blob: Blob; filename: string; skippedProposals: number }> {
+  const res = await requestBinary(
+    `/api/documents/${encodeURIComponent(uid)}/export.accepted-source`,
+    { method: 'GET', docUid: uid },
+  );
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  const match = cd.match(/filename="([^"]+)"/);
+  const filename = match?.[1] ?? `${uid}-proposals-accepted.md`;
+  return { blob, filename, skippedProposals: readSkippedProposalCount(res) };
+}
+
+export async function downloadDocumentDocxWithAcceptedProposals(
+  uid: string,
+  theme?: string,
+): Promise<{ blob: Blob; filename: string; skippedProposals: number }> {
+  const params = theme ? `?theme=${encodeURIComponent(theme)}` : '';
+  const res = await requestBinary(
+    `/api/documents/${encodeURIComponent(uid)}/export.accepted.docx${params}`,
+    { method: 'GET', docUid: uid },
+  );
+  const blob = await res.blob();
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  const match = cd.match(/filename="([^"]+)"/);
+  const filename = match?.[1] ?? `${uid}-proposals-accepted.docx`;
+  return { blob, filename, skippedProposals: readSkippedProposalCount(res) };
+}
+
+function readSkippedProposalCount(res: Response): number {
+  const raw = res.headers.get('X-Marginalia-Proposals-Skipped');
+  const n = raw ? Number(raw) : 0;
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 /**
  * Fetches a PDF export of the document and returns the bytes plus a
  * server-suggested filename. Mirrors `downloadDocumentDocx` — same

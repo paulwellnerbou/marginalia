@@ -2541,15 +2541,11 @@ describe('documents API', () => {
     return `${document}\n${comments}`;
   }
 
-  async function exportReviewDocx(
-    uid: string,
-    inviteToken: string,
-  ): Promise<string> {
+  async function exportReviewDocx(uid: string, inviteToken: string): Promise<string> {
     const res = await app.hono.fetch(
-      new Request(
-        `http://test/api/documents/${uid}/export.docx?review=both`,
-        { headers: withInvite(headersFor(CLIENT_A), inviteToken) },
-      ),
+      new Request(`http://test/api/documents/${uid}/export.docx?review=both`, {
+        headers: withInvite(headersFor(CLIENT_A), inviteToken),
+      }),
     );
     expect(res.status).toBe(200);
     return readDocxReviewParts(Buffer.from(await res.arrayBuffer()));
@@ -2560,7 +2556,9 @@ describe('documents API', () => {
       markdown: '# Doc\n\nFirst paragraph.\n\nSecond paragraph.\n',
       name: 'Resolved comment fixture',
     });
-    const blocks = [...locateAllBlocks('# Doc\n\nFirst paragraph.\n\nSecond paragraph.\n').entries()];
+    const blocks = [
+      ...locateAllBlocks('# Doc\n\nFirst paragraph.\n\nSecond paragraph.\n').entries(),
+    ];
     const firstParaId = blocks.find(([, r]) => r.text === 'First paragraph.')![0];
     const secondParaId = blocks.find(([, r]) => r.text === 'Second paragraph.')![0];
 
@@ -2727,14 +2725,11 @@ describe('documents API', () => {
     expect(closedRes.status).toBe(201);
     const closed = (await closedRes.json()) as { thread: { id: string } };
     const resolveRes = await app.hono.fetch(
-      new Request(
-        `http://test/api/documents/${created.uid}/threads/${closed.thread.id}/respond`,
-        {
-          method: 'POST',
-          headers: adminHeaders,
-          body: JSON.stringify({ action: 'resolve' }),
-        },
-      ),
+      new Request(`http://test/api/documents/${created.uid}/threads/${closed.thread.id}/respond`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ action: 'resolve' }),
+      }),
     );
     expect(resolveRes.status).toBe(200);
 
@@ -2818,6 +2813,108 @@ describe('documents API', () => {
       .filter(([p, e]) => p.startsWith('word/media/') && !e.dir)
       .map(([p]) => p);
     expect(media.length).toBe(1);
+  });
+
+  test('accepted-proposals downloads export a temporary merged source and DOCX', async () => {
+    const source = '# Doc\n\nAlpha.\n\nBeta.\n';
+    const created = await upload(CLIENT_A, { markdown: source, name: 'Proposal Doc' });
+    const blocks = [...locateAllBlocks(source).entries()];
+    const alpha = blocks.find(([, range]) => range.text === 'Alpha.');
+    const beta = blocks.find(([, range]) => range.text === 'Beta.');
+    expect(alpha).toBeDefined();
+    expect(beta).toBeDefined();
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+
+    for (const [blockId, text, proposed] of [
+      [alpha![0], 'Alpha.', 'Alpha accepted.'],
+      [beta![0], 'Beta.', 'Beta accepted.'],
+    ] as const) {
+      const proposeRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/threads`, {
+          method: 'POST',
+          headers: adminHeaders,
+          body: JSON.stringify({
+            anchor: { block_id: blockId, quote: text },
+            proposal: { proposed_text: proposed },
+          }),
+        }),
+      );
+      expect(proposeRes.status).toBe(201);
+    }
+
+    const sourceRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.accepted-source`, {
+        headers: adminHeaders,
+      }),
+    );
+    expect(sourceRes.status).toBe(200);
+    expect(sourceRes.headers.get('x-marginalia-proposals-applied')).toBe('2');
+    expect(sourceRes.headers.get('x-marginalia-proposals-skipped')).toBe('0');
+    expect(sourceRes.headers.get('content-disposition')).toContain(
+      'Proposal_Doc-proposals-accepted.md',
+    );
+    const mergedSource = await sourceRes.text();
+    expect(mergedSource).toContain('Alpha accepted.');
+    expect(mergedSource).toContain('Beta accepted.');
+
+    const docxRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.accepted.docx`, {
+        headers: adminHeaders,
+      }),
+    );
+    expect(docxRes.status).toBe(200);
+    expect(docxRes.headers.get('x-marginalia-proposals-applied')).toBe('2');
+    expect(docxRes.headers.get('x-marginalia-proposals-skipped')).toBe('0');
+    expect(docxRes.headers.get('content-disposition')).toContain(
+      'Proposal_Doc-proposals-accepted.docx',
+    );
+    const zip = await JSZip.loadAsync(Buffer.from(await docxRes.arrayBuffer()));
+    const documentXml = await zip.file('word/document.xml')!.async('string');
+    expect(documentXml).toContain('Alpha accepted.');
+    expect(documentXml).toContain('Beta accepted.');
+
+    const afterRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, { headers: adminHeaders }),
+    );
+    const after = (await afterRes.json()) as { source: string };
+    expect(after.source).toBe(source);
+  });
+
+  test('accepted-proposals source download returns a partial file for conflicting proposals', async () => {
+    const source = '# Doc\n\nAlpha.\n';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const block = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'Alpha.',
+    );
+    expect(block).toBeDefined();
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+
+    for (const proposed of ['First accepted.', 'Second accepted.']) {
+      const proposeRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/threads`, {
+          method: 'POST',
+          headers: adminHeaders,
+          body: JSON.stringify({
+            anchor: { block_id: block![0], quote: 'Alpha.' },
+            proposal: { proposed_text: proposed },
+          }),
+        }),
+      );
+      expect(proposeRes.status).toBe(201);
+    }
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.accepted-source`, {
+        headers: adminHeaders,
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-marginalia-proposals-applied')).toBe('1');
+    expect(res.headers.get('x-marginalia-proposals-skipped')).toBe('1');
+    expect(res.headers.get('content-disposition')).toContain('proposals-partial.md');
+    const partial = await res.text();
+    expect(partial).toContain('First accepted.');
+    expect(partial).not.toContain('Second accepted.');
   });
 
   test('import accepts legacy v1 bundles without representation', async () => {

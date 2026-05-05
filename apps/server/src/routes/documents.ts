@@ -9,25 +9,13 @@ import {
   rewriteAssetReferences,
   sanitizeDocumentFilename,
 } from '@marginalia/renderer';
-import type {
-  BlockSourceRange,
-  ReviewExportData,
-  ReviewThread,
-} from '@marginalia/renderer';
+import type { BlockSourceRange, ReviewExportData, ReviewThread } from '@marginalia/renderer';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { reanchor } from '../anchoring.js';
-import { mapWithConcurrency } from '../concurrency.js';
 import {
-  loadProposalRow,
-  reopenAcceptedProposal,
-  reanchorProposals,
-  readProposalContent,
-  toWire as toEditProposalWire,
-} from './edit-proposals.js';
-import {
-  type Identity,
   INVITE_SESSION_COOKIE,
+  type Identity,
   SESSION_COOKIE,
   authorize,
   canEdit,
@@ -41,8 +29,8 @@ import {
   verifyPassword,
 } from '../auth.js';
 import type { BlobStore } from '../blob-store.js';
+import { mapWithConcurrency } from '../concurrency.js';
 import type { ServerConfig } from '../config.js';
-import { gcAssetIfOrphan, listAttached } from './assets.js';
 import type {
   CommentRow,
   DocumentFormat,
@@ -54,30 +42,38 @@ import type {
 } from '../db.js';
 import { isDocumentFormat, isInviteKind, isInviteRole, isMermaidRenderer } from '../db.js';
 import type { MermaidRenderer } from '../db.js';
-import type { HistoryEntry as GitHistoryEntry, GitStore } from '../git-store.js';
-import { newDocumentUid, newInviteToken } from '../ids.js';
-import type { Realtime } from '../realtime.js';
-import { listDocUserNameMap, upsertDocUser } from '../users.js';
+import {
+  type MermaidPrerasterResolver,
+  countLiveMermaidBlocks,
+  inlineImageAssets,
+  prerasterizeMermaid,
+} from '../export/html-envelope.js';
+import { renderMermaidWithChromium } from '../export/mermaid-chromium.js';
+import {
+  type MermaidImageFormat,
+  MermaidRenderEngineMissingError,
+  type RenderedMermaidImage,
+  renderMermaidToImage,
+} from '../export/mermaid-rust.js';
 import {
   ExportBusyError,
   ExportEngineMissingError,
   ExportTimeoutError,
   exportPdf,
 } from '../export/pdf.js';
-import {
-  countLiveMermaidBlocks,
-  inlineImageAssets,
-  type MermaidPrerasterResolver,
-  prerasterizeMermaid,
-} from '../export/html-envelope.js';
-import { renderMermaidWithChromium } from '../export/mermaid-chromium.js';
-import {
-  MermaidRenderEngineMissingError,
-  type MermaidImageFormat,
-  renderMermaidToImage,
-  type RenderedMermaidImage,
-} from '../export/mermaid-rust.js';
 import { loadPrintCss, loadThemeCss } from '../export/theme-css.js';
+import type { HistoryEntry as GitHistoryEntry, GitStore } from '../git-store.js';
+import { newDocumentUid, newInviteToken } from '../ids.js';
+import type { Realtime } from '../realtime.js';
+import { listDocUserNameMap, upsertDocUser } from '../users.js';
+import { gcAssetIfOrphan, listAttached } from './assets.js';
+import {
+  loadProposalRow,
+  readProposalContent,
+  reanchorProposals,
+  reopenAcceptedProposal,
+  toWire as toEditProposalWire,
+} from './edit-proposals.js';
 
 // ---------------------------------------------------------------------
 // Mermaid renderer dispatch
@@ -158,6 +154,12 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.get('/:uid', async (c) => getDocument(c, deps));
   r.get('/:uid/export', async (c) => exportDocument(c, deps));
   r.get('/:uid/export.docx', async (c) => exportDocumentAsDocx(c, deps));
+  r.get('/:uid/export.accepted-source', async (c) =>
+    exportDocumentSourceWithAcceptedProposals(c, deps),
+  );
+  r.get('/:uid/export.accepted.docx', async (c) =>
+    exportDocumentAsDocx(c, deps, { acceptedProposals: true }),
+  );
   r.get('/:uid/export.pdf', async (c) => exportDocumentAsPdf(c, deps));
   r.put('/:uid', async (c) => updateDocument(c, deps));
   r.patch('/:uid/settings', async (c) => updateSettings(c, deps));
@@ -724,6 +726,58 @@ async function loadReviewThreadsForExport(
   return results;
 }
 
+interface AcceptedProposalsSourceResult {
+  source: string;
+  appliedCount: number;
+  skipped: Array<{ id: string; reason: 'proposal-conflict' | 'proposal-orphaned' }>;
+}
+
+async function sourceWithAcceptedProposals(
+  deps: AppDeps,
+  doc: DocumentRow,
+  initialSource: string,
+): Promise<AcceptedProposalsSourceResult> {
+  const rows = deps.db
+    .prepare(
+      `SELECT c.id
+         FROM comments c
+         JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.doc_uid = ?
+          AND c.parent_id IS NULL
+          AND c.parent_proposal_id IS NULL
+          AND c.deleted_at IS NULL
+          AND cep.status = 'open'
+        ORDER BY c.created_at ASC`,
+    )
+    .all(doc.uid) as Array<{ id: string }>;
+
+  let source = initialSource;
+  let appliedCount = 0;
+  const skipped: AcceptedProposalsSourceResult['skipped'] = [];
+  for (const row of rows) {
+    const merge = await deps.store.previewProposalMergeIntoSource(doc, row.id, source);
+    if (!merge.ok) {
+      skipped.push({
+        id: row.id,
+        reason: merge.reason === 'conflict' ? 'proposal-conflict' : 'proposal-orphaned',
+      });
+      continue;
+    }
+    source = merge.after;
+    appliedCount++;
+  }
+  return { source, appliedCount, skipped };
+}
+
+function setAcceptedProposalsExportHeaders(c: Context, applied: AcceptedProposalsSourceResult) {
+  c.header('X-Marginalia-Proposals-Applied', String(applied.appliedCount));
+  c.header('X-Marginalia-Proposals-Skipped', String(applied.skipped.length));
+}
+
+function acceptedProposalsFilenameSuffix(applied: AcceptedProposalsSourceResult): string {
+  return applied.skipped.length > 0 ? '-proposals-partial' : '-proposals-accepted';
+}
+
 /**
  * A thread is "closed" — and therefore excluded from the review
  * export — when:
@@ -761,10 +815,41 @@ function wantsReviewExport(c: Context): boolean {
   return raw === 'both' || raw === '1' || raw === 'true';
 }
 
+// --- GET /api/documents/:uid/export.accepted-source ------------------
+
+/**
+ * Source export that folds open edit proposals into a temporary
+ * snapshot without mutating the stored document. Conflicting or missing
+ * proposal branches are skipped so the caller still gets a best-effort
+ * partial file.
+ */
+async function exportDocumentSourceWithAcceptedProposals(c: Context, deps: AppDeps) {
+  const { db, store } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+
+  const applied = await sourceWithAcceptedProposals(deps, doc, store.read(doc));
+  const derivedTitle = doc.name ?? extractDocumentTitle(applied.source, doc.format);
+  const filename = `${sanitizeDocumentFilename(derivedTitle, doc.uid)}${acceptedProposalsFilenameSuffix(applied)}`;
+  const ext = doc.format === 'asciidoc' ? 'adoc' : 'md';
+  const type = doc.format === 'asciidoc' ? 'text/asciidoc' : 'text/markdown';
+  c.header('Content-Type', `${type}; charset=utf-8`);
+  c.header('Content-Disposition', `attachment; filename="${filename}.${ext}"`);
+  c.header('Cache-Control', 'private, no-store');
+  c.header('X-Content-Type-Options', 'nosniff');
+  setAcceptedProposalsExportHeaders(c, applied);
+  return c.body(applied.source);
+}
+
 // --- GET /api/documents/:uid/export.docx -----------------------------
 
 /**
- * DOCX export. Produces a themed Word document from the stored source.
+ * DOCX export. Produces a themed Word document from the stored source
+ * or, for the accepted-proposals route, from a temporary source with
+ * all open edit proposals folded in.
  *
  * Theme resolution: `?theme=<id>` wins; otherwise we fall back to the
  * document's `default_theme`. Unknown ids fall back to 'default' inside
@@ -775,7 +860,11 @@ function wantsReviewExport(c: Context): boolean {
  * sensible metadata. These are best-effort — if the name is missing
  * we omit the field entirely.
  */
-async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
+async function exportDocumentAsDocx(
+  c: Context,
+  deps: AppDeps,
+  options: { acceptedProposals?: boolean } = {},
+) {
   const { db, store, blobs } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
@@ -800,7 +889,12 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
     attached.set(a.ref_name, { assetId: a.asset_id, mime: a.mime });
   }
 
-  const source = store.read(doc);
+  let source = store.read(doc);
+  let acceptedProposals: AcceptedProposalsSourceResult | null = null;
+  if (options.acceptedProposals) {
+    acceptedProposals = await sourceWithAcceptedProposals(deps, doc, source);
+    source = acceptedProposals.source;
+  }
   // Title resolution for both the DOCX core properties and the
   // download filename: explicit `doc.name` wins; else the document's
   // own title (frontmatter `title:` or first H1 / `= Header`); else
@@ -826,7 +920,7 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
   // when the caller asked for the review export via `?review=both`.
   // Unset → vanilla export.
   let review: ReviewExportData | undefined;
-  if (wantsReviewExport(c)) {
+  if (!options.acceptedProposals && wantsReviewExport(c)) {
     const threads = await loadReviewThreadsForExport(deps, doc);
     if (threads.length > 0) {
       review = { threads };
@@ -875,13 +969,14 @@ async function exportDocumentAsDocx(c: Context, deps: AppDeps) {
     },
   });
 
-  const filename = sanitizeDocumentFilename(derivedTitle, doc.uid);
+  const filename = `${sanitizeDocumentFilename(derivedTitle, doc.uid)}${acceptedProposals ? acceptedProposalsFilenameSuffix(acceptedProposals) : ''}`;
   c.header(
     'Content-Type',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   );
   c.header('Content-Disposition', `attachment; filename="${filename}.docx"`);
   c.header('Cache-Control', 'private, no-store');
+  if (acceptedProposals) setAcceptedProposalsExportHeaders(c, acceptedProposals);
   // `nosniff` matches the asset route: stops the browser from
   // guessing a more permissive content type based on the bytes,
   // which closes a class of user-upload XSS paths even though Word
