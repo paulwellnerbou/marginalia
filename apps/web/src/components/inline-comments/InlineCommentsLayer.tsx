@@ -104,6 +104,7 @@ const STACK_GAP_PX = 8;
 const TOOLBAR_TOP_OFFSET_PX = 8;
 const TOOLBAR_BASE_TOP_PAD_PX = TOOLBAR_TOP_OFFSET_PX + STACK_GAP_PX;
 const FOCUS_MS = 1800;
+const DEFAULT_OPEN_COLUMN_WIDTH_PX = 320;
 
 /**
  * Global state shared by all cards.
@@ -154,6 +155,7 @@ export function InlineCommentsLayer({
   const rootRef = useRef<HTMLElement>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [toolbarHeight, setToolbarHeight] = useState(0);
+  const [openColumnWidth, setOpenColumnWidth] = useState(DEFAULT_OPEN_COLUMN_WIDTH_PX);
   const stickyTopPad = TOOLBAR_BASE_TOP_PAD_PX + toolbarHeight;
 
   /**
@@ -548,6 +550,19 @@ export function InlineCommentsLayer({
     return () => window.removeEventListener('resize', handler);
   }, [requestRemeasure]);
 
+  const measureOpenColumnWidth = useCallback(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const next = el.getBoundingClientRect().width;
+    if (next <= 0) return;
+    setOpenColumnWidth((prev) => (Math.abs(prev - next) > 0.5 ? next : prev));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    measureOpenColumnWidth();
+  }, [open, measureOpenColumnWidth]);
+
   // Measure the toolbar height so cards can stack below it. Re-runs on
   // any toolbar resize (e.g. theme/font changes that nudge the icon row).
   useLayoutEffect(() => {
@@ -759,6 +774,10 @@ export function InlineCommentsLayer({
       className={`ic-column${stackingEnabled ? '' : ' ic-column-no-stacking'}${open ? '' : ' ic-column-collapsed'}`}
       aria-label="Inline comments"
       style={open ? { minHeight: `${minHeight}px` } : undefined}
+      onTransitionEnd={(event) => {
+        if (event.target !== event.currentTarget || event.propertyName !== 'flex-basis') return;
+        if (open) measureOpenColumnWidth();
+      }}
     >
       <InlineCommentsToolbar
         rootRef={toolbarRef}
@@ -774,85 +793,89 @@ export function InlineCommentsLayer({
         onToggleHideResolved={onToggleHideResolved}
         onScrollToAnchor={scrollToAnchorWithOffset}
       />
-      <div className="ic-column-content" aria-hidden={!open}>
-        {renderItems.map((item, k) => {
-          const naturalTop = orderedMetrics.anchors[k] ?? 0;
-          const cardHeight = orderedMetrics.heights[k] ?? 96;
-          const { epoch, isSticky } = globalState;
+      <div className="ic-column-clip" aria-hidden={!open}>
+        <div className="ic-column-content" style={{ inlineSize: `${openColumnWidth}px` }}>
+          {renderItems.map((item, k) => {
+            const naturalTop = orderedMetrics.anchors[k] ?? 0;
+            const cardHeight = orderedMetrics.heights[k] ?? 96;
+            const { epoch, isSticky } = globalState;
 
-          let containerTop: number;
-          let containerHeight: number;
-          let useSticky: boolean;
-          let stickyTop = 0;
+            let containerTop: number;
+            let containerHeight: number;
+            let useSticky: boolean;
+            let stickyTop = 0;
 
-          if (!stackingEnabled) {
-            // No sticky behaviour: card sits at its anchor (or pushed
-            // down by the previous card if they would overlap) and
-            // scrolls with the document.
-            containerTop = noStackLayout.tops[k] ?? naturalTop;
-            containerHeight = cardHeight;
-            useSticky = false;
-          } else if (k < epoch) {
-            // Card has already passed its anchor and landed. We add the
-            // sticky top-pad to the landed scroll-y so the transition
-            // out of the SCROLLING phase is continuous (the card sat at
-            // viewport-y=stickyTopPad while sticky and stays at the
-            // same screen position when it lands).
-            containerTop = naturalTop + stickyTopPad;
-            containerHeight = cardHeight;
-            useSticky = false;
-          } else if (isSticky) {
-            // Stacked phase for the current stack [epoch..N-1].
-            //   container.top    = phaseStart + T
-            //   container.height = phaseEnd  - phaseStart + cardHeight
-            // chosen so the inner sticks at viewport-y = T from
-            // scrollTop=phaseStart and disengages at scrollTop=phaseEnd.
-            const T = stackOffset(k, epoch);
-            const phaseStart =
-              epoch === 0
-                ? 0
-                : (orderedMetrics.anchors[epoch - 1] ?? 0) +
-                  (orderedMetrics.heights[epoch - 1] ?? 96) +
-                  STACK_GAP_PX;
-            const phaseEnd = orderedMetrics.anchors[epoch] ?? naturalTop;
-            containerTop = phaseStart + T;
-            containerHeight = Math.max(phaseEnd - phaseStart + cardHeight, cardHeight);
-            stickyTop = T;
-            useSticky = true;
-          } else {
-            // Scrolling phase: cards in [epoch..N-1] ride the document
-            // with their stacked offsets between anchor[epoch] and the
-            // moment card_epoch leaves the viewport.
-            const T = stackOffset(k, epoch);
-            containerTop = (orderedMetrics.anchors[epoch] ?? 0) + T;
-            containerHeight = cardHeight;
-            useSticky = false;
-          }
+            if (!stackingEnabled) {
+              // No sticky behaviour: card sits at its anchor (or pushed
+              // down by the previous card if they would overlap) and
+              // scrolls with the document.
+              containerTop = noStackLayout.tops[k] ?? naturalTop;
+              containerHeight = cardHeight;
+              useSticky = false;
+            } else if (k < epoch) {
+              // Card has already passed its anchor and landed. We add the
+              // sticky top-pad to the landed scroll-y so the transition
+              // out of the SCROLLING phase is continuous (the card sat at
+              // viewport-y=stickyTopPad while sticky and stays at the
+              // same screen position when it lands).
+              containerTop = naturalTop + stickyTopPad;
+              containerHeight = cardHeight;
+              useSticky = false;
+            } else if (isSticky) {
+              // Stacked phase for the current stack [epoch..N-1].
+              //   container.top    = phaseStart + T
+              //   container.height = phaseEnd  - phaseStart + cardHeight
+              // chosen so the inner sticks at viewport-y = T from
+              // scrollTop=phaseStart and disengages at scrollTop=phaseEnd.
+              const T = stackOffset(k, epoch);
+              const phaseStart =
+                epoch === 0
+                  ? 0
+                  : (orderedMetrics.anchors[epoch - 1] ?? 0) +
+                    (orderedMetrics.heights[epoch - 1] ?? 96) +
+                    STACK_GAP_PX;
+              const phaseEnd = orderedMetrics.anchors[epoch] ?? naturalTop;
+              containerTop = phaseStart + T;
+              containerHeight = Math.max(phaseEnd - phaseStart + cardHeight, cardHeight);
+              stickyTop = T;
+              useSticky = true;
+            } else {
+              // Scrolling phase: cards in [epoch..N-1] ride the document
+              // with their stacked offsets between anchor[epoch] and the
+              // moment card_epoch leaves the viewport.
+              const T = stackOffset(k, epoch);
+              containerTop = (orderedMetrics.anchors[epoch] ?? 0) + T;
+              containerHeight = cardHeight;
+              useSticky = false;
+            }
 
-          return (
-            <div
-              key={item.id}
-              className="ic-anchor-slot"
-              style={{ top: `${containerTop}px`, height: `${containerHeight}px` }}
-            >
+            return (
               <div
-                ref={getRefCallback(item.id)}
-                className="ic-sticky-card"
-                style={
-                  useSticky ? { position: 'sticky', top: `${stickyTop}px` } : { position: 'static' }
-                }
+                key={item.id}
+                className="ic-anchor-slot"
+                style={{ top: `${containerTop}px`, height: `${containerHeight}px` }}
               >
-                {renderCardById(item.id)}
+                <div
+                  ref={getRefCallback(item.id)}
+                  className="ic-sticky-card"
+                  style={
+                    useSticky
+                      ? { position: 'sticky', top: `${stickyTop}px` }
+                      : { position: 'static' }
+                  }
+                >
+                  {renderCardById(item.id)}
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
 
-        {showEmpty && (
-          <div className="ic-empty-state">
-            {canComment ? 'Select text in the document to comment.' : 'No comments yet.'}
-          </div>
-        )}
+          {showEmpty && (
+            <div className="ic-empty-state">
+              {canComment ? 'Select text in the document to comment.' : 'No comments yet.'}
+            </div>
+          )}
+        </div>
       </div>
     </aside>
   );

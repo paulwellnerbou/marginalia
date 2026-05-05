@@ -2420,17 +2420,21 @@ button.primary:disabled {
   visibility: hidden;
   pointer-events: none;
 }
-.ic-column-content {
+.ic-column-clip {
   position: absolute;
   inset: 0;
   overflow: hidden;
   visibility: visible;
   transition: visibility 0s linear 0s;
 }
-.ic-column-collapsed .ic-column-content {
+.ic-column-collapsed .ic-column-clip {
   pointer-events: none;
   visibility: hidden;
   transition-delay: 180ms;
+}
+.ic-column-content {
+  position: relative;
+  min-height: 100%;
 }
 /* Each card lives inside an absolutely-positioned slot whose top and
    height are driven by JS to express the user's "all cards sticky at
