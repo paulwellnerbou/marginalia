@@ -104,8 +104,10 @@ const STACK_GAP_PX = 8;
 const TOOLBAR_TOP_OFFSET_PX = 8;
 const TOOLBAR_BASE_TOP_PAD_PX = TOOLBAR_TOP_OFFSET_PX + STACK_GAP_PX;
 const FOCUS_MS = 1800;
-const DEFAULT_OPEN_COLUMN_WIDTH_PX = 320;
+const DEFAULT_OPEN_COLUMN_WIDTH_PX = 280;
 const MIN_OPEN_COLUMN_WIDTH_PX = 240;
+const COLUMN_WIDTH_TRANSITION_MS = 180;
+const COLUMN_WIDTH_TRANSITION_FALLBACK_MS = COLUMN_WIDTH_TRANSITION_MS + 80;
 
 /**
  * Global state shared by all cards.
@@ -315,6 +317,8 @@ export function InlineCommentsLayer({
   const cardHeights = useRef<Map<string, number>>(new Map());
   const naturalTops = useRef<Map<string, number>>(new Map());
   const observerRef = useRef<ResizeObserver | null>(null);
+  const hasTrackedColumnOpen = useRef(false);
+  const columnWidthTransitioning = useRef(false);
 
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [columnHeight, setColumnHeight] = useState<number>(0);
@@ -521,6 +525,7 @@ export function InlineCommentsLayer({
   }, []);
 
   useEffect(() => {
+    if (!open) return;
     if (typeof ResizeObserver === 'undefined') return;
     const obs = new ResizeObserver((entries) => {
       let changed = false;
@@ -543,13 +548,14 @@ export function InlineCommentsLayer({
       obs.disconnect();
       observerRef.current = null;
     };
-  }, [requestRemeasure]);
+  }, [open, requestRemeasure]);
 
   useEffect(() => {
+    if (!open) return;
     const handler = () => requestRemeasure();
     window.addEventListener('resize', handler);
     return () => window.removeEventListener('resize', handler);
-  }, [requestRemeasure]);
+  }, [open, requestRemeasure]);
 
   const measureOpenColumnWidth = useCallback(() => {
     const el = rootRef.current;
@@ -560,8 +566,40 @@ export function InlineCommentsLayer({
   }, []);
 
   useLayoutEffect(() => {
+    if (!hasTrackedColumnOpen.current) {
+      hasTrackedColumnOpen.current = true;
+      return;
+    }
+
+    columnWidthTransitioning.current = true;
+    const timeout = window.setTimeout(() => {
+      columnWidthTransitioning.current = false;
+      if (open) measureOpenColumnWidth();
+    }, COLUMN_WIDTH_TRANSITION_FALLBACK_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [open, measureOpenColumnWidth]);
+
+  useLayoutEffect(() => {
     if (!open) return;
+    if (columnWidthTransitioning.current) return;
     measureOpenColumnWidth();
+  }, [open, measureOpenColumnWidth]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const el = rootRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+
+    const measureIfStable = () => {
+      if (columnWidthTransitioning.current) return;
+      measureOpenColumnWidth();
+    };
+
+    measureIfStable();
+    const obs = new ResizeObserver(measureIfStable);
+    obs.observe(el);
+    return () => obs.disconnect();
   }, [open, measureOpenColumnWidth]);
 
   // Measure the toolbar height so cards can stack below it. Re-runs on
@@ -584,6 +622,7 @@ export function InlineCommentsLayer({
   }, []);
 
   useEffect(() => {
+    if (!open) return;
     const doc = docElementRef.current;
     if (!doc || typeof MutationObserver === 'undefined') return;
     // Coalesce bursts of mutations (e.g. when applyCommentHighlights
@@ -603,7 +642,7 @@ export function InlineCommentsLayer({
       if (raf) window.cancelAnimationFrame(raf);
       obs.disconnect();
     };
-  }, [docElementRef, requestRemeasure, docHtml]);
+  }, [docElementRef, open, requestRemeasure, docHtml]);
 
   // Scroll listener — only setStates when the (epoch, isSticky) tuple
   // actually flips, which is at most 2N events for the whole document.
@@ -614,7 +653,7 @@ export function InlineCommentsLayer({
   // recomputation per animation frame so the O(N) global-state scan
   // doesn't run multiple times per painted frame on long docs.
   useEffect(() => {
-    if (!stackingEnabled) return;
+    if (!open || !stackingEnabled) return;
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
     let raf = 0;
@@ -630,9 +669,10 @@ export function InlineCommentsLayer({
       if (raf) window.cancelAnimationFrame(raf);
       scroll.removeEventListener('scroll', onScroll);
     };
-  }, [recomputeGlobalState, scrollContainerRef, stackingEnabled]);
+  }, [open, recomputeGlobalState, scrollContainerRef, stackingEnabled]);
 
   useLayoutEffect(() => {
+    if (!open) return;
     let heightsChanged = false;
     for (const [id, el] of cardEls.current) {
       const h = el.offsetHeight;
@@ -653,7 +693,7 @@ export function InlineCommentsLayer({
     // infinite loop.
     if (heightsChanged || naturalsChanged) requestRemeasure();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [measureNaturalTops, recomputeGlobalState, layoutVersion, docHtml]);
+  }, [measureNaturalTops, recomputeGlobalState, layoutVersion, docHtml, open]);
 
   // ----- focus animation -----
 
@@ -777,6 +817,7 @@ export function InlineCommentsLayer({
       style={open ? { minHeight: `${minHeight}px` } : undefined}
       onTransitionEnd={(event) => {
         if (event.target !== event.currentTarget || event.propertyName !== 'flex-basis') return;
+        columnWidthTransitioning.current = false;
         if (open) measureOpenColumnWidth();
       }}
     >
