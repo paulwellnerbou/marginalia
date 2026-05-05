@@ -174,7 +174,10 @@ export function locateAnchorRange(
   };
 }
 
-export function locateDocumentBlocks(doc: DocumentRow, source: string): Map<string, BlockSourceRange> {
+export function locateDocumentBlocks(
+  doc: DocumentRow,
+  source: string,
+): Map<string, BlockSourceRange> {
   return doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
 }
 
@@ -186,9 +189,7 @@ export function findBlockBySourceSpan(
   let exact: { id: string; range: BlockSourceRange } | null = null;
   let sameStart: { id: string; range: BlockSourceRange } | null = null;
   let container: { id: string; range: BlockSourceRange } | null = null;
-  let overlap:
-    | { id: string; range: BlockSourceRange; amount: number; span: number }
-    | null = null;
+  let overlap: { id: string; range: BlockSourceRange; amount: number; span: number } | null = null;
 
   for (const [id, range] of blocks) {
     if (range.start === start && range.end === end) {
@@ -208,7 +209,11 @@ export function findBlockBySourceSpan(
     const amount = Math.min(range.end, end) - Math.max(range.start, start);
     if (amount > 0) {
       const span = range.end - range.start;
-      if (!overlap || amount > overlap.amount || (amount === overlap.amount && span < overlap.span)) {
+      if (
+        !overlap ||
+        amount > overlap.amount ||
+        (amount === overlap.amount && span < overlap.span)
+      ) {
         overlap = { id, range, amount, span };
       }
     }
@@ -285,6 +290,27 @@ export async function readProposalContent(
       source_snapshot: base.slice(start, end),
       proposed_text: tip.slice(start, start + proposedLen),
     };
+  } catch {
+    return null;
+  }
+}
+
+export async function readProposalFullContent(
+  store: GitStore,
+  doc: DocumentRow,
+  row: {
+    id: string;
+    branch_ref: string | null;
+    base_oid: string | null;
+  },
+): Promise<{ before: string; after: string } | null> {
+  if (!row.branch_ref || !row.base_oid) return null;
+  if (row.branch_ref !== `refs/proposals/${row.id}`) return null;
+  try {
+    const after = await store.readProposalTip(doc, row.id);
+    if (after === null) return null;
+    const before = await store.readAt(doc, row.base_oid);
+    return { before, after };
   } catch {
     return null;
   }

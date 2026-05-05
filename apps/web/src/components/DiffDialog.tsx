@@ -8,20 +8,41 @@ import {
 } from '../lib/diff-overview.js';
 import { type DiffLine, diffLines } from '../lib/line-diff.js';
 
+const EMPTY_EQUAL_LINE: DiffLine = { op: 'equal', text: '' };
+
 interface Props {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   title?: string;
   before: string;
   after: string;
+  /** Number of unchanged lines to show around each changed hunk. `null` shows the full diff. */
+  contextLines?: number | null;
   /** Rendered in the dialog footer. E.g. Accept/Reject buttons. */
   actions?: React.ReactNode;
 }
 
-export function DiffDialog({ open, onOpenChange, title, before, after, actions }: Props) {
+const DEFAULT_CONTEXT_LINES = 3;
+
+export function DiffDialog({
+  open,
+  onOpenChange,
+  title,
+  before,
+  after,
+  contextLines = DEFAULT_CONTEXT_LINES,
+  actions,
+}: Props) {
   const lines = useMemo(() => diffLines(before, after), [before, after]);
   const hasChanges = lines.some((line) => line.op !== 'equal');
-  const renderedLines = useMemo(() => buildRenderableLines(lines), [lines]);
+  const renderedLines = useMemo(
+    () => compactRenderableLines(buildRenderableLines(lines), contextLines),
+    [lines, contextLines],
+  );
+  const overviewLines = useMemo(
+    () => renderedLines.map((entry) => entry.line ?? EMPTY_EQUAL_LINE),
+    [renderedLines],
+  );
   const renderLineKeys = useMemo(() => renderedLines.map(({ key }) => key), [renderedLines]);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
@@ -45,16 +66,16 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
   });
 
   const overviewMarkers = useMemo(() => {
-    const fallbackMarkers = buildDiffOverviewMarkers(lines);
+    const fallbackMarkers = buildDiffOverviewMarkers(overviewLines);
     if (!areStringArraysEqual(lineLayoutState.keys, renderLineKeys)) return fallbackMarkers;
 
     const measuredMarkers = buildMeasuredDiffOverviewMarkers({
-      lines,
+      lines: overviewLines,
       lineLayouts: lineLayoutState.layouts,
       scrollHeight: scrollMetrics.scrollHeight,
     });
     return measuredMarkers.length ? measuredMarkers : fallbackMarkers;
-  }, [lineLayoutState, lines, renderLineKeys, scrollMetrics.scrollHeight]);
+  }, [lineLayoutState, overviewLines, renderLineKeys, scrollMetrics.scrollHeight]);
 
   useLayoutEffect(() => {
     if (!open || !scroller) return;
@@ -186,22 +207,35 @@ export function DiffDialog({ open, onOpenChange, title, before, after, actions }
         </Dialog.Description>
 
         <section className="diff-view" aria-label="Diff">
-          <div ref={setScrollNode} className={`diff-scroll${hasChanges ? '' : ' diff-scroll-empty'}`}>
+          <div
+            ref={setScrollNode}
+            className={`diff-scroll${hasChanges ? '' : ' diff-scroll-empty'}`}
+          >
             <div ref={contentRef}>
               {hasChanges ? (
-                renderedLines.map(({ key, line }) => (
+                renderedLines.map(({ key, line, oldLineNumber, newLineNumber, omittedCount }) => (
                   <div
                     key={key}
                     ref={(node) => {
                       if (node) lineRefs.current.set(key, node);
                       else lineRefs.current.delete(key);
                     }}
-                    className={`diff-line diff-${line.op}`}
+                    className={`diff-line diff-${line?.op ?? 'omitted'}`}
                   >
-                    <span className="diff-marker">
-                      {line.op === 'add' ? '+' : line.op === 'remove' ? '−' : ' '}
+                    <span className="diff-line-number diff-line-number-old">
+                      {oldLineNumber ?? ''}
                     </span>
-                    <span className="diff-text">{renderLineText(line)}</span>
+                    <span className="diff-line-number diff-line-number-new">
+                      {newLineNumber ?? ''}
+                    </span>
+                    <span className="diff-marker">
+                      {line ? (line.op === 'add' ? '+' : line.op === 'remove' ? '−' : ' ') : '⋯'}
+                    </span>
+                    <span className="diff-text">
+                      {line
+                        ? renderLineText(line)
+                        : `${omittedCount} unchanged ${omittedCount === 1 ? 'line' : 'lines'} hidden`}
+                    </span>
                   </div>
                 ))
               ) : (
@@ -278,14 +312,83 @@ function renderLineText(line: DiffLine): React.ReactNode {
   });
 }
 
-function buildRenderableLines(lines: DiffLine[]): Array<{ key: string; line: DiffLine }> {
+interface RenderableDiffLine {
+  key: string;
+  line: DiffLine | null;
+  oldLineNumber: number | null;
+  newLineNumber: number | null;
+  omittedCount?: number;
+}
+
+function buildRenderableLines(lines: DiffLine[]): RenderableDiffLine[] {
   const occurrences = new Map<string, number>();
-  return lines.map((line) => {
+  let oldLine = 1;
+  let newLine = 1;
+  return lines.map((line, index) => {
     const signature = `${line.op}\u0000${line.text}`;
     const occurrence = occurrences.get(signature) ?? 0;
     occurrences.set(signature, occurrence + 1);
-    return { key: `${signature}\u0000${occurrence}`, line };
+    const oldLineNumber = line.op === 'add' ? null : oldLine;
+    const newLineNumber = line.op === 'remove' ? null : newLine;
+    if (line.op !== 'add') oldLine++;
+    if (line.op !== 'remove') newLine++;
+    return {
+      key: `${index}\u0000${signature}\u0000${occurrence}`,
+      line,
+      oldLineNumber,
+      newLineNumber,
+    };
   });
+}
+
+function compactRenderableLines(
+  lines: RenderableDiffLine[],
+  contextLines: number | null,
+): RenderableDiffLine[] {
+  if (contextLines === null) return lines;
+  const context = Math.max(0, Math.floor(contextLines));
+  const changedIndexes: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]?.line;
+    if (line && line.op !== 'equal') changedIndexes.push(i);
+  }
+  if (changedIndexes.length === 0) return lines;
+
+  const windows: Array<{ start: number; end: number }> = [];
+  for (const index of changedIndexes) {
+    const start = Math.max(0, index - context);
+    const end = Math.min(lines.length - 1, index + context);
+    const last = windows.at(-1);
+    if (last && start <= last.end + 1) {
+      last.end = Math.max(last.end, end);
+    } else {
+      windows.push({ start, end });
+    }
+  }
+
+  const out: RenderableDiffLine[] = [];
+  let cursor = 0;
+  for (const window of windows) {
+    if (window.start > cursor) {
+      out.push(omittedLine(cursor, window.start - 1));
+    }
+    out.push(...lines.slice(window.start, window.end + 1));
+    cursor = window.end + 1;
+  }
+  if (cursor < lines.length) {
+    out.push(omittedLine(cursor, lines.length - 1));
+  }
+  return out;
+}
+
+function omittedLine(startIndex: number, endIndex: number): RenderableDiffLine {
+  return {
+    key: `omitted\u0000${startIndex}\u0000${endIndex}`,
+    line: null,
+    oldLineNumber: null,
+    newLineNumber: null,
+    omittedCount: endIndex - startIndex + 1,
+  };
 }
 
 function measureDiffLineLayout(

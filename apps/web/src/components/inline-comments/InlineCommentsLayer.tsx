@@ -70,6 +70,7 @@ interface Props {
     body?: string,
     name?: string,
   ) => Promise<boolean>;
+  onRepairThread: (id: string) => Promise<boolean>;
   onScrollToAnchor: (
     blockId: string,
     quote?: string | null,
@@ -153,6 +154,7 @@ export function InlineCommentsLayer({
   onDeleteNode,
   onDeleteThread,
   onResolveThread,
+  onRepairThread,
   onScrollToAnchor,
 }: Props) {
   const rootRef = useRef<HTMLElement>(null);
@@ -279,7 +281,7 @@ export function InlineCommentsLayer({
     quote?: string | null,
   ): HTMLElement | null {
     const escaped = CSS.escape(blockId);
-    let target = doc.querySelector<HTMLElement>(
+    const target = doc.querySelector<HTMLElement>(
       `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
     );
     if (!target) return null;
@@ -802,6 +804,7 @@ export function InlineCommentsLayer({
         onDeleteNode={onDeleteNode}
         onDeleteThread={onDeleteThread}
         onResolveThread={onResolveThread}
+        onRepairThread={onRepairThread}
       />
     );
   }

@@ -433,6 +433,59 @@ export class GitStore {
       }
     });
   }
+
+  /**
+   * Materialize the result of merging a proposal branch into current main
+   * without leaving main advanced. Used by repair flows that need git's
+   * real 3-way placement to discover where an orphaned proposal applies
+   * in the current source.
+   */
+  async previewProposalMerge(
+    doc: DocLocator,
+    proposalId: string,
+  ): Promise<PreviewProposalMergeResult> {
+    return this.withLock(doc.uid, async () => {
+      const dir = this.repoDir(doc.uid);
+      if (!existsSync(join(dir, '.git'))) return { ok: false, reason: 'absent' };
+      const refName = proposalRef(proposalId);
+      let mainOid: string;
+      let tipOid: string;
+      try {
+        mainOid = await git.resolveRef({ fs, dir, ref: 'main' });
+        tipOid = await git.resolveRef({ fs, dir, ref: refName });
+      } catch {
+        return { ok: false, reason: 'absent' };
+      }
+      if (tipOid === mainOid) return { ok: false, reason: 'merged' };
+
+      const before = await this.readAt(doc, mainOid);
+      try {
+        await git.merge({
+          fs,
+          dir,
+          ours: 'main',
+          theirs: refName,
+          author: { name: 'preview', email: 'preview@local', timestamp: 0, timezoneOffset: 0 },
+          message: `preview-proposal: ${proposalId}\n`,
+        });
+        await git.checkout({ fs, dir, ref: 'main', force: true });
+        const mergedOid = await git.resolveRef({ fs, dir, ref: 'main' });
+        const after = await this.readAt(doc, mergedOid);
+        await git.writeRef({ fs, dir, ref: 'main', value: mainOid, force: true });
+        await git.checkout({ fs, dir, ref: 'main', force: true });
+        return { ok: true, before, after };
+      } catch (err) {
+        await git
+          .writeRef({ fs, dir, ref: 'main', value: mainOid, force: true })
+          .catch(() => undefined);
+        await git.checkout({ fs, dir, ref: 'main', force: true }).catch(() => undefined);
+        const e = err as { code?: string };
+        if (e.code === 'MergeConflictError') return { ok: false, reason: 'conflict' };
+        if (e.code === 'NotFoundError') return { ok: false, reason: 'absent' };
+        throw err;
+      }
+    });
+  }
 }
 
 function proposalRef(proposalId: string): string {
@@ -452,6 +505,10 @@ export type MergeProposalResult =
       };
     }
   | { ok: false; reason: 'absent' };
+
+export type PreviewProposalMergeResult =
+  | { ok: true; before: string; after: string }
+  | { ok: false; reason: 'conflict' | 'absent' | 'merged' };
 
 /**
  * Stage to a sibling temp file in the same directory, then `rename()`

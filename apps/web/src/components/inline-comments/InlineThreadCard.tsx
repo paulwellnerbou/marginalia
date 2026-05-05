@@ -1,8 +1,8 @@
 import { FileTextIcon, PilcrowIcon } from '@radix-ui/react-icons';
 import { useMemo, useRef, useState } from 'react';
+import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { Comment, ProposalDiff, Thread } from '../../lib/api.js';
 import { getEditProposalDiff, isProposal, proposalStatus } from '../../lib/api.js';
-import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import { reportError } from '../../lib/log.js';
 import { DiffDialog } from '../DiffDialog.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
@@ -28,6 +28,7 @@ interface Props {
     body?: string,
     name?: string,
   ) => Promise<boolean>;
+  onRepairThread: (id: string) => Promise<boolean>;
 }
 
 export function InlineThreadCard({
@@ -45,6 +46,7 @@ export function InlineThreadCard({
   onDeleteNode,
   onDeleteThread,
   onResolveThread,
+  onRepairThread,
 }: Props) {
   const composerRef = useRef<InlineComposerHandle>(null);
   // Track BOTH the kind and the render location that started the action.
@@ -52,8 +54,9 @@ export function InlineThreadCard({
   // once (the underlying card + the open diff dialog); without `source`
   // a single click would put the spinner in both copies of the matching
   // button instead of only the one the user actually pressed.
-  type WorkflowKind = 'accept' | 'reject' | 'resolve' | 'reopen';
-  type WorkflowSource = 'composer' | 'standalone' | 'dialog';
+  type ThreadWorkflowKind = 'accept' | 'reject' | 'resolve' | 'reopen';
+  type WorkflowKind = ThreadWorkflowKind | 'repair';
+  type WorkflowSource = 'header' | 'composer' | 'standalone' | 'dialog';
   const [busy, setBusy] = useState<{ kind: WorkflowKind; source: WorkflowSource } | null>(null);
   const isRunning = (kind: WorkflowKind, source: WorkflowSource) =>
     busy !== null && busy.kind === kind && busy.source === source;
@@ -67,6 +70,7 @@ export function InlineThreadCard({
   const status = proposal ? proposalStatus(thread) : null;
   const isResolved = thread.state === 'resolved';
   const isOrphan = thread.link_status === 'orphaned' && status !== 'accepted';
+  const isConflict = proposal && thread.link_status === 'conflict' && status !== 'accepted';
   const replies = thread.comments.slice(1);
 
   const proposalThread = proposal
@@ -75,6 +79,7 @@ export function InlineThreadCard({
 
   const canAccept = proposal && thread.capabilities.accept;
   const canReject = proposal && thread.capabilities.reject;
+  const canRepair = proposal && thread.capabilities.repair;
   const canResolve = !proposal && !isResolved && thread.capabilities.resolve;
   const canReopen = !proposal && isResolved && thread.capabilities.reopen;
 
@@ -126,7 +131,7 @@ export function InlineThreadCard({
   }
 
   async function runWorkflow(
-    kind: WorkflowKind,
+    kind: ThreadWorkflowKind,
     source: WorkflowSource,
     body?: string,
     name?: string,
@@ -139,6 +144,18 @@ export function InlineThreadCard({
     setBusy({ kind, source });
     try {
       return await onResolveThread(thread.id, kind, body, name);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runRepair(): Promise<void> {
+    if (busy) return;
+    setBusy({ kind: 'repair', source: 'header' });
+    try {
+      if (await onRepairThread(thread.id)) {
+        setResolvedDiff(null);
+      }
     } finally {
       setBusy(null);
     }
@@ -169,6 +186,7 @@ export function InlineThreadCard({
     proposal ? 'ic-card-proposal' : 'ic-card-comment',
     proposal && status ? `ic-card-proposal-${status}` : '',
     isOrphan ? 'ic-card-orphaned' : '',
+    isConflict ? 'ic-card-conflict' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -197,7 +215,7 @@ export function InlineThreadCard({
                 ) : (
                   <PilcrowIcon className="ic-badge-icon" aria-hidden="true" />
                 )}
-                Proposed change
+                <span className="ic-badge-text">Proposed change</span>
               </span>
             )}
             {proposal && status === 'accepted' && (
@@ -209,18 +227,34 @@ export function InlineThreadCard({
             {isResolved && !proposal && (
               <span className="ic-badge ic-badge-resolved">Resolved</span>
             )}
+            {isConflict && <span className="ic-badge ic-badge-conflict">Conflict</span>}
             {isOrphan && <span className="ic-badge ic-badge-orphan">Orphaned</span>}
           </div>
           {proposal && (
-            <button
-              type="button"
-              className="ic-btn ic-btn-link ic-card-show-diff"
-              onClick={() => void showDiff()}
-              disabled={loadingDiff}
-              title="Show the proposed text change"
-            >
-              {loadingDiff ? 'Loading…' : 'Show diff'}
-            </button>
+            <div className="ic-card-header-actions">
+              <button
+                type="button"
+                className="ic-btn ic-btn-ghost ic-card-show-diff"
+                onClick={() => void showDiff()}
+                disabled={loadingDiff}
+                title="Show the proposed text change"
+              >
+                {loadingDiff ? 'Loading…' : 'Show diff'}
+              </button>
+              {canRepair && (
+                <button
+                  type="button"
+                  className="ic-btn ic-btn-ghost"
+                  onClick={() => void runRepair()}
+                  disabled={busy !== null && !isRunning('repair', 'header')}
+                  aria-busy={isRunning('repair', 'header')}
+                  aria-label="Repair anchor"
+                  title="Use the proposal branch diff to re-anchor this thread"
+                >
+                  {workflowContent('Repair anchor', isRunning('repair', 'header'))}
+                </button>
+              )}
+            </div>
           )}
         </div>
         {diffError && <span className="ic-error">{diffError}</span>}
@@ -231,10 +265,7 @@ export function InlineThreadCard({
             title="Jump to this location in the document"
             onClick={onJump}
           >
-            <span aria-hidden>↗</span>{' '}
-            {anchorQuote
-              ? `"${anchorQuote}"`
-              : 'Jump to anchor'}
+            <span aria-hidden>↗</span> {anchorQuote ? `"${anchorQuote}"` : 'Jump to anchor'}
           </button>
         )}
         <button
@@ -424,8 +455,8 @@ export function InlineThreadCard({
           open={diffOpen}
           onOpenChange={setDiffOpen}
           title="Proposed change"
-          before={resolvedDiff?.before ?? ''}
-          after={resolvedDiff?.after ?? ''}
+          before={resolvedDiff?.original?.before ?? resolvedDiff?.before ?? ''}
+          after={resolvedDiff?.original?.after ?? resolvedDiff?.after ?? ''}
           actions={
             status === 'open' && (canAccept || canReject) ? (
               <>
