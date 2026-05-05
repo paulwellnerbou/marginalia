@@ -94,10 +94,7 @@ import { loadPrintCss, loadThemeCss } from '../export/theme-css.js';
  *
  * Returns the choice + a short label for telemetry / log lines.
  */
-function effectiveMermaidRenderer(
-  doc: DocumentRow,
-  c: Context,
-): MermaidRenderer {
+function effectiveMermaidRenderer(doc: DocumentRow, c: Context): MermaidRenderer {
   const queryRaw = c.req.query('mermaid');
   if (typeof queryRaw === 'string' && isMermaidRenderer(queryRaw)) return queryRaw;
   if (doc.mermaid_renderer) return doc.mermaid_renderer;
@@ -121,8 +118,7 @@ function makeMermaidResolver(
   format: MermaidImageFormat,
   onceWarn: (msg: string) => void,
 ): (source: string) => Promise<RenderedMermaidImage | null> {
-  const impl =
-    choice === 'chromium' ? renderMermaidWithChromium : renderMermaidToImage;
+  const impl = choice === 'chromium' ? renderMermaidWithChromium : renderMermaidToImage;
   return async (source) => {
     try {
       return await impl(source, format);
@@ -332,10 +328,11 @@ async function updateDocument(c: Context, deps: AppDeps) {
     return c.json({ error: 'source-required' }, 400);
   }
   const rawCommitMessage = typeof body?.commit_message === 'string' ? body.commit_message : '';
-  const commitMessage = rawCommitMessage
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
-    .trim()
-    .slice(0, 1000) || undefined;
+  const commitMessage =
+    rawCommitMessage
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+      .trim()
+      .slice(0, 1000) || undefined;
 
   let previousSource = '';
   try {
@@ -345,13 +342,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
   }
 
   const writeOptions = commitMessage ? { commitMessage } : undefined;
-  const { oid } = await store.write(
-    doc,
-    nextSource,
-    decision.identity,
-    'update',
-    writeOptions,
-  );
+  const { oid } = await store.write(doc, nextSource, decision.identity, 'update', writeOptions);
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
   const rendered = await renderDocument(nextSource, doc.format);
@@ -370,14 +361,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
   const now = Date.now();
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(
-      upd.blockId,
-      upd.startOffset,
-      upd.endOffset,
-      upd.linkStatus,
-      now,
-      comment.id,
-    );
+    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
   }
 
   // Include sub-block ids so proposals on list items / table cells don't
@@ -385,9 +369,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
   // asciidoc hands off to its own pipeline, and its locator also emits
   // sub-block ids for supported nested structures (e.g. list items).
   const knownBlocks =
-    doc.format === 'asciidoc'
-      ? locateAllBlocksAsciidoc(nextSource)
-      : locateAllBlocks(nextSource);
+    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(nextSource) : locateAllBlocks(nextSource);
   reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (isContentChange(previousSource, nextSource)) {
@@ -1225,8 +1207,7 @@ async function importDocument(c: Context, deps: AppDeps) {
       const status = normalizeImportedProposalStatus(
         typeof proposal.status === 'string' ? proposal.status : null,
       );
-      const acceptedOid =
-        typeof proposal.accepted_oid === 'string' ? proposal.accepted_oid : null;
+      const acceptedOid = typeof proposal.accepted_oid === 'string' ? proposal.accepted_oid : null;
 
       // Accepted proposals: skip branch creation. The bundle's source
       // is post-accept, so splicing `proposed_text` into it would
@@ -1416,8 +1397,10 @@ function parseStringArray(raw: string | null): string[] | null {
   }
 }
 
-function normalizeImportedLinkStatus(raw: string | null): 'linked' | 'low-confidence' | 'orphaned' {
-  if (raw === 'low-confidence' || raw === 'orphaned') return raw;
+function normalizeImportedLinkStatus(
+  raw: string | null,
+): 'linked' | 'low-confidence' | 'conflict' | 'orphaned' {
+  if (raw === 'low-confidence' || raw === 'conflict' || raw === 'orphaned') return raw;
   return 'linked';
 }
 
@@ -1504,15 +1487,9 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
     return c.json({ error: 'not-found' }, 404);
   }
 
-  const { oid } = await store.write(
-    doc,
-    restoredSource,
-    decision.identity,
-    'restore',
-    {
-      restoredFromOid: targetOid,
-    },
-  );
+  const { oid } = await store.write(doc, restoredSource, decision.identity, 'restore', {
+    restoredFromOid: targetOid,
+  });
   const now = Date.now();
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
@@ -1531,14 +1508,7 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   );
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(
-      upd.blockId,
-      upd.startOffset,
-      upd.endOffset,
-      upd.linkStatus,
-      now,
-      comment.id,
-    );
+    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
   }
 
   const knownBlocks =
@@ -1578,15 +1548,9 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
   if (!diff) return c.json({ error: 'not-found' }, 404);
 
   const meta = parseHistoryMetadata(latest);
-  const { oid } = await store.write(
-    doc,
-    diff.before,
-    decision.identity,
-    'restore',
-    {
-      restoredFromOid: parent.oid,
-    },
-  );
+  const { oid } = await store.write(doc, diff.before, decision.identity, 'restore', {
+    restoredFromOid: parent.oid,
+  });
   const now = Date.now();
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
@@ -1605,14 +1569,7 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
   );
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(
-      upd.blockId,
-      upd.startOffset,
-      upd.endOffset,
-      upd.linkStatus,
-      now,
-      comment.id,
-    );
+    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
   }
 
   const reopenedProposalId =
@@ -1621,9 +1578,7 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
       : null;
 
   const knownBlocks =
-    doc.format === 'asciidoc'
-      ? locateAllBlocksAsciidoc(diff.before)
-      : locateAllBlocks(diff.before);
+    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(diff.before) : locateAllBlocks(diff.before);
   reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (reopenedProposalId) {

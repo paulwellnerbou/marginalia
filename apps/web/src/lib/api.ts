@@ -185,6 +185,7 @@ export interface HistoryDiff {
  */
 export interface ProposalDiff extends HistoryDiff {
   mergeable: 'clean' | 'conflict' | 'stale' | null;
+  original: HistoryDiff | null;
 }
 
 export interface UploadOptions {
@@ -800,8 +801,7 @@ export interface CommentAnchor {
   section_index_path?: number[] | null;
 }
 
-export type CommentLinkStatus = 'linked' | 'low-confidence' | 'orphaned';
-
+export type CommentLinkStatus = 'linked' | 'low-confidence' | 'conflict' | 'orphaned';
 
 export type ThreadState = 'open' | 'resolved';
 export type ThreadResolutionKind = 'resolve' | 'accept' | 'reject';
@@ -818,6 +818,7 @@ export interface ThreadCapabilities {
   resolve: boolean;
   accept: boolean;
   reject: boolean;
+  repair: boolean;
   reopen: boolean;
 }
 
@@ -962,7 +963,6 @@ export function listThreads(
   return promise;
 }
 
-
 interface ThreadMutationResponse {
   thread: Thread;
   created_reply_id?: string | null;
@@ -992,12 +992,18 @@ function forgetComment(uid: string, commentId: string): void {
     .map((thread) => {
       if (!thread.comments.some((c) => c.id === commentId)) return thread;
       const [head, ...tail] = thread.comments;
-      return { ...thread, comments: [head, ...tail.filter((c) => c.id !== commentId)] as [Comment, ...Comment[]] };
+      return {
+        ...thread,
+        comments: [head, ...tail.filter((c) => c.id !== commentId)] as [Comment, ...Comment[]],
+      };
     });
   snapshotSet(uid, next);
 }
 
-function findCommentLocationInThreads(threads: Thread[], commentId: string): CommentLocation | null {
+function findCommentLocationInThreads(
+  threads: Thread[],
+  commentId: string,
+): CommentLocation | null {
   for (const thread of threads) {
     if (thread.comments.some((c) => c.id === commentId)) return { thread };
   }
@@ -1014,7 +1020,6 @@ async function findCommentLocation(uid: string, commentId: string): Promise<Comm
   if (location) return location;
   throw new ApiError(404, 'not-found');
 }
-
 
 export function createComment(
   uid: string,
@@ -1233,6 +1238,24 @@ export function getEditProposalDiff(
   const path = `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/diff`;
   const url = opts.mergeable ? `${path}?mergeable=1` : path;
   return request<ProposalDiff>(url, { method: 'GET', docUid: uid });
+}
+
+export function repairEditProposalAnchor(
+  uid: string,
+  pid: string,
+  identity: Identity,
+): Promise<Thread> {
+  return request<ThreadMutationResponse>(
+    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/repair`,
+    {
+      method: 'POST',
+      identity,
+      docUid: uid,
+    },
+  ).then((res) => {
+    rememberThread(uid, res.thread);
+    return res.thread;
+  });
 }
 
 export async function resolveThread(

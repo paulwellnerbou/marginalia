@@ -4,12 +4,12 @@ import { DropdownMenu, Flex, IconButton, SegmentedControl, Text } from '@radix-u
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
+import type { DocumentFormat } from '../../lib/api.js';
 import {
+  type ThreadCollapseState,
   buildThreadCollapseState,
   reconcileThreadCollapseState,
-  type ThreadCollapseState,
 } from '../threadCollapseState.js';
-import type { DocumentFormat } from '../../lib/api.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 
@@ -49,6 +49,7 @@ interface Props {
     body?: string,
     name?: string,
   ) => Promise<boolean>;
+  onRepairThread: (id: string) => Promise<boolean>;
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
 }
 
@@ -85,6 +86,7 @@ export function InlineCommentsList({
   onDeleteNode,
   onDeleteThread,
   onResolveThread,
+  onRepairThread,
   onScrollToAnchor,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -92,9 +94,7 @@ export function InlineCommentsList({
 
   /** Document-order rank (by source offset) — same approach as the inline column. */
   const blockOrder = useMemo(() => {
-    const ranked = Array.from(blockRanges.entries()).sort(
-      ([, a], [, b]) => a.start - b.start,
-    );
+    const ranked = Array.from(blockRanges.entries()).sort(([, a], [, b]) => a.start - b.start);
     const order = new Map<string, number>();
     let i = 0;
     for (const [id] of ranked) order.set(id, i++);
@@ -106,8 +106,7 @@ export function InlineCommentsList({
     const orphans: ThreadListItem[] = [];
     for (const t of threads) {
       const orphan =
-        t.link_status === 'orphaned' &&
-        (!isProposal(t) || proposalStatus(t) !== 'accepted');
+        t.link_status === 'orphaned' && (!isProposal(t) || proposalStatus(t) !== 'accepted');
       const item: ThreadListItem = {
         id: t.id,
         thread: t,
@@ -128,10 +127,7 @@ export function InlineCommentsList({
 
   const [sortMode, setSortMode] = useState<SortMode>('document');
 
-  const sortedActive = useMemo(
-    () => sortItems(activeItems, sortMode),
-    [activeItems, sortMode],
-  );
+  const sortedActive = useMemo(() => sortItems(activeItems, sortMode), [activeItems, sortMode]);
   const sortedOrphans = useMemo(
     () => sortItems(orphanedItems, sortMode),
     [orphanedItems, sortMode],
@@ -156,8 +152,7 @@ export function InlineCommentsList({
 
   const threadIds = useMemo(() => collapseDefaults.map((d) => d.id), [collapseDefaults]);
   const totalThreads = threadIds.length;
-  const allCollapsed =
-    totalThreads > 0 && threadIds.every((id) => collapsed.has(id));
+  const allCollapsed = totalThreads > 0 && threadIds.every((id) => collapsed.has(id));
 
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; phase: 'a' | 'b' } | null>(null);
@@ -257,6 +252,7 @@ export function InlineCommentsList({
         onDeleteNode={onDeleteNode}
         onDeleteThread={onDeleteThread}
         onResolveThread={onResolveThread}
+        onRepairThread={onRepairThread}
       />
     );
   }

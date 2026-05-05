@@ -237,6 +237,62 @@ Para C baseline.
     expect(await store.proposalMergeStatus(doc, 'p3')).toBe('conflict');
   });
 
+  test('previewProposalMergeWithGit materializes a native three-way merge without moving main', async () => {
+    const baseOid = await mainOid();
+    const aProposed = INITIAL.replace('Para A baseline.', 'Para A from main.');
+    const cProposed = INITIAL.replace('Para C baseline.', 'Para C from proposal.');
+    await store.createProposalBranch(doc, baseOid, 'p1', aProposed, author);
+    await store.createProposalBranch(doc, baseOid, 'p2', cProposed, author);
+    const originalP2Tip = await git.resolveRef({
+      fs,
+      dir: store.repoDir(doc.uid),
+      ref: 'refs/proposals/p2',
+    });
+
+    const accepted = await store.mergeProposalBranch(doc, 'p1', author);
+    expect(accepted.ok).toBe(true);
+    const beforePreviewOid = await mainOid();
+
+    const preview = await store.previewProposalMergeWithGit(doc, 'p2');
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.before).toContain('Para A from main.');
+    expect(preview.after).toContain('Para A from main.');
+    expect(preview.after).toContain('Para C from proposal.');
+    expect(await mainOid()).toBe(beforePreviewOid);
+    expect(store.read(doc)).toBe(preview.before);
+
+    const rewrite = await store.rewriteProposalBranchToMergedSource(
+      doc,
+      'p2',
+      preview.after,
+      author,
+      preview.mainOid,
+    );
+    expect(rewrite.ok).toBe(true);
+    if (!rewrite.ok) return;
+    expect(rewrite.baseOid).toBe(beforePreviewOid);
+    expect(await git.resolveRef({ fs, dir: store.repoDir(doc.uid), ref: rewrite.backupRef })).toBe(
+      originalP2Tip,
+    );
+
+    const newP2Tip = await git.resolveRef({
+      fs,
+      dir: store.repoDir(doc.uid),
+      ref: 'refs/proposals/p2',
+    });
+    expect(newP2Tip).not.toBe(originalP2Tip);
+    const { commit } = await git.readCommit({ fs, dir: store.repoDir(doc.uid), oid: newP2Tip });
+    expect(commit.parent[0]).toBe(beforePreviewOid);
+    expect(await store.readProposalTip(doc, 'p2')).toBe(preview.after);
+    expect(await store.proposalMergeStatus(doc, 'p2')).toBe('clean');
+
+    const acceptedRewrite = await store.mergeProposalBranch(doc, 'p2', author);
+    expect(acceptedRewrite.ok).toBe(true);
+    expect(await mainOid()).toBe(newP2Tip);
+    expect(store.read(doc)).toBe(preview.after);
+  });
+
   test('readProposalTip returns null when the ref is gone', async () => {
     expect(await store.readProposalTip(doc, 'never')).toBeNull();
   });

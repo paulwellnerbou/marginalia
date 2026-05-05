@@ -5,7 +5,13 @@ import { join } from 'node:path';
 import { locateAllBlocks } from '@marginalia/renderer';
 import JSZip from 'jszip';
 import { type App, createApp } from '../src/app.js';
-import { CLIENT_HEADER, CLIENT_NAME_HEADER, INVITE_HEADER, INVITE_SESSION_COOKIE, SESSION_COOKIE } from '../src/auth.js';
+import {
+  CLIENT_HEADER,
+  CLIENT_NAME_HEADER,
+  INVITE_HEADER,
+  INVITE_SESSION_COOKIE,
+  SESSION_COOKIE,
+} from '../src/auth.js';
 import { loadConfig } from '../src/config.js';
 
 const CLIENT_A = { id: 'aaaaaaaaaaaaaaaaaaaa', name: 'Alice' };
@@ -292,7 +298,6 @@ describe('documents API', () => {
     const docBody = (await getRes.json()) as { role: string };
     expect(docBody.role).toBe('admin');
   });
-
 
   test('upload returns an admin invite URL; admin access via that invite', async () => {
     const created = await upload(CLIENT_A, { markdown: '# Original\n\nBody.' });
@@ -749,7 +754,8 @@ describe('documents API', () => {
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
         body: JSON.stringify({
           markdown: '# Updated',
-          commit_message: 'Legit message\nX-Marginalia-Client-ID: spoofed-id\n  X-Marginalia-Client-ID: whitespace-spoofed',
+          commit_message:
+            'Legit message\nX-Marginalia-Client-ID: spoofed-id\n  X-Marginalia-Client-ID: whitespace-spoofed',
         }),
       }),
     );
@@ -932,9 +938,10 @@ describe('documents API', () => {
     };
 
     const acceptedSource = '## 2. Loesungskonzept & App-Architektur (Q1 - 30%)\n\nBody.\n';
-    const expectedAcceptedBlockId = [...locateAllBlocks(acceptedSource).entries()].find(
-      ([, range]) => range.kind === 'heading' && range.text.includes('30%'),
-    )?.[0] ?? null;
+    const expectedAcceptedBlockId =
+      [...locateAllBlocks(acceptedSource).entries()].find(
+        ([, range]) => range.kind === 'heading' && range.text.includes('30%'),
+      )?.[0] ?? null;
     expect(expectedAcceptedBlockId).toBeString();
 
     const acceptRes = await app.hono.fetch(
@@ -1291,9 +1298,7 @@ describe('documents API', () => {
     const proposal = (await proposeRes.json()) as { thread: { id: string } };
 
     const docLocator = { uid: created.uid, format: 'markdown' as const };
-    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe(
-      '# Title\n\nbeta',
-    );
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe('# Title\n\nbeta');
 
     const rejectRes = await app.hono.fetch(
       new Request(
@@ -1310,9 +1315,7 @@ describe('documents API', () => {
     // The branch ref is intentionally kept after reject so reopen +
     // accept don't have to reconstruct it from columns that Phase 3
     // drops. The proposal is just status='rejected' in the DB.
-    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe(
-      '# Title\n\nbeta',
-    );
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe('# Title\n\nbeta');
 
     const reopenRes = await app.hono.fetch(
       new Request(
@@ -1326,9 +1329,7 @@ describe('documents API', () => {
     );
     expect(reopenRes.status).toBe(200);
 
-    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe(
-      '# Title\n\nbeta',
-    );
+    expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBe('# Title\n\nbeta');
 
     const acceptRes = await app.hono.fetch(
       new Request(
@@ -1375,13 +1376,10 @@ describe('documents API', () => {
     expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeString();
 
     const deleteRes = await app.hono.fetch(
-      new Request(
-        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}`,
-        {
-          method: 'DELETE',
-          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
-        },
-      ),
+      new Request(`http://test/api/documents/${created.uid}/threads/${proposal.thread.id}`, {
+        method: 'DELETE',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
     );
     expect(deleteRes.status).toBe(204);
 
@@ -1487,12 +1485,9 @@ describe('documents API', () => {
     // Diff renders the original block content from base_oid using the
     // stored byte range — no anchor_block_id lookup, no source_snapshot.
     const diffRes = await app.hono.fetch(
-      new Request(
-        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/diff`,
-        {
-          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
-        },
-      ),
+      new Request(`http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/diff`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
     );
     expect(diffRes.status).toBe(200);
     const diff = (await diffRes.json()) as { before: string; after: string };
@@ -1529,9 +1524,7 @@ describe('documents API', () => {
     expect(thread.comments[0].body).toBe('Proposed change');
 
     const row = app.db
-      .prepare(
-        `SELECT branch_ref, base_oid FROM comments_edit_proposals WHERE comment_id = ?`,
-      )
+      .prepare(`SELECT branch_ref, base_oid FROM comments_edit_proposals WHERE comment_id = ?`)
       .get(thread.id) as { branch_ref: string | null; base_oid: string | null };
     expect(row.branch_ref).toBe(`refs/proposals/${thread.id}`);
     expect(row.base_oid).toBeString();
@@ -1578,14 +1571,11 @@ describe('documents API', () => {
 
     for (const id of [a, b]) {
       const acceptRes = await app.hono.fetch(
-        new Request(
-          `http://test/api/documents/${created.uid}/threads/${id}/respond`,
-          {
-            method: 'POST',
-            headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
-            body: JSON.stringify({ action: 'accept' }),
-          },
-        ),
+        new Request(`http://test/api/documents/${created.uid}/threads/${id}/respond`, {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        }),
       );
       expect(acceptRes.status).toBe(200);
     }
@@ -1658,7 +1648,9 @@ describe('documents API', () => {
       }),
     );
     expect(r1.status).toBe(200);
-    expect(((await r1.json()) as { mermaid_renderer: string | null }).mermaid_renderer).toBe('mmdr');
+    expect(((await r1.json()) as { mermaid_renderer: string | null }).mermaid_renderer).toBe(
+      'mmdr',
+    );
 
     // chromium override
     const r2 = await app.hono.fetch(
@@ -1669,7 +1661,9 @@ describe('documents API', () => {
       }),
     );
     expect(r2.status).toBe(200);
-    expect(((await r2.json()) as { mermaid_renderer: string | null }).mermaid_renderer).toBe('chromium');
+    expect(((await r2.json()) as { mermaid_renderer: string | null }).mermaid_renderer).toBe(
+      'chromium',
+    );
 
     // explicit null clears the override
     const r3 = await app.hono.fetch(
@@ -2222,6 +2216,10 @@ describe('documents API', () => {
     expect(await importedDiffRes.json()).toEqual({
       before: '# Hi',
       after: '# Better Hi',
+      original: {
+        before: '# Hi\n\nOriginal.\n',
+        after: '# Better Hi\n\nOriginal.\n',
+      },
       mergeable: null,
     });
   });
@@ -2308,9 +2306,7 @@ describe('documents API', () => {
       base_block_start: number;
       base_block_end: number;
     };
-    expect(importedProposalRow.branch_ref).toBe(
-      `refs/proposals/${importedProposalRow.comment_id}`,
-    );
+    expect(importedProposalRow.branch_ref).toBe(`refs/proposals/${importedProposalRow.comment_id}`);
     expect(importedProposalRow.base_oid).toBeString();
     expect(importedProposalRow.base_block_start).toBeNumber();
     expect(importedProposalRow.base_block_end).toBeNumber();

@@ -1956,6 +1956,11 @@ button.primary:disabled {
   border-color: #e0b255;
   color: #644b10;
 }
+.chip.status-conflict {
+  background: #fee2c0;
+  border-color: #f59e0b;
+  color: #7c2d12;
+}
 .chip.status-low-confidence {
   background: #fff6d6;
   border-color: #e0c865;
@@ -2241,19 +2246,24 @@ button.primary:disabled {
   padding: 0.5rem;
 }
 .diff-line {
-  display: flex;
+  display: grid;
+  grid-template-columns: 4ch 4ch 1ch minmax(0, 1fr);
   gap: 0.5rem;
   padding: 0.05rem 0.5rem;
   white-space: pre-wrap;
   word-break: break-word;
 }
+.diff-line-number {
+  color: var(--ui-fg-muted, rgba(15, 23, 42, 0.55));
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+}
 .diff-line .diff-marker {
-  flex: 0 0 1ch;
   user-select: none;
   opacity: 0.6;
 }
 .diff-line .diff-text {
-  flex: 1 1 auto;
   min-width: 0;
 }
 .diff-line .diff-inline-change {
@@ -2281,6 +2291,14 @@ button.primary:disabled {
 .diff-line.diff-remove .diff-marker {
   color: #dc2626;
   opacity: 1;
+}
+.diff-line.diff-omitted {
+  background: var(--ui-bg-muted, rgba(15, 23, 42, 0.04));
+  color: var(--ui-fg-muted, rgba(15, 23, 42, 0.65));
+  font-style: italic;
+}
+.diff-line.diff-omitted .diff-marker {
+  opacity: 0.7;
 }
 .diff-overview {
   display: flex;
@@ -2463,17 +2481,13 @@ button.primary:disabled {
   clip-path: inset(0);
   opacity: 1;
   visibility: visible;
-  transition:
-    opacity 180ms ease,
-    visibility 0s linear 0s;
+  transition: opacity 180ms ease, visibility 0s linear 0s;
 }
 .ic-column-collapsed .ic-column-clip {
   pointer-events: none;
   opacity: 0;
   visibility: hidden;
-  transition:
-    opacity 180ms ease,
-    visibility 0s linear 180ms;
+  transition: opacity 180ms ease, visibility 0s linear 180ms;
 }
 .ic-column-content {
   position: relative;
@@ -2576,6 +2590,9 @@ button.primary:disabled {
 .ic-card-orphaned {
   border-style: dashed;
 }
+.ic-card-conflict {
+  border-color: rgba(245, 158, 11, 0.42);
+}
 
 /* ---------- Header ---------- */
 
@@ -2594,21 +2611,22 @@ button.primary:disabled {
 }
 
 .ic-card-show-diff {
-  flex-shrink: 0;
   white-space: nowrap;
-  font-size: 0.74rem;
-  font-weight: 500;
-  color: #1d4ed8;
 }
-.ic-card-show-diff:hover:not(:disabled) {
-  background: rgba(59, 130, 246, 0.12);
-  color: #1d4ed8;
+
+.ic-card-header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+  flex-shrink: 0;
 }
 
 .ic-card-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
+  min-width: 0;
 }
 
 .ic-badge {
@@ -2628,9 +2646,16 @@ button.primary:disabled {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  max-width: 100%;
 }
 .ic-badge-icon {
   flex-shrink: 0;
+}
+.ic-badge-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .ic-badge-accepted {
   background: rgba(34, 197, 94, 0.14);
@@ -2647,6 +2672,10 @@ button.primary:disabled {
 .ic-badge-orphan {
   background: rgba(15, 23, 42, 0.08);
   color: var(--ui-fg-muted);
+}
+.ic-badge-conflict {
+  background: rgba(245, 158, 11, 0.18);
+  color: #92400e;
 }
 
 .ic-card-anchor {
@@ -2845,7 +2874,9 @@ button.primary:disabled {
 /* ---------- Buttons ---------- */
 
 @keyframes ic-spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .ic-spinner {
