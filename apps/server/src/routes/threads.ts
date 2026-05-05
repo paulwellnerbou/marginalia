@@ -437,9 +437,26 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
   const preview = await store.previewProposalMerge(doc, row.id);
   let anchor: RepairAnchor | null = null;
   let linkStatus: CommentLinkStatus | null = null;
+  let repairedBranch: { baseOid: string; baseBlockStart: number; baseBlockEnd: number } | null =
+    null;
   if (preview.ok) {
     const changed = changedSpan(preview.before, preview.after);
     if (!changed) return c.json({ error: 'proposal-repair-unavailable' }, 409);
+    if (preview.strategy === 'native-git') {
+      const rewrite = await store.rewriteProposalBranchToMergedSource(
+        doc,
+        row.id,
+        preview.after,
+        decision.identity,
+        preview.mainOid,
+      );
+      if (!rewrite.ok) return c.json({ error: 'proposal-repair-unavailable' }, 409);
+      repairedBranch = {
+        baseOid: rewrite.baseOid,
+        baseBlockStart: changed.beforeStart,
+        baseBlockEnd: changed.beforeEnd,
+      };
+    }
 
     const rendered = await renderDocument(preview.before, doc.format);
     const blocks = locateDocumentBlocks(doc, preview.before);
@@ -465,6 +482,20 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
   }
 
   const now = Date.now();
+  if (repairedBranch) {
+    db.prepare(
+      `UPDATE comments_edit_proposals
+          SET base_oid = ?,
+              base_block_start = ?,
+              base_block_end = ?
+        WHERE comment_id = ?`,
+    ).run(
+      repairedBranch.baseOid,
+      repairedBranch.baseBlockStart,
+      repairedBranch.baseBlockEnd,
+      row.id,
+    );
+  }
   db.prepare(
     `UPDATE comments
         SET anchor_block_id = ?,
