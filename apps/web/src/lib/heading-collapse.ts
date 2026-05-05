@@ -52,6 +52,13 @@ function sectionContainerHeadingLevel(node: Node): number | null {
   return null;
 }
 
+function isDocumentTitle(h1: HTMLElement, article: HTMLElement): boolean {
+  const parent = h1.parentElement;
+  if (!parent) return false;
+  // Markdown: direct child of the article. AsciiDoc: inside #header.
+  return parent === article || parent.id === 'header';
+}
+
 /** Idempotent: an attribute-based marker is more robust than a
  * class-based check, which could false-positive on user-authored
  * content that happens to reuse the class name.
@@ -62,14 +69,17 @@ export function installHeadingCollapse(article: HTMLElement): void {
 
   const headings = Array.from(article.querySelectorAll<HTMLElement>(HEADING_SELECTOR));
 
-  // Skip the opening h1 (and only the opening h1) — wrapping it
-  // re-parents its siblings, which breaks AsciiDoc's
-  // `#header > #toc.toc2` and the `beautiful` theme's
-  // `.marginalia > h1:first-child + p::first-letter` drop-cap. A doc
-  // that starts with h2, or introduces an h1 mid-body, isn't
-  // affected: only h1 at heading position 0 counts as a title.
+  // Skip the document-title h1 — wrapping it re-parents siblings
+  // and breaks AsciiDoc's `#header > #toc.toc2` and the `beautiful`
+  // theme's `.marginalia > h1:first-child + p::first-letter`
+  // drop-cap. The h1 only counts as a title if it's the FIRST
+  // heading in document order AND sits at a top-level structural
+  // position (direct child of `.marginalia` for Markdown, or inside
+  // `#header` for AsciiDoc). A nested h1 inside a blockquote or
+  // other wrapper isn't structural and shouldn't trigger the skip.
   const firstHeading = headings[0];
-  const documentTitle = firstHeading?.tagName === 'H1' ? firstHeading : null;
+  const documentTitle =
+    firstHeading?.tagName === 'H1' && isDocumentTitle(firstHeading, article) ? firstHeading : null;
 
   for (const heading of headings) {
     if (heading === documentTitle) continue;
@@ -147,12 +157,18 @@ function applyCollapsedState(button: HTMLElement, wrapper: HTMLElement, collapse
   button.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   button.setAttribute('aria-label', collapsed ? 'Expand section' : 'Collapse section');
   const inner = wrapper.firstElementChild as HTMLElement | null;
-  if (!inner) return;
-  if (collapsed) {
-    inner.setAttribute('inert', '');
-  } else {
-    inner.removeAttribute('inert');
+  if (inner) {
+    if (collapsed) {
+      inner.setAttribute('inert', '');
+    } else {
+      inner.removeAttribute('inert');
+    }
   }
+  // Notify outside listeners (e.g. the active-heading scroll-spy)
+  // that visibility of descendant headings just changed. Toggling a
+  // section neither scrolls nor resizes, so anything keyed off
+  // those events would otherwise miss the update.
+  wrapper.dispatchEvent(new CustomEvent('marginalia:collapse-toggle', { bubbles: true }));
 }
 
 /**

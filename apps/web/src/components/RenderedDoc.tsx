@@ -221,6 +221,10 @@ export function RenderedDoc({
     const onHashChange = () => revealHash(window.location.hash.slice(1));
     const onDocumentClick = (e: MouseEvent) => {
       if (e.defaultPrevented) return;
+      // Let the browser handle modifier / non-primary clicks so
+      // Cmd/Ctrl/Shift-click and middle-click can still open the
+      // anchor in a new tab or window.
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
       const a = (e.target as Element | null)?.closest?.('a[href^="#"]');
       if (!a) return;
       const href = a.getAttribute('href');

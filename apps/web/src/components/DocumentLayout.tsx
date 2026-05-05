@@ -397,9 +397,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     scheduleUpdate();
     container.addEventListener('scroll', scheduleUpdate, { passive: true });
     window.addEventListener('resize', scheduleUpdate);
+    // Section-collapse toggles change which headings are visible
+    // without firing scroll or resize, so the scan would otherwise
+    // keep highlighting a heading that just got hidden until the
+    // next scroll.
+    root.addEventListener('marginalia:collapse-toggle', scheduleUpdate);
     return () => {
       container.removeEventListener('scroll', scheduleUpdate);
       window.removeEventListener('resize', scheduleUpdate);
+      root.removeEventListener('marginalia:collapse-toggle', scheduleUpdate);
       if (frame) window.cancelAnimationFrame(frame);
     };
   }, [headingIdsKey, liveRendered.html]);
