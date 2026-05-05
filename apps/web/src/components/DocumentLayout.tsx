@@ -1256,7 +1256,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 access control which are admin-only. Sits next to the
                 gear so the whole toolbar cluster reads as a single set
                 of per-document actions. */}
-            <DownloadMenu doc={doc} source={liveSource} theme={theme} />
+            <DownloadMenu
+              doc={doc}
+              source={liveSource}
+              theme={theme}
+              reviewExportEnabled={inlineCommentsOpen}
+            />
             {children}
             {doc.role === 'admin' && onDocSettingsChanged && (
               <>

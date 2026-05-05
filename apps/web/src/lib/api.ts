@@ -428,13 +428,35 @@ export function exportDocumentBundle(uid: string): Promise<DocumentBundle> {
  * server; passing an explicit id overrides it (matches viewer
  * behavior: the user's selected theme gets baked into the export).
  */
+/**
+ * Server-side review mode the renderer always emits when asked:
+ * BOTH open comments and open edit proposals fold into the export
+ * as native Word features. Resolved / accepted / rejected threads
+ * are excluded server-side and there is no opt-in to bring them
+ * back — the export is always a snapshot of what's still open.
+ */
+export type DocxReviewMode = 'both';
+
+export interface DocxExportClientOptions {
+  theme?: string;
+  /**
+   * Fold the document's open comments + edit proposals into the
+   * DOCX as native Word features. Omit (or pass undefined) for a
+   * vanilla export with no review chrome.
+   */
+  review?: DocxReviewMode;
+}
+
 export async function downloadDocumentDocx(
   uid: string,
-  theme?: string,
+  options: DocxExportClientOptions = {},
 ): Promise<{ blob: Blob; filename: string }> {
-  const params = theme ? `?theme=${encodeURIComponent(theme)}` : '';
+  const params = new URLSearchParams();
+  if (options.theme) params.set('theme', options.theme);
+  if (options.review) params.set('review', options.review);
+  const qs = params.toString();
   const res = await requestBinary(
-    `/api/documents/${encodeURIComponent(uid)}/export.docx${params}`,
+    `/api/documents/${encodeURIComponent(uid)}/export.docx${qs ? `?${qs}` : ''}`,
     { method: 'GET', docUid: uid },
   );
   const blob = await res.blob();

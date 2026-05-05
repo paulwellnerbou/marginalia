@@ -13,6 +13,7 @@
   "dependencies": {
     "@asciidoctor/core": "^3.0.4",
     "@marginalia/themes": "workspace:*",
+    "diff": "^9.0.0",
     "docx": "^9.6.1",
     "github-slugger": "^2.0.0",
     "hast-util-to-string": "^3.0.1",
