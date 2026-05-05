@@ -574,6 +574,8 @@ export function EditPage() {
             saving={saving}
             displayName={displayName}
             error={error}
+            originalSource={savedSource}
+            currentSource={source}
             onSave={(comment) => handleSave(comment)}
             onProposeEdit={(rationale) => handleProposeEdit(rationale)}
           />

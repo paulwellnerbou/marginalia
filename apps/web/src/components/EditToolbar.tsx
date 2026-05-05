@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, Text, TextArea, Dialog, Flex } from '@radix-ui/themes';
 import { Cross2Icon } from '@radix-ui/react-icons';
+import { DiffView } from './DiffView.js';
 
 interface EditToolbarProps {
   docUid: string;
@@ -11,6 +12,8 @@ interface EditToolbarProps {
   saving: boolean;
   displayName: string;
   error: string | null;
+  originalSource: string;
+  currentSource: string;
   onSave: (comment: string) => void;
   onProposeEdit: (rationale: string) => void;
 }
@@ -23,6 +26,8 @@ export function EditToolbar({
   saving,
   displayName,
   error,
+  originalSource,
+  currentSource,
   onSave,
   onProposeEdit,
 }: EditToolbarProps) {
@@ -65,7 +70,7 @@ export function EditToolbar({
                 {saving ? 'Saving…' : canSave ? 'Save…' : canPropose ? 'Propose edit…' : 'Read-only'}
               </Button>
             </Dialog.Trigger>
-            <Dialog.Content maxWidth="460px">
+            <Dialog.Content size="3" maxWidth="900px">
               <Dialog.Title>
                 {canSave && canPropose
                   ? 'Save or propose change'
@@ -73,7 +78,10 @@ export function EditToolbar({
                     ? 'Save change'
                     : 'Propose change'}
               </Dialog.Title>
-              <Dialog.Description size="2" mb="3" color="gray">
+
+              <DiffView before={originalSource} after={currentSource} active={open} />
+
+              <Dialog.Description size="2" mt="3" mb="3" color="gray">
                 {canSave && canPropose
                   ? 'Add an optional commit message, then save directly or propose the edit for review.'
                   : canSave
