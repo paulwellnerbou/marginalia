@@ -1,7 +1,8 @@
 import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { IconButton, Text, TextField } from '@radix-ui/themes';
-import { ChevronDownIcon, ChevronRightIcon, Cross2Icon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
+import { ChevronDownIcon, Cross2Icon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
 import type { TocNode } from '../lib/api.js';
+import { waitForExpansionToSettle } from '../lib/heading-collapse.js';
 
 export function Toc({ nodes, activeId }: { nodes: TocNode[]; activeId?: string | null }) {
   const [query, setQuery] = useState('');
@@ -92,23 +93,67 @@ function TocItem({
   const hasChildren = node.children.length > 0;
   const [open, setOpen] = useState(true);
   const linkRef = useRef<HTMLAnchorElement>(null);
-  const forceOpen = Boolean(query) || containsNodeId(node.children, activeId);
   const isActive = activeId === node.id;
+  const hasActiveDescendant = containsNodeId(node.children, activeId);
+  const queryActive = Boolean(query);
+
+  // Auto-expand on every `activeId` change that lands inside this
+  // subtree. Kept as a one-shot `setOpen(true)` rather than a
+  // continuous `effectiveOpen` override so a user's manual collapse
+  // is honored until the next navigation.
+  useEffect(() => {
+    if (hasActiveDescendant) setOpen(true);
+  }, [activeId, hasActiveDescendant]);
 
   useEffect(() => {
     if (!isActive) return;
     const link = linkRef.current;
-    const container = link?.closest<HTMLElement>('.toc')?.querySelector<HTMLElement>(':scope > .toc-list');
-    if (!link || !container) return;
+    if (!link) return;
 
-    const linkRect = link.getBoundingClientRect();
-    const containerRect = container.getBoundingClientRect();
-    if (linkRect.top >= containerRect.top && linkRect.bottom <= containerRect.bottom) return;
+    let cancelled = false;
+    const doScroll = () => {
+      if (cancelled) return;
+      const container = link
+        .closest<HTMLElement>('.toc')
+        ?.querySelector<HTMLElement>(':scope > .toc-list');
+      if (!container) return;
+      const linkRect = link.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      if (linkRect.top >= containerRect.top && linkRect.bottom <= containerRect.bottom) return;
+      link.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    };
 
-    link.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // Effects run child-first, so the parent's auto-expand hasn't
+    // committed yet. Defer one frame for the class swap, then wait
+    // only if an ancestor is actually mid-animation — without the
+    // `getAnimations()` check, every active-heading update would
+    // pay a 360ms+ wait even when nothing is animating.
+    const raf = requestAnimationFrame(() => {
+      if (cancelled) return;
+      let outermost: HTMLElement | null = null;
+      let walker: Element | null = link.parentElement;
+      while (walker) {
+        const section = walker.closest<HTMLElement>('.toc-collapse-section');
+        if (!section) break;
+        if (section.getAnimations().length > 0) outermost = section;
+        walker = section.parentElement;
+      }
+      if (outermost) {
+        void waitForExpansionToSettle(outermost).then(doScroll);
+      } else {
+        doScroll();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+    };
   }, [isActive, query]);
 
-  const effectiveOpen = !hasChildren ? false : forceOpen || open;
+  // Query force-open stays in `effectiveOpen` only — never written to
+  // `open`, so a manual collapse is restored when the query clears.
+  const effectiveOpen = !hasChildren ? false : queryActive || open;
 
   return (
     <li className={`toc-item toc-l${node.level} ${isActive ? 'active' : ''}`}>
@@ -119,9 +164,12 @@ function TocItem({
             variant="ghost"
             onClick={() => setOpen((v) => !v)}
             aria-label={effectiveOpen ? 'Collapse' : 'Expand'}
+            aria-expanded={effectiveOpen}
             className="toc-toggle"
           >
-            {effectiveOpen ? <ChevronDownIcon /> : <ChevronRightIcon />}
+            {/* One icon rotated via CSS so the chevron animates in
+                lockstep with the height transition. */}
+            <ChevronDownIcon />
           </IconButton>
         ) : (
           <span className="toc-toggle-spacer" aria-hidden />
@@ -130,12 +178,19 @@ function TocItem({
           {renderHighlightedText(stripHtml(node.text), query)}
         </a>
       </div>
-      {hasChildren && effectiveOpen && (
-        <TocList
-          nodes={node.children}
-          activeId={activeId}
-          query={query}
-        />
+      {hasChildren && (
+        // Always rendered so children animate in/out (rather than
+        // popping); `inert` keeps closed-section links out of the
+        // focus order and a11y tree.
+        <div className={`toc-collapse-section ${effectiveOpen ? '' : 'is-collapsed'}`}>
+          <div className="toc-collapse-section-inner" inert={!effectiveOpen}>
+            <TocList
+              nodes={node.children}
+              activeId={activeId}
+              query={query}
+            />
+          </div>
+        </div>
       )}
     </li>
   );

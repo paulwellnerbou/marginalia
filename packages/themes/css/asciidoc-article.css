@@ -76,6 +76,12 @@
   margin-top: 0;
 }
 
+/* Mirror the rhythm opt-out across the runtime collapse wrapper so
+   sections don't gain extra inter-block spacing in this theme. */
+.marginalia .collapse-section-inner > * + * {
+  margin-top: 0;
+}
+
 .marginalia p {
   line-height: 1.6;
   margin-bottom: 1.25em;

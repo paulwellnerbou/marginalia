@@ -101,10 +101,9 @@ function computeSectionContext(
 ): { headingPath: string[]; sectionIndex: number; sectionIndexPath: number[] } {
   // Block-IDs plugin only annotates top-level mdast children, which render as
   // direct descendants of the rendered container. Nested [data-block] would
-  // throw off the stack, so scope to direct children.
-  const blocks = Array.from(root.children).filter(
-    (el): el is HTMLElement => el instanceof HTMLElement && el.hasAttribute('data-block'),
-  );
+  // throw off the stack, so scope to direct children — `collectTopLevelBlocks`
+  // also steps through `.collapse-section[-inner]` wrappers transparently.
+  const blocks = collectTopLevelBlocks(root);
   const stack: Array<{ level: number; text: string }> = [];
   const counts = new Map<string, number>();
   let result = { headingPath: [] as string[], sectionIndex: 0, sectionIndexPath: [0] };
@@ -131,6 +130,34 @@ function computeSectionContext(
     }
   }
   return result;
+}
+
+/** `[data-block]` descendants in document order, treating known
+ * structural containers as transparent: the runtime collapse
+ * wrappers (`.collapse-section[-inner]`) and AsciiDoc's section
+ * shape (`#content`, `#preamble`, `.sectN`, `.sectionbody`).
+ * Without those, comments captured inside a folded section or
+ * inside any AsciiDoc body would lose their heading-path metadata.
+ */
+const TRANSPARENT_CONTAINER_RE =
+  /(?:^|\s)(?:collapse-section|collapse-section-inner|sect\d+|sectionbody)(?:\s|$)/;
+function collectTopLevelBlocks(root: HTMLElement): HTMLElement[] {
+  const out: HTMLElement[] = [];
+  for (const child of Array.from(root.children)) {
+    if (!(child instanceof HTMLElement)) continue;
+    if (child.hasAttribute('data-block')) {
+      out.push(child);
+      continue;
+    }
+    if (
+      child.id === 'content' ||
+      child.id === 'preamble' ||
+      TRANSPARENT_CONTAINER_RE.test(child.className)
+    ) {
+      out.push(...collectTopLevelBlocks(child));
+    }
+  }
+  return out;
 }
 
 export function selectionRect(): DOMRect | null {

@@ -59,6 +59,7 @@ import {
   uploadAsset,
 } from '../lib/api.js';
 import { documentTitle } from '../lib/doc-title.js';
+import { expandAncestors } from '../lib/heading-collapse.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
@@ -141,6 +142,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
   const [historyVersion, setHistoryVersion] = useState(0);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
+  // Gates the deferred scrolls launched by `scrollToAnchor` (now
+  // async because of the expand wait). A stale promise that resolves
+  // after the user clicks a different thread bails out instead of
+  // yanking the viewport back.
+  const scrollToAnchorSeq = useRef(0);
   const [docSearchOpen, setDocSearchOpen] = useState(false);
   const [docSearchQuery, setDocSearchQuery] = useState('');
   const [docSearchCaseSensitive, setDocSearchCaseSensitive] = useState(false);
@@ -364,9 +370,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       frame = 0;
       const containerTop = container.getBoundingClientRect().top;
       const threshold = containerTop + 96;
-      let current = headings[0]!.id;
+      // Skip headings hidden inside a folded `.collapse-section` —
+      // their `getBoundingClientRect()` still reports the wrapper's
+      // collapsed position, so without this filter the TOC would
+      // happily highlight a heading the reader can't see.
+      const visible = headings.filter((h) => !h.closest('.collapse-section.is-collapsed'));
+      if (visible.length === 0) {
+        // Every heading is currently inside a folded section — clear
+        // the highlight so the TOC doesn't keep pointing at one of
+        // them.
+        setActiveHeadingId(null);
+        return;
+      }
+      let current = visible[0]!.id;
 
-      for (const heading of headings) {
+      for (const heading of visible) {
         if (heading.getBoundingClientRect().top <= threshold) {
           current = heading.id;
           continue;
@@ -385,9 +403,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     scheduleUpdate();
     container.addEventListener('scroll', scheduleUpdate, { passive: true });
     window.addEventListener('resize', scheduleUpdate);
+    // Section-collapse toggles change which headings are visible
+    // without firing scroll or resize, so the scan would otherwise
+    // keep highlighting a heading that just got hidden until the
+    // next scroll.
+    root.addEventListener('marginalia:collapse-toggle', scheduleUpdate);
     return () => {
       container.removeEventListener('scroll', scheduleUpdate);
       window.removeEventListener('resize', scheduleUpdate);
+      root.removeEventListener('marginalia:collapse-toggle', scheduleUpdate);
       if (frame) window.cancelAnimationFrame(frame);
     };
   }, [headingIdsKey, liveRendered.html]);
@@ -591,16 +615,28 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     }
 
+    // Reveal the target if it sits inside a folded section before
+    // measuring — otherwise the scroll lands at the pre-expansion
+    // offset and the user ends up at an empty spot. The seq guard
+    // discards a stale promise if another thread is clicked during
+    // the expand window.
     const scroll = docScrollRef.current;
-    if (scrollOffset > 0 && scroll) {
-      const targetTop =
-        target.getBoundingClientRect().top - scroll.getBoundingClientRect().top + scroll.scrollTop;
-      scroll.scrollTo({ top: targetTop - scrollOffset, behavior: 'smooth' });
-    } else {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-    target.classList.add('anchor-flash');
-    window.setTimeout(() => target?.classList.remove('anchor-flash'), 1600);
+    const finalTarget = target;
+    const seq = ++scrollToAnchorSeq.current;
+    void expandAncestors(target).then(() => {
+      if (seq !== scrollToAnchorSeq.current) return;
+      if (scrollOffset > 0 && scroll) {
+        const targetTop =
+          finalTarget.getBoundingClientRect().top -
+          scroll.getBoundingClientRect().top +
+          scroll.scrollTop;
+        scroll.scrollTo({ top: targetTop - scrollOffset, behavior: 'smooth' });
+      } else {
+        finalTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      finalTarget.classList.add('anchor-flash');
+      window.setTimeout(() => finalTarget.classList.remove('anchor-flash'), 1600);
+    });
   }, []);
 
   const onCreate = useCallback(

@@ -562,6 +562,112 @@ button.primary:disabled {
   border-radius: 0.18rem;
 }
 
+/* Heading collapse / expand --------------------------------------- */
+
+.marginalia .collapse-section {
+  display: grid;
+  grid-template-rows: 1fr;
+  /* Material-style ease-out: decelerates into rest. */
+  transition: grid-template-rows 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.marginalia .collapse-section.is-collapsed {
+  grid-template-rows: 0fr;
+}
+.marginalia .collapse-section > .collapse-section-inner {
+  min-height: 0;
+  /* `clip-path` instead of `overflow: hidden`: vertical clip drives
+     the collapse animation, horizontal slack keeps the `#`
+     heading-anchors (positioned at `left: -0.9em`) from being
+     cropped. Per-axis `overflow` values get coerced to `auto` when
+     one side is `visible`, so this is the cleanest way. */
+  clip-path: inset(0 -2em);
+  /* Cross-fade staggered behind the height: hides the visual snap
+     at the endpoints. */
+  opacity: 1;
+  transition: opacity 220ms ease-out 80ms;
+}
+/* Mirror `.marginalia > * + *` across the wrapper boundary so
+   blocks inside an expanded section keep their inter-block spacing. */
+.marginalia .collapse-section-inner > * + * {
+  margin-top: var(--md-space-block);
+}
+.marginalia .collapse-section.is-collapsed > .collapse-section-inner {
+  opacity: 0;
+  transition: opacity 180ms ease-in;
+}
+@media (prefers-reduced-motion: reduce) {
+  .marginalia .collapse-section,
+  .marginalia .collapse-section > .collapse-section-inner,
+  .marginalia .collapse-section.is-collapsed > .collapse-section-inner {
+    transition: none;
+  }
+}
+
+/* Reserve room for the absolutely-positioned chevron. */
+.marginalia :is(h1, h2, h3, h4, h5, h6):has(> .heading-collapse-toggle) {
+  padding-right: 1.4em;
+}
+
+.marginalia .heading-collapse-toggle {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1em;
+  height: 1em;
+  color: var(--md-color-fg-muted, currentColor);
+  cursor: pointer;
+  border-radius: 0.2em;
+  transition: color 80ms ease;
+}
+.marginalia .heading-collapse-toggle:hover {
+  color: var(--md-color-accent, currentColor);
+}
+.marginalia .heading-collapse-toggle:focus-visible {
+  outline: 2px solid var(--md-color-accent, currentColor);
+  outline-offset: 2px;
+}
+.marginalia .heading-collapse-toggle svg {
+  display: block;
+  width: 0.85em;
+  height: 0.85em;
+  transition: transform 200ms ease;
+  transform: rotate(90deg);
+}
+.marginalia .heading-collapse-toggle[aria-expanded="false"] svg {
+  /* Right-side chevron points left when collapsed ("fold back"). */
+  transform: rotate(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .marginalia .heading-collapse-toggle svg {
+    transition: none;
+  }
+}
+@media print {
+  .marginalia .heading-collapse-toggle {
+    display: none;
+  }
+  .marginalia :is(h1, h2, h3, h4, h5, h6):has(> .heading-collapse-toggle) {
+    padding-right: 0;
+  }
+  .marginalia .collapse-section.is-collapsed {
+    grid-template-rows: 1fr;
+  }
+  .marginalia .collapse-section > .collapse-section-inner,
+  .marginalia .collapse-section.is-collapsed > .collapse-section-inner {
+    /* Force-show sections that were closed at print time. */
+    clip-path: none;
+    opacity: 1;
+  }
+}
+
 .marginalia mark.doc-search-highlight {
   background: var(
     --md-color-search-highlight-bg,
@@ -684,6 +790,47 @@ button.primary:disabled {
 }
 .toc-toggle-spacer {
   display: inline-block;
+}
+.toc-toggle svg {
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.toc-toggle[aria-expanded="false"] svg {
+  transform: rotate(-90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .toc-toggle svg {
+    transition: none;
+  }
+}
+
+/* TOC subtree collapse — same height + opacity choreography as the
+   document-view section collapse, just with `overflow: hidden` rather
+   than the heading-anchor `clip-path` since the TOC has no left-side
+   sigils to preserve. */
+.toc-collapse-section {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.toc-collapse-section.is-collapsed {
+  grid-template-rows: 0fr;
+}
+.toc-collapse-section > .toc-collapse-section-inner {
+  min-height: 0;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 220ms ease-out 80ms;
+}
+.toc-collapse-section.is-collapsed > .toc-collapse-section-inner {
+  opacity: 0;
+  transition: opacity 180ms ease-in;
+}
+@media (prefers-reduced-motion: reduce) {
+  .toc-collapse-section,
+  .toc-collapse-section > .toc-collapse-section-inner,
+  .toc-collapse-section.is-collapsed > .toc-collapse-section-inner {
+    transition: none;
+  }
 }
 .toc a {
   color: inherit;

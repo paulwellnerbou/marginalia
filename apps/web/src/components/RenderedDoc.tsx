@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { RenderResult } from '@marginalia/renderer';
 import type { ThreadState } from '../lib/api.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
+import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
 
 export interface DocumentSearchResult {
@@ -92,6 +93,11 @@ export function RenderedDoc({
   const ref = elRef ?? internal;
   const lastHtml = useRef<string | null>(null);
   const [lightbox, setLightbox] = useState<LightboxImage | null>(null);
+  // Gates the deferred scrolls launched by hashchange / anchor /
+  // search handlers — a stale `expandAncestors().then(scroll)` whose
+  // seq doesn't match the latest request bails out so it can't yank
+  // the viewport back to a previously-selected target.
+  const scrollSeq = useRef(0);
   // Stash the upload callback in a ref so the placeholder post-process
   // can call the latest version without re-running when it changes —
   // the DOM-mutation effect only cares about whether uploads are enabled.
@@ -109,9 +115,36 @@ export function RenderedDoc({
     if (!el) return;
     if (lastHtml.current === rendered.html) return;
     el.innerHTML = rendered.html;
+    // innerHTML replaces children but leaves the article's own
+    // attributes intact — clear the marker so a doc swap re-installs.
+    el.removeAttribute('data-collapse-installed');
     lastHtml.current = rendered.html;
     void renderMermaidIn(el);
     replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
+    installHeadingCollapse(el);
+    // Replay the current hash after the article is populated. Opening
+    // a deep link directly (`/d/...#section`) lets the browser fire
+    // its initial fragment jump *before* React renders, so without
+    // this the target stays unscrolled-to (and unrevealed if it sits
+    // inside a folded section). hashchange doesn't fire on its own
+    // here either — the hash isn't changing.
+    const initialHash = window.location.hash.slice(1);
+    if (initialHash) {
+      let id = initialHash;
+      try {
+        id = decodeURIComponent(initialHash);
+      } catch {
+        id = initialHash;
+      }
+      const target = el.querySelector(`[id="${CSS.escape(id)}"]`);
+      if (target) {
+        const seq = ++scrollSeq.current;
+        void expandAncestors(target).then(() => {
+          if (seq !== scrollSeq.current) return;
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+      }
+    }
   }, [rendered.html, ref, canUploadMissing]);
 
   // If canUploadMissing flips while `rendered.html` stays the same
@@ -170,8 +203,86 @@ export function RenderedDoc({
     );
     if (!activeMark) return;
 
-    activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // `cancelled` handles deps-change; `scrollSeq` handles a TOC /
+    // anchor click landing during the expand window — those don't
+    // change this effect's deps but do bump the seq.
+    let cancelled = false;
+    const seq = ++scrollSeq.current;
+    void expandAncestors(activeMark).then(() => {
+      if (cancelled || seq !== scrollSeq.current) return;
+      activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [activeSearchResultId, activeSearchVersion, ref]);
+
+  // Reveal targets reached via in-app navigation: `hashchange`
+  // (back/forward, fresh anchor clicks) plus document clicks on
+  // hash links — the latter catches re-clicks where the link's hash
+  // already matches the current one (the browser doesn't fire
+  // `hashchange` then).
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const revealHash = (rawHash: string) => {
+      if (!rawHash) return;
+      let id = rawHash;
+      try {
+        id = decodeURIComponent(rawHash);
+      } catch {
+        id = rawHash;
+      }
+      const target = el.querySelector(`[id="${CSS.escape(id)}"]`);
+      if (!target) return;
+      const seq = ++scrollSeq.current;
+      void expandAncestors(target).then(() => {
+        if (seq !== scrollSeq.current) return;
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    };
+    const onHashChange = () => revealHash(window.location.hash.slice(1));
+    const onDocumentClick = (e: MouseEvent) => {
+      if (e.defaultPrevented) return;
+      // Let the browser handle modifier / non-primary clicks so
+      // Cmd/Ctrl/Shift-click and middle-click can still open the
+      // anchor in a new tab or window.
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+      const a = (e.target as Element | null)?.closest?.('a[href^="#"]');
+      if (!a) return;
+      const href = a.getAttribute('href');
+      if (!href || href.length <= 1) return;
+      const linkHash = href.slice(1);
+      // Resolve the target locally — if it isn't in our article we
+      // let the browser handle the link normally.
+      let id = linkHash;
+      try {
+        id = decodeURIComponent(linkHash);
+      } catch {
+        id = linkHash;
+      }
+      if (!el.querySelector(`[id="${CSS.escape(id)}"]`)) return;
+      // Intercept BOTH same-hash and different-hash clicks. Letting
+      // the browser's default fragment navigation run would jump
+      // instantly to the (still-folded) target before our
+      // `hashchange` handler gets a chance to expand and smooth-
+      // scroll, producing a visible "wrong-spot then snap" jolt.
+      e.preventDefault();
+      const current = window.location.hash.slice(1);
+      if (linkHash !== current) {
+        const next = new URL(window.location.href);
+        next.hash = linkHash;
+        window.history.pushState(null, '', next);
+      }
+      revealHash(linkHash);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    document.addEventListener('click', onDocumentClick);
+    return () => {
+      window.removeEventListener('hashchange', onHashChange);
+      document.removeEventListener('click', onDocumentClick);
+    };
+  }, [ref]);
 
   // Anchor-click scroll + image-click lightbox. Both live on a single
   // delegated click handler on the article.
@@ -240,7 +351,11 @@ export function RenderedDoc({
           const targetEl = el.querySelector(`[id="${CSS.escape(id)}"]`);
           if (targetEl) {
             e.preventDefault();
-            targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            const seq = ++scrollSeq.current;
+            void expandAncestors(targetEl).then(() => {
+              if (seq !== scrollSeq.current) return;
+              targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            });
             // Keep the URL in sync so copy-link / refresh / back-button
             // behaviour matches native anchor clicks. `pushState` rather
             // than `replaceState` because the browser would also push a
