@@ -1658,12 +1658,44 @@ function countComments(commentsXml: string): number {
   return (commentsXml.match(/<w:comment\s/g) ?? []).length;
 }
 
+/** Read word/settings.xml as text. */
+async function readSettingsXml(buf: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buf);
+  return (await zip.file('word/settings.xml')?.async('string')) ?? '';
+}
+
 describe('exportDocx — review mode (comments)', () => {
   test('vanilla export contains no comment entries', async () => {
     const buf = await exportDocx('# Doc\n\nHello.\n');
     const { commentsXml, documentXml } = await inspectComments(buf);
     expect(countComments(commentsXml)).toBe(0);
     expect(documentXml).not.toMatch(/<w:commentReference\b/);
+  });
+
+  test('vanilla export does NOT enable trackRevisions in settings.xml', async () => {
+    // OOXML element is `w:trackRevisions` (Word's UI labels it
+    // "Track Changes"). Vanilla exports must not flip it on.
+    const buf = await exportDocx('# Doc\n\nHello.\n');
+    const settings = await readSettingsXml(buf);
+    expect(settings).not.toMatch(/<w:trackRevisions\b/);
+  });
+
+  test('review-mode export turns on <w:trackRevisions/> so Word opens with markup visible', async () => {
+    const md = '# Doc\n\nHello.\n';
+    const blockId = paragraphBlockId('Hello.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'note', author: 'Alice', date: 1 }],
+          },
+        ],
+      },
+    });
+    const settings = await readSettingsXml(buf);
+    expect(settings).toMatch(/<w:trackRevisions\b/);
   });
 
   test('comment thread emits a comments.xml entry anchored to its block', async () => {

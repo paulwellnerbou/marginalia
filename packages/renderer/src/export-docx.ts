@@ -451,6 +451,11 @@ export async function exportDocx(
     language,
     rtl,
     comments: review ? review.commentChildren : [],
+    // Enable Word's track-changes mode whenever the export
+    // carries any review chrome — that's what makes Word open
+    // the file with markup visible (and tracks any further
+    // edits the reviewer makes).
+    reviewMode: review !== null,
   });
   return Packer.toBuffer(doc);
 }
@@ -1219,6 +1224,19 @@ interface DocumentLang {
    * exports don't ship an empty comments part.
    */
   readonly comments: readonly ICommentOptions[];
+  /**
+   * True when the export carries any review chrome (comments,
+   * tracked changes, or whole-doc appendix). Triggers
+   * `<w:trackRevisions/>` in `word/settings.xml` (Word's UI
+   * labels this setting "Track Changes") so Word opens the file
+   * in track-changes mode: existing tracked changes are
+   * immediately visible (Word's "All Markup" view) and any
+   * further edits the reviewer makes are tracked too. There's no
+   * per-document setting to force the comments pane open — that's
+   * a Word user preference — but the comment markers in the body
+   * are clickable and bring the pane up.
+   */
+  readonly reviewMode: boolean;
 }
 
 function buildDocument(
@@ -1258,6 +1276,7 @@ function buildDocument(
     numbering: buildNumbering(),
     ...(hasFootnotes ? { footnotes } : {}),
     ...(hasComments ? { comments: { children: lang.comments } } : {}),
+    ...(lang.reviewMode ? { features: { trackRevisions: true } } : {}),
     sections: [section],
   });
 }
