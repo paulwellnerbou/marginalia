@@ -2612,4 +2612,233 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     const db = (await inspectComments(b)).documentXml;
     expect(da).toBe(db);
   });
+
+  test('proposal with empty comment body creates no Word comment annotation', async () => {
+    // A proposal submitted without any rationale text should render as
+    // tracked changes only — no empty comment balloon in Word's pane.
+    const md = 'Original text.\n';
+    const blockId = paragraphBlockId('Original text.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: '', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Original text.',
+              proposed_text: 'Revised text.',
+            },
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    // No comment entry in comments.xml.
+    expect(countComments(commentsXml)).toBe(0);
+    // But the tracked changes (del/ins) must still be present.
+    expect(documentXml).toMatch(/<w:del\b/);
+    expect(documentXml).toMatch(/<w:ins\b/);
+  });
+
+  test('adjacent deleted words in structural path are merged into one <w:del>', async () => {
+    // The original paragraph has inline formatting so the inline-diff
+    // path is bypassed and the structural two-pass path is used. Each
+    // HAST text node would naively become its own <w:del> — the merge
+    // step should collapse consecutive ones into a single element.
+    const md = 'Plain **bold** end.\n';
+    const blockId = paragraphBlockId('Plain bold end.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'rewrite', author: 'Ed', date: 1 }],
+            proposal: {
+              source_snapshot: 'Plain bold end.',
+              proposed_text: 'New text.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // The structural path would emit 3 separate <w:del> elements (one
+    // per text node in "Plain ", "bold", " end.") without merging.
+    // collapseRevisionRuns folds them into a single <w:del> — the
+    // bold formatting is preserved on the inner <w:r> runs.
+    const delCount = (documentXml.match(/<w:del\b/g) ?? []).length;
+    expect(delCount).toBe(1);
+  });
+
+  test('adjacent deleted tokens in inline word diff are merged into one <w:del>', async () => {
+    // Pure-prose proposal: inline word diff path. When multiple
+    // consecutive words are deleted, they should collapse into one
+    // <w:del> element instead of appearing as N separate panel items.
+    const md = 'one two three four five\n';
+    const blockId = paragraphBlockId('one two three four five');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'trim middle', author: 'Ed', date: 1 }],
+            proposal: {
+              source_snapshot: 'one two three four five',
+              proposed_text: 'one five',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // "two ", "three ", "four " are all deleted — should collapse into
+    // one <w:del> rather than three.
+    const delCount = (documentXml.match(/<w:del\b/g) ?? []).length;
+    expect(delCount).toBe(1);
+  });
+
+  test('long screenshot-shaped paragraph with mid-word inline formatting collapses to one <w:del>', async () => {
+    // Reproduces the bug-report scenario: a paragraph fragmented by
+    // inline formatting (the screenshot showed 20+ separate "Deleted:
+    // word" entries because every word boundary was a HAST text-node
+    // boundary). Each `**word**` here forces a separate text node, so
+    // a 14-fragment paragraph would emit 14 <w:del> elements without
+    // merging. After collapseRevisionRuns, all consecutive
+    // DeletedTextRun siblings fold into a single <w:del>.
+    const original =
+      'Wir **denken** die **App** nicht als **Sammlung** einzelner **Funktionen**, ' +
+      'sondern als **aktiv** zu unterstützen.';
+    const proposed = 'Unsere Lösung verbindet Inhalte sinnvoll miteinander.';
+    const md = `${original}\n`;
+    const blockId = paragraphBlockId(
+      'Wir denken die App nicht als Sammlung einzelner Funktionen, sondern als ' +
+        'aktiv zu unterstützen.',
+    );
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            // Empty body — Fix 1: should NOT create a comment balloon.
+            comments: [{ body: '', author: 'Oli', date: 1 }],
+            proposal: {
+              source_snapshot: original,
+              proposed_text: proposed,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml, commentsXml } = await inspectComments(buf);
+
+    // Fix 1: empty-body proposal must not create a comment annotation.
+    expect(countComments(commentsXml)).toBe(0);
+
+    // Fix 2: the original paragraph has 11 alternating text nodes
+    // (regular + bolded fragments). The naïve structural pass would
+    // emit one <w:del> per fragment (~11). With merging, all
+    // consecutive DeletedTextRun siblings collapse into one <w:del>
+    // containing many <w:r> children — Word's review panel then shows
+    // the deletion as a single entry instead of word-by-word noise.
+    const delOpenCount = (documentXml.match(/<w:del\b/g) ?? []).length;
+    expect(delOpenCount).toBe(1);
+
+    // The merged <w:del> still has multiple <w:r> children — the
+    // formatting (bold) is preserved on the inner runs.
+    const delBlock = documentXml.match(/<w:del\b[\s\S]*?<\/w:del>/)?.[0] ?? '';
+    const innerRunCount = (delBlock.match(/<w:r\b/g) ?? []).length;
+    expect(innerRunCount).toBeGreaterThan(5);
+    // Bold formatting from the **bold** segments must survive the merge.
+    expect(delBlock).toMatch(/<w:b\b/);
+
+    // The proposed text is one paragraph of plain prose → one <w:ins>
+    // for the entire insertion.
+    const insOpenCount = (documentXml.match(/<w:ins\b/g) ?? []).length;
+    expect(insOpenCount).toBe(1);
+  });
+
+  test('paragraph rewrite with incidental shared words bails to whole-block delete + insert', async () => {
+    // Reproduces the bug from the second screenshot in the report:
+    // both sides are plain prose (so the inline-diff path qualifies),
+    // but the proposal is a near-complete rewrite. diffWordsWithSpace
+    // happens to find a few shared short words ("Die", "App", "wo
+    // sie", "ohne Umwege") and produces an alternating
+    // del/eq/ins/eq… sequence — Word's review panel then renders
+    // every del/ins as its own item (20+ entries).
+    //
+    // The exporter must detect this shape and fall back to the
+    // structural two-pass: one whole-block <w:del> for the original,
+    // one whole-block <w:ins> for the proposal.
+    const original =
+      'Die App denkt mit: Inhalte erscheinen genau dort, wo sie gebraucht werden ' +
+      '– ohne Suchen, ohne Umwege. Die App kommt zum Nutzer, nicht umgekehrt. ' +
+      'So wird der Zoobesuch ganz selbstverständlich digital begleitet – vom ' +
+      'Ticketkauf über die Orientierung vor Ort bis hin zu weiterführenden ' +
+      'Informationen und Geschichten zu den Tieren.';
+    const proposed =
+      'Ticket kaufen. Am Einlass scannen. Sofort wissen, wo man ist und wo es ' +
+      'lang geht. Die Inhalte erscheinen dort, wo sie hingehören: ohne Suche, ' +
+      'ohne Umwege. So wird der Zoobesuch selbstverständlich digital begleitet. ' +
+      'Darüber hinaus erweitert die App den Erlebnisraum Zoo mit ' +
+      'abwechslungsreichen Spielen, die Spaß machen und Wissen vermitteln.';
+    const md = `${original}\n`;
+    const blockId = paragraphBlockId(original);
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: '', author: 'Oli', date: 1 }],
+            proposal: { source_snapshot: original, proposed_text: proposed },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    const delOpenCount = (documentXml.match(/<w:del\b/g) ?? []).length;
+    const insOpenCount = (documentXml.match(/<w:ins\b/g) ?? []).length;
+    // Whole-block delete + whole-block insert → exactly one of each.
+    expect(delOpenCount).toBe(1);
+    expect(insOpenCount).toBe(1);
+  });
+
+  test('malformed markdown link in proposed_text is normalised to a hyperlink', async () => {
+    // `[text] (url)` with a space is not valid GFM but is a common
+    // editing artefact. The exporter normalises it before parsing so
+    // the output contains a proper <w:hyperlink> relationship and the
+    // visible link text is the bracketed label, not the raw URL.
+    const md = 'See original.\n';
+    const blockId = paragraphBlockId('See original.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'add link', author: 'Ed', date: 1 }],
+            proposal: {
+              source_snapshot: 'See original.',
+              proposed_text: 'See [Leipzig] (https://example.com) for details.',
+            },
+          },
+        ],
+      },
+    });
+    const zip = await JSZip.loadAsync(buf);
+    const relsXml =
+      (await zip.file('word/_rels/document.xml.rels')?.async('string')) ?? '';
+    const documentXml = (await zip.file('word/document.xml')?.async('string')) ?? '';
+    // The normalised link must produce a hyperlink relationship entry…
+    expect(relsXml).toMatch(/https:\/\/example\.com/);
+    // …and the visible label inside <w:hyperlink> should be "Leipzig",
+    // not the raw URL or the bracketed source text.
+    expect(documentXml).toMatch(/<w:hyperlink\b[^>]*>[\s\S]*?Leipzig[\s\S]*?<\/w:hyperlink>/);
+    // The raw bracketed pattern must not survive into the body.
+    expect(documentXml).not.toContain('[Leipzig]');
+  });
 });
