@@ -817,18 +817,22 @@ async function toggleCommentReaction(c: Context, deps: AppDeps) {
   // and trip the unique-PK insert.
   db.exec('BEGIN');
   try {
+    // `doc_uid` is also in the WHERE clause for defense-in-depth: comment
+    // ids are random + globally unique today, but scoping by document
+    // matches the rest of the endpoint and keeps the toggle correct if
+    // id generation ever changes.
     const existing = db
       .prepare(
         `SELECT 1 FROM comment_reactions
-          WHERE comment_id = ? AND author_client_id = ? AND emoji = ?
+          WHERE doc_uid = ? AND comment_id = ? AND author_client_id = ? AND emoji = ?
           LIMIT 1`,
       )
-      .get(cid, identity.clientId, emoji);
+      .get(doc.uid, cid, identity.clientId, emoji);
     if (existing) {
       db.prepare(
         `DELETE FROM comment_reactions
-          WHERE comment_id = ? AND author_client_id = ? AND emoji = ?`,
-      ).run(cid, identity.clientId, emoji);
+          WHERE doc_uid = ? AND comment_id = ? AND author_client_id = ? AND emoji = ?`,
+      ).run(doc.uid, cid, identity.clientId, emoji);
     } else {
       db.prepare(
         `INSERT INTO comment_reactions

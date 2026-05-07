@@ -33,16 +33,17 @@ export function EmojiReactionPicker({ onPick, disabled }: Props) {
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger>
-        <button
-          type="button"
-          className="ic-icon-btn"
-          title="Add reaction"
-          aria-label="Add reaction"
-          disabled={disabled}
-        >
-          <FaceIcon />
-        </button>
+      {/* Themes' Popover.Trigger renders its own <button> and (unlike
+          its DropdownMenu sibling) strips `asChild`. Pass the styling
+          and a11y props straight to the Trigger and put the icon as
+          its child — wrapping a <button> inside would nest two of them. */}
+      <Popover.Trigger
+        className="ic-icon-btn"
+        title="Add reaction"
+        aria-label="Add reaction"
+        disabled={disabled}
+      >
+        <FaceIcon />
       </Popover.Trigger>
       <Popover.Content
         className="ic-reaction-popover"

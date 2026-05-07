@@ -240,12 +240,13 @@ export function InlineCommentRow({
                 onClick={() => void toggleReaction(r.emoji)}
                 disabled={reacting || !onReact || !node.capabilities.react}
                 aria-pressed={r.reacted}
+                aria-label={chipAriaLabel(r.emoji, r.count, r.reacted)}
                 title={reactionTitle(r.authors)}
               >
-                <span className="ic-reaction-chip-emoji" aria-hidden="true">
-                  {r.emoji}
+                <span className="ic-reaction-chip-emoji">{r.emoji}</span>
+                <span className="ic-reaction-chip-count" aria-hidden="true">
+                  {r.count}
                 </span>
-                <span className="ic-reaction-chip-count">{r.count}</span>
               </button>
             ))}
           </div>
@@ -261,4 +262,16 @@ function reactionTitle(authors: string[]): string {
   const rest = authors.length - shown.length;
   const prefix = shown.join(', ');
   return rest > 0 ? `${prefix} and ${rest} more` : prefix;
+}
+
+/**
+ * Accessible name for a reaction chip — without one, screen readers
+ * announce the button as just its count (e.g. "2") because the emoji
+ * span is decorative duplicate content. We voice the emoji + count and
+ * note whether the viewer is among the reactors so toggling the chip
+ * doesn't feel ambiguous.
+ */
+function chipAriaLabel(emoji: string, count: number, reacted: boolean): string {
+  const base = `${emoji}, ${count} ${count === 1 ? 'reaction' : 'reactions'}`;
+  return reacted ? `${base}, including yours` : base;
 }

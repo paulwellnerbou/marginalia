@@ -276,20 +276,22 @@ export interface ShortcodeMatch {
  */
 export function filterShortcodes(query: string, limit: number): ShortcodeMatch[] {
   const q = query.toLowerCase();
+  let exact: ShortcodeMatch | null = null;
   const prefix: ShortcodeMatch[] = [];
   const substring: ShortcodeMatch[] = [];
+  // Scan the full map (~120 entries — trivially cheap) before slicing so
+  // the result is order-independent. An earlier short-circuit on
+  // `prefix.length >= limit` made `:s` miss `:star` because earlier
+  // prefix matches filled the bucket first.
   for (const [shortcode, emoji] of Object.entries(EMOJI_SHORTCODES)) {
     if (shortcode === q) {
-      // Exact match wins regardless of position.
-      prefix.unshift({ shortcode, emoji });
-      continue;
-    }
-    if (shortcode.startsWith(q)) {
+      exact = { shortcode, emoji };
+    } else if (shortcode.startsWith(q)) {
       prefix.push({ shortcode, emoji });
     } else if (shortcode.includes(q)) {
       substring.push({ shortcode, emoji });
     }
-    if (prefix.length >= limit) break;
   }
-  return [...prefix, ...substring].slice(0, limit);
+  const ranked: ShortcodeMatch[] = exact ? [exact, ...prefix, ...substring] : [...prefix, ...substring];
+  return ranked.slice(0, limit);
 }

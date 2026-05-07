@@ -100,6 +100,25 @@ describe('emoji shortcode autocomplete', () => {
     expect(codes.indexOf('star')).toBeLessThan(4);
   });
 
+  test('filterShortcodes scans the full map (no early break)', () => {
+    // Regression: an earlier short-circuit on `prefix.length >= limit`
+    // made narrow queries miss later prefix matches. With ~100+
+    // shortcodes starting with `s`, `:star` lives well past the first
+    // 8 entries — and yet should still surface for the bare query `s`.
+    const results = filterShortcodes('s', 50);
+    const codes = results.map((r) => r.shortcode);
+    expect(codes).toContain('star');
+    expect(codes).toContain('star_struck');
+    expect(codes).toContain('smile');
+  });
+
+  test('filterShortcodes promotes exact matches to the top', () => {
+    // `star` is the exact match; `star2` and `star_struck` are prefix
+    // matches that come from the same scan. The exact match must lead.
+    const results = filterShortcodes('star', 3);
+    expect(results[0]?.shortcode).toBe('star');
+  });
+
   test('filterShortcodes matches `+1` and `-1` aliases', () => {
     expect(filterShortcodes('+1', 2).map((r) => r.emoji)).toContain('👍');
     expect(filterShortcodes('-1', 2).map((r) => r.emoji)).toContain('👎');
