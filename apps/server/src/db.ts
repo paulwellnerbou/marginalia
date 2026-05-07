@@ -125,7 +125,11 @@ CREATE TABLE IF NOT EXISTS comment_reactions (
   author_client_id     TEXT NOT NULL,
   author_display_name  TEXT NOT NULL,
   created_at           INTEGER NOT NULL,
-  PRIMARY KEY (comment_id, author_client_id, emoji)
+  -- doc_uid leads the PK so the uniqueness scope matches every read +
+  -- write on this table (all of them filter by doc_uid). Without it,
+  -- a hypothetical comment-id collision across documents would clash
+  -- on the PK even though the rows belong to unrelated docs.
+  PRIMARY KEY (doc_uid, comment_id, author_client_id, emoji)
 );
 
 -- Covers loadCommentReactionsWire's hot read
@@ -444,7 +448,57 @@ export function openDatabase(path: string): Database {
   migrateInvitesKind(db);
   migrateEditProposalsToCommentExtensions(db);
   migrateProposalDecisionColumnsToComments(db);
+  migrateCommentReactionsPrimaryKey(db);
   return db;
+}
+
+/**
+ * Rebuild `comment_reactions` with `doc_uid` in the PRIMARY KEY when an
+ * earlier (PR #63 development) version of the table is detected. The
+ * old PK was `(comment_id, author_client_id, emoji)`, which made
+ * uniqueness global across documents — stricter than every read/write
+ * (all of them filter by doc_uid) and a hypothetical correctness hazard
+ * if comment-id generation ever loses global uniqueness. Idempotent;
+ * no-op once `doc_uid` leads the PK.
+ */
+function migrateCommentReactionsPrimaryKey(db: Database): void {
+  const cols = db.prepare(`PRAGMA table_info(comment_reactions)`).all() as Array<{
+    name: string;
+    pk: number;
+  }>;
+  const docUidPkPosition = cols.find((c) => c.name === 'doc_uid')?.pk ?? 0;
+  if (docUidPkPosition === 1) return; // already migrated
+
+  db.exec('BEGIN');
+  try {
+    db.exec(`ALTER TABLE comment_reactions RENAME TO comment_reactions_pre_doc_pk`);
+    db.exec(`
+      CREATE TABLE comment_reactions (
+        doc_uid              TEXT NOT NULL,
+        comment_id           TEXT NOT NULL,
+        emoji                TEXT NOT NULL,
+        author_client_id     TEXT NOT NULL,
+        author_display_name  TEXT NOT NULL,
+        created_at           INTEGER NOT NULL,
+        PRIMARY KEY (doc_uid, comment_id, author_client_id, emoji)
+      )
+    `);
+    db.exec(`
+      INSERT INTO comment_reactions
+        (doc_uid, comment_id, emoji, author_client_id, author_display_name, created_at)
+      SELECT doc_uid, comment_id, emoji, author_client_id, author_display_name, created_at
+        FROM comment_reactions_pre_doc_pk
+    `);
+    db.exec(`DROP TABLE comment_reactions_pre_doc_pk`);
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_comment_reactions_doc_comment_created
+        ON comment_reactions(doc_uid, comment_id, created_at)
+    `);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 }
 
 /**

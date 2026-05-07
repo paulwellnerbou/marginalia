@@ -446,4 +446,67 @@ describe('openDatabase migrations', () => {
 
     db.close();
   });
+
+  test('comment_reactions PK is rebuilt to include doc_uid when an old PK is detected', () => {
+    {
+      const seed = new Database(dbPath);
+      // Pre-fix table: PK is (comment_id, author_client_id, emoji),
+      // missing doc_uid.
+      seed.exec(`
+        CREATE TABLE comment_reactions (
+          doc_uid              TEXT NOT NULL,
+          comment_id           TEXT NOT NULL,
+          emoji                TEXT NOT NULL,
+          author_client_id     TEXT NOT NULL,
+          author_display_name  TEXT NOT NULL,
+          created_at           INTEGER NOT NULL,
+          PRIMARY KEY (comment_id, author_client_id, emoji)
+        );
+      `);
+      const now = Date.now();
+      seed
+        .prepare(
+          `INSERT INTO comment_reactions
+             (doc_uid, comment_id, emoji, author_client_id, author_display_name, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run('doc-1', 'cmt-1', '👍', 'client-a', 'Alice', now);
+      seed.close();
+    }
+
+    const db = openDatabase(dbPath);
+
+    // After migration, doc_uid leads the PK (pk position 1).
+    const cols = db.prepare('PRAGMA table_info(comment_reactions)').all() as Array<{
+      name: string;
+      pk: number;
+    }>;
+    expect(cols.find((c) => c.name === 'doc_uid')?.pk).toBe(1);
+
+    // Existing rows survive the rebuild.
+    const rows = db
+      .prepare(
+        `SELECT doc_uid, comment_id, emoji, author_client_id, author_display_name
+           FROM comment_reactions`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      doc_uid: 'doc-1',
+      comment_id: 'cmt-1',
+      emoji: '👍',
+      author_client_id: 'client-a',
+      author_display_name: 'Alice',
+    });
+    db.close();
+
+    // Idempotent: a second open is a no-op (PK already correct).
+    const db2 = openDatabase(dbPath);
+    const cols2 = db2.prepare('PRAGMA table_info(comment_reactions)').all() as Array<{
+      name: string;
+      pk: number;
+    }>;
+    expect(cols2.find((c) => c.name === 'doc_uid')?.pk).toBe(1);
+    db2.close();
+  });
 });

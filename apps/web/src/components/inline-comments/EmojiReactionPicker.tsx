@@ -54,7 +54,7 @@ export function EmojiReactionPicker({ onPick, disabled }: Props) {
       >
         {/* Close before awaiting onPick — snappier UX, and the parent
             handles its own busy state. */}
-        <div className="ic-emoji-quick-row" aria-label="Common reactions">
+        <div className="ic-emoji-quick-row" role="group" aria-label="Common reactions">
           {QUICK_REACTIONS.map(({ emoji, label }) => (
             <button
               key={emoji}
