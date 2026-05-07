@@ -2803,6 +2803,162 @@ button.primary:disabled {
   width: 13px;
   height: 13px;
 }
+.ic-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ic-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+}
+.ic-reaction-chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--ui-border, rgba(15, 23, 42, 0.15));
+  background: var(--ui-bg-muted, rgba(15, 23, 42, 0.04));
+  color: var(--ui-fg, inherit);
+  font-size: 0.78rem;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: background-color 80ms ease, border-color 80ms ease;
+}
+.ic-reaction-chip:hover:not(:disabled) {
+  background: var(--ui-bg, rgba(15, 23, 42, 0.08));
+  border-color: var(--ui-fg-muted, rgba(15, 23, 42, 0.3));
+}
+.ic-reaction-chip-self {
+  border-color: var(--ui-accent, #2563eb);
+  background: color-mix(in srgb, var(--ui-accent, #2563eb) 12%, transparent);
+}
+.ic-reaction-chip-self:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ui-accent, #2563eb) 18%, transparent);
+}
+.ic-reaction-chip:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.ic-reaction-chip-emoji {
+  font-size: 0.95em;
+  line-height: 1;
+}
+.ic-reaction-chip-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-fg-muted);
+}
+.ic-reaction-chip-self .ic-reaction-chip-count {
+  color: var(--ui-accent, #2563eb);
+}
+
+.ic-reaction-popover {
+  padding: 0;
+}
+.ic-emoji-quick-row {
+  display: flex;
+  gap: 0.1rem;
+  padding: 0.35rem 0.4rem;
+  border-bottom: 1px solid var(--ui-border, rgba(15, 23, 42, 0.12));
+}
+.ic-emoji-quick-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.ic-emoji-quick-btn:hover,
+.ic-emoji-quick-btn:focus-visible {
+  background: var(--ui-bg-muted, rgba(15, 23, 42, 0.08));
+  outline: none;
+}
+.ic-emoji-picker {
+  display: flex;
+  flex-direction: column;
+  width: 18rem;
+  height: 22rem;
+  isolation: isolate;
+  font: inherit;
+}
+.ic-emoji-picker-search {
+  appearance: none;
+  width: 100%;
+  padding: 0.45rem 0.6rem;
+  border: 0;
+  border-bottom: 1px solid var(--ui-border, rgba(15, 23, 42, 0.12));
+  background: transparent;
+  color: var(--ui-fg);
+  font-size: 0.85rem;
+  outline: none;
+  flex-shrink: 0;
+}
+.ic-emoji-picker-search:focus {
+  border-bottom-color: var(--ui-accent, #2563eb);
+}
+.ic-emoji-picker-viewport {
+  position: relative;
+  flex: 1;
+  outline: none;
+  overflow: hidden;
+}
+.ic-emoji-picker-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: absolute;
+  inset: 0;
+  padding: 1rem;
+  text-align: center;
+  color: var(--ui-fg-muted);
+  font-size: 0.85rem;
+  pointer-events: none;
+}
+.ic-emoji-picker [frimousse-list] {
+  user-select: none;
+  padding: 0.25rem;
+}
+.ic-emoji-picker [frimousse-category-header] {
+  background: var(--ui-bg, #fff);
+  padding: 0.4rem 0.4rem 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ui-fg-muted);
+}
+.ic-emoji-picker [frimousse-row] {
+  display: flex;
+  scroll-margin: 0.25rem;
+}
+.ic-emoji-picker [frimousse-emoji] {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  border-radius: 4px;
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.ic-emoji-picker [frimousse-emoji][data-active] {
+  background: var(--ui-bg-muted, rgba(15, 23, 42, 0.08));
+}
 
 .ic-row-body {
   font-size: 0.85rem;
@@ -3071,6 +3227,14 @@ button.primary:disabled {
 .ic-mention-option:hover,
 .ic-mention-option.active {
   background: var(--accent-3);
+}
+
+.ic-shortcode-emoji {
+  display: inline-block;
+  width: 1.4em;
+  margin-right: 0.35em;
+  text-align: center;
+  font-size: 1em;
 }
 
 .ic-composer-actions {

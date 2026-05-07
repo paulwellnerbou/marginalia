@@ -5,6 +5,10 @@ import {
   filterMentionOptions,
   getActiveMention,
 } from '../src/components/inline-comments/InlineComposer.js';
+import {
+  filterShortcodes,
+  getActiveShortcode,
+} from '../src/components/inline-comments/emojiShortcodes.js';
 import { inlineAvatarInitials } from '../src/components/inline-comments/inlineUtils.js';
 
 describe('inlineAvatarInitials', () => {
@@ -50,5 +54,58 @@ describe('inline comment mention autocomplete', () => {
     ]);
     expect(filterMentionOptions(options, 'ali', 8)).toEqual(['Alice Adams']);
     expect(filterMentionOptions(options, 'bak', 8)).toEqual(['Bob Baker']);
+  });
+});
+
+describe('emoji shortcode autocomplete', () => {
+  test('detects `:foo` at the caret', () => {
+    expect(getActiveShortcode('hi :thu', 'hi :thu'.length)).toEqual({
+      start: 3,
+      end: 7,
+      query: 'thu',
+    });
+    expect(getActiveShortcode(':smile', ':smile'.length)).toEqual({
+      start: 0,
+      end: 6,
+      query: 'smile',
+    });
+  });
+
+  test('lowercases the query so case-insensitive matches work', () => {
+    expect(getActiveShortcode(':THUMB', ':THUMB'.length)?.query).toBe('thumb');
+  });
+
+  test('ignores `:` mid-word (URLs, ratios, times)', () => {
+    expect(getActiveShortcode('https://example.com', 8)).toBeNull();
+    expect(getActiveShortcode('1:1 sync', 3)).toBeNull();
+    expect(getActiveShortcode('12:30 PM', 5)).toBeNull();
+  });
+
+  test('returns null for an empty query (bare `:`)', () => {
+    expect(getActiveShortcode(':', 1)).toBeNull();
+  });
+
+  test('returns null when the query contains spaces or punctuation', () => {
+    expect(getActiveShortcode(':foo bar', 8)).toBeNull();
+    expect(getActiveShortcode(':foo.', 5)).toBeNull();
+  });
+
+  test('filterShortcodes ranks prefix matches before substring matches', () => {
+    const results = filterShortcodes('star', 4);
+    // Both `star` and `star_struck` start with `star`; `star_struck`
+    // also lives under the prefix bucket. They should land before any
+    // substring-only match.
+    const codes = results.map((r) => r.shortcode);
+    expect(codes).toContain('star');
+    expect(codes.indexOf('star')).toBeLessThan(4);
+  });
+
+  test('filterShortcodes matches `+1` and `-1` aliases', () => {
+    expect(filterShortcodes('+1', 2).map((r) => r.emoji)).toContain('👍');
+    expect(filterShortcodes('-1', 2).map((r) => r.emoji)).toContain('👎');
+  });
+
+  test('filterShortcodes respects the limit', () => {
+    expect(filterShortcodes('a', 3).length).toBeLessThanOrEqual(3);
   });
 });

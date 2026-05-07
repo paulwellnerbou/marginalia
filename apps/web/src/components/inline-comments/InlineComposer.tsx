@@ -7,6 +7,11 @@ import {
   useRef,
   useState,
 } from 'react';
+import {
+  type ShortcodeMatch,
+  filterShortcodes,
+  getActiveShortcode,
+} from './emojiShortcodes.js';
 
 export interface InlineComposerHandle {
   insertText: (text: string) => void;
@@ -86,6 +91,8 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
   const [caret, setCaret] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState(false);
+  const [activeShortcodeIndex, setActiveShortcodeIndex] = useState(0);
+  const [shortcodeDismissed, setShortcodeDismissed] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
 
@@ -99,10 +106,32 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
     [activeMention, mentionDismissed, mentionOptions],
   );
 
+  // `:foo` emoji shortcode autocomplete. Mention takes priority when
+  // both happen to be active so a single keystream can't drive two
+  // overlapping menus — in practice they can't overlap (different
+  // sigils + word-boundary requirement) but the precedence guard keeps
+  // the keyboard handler unambiguous.
+  const activeShortcode = useMemo(
+    () => (activeMention ? null : getActiveShortcode(value, caret)),
+    [activeMention, value, caret],
+  );
+  const filteredShortcodeOptions = useMemo<ShortcodeMatch[]>(
+    () =>
+      activeShortcode && !shortcodeDismissed
+        ? filterShortcodes(activeShortcode.query, 8)
+        : [],
+    [activeShortcode, shortcodeDismissed],
+  );
+
   useEffect(() => {
     if (activeMentionIndex < filteredMentionOptions.length) return;
     setActiveMentionIndex(0);
   }, [activeMentionIndex, filteredMentionOptions.length]);
+
+  useEffect(() => {
+    if (activeShortcodeIndex < filteredShortcodeOptions.length) return;
+    setActiveShortcodeIndex(0);
+  }, [activeShortcodeIndex, filteredShortcodeOptions.length]);
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -205,6 +234,32 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
         return;
       }
     }
+    if (filteredShortcodeOptions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActiveShortcodeIndex((prev) => (prev + 1) % filteredShortcodeOptions.length);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActiveShortcodeIndex(
+          (prev) => (prev - 1 + filteredShortcodeOptions.length) % filteredShortcodeOptions.length,
+        );
+        return;
+      }
+      if ((e.key === 'Enter' || e.key === 'Tab') && !e.metaKey && !e.ctrlKey && activeShortcode) {
+        e.preventDefault();
+        const selected =
+          filteredShortcodeOptions[activeShortcodeIndex] ?? filteredShortcodeOptions[0];
+        if (selected) insertShortcode(selected);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setShortcodeDismissed(true);
+        return;
+      }
+    }
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       if (ready) void send();
@@ -213,7 +268,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
 
   function handleKeyUp(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (
-      filteredMentionOptions.length > 0 &&
+      (filteredMentionOptions.length > 0 || filteredShortcodeOptions.length > 0) &&
       ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)
     ) {
       return;
@@ -224,6 +279,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
   function updateCaret(target: HTMLTextAreaElement) {
     setCaret(target.selectionStart ?? target.value.length);
     setActiveMentionIndex(0);
+    setActiveShortcodeIndex(0);
   }
 
   function insertMention(rawName: string) {
@@ -238,6 +294,26 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
     setCaret(nextCaret);
     setActiveMentionIndex(0);
     setMentionDismissed(false);
+    window.setTimeout(() => {
+      const el = textRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      el.setSelectionRange(nextCaret, nextCaret);
+    }, 0);
+  }
+
+  function insertShortcode(match: ShortcodeMatch) {
+    if (!activeShortcode) return;
+    // Replace just the `:foo` token (start..end). The user may already
+    // have typed a closing `:` past the caret — leave it, we don't
+    // want to second-guess what's "after" the autocomplete trigger.
+    const nextValue =
+      value.slice(0, activeShortcode.start) + match.emoji + value.slice(activeShortcode.end);
+    const nextCaret = activeShortcode.start + match.emoji.length;
+    setValue(nextValue);
+    setCaret(nextCaret);
+    setActiveShortcodeIndex(0);
+    setShortcodeDismissed(false);
     window.setTimeout(() => {
       const el = textRef.current;
       if (!el) return;
@@ -269,6 +345,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
           setValue(e.target.value);
           updateCaret(e.target);
           setMentionDismissed(false);
+          setShortcodeDismissed(false);
         }}
         onKeyDown={handleKey}
         onClick={(e) => updateCaret(e.currentTarget)}
@@ -288,6 +365,26 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
               }}
             >
               @{option}
+            </button>
+          ))}
+        </div>
+      )}
+      {activeShortcode && filteredShortcodeOptions.length > 0 && (
+        <div className="ic-mention-menu" aria-label="Emoji suggestions">
+          {filteredShortcodeOptions.map((match, index) => (
+            <button
+              key={match.shortcode}
+              type="button"
+              className={`ic-mention-option ${index === activeShortcodeIndex ? 'active' : ''}`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                insertShortcode(match);
+              }}
+            >
+              <span className="ic-shortcode-emoji" aria-hidden="true">
+                {match.emoji}
+              </span>
+              :{match.shortcode}:
             </button>
           ))}
         </div>

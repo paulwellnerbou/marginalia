@@ -51,6 +51,7 @@ interface Props {
     name?: string,
   ) => Promise<boolean>;
   onRepairThread: (id: string) => Promise<boolean>;
+  onReact: (commentId: string, emoji: string) => Promise<void>;
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
 }
 
@@ -89,6 +90,7 @@ export function InlineCommentsList({
   onDeleteThread,
   onResolveThread,
   onRepairThread,
+  onReact,
   onScrollToAnchor,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -256,6 +258,7 @@ export function InlineCommentsList({
         onDeleteThread={onDeleteThread}
         onResolveThread={onResolveThread}
         onRepairThread={onRepairThread}
+        onReact={onReact}
       />
     );
   }

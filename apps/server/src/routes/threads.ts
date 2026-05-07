@@ -18,6 +18,7 @@ import {
 import { mapWithConcurrency } from '../concurrency.js';
 import type {
   CommentLinkStatus,
+  CommentReactionRow,
   CommentRow,
   DocumentRow,
   EditProposalStatus,
@@ -101,6 +102,9 @@ export function threadsRouter(deps: AppDeps): Hono {
   r.patch('/:uid/threads/:tid/comments/:cid', async (c) => editThreadReply(c, deps));
   r.delete('/:uid/threads/:tid/comments/:cid', async (c) => deleteThreadReply(c, deps));
   r.post('/:uid/threads/:tid/respond', async (c) => respondToThread(c, deps));
+  r.post('/:uid/threads/:tid/comments/:cid/reactions', async (c) =>
+    toggleCommentReaction(c, deps),
+  );
 
   return r;
 }
@@ -135,6 +139,7 @@ async function listThreads(c: Context, deps: AppDeps) {
 
   const threads = await mapWithConcurrency(roots, 4, (root) =>
     toThreadWire(
+      db,
       store,
       doc,
       root,
@@ -292,7 +297,7 @@ async function createThread(c: Context, deps: AppDeps) {
 
   const root = loadThreadRow(db, id, doc.uid);
   if (!root) return c.json({ error: 'not-found' }, 404);
-  const thread = await toThreadWire(store, doc, root, [], decision, new Set<string>());
+  const thread = await toThreadWire(db, store, doc, root, [], decision, new Set<string>());
   const rootComment = db.prepare('SELECT * FROM comments WHERE id = ?').get(id) as CommentRow;
   const mentionTargets = storeMentionsForComment(
     db,
@@ -533,7 +538,7 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
     }
 
     return c.json({
-      thread: await toThreadWire(store, doc, updated, replies, decision, reopenableAccepted),
+      thread: await toThreadWire(db, store, doc, updated, replies, decision, reopenableAccepted),
     });
   });
 }
@@ -608,7 +613,7 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const replies = loadReplies(db, doc.uid, tid);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updated]);
   return c.json({
-    thread: await toThreadWire(store, doc, updated, replies, decision, reopenableAccepted),
+    thread: await toThreadWire(db, store, doc, updated, replies, decision, reopenableAccepted),
   });
 }
 
@@ -731,7 +736,7 @@ async function editThreadReply(c: Context, deps: AppDeps) {
   const replies = loadReplies(db, doc.uid, tid);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updatedThread]);
   return c.json({
-    thread: await toThreadWire(store, doc, updatedThread, replies, decision, reopenableAccepted),
+    thread: await toThreadWire(db, store, doc, updatedThread, replies, decision, reopenableAccepted),
   });
 }
 
@@ -771,6 +776,141 @@ async function deleteThreadReply(c: Context, deps: AppDeps) {
     decision.identity.clientId,
   );
   return c.body(null, 204);
+}
+
+/**
+ * `POST /:uid/threads/:tid/comments/:cid/reactions`
+ *
+ * Toggle the requesting viewer's emoji reaction on a single comment node.
+ * Body: `{ emoji: string }`. If the viewer already reacted with this
+ * emoji it's removed; otherwise it's added. Returns the updated thread.
+ */
+async function toggleCommentReaction(c: Context, deps: AppDeps) {
+  const { db, realtime, store } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  // `react` shares the comment gate (see the `react: canReply` field in
+  // toThreadWire) — readers can't react, anyone who can reply can.
+  if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
+  const identity = decision.identity;
+
+  const tid = c.req.param('tid');
+  const cid = c.req.param('cid');
+  if (!tid || !cid) return c.json({ error: 'not-found' }, 404);
+
+  const thread = loadThreadRow(db, tid, doc.uid);
+  if (!thread) return c.json({ error: 'not-found' }, 404);
+  const target = loadThreadNode(db, doc.uid, tid, cid);
+  if (!target) return c.json({ error: 'not-found' }, 404);
+
+  const body = await safeJson(c);
+  if (!body) return c.json({ error: 'invalid-body' }, 400);
+  const emoji = parseEmoji(body.emoji);
+  if (!emoji) return c.json({ error: 'invalid-emoji' }, 400);
+
+  // Atomic toggle: read+write inside a transaction so two same-user same-
+  // emoji races (double-click, retry) can't both pass the existence check
+  // and trip the unique-PK insert.
+  db.exec('BEGIN');
+  try {
+    const existing = db
+      .prepare(
+        `SELECT 1 FROM comment_reactions
+          WHERE comment_id = ? AND author_client_id = ? AND emoji = ?
+          LIMIT 1`,
+      )
+      .get(cid, identity.clientId, emoji);
+    if (existing) {
+      db.prepare(
+        `DELETE FROM comment_reactions
+          WHERE comment_id = ? AND author_client_id = ? AND emoji = ?`,
+      ).run(cid, identity.clientId, emoji);
+    } else {
+      db.prepare(
+        `INSERT INTO comment_reactions
+           (doc_uid, comment_id, emoji, author_client_id, author_display_name, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      ).run(doc.uid, cid, emoji, identity.clientId, identity.displayName, Date.now());
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+
+  // Reuse `comment.updated` so existing clients debounce-refresh threads
+  // without needing a new event-type handler. The wire payload doesn't
+  // need reactions on it — listThreads is the source of truth and will
+  // deliver them on next fetch.
+  realtime.broadcast(
+    doc.uid,
+    { type: 'comment.updated', comment: toLegacyCommentWire(target) },
+    identity.clientId,
+  );
+
+  // Thread row is unchanged by a reaction toggle, but the per-comment
+  // reactions read inside `toThreadWire` is — that's the only thing we
+  // need fresh. `replies` is reloaded so the wire reflects any other
+  // concurrent activity.
+  const replies = loadReplies(db, doc.uid, tid);
+  const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [thread]);
+  return c.json({
+    thread: await toThreadWire(db, store, doc, thread, replies, decision, reopenableAccepted),
+  });
+}
+
+/**
+ * Load a single comment node (opener OR reply) belonging to a thread.
+ * Returns null when the row doesn't exist, is soft-deleted, or doesn't
+ * belong to `threadId` — used by node-level mutations to validate the
+ * URL path (`/threads/:tid/comments/:cid`) in one shot.
+ */
+function loadThreadNode(
+  db: Database,
+  docUid: string,
+  threadId: string,
+  commentId: string,
+): CommentRow | null {
+  const stmt =
+    commentId === threadId
+      ? db.prepare(
+          `SELECT * FROM comments
+            WHERE id = ? AND doc_uid = ?
+              AND parent_id IS NULL AND parent_proposal_id IS NULL
+              AND deleted_at IS NULL
+            LIMIT 1`,
+        )
+      : db.prepare(
+          `SELECT * FROM comments
+            WHERE id = ? AND doc_uid = ?
+              AND deleted_at IS NULL
+              AND (parent_id = ? OR parent_proposal_id = ?)
+            LIMIT 1`,
+        );
+  const row = (
+    commentId === threadId
+      ? stmt.get(commentId, docUid)
+      : stmt.get(commentId, docUid, threadId, threadId)
+  ) as CommentRow | undefined;
+  return row ?? null;
+}
+
+// Loose validation: reactions are arbitrary short strings (emoji
+// codepoints, possibly multi-codepoint sequences with ZWJ joiners).
+// Reject empty / over-long / whitespace-bearing values to keep storage
+// bounded and deny unprintable injection. The picker only ever sends
+// from a small standard set, but the server can't trust that.
+const MAX_EMOJI_LENGTH = 32;
+
+function parseEmoji(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  if (v.length === 0 || v.length > MAX_EMOJI_LENGTH) return null;
+  if (/\s/.test(v)) return null;
+  return v;
 }
 
 /**
@@ -1013,7 +1153,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
   }
 
   return c.json({
-    thread: await toThreadWire(deps.store, doc, updated, replies, decision, reopenableAccepted),
+    thread: await toThreadWire(deps.db, deps.store, doc, updated, replies, decision, reopenableAccepted),
     created_reply_id: createdReplyId,
   });
 }
@@ -1372,6 +1512,7 @@ async function loadReopenableAcceptedThreadIds(
 }
 
 async function toThreadWire(
+  db: Database,
   store: GitStore,
   doc: DocumentRow,
   row: ThreadRow,
@@ -1390,6 +1531,9 @@ async function toThreadWire(
   const canReply = decision.ok && canComment(decision.role);
   const canRootEdit = viewerId !== null && viewerId === row.author_client_id;
   const canRootDelete = canRootEdit || isAdmin;
+
+  const commentIds = [row.id, ...replies.map((r) => r.id)];
+  const reactionsByComment = loadCommentReactionsWire(db, doc.uid, commentIds, viewerId);
 
   return {
     id: row.id,
@@ -1459,7 +1603,9 @@ async function toThreadWire(
         capabilities: {
           edit: canRootEdit,
           delete: row.proposal_status === 'accepted' ? isAdmin : canRootDelete,
+          react: canReply,
         },
+        reactions: reactionsByComment.get(row.id) ?? [],
         created_at: row.created_at,
         updated_at: row.updated_at,
       },
@@ -1473,12 +1619,67 @@ async function toThreadWire(
         capabilities: {
           edit: viewerId !== null && viewerId === reply.author_client_id,
           delete: (viewerId !== null && viewerId === reply.author_client_id) || isAdmin,
+          react: canReply,
         },
+        reactions: reactionsByComment.get(reply.id) ?? [],
         created_at: reply.created_at,
         updated_at: reply.updated_at,
       })),
     ],
   };
+}
+
+interface ReactionWire {
+  emoji: string;
+  count: number;
+  /** True when the requesting viewer has this reaction on this comment. */
+  reacted: boolean;
+  /** Author display names, ordered by reaction time (oldest first). */
+  authors: string[];
+}
+
+function loadCommentReactionsWire(
+  db: Database,
+  docUid: string,
+  commentIds: string[],
+  viewerId: string | null,
+): Map<string, ReactionWire[]> {
+  const result = new Map<string, ReactionWire[]>();
+  if (commentIds.length === 0) return result;
+  const placeholders = commentIds.map(() => '?').join(',');
+  const rows = db
+    .prepare(
+      `SELECT comment_id, emoji, author_client_id, author_display_name
+         FROM comment_reactions
+        WHERE doc_uid = ?
+          AND comment_id IN (${placeholders})
+        ORDER BY created_at ASC`,
+    )
+    .all(docUid, ...commentIds) as Pick<
+    CommentReactionRow,
+    'comment_id' | 'emoji' | 'author_client_id' | 'author_display_name'
+  >[];
+
+  const grouped = new Map<string, Map<string, ReactionWire>>();
+  for (const r of rows) {
+    let perComment = grouped.get(r.comment_id);
+    if (!perComment) {
+      perComment = new Map();
+      grouped.set(r.comment_id, perComment);
+    }
+    let bucket = perComment.get(r.emoji);
+    if (!bucket) {
+      bucket = { emoji: r.emoji, count: 0, reacted: false, authors: [] };
+      perComment.set(r.emoji, bucket);
+    }
+    bucket.count += 1;
+    bucket.authors.push(r.author_display_name);
+    if (viewerId !== null && r.author_client_id === viewerId) bucket.reacted = true;
+  }
+  for (const [cid, perComment] of grouped) {
+    result.set(cid, Array.from(perComment.values()));
+  }
+  return result;
 }
 
 function threadState(row: ThreadRow): ThreadState {

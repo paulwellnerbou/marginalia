@@ -112,6 +112,27 @@ CREATE TABLE IF NOT EXISTS comment_mentions (
 CREATE INDEX IF NOT EXISTS idx_comment_mentions_pending
   ON comment_mentions(doc_uid, target_display_name, delivered_at);
 
+-- Emoji reactions on comments and replies. One row per
+-- (comment, viewer client_id, emoji): a user can react with several
+-- different emojis to the same comment but never twice with the same
+-- emoji. The author_display_name is the reactor's name at react time
+-- (snapshot, not joined) — used only for hover tooltips, so a later
+-- rename is acceptable drift.
+CREATE TABLE IF NOT EXISTS comment_reactions (
+  doc_uid              TEXT NOT NULL,
+  comment_id           TEXT NOT NULL,
+  emoji                TEXT NOT NULL,
+  author_client_id     TEXT NOT NULL,
+  author_display_name  TEXT NOT NULL,
+  created_at           INTEGER NOT NULL,
+  PRIMARY KEY (comment_id, author_client_id, emoji)
+);
+
+CREATE INDEX IF NOT EXISTS idx_comment_reactions_doc
+  ON comment_reactions(doc_uid);
+CREATE INDEX IF NOT EXISTS idx_comment_reactions_comment
+  ON comment_reactions(comment_id);
+
 -- Per-document user registry. authorize() upserts on every request; a
 -- display_name change for the same (doc_uid, client_id) fans out to
 -- comments.author_display_name and comment_mentions.target_display_name
@@ -306,6 +327,15 @@ export interface CommentMentionRow {
   target_display_name: string;
   created_at: number;
   delivered_at: number | null;
+}
+
+export interface CommentReactionRow {
+  doc_uid: string;
+  comment_id: string;
+  emoji: string;
+  author_client_id: string;
+  author_display_name: string;
+  created_at: number;
 }
 
 export interface DocUserRow {

@@ -35,7 +35,8 @@ interface ThreadCommentNodeShape {
   id: string;
   body: string;
   author: { client_id: string; display_name: string };
-  capabilities: { edit: boolean; delete: boolean };
+  capabilities: { edit: boolean; delete: boolean; react?: boolean };
+  reactions?: Array<{ emoji: string; count: number; reacted: boolean; authors: string[] }>;
   created_at: number;
   updated_at: number;
 }
@@ -1806,5 +1807,165 @@ describe('threads API', () => {
     // Carol should see the @Bobby mention (c2.id).
     const c2Id = (c2.body as { comment: { id: string } }).comment.id;
     expect(carolBody.pending_mentions).toContain(c2Id);
+  });
+
+  describe('emoji reactions', () => {
+    async function listThreads(uid: string, who: typeof ALICE) {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, { headers: headersFor(who) }),
+      );
+      const j = (await res.json()) as { threads: ThreadShape[] };
+      return j.threads;
+    }
+
+    async function react(
+      uid: string,
+      threadId: string,
+      commentId: string,
+      who: typeof ALICE,
+      emoji: string,
+    ): Promise<{ status: number; thread: ThreadShape | null }> {
+      const res = await app.hono.fetch(
+        new Request(
+          `http://test/api/documents/${uid}/threads/${threadId}/comments/${commentId}/reactions`,
+          {
+            method: 'POST',
+            headers: headersFor(who),
+            body: JSON.stringify({ emoji }),
+          },
+        ),
+      );
+      if (res.status !== 200) return { status: res.status, thread: null };
+      const json = (await res.json()) as { thread: ThreadShape };
+      return { status: res.status, thread: json.thread };
+    }
+
+    test('add and toggle a reaction on the thread opener', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hi');
+      const cid = (r1.body as { comment: { id: string } }).comment.id;
+
+      // Bob reacts with 👍
+      const a = await react(uid, cid, cid, BOB, '👍');
+      expect(a.status).toBe(200);
+      expect(a.thread!.comments[0].reactions).toEqual([
+        { emoji: '👍', count: 1, reacted: true, authors: ['Bob'] },
+      ]);
+
+      // Alice (different user) sees the reaction but `reacted: false`
+      const aliceList = await listThreads(uid, ALICE);
+      const seen = aliceList[0]!.comments[0].reactions!;
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toEqual({ emoji: '👍', count: 1, reacted: false, authors: ['Bob'] });
+
+      // Bob toggles again — reaction is removed
+      const b = await react(uid, cid, cid, BOB, '👍');
+      expect(b.status).toBe(200);
+      expect(b.thread!.comments[0].reactions).toEqual([]);
+    });
+
+    test('multiple users + multiple emojis on the same comment', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hi');
+      const cid = (r1.body as { comment: { id: string } }).comment.id;
+
+      await react(uid, cid, cid, ALICE, '👍');
+      await react(uid, cid, cid, BOB, '👍');
+      await react(uid, cid, cid, BOB, '🎉');
+
+      const list = await listThreads(uid, BOB);
+      const reactions = list[0]!.comments[0].reactions!;
+      const byEmoji = new Map(reactions.map((r) => [r.emoji, r]));
+      expect(byEmoji.get('👍')).toEqual({
+        emoji: '👍',
+        count: 2,
+        reacted: true,
+        authors: ['Alice', 'Bob'],
+      });
+      expect(byEmoji.get('🎉')).toEqual({
+        emoji: '🎉',
+        count: 1,
+        reacted: true,
+        authors: ['Bob'],
+      });
+    });
+
+    test('reactions on replies are scoped to the reply', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hi');
+      const tid = (r1.body as { comment: { id: string } }).comment.id;
+      const r2 = await addReply(uid, BOB, tid, 'reply');
+      const replyId = (r2.body as { comment: { id: string } }).comment.id;
+
+      await react(uid, tid, replyId, ALICE, '❤️');
+
+      const list = await listThreads(uid, ALICE);
+      expect(list[0]!.comments[0].reactions).toEqual([]);
+      const reply = list[0]!.comments[1]!;
+      expect(reply.reactions).toEqual([
+        { emoji: '❤️', count: 1, reacted: true, authors: ['Alice'] },
+      ]);
+    });
+
+    test('rejects invalid emoji input', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hi');
+      const cid = (r1.body as { comment: { id: string } }).comment.id;
+
+      const empty = await react(uid, cid, cid, BOB, '');
+      expect(empty.status).toBe(400);
+
+      const tooLong = await react(uid, cid, cid, BOB, 'x'.repeat(64));
+      expect(tooLong.status).toBe(400);
+
+      const whitespace = await react(uid, cid, cid, BOB, 'a b');
+      expect(whitespace.status).toBe(400);
+    });
+
+    test('readers cannot react', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hi');
+      const cid = (r1.body as { comment: { id: string } }).comment.id;
+
+      // Anonymous (no invite) is a reader by default.
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${cid}/comments/${cid}/reactions`, {
+          method: 'POST',
+          headers: rawHeadersFor(BOB),
+          body: JSON.stringify({ emoji: '👍' }),
+        }),
+      );
+      expect(res.status).toBe(403);
+    });
+
+    test('react targets must belong to the thread', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'first');
+      const r2 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'second');
+      const t1 = (r1.body as { comment: { id: string } }).comment.id;
+      const t2 = (r2.body as { comment: { id: string } }).comment.id;
+
+      // Mismatched (tid vs cid): t2 is its own thread, not a reply under t1.
+      const cross = await react(uid, t1, t2, BOB, '👍');
+      expect(cross.status).toBe(404);
+    });
+
+    test('thread node capabilities expose `react: true` for collaborators', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const r1 = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'hi');
+      await addReply(uid, BOB, (r1.body as { comment: { id: string } }).comment.id, 'reply');
+
+      const list = await listThreads(uid, BOB);
+      for (const node of list[0]!.comments) {
+        expect(node.capabilities.react).toBe(true);
+      }
+    });
   });
 });

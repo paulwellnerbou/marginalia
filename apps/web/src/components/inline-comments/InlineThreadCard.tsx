@@ -30,6 +30,7 @@ interface Props {
     name?: string,
   ) => Promise<boolean>;
   onRepairThread: (id: string) => Promise<boolean>;
+  onReact: (commentId: string, emoji: string) => Promise<void>;
 }
 
 export function InlineThreadCard({
@@ -49,6 +50,7 @@ export function InlineThreadCard({
   onDeleteThread,
   onResolveThread,
   onRepairThread,
+  onReact,
 }: Props) {
   const composerRef = useRef<InlineComposerHandle>(null);
   // Track BOTH the kind and the render location that started the action.
@@ -96,6 +98,7 @@ export function InlineThreadCard({
       capabilities: {
         edit: base.capabilities.edit && status === 'open',
         delete: base.capabilities.delete && status !== 'accepted',
+        react: base.capabilities.react,
       },
     };
   }, [thread.comments, proposal, status]);
@@ -289,6 +292,7 @@ export function InlineThreadCard({
             onEdit={onEdit}
             onDelete={() => onDeleteThread(thread.id)}
             onQuote={canComment ? handleQuote : undefined}
+            onReact={onReact}
           />
 
           {replies.map((reply) => (
@@ -300,6 +304,7 @@ export function InlineThreadCard({
               onEdit={onEdit}
               onDelete={onDeleteNode}
               onQuote={canComment ? handleQuote : undefined}
+              onReact={onReact}
             />
           ))}
 

@@ -51,6 +51,7 @@ import {
   resolveThread as apiResolve,
   restoreHistoryVersion as apiRestoreHistoryVersion,
   revertHistoryVersion as apiRevertHistoryVersion,
+  toggleCommentReaction as apiToggleReaction,
   updateComment as apiUpdate,
   getDocument,
   getHistoryDiff,
@@ -891,6 +892,25 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [doc.uid, displayName, effectiveDisplayName],
   );
 
+  const onReact = useCallback(
+    async (nodeId: string, emoji: string) => {
+      const identity = resolveIdentity();
+      if (!identity) {
+        setError('Please set your display name first.');
+        return;
+      }
+      try {
+        await apiToggleReaction(doc.uid, nodeId, emoji, identity);
+        await refreshThreads();
+      } catch (err) {
+        reportError('DocumentLayout.toggleReaction', err, { nodeId });
+        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Reaction failed');
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName, effectiveDisplayName, refreshThreads],
+  );
+
   const onRestoreHistoryVersion = useCallback(
     async (oid: string) => {
       const identity = resolveIdentity();
@@ -1507,6 +1527,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 onDeleteThread={onDeleteThread}
                 onResolveThread={onResolveThread}
                 onRepairThread={onRepairThread}
+                onReact={onReact}
                 onScrollToAnchor={scrollToAnchor}
               />
             </div>
@@ -1585,6 +1606,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onDeleteThread={onDeleteThread}
                   onResolveThread={onResolveThread}
                   onRepairThread={onRepairThread}
+                  onReact={onReact}
                   onScrollToAnchor={scrollToAnchor}
                 />
               </Tabs.Content>
