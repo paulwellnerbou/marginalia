@@ -137,6 +137,18 @@ async function listThreads(c: Context, deps: AppDeps) {
   const repliesByThread = groupRepliesByThread(replies);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, roots);
 
+  // Batch-load reactions for every comment node on the page in a single
+  // query. Without this, toThreadWire's per-thread fallback turns into
+  // N+1 (one reactions query per root) and dominates the request as
+  // thread counts grow.
+  const viewerId = decision.identity?.clientId ?? null;
+  const reactionsByComment = loadCommentReactionsWire(
+    db,
+    doc.uid,
+    [...roots.map((r) => r.id), ...replies.map((r) => r.id)],
+    viewerId,
+  );
+
   const threads = await mapWithConcurrency(roots, 4, (root) =>
     toThreadWire(
       db,
@@ -146,6 +158,7 @@ async function listThreads(c: Context, deps: AppDeps) {
       repliesByThread.get(root.id) ?? [],
       decision,
       reopenableAccepted,
+      reactionsByComment,
     ),
   );
   return c.json({
@@ -812,38 +825,28 @@ async function toggleCommentReaction(c: Context, deps: AppDeps) {
   const emoji = parseEmoji(body.emoji);
   if (!emoji) return c.json({ error: 'invalid-emoji' }, 400);
 
-  // Atomic toggle: read+write inside a transaction so two same-user same-
-  // emoji races (double-click, retry) can't both pass the existence check
-  // and trip the unique-PK insert.
-  db.exec('BEGIN');
-  try {
-    // `doc_uid` is also in the WHERE clause for defense-in-depth: comment
-    // ids are random + globally unique today, but scoping by document
-    // matches the rest of the endpoint and keeps the toggle correct if
-    // id generation ever changes.
-    const existing = db
-      .prepare(
-        `SELECT 1 FROM comment_reactions
-          WHERE doc_uid = ? AND comment_id = ? AND author_client_id = ? AND emoji = ?
-          LIMIT 1`,
-      )
-      .get(doc.uid, cid, identity.clientId, emoji);
-    if (existing) {
-      db.prepare(
-        `DELETE FROM comment_reactions
-          WHERE doc_uid = ? AND comment_id = ? AND author_client_id = ? AND emoji = ?`,
-      ).run(doc.uid, cid, identity.clientId, emoji);
-    } else {
-      db.prepare(
-        `INSERT INTO comment_reactions
-           (doc_uid, comment_id, emoji, author_client_id, author_display_name, created_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      ).run(doc.uid, cid, emoji, identity.clientId, identity.displayName, Date.now());
-    }
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
+  // Race-free toggle without a transaction: `INSERT OR IGNORE` is a single
+  // atomic statement that returns 1 if the row was new, 0 if it already
+  // existed. We only DELETE when the insert was a no-op. Two concurrent
+  // same-user same-emoji clicks no longer race a SELECT+INSERT pair into
+  // a unique-PK 500 — at worst they cancel each other out, which is the
+  // same end-state a sequential double-click produces.
+  // `doc_uid` is in every WHERE for defense-in-depth: comment ids are
+  // random + globally unique today, but scoping by document matches the
+  // rest of the endpoint and keeps the toggle correct if id generation
+  // ever changes.
+  const inserted = db
+    .prepare(
+      `INSERT OR IGNORE INTO comment_reactions
+         (doc_uid, comment_id, emoji, author_client_id, author_display_name, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(doc.uid, cid, emoji, identity.clientId, identity.displayName, Date.now());
+  if (inserted.changes === 0) {
+    db.prepare(
+      `DELETE FROM comment_reactions
+        WHERE doc_uid = ? AND comment_id = ? AND author_client_id = ? AND emoji = ?`,
+    ).run(doc.uid, cid, identity.clientId, emoji);
   }
 
   // Reuse `comment.updated` so existing clients debounce-refresh threads
@@ -1523,6 +1526,13 @@ async function toThreadWire(
   replies: CommentRow[],
   decision: ReturnType<typeof authorize>,
   reopenableAccepted: Set<string>,
+  /**
+   * Preloaded reactions keyed by comment id, used by listThreads to
+   * collapse what would otherwise be N+1 queries (one per thread) into
+   * a single batch read. Single-thread mutation handlers omit this and
+   * pay the cost of one extra query, which is fine.
+   */
+  preloadedReactions?: Map<string, ReactionWire[]>,
 ): Promise<Record<string, unknown>> {
   const state = threadState(row);
   const resolution = threadResolution(row);
@@ -1536,8 +1546,9 @@ async function toThreadWire(
   const canRootEdit = viewerId !== null && viewerId === row.author_client_id;
   const canRootDelete = canRootEdit || isAdmin;
 
-  const commentIds = [row.id, ...replies.map((r) => r.id)];
-  const reactionsByComment = loadCommentReactionsWire(db, doc.uid, commentIds, viewerId);
+  const reactionsByComment =
+    preloadedReactions ??
+    loadCommentReactionsWire(db, doc.uid, [row.id, ...replies.map((r) => r.id)], viewerId);
 
   return {
     id: row.id,
