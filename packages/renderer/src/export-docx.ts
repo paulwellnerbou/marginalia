@@ -57,6 +57,7 @@ import {
   FootnoteReferenceRun,
   HeadingLevel,
   ImageRun,
+  ImportedXmlComponent,
   InsertedTextRun,
   InternalHyperlink,
   LevelFormat,
@@ -3681,7 +3682,26 @@ function emitProposalBlock(
   };
   const delBuf: FileChild[] = [];
   convertBlockInner(node, ctxDel, delBuf, walk);
-  out.push(...collapseRevisionRunsInBuf(delBuf, ctx));
+  const collapsedDel = collapseRevisionRunsInBuf(delBuf, ctx);
+  // Mark every paragraph's pilcrow as deleted too. Without this,
+  // accepting all changes leaves an empty paragraph where the
+  // structurally-deleted block used to be — the runs inside vanish but
+  // the paragraph mark stays, producing a blank line. With it, accept
+  // collapses the whole paragraph out of the document. Paragraphs that
+  // came from list items keep their list context (the <w:numPr> is in
+  // <w:pPr> alongside our injected <w:rPr>), so list renumbering works
+  // correctly after acceptance.
+  const pMarkAttrs = {
+    id: ctxDel.revision!.id,
+    author: ctxDel.revision!.author,
+    date: ctxDel.revision!.date,
+  };
+  for (const fc of collapsedDel) {
+    if (fc instanceof Paragraph) {
+      markParagraphMarkDeleted(fc, pMarkAttrs);
+    }
+  }
+  out.push(...collapsedDel);
 
   // Pass 2: proposed_text (pre-parsed to HAST), every text run
   // wrapped in InsertedTextRun. `review: null` disables the
@@ -3880,6 +3900,61 @@ function runsForInlineTrimDiff(
   if (newMiddle) out.push(new InsertedTextRun({ ...attrs, text: newMiddle }));
   if (suffix) out.push(new TextRun({ text: suffix }));
   return out;
+}
+
+/**
+ * Mark a paragraph's pilcrow (the paragraph mark itself, not the
+ * runs) as deleted, so accepting all tracked changes removes the
+ * paragraph entirely instead of leaving an empty line where the
+ * deleted block used to be.
+ *
+ * The OOXML shape is a `<w:rPr>` inside the paragraph's `<w:pPr>`
+ * carrying a `<w:del>` element with the same author/date attribution
+ * we use for the deleted runs:
+ *
+ *   <w:p>
+ *     <w:pPr>
+ *       <w:rPr>
+ *         <w:del w:id="N" w:author="..." w:date="..."/>
+ *       </w:rPr>
+ *     </w:pPr>
+ *     <w:del>...deleted runs...</w:del>
+ *   </w:p>
+ *
+ * Word interprets this as "the paragraph mark is also part of the
+ * deletion" — accept-all then collapses the whole paragraph (including
+ * its trailing newline / list-item bullet) out of the document.
+ *
+ * Implementation note: the paragraph library exposes
+ * `ParagraphProperties.push(XmlComponent)` and
+ * `ImportedXmlComponent.fromXmlString(xml)` publicly, so unlike the
+ * tracked-change run reparenting we don't need to reach into private
+ * fields here.
+ */
+function markParagraphMarkDeleted(
+  paragraph: Paragraph,
+  attrs: { id: number; author: string; date: string },
+): void {
+  const xml =
+    `<w:rPr><w:del w:id="${attrs.id}" ` +
+    `w:author="${escapeXmlAttr(attrs.author)}" ` +
+    `w:date="${escapeXmlAttr(attrs.date)}"/></w:rPr>`;
+  // root[0] of a Paragraph is its ParagraphProperties (the <w:pPr>).
+  // ParagraphProperties.push appends an XmlComponent to its child
+  // list — `<w:rPr>` is one of the recognised pPr children.
+  const pPr = (paragraph as unknown as { root: unknown[] }).root[0];
+  (pPr as unknown as { push(c: unknown): void }).push(
+    ImportedXmlComponent.fromXmlString(xml),
+  );
+}
+
+/** Escape `&`, `<`, `>`, `"` for use as an XML attribute value. */
+function escapeXmlAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /**
