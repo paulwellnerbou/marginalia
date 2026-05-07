@@ -2613,6 +2613,36 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(da).toBe(db);
   });
 
+  test('empty opener + non-empty reply: surviving comment has no "↳ Reply by" prefix', async () => {
+    // The opener is empty (skipped), but the reply has a body. The
+    // single emitted comment is the *first* emitted, so it must not
+    // get the "↳ Reply by …" prefix even though it's not at index 0.
+    const md = 'Some text.\n';
+    const blockId = paragraphBlockId('Some text.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [
+              { body: '', author: 'Oli', date: 1 },
+              { body: 'actual rationale', author: 'Paul', date: 2 },
+            ],
+            proposal: {
+              source_snapshot: 'Some text.',
+              proposed_text: 'Different text.',
+            },
+          },
+        ],
+      },
+    });
+    const { commentsXml } = await inspectComments(buf);
+    expect(countComments(commentsXml)).toBe(1);
+    expect(commentsXml).toContain('actual rationale');
+    expect(commentsXml).not.toContain('↳ Reply by');
+  });
+
   test('proposal with empty comment body creates no Word comment annotation', async () => {
     const md = 'Original text.\n';
     const blockId = paragraphBlockId('Original text.');

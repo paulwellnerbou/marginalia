@@ -3119,7 +3119,10 @@ function allocCommentIdsForThread(thread: ReviewThread, ctx: BuildCtx): number[]
     // whole-doc paths use, so the reply prefix never reads
     // "↳ Reply by : …" and Word never sees `w:author=""`.
     const author = c.author || 'Unknown reviewer';
-    const isOpener = i === 0;
+    // First *emitted* comment is the opener, not first iterated — an
+    // empty opener followed by a non-empty reply still wants no
+    // "↳ Reply by …" prefix on the surviving entry.
+    const isOpener = ids.length === 1;
     const body = isOpener ? c.body : `↳ Reply by ${author}: ${c.body}`;
     const initials = makeInitials(author);
     const opt: ICommentOptions = {
@@ -3858,11 +3861,19 @@ function commonAffixAtWordBoundary(
  * `ImportedXmlComponent.fromXmlString` is unusable here — it wraps
  * the input in an `<undefined>` synthetic root — so we build the
  * components directly via the (rootKey, attrs) constructor.
+ *
+ * Returns false if the docx-internal shape it depends on
+ * (`paragraph.root[0]` exposing a `push` method) isn't there, so a
+ * future docx upgrade degrades to "paragraph mark not deleted"
+ * instead of throwing during export.
  */
 function markParagraphMarkDeleted(
   paragraph: Paragraph,
   attrs: { id: number; author: string; date: string },
-): void {
+): boolean {
+  const root = (paragraph as unknown as { root?: unknown[] }).root;
+  const pPr = root?.[0] as { push?: (c: unknown) => void } | undefined;
+  if (!pPr || typeof pPr.push !== 'function') return false;
   const del = new ImportedXmlComponent('w:del', {
     'w:id': String(attrs.id),
     'w:author': attrs.author,
@@ -3870,9 +3881,8 @@ function markParagraphMarkDeleted(
   });
   const rPr = new ImportedXmlComponent('w:rPr');
   rPr.push(del);
-  // paragraph.root[0] is the ParagraphProperties (<w:pPr>).
-  const pPr = (paragraph as unknown as { root: unknown[] }).root[0];
-  (pPr as unknown as { push(c: unknown): void }).push(rPr);
+  pPr.push(rPr);
+  return true;
 }
 
 /**
@@ -3881,16 +3891,23 @@ function markParagraphMarkDeleted(
  * private fields (no public API for this):
  *  - DeletedTextRun: wrapper at `deletedTextRunWrapper`
  *  - InsertedTextRun: inner TextRun at `root[1]` (root[0] is attrs)
+ *
+ * Returns false if those internals aren't present, so the caller can
+ * fall back to leaving the runs unmerged on a future docx upgrade.
  */
 function appendInnerRun(
   target: DeletedTextRun | InsertedTextRun,
   source: DeletedTextRun | InsertedTextRun,
-): void {
+): boolean {
+  const t = target as unknown as { addChildElement?: (c: unknown) => void };
+  if (typeof t.addChildElement !== 'function') return false;
   const inner =
     source instanceof DeletedTextRun
-      ? (source as unknown as { deletedTextRunWrapper: unknown }).deletedTextRunWrapper
-      : (source as unknown as { root: unknown[] }).root[1];
-  (target as unknown as { addChildElement(c: unknown): void }).addChildElement(inner);
+      ? (source as unknown as { deletedTextRunWrapper?: unknown }).deletedTextRunWrapper
+      : (source as unknown as { root?: unknown[] }).root?.[1];
+  if (inner === undefined) return false;
+  t.addChildElement(inner);
+  return true;
 }
 
 /**
@@ -3915,15 +3932,14 @@ function collapseRevisionRuns(
     const sameKind =
       (child instanceof DeletedTextRun && prev instanceof DeletedTextRun) ||
       (child instanceof InsertedTextRun && prev instanceof InsertedTextRun);
-    if (sameKind) {
-      didMerge = true;
+    const merged =
+      sameKind &&
       appendInnerRun(
         prev as DeletedTextRun | InsertedTextRun,
         child as DeletedTextRun | InsertedTextRun,
       );
-    } else {
-      out.push(child);
-    }
+    if (merged) didMerge = true;
+    else out.push(child);
   }
   return didMerge ? out : children;
 }
