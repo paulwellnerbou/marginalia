@@ -2612,4 +2612,400 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     const db = (await inspectComments(b)).documentXml;
     expect(da).toBe(db);
   });
+
+  test('empty opener + non-empty reply: surviving comment has no "↳ Reply by" prefix', async () => {
+    // The opener is empty (skipped), but the reply has a body. The
+    // single emitted comment is the *first* emitted, so it must not
+    // get the "↳ Reply by …" prefix even though it's not at index 0.
+    const md = 'Some text.\n';
+    const blockId = paragraphBlockId('Some text.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [
+              { body: '', author: 'Oli', date: 1 },
+              { body: 'actual rationale', author: 'Paul', date: 2 },
+            ],
+            proposal: {
+              source_snapshot: 'Some text.',
+              proposed_text: 'Different text.',
+            },
+          },
+        ],
+      },
+    });
+    const { commentsXml } = await inspectComments(buf);
+    expect(countComments(commentsXml)).toBe(1);
+    expect(commentsXml).toContain('actual rationale');
+    expect(commentsXml).not.toContain('↳ Reply by');
+  });
+
+  test('proposal with empty comment body creates no Word comment annotation', async () => {
+    const md = 'Original text.\n';
+    const blockId = paragraphBlockId('Original text.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: '', author: 'Editor', date: 1 }],
+            proposal: {
+              source_snapshot: 'Original text.',
+              proposed_text: 'Revised text.',
+            },
+          },
+        ],
+      },
+    });
+    const { commentsXml, documentXml } = await inspectComments(buf);
+    expect(countComments(commentsXml)).toBe(0);
+    // Tracked changes still emitted.
+    expect(documentXml).toMatch(/<w:del\b/);
+    expect(documentXml).toMatch(/<w:ins\b/);
+  });
+
+  test('adjacent deleted words in structural path are merged into one <w:del>', async () => {
+    // Inline formatting (`**bold**`) forces the structural two-pass
+    // path. Three text nodes ("Plain ", "bold", " end.") would emit
+    // three <w:del> wrappers without merging.
+    const md = 'Plain **bold** end.\n';
+    const blockId = paragraphBlockId('Plain bold end.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'rewrite', author: 'Ed', date: 1 }],
+            proposal: {
+              source_snapshot: 'Plain bold end.',
+              proposed_text: 'New text.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Closing tags only — the paragraph-mark deletion is self-closing.
+    const delCount = (documentXml.match(/<\/w:del>/g) ?? []).length;
+    expect(delCount).toBe(1);
+  });
+
+  test('adjacent deleted tokens in inline word diff are merged into one <w:del>', async () => {
+    const md = 'one two three four five\n';
+    const blockId = paragraphBlockId('one two three four five');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'trim middle', author: 'Ed', date: 1 }],
+            proposal: {
+              source_snapshot: 'one two three four five',
+              proposed_text: 'one five',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // "two ", "three ", "four " are all deleted — should collapse into
+    // one <w:del> rather than three.
+    const delCount = (documentXml.match(/<w:del\b/g) ?? []).length;
+    expect(delCount).toBe(1);
+  });
+
+  test('long screenshot-shaped paragraph with mid-word inline formatting collapses to one <w:del>', async () => {
+    // Reproduces the bug-report scenario: a paragraph fragmented by
+    // inline formatting (the screenshot showed 20+ separate "Deleted:
+    // word" entries because every word boundary was a HAST text-node
+    // boundary). Each `**word**` here forces a separate text node, so
+    // a 14-fragment paragraph would emit 14 <w:del> elements without
+    // merging.
+    const original =
+      'Wir **denken** die **App** nicht als **Sammlung** einzelner **Funktionen**, ' +
+      'sondern als **aktiv** zu unterstützen.';
+    const proposed = 'Unsere Lösung verbindet Inhalte sinnvoll miteinander.';
+    const md = `${original}\n`;
+    const blockId = paragraphBlockId(
+      'Wir denken die App nicht als Sammlung einzelner Funktionen, sondern als ' +
+        'aktiv zu unterstützen.',
+    );
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: '', author: 'Oli', date: 1 }],
+            proposal: {
+              source_snapshot: original,
+              proposed_text: proposed,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml, commentsXml } = await inspectComments(buf);
+    expect(countComments(commentsXml)).toBe(0);
+    // Closing </w:del> only (paragraph-mark deletion is self-closing).
+    expect((documentXml.match(/<\/w:del>/g) ?? []).length).toBe(1);
+    // Bold formatting preserved across the merged inner <w:r> runs.
+    const delBlock = documentXml.match(/<w:del\b[\s\S]*?<\/w:del>/)?.[0] ?? '';
+    expect((delBlock.match(/<w:r\b/g) ?? []).length).toBeGreaterThan(5);
+    expect(delBlock).toMatch(/<w:b\b/);
+    expect((documentXml.match(/<w:ins\b/g) ?? []).length).toBe(1);
+  });
+
+  test('paragraph rewrite with incidental shared words emits one inline del + ins in a single paragraph', async () => {
+    // diffWordsWithSpace finds a few shared short words ("Die",
+    // "App", "wo sie", "ohne Umwege") in this near-complete rewrite,
+    // producing 30+ alternating del/eq/ins/eq runs. The trim-based
+    // path consolidates to one <w:del> + one <w:ins> in the same
+    // <w:p> so reviewers see the old and new text side by side.
+    const original =
+      'Die App denkt mit: Inhalte erscheinen genau dort, wo sie gebraucht werden ' +
+      '– ohne Suchen, ohne Umwege. Die App kommt zum Nutzer, nicht umgekehrt. ' +
+      'So wird der Zoobesuch ganz selbstverständlich digital begleitet – vom ' +
+      'Ticketkauf über die Orientierung vor Ort bis hin zu weiterführenden ' +
+      'Informationen und Geschichten zu den Tieren.';
+    const proposed =
+      'Ticket kaufen. Am Einlass scannen. Sofort wissen, wo man ist und wo es ' +
+      'lang geht. Die Inhalte erscheinen dort, wo sie hingehören: ohne Suche, ' +
+      'ohne Umwege. So wird der Zoobesuch selbstverständlich digital begleitet. ' +
+      'Darüber hinaus erweitert die App den Erlebnisraum Zoo mit ' +
+      'abwechslungsreichen Spielen, die Spaß machen und Wissen vermitteln.';
+    const md = `${original}\n`;
+    const blockId = paragraphBlockId(original);
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: '', author: 'Oli', date: 1 }],
+            proposal: { source_snapshot: original, proposed_text: proposed },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    const delOpenCount = (documentXml.match(/<w:del\b/g) ?? []).length;
+    const insOpenCount = (documentXml.match(/<w:ins\b/g) ?? []).length;
+    // Trim-based inline diff: exactly one <w:del> + one <w:ins>.
+    expect(delOpenCount).toBe(1);
+    expect(insOpenCount).toBe(1);
+    // The proposal opener's author must propagate onto the tracked
+    // change attributes so Word's review pane attributes the change
+    // to "Oli" — not just to the comment balloon.
+    expect(documentXml).toMatch(/<w:del\b[^>]*w:author="Oli"/);
+    expect(documentXml).toMatch(/<w:ins\b[^>]*w:author="Oli"/);
+    // Both runs must live in the SAME paragraph (single <w:p>) so
+    // Word shows them side by side. Find the <w:p> that contains the
+    // del — the ins must be in the same one.
+    const paragraphMatches = [...documentXml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)];
+    const reviewParas = paragraphMatches.filter((m) =>
+      /<w:del\b|<w:ins\b/.test(m[0]),
+    );
+    expect(reviewParas).toHaveLength(1);
+    expect(reviewParas[0]?.[0]).toMatch(/<w:del\b/);
+    expect(reviewParas[0]?.[0]).toMatch(/<w:ins\b/);
+  });
+
+  test('rewrite-shaped diff peels shared prefix and suffix as plain text', async () => {
+    const original =
+      'The quick brown fox jumps over the lazy dog and the cat watches silently.';
+    const proposed =
+      'The quick black wolf leaps across the sleepy bear and the cat watches silently.';
+    const md = `${original}\n`;
+    const blockId = paragraphBlockId(original);
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: '', author: 'Ed', date: 1 }],
+            proposal: { source_snapshot: original, proposed_text: proposed },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect((documentXml.match(/<w:del\b/g) ?? []).length).toBe(1);
+    expect((documentXml.match(/<w:ins\b/g) ?? []).length).toBe(1);
+    // Shared prefix/suffix appear as plain text (outside del/ins).
+    const stripped = documentXml.replace(/<w:(del|ins)\b[\s\S]*?<\/w:\1>/g, '');
+    expect(stripped).toContain('and the cat watches silently.');
+    expect(stripped).toContain('The quick');
+    const delBlock = documentXml.match(/<w:del\b[\s\S]*?<\/w:del>/)?.[0] ?? '';
+    const insBlock = documentXml.match(/<w:ins\b[\s\S]*?<\/w:ins>/)?.[0] ?? '';
+    expect(delBlock).toContain('brown');
+    expect(delBlock).toContain('lazy dog');
+    expect(insBlock).toContain('black');
+    expect(insBlock).toContain('sleepy bear');
+  });
+
+  test('proposal that removes a paragraph entirely also marks the paragraph mark as deleted', async () => {
+    // Heading on the proposed side disqualifies the inline-diff path
+    // and forces the structural two-pass.
+    const md = 'Doomed paragraph.\n';
+    const blockId = paragraphBlockId('Doomed paragraph.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'replace with heading', author: 'Ed', date: 1 }],
+            proposal: {
+              source_snapshot: 'Doomed paragraph.',
+              proposed_text: '# Replacement heading\n',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    const paragraphs = [...documentXml.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)];
+    const deletedPara = paragraphs.find((m) =>
+      /<w:del\b[\s\S]*?Doomed paragraph/.test(m[0]),
+    );
+    expect(deletedPara).toBeDefined();
+    expect(deletedPara?.[0]).toMatch(
+      /<w:pPr\b[\s\S]*?<w:rPr\b[\s\S]*?<w:del\b[^>]*w:author="Ed"[^>]*\/>[\s\S]*?<\/w:rPr>[\s\S]*?<\/w:pPr>/,
+    );
+  });
+
+  test('proposal that empties a paragraph (proposed_text="") deletes the paragraph mark', async () => {
+    const md = 'Paragraph to remove.\n';
+    const blockId = paragraphBlockId('Paragraph to remove.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'delete this', author: 'Ed', date: 1 }],
+            proposal: {
+              source_snapshot: 'Paragraph to remove.',
+              proposed_text: '',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    expect(documentXml).toMatch(
+      /<w:p\b[^>]*>[\s\S]*?<w:pPr\b[\s\S]*?<w:rPr\b[\s\S]*?<w:del\b[^>]*\/>[\s\S]*?<\/w:rPr>[\s\S]*?<\/w:pPr>[\s\S]*?<w:del\b[\s\S]*?Paragraph to remove[\s\S]*?<\/w:p>/,
+    );
+  });
+
+  test('hyperlinks in the structural delete pass do not produce <w:hyperlink> wrappers', async () => {
+    // Word labels tracked deletions of hyperlink-wrapped text as
+    // "Field Code Changed" because it classifies <w:hyperlink> as
+    // field-like. Dropping the wrapper in the delete pass suppresses
+    // that pseudo-comment without losing the strikethrough.
+    const md =
+      'Original prose with a [link to nowhere](https://example.com) inside.\n';
+    const blockId = paragraphBlockId(
+      'Original prose with a link to nowhere inside.',
+    );
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'rewrite with link', author: 'Ed', date: 1 }],
+            proposal: {
+              source_snapshot:
+                'Original prose with a [link to nowhere](https://example.com) inside.',
+              proposed_text:
+                '# A new [destination](https://example.org) heading\n',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    const delBlocks = [
+      ...documentXml.matchAll(/<w:del\b[\s\S]*?<\/w:del>/g),
+    ];
+    expect(delBlocks.length).toBeGreaterThan(0);
+    for (const m of delBlocks) {
+      expect(m[0]).not.toMatch(/<w:hyperlink\b/);
+    }
+    // Anchor text still strikethrough.
+    expect(documentXml).toMatch(/<w:delText[^>]*>link to nowhere<\/w:delText>/);
+    // Inserted link keeps its hyperlink wrapper (may sit inside or
+    // outside the <w:ins> wrapper — accept either shape).
+    expect(documentXml).toMatch(
+      /<w:hyperlink\b[\s\S]*?destination[\s\S]*?<\/w:hyperlink>|<w:hyperlink\b[^>]*>[\s\S]*?<w:ins\b[\s\S]*?destination/,
+    );
+  });
+
+  test('inline word-diff path leaves the paragraph mark intact', async () => {
+    // The paragraph-mark deletion is structural-only — a small wording
+    // tweak via the inline-diff path must keep the paragraph.
+    const md = 'Original sentence.\n';
+    const blockId = paragraphBlockId('Original sentence.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'tweak', author: 'Ed', date: 1 }],
+            proposal: {
+              source_snapshot: 'Original sentence.',
+              proposed_text: 'Revised sentence.',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // No <w:del> inside any <w:pPr><w:rPr> (run-level deletions in
+    // the body are expected, just not on the paragraph mark).
+    const pPrs = [
+      ...documentXml.matchAll(/<w:pPr\b[\s\S]*?<\/w:pPr>/g),
+    ];
+    for (const m of pPrs) {
+      expect(m[0]).not.toMatch(/<w:rPr\b[\s\S]*?<w:del\b/);
+    }
+  });
+
+  test('malformed markdown link in proposed_text is normalised to a hyperlink', async () => {
+    // Stray space between `]` and `(` — common editing artefact.
+    const md = 'See original.\n';
+    const blockId = paragraphBlockId('See original.');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'add link', author: 'Ed', date: 1 }],
+            proposal: {
+              source_snapshot: 'See original.',
+              proposed_text: 'See [Leipzig] (https://example.com) for details.',
+            },
+          },
+        ],
+      },
+    });
+    const zip = await JSZip.loadAsync(buf);
+    const relsXml =
+      (await zip.file('word/_rels/document.xml.rels')?.async('string')) ?? '';
+    const documentXml = (await zip.file('word/document.xml')?.async('string')) ?? '';
+    expect(relsXml).toMatch(/https:\/\/example\.com/);
+    expect(documentXml).toMatch(/<w:hyperlink\b[^>]*>[\s\S]*?Leipzig[\s\S]*?<\/w:hyperlink>/);
+    expect(documentXml).not.toContain('[Leipzig]');
+  });
 });

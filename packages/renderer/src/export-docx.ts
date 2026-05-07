@@ -32,7 +32,7 @@
  * - M5: BCP-47 language tag + `<w:bidi/>` for RTL frontmatter.
  */
 
-import { diffArrays, diffWordsWithSpace } from 'diff';
+import { type Change, diffArrays, diffWordsWithSpace } from 'diff';
 import rehypeParse from 'rehype-parse';
 import rehypeStringify from 'rehype-stringify';
 import remarkFrontmatter from 'remark-frontmatter';
@@ -57,6 +57,7 @@ import {
   FootnoteReferenceRun,
   HeadingLevel,
   ImageRun,
+  ImportedXmlComponent,
   InsertedTextRun,
   InternalHyperlink,
   LevelFormat,
@@ -2722,6 +2723,18 @@ function walkInline(
       const linkChildren: ParagraphChild[] = [];
       walkChildren(n, ctx, linkStyle, linkChildren);
       const fallbackChildren = [mkRun(runOptions(linkStyle, href, tokens), ctx)];
+      const children =
+        linkChildren.length > 0 ? linkChildren : fallbackChildren;
+
+      // In the delete pass, drop the <w:hyperlink> wrapper — Word
+      // would otherwise label the deletion "Field Code Changed" in
+      // the review pane on top of the strikethrough, since it
+      // classifies hyperlinks as field-like. The runs are already
+      // DeletedTextRuns and keep the link colour/underline.
+      if (ctx.revision?.kind === 'delete') {
+        out.push(...children);
+        return;
+      }
 
       if (href.startsWith('#') && href.length > 1) {
         // Internal anchor link — points at a heading bookmark in this
@@ -2730,7 +2743,7 @@ function walkInline(
         out.push(
           new InternalHyperlink({
             anchor: href.slice(1),
-            children: linkChildren.length > 0 ? linkChildren : fallbackChildren,
+            children,
           }),
         );
         return;
@@ -2739,7 +2752,7 @@ function walkInline(
       out.push(
         new ExternalHyperlink({
           link: href,
-          children: linkChildren.length > 0 ? linkChildren : fallbackChildren,
+          children,
         }),
       );
       return;
@@ -3038,7 +3051,10 @@ async function buildReviewState(
     parseTasks,
     PROPOSAL_PARSE_CONCURRENCY,
     async ({ threadId, text }): Promise<[string, HastRoot]> => {
-      const result = await sourceToHast(text, options.format ?? 'markdown', {
+      const format = options.format ?? 'markdown';
+      const normalizedText =
+        format === 'markdown' ? normalizeMarkdownLinkSyntax(text) : text;
+      const result = await sourceToHast(normalizedText, format, {
         ...(options.highlight !== undefined ? { highlight: options.highlight } : {}),
       });
       return [threadId, result.hast];
@@ -3094,6 +3110,8 @@ function allocCommentIdsForThread(thread: ReviewThread, ctx: BuildCtx): number[]
   const ids: number[] = [];
   for (let i = 0; i < thread.comments.length; i++) {
     const c = thread.comments[i]!;
+    // Empty body → no balloon (renders as tracked changes only).
+    if (c.body.trim() === '') continue;
     const id = review.nextCommentId.value++;
     ids.push(id);
     // Normalise empty author strings (possible with degraded /
@@ -3101,7 +3119,10 @@ function allocCommentIdsForThread(thread: ReviewThread, ctx: BuildCtx): number[]
     // whole-doc paths use, so the reply prefix never reads
     // "↳ Reply by : …" and Word never sees `w:author=""`.
     const author = c.author || 'Unknown reviewer';
-    const isOpener = i === 0;
+    // First *emitted* comment is the opener, not first iterated — an
+    // empty opener followed by a non-empty reply still wants no
+    // "↳ Reply by …" prefix on the surviving entry.
+    const isOpener = ids.length === 1;
     const body = isOpener ? c.body : `↳ Reply by ${author}: ${c.body}`;
     const initials = makeInitials(author);
     const opt: ICommentOptions = {
@@ -3114,6 +3135,18 @@ function allocCommentIdsForThread(thread: ReviewThread, ctx: BuildCtx): number[]
     review.commentChildren.push(opt);
   }
   return ids;
+}
+
+/**
+ * Repair `[text] (url)` (stray space between `]` and `(`) into a
+ * valid GFM link. Only collapses spaces/tabs (not newlines) and only
+ * when the target has an `http(s)://` scheme, so innocent `] (`
+ * sequences in prose stay untouched. URLs containing literal `)` are
+ * truncated at the first `)` (rare; full balanced-paren parsing isn't
+ * worth the complexity).
+ */
+function normalizeMarkdownLinkSyntax(text: string): string {
+  return text.replace(/\][ \t]+\((https?:\/\/[^\s)]+)\)/g, ']($1)');
 }
 
 /** Best-effort 2–3 letter initials from a display name. */
@@ -3654,7 +3687,16 @@ function emitProposalBlock(
   };
   const delBuf: FileChild[] = [];
   convertBlockInner(node, ctxDel, delBuf, walk);
-  out.push(...delBuf);
+  const collapsedDel = collapseRevisionRunsInBuf(delBuf, ctx);
+  // Also delete the paragraph marks so accept-all collapses the
+  // whole paragraph (including its trailing newline / list bullet)
+  // instead of leaving an empty line.
+  for (const fc of collapsedDel) {
+    if (fc instanceof Paragraph) {
+      markParagraphMarkDeleted(fc, ctxDel.revision!);
+    }
+  }
+  out.push(...collapsedDel);
 
   // Pass 2: proposed_text (pre-parsed to HAST), every text run
   // wrapped in InsertedTextRun. `review: null` disables the
@@ -3674,7 +3716,10 @@ function emitProposalBlock(
     },
     review: null,
   };
-  const insBuf: FileChild[] = hastToDocxChildren(propHast, ctxIns, {});
+  const insBuf = collapseRevisionRunsInBuf(
+    hastToDocxChildren(propHast, ctxIns, {}),
+    ctx,
+  );
 
   // Attach the thread's comments to the inserted region (last
   // paragraph) so the rationale is visible. Replies become flat
@@ -3739,7 +3784,180 @@ function tryEmitInlineWordDiff(
   // doc shows. If we diffed `source_snapshot` instead, a stale
   // snapshot (proposal authored against an older revision of the
   // block) would emit equal runs that contradict the live doc.
-  return runsForInlineWordDiff(oldText, newText, author, date, ctx);
+  const changes = diffWordsWithSpace(oldText, newText);
+  // Whole-paragraph rewrites that share a few short words ("die",
+  // "App", …) shred into 30+ review-panel entries under word-level
+  // diffing. Switch to one consolidated del + ins around the shared
+  // prefix/suffix in those cases.
+  if (isRewriteShapedDiff(changes)) {
+    return runsForInlineTrimDiff(oldText, newText, author, date, ctx);
+  }
+  return runsForInlineWordDiff(changes, author, date, ctx);
+}
+
+/** Past 4 revision runs (2 word swaps) the panel noise dominates. */
+function isRewriteShapedDiff(changes: readonly Change[]): boolean {
+  let n = 0;
+  for (const c of changes) {
+    if (c.added || c.removed) n++;
+    if (n > 4) return true;
+  }
+  return false;
+}
+
+/**
+ * Coarse inline diff: shared prefix + one DeletedTextRun + one
+ * InsertedTextRun + shared suffix, all in one paragraph. Affixes
+ * walk back to whitespace so words aren't split.
+ */
+function runsForInlineTrimDiff(
+  oldText: string,
+  newText: string,
+  author: string,
+  date: string,
+  ctx: BuildCtx,
+): ParagraphChild[] {
+  const id = ctx.review!.nextRevisionId.value++;
+  const attrs = { id, author, date };
+  const prefixLen = commonAffixAtWordBoundary(oldText, newText, 'prefix');
+  const suffixLen = commonAffixAtWordBoundary(
+    oldText.slice(prefixLen),
+    newText.slice(prefixLen),
+    'suffix',
+  );
+  const prefix = oldText.slice(0, prefixLen);
+  const oldMiddle = oldText.slice(prefixLen, oldText.length - suffixLen);
+  const newMiddle = newText.slice(prefixLen, newText.length - suffixLen);
+  const suffix = oldText.slice(oldText.length - suffixLen);
+  const out: ParagraphChild[] = [];
+  if (prefix) out.push(new TextRun({ text: prefix }));
+  if (oldMiddle) out.push(new DeletedTextRun({ ...attrs, text: oldMiddle }));
+  if (newMiddle) out.push(new InsertedTextRun({ ...attrs, text: newMiddle }));
+  if (suffix) out.push(new TextRun({ text: suffix }));
+  return out;
+}
+
+/** Length of the longest common prefix or suffix ending at a whitespace boundary. */
+function commonAffixAtWordBoundary(
+  a: string,
+  b: string,
+  kind: 'prefix' | 'suffix',
+): number {
+  const at = (s: string, i: number): string =>
+    kind === 'prefix' ? s[i] ?? '' : s[s.length - 1 - i] ?? '';
+  const max = Math.min(a.length, b.length);
+  let n = 0;
+  while (n < max && at(a, n) === at(b, n)) n++;
+  // Walk back to whitespace so we never split a word.
+  while (n > 0 && !/\s/.test(at(a, n - 1))) n--;
+  return n;
+}
+
+/**
+ * Inject `<w:rPr><w:del/></w:rPr>` into the paragraph's `<w:pPr>` so
+ * the paragraph mark itself is part of the tracked deletion. Without
+ * this, accept-all leaves an empty paragraph behind.
+ *
+ * `ImportedXmlComponent.fromXmlString` is unusable here — it wraps
+ * the input in an `<undefined>` synthetic root — so we build the
+ * components directly via the (rootKey, attrs) constructor.
+ *
+ * Returns false if the docx-internal shape it depends on
+ * (`paragraph.root[0]` exposing a `push` method) isn't there, so a
+ * future docx upgrade degrades to "paragraph mark not deleted"
+ * instead of throwing during export.
+ */
+function markParagraphMarkDeleted(
+  paragraph: Paragraph,
+  attrs: { id: number; author: string; date: string },
+): boolean {
+  const root = (paragraph as unknown as { root?: unknown[] }).root;
+  const pPr = root?.[0] as { push?: (c: unknown) => void } | undefined;
+  if (!pPr || typeof pPr.push !== 'function') return false;
+  const del = new ImportedXmlComponent('w:del', {
+    'w:id': String(attrs.id),
+    'w:author': attrs.author,
+    'w:date': attrs.date,
+  });
+  const rPr = new ImportedXmlComponent('w:rPr');
+  rPr.push(del);
+  pPr.push(rPr);
+  return true;
+}
+
+/**
+ * Reparent `source`'s inner `<w:r>` onto `target` so both render
+ * inside one `<w:del>`/`<w:ins>` wrapper. Reaches into docx v9.x
+ * private fields (no public API for this):
+ *  - DeletedTextRun: wrapper at `deletedTextRunWrapper`
+ *  - InsertedTextRun: inner TextRun at `root[1]` (root[0] is attrs)
+ *
+ * Returns false if those internals aren't present, so the caller can
+ * fall back to leaving the runs unmerged on a future docx upgrade.
+ */
+function appendInnerRun(
+  target: DeletedTextRun | InsertedTextRun,
+  source: DeletedTextRun | InsertedTextRun,
+): boolean {
+  const t = target as unknown as { addChildElement?: (c: unknown) => void };
+  if (typeof t.addChildElement !== 'function') return false;
+  const inner =
+    source instanceof DeletedTextRun
+      ? (source as unknown as { deletedTextRunWrapper?: unknown }).deletedTextRunWrapper
+      : (source as unknown as { root?: unknown[] }).root?.[1];
+  if (inner === undefined) return false;
+  t.addChildElement(inner);
+  return true;
+}
+
+/**
+ * Merge adjacent same-kind `DeletedTextRun` / `InsertedTextRun`
+ * siblings into one wrapper so Word's review panel shows one entry
+ * per logical change instead of one per HAST text node.
+ *
+ * Mutates the surviving sibling in place. Returns the original
+ * reference when nothing merged so callers can skip the rebuild.
+ *
+ * Safe without comparing revision attrs: every revision run inside a
+ * paragraph in this codebase shares the same `(id, author, date)`.
+ */
+function collapseRevisionRuns(
+  children: readonly ParagraphChild[],
+): readonly ParagraphChild[] {
+  if (children.length <= 1) return children;
+  let didMerge = false;
+  const out: ParagraphChild[] = [];
+  for (const child of children) {
+    const prev = out[out.length - 1];
+    const sameKind =
+      (child instanceof DeletedTextRun && prev instanceof DeletedTextRun) ||
+      (child instanceof InsertedTextRun && prev instanceof InsertedTextRun);
+    const merged =
+      sameKind &&
+      appendInnerRun(
+        prev as DeletedTextRun | InsertedTextRun,
+        child as DeletedTextRun | InsertedTextRun,
+      );
+    if (merged) didMerge = true;
+    else out.push(child);
+  }
+  return didMerge ? out : children;
+}
+
+/** Apply `collapseRevisionRuns` to each Paragraph in a FileChild buffer. */
+function collapseRevisionRunsInBuf(buf: FileChild[], ctx: BuildCtx): FileChild[] {
+  return buf.map((fc) => {
+    if (!(fc instanceof Paragraph)) return fc;
+    const opts = ctx.paraOpts.get(fc);
+    if (!opts) return fc;
+    const children = (opts.children ?? []) as readonly ParagraphChild[];
+    const collapsed = collapseRevisionRuns(children);
+    if (collapsed === children) return fc;
+    return mkParagraph(
+      { ...opts, children: [...collapsed] as ParagraphChild[] },
+      ctx,
+    );
+  });
 }
 
 /**
@@ -3756,8 +3974,7 @@ function tryEmitInlineWordDiff(
  * word — matching what the structural delete/insert pass does.
  */
 function runsForInlineWordDiff(
-  oldText: string,
-  newText: string,
+  changes: readonly Change[],
   author: string,
   date: string,
   ctx: BuildCtx,
@@ -3770,7 +3987,7 @@ function runsForInlineWordDiff(
   const id = review.nextRevisionId.value++;
   const attrs = { id, author, date };
   const out: ParagraphChild[] = [];
-  for (const change of diffWordsWithSpace(oldText, newText)) {
+  for (const change of changes) {
     if (change.value === '') continue;
     if (change.added) {
       out.push(new InsertedTextRun({ ...attrs, text: change.value }));
@@ -3780,7 +3997,7 @@ function runsForInlineWordDiff(
       out.push(new TextRun({ text: change.value }));
     }
   }
-  return out;
+  return collapseRevisionRuns(out) as ParagraphChild[];
 }
 
 /**
@@ -4081,7 +4298,12 @@ function tryEmitInlineWordDiffForPair(
   // Reuse the shared helper so both block-level and whole-doc
   // word-diff paths share the "one revision id per logical change"
   // invariant.
-  return runsForInlineWordDiff(oldText, newText, author, date, ctx);
+  return runsForInlineWordDiff(
+    diffWordsWithSpace(oldText, newText),
+    author,
+    date,
+    ctx,
+  );
 }
 
 /**
