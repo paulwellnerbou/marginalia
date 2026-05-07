@@ -1688,13 +1688,18 @@ function loadCommentReactionsWire(
   for (let i = 0; i < commentIds.length; i += REACTION_QUERY_BATCH) {
     const batch = commentIds.slice(i, i + REACTION_QUERY_BATCH);
     const placeholders = batch.map(() => '?').join(',');
+    // ORDER BY (comment_id, created_at) lines up with the
+    // (doc_uid, comment_id, created_at) index so the sort is index-
+    // driven rather than a filesort. Downstream we group by
+    // comment_id anyway, so the cross-comment order doesn't matter —
+    // only oldest-first within each comment, which this preserves.
     const rows = db
       .prepare(
         `SELECT comment_id, emoji, author_client_id, author_display_name
            FROM comment_reactions
           WHERE doc_uid = ?
             AND comment_id IN (${placeholders})
-          ORDER BY created_at ASC`,
+          ORDER BY comment_id, created_at ASC`,
       )
       .all(docUid, ...batch) as Pick<
       CommentReactionRow,

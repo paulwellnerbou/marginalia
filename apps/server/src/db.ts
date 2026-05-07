@@ -132,11 +132,14 @@ CREATE TABLE IF NOT EXISTS comment_reactions (
   PRIMARY KEY (doc_uid, comment_id, author_client_id, emoji)
 );
 
--- Covers loadCommentReactionsWire's hot read
--- (WHERE doc_uid AND comment_id IN (...) ORDER BY created_at) without
--- a filesort. The leading (doc_uid, comment_id) prefix also serves
--- any future "all reactions for one comment" lookup, so we don't
--- keep separate single-column indexes around.
+-- Covers loadCommentReactionsWire's hot read. The query's
+-- ORDER BY (comment_id, created_at) matches this index column-for-
+-- column, so SQLite can satisfy filter + sort straight from the
+-- index without a temp sort step. (Sorting by created_at alone
+-- across multiple comment_ids would NOT line up — the index sorts
+-- created_at per-comment, not globally.) Also serves any future
+-- "all reactions for one comment" lookup, so we don't keep
+-- separate single-column indexes around.
 CREATE INDEX IF NOT EXISTS idx_comment_reactions_doc_comment_created
   ON comment_reactions(doc_uid, comment_id, created_at);
 
