@@ -3925,36 +3925,30 @@ function runsForInlineTrimDiff(
  * deletion" — accept-all then collapses the whole paragraph (including
  * its trailing newline / list-item bullet) out of the document.
  *
- * Implementation note: the paragraph library exposes
- * `ParagraphProperties.push(XmlComponent)` and
- * `ImportedXmlComponent.fromXmlString(xml)` publicly, so unlike the
- * tracked-change run reparenting we don't need to reach into private
- * fields here.
+ * Implementation note: we construct the OOXML elements directly with
+ * `new ImportedXmlComponent(name, attrs)` rather than parsing an XML
+ * string. `ImportedXmlComponent.fromXmlString` wraps the input in an
+ * `<undefined>` synthetic root element (its `xml-js` driver doesn't
+ * recognise the document-level wrapper) which would corrupt the
+ * generated `pPr`. The direct constructor handles attribute escaping
+ * for us.
  */
 function markParagraphMarkDeleted(
   paragraph: Paragraph,
   attrs: { id: number; author: string; date: string },
 ): void {
-  const xml =
-    `<w:rPr><w:del w:id="${attrs.id}" ` +
-    `w:author="${escapeXmlAttr(attrs.author)}" ` +
-    `w:date="${escapeXmlAttr(attrs.date)}"/></w:rPr>`;
+  const del = new ImportedXmlComponent('w:del', {
+    'w:id': String(attrs.id),
+    'w:author': attrs.author,
+    'w:date': attrs.date,
+  });
+  const rPr = new ImportedXmlComponent('w:rPr');
+  rPr.push(del);
   // root[0] of a Paragraph is its ParagraphProperties (the <w:pPr>).
   // ParagraphProperties.push appends an XmlComponent to its child
   // list — `<w:rPr>` is one of the recognised pPr children.
   const pPr = (paragraph as unknown as { root: unknown[] }).root[0];
-  (pPr as unknown as { push(c: unknown): void }).push(
-    ImportedXmlComponent.fromXmlString(xml),
-  );
-}
-
-/** Escape `&`, `<`, `>`, `"` for use as an XML attribute value. */
-function escapeXmlAttr(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  (pPr as unknown as { push(c: unknown): void }).push(rPr);
 }
 
 /**
