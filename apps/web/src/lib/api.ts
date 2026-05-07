@@ -1126,12 +1126,18 @@ export async function updateComment(
   rememberThread(uid, res.thread);
 }
 
+/**
+ * Returns the updated `Thread` so callers can splice it into local
+ * state without a follow-up `listThreads()`. Pre-update local cache is
+ * still patched via `rememberThread` for any other consumer that reads
+ * straight from the snapshot.
+ */
 export async function toggleCommentReaction(
   uid: string,
   cid: string,
   emoji: string,
   identity: Identity,
-): Promise<void> {
+): Promise<Thread> {
   const location = await findCommentLocation(uid, cid);
   const tid = location.thread.id;
   const path = `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(tid)}/comments/${encodeURIComponent(cid)}/reactions`;
@@ -1142,6 +1148,7 @@ export async function toggleCommentReaction(
     docUid: uid,
   });
   rememberThread(uid, res.thread);
+  return res.thread;
 }
 
 export async function deleteComment(uid: string, cid: string, identity: Identity): Promise<void> {

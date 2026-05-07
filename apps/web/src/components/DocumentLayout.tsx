@@ -900,15 +900,18 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         return;
       }
       try {
-        await apiToggleReaction(doc.uid, nodeId, emoji, identity);
-        await refreshThreads();
+        // Server returns the updated thread; splice it into local state
+        // in place so a reaction toggle costs one network round-trip
+        // instead of one POST + one full listThreads refetch.
+        const updated = await apiToggleReaction(doc.uid, nodeId, emoji, identity);
+        setThreads((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       } catch (err) {
         reportError('DocumentLayout.toggleReaction', err, { nodeId });
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Reaction failed');
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName, refreshThreads],
+    [doc.uid, displayName, effectiveDisplayName],
   );
 
   const onRestoreHistoryVersion = useCallback(

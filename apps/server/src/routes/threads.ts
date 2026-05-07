@@ -825,28 +825,43 @@ async function toggleCommentReaction(c: Context, deps: AppDeps) {
   const emoji = parseEmoji(body.emoji);
   if (!emoji) return c.json({ error: 'invalid-emoji' }, 400);
 
-  // Race-free toggle without a transaction: `INSERT OR IGNORE` is a single
-  // atomic statement that returns 1 if the row was new, 0 if it already
-  // existed. We only DELETE when the insert was a no-op. Two concurrent
-  // same-user same-emoji clicks no longer race a SELECT+INSERT pair into
-  // a unique-PK 500 — at worst they cancel each other out, which is the
-  // same end-state a sequential double-click produces.
+  // Race-free toggle: `INSERT OR IGNORE` is a single atomic statement
+  // that reports 0 changes when the row already existed; we DELETE in
+  // that case. Two concurrent same-user same-emoji clicks no longer
+  // race a SELECT+INSERT pair into a unique-PK 500 — at worst they
+  // cancel out, the same end-state as a sequential double-click.
+  //
+  // The pair is wrapped in a transaction even though each statement is
+  // individually atomic: if a third party deletes the just-inserted
+  // row between our two statements, our DELETE becomes a no-op and the
+  // user's toggle silently flips. The transaction keeps the toggle
+  // semantics consistent even under multi-connection / multi-process
+  // SQLite (bun:sqlite is single-connection today, but cheap insurance
+  // against future-self surprise).
+  //
   // `doc_uid` is in every WHERE for defense-in-depth: comment ids are
-  // random + globally unique today, but scoping by document matches the
-  // rest of the endpoint and keeps the toggle correct if id generation
-  // ever changes.
-  const inserted = db
-    .prepare(
-      `INSERT OR IGNORE INTO comment_reactions
-         (doc_uid, comment_id, emoji, author_client_id, author_display_name, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    )
-    .run(doc.uid, cid, emoji, identity.clientId, identity.displayName, Date.now());
-  if (inserted.changes === 0) {
-    db.prepare(
-      `DELETE FROM comment_reactions
-        WHERE doc_uid = ? AND comment_id = ? AND author_client_id = ? AND emoji = ?`,
-    ).run(doc.uid, cid, identity.clientId, emoji);
+  // globally unique today, but scoping by document matches the rest of
+  // the endpoint and keeps the toggle correct if id generation ever
+  // changes.
+  db.exec('BEGIN');
+  try {
+    const inserted = db
+      .prepare(
+        `INSERT OR IGNORE INTO comment_reactions
+           (doc_uid, comment_id, emoji, author_client_id, author_display_name, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(doc.uid, cid, emoji, identity.clientId, identity.displayName, Date.now());
+    if (inserted.changes === 0) {
+      db.prepare(
+        `DELETE FROM comment_reactions
+          WHERE doc_uid = ? AND comment_id = ? AND author_client_id = ? AND emoji = ?`,
+      ).run(doc.uid, cid, identity.clientId, emoji);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
   }
 
   // Reuse `comment.updated` so existing clients debounce-refresh threads
@@ -1653,6 +1668,12 @@ interface ReactionWire {
   authors: string[];
 }
 
+// Conservative cap on the `comment_id IN (?, ?, …)` list. SQLite's
+// `SQLITE_MAX_VARIABLE_NUMBER` is 999 on older builds and 32766 on
+// recent ones; 500 is well under the floor and lets us batch without
+// caring which build is active. Plus 1 for `doc_uid`.
+const REACTION_QUERY_BATCH = 500;
+
 function loadCommentReactionsWire(
   db: Database,
   docUid: string,
@@ -1661,35 +1682,39 @@ function loadCommentReactionsWire(
 ): Map<string, ReactionWire[]> {
   const result = new Map<string, ReactionWire[]>();
   if (commentIds.length === 0) return result;
-  const placeholders = commentIds.map(() => '?').join(',');
-  const rows = db
-    .prepare(
-      `SELECT comment_id, emoji, author_client_id, author_display_name
-         FROM comment_reactions
-        WHERE doc_uid = ?
-          AND comment_id IN (${placeholders})
-        ORDER BY created_at ASC`,
-    )
-    .all(docUid, ...commentIds) as Pick<
-    CommentReactionRow,
-    'comment_id' | 'emoji' | 'author_client_id' | 'author_display_name'
-  >[];
 
+  // Group reactions per (comment_id, emoji) as we read across batches.
   const grouped = new Map<string, Map<string, ReactionWire>>();
-  for (const r of rows) {
-    let perComment = grouped.get(r.comment_id);
-    if (!perComment) {
-      perComment = new Map();
-      grouped.set(r.comment_id, perComment);
+  for (let i = 0; i < commentIds.length; i += REACTION_QUERY_BATCH) {
+    const batch = commentIds.slice(i, i + REACTION_QUERY_BATCH);
+    const placeholders = batch.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT comment_id, emoji, author_client_id, author_display_name
+           FROM comment_reactions
+          WHERE doc_uid = ?
+            AND comment_id IN (${placeholders})
+          ORDER BY created_at ASC`,
+      )
+      .all(docUid, ...batch) as Pick<
+      CommentReactionRow,
+      'comment_id' | 'emoji' | 'author_client_id' | 'author_display_name'
+    >[];
+    for (const r of rows) {
+      let perComment = grouped.get(r.comment_id);
+      if (!perComment) {
+        perComment = new Map();
+        grouped.set(r.comment_id, perComment);
+      }
+      let bucket = perComment.get(r.emoji);
+      if (!bucket) {
+        bucket = { emoji: r.emoji, count: 0, reacted: false, authors: [] };
+        perComment.set(r.emoji, bucket);
+      }
+      bucket.count += 1;
+      bucket.authors.push(r.author_display_name);
+      if (viewerId !== null && r.author_client_id === viewerId) bucket.reacted = true;
     }
-    let bucket = perComment.get(r.emoji);
-    if (!bucket) {
-      bucket = { emoji: r.emoji, count: 0, reacted: false, authors: [] };
-      perComment.set(r.emoji, bucket);
-    }
-    bucket.count += 1;
-    bucket.authors.push(r.author_display_name);
-    if (viewerId !== null && r.author_client_id === viewerId) bucket.reacted = true;
   }
   for (const [cid, perComment] of grouped) {
     result.set(cid, Array.from(perComment.values()));

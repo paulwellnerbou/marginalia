@@ -128,10 +128,13 @@ CREATE TABLE IF NOT EXISTS comment_reactions (
   PRIMARY KEY (comment_id, author_client_id, emoji)
 );
 
-CREATE INDEX IF NOT EXISTS idx_comment_reactions_doc
-  ON comment_reactions(doc_uid);
-CREATE INDEX IF NOT EXISTS idx_comment_reactions_comment
-  ON comment_reactions(comment_id);
+-- Covers loadCommentReactionsWire's hot read
+-- (WHERE doc_uid AND comment_id IN (...) ORDER BY created_at) without
+-- a filesort. The leading (doc_uid, comment_id) prefix also serves
+-- any future "all reactions for one comment" lookup, so we don't
+-- keep separate single-column indexes around.
+CREATE INDEX IF NOT EXISTS idx_comment_reactions_doc_comment_created
+  ON comment_reactions(doc_uid, comment_id, created_at);
 
 -- Per-document user registry. authorize() upserts on every request; a
 -- display_name change for the same (doc_uid, client_id) fans out to

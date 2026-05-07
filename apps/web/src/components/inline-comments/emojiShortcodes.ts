@@ -249,12 +249,13 @@ export function getActiveShortcode(value: string, caret: number): ActiveShortcod
   const uptoCaret = value.slice(0, caret);
   const colon = uptoCaret.lastIndexOf(':');
   if (colon < 0) return null;
-  // Only word-boundary `:` opens an autocomplete. This rules out URLs
-  // (`https://`), times (`12:30`), ratios (`1:1`), and Markdown-style
-  // emoji that the user has already finished typing (`:tada:` followed
-  // by more text would otherwise re-trigger from the closing colon).
+  // Only word-boundary `:` opens an autocomplete. We reject when the
+  // preceding char is alphanumeric/underscore — same gate as the
+  // @mention detection — so URLs (`https://`), times (`12:30`), and
+  // ratios (`1:1`) don't fire while still allowing colons after
+  // punctuation or brackets like `(:thumb` or `":thumb`.
   const prev = colon === 0 ? '' : (uptoCaret[colon - 1] ?? '');
-  if (prev && !/\s/.test(prev)) return null;
+  if (/[0-9A-Za-z_]/.test(prev)) return null;
   const query = uptoCaret.slice(colon + 1);
   if (query.length === 0) return null;
   // Bail on anything that can't appear in a shortcode key. Shortcodes

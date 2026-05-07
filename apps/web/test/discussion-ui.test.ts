@@ -81,6 +81,12 @@ describe('emoji shortcode autocomplete', () => {
     expect(getActiveShortcode('12:30 PM', 5)).toBeNull();
   });
 
+  test('triggers after punctuation, brackets, and quotes', () => {
+    expect(getActiveShortcode('(:tada', 6)?.query).toBe('tada');
+    expect(getActiveShortcode('"":star', 7)?.query).toBe('star');
+    expect(getActiveShortcode('[:rocket', 8)?.query).toBe('rocket');
+  });
+
   test('returns null for an empty query (bare `:`)', () => {
     expect(getActiveShortcode(':', 1)).toBeNull();
   });
