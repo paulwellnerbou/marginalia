@@ -2761,7 +2761,7 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(insOpenCount).toBe(1);
   });
 
-  test('paragraph rewrite with incidental shared words bails to whole-block delete + insert', async () => {
+  test('paragraph rewrite with incidental shared words emits one inline del + ins in a single paragraph', async () => {
     // Reproduces the bug from the second screenshot in the report:
     // both sides are plain prose (so the inline-diff path qualifies),
     // but the proposal is a near-complete rewrite. diffWordsWithSpace
@@ -2770,9 +2770,12 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     // del/eq/ins/eq… sequence — Word's review panel then renders
     // every del/ins as its own item (20+ entries).
     //
-    // The exporter must detect this shape and fall back to the
-    // structural two-pass: one whole-block <w:del> for the original,
-    // one whole-block <w:ins> for the proposal.
+    // The exporter must detect this shape and switch to the
+    // trim-based path: ONE consolidated <w:del> for the changed
+    // middle of the original, ONE <w:ins> for the changed middle of
+    // the proposal, both in the SAME <w:p> so reviewers see the old
+    // and new text side by side instead of in two separate
+    // paragraphs.
     const original =
       'Die App denkt mit: Inhalte erscheinen genau dort, wo sie gebraucht werden ' +
       '– ohne Suchen, ohne Umwege. Die App kommt zum Nutzer, nicht umgekehrt. ' +
@@ -2802,9 +2805,65 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     const { documentXml } = await inspectComments(buf);
     const delOpenCount = (documentXml.match(/<w:del\b/g) ?? []).length;
     const insOpenCount = (documentXml.match(/<w:ins\b/g) ?? []).length;
-    // Whole-block delete + whole-block insert → exactly one of each.
+    // Trim-based inline diff: exactly one <w:del> + one <w:ins>.
     expect(delOpenCount).toBe(1);
     expect(insOpenCount).toBe(1);
+    // Both runs must live in the SAME paragraph (single <w:p>) so
+    // Word shows them side by side. Find the <w:p> that contains the
+    // del — the ins must be in the same one.
+    const paragraphMatches = [...documentXml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)];
+    const reviewParas = paragraphMatches.filter((m) =>
+      /<w:del\b|<w:ins\b/.test(m[0]),
+    );
+    expect(reviewParas).toHaveLength(1);
+    expect(reviewParas[0]?.[0]).toMatch(/<w:del\b/);
+    expect(reviewParas[0]?.[0]).toMatch(/<w:ins\b/);
+  });
+
+  test('rewrite-shaped diff peels shared prefix and suffix as plain text', async () => {
+    // When the rewrite has a clearly shared prefix and suffix, the
+    // trim path keeps them as plain TextRuns — only the changed
+    // middle is wrapped in del/ins. Reviewers see the unchanged
+    // framing in plain black, and the change zone in the usual
+    // strike-through + underline. Word boundary-aware so words are
+    // never split.
+    const original =
+      'The quick brown fox jumps over the lazy dog and the cat watches silently.';
+    const proposed =
+      'The quick black wolf leaps across the sleepy bear and the cat watches silently.';
+    const md = `${original}\n`;
+    const blockId = paragraphBlockId(original);
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: '', author: 'Ed', date: 1 }],
+            proposal: { source_snapshot: original, proposed_text: proposed },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Exactly one del + one ins.
+    expect((documentXml.match(/<w:del\b/g) ?? []).length).toBe(1);
+    expect((documentXml.match(/<w:ins\b/g) ?? []).length).toBe(1);
+    // The shared suffix " and the cat watches silently." must appear
+    // as plain text outside any <w:del> / <w:ins> wrapper.
+    const sharedSuffix = 'and the cat watches silently.';
+    const stripped = documentXml.replace(/<w:(del|ins)\b[\s\S]*?<\/w:\1>/g, '');
+    expect(stripped).toContain(sharedSuffix);
+    // The shared prefix "The quick " must also survive as plain text.
+    expect(stripped).toContain('The quick');
+    // Spot-check: the unique words from each side are inside their
+    // respective change wrappers.
+    const delBlock = documentXml.match(/<w:del\b[\s\S]*?<\/w:del>/)?.[0] ?? '';
+    const insBlock = documentXml.match(/<w:ins\b[\s\S]*?<\/w:ins>/)?.[0] ?? '';
+    expect(delBlock).toContain('brown');
+    expect(delBlock).toContain('lazy dog');
+    expect(insBlock).toContain('black');
+    expect(insBlock).toContain('sleepy bear');
   });
 
   test('malformed markdown link in proposed_text is normalised to a hyperlink', async () => {

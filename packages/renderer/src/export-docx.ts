@@ -3774,13 +3774,15 @@ function tryEmitInlineWordDiff(
   // Rewrite-shaped proposals (whole-paragraph replacements that
   // happen to share a few common short words like "die", "App",
   // "wo sie") produce a fragmented alternating del/eq/ins/eq…
-  // sequence. That's *technically* a smaller diff than the
-  // whole-block delete + insert, but Word's review panel renders
-  // every del/ins run as its own item — so a 200-character rewrite
-  // ends up as 30+ panel entries. Bail to the structural path,
-  // which emits ONE whole-block <w:del> and ONE <w:ins>, when more
-  // text is changing than surviving.
-  if (isRewriteShapedDiff(changes)) return null;
+  // sequence. Word's review panel renders every del/ins run as its
+  // own item, so a 200-character rewrite ends up as 30+ panel
+  // entries. Switch to a coarse trim-based diff: keep only the
+  // shared prefix/suffix as plain text and emit ONE consolidated
+  // delete + ONE insert for the changed middle, all in the same
+  // paragraph so reviewers see the old and new side by side.
+  if (isRewriteShapedDiff(changes)) {
+    return runsForInlineTrimDiff(oldText, newText, author, date, ctx);
+  }
 
   return runsForInlineWordDiff(changes, author, date, ctx);
 }
@@ -3793,7 +3795,7 @@ function tryEmitInlineWordDiff(
  * word swaps → 2–4 revision runs) stays in the inline path, while a
  * paragraph rewrite that happens to share a handful of short words
  * (each shared word producing del/eq/ins triplets) crosses the
- * threshold and bails to the whole-block delete + insert path.
+ * threshold and switches to the trim-based single delete + insert.
  */
 function isRewriteShapedDiff(changes: readonly Change[]): boolean {
   // 4 = up to two word swaps (2 del + 2 ins). Beyond that, the panel
@@ -3805,6 +3807,79 @@ function isRewriteShapedDiff(changes: readonly Change[]): boolean {
     if (revisionRunCount > MAX_REVISION_RUNS_FOR_INLINE_DIFF) return true;
   }
   return false;
+}
+
+/**
+ * Emit a coarse inline diff: peel off the shared prefix and suffix at
+ * word boundaries, then represent the changed middle as exactly one
+ * `DeletedTextRun` followed by one `InsertedTextRun`. Used for
+ * paragraph rewrites where word-level diffing produces too many tiny
+ * panel entries to be readable.
+ *
+ * Both sides live in the same paragraph (single `<w:p>`), so Word
+ * shows the old text struck-through next to the new text — reviewers
+ * can see the change at a glance instead of scrolling between two
+ * full whole-paragraph blocks.
+ *
+ * The prefix/suffix walk-back to a whitespace boundary avoids
+ * splitting words: matching `"brownie"` vs `"brown"` reports the
+ * common prefix as `"The quick "` (10 chars), not `"The quick brown"`
+ * (15 chars), so the deletion shows the full word `"brownie"`.
+ */
+function runsForInlineTrimDiff(
+  oldText: string,
+  newText: string,
+  author: string,
+  date: string,
+  ctx: BuildCtx,
+): ParagraphChild[] {
+  const review = ctx.review!;
+  const id = review.nextRevisionId.value++;
+  const attrs = { id, author, date };
+
+  const minLen = Math.min(oldText.length, newText.length);
+
+  // Longest common prefix, walked back to a whitespace boundary so
+  // we never split a word across the prefix/middle boundary.
+  let prefixLen = 0;
+  while (prefixLen < minLen && oldText[prefixLen] === newText[prefixLen]) {
+    prefixLen++;
+  }
+  while (prefixLen > 0 && !/\s/.test(oldText[prefixLen - 1] ?? '')) {
+    prefixLen--;
+  }
+
+  // Longest common suffix (in the part that wasn't claimed by the
+  // prefix), walked back analogously.
+  const oldRem = oldText.length - prefixLen;
+  const newRem = newText.length - prefixLen;
+  let suffixLen = 0;
+  while (
+    suffixLen < oldRem &&
+    suffixLen < newRem &&
+    oldText[oldText.length - 1 - suffixLen] ===
+      newText[newText.length - 1 - suffixLen]
+  ) {
+    suffixLen++;
+  }
+  while (
+    suffixLen > 0 &&
+    !/\s/.test(oldText[oldText.length - suffixLen] ?? '')
+  ) {
+    suffixLen--;
+  }
+
+  const prefix = oldText.slice(0, prefixLen);
+  const oldMiddle = oldText.slice(prefixLen, oldText.length - suffixLen);
+  const newMiddle = newText.slice(prefixLen, newText.length - suffixLen);
+  const suffix = oldText.slice(oldText.length - suffixLen);
+
+  const out: ParagraphChild[] = [];
+  if (prefix) out.push(new TextRun({ text: prefix }));
+  if (oldMiddle) out.push(new DeletedTextRun({ ...attrs, text: oldMiddle }));
+  if (newMiddle) out.push(new InsertedTextRun({ ...attrs, text: newMiddle }));
+  if (suffix) out.push(new TextRun({ text: suffix }));
+  return out;
 }
 
 /**
