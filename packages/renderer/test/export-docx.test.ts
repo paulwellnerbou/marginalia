@@ -2808,6 +2808,11 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     // Trim-based inline diff: exactly one <w:del> + one <w:ins>.
     expect(delOpenCount).toBe(1);
     expect(insOpenCount).toBe(1);
+    // The proposal opener's author must propagate onto the tracked
+    // change attributes so Word's review pane attributes the change
+    // to "Oli" — not just to the comment balloon.
+    expect(documentXml).toMatch(/<w:del\b[^>]*w:author="Oli"/);
+    expect(documentXml).toMatch(/<w:ins\b[^>]*w:author="Oli"/);
     // Both runs must live in the SAME paragraph (single <w:p>) so
     // Word shows them side by side. Find the <w:p> that contains the
     // del — the ins must be in the same one.
