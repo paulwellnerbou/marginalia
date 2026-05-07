@@ -2998,6 +2998,70 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     // and is covered by the previous test.
   });
 
+  test('hyperlinks in the structural delete pass do not produce <w:hyperlink> wrappers', async () => {
+    // Word's review pane labels tracked deletions of hyperlink-wrapped
+    // text as "Field Code Changed" because it classifies <w:hyperlink>
+    // as a field-like construct. Suppressing the hyperlink wrapper in
+    // the delete pass keeps the strikethrough and drops the spurious
+    // Field-Code marker. The proposal-side <w:ins> still wraps newly
+    // inserted links so they stay clickable.
+    const md =
+      'Original prose with a [link to nowhere](https://example.com) inside.\n';
+    const blockId = paragraphBlockId(
+      'Original prose with a link to nowhere inside.',
+    );
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: blockId,
+            comments: [{ body: 'rewrite with link', author: 'Ed', date: 1 }],
+            // Heading on the proposed side forces the structural pass
+            // (different block type → inline-diff path bails).
+            proposal: {
+              source_snapshot:
+                'Original prose with a [link to nowhere](https://example.com) inside.',
+              proposed_text:
+                '# A new [destination](https://example.org) heading\n',
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    // Inside any <w:del>...</w:del> wrapper, there must be no
+    // <w:hyperlink> element. The deleted anchor text shows as plain
+    // strikethrough with the link styling preserved on the run, but no
+    // hyperlink relationship and no field-code interpretation.
+    const delBlocks = [
+      ...documentXml.matchAll(/<w:del\b[\s\S]*?<\/w:del>/g),
+    ];
+    expect(delBlocks.length).toBeGreaterThan(0);
+    for (const m of delBlocks) {
+      expect(m[0]).not.toMatch(/<w:hyperlink\b/);
+    }
+    // Sanity: the deleted run still contains the anchor text.
+    expect(documentXml).toMatch(/<w:delText[^>]*>link to nowhere<\/w:delText>/);
+    // The inserted side keeps its hyperlink wrapper so the new link is
+    // clickable in Word once the change is accepted.
+    const insBlocks = [
+      ...documentXml.matchAll(/<w:ins\b[\s\S]*?<\/w:ins>/g),
+    ];
+    const insTextMatches = insBlocks.some((m) =>
+      /<w:hyperlink\b[\s\S]*?destination[\s\S]*?<\/w:hyperlink>/.test(m[0]),
+    );
+    // Note: the inserted hyperlink may sit OUTSIDE the <w:ins> wrapper
+    // (the wrapper is per-text-run, not per-hyperlink); accept either
+    // shape as long as the link is preserved on the inserted side.
+    const docHasInsertedLink =
+      insTextMatches ||
+      /<w:hyperlink\b[^>]*>[\s\S]*?<w:ins\b[\s\S]*?destination/.test(
+        documentXml,
+      );
+    expect(docHasInsertedLink).toBe(true);
+  });
+
   test('inline word-diff path leaves the paragraph mark intact', async () => {
     // Sanity check: the paragraph-mark deletion is structural-only.
     // A small wording tweak that takes the inline-diff path must NOT

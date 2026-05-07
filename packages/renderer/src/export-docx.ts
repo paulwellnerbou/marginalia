@@ -2723,6 +2723,23 @@ function walkInline(
       const linkChildren: ParagraphChild[] = [];
       walkChildren(n, ctx, linkStyle, linkChildren);
       const fallbackChildren = [mkRun(runOptions(linkStyle, href, tokens), ctx)];
+      const children =
+        linkChildren.length > 0 ? linkChildren : fallbackChildren;
+
+      // Tracked-delete pass: skip the hyperlink wrapper entirely and
+      // push the anchor runs (already wrapped in DeletedTextRun by
+      // mkRun under the active revision). Keeping the
+      // <w:hyperlink>/<w:r:id> wrapper makes Word classify the
+      // tracked deletion as a hyperlink-field change and emit a
+      // "Field Code Changed" pseudo-comment in the review pane on top
+      // of the strikethrough — the relationship is being deleted
+      // along with its anchor anyway, so the link target adds no
+      // useful information here. Inserts keep the wrapper so newly
+      // proposed links remain clickable.
+      if (ctx.revision?.kind === 'delete') {
+        out.push(...children);
+        return;
+      }
 
       if (href.startsWith('#') && href.length > 1) {
         // Internal anchor link — points at a heading bookmark in this
@@ -2731,7 +2748,7 @@ function walkInline(
         out.push(
           new InternalHyperlink({
             anchor: href.slice(1),
-            children: linkChildren.length > 0 ? linkChildren : fallbackChildren,
+            children,
           }),
         );
         return;
@@ -2740,7 +2757,7 @@ function walkInline(
       out.push(
         new ExternalHyperlink({
           link: href,
-          children: linkChildren.length > 0 ? linkChildren : fallbackChildren,
+          children,
         }),
       );
       return;
