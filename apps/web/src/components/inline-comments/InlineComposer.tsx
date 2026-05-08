@@ -347,7 +347,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
         onSelect={(e) => updateCaret(e.currentTarget)}
       />
       {activeMention && filteredMentionOptions.length > 0 && (
-        <div className="ic-mention-menu" aria-label="Mention suggestions">
+        <div className="ic-mention-menu">
           {filteredMentionOptions.map((option, index) => (
             <button
               key={option.toLowerCase()}
@@ -364,7 +364,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
         </div>
       )}
       {activeShortcode && filteredShortcodeOptions.length > 0 && (
-        <div className="ic-mention-menu" aria-label="Emoji suggestions">
+        <div className="ic-mention-menu">
           {filteredShortcodeOptions.map((match, index) => (
             <button
               key={match.shortcode}

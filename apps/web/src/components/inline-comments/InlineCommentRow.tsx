@@ -45,6 +45,7 @@ export function InlineCommentRow({
   const [linkCopied, setLinkCopied] = useState(false);
   const [reacting, setReacting] = useState(false);
   const linkCopyTimer = useRef<number | null>(null);
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Clean up the copy-confirmation timer if the component unmounts while it's pending.
   useEffect(() => {
@@ -52,6 +53,10 @@ export function InlineCommentRow({
       if (linkCopyTimer.current !== null) window.clearTimeout(linkCopyTimer.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (editing) editTextareaRef.current?.focus();
+  }, [editing]);
 
   function startEdit() {
     setDraft(node.body);
@@ -204,11 +209,11 @@ export function InlineCommentRow({
         {editing ? (
           <div className="ic-edit">
             <textarea
+              ref={editTextareaRef}
               className="ic-composer-body"
               value={draft}
               rows={3}
               onChange={(e) => setDraft(e.target.value)}
-              autoFocus
             />
             <div className="ic-composer-actions">
               <button
@@ -236,6 +241,7 @@ export function InlineCommentRow({
         )}
 
         {!editing && node.reactions.length > 0 && (
+          // biome-ignore lint/a11y/useSemanticElements: <fieldset> is form-only; reactions are not a form group
           <div className="ic-reactions" role="group" aria-label="Reactions">
             {node.reactions.map((r) => (
               <button

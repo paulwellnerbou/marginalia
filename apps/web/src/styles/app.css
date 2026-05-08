@@ -1811,7 +1811,6 @@ button.primary:disabled {
   /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
   height: 100dvh !important;
   max-height: 100vh !important;
-  /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
   max-height: 100dvh !important;
   margin: 0 !important;
   padding: 0 !important;

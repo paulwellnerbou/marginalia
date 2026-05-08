@@ -43,7 +43,7 @@ export function AppBar({
     <Flex align="center" gap="3" px="3" py="2" className="app-bar">
       <Link to="/" aria-label="Marginalia home" className="app-brand">
         <span className="app-brand-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" className="app-brand-icon-svg">
+          <svg viewBox="0 0 24 24" className="app-brand-icon-svg" aria-hidden="true">
             <defs>
               <linearGradient
                 id={brandGradientId}
