@@ -2,7 +2,7 @@ import type { BlockSourceRange } from '@marginalia/renderer';
 import { DotsHorizontalIcon } from '@radix-ui/react-icons';
 import { DropdownMenu, Flex, IconButton, SegmentedControl, Text } from '@radix-ui/themes';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CommentAnchor, DocumentFormat, Thread } from '../../lib/api.js';
+import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import {
   buildThreadCollapseState,
@@ -25,9 +25,7 @@ import { InlineThreadCard } from './InlineThreadCard.js';
 interface Props {
   uid: string;
   threads: Thread[];
-  docSource: string;
   blockRanges: Map<string, BlockSourceRange>;
-  docFormat: DocumentFormat;
   canComment: boolean;
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number } | null;
@@ -73,9 +71,7 @@ const FOCUS_HIGHLIGHT_MS = 1800;
 export function InlineCommentsList({
   uid,
   threads,
-  docSource,
   blockRanges,
-  docFormat,
   canComment,
   pendingAnchor,
   focusedThread,

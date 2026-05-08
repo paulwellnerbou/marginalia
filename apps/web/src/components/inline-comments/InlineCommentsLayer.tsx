@@ -9,7 +9,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import type { CommentAnchor, DocumentFormat, Thread } from '../../lib/api.js';
+import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import {
   buildThreadCollapseState,
@@ -24,12 +24,10 @@ import { COMMENT_FLASH_MS } from './inlineUtils.js';
 interface Props {
   uid: string;
   threads: Thread[];
-  docSource: string;
   docHtml: string;
   docElementRef: RefObject<HTMLElement | null>;
   scrollContainerRef: RefObject<HTMLDivElement | null>;
   blockRanges: Map<string, BlockSourceRange>;
-  docFormat: DocumentFormat;
   canComment: boolean;
   open: boolean;
   onToggleOpen: () => void;
@@ -133,12 +131,10 @@ interface GlobalState {
 export function InlineCommentsLayer({
   uid,
   threads,
-  docSource,
   docHtml,
   docElementRef,
   scrollContainerRef,
   blockRanges,
-  docFormat,
   canComment,
   open,
   onToggleOpen,

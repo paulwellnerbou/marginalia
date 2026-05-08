@@ -12,7 +12,7 @@
  * Chromium launch in the process. Each render gets a fresh
  * `BrowserContext` so state never leaks across diagrams.
  */
-import type { BrowserContext } from 'playwright';
+import type { Browser, BrowserContext } from 'playwright';
 import { loadMermaidUmd } from './html-envelope.js';
 import {
   type MermaidImageFormat,
@@ -172,7 +172,7 @@ export async function renderMermaidWithChromium(
 ): Promise<RenderedMermaidImage | null> {
   const umd = await loadUmd();
 
-  let browser;
+  let browser: Browser;
   try {
     browser = await getBrowser();
   } catch (err) {

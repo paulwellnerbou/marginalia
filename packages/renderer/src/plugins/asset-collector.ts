@@ -12,7 +12,9 @@ import type { AssetRef, Warning } from '../types.js';
 export const remarkAssetCollector: Plugin<[], Root> = () => {
   return (tree, file) => {
     const assets: AssetRef[] = [];
-    const warnings: Warning[] = ((file.data as { warnings?: Warning[] }).warnings ??= []);
+    const fileData = file.data as { warnings?: Warning[] };
+    fileData.warnings ??= [];
+    const warnings: Warning[] = fileData.warnings;
 
     visit(tree, 'image', (node: Image) => {
       const ref: AssetRef = {

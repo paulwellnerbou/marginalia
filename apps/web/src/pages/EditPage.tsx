@@ -62,12 +62,18 @@ function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'):
   // AsciiDoc: image::src[]  /  image:src[] (inline) / include::src[]
   const adocRe = /(?:^|\s)(?:image::|image:|include::)([^\s[]+)/g;
   const re = format === 'asciidoc' ? adocRe : mdRe;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(source)) !== null) {
+  let m = re.exec(source);
+  while (m !== null) {
     const raw = m[1];
-    if (!raw) continue;
-    if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith('/') || raw.startsWith('#')) continue;
-    out.add(raw);
+    if (
+      raw &&
+      !/^[a-z][a-z0-9+.-]*:/i.test(raw) &&
+      !raw.startsWith('/') &&
+      !raw.startsWith('#')
+    ) {
+      out.add(raw);
+    }
+    m = re.exec(source);
   }
   return out;
 }

@@ -54,7 +54,8 @@ export const rehypeAsciidocBlockIds: Plugin<[AsciidocBlockIdsOptions], Root> = (
       }
       if (blockIdx === null && subBlockIdx === null) return;
 
-      const props: Properties = (node.properties ??= {});
+      node.properties ??= {};
+      const props: Properties = node.properties;
 
       if (blockIdx !== null) {
         const info = blocks[blockIdx];
