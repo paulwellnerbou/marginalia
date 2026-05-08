@@ -36,7 +36,8 @@ declare global {
   var __asciidoctor: AsciidoctorInstance | undefined;
 }
 
-const asciidoctor: AsciidoctorInstance = (globalThis.__asciidoctor ??= Asciidoctor());
+globalThis.__asciidoctor ??= Asciidoctor();
+const asciidoctor: AsciidoctorInstance = globalThis.__asciidoctor;
 
 interface AdocRenderData {
   anchors?: Anchor[];

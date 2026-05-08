@@ -60,6 +60,7 @@ export function ResizeHandle({
   }
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: <hr> cannot carry the interactive resize behaviour
     <div
       className={`resize-handle resize-handle-${side}`}
       role="separator"

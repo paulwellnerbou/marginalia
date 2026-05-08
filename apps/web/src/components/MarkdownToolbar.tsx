@@ -126,7 +126,12 @@ export function MarkdownToolbar({ viewRef, format, wordWrap, onWordWrapToggle }:
   const isAdoc = format === 'asciidoc';
 
   return (
-    <div className="markdown-toolbar" onMouseDown={(e) => e.preventDefault()}>
+    <div
+      className="markdown-toolbar"
+      role="toolbar"
+      aria-label="Editor formatting"
+      onMouseDown={(e) => e.preventDefault()}
+    >
       {/* Inline formatting */}
       <div className="markdown-toolbar__group">
         {isAdoc ? (

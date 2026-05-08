@@ -17,13 +17,14 @@ export function ToastContainer() {
         <div key={t.id} className="toast" role="status">
           <div className="toast-head">
             <strong>{t.title}</strong>
-            <button className="toast-close" onClick={() => dismissToast(t.id)}>
+            <button type="button" className="toast-close" onClick={() => dismissToast(t.id)}>
               ×
             </button>
           </div>
           <div className="toast-body">{t.body}</div>
           {t.action && (
             <button
+              type="button"
               className="link"
               onClick={() => {
                 t.action?.onClick();

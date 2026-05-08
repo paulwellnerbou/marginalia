@@ -54,11 +54,23 @@ export function ImageLightbox({
       >
         <Dialog.Title className="visually-hidden">{image?.alt || 'Image preview'}</Dialog.Title>
         {image && (
+          // biome-ignore lint/a11y/useSemanticElements: <button> cannot contain the controls and image markup inside
           <div
             className={`lightbox-stage lightbox-stage-${zoom}`}
+            role="button"
+            tabIndex={0}
+            aria-label={zoom === 'fit' ? 'Zoom to native size' : 'Fit to viewport'}
             onClick={() => setZoom((z) => (z === 'fit' ? 'native' : 'fit'))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setZoom((z) => (z === 'fit' ? 'native' : 'fit'));
+              }
+            }}
           >
             <div className="lightbox-figure">
+              {/* biome-ignore lint/a11y/noStaticElementInteractions: stop-propagation only — controls inside are buttons */}
+              {/* biome-ignore lint/a11y/useKeyWithClickEvents: stop-propagation only, no real interaction */}
               <div className="lightbox-controls" onClick={(e) => e.stopPropagation()}>
                 <Tooltip content={bgTooltip}>
                   <IconButton variant="soft" size="2" color="gray" onClick={cycleBg}>
@@ -77,6 +89,7 @@ export function ImageLightbox({
                 <img src={image.src} alt={image.alt} className={`lightbox-img zoom-${zoom}`} />
               </div>
               {image.alt && (
+                // biome-ignore lint/a11y/useKeyWithClickEvents: stop-propagation only, no real interaction
                 <p className="lightbox-caption" onClick={(e) => e.stopPropagation()}>
                   {image.alt}
                 </p>

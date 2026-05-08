@@ -305,6 +305,7 @@ button.primary:disabled {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
   height: 100dvh;
   overflow: hidden;
 }
@@ -912,6 +913,7 @@ button.primary:disabled {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
   height: 100dvh;
 }
 .edit-toolbar {
@@ -1315,6 +1317,7 @@ button.primary:disabled {
 
 .landing {
   min-height: calc(100vh - var(--app-bar-height));
+  /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
   min-height: calc(100dvh - var(--app-bar-height));
 }
 
@@ -1805,6 +1808,7 @@ button.primary:disabled {
   width: 100vw !important;
   max-width: 100vw !important;
   height: 100vh !important;
+  /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
   height: 100dvh !important;
   max-height: 100vh !important;
   max-height: 100dvh !important;

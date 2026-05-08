@@ -2595,16 +2595,19 @@ function walkInline(n: HastNode, ctx: BuildCtx, style: InlineStyle, out: Paragra
   switch (t) {
     case 'strong':
     case 'b':
-      return walkChildren(n, ctx, { ...style, bold: true }, out);
+      walkChildren(n, ctx, { ...style, bold: true }, out);
+      return;
     case 'em':
     case 'i':
-      return walkChildren(n, ctx, { ...style, italic: true }, out);
+      walkChildren(n, ctx, { ...style, italic: true }, out);
+      return;
     case 'del':
     case 's':
     case 'strike':
-      return walkChildren(n, ctx, { ...style, strike: true }, out);
+      walkChildren(n, ctx, { ...style, strike: true }, out);
+      return;
     case 'code':
-      return walkChildren(
+      walkChildren(
         n,
         ctx,
         {
@@ -2616,9 +2619,13 @@ function walkInline(n: HastNode, ctx: BuildCtx, style: InlineStyle, out: Paragra
         },
         out,
       );
+      return;
     case 'a': {
       const href = String(n.properties?.href ?? '');
-      if (!href) return walkChildren(n, ctx, style, out);
+      if (!href) {
+        walkChildren(n, ctx, style, out);
+        return;
+      }
       // Skip heading-anchor sigils (they're UI chrome, not content).
       if (
         Array.isArray(n.properties?.className) &&
@@ -2701,7 +2708,8 @@ function walkInline(n: HastNode, ctx: BuildCtx, style: InlineStyle, out: Paragra
     case 'mark':
     case 'u': {
       const extra: InlineStyle = t === 'u' ? { ...style } : style;
-      return walkChildren(n, ctx, extra, out);
+      walkChildren(n, ctx, extra, out);
+      return;
     }
     case 'img': {
       // Inline image: emit a real ImageRun if we resolved it; else
@@ -2724,7 +2732,8 @@ function walkInline(n: HastNode, ctx: BuildCtx, style: InlineStyle, out: Paragra
       return;
     }
     default:
-      return walkChildren(n, ctx, style, out);
+      walkChildren(n, ctx, style, out);
+      return;
   }
 }
 

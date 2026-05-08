@@ -1505,12 +1505,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               <InlineCommentsLayer
                 uid={doc.uid}
                 threads={threads}
-                docSource={liveSource}
                 docHtml={liveRendered.html}
                 docElementRef={docRef}
                 scrollContainerRef={docScrollRef}
                 blockRanges={blockRanges}
-                docFormat={doc.format}
                 canComment={canComment}
                 open={inlineCommentsOpen}
                 onToggleOpen={() => setInlineCommentsOpen((v) => !v)}
@@ -1593,9 +1591,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 <InlineCommentsList
                   uid={doc.uid}
                   threads={threads}
-                  docSource={liveSource}
                   blockRanges={blockRanges}
-                  docFormat={doc.format}
                   canComment={canComment}
                   pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}

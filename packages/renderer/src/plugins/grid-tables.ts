@@ -262,7 +262,7 @@ function dedent(lines: string[]): string {
     const len = m ? m[1]!.length : 0;
     if (len < min) min = len;
   }
-  if (!isFinite(min)) min = 0;
+  if (!Number.isFinite(min)) min = 0;
   return lines.map((l) => l.slice(min)).join('\n');
 }
 

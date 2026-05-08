@@ -870,6 +870,7 @@ function MarkdownDropZone({
   const depth = useRef(0);
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: drop-target wrapper around an editable textarea; not a clickable element
     <div
       className={`drop-zone ${over ? 'drop-zone--over' : ''}`}
       onDragEnter={(e) => {
@@ -938,6 +939,7 @@ function FileDropZone({
   }
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: <button> can't host the drag-and-drop and dashed-panel rendering
     <div
       className={`file-drop ${over ? 'file-drop--over' : ''}`}
       role="button"
