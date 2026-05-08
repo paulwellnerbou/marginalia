@@ -1,6 +1,6 @@
-import { useMemo, useRef } from 'react';
-import { IconButton, Text } from '@radix-ui/themes';
 import { ChevronLeftIcon, ChevronRightIcon, Cross2Icon } from '@radix-ui/react-icons';
+import { IconButton, Text } from '@radix-ui/themes';
+import { useMemo, useRef } from 'react';
 import { type AttachedAsset, assetProxyUrl } from '../lib/api.js';
 import { ResizeHandle } from './ResizeHandle.js';
 
@@ -111,7 +111,16 @@ export function AssetsPanel({
         </div>
       )}
 
-      {open && <ResizeHandle side="left" width={width} onResize={onResize} min={180} max={480} label="Resize assets panel" />}
+      {open && (
+        <ResizeHandle
+          side="left"
+          width={width}
+          onResize={onResize}
+          min={180}
+          max={480}
+          label="Resize assets panel"
+        />
+      )}
     </aside>
   );
 }

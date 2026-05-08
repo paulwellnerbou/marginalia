@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { CheckIcon, Cross2Icon, UpdateIcon } from '@radix-ui/react-icons';
 import {
   Badge,
   Box,
@@ -13,21 +13,21 @@ import {
   TextField,
   Tooltip,
 } from '@radix-ui/themes';
-import { CheckIcon, Cross2Icon, UpdateIcon } from '@radix-ui/react-icons';
-import { Copyable } from './Copyable.js';
-import { ConfirmButton } from './ConfirmButton.js';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   createInvite,
   deleteInvite,
-  listInvites,
-  rotateAdminInvite,
   type Invite,
+  listInvites,
   type Role,
+  rotateAdminInvite,
 } from '../lib/api.js';
 import { getClientId, getDisplayName, useDisplayName } from '../lib/identity.js';
 import { saveInviteToken } from '../lib/invite.js';
 import { reportError } from '../lib/log.js';
 import { appInviteKindColor, appRoleColor } from '../styles/theme.js';
+import { ConfirmButton } from './ConfirmButton.js';
+import { Copyable } from './Copyable.js';
 
 /**
  * Two-step inline confirm for the admin-rotate action. Kept local because
@@ -238,9 +238,9 @@ export function InvitesPanel({ uid }: { uid: string }) {
         Access links
       </Text>
       <Text size="1" color="gray">
-        Each link is a shareable URL. A <b>named</b> link sets the recipient's display name and is only meant to be used by a specific person
-        (useful for personal invites); a <b>generic</b> link lets the visitor bring their own
-        name (useful for "anyone with this URL can comment").
+        Each link is a shareable URL. A <b>named</b> link sets the recipient's display name and is
+        only meant to be used by a specific person (useful for personal invites); a <b>generic</b>{' '}
+        link lets the visitor bring their own name (useful for "anyone with this URL can comment").
       </Text>
 
       <Flex gap="2" align="end" wrap="wrap" className="invite-create-form">
@@ -286,9 +286,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
             </Select.Trigger>
             <Select.Content position="popper">
               <Select.Item value="reader">Reader (view only)</Select.Item>
-              <Select.Item value="collaborator">
-                Collaborator (comment + propose edits)
-              </Select.Item>
+              <Select.Item value="collaborator">Collaborator (comment + propose edits)</Select.Item>
               <Select.Item value="editor">Editor (can edit directly)</Select.Item>
               {/* 'admin' is intentionally absent — admin invites are minted
                   at document creation and rotated via the per-row action
@@ -324,19 +322,18 @@ export function InvitesPanel({ uid }: { uid: string }) {
       ) : (
         <Flex direction="column" gap="2">
           {invites.map((inv) => (
-            <Flex
-              key={inv.token}
-              direction="column"
-              gap="2"
-              p="2"
-              className="invite-card"
-            >
+            <Flex key={inv.token} direction="column" gap="2" p="2" className="invite-card">
               <Flex align="start" justify="between" gap="2" className="invite-header">
                 <Flex align="baseline" gap="2" wrap="wrap" className="invite-header-meta">
                   <Text size="2" weight="medium">
                     {inv.display_name ?? <span style={{ fontStyle: 'italic' }}>Any visitor</span>}
                   </Text>
-                  <Badge size="1" color={appRoleColor(inv.role)} variant="soft" className="role-badge">
+                  <Badge
+                    size="1"
+                    color={appRoleColor(inv.role)}
+                    variant="soft"
+                    className="role-badge"
+                  >
                     {inv.role}
                   </Badge>
                   <Badge size="1" color={appInviteKindColor(inv.kind)} variant="surface">
@@ -354,7 +351,11 @@ export function InvitesPanel({ uid }: { uid: string }) {
                   )}
                 </Box>
               </Flex>
-              <Copyable text={window.location.origin + inv.url} multiline ariaLabel="Copy invite link" />
+              <Copyable
+                text={window.location.origin + inv.url}
+                multiline
+                ariaLabel="Copy invite link"
+              />
             </Flex>
           ))}
         </Flex>

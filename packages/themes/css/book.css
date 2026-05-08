@@ -5,15 +5,15 @@
  * long-form reading. No link underlines except on hover.
  */
 
-@import './default.css';
+@import "./default.css";
 
 .marginalia-theme,
 .marginalia {
   --md-max-width: 60ch;
 
   --md-font-body:
-    'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua',
-    Georgia, 'Times New Roman', serif;
+    "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Times New Roman",
+    serif;
   --md-font-heading: var(--md-font-body);
 
   --md-font-size: 18px;
@@ -36,22 +36,33 @@
   --md-color-table-stripe: #f5efe1;
 }
 
-.marginalia h1 { border-bottom: 0; text-align: center; font-size: 2.2em; }
-.marginalia h2 { border-bottom: 0; font-size: 1.5em; }
+.marginalia h1 {
+  border-bottom: 0;
+  text-align: center;
+  font-size: 2.2em;
+}
+.marginalia h2 {
+  border-bottom: 0;
+  font-size: 1.5em;
+}
 .marginalia a {
   color: inherit;
   text-decoration: none;
   border-bottom: 1px dotted currentColor;
 }
-.marginalia a:hover { border-bottom-style: solid; }
-.marginalia blockquote { font-style: italic; }
+.marginalia a:hover {
+  border-bottom-style: solid;
+}
+.marginalia blockquote {
+  font-style: italic;
+}
 
 /* ------------------------------------------------------------------
  * DARK VARIANT — warm paper-at-night feel; lets app chrome show through.
  * ------------------------------------------------------------------ */
 
-[data-appearance='dark'] .marginalia-theme,
-[data-appearance='dark'] .marginalia {
+[data-appearance="dark"] .marginalia-theme,
+[data-appearance="dark"] .marginalia {
   --md-color-fg: #ebe4d1;
   --md-color-fg-muted: #a39a82;
   --md-color-bg: transparent;
@@ -66,8 +77,8 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  [data-appearance='auto'] .marginalia-theme,
-  [data-appearance='auto'] .marginalia {
+  [data-appearance="auto"] .marginalia-theme,
+  [data-appearance="auto"] .marginalia {
     --md-color-fg: #ebe4d1;
     --md-color-fg-muted: #a39a82;
     --md-color-bg: transparent;

@@ -13,8 +13,8 @@ import {
 import { useEffect, useState } from 'react';
 import type { Document } from '../lib/api.js';
 import {
-  recoverCurrentPassword,
   type DocumentSettingsResponse,
+  recoverCurrentPassword,
   updateDocumentSettings,
 } from '../lib/api.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';

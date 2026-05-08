@@ -13,12 +13,6 @@
  * `BrowserContext` so state never leaks across diagrams.
  */
 import type { BrowserContext } from 'playwright';
-
-import {
-  ALLOWED_EXPORT_HOSTS,
-  ExportEngineMissingError as PdfEngineMissingError,
-  getBrowser,
-} from './pdf.js';
 import { loadMermaidUmd } from './html-envelope.js';
 import {
   type MermaidImageFormat,
@@ -27,6 +21,11 @@ import {
   MermaidRenderTimeoutError,
   type RenderedMermaidImage,
 } from './mermaid-rust.js';
+import {
+  ALLOWED_EXPORT_HOSTS,
+  getBrowser,
+  ExportEngineMissingError as PdfEngineMissingError,
+} from './pdf.js';
 
 // ---------------------------------------------------------------------
 // Configuration
@@ -63,8 +62,7 @@ let config: Config = readConfigFromEnv();
 
 function readConfigFromEnv(): Config {
   const t = process.env.MARGINALIA_MERMAID_CHROMIUM_TIMEOUT_MS;
-  const timeoutMs =
-    t && Number.isInteger(Number(t)) && Number(t) >= 100 ? Number(t) : 15_000;
+  const timeoutMs = t && Number.isInteger(Number(t)) && Number(t) >= 100 ? Number(t) : 15_000;
   const s = process.env.MARGINALIA_MERMAID_CHROMIUM_PNG_SCALE;
   const pngScale = s && Number.isFinite(Number(s)) && Number(s) > 0 ? Number(s) : 4;
   return { timeoutMs, pngScale };
@@ -225,7 +223,9 @@ export async function renderMermaidWithChromium(
     // instead of an opaque playwright one.
     try {
       await page.waitForFunction(
-        () => (window as unknown as { __marginaliaMermaidReady?: boolean }).__marginaliaMermaidReady === true,
+        () =>
+          (window as unknown as { __marginaliaMermaidReady?: boolean }).__marginaliaMermaidReady ===
+          true,
         undefined,
         { timeout: config.timeoutMs },
       );

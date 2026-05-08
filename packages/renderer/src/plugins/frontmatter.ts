@@ -1,5 +1,5 @@
-import type { Plugin } from 'unified';
 import type { Root } from 'mdast';
+import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 
 /**
@@ -12,8 +12,7 @@ export const remarkExtractFrontmatter: Plugin<[], Root> = () => {
   return (tree, file) => {
     visit(tree, 'yaml', (node) => {
       const raw = (node as { value: string }).value;
-      (file.data as { frontmatter?: Record<string, unknown> }).frontmatter =
-        parseSimpleYaml(raw);
+      (file.data as { frontmatter?: Record<string, unknown> }).frontmatter = parseSimpleYaml(raw);
     });
     if (!(file.data as { frontmatter?: unknown }).frontmatter) {
       (file.data as { frontmatter?: unknown }).frontmatter = {};

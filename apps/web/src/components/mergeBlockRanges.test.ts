@@ -8,23 +8,17 @@ function makeRanges(entries: Array<[string, BlockSourceRange]>): Map<string, Blo
 
 describe('mergeBlockRanges', () => {
   test('returns the start range when endId is null', () => {
-    const ranges = makeRanges([
-      ['p1', { start: 0, end: 10, kind: 'paragraph', text: 'first' }],
-    ]);
+    const ranges = makeRanges([['p1', { start: 0, end: 10, kind: 'paragraph', text: 'first' }]]);
     expect(mergeBlockRanges(ranges, 'p1', null, 'markdown')).toEqual({ start: 0, end: 10 });
   });
 
   test('returns the start range when endId equals startId', () => {
-    const ranges = makeRanges([
-      ['p1', { start: 0, end: 10, kind: 'paragraph', text: 'first' }],
-    ]);
+    const ranges = makeRanges([['p1', { start: 0, end: 10, kind: 'paragraph', text: 'first' }]]);
     expect(mergeBlockRanges(ranges, 'p1', 'p1', 'markdown')).toEqual({ start: 0, end: 10 });
   });
 
   test('returns null when either endpoint is unknown', () => {
-    const ranges = makeRanges([
-      ['p1', { start: 0, end: 10, kind: 'paragraph', text: 'a' }],
-    ]);
+    const ranges = makeRanges([['p1', { start: 0, end: 10, kind: 'paragraph', text: 'a' }]]);
     expect(mergeBlockRanges(ranges, 'p1', 'nope', 'markdown')).toBeNull();
     expect(mergeBlockRanges(ranges, 'nope', 'p1', 'markdown')).toBeNull();
   });

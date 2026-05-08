@@ -1,5 +1,5 @@
+import type { Image, Link, Root } from 'mdast';
 import type { Plugin } from 'unified';
-import type { Root, Image, Link } from 'mdast';
 import { visit } from 'unist-util-visit';
 import type { AssetRef, Warning } from '../types.js';
 
@@ -12,8 +12,7 @@ import type { AssetRef, Warning } from '../types.js';
 export const remarkAssetCollector: Plugin<[], Root> = () => {
   return (tree, file) => {
     const assets: AssetRef[] = [];
-    const warnings: Warning[] = ((file.data as { warnings?: Warning[] })
-      .warnings ??= []);
+    const warnings: Warning[] = ((file.data as { warnings?: Warning[] }).warnings ??= []);
 
     visit(tree, 'image', (node: Image) => {
       const ref: AssetRef = {
@@ -26,7 +25,10 @@ export const remarkAssetCollector: Plugin<[], Root> = () => {
       }
       assets.push(ref);
       if (!node.alt || node.alt.trim() === '') {
-        const w: Warning = { kind: 'missing-alt', message: `image ${node.url} is missing alt text` };
+        const w: Warning = {
+          kind: 'missing-alt',
+          message: `image ${node.url} is missing alt text`,
+        };
         if (node.position?.start.line !== undefined) w.line = node.position.start.line;
         warnings.push(w);
       }

@@ -1,16 +1,16 @@
-import type { RefObject } from 'react';
-import type { EditorView } from 'codemirror';
-import { IconButton } from '@radix-ui/themes';
 import {
+  CodeIcon,
   FontBoldIcon,
   FontItalicIcon,
-  StrikethroughIcon,
-  CodeIcon,
   Link2Icon,
-  QuoteIcon,
   ListBulletIcon,
+  QuoteIcon,
+  StrikethroughIcon,
 } from '@radix-ui/react-icons';
+import { IconButton } from '@radix-ui/themes';
+import type { EditorView } from 'codemirror';
 import { Heading1, Heading2, Heading3, ListOrdered, WrapText } from 'lucide-react';
+import type { RefObject } from 'react';
 
 // ── shared helpers ────────────────────────────────────────────────────────────
 
@@ -117,28 +117,58 @@ interface Props {
 
 export function MarkdownToolbar({ viewRef, format, wordWrap, onWordWrapToggle }: Props) {
   function act(fn: (v: EditorView) => void) {
-    return () => { const v = viewRef.current; if (v) fn(v); };
+    return () => {
+      const v = viewRef.current;
+      if (v) fn(v);
+    };
   }
 
   const isAdoc = format === 'asciidoc';
 
   return (
     <div className="markdown-toolbar" onMouseDown={(e) => e.preventDefault()}>
-
       {/* Inline formatting */}
       <div className="markdown-toolbar__group">
         {isAdoc ? (
           <>
-            <Btn label="Bold"        icon={<FontBoldIcon />}   onClick={act((v) => wrapSelection(v, '*', '*'))} />
-            <Btn label="Italic"      icon={<FontItalicIcon />} onClick={act((v) => wrapSelection(v, '_', '_'))} />
-            <Btn label="Inline code" icon={<CodeIcon />}       onClick={act((v) => wrapSelection(v, '`', '`'))} />
+            <Btn
+              label="Bold"
+              icon={<FontBoldIcon />}
+              onClick={act((v) => wrapSelection(v, '*', '*'))}
+            />
+            <Btn
+              label="Italic"
+              icon={<FontItalicIcon />}
+              onClick={act((v) => wrapSelection(v, '_', '_'))}
+            />
+            <Btn
+              label="Inline code"
+              icon={<CodeIcon />}
+              onClick={act((v) => wrapSelection(v, '`', '`'))}
+            />
           </>
         ) : (
           <>
-            <Btn label="Bold"          icon={<FontBoldIcon />}      onClick={act((v) => wrapSelection(v, '**', '**'))} />
-            <Btn label="Italic"        icon={<FontItalicIcon />}    onClick={act((v) => wrapSelection(v, '*', '*'))} />
-            <Btn label="Strikethrough" icon={<StrikethroughIcon />} onClick={act((v) => wrapSelection(v, '~~', '~~'))} />
-            <Btn label="Inline code"   icon={<CodeIcon />}          onClick={act((v) => wrapSelection(v, '`', '`'))} />
+            <Btn
+              label="Bold"
+              icon={<FontBoldIcon />}
+              onClick={act((v) => wrapSelection(v, '**', '**'))}
+            />
+            <Btn
+              label="Italic"
+              icon={<FontItalicIcon />}
+              onClick={act((v) => wrapSelection(v, '*', '*'))}
+            />
+            <Btn
+              label="Strikethrough"
+              icon={<StrikethroughIcon />}
+              onClick={act((v) => wrapSelection(v, '~~', '~~'))}
+            />
+            <Btn
+              label="Inline code"
+              icon={<CodeIcon />}
+              onClick={act((v) => wrapSelection(v, '`', '`'))}
+            />
           </>
         )}
       </div>
@@ -147,9 +177,21 @@ export function MarkdownToolbar({ viewRef, format, wordWrap, onWordWrapToggle }:
 
       {/* Headings */}
       <div className="markdown-toolbar__group">
-        <Btn label="Heading 1" icon={<Heading1 size={14} />} onClick={act((v) => isAdoc ? adocHeading(v, 1) : mdHeading(v, 1))} />
-        <Btn label="Heading 2" icon={<Heading2 size={14} />} onClick={act((v) => isAdoc ? adocHeading(v, 2) : mdHeading(v, 2))} />
-        <Btn label="Heading 3" icon={<Heading3 size={14} />} onClick={act((v) => isAdoc ? adocHeading(v, 3) : mdHeading(v, 3))} />
+        <Btn
+          label="Heading 1"
+          icon={<Heading1 size={14} />}
+          onClick={act((v) => (isAdoc ? adocHeading(v, 1) : mdHeading(v, 1)))}
+        />
+        <Btn
+          label="Heading 2"
+          icon={<Heading2 size={14} />}
+          onClick={act((v) => (isAdoc ? adocHeading(v, 2) : mdHeading(v, 2)))}
+        />
+        <Btn
+          label="Heading 3"
+          icon={<Heading3 size={14} />}
+          onClick={act((v) => (isAdoc ? adocHeading(v, 3) : mdHeading(v, 3)))}
+        />
       </div>
 
       <Sep />
@@ -157,17 +199,33 @@ export function MarkdownToolbar({ viewRef, format, wordWrap, onWordWrapToggle }:
       {/* Block structure */}
       <div className="markdown-toolbar__group">
         {!isAdoc && (
-          <Btn label="Blockquote" icon={<QuoteIcon />} onClick={act((v) => toggleLinePrefix(v, '> '))} />
+          <Btn
+            label="Blockquote"
+            icon={<QuoteIcon />}
+            onClick={act((v) => toggleLinePrefix(v, '> '))}
+          />
         )}
-        <Btn label="Bullet list"  icon={<ListBulletIcon />}        onClick={act((v) => toggleLinePrefix(v, isAdoc ? '* ' : '- '))} />
-        <Btn label="Ordered list" icon={<ListOrdered size={14} />} onClick={act((v) => toggleLinePrefix(v, isAdoc ? '. ' : '1. '))} />
+        <Btn
+          label="Bullet list"
+          icon={<ListBulletIcon />}
+          onClick={act((v) => toggleLinePrefix(v, isAdoc ? '* ' : '- '))}
+        />
+        <Btn
+          label="Ordered list"
+          icon={<ListOrdered size={14} />}
+          onClick={act((v) => toggleLinePrefix(v, isAdoc ? '. ' : '1. '))}
+        />
       </div>
 
       <Sep />
 
       {/* Link */}
       <div className="markdown-toolbar__group">
-        <Btn label="Link" icon={<Link2Icon />} onClick={act((v) => isAdoc ? adocLink(v) : mdLink(v))} />
+        <Btn
+          label="Link"
+          icon={<Link2Icon />}
+          onClick={act((v) => (isAdoc ? adocLink(v) : mdLink(v)))}
+        />
       </div>
 
       <div className="markdown-toolbar__spacer" />
@@ -187,9 +245,24 @@ export function MarkdownToolbar({ viewRef, format, wordWrap, onWordWrapToggle }:
   );
 }
 
-function Btn({ label, icon, onClick }: { label: string; icon: React.ReactNode; onClick: () => void }) {
+function Btn({
+  label,
+  icon,
+  onClick,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+}) {
   return (
-    <IconButton variant="ghost" color="gray" size="1" onClick={onClick} title={label} aria-label={label}>
+    <IconButton
+      variant="ghost"
+      color="gray"
+      size="1"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+    >
       {icon}
     </IconButton>
   );

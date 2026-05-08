@@ -29,15 +29,8 @@
  * ambiguity concerns without a clear benefit.
  */
 
+import type { Emphasis, LinkReference, Paragraph, PhrasingContent, Root, Text } from 'mdast';
 import type { Plugin } from 'unified';
-import type {
-  Emphasis,
-  LinkReference,
-  Paragraph,
-  PhrasingContent,
-  Root,
-  Text,
-} from 'mdast';
 
 export const TOC_MARKER_CLASSNAME = 'marginalia-toc-marker';
 
@@ -102,11 +95,7 @@ function isTocMarkerParagraph(node: Paragraph): boolean {
   // phrasing children around an emphasis wrapper — the emphasis is
   // what distinguishes it from the strong-emphasis variant.
   if (node.children.length === 3) {
-    const [open, mid, close] = node.children as [
-      PhrasingContent,
-      PhrasingContent,
-      PhrasingContent,
-    ];
+    const [open, mid, close] = node.children as [PhrasingContent, PhrasingContent, PhrasingContent];
     if (
       open.type === 'text' &&
       (open as Text).value.trim() === '[[' &&
@@ -121,10 +110,7 @@ function isTocMarkerParagraph(node: Paragraph): boolean {
   return false;
 }
 
-function isSingleTextChild(
-  children: readonly PhrasingContent[],
-  expected: string,
-): boolean {
+function isSingleTextChild(children: readonly PhrasingContent[], expected: string): boolean {
   if (children.length !== 1) return false;
   const only = children[0];
   return !!only && only.type === 'text' && (only as Text).value === expected;

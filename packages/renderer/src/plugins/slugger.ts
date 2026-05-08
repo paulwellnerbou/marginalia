@@ -1,7 +1,7 @@
-import type { Plugin } from 'unified';
-import type { Root, Heading } from 'mdast';
-import { visit } from 'unist-util-visit';
+import type { Heading, Root } from 'mdast';
 import { toString as mdastToString } from 'mdast-util-to-string';
+import type { Plugin } from 'unified';
+import { visit } from 'unist-util-visit';
 import type { Anchor, Warning } from '../types.js';
 
 /**
@@ -23,8 +23,7 @@ export const remarkSlugger: Plugin<[], Root> = () => {
       const id = dedupe(base, seen);
 
       const data = (node.data ??= {});
-      const props = ((data as { hProperties?: Record<string, unknown> })
-        .hProperties ??= {});
+      const props = ((data as { hProperties?: Record<string, unknown> }).hProperties ??= {});
       (props as Record<string, unknown>).id = id;
 
       anchors.push({ level: node.depth, text, id });
@@ -33,7 +32,7 @@ export const remarkSlugger: Plugin<[], Root> = () => {
     (file.data as { anchors?: Anchor[] }).anchors = anchors;
 
     // Seed warnings array so later plugins can push into it.
-    ((file.data as { warnings?: Warning[] }).warnings ??= []);
+    (file.data as { warnings?: Warning[] }).warnings ??= [];
   };
 };
 

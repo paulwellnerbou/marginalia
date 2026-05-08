@@ -1,19 +1,19 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import { canMergeMultiBlock, renderDocument } from '@marginalia/renderer';
 import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
-import { Hono } from 'hono';
+import { canMergeMultiBlock, renderDocument } from '@marginalia/renderer';
 import type { Context } from 'hono';
+import { Hono } from 'hono';
 import { reanchor } from '../anchoring.js';
 import {
-  INVITE_SESSION_COOKIE,
-  type Identity,
-  SESSION_COOKIE,
   authorize,
   canComment,
   canEdit,
   canPropose,
+  type Identity,
+  INVITE_SESSION_COOKIE,
   parseCookie,
+  SESSION_COOKIE,
 } from '../auth.js';
 import { mapWithConcurrency } from '../concurrency.js';
 import type {
@@ -102,9 +102,7 @@ export function threadsRouter(deps: AppDeps): Hono {
   r.patch('/:uid/threads/:tid/comments/:cid', async (c) => editThreadReply(c, deps));
   r.delete('/:uid/threads/:tid/comments/:cid', async (c) => deleteThreadReply(c, deps));
   r.post('/:uid/threads/:tid/respond', async (c) => respondToThread(c, deps));
-  r.post('/:uid/threads/:tid/comments/:cid/reactions', async (c) =>
-    toggleCommentReaction(c, deps),
-  );
+  r.post('/:uid/threads/:tid/comments/:cid/reactions', async (c) => toggleCommentReaction(c, deps));
 
   return r;
 }
@@ -749,7 +747,15 @@ async function editThreadReply(c: Context, deps: AppDeps) {
   const replies = loadReplies(db, doc.uid, tid);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updatedThread]);
   return c.json({
-    thread: await toThreadWire(db, store, doc, updatedThread, replies, decision, reopenableAccepted),
+    thread: await toThreadWire(
+      db,
+      store,
+      doc,
+      updatedThread,
+      replies,
+      decision,
+      reopenableAccepted,
+    ),
   });
 }
 
@@ -1175,7 +1181,15 @@ async function respondToThread(c: Context, deps: AppDeps) {
   }
 
   return c.json({
-    thread: await toThreadWire(deps.db, deps.store, doc, updated, replies, decision, reopenableAccepted),
+    thread: await toThreadWire(
+      deps.db,
+      deps.store,
+      doc,
+      updated,
+      replies,
+      decision,
+      reopenableAccepted,
+    ),
     created_reply_id: createdReplyId,
   });
 }

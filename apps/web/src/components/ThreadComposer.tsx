@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Button, Dialog, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
 import type { BlockSourceRange, RenderResult } from '@marginalia/renderer';
 import { EnterFullScreenIcon, ExitFullScreenIcon } from '@radix-ui/react-icons';
+import { Button, Dialog, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AttachedAsset, DocumentFormat } from '../lib/api.js';
-import { loadEditorDeps, type EditorDeps } from '../lib/codemirror-loader.js';
+import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { reportError } from '../lib/log.js';
-import { mergeBlockRanges } from './mergeBlockRanges.js';
-import type { ProposalTarget } from './SelectionToolbar.js';
-import { RenderedDoc } from './RenderedDoc.js';
 import { loadRenderer } from '../lib/renderer-loader.js';
+import { mergeBlockRanges } from './mergeBlockRanges.js';
+import { RenderedDoc } from './RenderedDoc.js';
+import type { ProposalTarget } from './SelectionToolbar.js';
 
 function ProposalSourceField({
   id,
@@ -48,7 +48,9 @@ function ProposalSourceField({
   const pendingSwapRef = useRef(false);
 
   const onChangeRef = useRef(onChange);
-  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   // Keep parent state in lockstep with the local value: call onChange
   // synchronously from the editor's change handlers so a fast
@@ -132,7 +134,9 @@ function ProposalSourceField({
         if (!disposed) setPhase('failed');
       },
     );
-    return () => { disposed = true; };
+    return () => {
+      disposed = true;
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -275,7 +279,9 @@ export function ProposalComposer({
   // than React state updates, so we read the latest value from a ref
   // rather than capturing a stale closure value.
   const offsetRef = useRef(offset);
-  useEffect(() => { offsetRef.current = offset; }, [offset]);
+  useEffect(() => {
+    offsetRef.current = offset;
+  }, [offset]);
   // Reset expanded + drag offset whenever the dialog is closed (any
   // path: Cancel button, Escape, overlay click, parent clearing the
   // target after submit). Doing this in an effect on `open` catches
@@ -295,33 +301,39 @@ export function ProposalComposer({
     if (expanded) setOffset({ x: 0, y: 0 });
   }, [expanded]);
 
-  const handleTitlePointerDown = useCallback((e: React.PointerEvent) => {
-    if (expanded) return;
-    if (e.button !== 0) return;
-    // Don't hijack clicks on interactive controls inside the header —
-    // the expand toggle, the display-name field, focusable text, etc.
-    // Anything that the user is reasonably trying to *interact with*
-    // rather than grab the window by.
-    if ((e.target as HTMLElement).closest(
-      'button, [role="button"], a, input, textarea, select, [contenteditable="true"]',
-    )) return;
-    e.preventDefault();
-    const startX = e.clientX;
-    const startY = e.clientY;
-    const baseX = offsetRef.current.x;
-    const baseY = offsetRef.current.y;
-    const onMove = (ev: PointerEvent) => {
-      setOffset({ x: baseX + ev.clientX - startX, y: baseY + ev.clientY - startY });
-    };
-    const onUp = () => {
-      document.removeEventListener('pointermove', onMove);
-      document.removeEventListener('pointerup', onUp);
-      document.removeEventListener('pointercancel', onUp);
-    };
-    document.addEventListener('pointermove', onMove);
-    document.addEventListener('pointerup', onUp);
-    document.addEventListener('pointercancel', onUp);
-  }, [expanded]);
+  const handleTitlePointerDown = useCallback(
+    (e: React.PointerEvent) => {
+      if (expanded) return;
+      if (e.button !== 0) return;
+      // Don't hijack clicks on interactive controls inside the header —
+      // the expand toggle, the display-name field, focusable text, etc.
+      // Anything that the user is reasonably trying to *interact with*
+      // rather than grab the window by.
+      if (
+        (e.target as HTMLElement).closest(
+          'button, [role="button"], a, input, textarea, select, [contenteditable="true"]',
+        )
+      )
+        return;
+      e.preventDefault();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const baseX = offsetRef.current.x;
+      const baseY = offsetRef.current.y;
+      const onMove = (ev: PointerEvent) => {
+        setOffset({ x: baseX + ev.clientX - startX, y: baseY + ev.clientY - startY });
+      };
+      const onUp = () => {
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onUp);
+        document.removeEventListener('pointercancel', onUp);
+      };
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', onUp);
+      document.addEventListener('pointercancel', onUp);
+    },
+    [expanded],
+  );
 
   const dragged = offset.x !== 0 || offset.y !== 0;
   const contentStyle: React.CSSProperties = {
@@ -514,17 +526,14 @@ function ProposalComposerBody({
   const blockNoun = target.block_count > 1 ? `${target.block_count} blocks` : 'this block';
 
   return (
-    <div className={`proposal-composer-layout composer${expanded ? ' proposal-composer-layout--expanded' : ''}`}>
+    <div
+      className={`proposal-composer-layout composer${expanded ? ' proposal-composer-layout--expanded' : ''}`}
+    >
       <div
         className={`proposal-composer-header${expanded ? '' : ' proposal-drag-handle'}`}
         onPointerDown={expanded ? undefined : onTitlePointerDown}
       >
-        <Flex
-          align="center"
-          gap="2"
-          mb="1"
-          className="proposal-composer-title-row"
-        >
+        <Flex align="center" gap="2" mb="1" className="proposal-composer-title-row">
           <Dialog.Title className="proposal-composer-title">Propose edit</Dialog.Title>
           <IconButton
             size="2"
@@ -538,7 +547,8 @@ function ProposalComposerBody({
           </IconButton>
         </Flex>
         <Dialog.Description size="2" color="gray" mb="2">
-          Edit the {formatLabel} source of {blockNoun}. Editors will review the diff before accepting.
+          Edit the {formatLabel} source of {blockNoun}. Editors will review the diff before
+          accepting.
         </Dialog.Description>
         {!expanded && (
           <div className="composer-quote">
@@ -606,7 +616,9 @@ function ProposalComposerBody({
           {rendered ? (
             <RenderedDoc rendered={rendered} />
           ) : (
-            <Text color="gray" size="2" as="p">Preview…</Text>
+            <Text color="gray" size="2" as="p">
+              Preview…
+            </Text>
           )}
         </div>
       </div>

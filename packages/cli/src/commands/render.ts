@@ -1,8 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
-import { render, type RenderOptions } from '@marginalia/renderer';
+import { type RenderOptions, render } from '@marginalia/renderer';
 import { parseArgs } from '../args.js';
-import { loadThemeCss } from '../themes.js';
 import { wrapFullHtml } from '../html-wrapper.js';
+import { loadThemeCss } from '../themes.js';
 
 const RENDER_USAGE = `Usage:
   marginalia render <file.md> [options]

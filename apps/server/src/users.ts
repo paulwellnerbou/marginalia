@@ -14,11 +14,7 @@ export interface UpsertResult {
   oldName: string | null;
 }
 
-export function upsertDocUser(
-  db: Database,
-  docUid: string,
-  identity: Identity,
-): UpsertResult {
+export function upsertDocUser(db: Database, docUid: string, identity: Identity): UpsertResult {
   const now = Date.now();
   // bun:sqlite's `.get()` returns null (not undefined) when no row matches.
   const prev = db

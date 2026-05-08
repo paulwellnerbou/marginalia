@@ -1,8 +1,11 @@
-import { defaultSchema } from 'rehype-sanitize';
 import type { Schema } from 'hast-util-sanitize';
+import { defaultSchema } from 'rehype-sanitize';
 
 const base = defaultSchema as Schema;
-const baseAttrs = (base.attributes ?? {}) as Record<string, Array<string | [string, ...Array<string | number | boolean>]>>;
+const baseAttrs = (base.attributes ?? {}) as Record<
+  string,
+  Array<string | [string, ...Array<string | number | boolean>]>
+>;
 
 /**
  * Extends the rehype-sanitize default schema:
@@ -25,9 +28,7 @@ export const sanitizeSchema: Schema = {
     // Drop the default schema's restrictive `[['className', 'anchor']]` for
     // <a> so our heading-anchor class (and any user theme classes) survive.
     a: [
-      ...(baseAttrs.a ?? []).filter(
-        (entry) => !(Array.isArray(entry) && entry[0] === 'className'),
-      ),
+      ...(baseAttrs.a ?? []).filter((entry) => !(Array.isArray(entry) && entry[0] === 'className')),
       'className',
       'target',
       'rel',

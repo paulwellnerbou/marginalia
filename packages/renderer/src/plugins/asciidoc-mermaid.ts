@@ -1,6 +1,6 @@
-import type { Plugin } from 'unified';
-import type { Root, Element, ElementContent } from 'hast';
+import type { Element, ElementContent, Root } from 'hast';
 import { toString as hastToString } from 'hast-util-to-string';
+import type { Plugin } from 'unified';
 import type { MermaidBlock } from '../types.js';
 
 export interface AsciidocMermaidOptions {
@@ -124,7 +124,11 @@ function walk(tree: Root, visitor: Visitor): void {
   // `remarkMermaid` for the markdown pipeline. Replacements are
   // in-place (parent.children[idx] = …), so they don't shift sibling
   // indices; forward iteration is safe.
-  const visit = (node: ElementContent | Root, parent: Element | Root | null, idx: number | undefined) => {
+  const visit = (
+    node: ElementContent | Root,
+    parent: Element | Root | null,
+    idx: number | undefined,
+  ) => {
     visitor(node, parent, idx);
     const children = (node as { children?: ElementContent[] }).children;
     if (!children) return;

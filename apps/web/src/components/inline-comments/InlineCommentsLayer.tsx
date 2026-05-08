@@ -12,9 +12,9 @@ import {
 import type { CommentAnchor, DocumentFormat, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import {
-  type ThreadCollapseState,
   buildThreadCollapseState,
   reconcileThreadCollapseState,
+  type ThreadCollapseState,
 } from '../threadCollapseState.js';
 import { InlineCommentsToolbar } from './InlineCommentsToolbar.js';
 import { InlineComposer } from './InlineComposer.js';

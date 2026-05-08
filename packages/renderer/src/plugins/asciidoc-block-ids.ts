@@ -1,12 +1,12 @@
+import type { Element, ElementContent, Properties, Root } from 'hast';
 import type { Plugin } from 'unified';
-import type { Root, Element, ElementContent, Properties } from 'hast';
 import { visit } from 'unist-util-visit';
-import type { BlockMap } from '../types.js';
 import {
   MARGINALIA_BLOCK_MARKER_PREFIX,
   MARGINALIA_SUBBLOCK_MARKER_PREFIX,
   type SubBlockEntry,
 } from '../asciidoc-markers.js';
+import type { BlockMap } from '../types.js';
 
 export interface AsciidocBlockIdsOptions {
   blocks: BlockMap;

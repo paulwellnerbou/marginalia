@@ -122,7 +122,7 @@ function annotateInlineDiffs(lines: DiffLine[]): void {
 
 function diffInline(
   before: string,
-  after: string
+  after: string,
 ): { before: DiffSegment[]; after: DiffSegment[] } {
   if (before === after) {
     return {
@@ -137,7 +137,9 @@ function diffInline(
     return diffInlineByEdges(before, after);
   }
 
-  const dp: number[][] = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  const dp: number[][] = Array.from({ length: a.length + 1 }, () =>
+    new Array(b.length + 1).fill(0),
+  );
   for (let i = a.length - 1; i >= 0; i--) {
     for (let j = b.length - 1; j >= 0; j--) {
       if (a[i] === b[j]) dp[i]![j] = dp[i + 1]![j + 1]! + 1;
@@ -171,7 +173,7 @@ function diffInline(
 
 function diffInlineByEdges(
   before: string,
-  after: string
+  after: string,
 ): { before: DiffSegment[]; after: DiffSegment[] } {
   let prefix = 0;
   const maxPrefix = Math.min(before.length, after.length);
@@ -179,7 +181,11 @@ function diffInlineByEdges(
 
   let beforeSuffix = before.length;
   let afterSuffix = after.length;
-  while (beforeSuffix > prefix && afterSuffix > prefix && before[beforeSuffix - 1] === after[afterSuffix - 1]) {
+  while (
+    beforeSuffix > prefix &&
+    afterSuffix > prefix &&
+    before[beforeSuffix - 1] === after[afterSuffix - 1]
+  ) {
     beforeSuffix--;
     afterSuffix--;
   }

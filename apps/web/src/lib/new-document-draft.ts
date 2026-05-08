@@ -1,4 +1,4 @@
-import { isDocumentFormat, type DocumentFormat } from './api.js';
+import { type DocumentFormat, isDocumentFormat } from './api.js';
 
 const PENDING_NEW_DOCUMENT_DRAFT_KEY = 'marginalia.pendingNewDocumentDraft';
 

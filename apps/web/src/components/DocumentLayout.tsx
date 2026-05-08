@@ -39,8 +39,6 @@ import type {
 } from '../lib/api.js';
 import {
   ApiError,
-  type Comment,
-  type HistoryEntry,
   acceptEditProposal as apiAcceptProposal,
   createComment as apiCreate,
   createEditProposal as apiCreateProposal,
@@ -53,8 +51,10 @@ import {
   revertHistoryVersion as apiRevertHistoryVersion,
   toggleCommentReaction as apiToggleReaction,
   updateComment as apiUpdate,
+  type Comment,
   getDocument,
   getHistoryDiff,
+  type HistoryEntry,
   isProposal,
   listThreads,
   uploadAsset,
@@ -67,8 +67,8 @@ import { reportError } from '../lib/log.js';
 import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
 import { ensureNotificationPermission, notify } from '../lib/notifications.js';
 import {
-  BUILT_IN_THEMES,
   applyTheme,
+  BUILT_IN_THEMES,
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
@@ -84,14 +84,14 @@ import {
 import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
 import { DownloadMenu } from './DownloadMenu.js';
 import { HistoryList } from './HistoryList.js';
+import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
+import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
+import { COMMENT_FLASH_MS } from './inline-comments/inlineUtils.js';
 import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
 import { ProposalComposer } from './ThreadComposer.js';
 import { Toc } from './Toc.js';
-import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
-import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
-import { COMMENT_FLASH_MS } from './inline-comments/inlineUtils.js';
 
 const MAX_WIDTH_KEY = 'marginalia.maxWidth';
 const TEXT_ZOOM_KEY = 'marginalia.textZoom';

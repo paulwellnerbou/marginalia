@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react';
-import { Code, IconButton, Tooltip } from '@radix-ui/themes';
 import { CheckIcon, CopyIcon } from '@radix-ui/react-icons';
+import { Code, IconButton, Tooltip } from '@radix-ui/themes';
+import { useRef, useState } from 'react';
 import { reportError } from '../lib/log.js';
 
 interface Props {
@@ -39,7 +39,9 @@ export function Copyable({ text, multiline = false, ariaLabel = 'Copy', size = '
   return (
     <div className={`copyable ${multiline ? 'copyable-multiline' : 'copyable-inline'}`}>
       <div className="copyable-surface">
-        <Code size={size} className="copyable-text">{text}</Code>
+        <Code size={size} className="copyable-text">
+          {text}
+        </Code>
         <Tooltip content={copied ? 'Copied!' : ariaLabel}>
           <IconButton
             type="button"

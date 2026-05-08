@@ -65,11 +65,7 @@ export function dismissToast(id: number): void {
  */
 export function notify(title: string, body: string, action?: Toast['action']): void {
   const tabHidden = typeof document !== 'undefined' && document.hidden;
-  if (
-    tabHidden &&
-    typeof Notification !== 'undefined' &&
-    Notification.permission === 'granted'
-  ) {
+  if (tabHidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
     try {
       const n = new Notification(title, { body, tag: 'marginalia' });
       if (action) n.addEventListener('click', action.onClick);

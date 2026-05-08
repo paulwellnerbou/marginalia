@@ -31,12 +31,13 @@
  * unreadable PDFs. */
 @media print {
   :root,
-  [data-appearance='dark'],
-  [data-appearance='auto'] {
+  [data-appearance="dark"],
+  [data-appearance="auto"] {
     color-scheme: light;
   }
 
-  html, body {
+  html,
+  body {
     background: #fff !important;
   }
 
@@ -104,7 +105,7 @@
    * most of this already. */
   .marginalia .block-actions,
   .marginalia .comment-gutter,
-  .marginalia [data-editor-only='true'] {
+  .marginalia [data-editor-only="true"] {
     display: none !important;
   }
 
@@ -127,7 +128,7 @@
 
   /* When a mermaid block fails to render (parse error or the runtime
    * didn't load), show the raw source instead of an empty box. */
-  .marginalia div.mermaid:not([data-processed='true']) {
+  .marginalia div.mermaid:not([data-processed="true"]) {
     white-space: pre-wrap;
     font-family: var(--md-font-mono, ui-monospace, monospace);
     font-size: 0.9em;

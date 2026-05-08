@@ -69,13 +69,11 @@ export async function renderMermaidIn(root: HTMLElement): Promise<void> {
   // current rendered article is found.
   const liveRoot: Element | Document = root.isConnected
     ? root
-    : document.querySelector('article.marginalia') ?? document;
+    : (document.querySelector('article.marginalia') ?? document);
 
   const blocks = Array.from(
     liveRoot.querySelectorAll<HTMLElement>('div.mermaid, pre.mermaid'),
-  ).filter(
-    (el) => el.getAttribute('data-processed') !== 'true' && el.isConnected,
-  );
+  ).filter((el) => el.getAttribute('data-processed') !== 'true' && el.isConnected);
   console.log(
     `[marginalia:mermaid] live scan: ${blocks.length} pending (root still connected: ${root.isConnected})`,
   );

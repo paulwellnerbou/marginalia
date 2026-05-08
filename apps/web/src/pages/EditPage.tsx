@@ -1,38 +1,38 @@
+import type { RenderResult } from '@marginalia/renderer';
+import { Button, Container, Flex, Select, Slider, Text } from '@radix-ui/themes';
+import type { EditorView } from 'codemirror';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { saveInviteToken } from '../lib/invite.js';
-import { Button, Container, Flex, Select, Slider, Text } from '@radix-ui/themes';
-import type { RenderResult } from '@marginalia/renderer';
-import type { EditorView } from 'codemirror';
-import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
+import { AppBar } from '../components/AppBar.js';
+import { AssetsPanel } from '../components/AssetsPanel.js';
+import { EditToolbar } from '../components/EditToolbar.js';
+import { MarkdownToolbar } from '../components/MarkdownToolbar.js';
+import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
+import { RenderedDoc } from '../components/RenderedDoc.js';
+import { ResizeHandle } from '../components/ResizeHandle.js';
 import {
-  getDocument,
-  updateDocument,
+  ApiError,
+  type AttachedAsset,
   claimInvite,
   createDocumentProposal,
-  ApiError,
   type Document,
-  type AttachedAsset,
-  uploadAsset,
   deleteAttachedAsset,
+  getDocument,
+  updateDocument,
+  uploadAsset,
 } from '../lib/api.js';
-import { loadEditorDeps, type EditorDeps } from '../lib/codemirror-loader.js';
-import { loadRenderer } from '../lib/renderer-loader.js';
+import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { documentTitle } from '../lib/doc-title.js';
+import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
+import { saveInviteToken } from '../lib/invite.js';
 import { reportError } from '../lib/log.js';
+import { loadRenderer } from '../lib/renderer-loader.js';
 import {
   applyTheme,
   BUILT_IN_THEMES,
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
-import { RenderedDoc } from '../components/RenderedDoc.js';
-import { AssetsPanel } from '../components/AssetsPanel.js';
-import { AppBar } from '../components/AppBar.js';
-import { EditToolbar } from '../components/EditToolbar.js';
-import { MarkdownToolbar } from '../components/MarkdownToolbar.js';
-import { ResizeHandle } from '../components/ResizeHandle.js';
-import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
 
 const ASSETS_COLLAPSED_WIDTH = 36;
 const LS_ASSETS_OPEN = 'marginalia.editAssetsOpen';
@@ -60,7 +60,7 @@ function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'):
   // external URLs or linkified text.
   const mdRe = /!\[[^\]]*\]\(([^)\s"']+)/g;
   // AsciiDoc: image::src[]  /  image:src[] (inline) / include::src[]
-  const adocRe = /(?:^|\s)(?:image::|image:|include::)([^\s\[]+)/g;
+  const adocRe = /(?:^|\s)(?:image::|image:|include::)([^\s[]+)/g;
   const re = format === 'asciidoc' ? adocRe : mdRe;
   let m: RegExpExecArray | null;
   while ((m = re.exec(source)) !== null) {
@@ -103,7 +103,9 @@ export function EditPage() {
     return saved === null ? true : saved === 'true';
   });
   const wordWrapRef = useRef(wordWrap);
-  useEffect(() => { wordWrapRef.current = wordWrap; }, [wordWrap]);
+  useEffect(() => {
+    wordWrapRef.current = wordWrap;
+  }, [wordWrap]);
 
   const [assetsOpen, setAssetsOpen] = useState<boolean>(() => {
     const saved = localStorage.getItem(LS_ASSETS_OPEN);
@@ -124,12 +126,24 @@ export function EditPage() {
   });
   const [theme, setTheme] = useState('default');
 
-  useEffect(() => { localStorage.setItem(LS_ASSETS_OPEN, String(assetsOpen)); }, [assetsOpen]);
-  useEffect(() => { localStorage.setItem(LS_ASSETS_WIDTH, String(assetsWidth)); }, [assetsWidth]);
-  useEffect(() => { localStorage.setItem(LS_EDITOR_WIDTH, String(editorWidth)); }, [editorWidth]);
-  useEffect(() => { localStorage.setItem(LS_TEXT_ZOOM, String(textZoom)); }, [textZoom]);
-  useEffect(() => { localStorage.setItem(LS_WORD_WRAP, String(wordWrap)); }, [wordWrap]);
-  useEffect(() => { void applyTheme(theme); }, [theme]);
+  useEffect(() => {
+    localStorage.setItem(LS_ASSETS_OPEN, String(assetsOpen));
+  }, [assetsOpen]);
+  useEffect(() => {
+    localStorage.setItem(LS_ASSETS_WIDTH, String(assetsWidth));
+  }, [assetsWidth]);
+  useEffect(() => {
+    localStorage.setItem(LS_EDITOR_WIDTH, String(editorWidth));
+  }, [editorWidth]);
+  useEffect(() => {
+    localStorage.setItem(LS_TEXT_ZOOM, String(textZoom));
+  }, [textZoom]);
+  useEffect(() => {
+    localStorage.setItem(LS_WORD_WRAP, String(wordWrap));
+  }, [wordWrap]);
+  useEffect(() => {
+    void applyTheme(theme);
+  }, [theme]);
 
   const editorEl = useRef<HTMLDivElement>(null);
   const previewEl = useRef<HTMLDivElement>(null);
@@ -468,9 +482,10 @@ export function EditPage() {
       // what the server has at base — the proposed_text is the user's
       // new full source.
       const renderer = await loadRenderer();
-      const blocks = doc.format === 'asciidoc'
-        ? renderer.locateAllBlocksAsciidoc(savedSource)
-        : renderer.locateAllBlocks(savedSource);
+      const blocks =
+        doc.format === 'asciidoc'
+          ? renderer.locateAllBlocksAsciidoc(savedSource)
+          : renderer.locateAllBlocks(savedSource);
       const first = blocks.entries().next();
       if (first.done) {
         setError('Cannot propose an edit on an empty document.');
@@ -526,9 +541,7 @@ export function EditPage() {
   }
 
   const assetsPx = canEdit ? (assetsOpen ? assetsWidth : ASSETS_COLLAPSED_WIDTH) : 0;
-  const gridColumns = canEdit
-    ? `${assetsPx}px ${editorWidth}px 1fr`
-    : `${editorWidth}px 1fr`;
+  const gridColumns = canEdit ? `${assetsPx}px ${editorWidth}px 1fr` : `${editorWidth}px 1fr`;
 
   return (
     <div className="edit-page">
@@ -579,12 +592,21 @@ export function EditPage() {
             onSave={(comment) => handleSave(comment)}
             onProposeEdit={(rationale) => handleProposeEdit(rationale)}
           />
-          <ResizeHandle side="left" width={editorWidth} onResize={setEditorWidth} min={200} max={1800} label="Resize editor panel" />
+          <ResizeHandle
+            side="left"
+            width={editorWidth}
+            onResize={setEditorWidth}
+            min={200}
+            max={1800}
+            label="Resize editor panel"
+          />
         </div>
         <div className="edit-preview-pane">
           <div className="edit-preview-chrome">
             <Flex align="center" gap="2">
-              <Text size="1" color="gray">Text size</Text>
+              <Text size="1" color="gray">
+                Text size
+              </Text>
               <Slider
                 size="1"
                 style={{ width: 80 }}
@@ -597,12 +619,19 @@ export function EditPage() {
               <Text size="1" color="gray" style={{ minWidth: '3.5ch', flexShrink: 0 }}>
                 {textZoom}%
               </Text>
-              <Button size="1" variant="ghost" onClick={() => setTextZoom(100)} disabled={textZoom === 100}>
+              <Button
+                size="1"
+                variant="ghost"
+                onClick={() => setTextZoom(100)}
+                disabled={textZoom === 100}
+              >
                 Reset
               </Button>
             </Flex>
             <Flex align="center" gap="2">
-              <Text size="1" color="gray" as="label" htmlFor="edit-theme-select">Theme</Text>
+              <Text size="1" color="gray" as="label" htmlFor="edit-theme-select">
+                Theme
+              </Text>
               <Select.Root
                 value={theme}
                 size="1"
@@ -614,7 +643,9 @@ export function EditPage() {
                 <Select.Trigger id="edit-theme-select" variant="soft" />
                 <Select.Content position="popper" style={{ maxHeight: 360 }}>
                   {BUILT_IN_THEMES.map((t) => (
-                    <Select.Item key={t.id} value={t.id}>{t.label}</Select.Item>
+                    <Select.Item key={t.id} value={t.id}>
+                      {t.label}
+                    </Select.Item>
                   ))}
                 </Select.Content>
               </Select.Root>

@@ -163,7 +163,7 @@ function collectTopLevelBlocks(root: HTMLElement): HTMLElement[] {
 export function selectionRect(): DOMRect | null {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
-  
+
   // Use getClientRects()[0] instead of getBoundingClientRect() so that when a
   // selection wraps across multiple lines, we only consider the bounding box
   // of the first line. This prevents the button from jumping to the center
@@ -172,7 +172,7 @@ export function selectionRect(): DOMRect | null {
   if (rects.length === 0) return null;
   const rect = rects[0];
   if (!rect) return null;
-  
+
   if (rect.width === 0 && rect.height === 0) return null;
   return rect;
 }

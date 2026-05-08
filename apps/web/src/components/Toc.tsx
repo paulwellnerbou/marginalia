@@ -1,6 +1,14 @@
-import { Fragment, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { IconButton, Text, TextField } from '@radix-ui/themes';
 import { ChevronDownIcon, Cross2Icon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
+import { IconButton, Text, TextField } from '@radix-ui/themes';
+import {
+  Fragment,
+  type ReactNode,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { TocNode } from '../lib/api.js';
 import { waitForExpansionToSettle } from '../lib/heading-collapse.js';
 
@@ -8,9 +16,17 @@ export function Toc({ nodes, activeId }: { nodes: TocNode[]; activeId?: string |
   const [query, setQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const deferredQuery = useDeferredValue(query);
-  const filteredNodes = useMemo(() => filterNodes(nodes, deferredQuery.trim()), [deferredQuery, nodes]);
+  const filteredNodes = useMemo(
+    () => filterNodes(nodes, deferredQuery.trim()),
+    [deferredQuery, nodes],
+  );
 
-  if (nodes.length === 0) return <Text size="1" color="gray" className="toc-empty">No headings</Text>;
+  if (nodes.length === 0)
+    return (
+      <Text size="1" color="gray" className="toc-empty">
+        No headings
+      </Text>
+    );
 
   return (
     <nav className="toc">
@@ -46,13 +62,11 @@ export function Toc({ nodes, activeId }: { nodes: TocNode[]; activeId?: string |
         </TextField.Root>
       </div>
       {filteredNodes.length > 0 ? (
-        <TocList
-          nodes={filteredNodes}
-          activeId={activeId ?? null}
-          query={deferredQuery.trim()}
-        />
+        <TocList nodes={filteredNodes} activeId={activeId ?? null} query={deferredQuery.trim()} />
       ) : (
-        <Text size="1" color="gray" className="toc-empty">No headings match "{query.trim()}".</Text>
+        <Text size="1" color="gray" className="toc-empty">
+          No headings match "{query.trim()}".
+        </Text>
       )}
     </nav>
   );
@@ -70,12 +84,7 @@ function TocList({
   return (
     <ul className="toc-list">
       {nodes.map((n) => (
-        <TocItem
-          key={n.id}
-          node={n}
-          activeId={activeId}
-          query={query}
-        />
+        <TocItem key={n.id} node={n} activeId={activeId} query={query} />
       ))}
     </ul>
   );
@@ -184,11 +193,7 @@ function TocItem({
         // focus order and a11y tree.
         <div className={`toc-collapse-section ${effectiveOpen ? '' : 'is-collapsed'}`}>
           <div className="toc-collapse-section-inner" inert={!effectiveOpen}>
-            <TocList
-              nodes={node.children}
-              activeId={activeId}
-              query={query}
-            />
+            <TocList nodes={node.children} activeId={activeId} query={query} />
           </div>
         </div>
       )}

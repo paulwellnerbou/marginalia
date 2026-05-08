@@ -83,8 +83,7 @@ export function reanchor(comment: CommentRow, blocks: BlockInfo[]): AnchorUpdate
 
   // 3. prefix + quote + suffix fuzzy search — again, prefer the structurally
   //    closest candidate.
-  const context =
-    (comment.anchor_prefix ?? '') + quote + (comment.anchor_suffix ?? '');
+  const context = (comment.anchor_prefix ?? '') + quote + (comment.anchor_suffix ?? '');
   if (context.length > quote.length) {
     const ctxMatches = blocks
       .filter((b) => b.text.includes(context))

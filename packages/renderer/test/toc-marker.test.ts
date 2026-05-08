@@ -48,15 +48,7 @@ describe('remarkTocMarker', () => {
   });
 
   test('multiple markers are all converted', async () => {
-    const md = [
-      '[TOC]',
-      '',
-      '## A',
-      '',
-      '[[_TOC_]]',
-      '',
-      '## B',
-    ].join('\n');
+    const md = ['[TOC]', '', '## A', '', '[[_TOC_]]', '', '## B'].join('\n');
     const { html } = await render(md);
     const matches = html.match(/class="marginalia-toc-marker"/g) ?? [];
     expect(matches.length).toBe(2);

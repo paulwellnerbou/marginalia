@@ -66,13 +66,7 @@ describe('grid tables', () => {
   });
 
   test('leaves grid-table-looking content inside a fenced code block untouched', async () => {
-    const md = [
-      '```',
-      '+---+---+',
-      '| a | b |',
-      '+---+---+',
-      '```',
-    ].join('\n');
+    const md = ['```', '+---+---+', '| a | b |', '+---+---+', '```'].join('\n');
     const r = await render(md);
     // Inside a code block, the raw source should survive as text.
     expect(r.html).toContain('+---+---+');

@@ -1,5 +1,5 @@
+import type { Code, Html, Root } from 'mdast';
 import type { Plugin } from 'unified';
-import type { Root, Code, Html } from 'mdast';
 import { visit } from 'unist-util-visit';
 import type { MermaidBlock } from '../types.js';
 

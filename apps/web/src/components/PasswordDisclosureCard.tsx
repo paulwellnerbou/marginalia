@@ -1,6 +1,6 @@
-import { useState } from 'react';
 import { Button, Callout, Checkbox, Flex, Text } from '@radix-ui/themes';
-import { Copyable } from './Copyable.js';
+import { useState } from 'react';
+import { reportError } from '../lib/log.js';
 import {
   clearSavedPassword,
   saveSavedPassword,
@@ -8,7 +8,7 @@ import {
   supportsBrowserPasswordManager,
   useSavedPassword,
 } from '../lib/passwords.js';
-import { reportError } from '../lib/log.js';
+import { Copyable } from './Copyable.js';
 
 export function PasswordDisclosureCard({
   docUid,

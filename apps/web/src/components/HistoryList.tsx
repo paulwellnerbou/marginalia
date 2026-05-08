@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertDialog, Box, Button, Code, Flex, Text } from '@radix-ui/themes';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getDocument, getHistory, getHistoryDiff, type HistoryEntry } from '../lib/api.js';
 import { formatTimestamp, formatTimestampLong } from '../lib/format-time.js';
 import { describeEntry, historyActorLabel, shortOid } from '../lib/history-format.js';
@@ -254,9 +254,7 @@ export function HistoryList({
           const canRevertLatest =
             isCurrent && displayedEntries.length > 1 && Boolean(onRevertLatest);
           const revertTitle =
-            entry.action === 'accept-proposal'
-              ? 'Revert and reopen the change proposal'
-              : 'Revert';
+            entry.action === 'accept-proposal' ? 'Revert and reopen the change proposal' : 'Revert';
           const actorName = historyActorLabel(entry.actor.display_name, entry.actor.client_id);
           const proposal = entry.proposal;
           const proposalAuthor = proposal
@@ -438,4 +436,3 @@ export function HistoryList({
     </>
   );
 }
-

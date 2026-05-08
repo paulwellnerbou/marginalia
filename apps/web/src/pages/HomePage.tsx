@@ -1,4 +1,3 @@
-import ReactMarkdown from 'react-markdown';
 import {
   ChatBubbleIcon,
   Cross2Icon,
@@ -30,6 +29,7 @@ import {
   Tooltip,
 } from '@radix-ui/themes';
 import { useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
 import { Link, useNavigate } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { Copyable } from '../components/Copyable.js';
@@ -52,9 +52,9 @@ import {
   type PendingNewDocumentDraft,
 } from '../lib/new-document-draft.js';
 import {
-  type RecentDoc,
   loadRecentDocs,
   openUrlFor,
+  type RecentDoc,
   recordVisit,
   removeFromRecent,
 } from '../lib/recent-docs.js';
@@ -1036,4 +1036,3 @@ function formatRelative(ts: number): string {
   if (diff < 24 * 60 * 60_000) return `${Math.round(diff / (60 * 60_000))}h ago`;
   return new Date(ts).toLocaleDateString();
 }
-

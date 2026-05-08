@@ -26,8 +26,9 @@ export async function backfillProposalBranches(
   }
   const rows = (
     docUid === undefined
-      ? db.prepare(
-          `SELECT cep.comment_id          AS id,
+      ? db
+          .prepare(
+            `SELECT cep.comment_id          AS id,
                   c.doc_uid               AS doc_uid,
                   c.anchor_block_id       AS anchor_block_id,
                   c.author_client_id      AS author_client_id,
@@ -45,7 +46,8 @@ export async function backfillProposalBranches(
               AND cep.branch_ref IS NULL
               AND c.deleted_at IS NULL
               AND c.anchor_block_id IS NOT NULL`,
-        ).all()
+          )
+          .all()
       : db
           .prepare(
             `SELECT cep.comment_id          AS id,
@@ -195,4 +197,3 @@ export async function backfillProposalBranches(
 
   return { migrated, skipped };
 }
-

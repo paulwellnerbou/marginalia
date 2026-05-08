@@ -23,8 +23,7 @@ async function inspectDocx(buf: Buffer): Promise<{
 }> {
   const zip = await JSZip.loadAsync(buf);
   const documentXml = (await zip.file('word/document.xml')?.async('string')) ?? '';
-  const relsXml =
-    (await zip.file('word/_rels/document.xml.rels')?.async('string')) ?? '';
+  const relsXml = (await zip.file('word/_rels/document.xml.rels')?.async('string')) ?? '';
   // JSZip lists both directories and files under `zip.files`; skip
   // directory entries so we count actual images, not the `word/media/`
   // folder marker itself.
@@ -306,17 +305,7 @@ describe('exportDocx — bookmarks and internal links (M3a)', () => {
 
 describe('exportDocx — Table of Contents (M3b)', () => {
   test('auto mode emits TOC when doc has ≥ 2 headings', async () => {
-    const md = [
-      '# Top',
-      '',
-      '## A',
-      '',
-      'Body A.',
-      '',
-      '## B',
-      '',
-      'Body B.',
-    ].join('\n');
+    const md = ['# Top', '', '## A', '', 'Body A.', '', '## B', '', 'Body B.'].join('\n');
     const buf = await exportDocx(md);
     const { documentXml } = await inspectDocx(buf);
     // Word TOC field: `<w:fldChar>` + instrText containing the TOC
@@ -406,13 +395,7 @@ describe('exportDocx — Table of Contents (M3b)', () => {
   test('TOC falls back to the top when the doc has no leading heading', async () => {
     // A doc that opens with a paragraph (not a heading) still needs
     // its TOC somewhere visible — the top is the natural place.
-    const md = [
-      'Intro paragraph before any heading.',
-      '',
-      '## A',
-      '',
-      '## B',
-    ].join('\n');
+    const md = ['Intro paragraph before any heading.', '', '## A', '', '## B'].join('\n');
     const buf = await exportDocx(md);
     const { documentXml } = await inspectDocx(buf);
     const introIdx = documentXml.indexOf('Intro paragraph');
@@ -453,15 +436,7 @@ describe('exportDocx — [TOC] / [[_TOC_]] markers', () => {
   });
 
   test('[[_TOC_]] marker is also honoured', async () => {
-    const md = [
-      '# Title',
-      '',
-      '[[_TOC_]]',
-      '',
-      '## A',
-      '',
-      '## B',
-    ].join('\n');
+    const md = ['# Title', '', '[[_TOC_]]', '', '## A', '', '## B'].join('\n');
     const buf = await exportDocx(md);
     const { documentXml } = await inspectDocx(buf);
     // TOC field lands in the body (not just the heading).
@@ -474,17 +449,9 @@ describe('exportDocx — [TOC] / [[_TOC_]] markers', () => {
   test('explicit marker wins over the "after-leading-heading" heuristic', async () => {
     // Without the marker, the TOC would go right after the title.
     // With the marker, it goes where the author put it.
-    const md = [
-      '# Title',
-      '',
-      '## A',
-      '',
-      'Some content between.',
-      '',
-      '[TOC]',
-      '',
-      '## B',
-    ].join('\n');
+    const md = ['# Title', '', '## A', '', 'Some content between.', '', '[TOC]', '', '## B'].join(
+      '\n',
+    );
     const buf = await exportDocx(md);
     const { documentXml } = await inspectDocx(buf);
     const titleIdx = documentXml.indexOf('Title');
@@ -499,17 +466,7 @@ describe('exportDocx — [TOC] / [[_TOC_]] markers', () => {
   });
 
   test('only the FIRST marker becomes a TOC; later markers are silently dropped', async () => {
-    const md = [
-      '# Title',
-      '',
-      '[TOC]',
-      '',
-      '## A',
-      '',
-      '[[_TOC_]]',
-      '',
-      '## B',
-    ].join('\n');
+    const md = ['# Title', '', '[TOC]', '', '## A', '', '[[_TOC_]]', '', '## B'].join('\n');
     const buf = await exportDocx(md);
     const { documentXml } = await inspectDocx(buf);
     // A single Word TOC field uses three `<w:fldChar>` elements
@@ -676,12 +633,8 @@ describe('exportDocx — base font size calibration', () => {
       exportDocx('Body.', { theme: 'technical', includeToc: false }).then(loadStyles),
       exportDocx('Body.', { theme: 'beautiful', includeToc: false }).then(loadStyles),
     ]);
-    expect(tech).toMatch(
-      /<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:sz\s+w:val="20"/,
-    );
-    expect(beautiful).toMatch(
-      /<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:sz\s+w:val="26"/,
-    );
+    expect(tech).toMatch(/<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:sz\s+w:val="20"/);
+    expect(beautiful).toMatch(/<w:docDefaults>[\s\S]*?<w:rPrDefault>[\s\S]*?<w:sz\s+w:val="26"/);
   });
 
   test('body and list paragraphs use fixed 1.5 line spacing in DOCX', async () => {
@@ -720,9 +673,7 @@ describe('exportDocx — base font size calibration', () => {
       expect(paragraphContaining(documentXml, text)).toMatch(/<w:spacing[^>]*w:line="360"/);
     }
 
-    const lineValues = [...documentXml.matchAll(/w:line="(\d+)"/g)].map((m) =>
-      Number(m[1]),
-    );
+    const lineValues = [...documentXml.matchAll(/w:line="(\d+)"/g)].map((m) => Number(m[1]));
     expect(lineValues.length).toBeGreaterThanOrEqual(3);
     expect(Math.max(...lineValues)).toBeLessThanOrEqual(360);
   });
@@ -755,11 +706,7 @@ describe('exportDocx — footnotes (M3c)', () => {
   });
 
   test('footnote bodies land in word/footnotes.xml, not inline', async () => {
-    const md = [
-      'Alpha[^a].',
-      '',
-      '[^a]: Body text here.',
-    ].join('\n');
+    const md = ['Alpha[^a].', '', '[^a]: Body text here.'].join('\n');
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     const footnotesXml = await loadFootnotes(buf);
@@ -919,12 +866,7 @@ describe('exportDocx — blockquote nesting', () => {
     // Regression: the previous `case 'blockquote'` flattened every
     // child via `collectInline`, so an inner `<ul>` lost its
     // numbering and items became a single plain-text run.
-    const md = [
-      '> Intro paragraph.',
-      '>',
-      '> - item one',
-      '> - item two',
-    ].join('\n');
+    const md = ['> Intro paragraph.', '>', '> - item one', '> - item two'].join('\n');
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     // The intro paragraph carries Blockquote styling.
@@ -937,33 +879,19 @@ describe('exportDocx — blockquote nesting', () => {
   });
 
   test('blockquote list items keep Blockquote styling instead of plain ListParagraph', async () => {
-    const md = [
-      '> Intro paragraph.',
-      '>',
-      '> - item one',
-      '> - item two',
-    ].join('\n');
+    const md = ['> Intro paragraph.', '>', '> - item one', '> - item two'].join('\n');
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     // The quoted list paragraphs need BOTH the quote style and list
     // numbering. Without the fix they came out as plain ListParagraph
     // items, so the left quote bar/indent disappeared in Word.
-    expect(documentXml).toMatch(
-      /<w:pStyle w:val="Blockquote"\/>[\s\S]*?<w:numPr>[\s\S]*?item one/,
-    );
-    expect(documentXml).toMatch(
-      /<w:pStyle w:val="Blockquote"\/>[\s\S]*?<w:numPr>[\s\S]*?item two/,
-    );
+    expect(documentXml).toMatch(/<w:pStyle w:val="Blockquote"\/>[\s\S]*?<w:numPr>[\s\S]*?item one/);
+    expect(documentXml).toMatch(/<w:pStyle w:val="Blockquote"\/>[\s\S]*?<w:numPr>[\s\S]*?item two/);
     expect(documentXml).not.toContain('<w:pStyle w:val="ListParagraph"/>');
   });
 
   test('blockquote list paragraphs carry explicit quote context in source order', async () => {
-    const md = [
-      '> Quoted preamble.',
-      '>',
-      '> - quoted item one',
-      '> - quoted item two',
-    ].join('\n');
+    const md = ['> Quoted preamble.', '>', '> - quoted item one', '> - quoted item two'].join('\n');
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     const preamble = paragraphContaining(documentXml, 'Quoted preamble.');
@@ -986,13 +914,7 @@ describe('exportDocx — blockquote nesting', () => {
   });
 
   test('blockquote with a nested code block keeps CodeBlock styling', async () => {
-    const md = [
-      '> Quoted prose.',
-      '>',
-      '> ```js',
-      '> const x = 1;',
-      '> ```',
-    ].join('\n');
+    const md = ['> Quoted prose.', '>', '> ```js', '> const x = 1;', '> ```'].join('\n');
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     // The prose paragraph is styled Blockquote.
@@ -1029,8 +951,7 @@ describe('exportDocx — blockquote nesting', () => {
     ].join('\n');
     const buf = await exportDocx(md, { includeToc: false });
     const zip = await JSZip.loadAsync(buf);
-    const footnotesXml =
-      (await zip.file('word/footnotes.xml')?.async('string')) ?? '';
+    const footnotesXml = (await zip.file('word/footnotes.xml')?.async('string')) ?? '';
     expect(footnotesXml).toContain('A quoted preamble.');
     expect(footnotesXml).toContain('first bullet');
     expect(footnotesXml).toContain('second bullet');
@@ -1098,12 +1019,7 @@ describe('exportDocx — list items', () => {
   test('list item with a nested list preserves the nesting', async () => {
     // Regression: the rewrite must keep nested lists working and
     // place them at the correct depth (level + 1).
-    const md = [
-      '- outer one',
-      '  - nested a',
-      '  - nested b',
-      '- outer two',
-    ].join('\n');
+    const md = ['- outer one', '  - nested a', '  - nested b', '- outer two'].join('\n');
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     expect(documentXml).toContain('outer one');
@@ -1116,13 +1032,9 @@ describe('exportDocx — list items', () => {
   });
 
   test('list item and continuation paragraphs use 3pt after spacing', async () => {
-    const md = [
-      '- First paragraph.',
-      '',
-      '  Continuation paragraph.',
-      '',
-      '- Second item.',
-    ].join('\n');
+    const md = ['- First paragraph.', '', '  Continuation paragraph.', '', '- Second item.'].join(
+      '\n',
+    );
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     expect(paragraphContaining(documentXml, 'First paragraph.')).toMatch(
@@ -1131,9 +1043,7 @@ describe('exportDocx — list items', () => {
     expect(paragraphContaining(documentXml, 'Continuation paragraph.')).toMatch(
       /<w:spacing[^>]*w:after="60"/,
     );
-    expect(paragraphContaining(documentXml, 'Second item.')).toMatch(
-      /<w:spacing[^>]*w:after="60"/,
-    );
+    expect(paragraphContaining(documentXml, 'Second item.')).toMatch(/<w:spacing[^>]*w:after="60"/);
   });
 });
 
@@ -1221,11 +1131,7 @@ describe('exportDocx — tables (Copilot review follow-ups)', () => {
   });
 
   test('header cells carry a heavier bottom border when token enabled (C7)', async () => {
-    const md = [
-      '| Col A | Col B |',
-      '|-------|-------|',
-      '| a     | b     |',
-    ].join('\n');
+    const md = ['| Col A | Col B |', '|-------|-------|', '| a     | b     |'].join('\n');
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     // The header cell's bottom border is 2pt (size=16 in eighths of
@@ -1235,13 +1141,7 @@ describe('exportDocx — tables (Copilot review follow-ups)', () => {
   });
 
   test('paragraph after a table keeps explicit top spacing', async () => {
-    const md = [
-      '| A | B |',
-      '|---|---|',
-      '| 1 | 2 |',
-      '',
-      'Next paragraph.',
-    ].join('\n');
+    const md = ['| A | B |', '|---|---|', '| 1 | 2 |', '', 'Next paragraph.'].join('\n');
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     // Tables don't contribute paragraph spacing on their own. The
@@ -1268,13 +1168,9 @@ describe('exportDocx — tables (Copilot review follow-ups)', () => {
   });
 
   test('paragraph after a quoted table gets normal top spacing', async () => {
-    const md = [
-      '> | A | B |',
-      '> |---|---|',
-      '> | 1 | 2 |',
-      '>',
-      '> Next quoted paragraph.',
-    ].join('\n');
+    const md = ['> | A | B |', '> |---|---|', '> | 1 | 2 |', '>', '> Next quoted paragraph.'].join(
+      '\n',
+    );
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     expect(paragraphContaining(documentXml, 'Next quoted paragraph.')).toMatch(
@@ -1334,13 +1230,7 @@ describe('exportDocx — page size & margins', () => {
 
 describe('exportDocx — hyperlink underlines', () => {
   test('internal links carry a single underline', async () => {
-    const md = [
-      '[Go to section](#my-section)',
-      '',
-      '## My Section',
-      '',
-      'Body.',
-    ].join('\n');
+    const md = ['[Go to section](#my-section)', '', '## My Section', '', 'Body.'].join('\n');
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     // The hyperlink runs should include `<w:u w:val="single" .../>`.
@@ -1369,16 +1259,9 @@ describe('exportDocx — hyperlink underlines', () => {
 
 describe('exportDocx — mermaid fallback (M4b stopgap)', () => {
   test('mermaid code blocks render as labeled code', async () => {
-    const md = [
-      '# Diagrams',
-      '',
-      '```mermaid',
-      'graph TD',
-      '  A --> B',
-      '```',
-      '',
-      'After.',
-    ].join('\n');
+    const md = ['# Diagrams', '', '```mermaid', 'graph TD', '  A --> B', '```', '', 'After.'].join(
+      '\n',
+    );
     const buf = await exportDocx(md, { includeToc: false });
     const { documentXml } = await inspectDocx(buf);
     // The label and source text both appear.
@@ -1392,16 +1275,9 @@ describe('exportDocx — mermaid fallback (M4b stopgap)', () => {
 
 describe('exportDocx — mermaid resolveMermaid', () => {
   test('embeds rendered PNG when resolveMermaid returns bytes', async () => {
-    const md = [
-      '# Diagrams',
-      '',
-      '```mermaid',
-      'graph TD',
-      '  A --> B',
-      '```',
-      '',
-      'After.',
-    ].join('\n');
+    const md = ['# Diagrams', '', '```mermaid', 'graph TD', '  A --> B', '```', '', 'After.'].join(
+      '\n',
+    );
     let calls = 0;
     let calledIndex = -1;
     let calledSource = '';
@@ -1510,20 +1386,17 @@ describe('exportDocx — mermaid resolveMermaid', () => {
     // dims so `image-size` reports 100×100). The image-size library
     // only reads IHDR for PNG; the rest can be junk for this test.
     const png100 = makeIhdrOnlyPngFixture(100, 100);
-    const buf = await exportDocx(
-      ['```mermaid', 'graph TD\nA --> B', '```'].join('\n'),
-      {
-        includeToc: false,
-        resolveMermaid: async () => ({
-          bytes: png100,
-          mime: 'image/png',
-          // Declare natural display as 25×25 — 4× smaller than the
-          // bytes' actual 100×100. docx must honour these.
-          width: 25,
-          height: 25,
-        }),
-      },
-    );
+    const buf = await exportDocx(['```mermaid', 'graph TD\nA --> B', '```'].join('\n'), {
+      includeToc: false,
+      resolveMermaid: async () => ({
+        bytes: png100,
+        mime: 'image/png',
+        // Declare natural display as 25×25 — 4× smaller than the
+        // bytes' actual 100×100. docx must honour these.
+        width: 25,
+        height: 25,
+      }),
+    });
     const { documentXml } = await inspectDocx(buf);
     // docx ImageRun emits extent in EMU (914400 = 1 inch, 9525 = 1
     // px at 96 DPI). 25 px → 25 * 9525 = 238125 EMU.
@@ -1555,15 +1428,7 @@ describe('exportDocx — mermaid resolveMermaid', () => {
     // `dataMermaidIndex` (camelCase, normalised by `rehypeRaw`).
     // Both spellings must reach the resolver and the walker so the
     // diagram embeds end-to-end on either format.
-    const adoc = [
-      '= Title',
-      '',
-      '[mermaid]',
-      '----',
-      'graph TD',
-      'A --> B',
-      '----',
-    ].join('\n');
+    const adoc = ['= Title', '', '[mermaid]', '----', 'graph TD', 'A --> B', '----'].join('\n');
     let calls = 0;
     let calledIndex = -1;
     let calledSource = '';
@@ -1707,9 +1572,7 @@ describe('exportDocx — review mode (comments)', () => {
           {
             id: 't1',
             block_id: blockId,
-            comments: [
-              { body: 'Looks good to me', author: 'Alice', date: 1700000000000 },
-            ],
+            comments: [{ body: 'Looks good to me', author: 'Alice', date: 1700000000000 }],
           },
         ],
       },
@@ -1960,9 +1823,7 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
           {
             id: 't1',
             block_id: blockId,
-            comments: [
-              { body: 'Reason: clearer phrasing', author: 'Editor', date: 1 },
-            ],
+            comments: [{ body: 'Reason: clearer phrasing', author: 'Editor', date: 1 }],
             proposal: {
               source_snapshot: 'Old line.',
               proposed_text: 'New line.',
@@ -2052,12 +1913,8 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     // The changed middle paragraph is now a replacement pair —
     // single plain prose on both sides, so it goes through the
     // inline word-diff path.
-    expect(documentXml).toMatch(
-      /<w:del\b[^>]*>[\s\S]*?<w:delText[^>]*>rewritten/,
-    );
-    expect(documentXml).toMatch(
-      /<w:ins\b[^>]*>[\s\S]*?<w:t[^>]*>entirely replaced/,
-    );
+    expect(documentXml).toMatch(/<w:del\b[^>]*>[\s\S]*?<w:delText[^>]*>rewritten/);
+    expect(documentXml).toMatch(/<w:ins\b[^>]*>[\s\S]*?<w:t[^>]*>entirely replaced/);
   });
 
   test('whole-document proposal: pure addition emits only <w:ins> at end', async () => {
@@ -2085,7 +1942,6 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     // plain in the appendix (no <w:del>, no <w:ins> on its run).
     expect(documentXml).toMatch(/<w:ins\b[^>]*>[\s\S]*?Newly appended paragraph/);
   });
-
 
   test('comment with anchor_quote wraps just the highlighted substring', async () => {
     const md = 'The quick brown fox jumps over the lazy dog.\n';
@@ -2137,9 +1993,7 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(documentXml).toMatch(/<w:commentRangeEnd\b/);
     // The full text is still present as a single plain run (the
     // precise wrap would have split it; the fallback didn't).
-    expect(documentXml).toMatch(
-      /<w:r><w:t[^>]*>A short and unchanged paragraph\.<\/w:t><\/w:r>/,
-    );
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*>A short and unchanged paragraph\.<\/w:t><\/w:r>/);
   });
 
   test('comment with anchor_quote that matches multiple times falls back', async () => {
@@ -2160,9 +2014,7 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     });
     const { documentXml } = await inspectComments(buf);
     // The full text stays as one run (no per-substring split).
-    expect(documentXml).toMatch(
-      /<w:r><w:t[^>]*>The cat saw the dog near the tree\.<\/w:t><\/w:r>/,
-    );
+    expect(documentXml).toMatch(/<w:r><w:t[^>]*>The cat saw the dog near the tree\.<\/w:t><\/w:r>/);
     // But the comment is still anchored on the whole paragraph.
     expect(documentXml).toMatch(/<w:commentReference\b/);
   });
@@ -2275,8 +2127,7 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     // Each word from the original paragraph appears EXACTLY once
     // across all <w:t>/<w:delText> elements.
     const tHits: string[] = documentXml.match(/<w:t[^>]*>([^<]*)<\/w:t>/g) ?? [];
-    const delHits: string[] =
-      documentXml.match(/<w:delText[^>]*>([^<]*)<\/w:delText>/g) ?? [];
+    const delHits: string[] = documentXml.match(/<w:delText[^>]*>([^<]*)<\/w:delText>/g) ?? [];
     const allRunText = [...tHits, ...delHits].join('');
     for (const word of ['one', 'two', 'three', 'four', 'five', 'six', 'seven']) {
       const occurrences = allRunText.split(word).length - 1;
@@ -2284,7 +2135,7 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     }
   });
 
-  test('substring wrap descends into a heading\'s Bookmark', async () => {
+  test("substring wrap descends into a heading's Bookmark", async () => {
     // Headings are wrapped in a Bookmark for internal-link targets;
     // the substring wrap has to descend into it. Asserts the markers
     // land INSIDE the bookmark element (not adjacent to it), and
@@ -2551,9 +2402,7 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
             id: 't1',
             block_id: startBlockId,
             end_block_id: endBlockId,
-            comments: [
-              { body: 'replace both with one', author: 'A', date: 1 },
-            ],
+            comments: [{ body: 'replace both with one', author: 'A', date: 1 }],
             proposal: {
               source_snapshot: 'Block one.\n\nBlock two.',
               proposed_text: 'Merged block.',
@@ -2809,17 +2658,14 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     // Word shows them side by side. Find the <w:p> that contains the
     // del — the ins must be in the same one.
     const paragraphMatches = [...documentXml.matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)];
-    const reviewParas = paragraphMatches.filter((m) =>
-      /<w:del\b|<w:ins\b/.test(m[0]),
-    );
+    const reviewParas = paragraphMatches.filter((m) => /<w:del\b|<w:ins\b/.test(m[0]));
     expect(reviewParas).toHaveLength(1);
     expect(reviewParas[0]?.[0]).toMatch(/<w:del\b/);
     expect(reviewParas[0]?.[0]).toMatch(/<w:ins\b/);
   });
 
   test('rewrite-shaped diff peels shared prefix and suffix as plain text', async () => {
-    const original =
-      'The quick brown fox jumps over the lazy dog and the cat watches silently.';
+    const original = 'The quick brown fox jumps over the lazy dog and the cat watches silently.';
     const proposed =
       'The quick black wolf leaps across the sleepy bear and the cat watches silently.';
     const md = `${original}\n`;
@@ -2873,9 +2719,7 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     });
     const { documentXml } = await inspectComments(buf);
     const paragraphs = [...documentXml.matchAll(/<w:p\b[^>]*>[\s\S]*?<\/w:p>/g)];
-    const deletedPara = paragraphs.find((m) =>
-      /<w:del\b[\s\S]*?Doomed paragraph/.test(m[0]),
-    );
+    const deletedPara = paragraphs.find((m) => /<w:del\b[\s\S]*?Doomed paragraph/.test(m[0]));
     expect(deletedPara).toBeDefined();
     expect(deletedPara?.[0]).toMatch(
       /<w:pPr\b[\s\S]*?<w:rPr\b[\s\S]*?<w:del\b[^>]*w:author="Ed"[^>]*\/>[\s\S]*?<\/w:rPr>[\s\S]*?<\/w:pPr>/,
@@ -2911,11 +2755,8 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     // "Field Code Changed" because it classifies <w:hyperlink> as
     // field-like. Dropping the wrapper in the delete pass suppresses
     // that pseudo-comment without losing the strikethrough.
-    const md =
-      'Original prose with a [link to nowhere](https://example.com) inside.\n';
-    const blockId = paragraphBlockId(
-      'Original prose with a link to nowhere inside.',
-    );
+    const md = 'Original prose with a [link to nowhere](https://example.com) inside.\n';
+    const blockId = paragraphBlockId('Original prose with a link to nowhere inside.');
     const buf = await exportDocx(md, {
       review: {
         threads: [
@@ -2926,17 +2767,14 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
             proposal: {
               source_snapshot:
                 'Original prose with a [link to nowhere](https://example.com) inside.',
-              proposed_text:
-                '# A new [destination](https://example.org) heading\n',
+              proposed_text: '# A new [destination](https://example.org) heading\n',
             },
           },
         ],
       },
     });
     const { documentXml } = await inspectComments(buf);
-    const delBlocks = [
-      ...documentXml.matchAll(/<w:del\b[\s\S]*?<\/w:del>/g),
-    ];
+    const delBlocks = [...documentXml.matchAll(/<w:del\b[\s\S]*?<\/w:del>/g)];
     expect(delBlocks.length).toBeGreaterThan(0);
     for (const m of delBlocks) {
       expect(m[0]).not.toMatch(/<w:hyperlink\b/);
@@ -2973,9 +2811,7 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     const { documentXml } = await inspectComments(buf);
     // No <w:del> inside any <w:pPr><w:rPr> (run-level deletions in
     // the body are expected, just not on the paragraph mark).
-    const pPrs = [
-      ...documentXml.matchAll(/<w:pPr\b[\s\S]*?<\/w:pPr>/g),
-    ];
+    const pPrs = [...documentXml.matchAll(/<w:pPr\b[\s\S]*?<\/w:pPr>/g)];
     for (const m of pPrs) {
       expect(m[0]).not.toMatch(/<w:rPr\b[\s\S]*?<w:del\b/);
     }
@@ -3001,8 +2837,7 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
       },
     });
     const zip = await JSZip.loadAsync(buf);
-    const relsXml =
-      (await zip.file('word/_rels/document.xml.rels')?.async('string')) ?? '';
+    const relsXml = (await zip.file('word/_rels/document.xml.rels')?.async('string')) ?? '';
     const documentXml = (await zip.file('word/document.xml')?.async('string')) ?? '';
     expect(relsXml).toMatch(/https:\/\/example\.com/);
     expect(documentXml).toMatch(/<w:hyperlink\b[^>]*>[\s\S]*?Leipzig[\s\S]*?<\/w:hyperlink>/);

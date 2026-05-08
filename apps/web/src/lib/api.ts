@@ -1,4 +1,4 @@
-import { type Identity, getClientId, getDisplayName } from './identity.js';
+import { getClientId, getDisplayName, type Identity } from './identity.js';
 import { loadInviteToken } from './invite.js';
 
 export interface Anchor {

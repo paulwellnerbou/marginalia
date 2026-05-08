@@ -1,25 +1,25 @@
-import { unified } from 'unified';
-import remarkParse from 'remark-parse';
-import remarkGfm from 'remark-gfm';
-import remarkFrontmatter from 'remark-frontmatter';
-import remarkRehype from 'remark-rehype';
+import type { Root as HastRoot } from 'hast';
+import type { Root as MdastRoot } from 'mdast';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize from 'rehype-sanitize';
 import rehypeStringify from 'rehype-stringify';
-import type { Root as MdastRoot } from 'mdast';
-import type { Root as HastRoot } from 'hast';
-
-import { remarkExtractFrontmatter } from './plugins/frontmatter.js';
-import { remarkSlugger } from './plugins/slugger.js';
-import { remarkBlockIds } from './plugins/block-ids.js';
-import { remarkMermaid } from './plugins/mermaid.js';
+import remarkFrontmatter from 'remark-frontmatter';
+import remarkGfm from 'remark-gfm';
+import remarkParse from 'remark-parse';
+import remarkRehype from 'remark-rehype';
+import { unified } from 'unified';
 import { remarkAssetCollector } from './plugins/asset-collector.js';
-import { remarkTocMarker } from './plugins/toc-marker.js';
-import { rehypeShikiHighlight } from './plugins/shiki.js';
-import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
-import { sanitizeSchema } from './plugins/sanitize-schema.js';
+import { remarkBlockIds } from './plugins/block-ids.js';
+import { remarkExtractFrontmatter } from './plugins/frontmatter.js';
 import { preprocessGridTables } from './plugins/grid-tables.js';
-
+import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
+import { remarkMermaid } from './plugins/mermaid.js';
+import { sanitizeSchema } from './plugins/sanitize-schema.js';
+import { rehypeShikiHighlight } from './plugins/shiki.js';
+import { remarkSlugger } from './plugins/slugger.js';
+import { remarkTocMarker } from './plugins/toc-marker.js';
+import { renderAsciidoc } from './render-asciidoc.js';
+import { buildToc } from './toc.js';
 import type {
   Anchor,
   AssetRef,
@@ -30,8 +30,6 @@ import type {
   TocNode,
   Warning,
 } from './types.js';
-import { buildToc } from './toc.js';
-import { renderAsciidoc } from './render-asciidoc.js';
 
 /** Document source flavours supported by the renderer. */
 export type DocumentFormat = 'markdown' | 'asciidoc';
@@ -62,10 +60,7 @@ interface RenderData {
   frontmatter?: Record<string, unknown>;
 }
 
-export async function render(
-  markdown: string,
-  options: RenderOptions = {},
-): Promise<RenderResult> {
+export async function render(markdown: string, options: RenderOptions = {}): Promise<RenderResult> {
   const preprocessed = await preprocessGridTables(markdown, {
     renderCell: (cellMd) => renderCell(cellMd, options),
   });
@@ -106,7 +101,7 @@ export async function render(
 }
 
 // Exported for tests that want intermediate ASTs.
-export type { MdastRoot, HastRoot };
+export type { HastRoot, MdastRoot };
 
 /**
  * Minimal sub-pipeline used to render a single grid-table cell to HTML.

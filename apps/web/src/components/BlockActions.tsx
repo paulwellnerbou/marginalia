@@ -69,7 +69,11 @@ export function BlockActions({ rootRef, onPropose }: Props) {
       if (!block) {
         const btnRect = btnRef.current?.getBoundingClientRect() ?? null;
         const activeRect = hoveredTarget?.rect ?? renderedTarget?.rect ?? null;
-        if (btnRect && activeRect && isWithinHoverBridge(e.clientX, e.clientY, activeRect, btnRect)) {
+        if (
+          btnRect &&
+          activeRect &&
+          isWithinHoverBridge(e.clientX, e.clientY, activeRect, btnRect)
+        ) {
           return;
         }
         setHoveredTarget((prev) => (prev === null ? prev : null));
@@ -198,7 +202,8 @@ function isWithinHoverBridge(
   const verticalReach = Math.min(34, Math.max(18, targetRect.height * 0.28));
   const top = Math.min(buttonRect.top, targetRect.top) - 10;
   const bottom = Math.max(buttonRect.bottom, targetRect.top + verticalReach) + 10;
-  const left = Math.min(buttonRect.left, targetRect.right - Math.max(buttonRect.width + 24, 120)) - 10;
+  const left =
+    Math.min(buttonRect.left, targetRect.right - Math.max(buttonRect.width + 24, 120)) - 10;
   const right = Math.max(buttonRect.right, targetRect.right) + 10;
   return x >= left && x <= right && y >= top && y <= bottom;
 }

@@ -1,11 +1,10 @@
+import type { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import fs from 'node:fs';
-import { mkdtempSync, rmSync } from 'node:fs';
+import fs, { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Database } from 'bun:sqlite';
-import * as git from 'isomorphic-git';
 import { locateAllBlocks } from '@marginalia/renderer';
+import * as git from 'isomorphic-git';
 import { openDatabase } from '../src/db.js';
 import { GitStore } from '../src/git-store.js';
 import { backfillProposalBranches } from '../src/proposal-branch-backfill.js';
@@ -123,10 +122,7 @@ describe('backfillProposalBranches', () => {
 
     // The branch tip must contain the spliced source (full doc, block
     // replaced) so accept can use git.merge against current main.
-    const tip = await store.readProposalTip(
-      { uid: 'doc-1', format: 'markdown' },
-      'prop-1',
-    );
+    const tip = await store.readProposalTip({ uid: 'doc-1', format: 'markdown' }, 'prop-1');
     expect(tip).toBe('# Title\n\nbeta');
 
     // base_oid must equal main's tip at backfill time.
@@ -253,9 +249,7 @@ describe('backfillProposalBranches', () => {
     expect(summary).toEqual({ migrated: 0, skipped: 0 });
 
     const row = db
-      .prepare(
-        `SELECT branch_ref FROM comments_edit_proposals WHERE comment_id = 'prop-accepted'`,
-      )
+      .prepare(`SELECT branch_ref FROM comments_edit_proposals WHERE comment_id = 'prop-accepted'`)
       .get() as { branch_ref: string | null };
     expect(row.branch_ref).toBeNull();
 

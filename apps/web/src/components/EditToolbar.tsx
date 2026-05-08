@@ -1,7 +1,7 @@
+import { Cross2Icon } from '@radix-ui/react-icons';
+import { Button, Dialog, Flex, Text, TextArea } from '@radix-ui/themes';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Button, Text, TextArea, Dialog, Flex } from '@radix-ui/themes';
-import { Cross2Icon } from '@radix-ui/react-icons';
 import { DiffView } from './DiffView.js';
 
 interface EditToolbarProps {
@@ -67,7 +67,13 @@ export function EditToolbar({
           <Dialog.Root open={open} onOpenChange={setOpen}>
             <Dialog.Trigger>
               <Button size="2" variant={canSave ? 'solid' : 'soft'} disabled={disabled}>
-                {saving ? 'Saving…' : canSave ? 'Save…' : canPropose ? 'Propose edit…' : 'Read-only'}
+                {saving
+                  ? 'Saving…'
+                  : canSave
+                    ? 'Save…'
+                    : canPropose
+                      ? 'Propose edit…'
+                      : 'Read-only'}
               </Button>
             </Dialog.Trigger>
             <Dialog.Content size="3" maxWidth="900px">
@@ -89,7 +95,9 @@ export function EditToolbar({
                     : 'Add a rationale describing why this change should be made.'}
               </Dialog.Description>
               <TextArea
-                placeholder={canSave ? 'e.g. Fix typo in introduction (optional)' : 'Why this change?'}
+                placeholder={
+                  canSave ? 'e.g. Fix typo in introduction (optional)' : 'Why this change?'
+                }
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 rows={3}

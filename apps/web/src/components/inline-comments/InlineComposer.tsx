@@ -1,17 +1,13 @@
 import {
-  type ReactNode,
   forwardRef,
+  type ReactNode,
   useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
   useState,
 } from 'react';
-import {
-  type ShortcodeMatch,
-  filterShortcodes,
-  getActiveShortcode,
-} from './emojiShortcodes.js';
+import { filterShortcodes, getActiveShortcode, type ShortcodeMatch } from './emojiShortcodes.js';
 
 export interface InlineComposerHandle {
   insertText: (text: string) => void;
@@ -117,9 +113,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
   );
   const filteredShortcodeOptions = useMemo<ShortcodeMatch[]>(
     () =>
-      activeShortcode && !shortcodeDismissed
-        ? filterShortcodes(activeShortcode.query, 8)
-        : [],
+      activeShortcode && !shortcodeDismissed ? filterShortcodes(activeShortcode.query, 8) : [],
     [activeShortcode, shortcodeDismissed],
   );
 

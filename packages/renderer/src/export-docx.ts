@@ -32,18 +32,8 @@
  * - M5: BCP-47 language tag + `<w:bidi/>` for RTL frontmatter.
  */
 
+import { getThemeTokens, type ThemeTokens } from '@marginalia/themes/tokens';
 import { type Change, diffArrays, diffWordsWithSpace } from 'diff';
-import rehypeParse from 'rehype-parse';
-import rehypeStringify from 'rehype-stringify';
-import remarkFrontmatter from 'remark-frontmatter';
-import remarkGfm from 'remark-gfm';
-import remarkParse from 'remark-parse';
-import remarkRehype from 'remark-rehype';
-import rehypeRaw from 'rehype-raw';
-import rehypeSanitize from 'rehype-sanitize';
-import { unified } from 'unified';
-import type { Element, Root as HastRoot, Node as HastNode, Parent, Text } from 'hast';
-
 import {
   AlignmentType,
   Bookmark,
@@ -51,18 +41,25 @@ import {
   CommentRangeEnd,
   CommentRangeStart,
   CommentReference,
+  convertMillimetersToTwip,
   DeletedTextRun,
   Document,
   ExternalHyperlink,
+  type FileChild,
   FootnoteReferenceRun,
   HeadingLevel,
+  type IBookmarkOptions,
+  type ICommentOptions,
   ImageRun,
   ImportedXmlComponent,
   InsertedTextRun,
   InternalHyperlink,
+  type IRunOptions,
+  type ISectionOptions,
   LevelFormat,
   Packer,
   Paragraph,
+  type ParagraphChild,
   ShadingType,
   Table,
   TableCell,
@@ -71,31 +68,31 @@ import {
   TextRun,
   UnderlineType,
   WidthType,
-  convertMillimetersToTwip,
-  type FileChild,
-  type IBookmarkOptions,
-  type ICommentOptions,
-  type IRunOptions,
-  type ISectionOptions,
-  type ParagraphChild,
 } from 'docx';
+import type { Element, Node as HastNode, Root as HastRoot, Parent, Text } from 'hast';
 import { imageSize } from 'image-size';
+import rehypeParse from 'rehype-parse';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
+import rehypeStringify from 'rehype-stringify';
+import remarkFrontmatter from 'remark-frontmatter';
+import remarkGfm from 'remark-gfm';
+import remarkParse from 'remark-parse';
+import remarkRehype from 'remark-rehype';
+import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
-
-import { getThemeTokens, type ThemeTokens } from '@marginalia/themes/tokens';
-
-import { remarkExtractFrontmatter } from './plugins/frontmatter.js';
-import { remarkSlugger } from './plugins/slugger.js';
-import { remarkBlockIds } from './plugins/block-ids.js';
-import { remarkMermaid } from './plugins/mermaid.js';
 import { remarkAssetCollector } from './plugins/asset-collector.js';
-import { remarkTocMarker, TOC_MARKER_CLASSNAME } from './plugins/toc-marker.js';
-import { rehypeShikiHighlight } from './plugins/shiki.js';
-import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
-import { sanitizeSchema } from './plugins/sanitize-schema.js';
+import { remarkBlockIds } from './plugins/block-ids.js';
+import { remarkExtractFrontmatter } from './plugins/frontmatter.js';
 import { preprocessGridTables } from './plugins/grid-tables.js';
-import { renderAsciidoc } from './render-asciidoc.js';
+import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
+import { remarkMermaid } from './plugins/mermaid.js';
+import { sanitizeSchema } from './plugins/sanitize-schema.js';
+import { rehypeShikiHighlight } from './plugins/shiki.js';
+import { remarkSlugger } from './plugins/slugger.js';
+import { remarkTocMarker, TOC_MARKER_CLASSNAME } from './plugins/toc-marker.js';
 import type { DocumentFormat } from './render.js';
+import { renderAsciidoc } from './render-asciidoc.js';
 import type { RenderOptions } from './types.js';
 
 /**
@@ -331,18 +328,11 @@ export interface ReviewExportData {
  * Render a markdown/asciidoc source string to a DOCX buffer styled to
  * the given theme. Everything is server-safe (no DOM, no browser APIs).
  */
-export async function exportDocx(
-  source: string,
-  options: DocxExportOptions = {},
-): Promise<Buffer> {
+export async function exportDocx(source: string, options: DocxExportOptions = {}): Promise<Buffer> {
   const tokens = getThemeTokens(options.theme);
-  const { hast, frontmatter } = await sourceToHast(
-    source,
-    options.format ?? 'markdown',
-    {
-      ...(options.highlight !== undefined ? { highlight: options.highlight } : {}),
-    },
-  );
+  const { hast, frontmatter } = await sourceToHast(source, options.format ?? 'markdown', {
+    ...(options.highlight !== undefined ? { highlight: options.highlight } : {}),
+  });
 
   // Resolve the document's language. Explicit `options.language` wins;
   // otherwise read `lang:` (or `language:`) from YAML frontmatter so
@@ -381,10 +371,7 @@ export async function exportDocx(
   // `FootnoteReferenceRun`s pointed at those ids.
   const effectivePageSize = options.pageSize ?? tokens.page.size;
   const paraOpts = new WeakMap<Paragraph, ParagraphOptions>();
-  const runOpts = new WeakMap<
-    TextRun | InsertedTextRun | DeletedTextRun,
-    IRunOptions
-  >();
+  const runOpts = new WeakMap<TextRun | InsertedTextRun | DeletedTextRun, IRunOptions>();
   const bookmarkOpts = new WeakMap<Bookmark, IBookmarkOptions>();
   const ctxWithoutFootnotes: BuildCtx = {
     tokens,
@@ -412,9 +399,7 @@ export async function exportDocx(
     options.includeToc === true ||
     ((options.includeToc === 'auto' || options.includeToc === undefined) &&
       (hasMarker || countHeadings(hast) >= 2));
-  const tocBlocks = shouldIncludeToc
-    ? buildTocBlocks(options.tocLabel ?? 'Contents', tokens)
-    : [];
+  const tocBlocks = shouldIncludeToc ? buildTocBlocks(options.tocLabel ?? 'Contents', tokens) : [];
 
   // If a marker drives placement, pendingToc carries the blocks to
   // emit when the walker first hits a marker element. After the
@@ -435,9 +420,7 @@ export async function exportDocx(
     injectedBlocks: hasMarker ? [] : tocBlocks,
   });
   const bodyBlocks: FileChild[] =
-    !hasMarker && shouldIncludeToc && leadingHeadingIdx < 0
-      ? [...tocBlocks, ...body]
-      : body;
+    !hasMarker && shouldIncludeToc && leadingHeadingIdx < 0 ? [...tocBlocks, ...body] : body;
 
   // Whole-document proposals are emitted as an "alternative-version"
   // section appended to the body. The appendix content itself is a
@@ -576,9 +559,7 @@ async function sourceToHast(
 ): Promise<{ hast: HastRoot; frontmatter: Record<string, unknown> }> {
   if (format === 'asciidoc') {
     const { html, frontmatter } = await renderAsciidoc(source, options);
-    const hast = unified()
-      .use(rehypeParse, { fragment: true })
-      .parse(html) as HastRoot;
+    const hast = unified().use(rehypeParse, { fragment: true }).parse(html) as HastRoot;
     return { hast, frontmatter };
   }
 
@@ -698,10 +679,7 @@ const hex = (c: string): string => c.replace(/^#/, '').toLowerCase();
  * use this to scale images down so they don't blow past the margins.
  * docx's `ImageRun` transformation is in pixels.
  */
-function contentWidthPx(
-  size: ThemeTokens['page']['size'],
-  marginPt: number,
-): number {
+function contentWidthPx(size: ThemeTokens['page']['size'], marginPt: number): number {
   // A4 ≈ 595pt, Letter ≈ 612pt, A5 ≈ 420pt, B5 ≈ 499pt.
   const pageWidthPt = ({ A4: 595, Letter: 612, A5: 420, B5: 499 } as const)[size];
   const contentPt = pageWidthPt - 2 * marginPt;
@@ -946,10 +924,8 @@ function probeImage(
   try {
     const info = imageSize(bytes);
     if (!info.width || !info.height) return null;
-    const width =
-      displayWidth && displayWidth > 0 ? Math.round(displayWidth) : info.width;
-    const height =
-      displayHeight && displayHeight > 0 ? Math.round(displayHeight) : info.height;
+    const width = displayWidth && displayWidth > 0 ? Math.round(displayWidth) : info.width;
+    const height = displayHeight && displayHeight > 0 ? Math.round(displayHeight) : info.height;
     return { bytes, mime, width, height, type };
   } catch {
     return null;
@@ -1127,7 +1103,8 @@ function appendFootnoteBlock(
           style: options.style ?? 'Blockquote',
           indent: {
             ...(options.indent ?? {}),
-            left: (typeof options.indent?.left === 'number' ? options.indent.left : 0) + quoteIndent,
+            left:
+              (typeof options.indent?.left === 'number' ? options.indent.left : 0) + quoteIndent,
           },
         }
       : options;
@@ -1282,9 +1259,7 @@ function buildDocument(
   });
 }
 
-function pageSizeOf(
-  size: ThemeTokens['page']['size'],
-): { width: number; height: number } {
+function pageSizeOf(size: ThemeTokens['page']['size']): { width: number; height: number } {
   // DOCX uses twips; sizes below cover the theme token enum values.
   // 1 mm = ~56.69 twips; use convertMillimetersToTwip for accuracy.
   const mm = (w: number, h: number) => ({
@@ -1468,9 +1443,7 @@ function buildStyles(
   };
 }
 
-function buildNumbering(): NonNullable<
-  ConstructorParameters<typeof Document>[0]['numbering']
-> {
+function buildNumbering(): NonNullable<ConstructorParameters<typeof Document>[0]['numbering']> {
   return {
     config: [
       {
@@ -1559,10 +1532,7 @@ interface BuildCtx {
    * content (and the IRunOptions used to style it) so it can split
    * the run at character boundaries that fall mid-text.
    */
-  readonly runOpts: WeakMap<
-    TextRun | InsertedTextRun | DeletedTextRun,
-    IRunOptions
-  >;
+  readonly runOpts: WeakMap<TextRun | InsertedTextRun | DeletedTextRun, IRunOptions>;
   /**
    * Companion side-table for `Bookmark` instances. `buildHeading`
    * wraps every heading's runs in a Bookmark for internal-link
@@ -1679,11 +1649,7 @@ interface WalkOptions {
   injectedBlocks?: readonly FileChild[];
 }
 
-function hastToDocxChildren(
-  root: HastRoot,
-  ctx: BuildCtx,
-  options: WalkOptions = {},
-): FileChild[] {
+function hastToDocxChildren(root: HastRoot, ctx: BuildCtx, options: WalkOptions = {}): FileChild[] {
   const out: FileChild[] = [];
   const topLevel = flattenRoot(root);
   const injectAt = options.injectAfterTopLevelIndex ?? -1;
@@ -1870,12 +1836,7 @@ function blockEndsWithTable(node: HastNode): boolean {
   return false;
 }
 
-function convertBlock(
-  node: HastNode,
-  ctx: BuildCtx,
-  out: FileChild[],
-  walk: WalkCtx,
-): void {
+function convertBlock(node: HastNode, ctx: BuildCtx, out: FileChild[], walk: WalkCtx): void {
   // Review-mode interception. If the block has an id matching a
   // review thread, route through the wrapping/replacement path
   // instead of normal rendering. The `reviewWrappedBlockId` flag
@@ -1904,12 +1865,7 @@ function convertBlock(
   convertBlockInner(node, ctx, out, walk);
 }
 
-function convertBlockInner(
-  node: HastNode,
-  ctx: BuildCtx,
-  out: FileChild[],
-  walk: WalkCtx,
-): void {
+function convertBlockInner(node: HastNode, ctx: BuildCtx, out: FileChild[], walk: WalkCtx): void {
   const tokens = ctx.tokens;
   if (!isElement(node)) {
     // Bare text at block level → wrap in a paragraph.
@@ -2019,8 +1975,7 @@ function convertBlockInner(
       // caller queued TOC blocks, emit them here (first marker wins).
       // Silently drop later markers and any marker when TOC is
       // suppressed via `includeToc: false`.
-      const isMarker =
-        Array.isArray(cls) && (cls as unknown[]).includes(TOC_MARKER_CLASSNAME);
+      const isMarker = Array.isArray(cls) && (cls as unknown[]).includes(TOC_MARKER_CLASSNAME);
       if (isMarker) {
         const pending = ctx.pendingToc;
         if (pending && !pending.consumed) {
@@ -2034,8 +1989,7 @@ function convertBlockInner(
       // bytes, embed it as a real image. Otherwise fall back to a
       // labeled code block so the diagram source is still readable
       // in the doc.
-      const isMermaid =
-        Array.isArray(cls) && (cls as unknown[]).includes('mermaid');
+      const isMermaid = Array.isArray(cls) && (cls as unknown[]).includes('mermaid');
       if (isMermaid) {
         // Use the same index reader as `resolveAllMermaid` so the
         // walker and resolver agree on which key spelling carries the
@@ -2109,9 +2063,7 @@ function convertBlockInner(
       if (node.children && node.children.length > 0) {
         const inline = collectInline(node, ctx, {});
         if (inline.length > 0) {
-          out.push(
-            mkParagraph(withParagraphContext({ children: inline }, ctx, walk), ctx),
-          );
+          out.push(mkParagraph(withParagraphContext({ children: inline }, ctx, walk), ctx));
         }
       }
       return;
@@ -2130,9 +2082,7 @@ function buildHeading(node: Element, ctx: BuildCtx): Paragraph {
   // Wrap the heading's runs in a Bookmark so internal links
   // (`[Section](#section)`) can navigate to it inside Word. Without an
   // id we just emit the paragraph unwrapped — still valid.
-  const children: ParagraphChild[] = id
-    ? [mkBookmark({ id, children: inline }, ctx)]
-    : inline;
+  const children: ParagraphChild[] = id ? [mkBookmark({ id, children: inline }, ctx)] : inline;
   return mkParagraph(
     {
       style: styleId,
@@ -2299,12 +2249,7 @@ function headingLevelOf(level: number): (typeof HeadingLevel)[keyof typeof Headi
   }
 }
 
-function convertList(
-  node: Element,
-  ctx: BuildCtx,
-  out: FileChild[],
-  walk: WalkCtx,
-): void {
+function convertList(node: Element, ctx: BuildCtx, out: FileChild[], walk: WalkCtx): void {
   const ordered = node.tagName === 'ol';
   const reference = ordered ? 'marginalia-ordered' : 'marginalia-bullet';
   const level = Math.min(walk.listDepth, 5);
@@ -2585,9 +2530,7 @@ function buildTable(node: Element, ctx: BuildCtx): Table {
       // Table without explicit thead/tbody wrappers.
       if (!headerSeen) {
         // First row as header if it has any th cells.
-        const hasTh = section.children.some(
-          (c) => isElement(c) && c.tagName === 'th',
-        );
+        const hasTh = section.children.some((c) => isElement(c) && c.tagName === 'th');
         if (hasTh) {
           collectRows({ ...node, children: [section] }, true);
           headerSeen = true;
@@ -2639,12 +2582,7 @@ function collectInlineFromMany(
   return out;
 }
 
-function walkInline(
-  n: HastNode,
-  ctx: BuildCtx,
-  style: InlineStyle,
-  out: ParagraphChild[],
-): void {
+function walkInline(n: HastNode, ctx: BuildCtx, style: InlineStyle, out: ParagraphChild[]): void {
   const tokens = ctx.tokens;
   if (isText(n)) {
     if (n.value === '') return;
@@ -2723,8 +2661,7 @@ function walkInline(
       const linkChildren: ParagraphChild[] = [];
       walkChildren(n, ctx, linkStyle, linkChildren);
       const fallbackChildren = [mkRun(runOptions(linkStyle, href, tokens), ctx)];
-      const children =
-        linkChildren.length > 0 ? linkChildren : fallbackChildren;
+      const children = linkChildren.length > 0 ? linkChildren : fallbackChildren;
 
       // In the delete pass, drop the <w:hyperlink> wrapper — Word
       // would otherwise label the deletion "Field Code Changed" in
@@ -2791,12 +2728,7 @@ function walkInline(
   }
 }
 
-function walkChildren(
-  n: Element,
-  ctx: BuildCtx,
-  style: InlineStyle,
-  out: ParagraphChild[],
-): void {
+function walkChildren(n: Element, ctx: BuildCtx, style: InlineStyle, out: ParagraphChild[]): void {
   for (const c of n.children as HastNode[]) walkInline(c, ctx, style, out);
 }
 
@@ -2905,10 +2837,7 @@ function mkBookmark(opts: IBookmarkOptions, ctx: BuildCtx): Bookmark {
  * Behaves identically to `new TextRun(opts)` outside revision mode,
  * so call sites can route through it unconditionally.
  */
-function mkRun(
-  opts: IRunOptions,
-  ctx: BuildCtx,
-): TextRun | InsertedTextRun | DeletedTextRun {
+function mkRun(opts: IRunOptions, ctx: BuildCtx): TextRun | InsertedTextRun | DeletedTextRun {
   const rev = ctx.revision;
   let run: TextRun | InsertedTextRun | DeletedTextRun;
   if (!rev) {
@@ -3019,11 +2948,7 @@ async function buildReviewState(
     // Demote to a comment-only entry so the discussion still
     // surfaces while the body text stays correct. Multi-block
     // span replacement is a separate piece of work.
-    if (
-      isProposal &&
-      thread.end_block_id &&
-      thread.end_block_id !== thread.block_id
-    ) {
+    if (isProposal && thread.end_block_id && thread.end_block_id !== thread.block_id) {
       isProposal = false;
     }
 
@@ -3052,8 +2977,7 @@ async function buildReviewState(
     PROPOSAL_PARSE_CONCURRENCY,
     async ({ threadId, text }): Promise<[string, HastRoot]> => {
       const format = options.format ?? 'markdown';
-      const normalizedText =
-        format === 'markdown' ? normalizeMarkdownLinkSyntax(text) : text;
+      const normalizedText = format === 'markdown' ? normalizeMarkdownLinkSyntax(text) : text;
       const result = await sourceToHast(normalizedText, format, {
         ...(options.highlight !== undefined ? { highlight: options.highlight } : {}),
       });
@@ -3179,10 +3103,7 @@ function wrapBufferWithCommentRanges(
 ): FileChild[] {
   if (commentIds.length === 0) return buf;
   const starts = commentIds.map((id) => new CommentRangeStart(id));
-  const ends = commentIds.flatMap((id) => [
-    new CommentRangeEnd(id),
-    new CommentReference(id),
-  ]);
+  const ends = commentIds.flatMap((id) => [new CommentRangeEnd(id), new CommentReference(id)]);
 
   // Find the first and last Paragraph in the buffer — those are the
   // wrap points. Tables / TOC fields can't host CommentRange* nodes
@@ -3203,10 +3124,7 @@ function wrapBufferWithCommentRanges(
   // it as a tiny visual marker rather than dropping the comment to
   // an orphan in the review pane.
   if (firstP === -1) {
-    return [
-      ...buf,
-      mkParagraph({ children: [...starts, ...ends] }, ctx),
-    ];
+    return [...buf, mkParagraph({ children: [...starts, ...ends] }, ctx)];
   }
 
   const out = [...buf];
@@ -3248,11 +3166,7 @@ function augmentParagraph(
   const opts = ctx.paraOpts.get(p);
   if (!opts) return p;
   const original = (opts.children ?? []) as ParagraphChild[];
-  const next: ParagraphChild[] = [
-    ...(patch.prepend ?? []),
-    ...original,
-    ...(patch.append ?? []),
-  ];
+  const next: ParagraphChild[] = [...(patch.prepend ?? []), ...original, ...(patch.append ?? [])];
   return mkParagraph({ ...opts, children: next }, ctx);
 }
 
@@ -3283,9 +3197,7 @@ function emitCommentedBlock(
     const ids = allocCommentIdsForThread(t, ctx);
     const quote = t.anchor_quote ?? null;
     const precise =
-      quote && quote.length > 0
-        ? tryWrapBufferAtSubstring(sub, quote, ids, ctx)
-        : null;
+      quote && quote.length > 0 ? tryWrapBufferAtSubstring(sub, quote, ids, ctx) : null;
     sub = precise ?? wrapBufferWithCommentRanges(sub, ids, ctx);
   }
   out.push(...sub);
@@ -3325,10 +3237,7 @@ function tryWrapBufferAtSubstring(
   if (buf.length === 0 || commentIds.length === 0) return null;
 
   const starts = commentIds.map((id) => new CommentRangeStart(id));
-  const ends = commentIds.flatMap((id) => [
-    new CommentRangeEnd(id),
-    new CommentReference(id),
-  ]);
+  const ends = commentIds.flatMap((id) => [new CommentRangeEnd(id), new CommentReference(id)]);
 
   // Scan every Paragraph in the buffer — a single block can render
   // to multiple paragraphs (blockquotes, multi-`<p>` list items,
@@ -3345,7 +3254,12 @@ function tryWrapBufferAtSubstring(
   //   2. Wrap the single matching paragraph. The per-paragraph
   //      wrap also rejects intra-paragraph ambiguity (substring
   //      appears multiple times inside one paragraph).
-  let candidate: { index: number; opts: ParagraphOptions; children: readonly ParagraphChild[]; bookmark: { bm: Bookmark; opts: IBookmarkOptions } | null } | null = null;
+  let candidate: {
+    index: number;
+    opts: ParagraphOptions;
+    children: readonly ParagraphChild[];
+    bookmark: { bm: Bookmark; opts: IBookmarkOptions } | null;
+  } | null = null;
   for (let i = 0; i < buf.length; i++) {
     const fc = buf[i];
     if (!(fc instanceof Paragraph)) continue;
@@ -3390,10 +3304,7 @@ function tryWrapBufferAtSubstring(
       ctx,
     );
     if (!wrappedInner) return null;
-    const newBookmark = mkBookmark(
-      { ...bookmark.opts, children: wrappedInner },
-      ctx,
-    );
+    const newBookmark = mkBookmark({ ...bookmark.opts, children: wrappedInner }, ctx);
     const newPara = mkParagraph({ ...opts, children: [newBookmark] }, ctx);
     const out = [...buf];
     out[index] = newPara;
@@ -3420,11 +3331,7 @@ function paragraphContainsSubstringUniquely(
 ): boolean {
   let text = '';
   for (const c of children) {
-    if (
-      c instanceof TextRun ||
-      c instanceof InsertedTextRun ||
-      c instanceof DeletedTextRun
-    ) {
+    if (c instanceof TextRun || c instanceof InsertedTextRun || c instanceof DeletedTextRun) {
       const ro = ctx.runOpts.get(c);
       if (ro && typeof ro.text === 'string') text += ro.text;
     }
@@ -3481,11 +3388,7 @@ function wrapChildrenAtSubstring(
   const slots: Slot[] = [];
   for (let i = 0; i < children.length; i++) {
     const c = children[i]!;
-    if (
-      c instanceof TextRun ||
-      c instanceof InsertedTextRun ||
-      c instanceof DeletedTextRun
-    ) {
+    if (c instanceof TextRun || c instanceof InsertedTextRun || c instanceof DeletedTextRun) {
       const ro = ctx.runOpts.get(c);
       if (!ro || typeof ro.text !== 'string') return null; // unrecoverable
       slots.push({ childIndex: i, text: ro.text, runOpts: ro });
@@ -3576,14 +3479,11 @@ function wrapChildrenAtSubstring(
     const middle = text.slice(cutStart ?? 0, cutEnd ?? text.length);
     const after = text.slice(cutEnd ?? text.length);
 
-    if (before.length > 0)
-      newChildren.push(mkPlainTextRun({ ...slot.runOpts, text: before }, ctx));
+    if (before.length > 0) newChildren.push(mkPlainTextRun({ ...slot.runOpts, text: before }, ctx));
     if (cutStart !== null) newChildren.push(...starts);
-    if (middle.length > 0)
-      newChildren.push(mkPlainTextRun({ ...slot.runOpts, text: middle }, ctx));
+    if (middle.length > 0) newChildren.push(mkPlainTextRun({ ...slot.runOpts, text: middle }, ctx));
     if (cutEnd !== null) newChildren.push(...ends);
-    if (after.length > 0)
-      newChildren.push(mkPlainTextRun({ ...slot.runOpts, text: after }, ctx));
+    if (after.length > 0) newChildren.push(mkPlainTextRun({ ...slot.runOpts, text: after }, ctx));
   }
   return newChildren;
 }
@@ -3650,24 +3550,12 @@ function emitProposalBlock(
   // anything that isn't simple prose: headings, lists, code blocks,
   // tables, multi-paragraph proposals, or any source/proposed text
   // that contains markdown formatting we'd lose by flattening.
-  const inlineRuns = tryEmitInlineWordDiff(
-    node,
-    main,
-    propHast,
-    author,
-    date,
-    ctx,
-    walk,
-  );
+  const inlineRuns = tryEmitInlineWordDiff(node, main, propHast, author, date, ctx, walk);
   if (inlineRuns) {
     const commentIds: number[] = [];
     for (const t of proposals) commentIds.push(...allocCommentIdsForThread(t, ctx));
-    for (const t of extraComments)
-      commentIds.push(...allocCommentIdsForThread(t, ctx));
-    const para = mkParagraph(
-      withParagraphContext({ children: inlineRuns }, ctx, walk),
-      ctx,
-    );
+    for (const t of extraComments) commentIds.push(...allocCommentIdsForThread(t, ctx));
+    const para = mkParagraph(withParagraphContext({ children: inlineRuns }, ctx, walk), ctx);
     out.push(...wrapBufferWithCommentRanges([para], commentIds, ctx));
     return;
   }
@@ -3716,18 +3604,14 @@ function emitProposalBlock(
     },
     review: null,
   };
-  const insBuf = collapseRevisionRunsInBuf(
-    hastToDocxChildren(propHast, ctxIns, {}),
-    ctx,
-  );
+  const insBuf = collapseRevisionRunsInBuf(hastToDocxChildren(propHast, ctxIns, {}), ctx);
 
   // Attach the thread's comments to the inserted region (last
   // paragraph) so the rationale is visible. Replies become flat
   // additional comments — same range, "↳ Reply by …" prefix.
   const commentIds: number[] = [];
   for (const t of proposals) commentIds.push(...allocCommentIdsForThread(t, ctx));
-  for (const t of extraComments)
-    commentIds.push(...allocCommentIdsForThread(t, ctx));
+  for (const t of extraComments) commentIds.push(...allocCommentIdsForThread(t, ctx));
   out.push(...wrapBufferWithCommentRanges(insBuf, commentIds, ctx));
 }
 
@@ -3838,13 +3722,9 @@ function runsForInlineTrimDiff(
 }
 
 /** Length of the longest common prefix or suffix ending at a whitespace boundary. */
-function commonAffixAtWordBoundary(
-  a: string,
-  b: string,
-  kind: 'prefix' | 'suffix',
-): number {
+function commonAffixAtWordBoundary(a: string, b: string, kind: 'prefix' | 'suffix'): number {
   const at = (s: string, i: number): string =>
-    kind === 'prefix' ? s[i] ?? '' : s[s.length - 1 - i] ?? '';
+    kind === 'prefix' ? (s[i] ?? '') : (s[s.length - 1 - i] ?? '');
   const max = Math.min(a.length, b.length);
   let n = 0;
   while (n < max && at(a, n) === at(b, n)) n++;
@@ -3921,9 +3801,7 @@ function appendInnerRun(
  * Safe without comparing revision attrs: every revision run inside a
  * paragraph in this codebase shares the same `(id, author, date)`.
  */
-function collapseRevisionRuns(
-  children: readonly ParagraphChild[],
-): readonly ParagraphChild[] {
+function collapseRevisionRuns(children: readonly ParagraphChild[]): readonly ParagraphChild[] {
   if (children.length <= 1) return children;
   let didMerge = false;
   const out: ParagraphChild[] = [];
@@ -3953,10 +3831,7 @@ function collapseRevisionRunsInBuf(buf: FileChild[], ctx: BuildCtx): FileChild[]
     const children = (opts.children ?? []) as readonly ParagraphChild[];
     const collapsed = collapseRevisionRuns(children);
     if (collapsed === children) return fc;
-    return mkParagraph(
-      { ...opts, children: [...collapsed] as ParagraphChild[] },
-      ctx,
-    );
+    return mkParagraph({ ...opts, children: [...collapsed] as ParagraphChild[] }, ctx);
   });
 }
 
@@ -4036,9 +3911,7 @@ function pureTextContent(node: Element): string | null {
 function singleParagraphElement(root: HastRoot): Element | null {
   const top = flattenRoot(root);
   // Skip whitespace-only text nodes between blocks.
-  const meaningful = top.filter(
-    (n) => !(isText(n) && n.value.trim() === ''),
-  );
+  const meaningful = top.filter((n) => !(isText(n) && n.value.trim() === ''));
   if (meaningful.length !== 1) return null;
   const only = meaningful[0];
   if (!only || !isElement(only) || only.tagName !== 'p') return null;
@@ -4094,13 +3967,7 @@ function appendWholeDocProposals(
     const propHast = review.proposalHasts.get(thread.id);
     if (!propHast) continue;
     const commentIds = allocCommentIdsForThread(thread, ctx);
-    const diffBlocks = renderWholeDocBlockDiff(
-      originalHast,
-      propHast,
-      author,
-      date,
-      ctx,
-    );
+    const diffBlocks = renderWholeDocBlockDiff(originalHast, propHast, author, date, ctx);
     out.push(...wrapBufferWithCommentRanges(diffBlocks, commentIds, ctx));
   }
   return out;
@@ -4205,12 +4072,7 @@ function renderWholeDocBlockDiff(
     const next = changes[i + 1];
     if (!change.added && !change.removed) {
       for (let k = 0; k < change.value.length; k++) {
-        convertBlockInner(
-          originalBlocks[origIdx]!,
-          ctxEqual,
-          out,
-          defaultWalk,
-        );
+        convertBlockInner(originalBlocks[origIdx]!, ctxEqual, out, defaultWalk);
         origIdx++;
       }
       propIdx += change.value.length;
@@ -4234,12 +4096,7 @@ function renderWholeDocBlockDiff(
           defaultWalk,
         );
         if (inline) {
-          out.push(
-            mkParagraph(
-              withParagraphContext({ children: inline }, ctx, defaultWalk),
-              ctx,
-            ),
-          );
+          out.push(mkParagraph(withParagraphContext({ children: inline }, ctx, defaultWalk), ctx));
         } else {
           convertBlockInner(removedSlice[k]!, delCtx(), out, defaultWalk);
           convertBlockInner(addedSlice[k]!, insCtx(), out, defaultWalk);
@@ -4298,12 +4155,7 @@ function tryEmitInlineWordDiffForPair(
   // Reuse the shared helper so both block-level and whole-doc
   // word-diff paths share the "one revision id per logical change"
   // invariant.
-  return runsForInlineWordDiff(
-    diffWordsWithSpace(oldText, newText),
-    author,
-    date,
-    ctx,
-  );
+  return runsForInlineWordDiff(diffWordsWithSpace(oldText, newText), author, date, ctx);
 }
 
 /**

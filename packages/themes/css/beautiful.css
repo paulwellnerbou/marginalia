@@ -11,8 +11,8 @@
  * stack — they render beautifully on Mac/Windows and stay fast.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;1,9..144,500;1,9..144,700&display=swap');
-@import './default.css';
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;1,9..144,500;1,9..144,700&display=swap");
+@import "./default.css";
 
 .marginalia-theme,
 .marginalia {
@@ -20,7 +20,7 @@
   --md-color-fg: #1a1712;
   --md-color-fg-muted: #736a5c;
   --md-color-bg: #fbf8f1;
-  --md-color-accent: #1f3864;         /* deep editorial ink-blue */
+  --md-color-accent: #1f3864; /* deep editorial ink-blue */
   --md-color-accent-muted: #c9d1e0;
   --md-color-border: #e2dccd;
   --md-color-code-bg: #f3ede0;
@@ -31,16 +31,14 @@
 
   /* --- Typography ------------------------------------------------- */
   --md-font-body:
-    'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua',
-    'Charter', Georgia, serif;
-  --md-font-heading:
-    'Fraunces', 'Iowan Old Style', 'Source Serif Pro', Georgia, serif;
+    "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", "Charter", Georgia, serif;
+  --md-font-heading: "Fraunces", "Iowan Old Style", "Source Serif Pro", Georgia, serif;
 
   --md-max-width: 66ch;
   --md-font-size: 19px;
   --md-line-height: 1.72;
 
-  --md-heading-weight: 500;               /* Fraunces 500 has a lot of presence */
+  --md-heading-weight: 500; /* Fraunces 500 has a lot of presence */
   --md-heading-line-height: 1.15;
   --md-heading-letter-spacing: -0.015em;
 
@@ -70,7 +68,7 @@
 
 /* A thin ornamental rule under the h1 instead of the default border. */
 .marginalia > h1:first-child::after {
-  content: '';
+  content: "";
   display: block;
   width: 6em;
   height: 1px;
@@ -116,7 +114,7 @@
 
 .marginalia p {
   /* Enable classic small-caps + old-style figures where the face supports it. */
-  font-feature-settings: 'kern', 'liga', 'onum';
+  font-feature-settings: "kern", "liga", "onum";
 }
 
 /* Drop cap on the first paragraph after the first h1. An understated one —
@@ -137,7 +135,10 @@
 
 /* Indent successive paragraphs, book-style — but not after a block element
    like a heading, list, quote, or figure. */
-.marginalia p + p { text-indent: 1.5em; margin-top: 0; }
+.marginalia p + p {
+  text-indent: 1.5em;
+  margin-top: 0;
+}
 
 /* --- Links -------------------------------------------------------- */
 
@@ -150,7 +151,9 @@
     var(--md-color-accent) calc(100% - 1px)
   );
   background-size: 100% 100%;
-  transition: color 140ms ease, background-size 140ms ease;
+  transition:
+    color 140ms ease,
+    background-size 140ms ease;
 }
 .marginalia a:hover {
   color: var(--md-color-accent);
@@ -170,7 +173,7 @@
   position: relative;
 }
 .marginalia blockquote::before {
-  content: '“';
+  content: "“";
   font-family: var(--md-font-heading);
   position: absolute;
   left: 0;
@@ -192,7 +195,7 @@
   overflow: visible;
 }
 .marginalia hr::before {
-  content: '§';
+  content: "§";
   font-family: var(--md-font-heading);
   font-style: italic;
   color: var(--md-color-fg-muted);
@@ -203,7 +206,7 @@
 /* --- Tables ------------------------------------------------------- */
 
 .marginalia table {
-  font-feature-settings: 'kern', 'tnum';
+  font-feature-settings: "kern", "tnum";
   font-size: 0.95em;
 }
 .marginalia th {
@@ -243,8 +246,8 @@
  * DARK VARIANT — warm, low-glare
  * ------------------------------------------------------------------ */
 
-[data-appearance='dark'] .marginalia-theme,
-[data-appearance='dark'] .marginalia {
+[data-appearance="dark"] .marginalia-theme,
+[data-appearance="dark"] .marginalia {
   --md-color-fg: #e9e4d4;
   --md-color-fg-muted: #a59a82;
   --md-color-bg: transparent;
@@ -256,17 +259,17 @@
   --md-color-table-stripe: #22201b;
   --md-color-selection-bg: #365f93;
 }
-[data-appearance='dark'] .marginalia > h1:first-child + p::first-letter {
+[data-appearance="dark"] .marginalia > h1:first-child + p::first-letter {
   color: var(--md-color-accent);
 }
-[data-appearance='dark'] .marginalia blockquote::before {
+[data-appearance="dark"] .marginalia blockquote::before {
   color: var(--md-color-accent);
   opacity: 0.5;
 }
 
 @media (prefers-color-scheme: dark) {
-  [data-appearance='auto'] .marginalia-theme,
-  [data-appearance='auto'] .marginalia {
+  [data-appearance="auto"] .marginalia-theme,
+  [data-appearance="auto"] .marginalia {
     --md-color-fg: #e9e4d4;
     --md-color-fg-muted: #a59a82;
     --md-color-bg: transparent;
@@ -278,10 +281,10 @@
     --md-color-table-stripe: #22201b;
     --md-color-selection-bg: #365f93;
   }
-  [data-appearance='auto'] .marginalia > h1:first-child + p::first-letter {
+  [data-appearance="auto"] .marginalia > h1:first-child + p::first-letter {
     color: var(--md-color-accent);
   }
-  [data-appearance='auto'] .marginalia blockquote::before {
+  [data-appearance="auto"] .marginalia blockquote::before {
     color: var(--md-color-accent);
     opacity: 0.5;
   }

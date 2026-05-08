@@ -1,8 +1,8 @@
+import type { Database } from 'bun:sqlite';
 import { Hono } from 'hono';
 import type { UpgradeWebSocket } from 'hono/ws';
-import type { Database } from 'bun:sqlite';
+import { authorize, INVITE_SESSION_COOKIE, parseCookie, SESSION_COOKIE } from '../auth.js';
 import type { DocumentRow } from '../db.js';
-import { INVITE_SESSION_COOKIE, authorize, parseCookie, SESSION_COOKIE } from '../auth.js';
 import type { Realtime } from '../realtime.js';
 
 export interface EventsDeps {

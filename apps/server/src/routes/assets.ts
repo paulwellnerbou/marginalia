@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
-import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { INVITE_SESSION_COOKIE, SESSION_COOKIE, authorize, canEdit, parseCookie } from '../auth.js';
+import { Hono } from 'hono';
+import { authorize, canEdit, INVITE_SESSION_COOKIE, parseCookie, SESSION_COOKIE } from '../auth.js';
 import type { BlobStore } from '../blob-store.js';
 import type { ServerConfig } from '../config.js';
 import type { AssetKind, AssetRow, DocumentAssetRow, DocumentRow } from '../db.js';
@@ -103,9 +103,7 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
     ).run(assetId, mime, file.size, now);
 
     const existing = db
-      .prepare(
-        'SELECT asset_id FROM document_assets WHERE doc_uid = ? AND ref_name = ?',
-      )
+      .prepare('SELECT asset_id FROM document_assets WHERE doc_uid = ? AND ref_name = ?')
       .get(doc.uid, refName) as { asset_id: string } | undefined;
 
     db.prepare(
@@ -248,15 +246,14 @@ async function deleteAsset(c: Context, { db, blobs }: AssetsDeps) {
   if (!refName) return c.json({ error: 'not-found' }, 404);
 
   const row = db
-    .prepare(
-      'SELECT asset_id FROM document_assets WHERE doc_uid = ? AND ref_name = ?',
-    )
+    .prepare('SELECT asset_id FROM document_assets WHERE doc_uid = ? AND ref_name = ?')
     .get(doc.uid, refName) as { asset_id: string } | undefined;
   if (!row) return c.json({ error: 'not-found' }, 404);
 
-  db.prepare(
-    'DELETE FROM document_assets WHERE doc_uid = ? AND ref_name = ?',
-  ).run(doc.uid, refName);
+  db.prepare('DELETE FROM document_assets WHERE doc_uid = ? AND ref_name = ?').run(
+    doc.uid,
+    refName,
+  );
   await gcAssetIfOrphan(db, blobs, row.asset_id);
   return c.body(null, 204);
 }

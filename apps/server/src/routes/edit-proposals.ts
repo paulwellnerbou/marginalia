@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
-import { canMergeMultiBlock, locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import type { BlockSourceRange } from '@marginalia/renderer';
+import { canMergeMultiBlock, locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import type { DocumentRow, EditProposalThreadRow } from '../db.js';
 import type { GitStore } from '../git-store.js';
 import { toWire as toCommentWire } from './comments.js';

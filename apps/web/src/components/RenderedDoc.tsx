@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { RenderResult } from '@marginalia/renderer';
+import { type RefObject, useEffect, useRef, useState } from 'react';
 import type { ThreadState } from '../lib/api.js';
-import { renderMermaidIn } from '../lib/mermaid.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
+import { renderMermaidIn } from '../lib/mermaid.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
 
 export interface DocumentSearchResult {
@@ -579,10 +579,7 @@ function applyCommentHighlights(
     state?: ThreadState;
   }>,
 ): void {
-  const rangesByBlock = new Map<
-    HTMLElement,
-    HighlightRange[]
-  >();
+  const rangesByBlock = new Map<HTMLElement, HighlightRange[]>();
 
   for (const highlight of highlights) {
     const block = findHighlightBlock(root, highlight.blockId, highlight.quote);
@@ -635,9 +632,10 @@ function applyCommentHighlights(
     blockRanges.push({
       rawStart,
       rawEnd,
-      threads: highlight.threadId && highlight.state
-        ? [{ id: highlight.threadId, state: highlight.state }]
-        : [],
+      threads:
+        highlight.threadId && highlight.state
+          ? [{ id: highlight.threadId, state: highlight.state }]
+          : [],
     });
     rangesByBlock.set(block, blockRanges);
   }
@@ -664,7 +662,9 @@ function clearCommentHighlights(root: HTMLElement): void {
     parent.normalize();
   }
 
-  const blockHighlights = root.querySelectorAll<HTMLElement>('[data-comment-highlight-block="true"]');
+  const blockHighlights = root.querySelectorAll<HTMLElement>(
+    '[data-comment-highlight-block="true"]',
+  );
   for (const block of blockHighlights) {
     block.classList.remove('comment-highlight-block');
     delete block.dataset.commentHighlightBlock;
@@ -685,8 +685,9 @@ function applyDocumentSearchHighlights(
   // Mermaid diagram blocks contain their source as text until the client-side
   // renderer swaps it for SVG; exclude that text (and any SVG internals after
   // rendering) so search only matches what the reader can actually see.
-  const textNodes = collectTextNodes(root, (node) =>
-    node.parentElement?.closest('[data-block-kind="mermaid"]') != null,
+  const textNodes = collectTextNodes(
+    root,
+    (node) => node.parentElement?.closest('[data-block-kind="mermaid"]') != null,
   );
   if (textNodes.length === 0) return [];
 

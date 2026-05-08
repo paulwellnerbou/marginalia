@@ -1,14 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-
+import {
+  filterShortcodes,
+  getActiveShortcode,
+} from '../src/components/inline-comments/emojiShortcodes.js';
 import {
   buildMentionOptions,
   filterMentionOptions,
   getActiveMention,
 } from '../src/components/inline-comments/InlineComposer.js';
-import {
-  filterShortcodes,
-  getActiveShortcode,
-} from '../src/components/inline-comments/emojiShortcodes.js';
 import { inlineAvatarInitials } from '../src/components/inline-comments/inlineUtils.js';
 
 describe('inlineAvatarInitials', () => {

@@ -687,11 +687,13 @@ button.primary:disabled {
     --md-color-search-highlight-active-bg,
     color-mix(in srgb, var(--green-5) 82%, transparent)
   );
-  box-shadow: inset 0 -1px 0
+  box-shadow:
+    inset 0 -1px 0
     var(
       --md-color-search-highlight-active-ring,
       color-mix(in srgb, var(--green-9) 34%, transparent)
-    ), 0 0 0 1px
+    ),
+    0 0 0 1px
     var(
       --md-color-search-highlight-active-ring,
       color-mix(in srgb, var(--green-9) 34%, transparent)
@@ -842,8 +844,11 @@ button.primary:disabled {
   line-height: 1.25;
   flex: 1;
   border-radius: 0.35rem;
-  transition: color 160ms ease, background-color 160ms ease, box-shadow 160ms ease, transform 160ms
-    ease;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
 }
 .toc a:hover,
 .toc a:focus-visible {
@@ -1027,7 +1032,9 @@ button.primary:disabled {
 }
 .missing-asset--editable {
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
 }
 .missing-asset--editable:hover,
 .missing-asset--editable:focus-within {
@@ -1170,7 +1177,9 @@ button.primary:disabled {
 
 .copyable-btn {
   flex: none;
-  transition: transform 140ms ease-out, color 140ms ease-out;
+  transition:
+    transform 140ms ease-out,
+    color 140ms ease-out;
 }
 .copyable-inline .copyable-btn {
   align-self: center;
@@ -1260,7 +1269,10 @@ button.primary:disabled {
   background: var(--gray-a2);
   color: var(--gray-11);
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
   text-align: center;
 }
 .file-drop:hover,
@@ -1336,7 +1348,10 @@ button.primary:disabled {
   line-height: 1;
   box-shadow: var(--shadow-2);
   backdrop-filter: blur(10px);
-  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .landing-github-link:hover {
@@ -1407,7 +1422,9 @@ button.primary:disabled {
 }
 
 .feature-card {
-  transition: transform 120ms ease, box-shadow 120ms ease;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease;
 }
 .feature-card:hover {
   transform: translateY(-1px);
@@ -1507,7 +1524,10 @@ button.primary:disabled {
 .recent-card {
   position: relative;
   cursor: pointer;
-  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    border-color 120ms ease;
   border: 1px solid transparent;
 }
 .recent-card:hover {
@@ -1832,7 +1852,8 @@ button.primary:disabled {
 
 .lightbox[data-bg-mode="dark"] .lightbox-media {
   background-color: var(--gray-2);
-  background-image: linear-gradient(
+  background-image:
+    linear-gradient(
       45deg,
       var(--gray-4) 25%,
       transparent 25%,
@@ -1848,7 +1869,9 @@ button.primary:disabled {
       var(--gray-4) 75%,
       var(--gray-4)
     );
-  background-position: 0 0, 12px 12px;
+  background-position:
+    0 0,
+    12px 12px;
   background-size: 24px 24px;
 }
 
@@ -1859,12 +1882,17 @@ button.primary:disabled {
 
 .lightbox[data-bg-mode="checker"] .lightbox-media {
   background-color: #e5e5e5;
-  background-image: linear-gradient(45deg, #f2f2f2 25%, transparent 25%),
+  background-image:
+    linear-gradient(45deg, #f2f2f2 25%, transparent 25%),
     linear-gradient(45deg, transparent 75%, #f2f2f2 75%),
     linear-gradient(45deg, transparent 75%, #f2f2f2 75%),
     linear-gradient(45deg, #f2f2f2 25%, transparent 25%);
   background-size: 20px 20px;
-  background-position: 0 0, 0 0, -10px -10px, 10px 10px;
+  background-position:
+    0 0,
+    0 0,
+    -10px -10px,
+    10px 10px;
 }
 
 .lightbox-media.zoom-fit {
@@ -1919,7 +1947,9 @@ button.primary:disabled {
   padding: 0.5rem 0 0;
   margin: 0;
   color: white;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8), 0 0 12px rgba(0, 0, 0, 0.4);
+  text-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.8),
+    0 0 12px rgba(0, 0, 0, 0.4);
   cursor: default;
 }
 
@@ -2029,12 +2059,18 @@ button.primary:disabled {
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 260ms ease-out, border-color 120ms ease, color 120ms ease;
+  transition:
+    opacity 260ms ease-out,
+    border-color 120ms ease,
+    color 120ms ease;
 }
 .block-actions-btn.is-visible {
   opacity: 0.9;
   pointer-events: auto;
-  transition: opacity 90ms ease-out, border-color 120ms ease, color 120ms ease;
+  transition:
+    opacity 90ms ease-out,
+    border-color 120ms ease,
+    color 120ms ease;
 }
 .block-actions-btn:hover {
   opacity: 1;
@@ -2352,7 +2388,9 @@ button.primary:disabled {
   border-radius: 999px;
   border: 1px solid rgba(15, 23, 42, 0.42);
   background: rgba(15, 23, 42, 0.18);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.18);
   pointer-events: none;
   z-index: 2;
 }
@@ -2405,7 +2443,9 @@ button.primary:disabled {
   box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
   backdrop-filter: blur(14px);
   overflow: hidden;
-  transition: margin 180ms ease, padding 180ms ease;
+  transition:
+    margin 180ms ease,
+    padding 180ms ease;
 }
 .ic-toolbar-group {
   display: flex;
@@ -2419,14 +2459,18 @@ button.primary:disabled {
   align-items: center;
   justify-content: center;
   gap: 3px;
-  transition: opacity 140ms ease, visibility 140ms ease;
+  transition:
+    opacity 140ms ease,
+    visibility 140ms ease;
 }
 /* The right group only contains toggle buttons; we want them spaced by the
  * same 3px that separates a toggle edge from the bar edge. The default 8px
  * group gap is right for the chevron pair on the left. */
 .ic-toolbar-group-right {
   gap: 3px;
-  transition: opacity 140ms ease, visibility 140ms ease;
+  transition:
+    opacity 140ms ease,
+    visibility 140ms ease;
 }
 .ic-toolbar-count {
   flex: 0 0 auto;
@@ -2481,13 +2525,17 @@ button.primary:disabled {
   clip-path: inset(0);
   opacity: 1;
   visibility: visible;
-  transition: opacity 180ms ease, visibility 0s linear 0s;
+  transition:
+    opacity 180ms ease,
+    visibility 0s linear 0s;
 }
 .ic-column-collapsed .ic-column-clip {
   pointer-events: none;
   opacity: 0;
   visibility: hidden;
-  transition: opacity 180ms ease, visibility 0s linear 180ms;
+  transition:
+    opacity 180ms ease,
+    visibility 0s linear 180ms;
 }
 .ic-column-content {
   position: relative;
@@ -2555,7 +2603,10 @@ button.primary:disabled {
   position: relative;
   scroll-margin-top: 1rem;
   scroll-margin-bottom: 1rem;
-  transition: box-shadow 160ms ease, border-color 160ms ease, background 160ms ease;
+  transition:
+    box-shadow 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
 }
 
 .ic-card-resolved {
@@ -2830,7 +2881,9 @@ button.primary:disabled {
   font-size: 0.78rem;
   line-height: 1.4;
   cursor: pointer;
-  transition: background-color 80ms ease, border-color 80ms ease;
+  transition:
+    background-color 80ms ease,
+    border-color 80ms ease;
 }
 .ic-reaction-chip:hover:not(:disabled) {
   background: var(--ui-bg, rgba(15, 23, 42, 0.08));
@@ -3073,7 +3126,10 @@ button.primary:disabled {
   border-radius: 6px;
   color: var(--ui-fg);
   line-height: 1.3;
-  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
 }
 .ic-btn:disabled {
   cursor: not-allowed;

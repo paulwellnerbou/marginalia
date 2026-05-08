@@ -1,10 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import {
-  locateAllBlocks,
-  locateBlockRange,
-  locateBlockSource,
-  render,
-} from '../src/index.js';
+import { locateAllBlocks, locateBlockRange, locateBlockSource, render } from '../src/index.js';
 
 describe('locateBlockSource', () => {
   test('returns ranges that slice back to exact block sources — round-trips with remarkBlockIds', async () => {

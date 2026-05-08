@@ -1,7 +1,7 @@
-import type { Plugin } from 'unified';
-import type { Root, Element } from 'hast';
-import { visit } from 'unist-util-visit';
+import type { Element, Root } from 'hast';
 import { toString as hastToString } from 'hast-util-to-string';
+import type { Plugin } from 'unified';
+import { visit } from 'unist-util-visit';
 
 /**
  * For every heading that has an `id`, prepend a self-linking anchor so
@@ -35,7 +35,9 @@ export const rehypeHeadingAnchors: Plugin<[], Root> = () => {
 };
 
 function isHeading(tag: string): boolean {
-  return tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6';
+  return (
+    tag === 'h1' || tag === 'h2' || tag === 'h3' || tag === 'h4' || tag === 'h5' || tag === 'h6'
+  );
 }
 
 function getStringProp(node: Element, key: string): string | null {

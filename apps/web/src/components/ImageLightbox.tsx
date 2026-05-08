@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { Cross2Icon, MoonIcon, SunIcon, TransparencyGridIcon } from '@radix-ui/react-icons';
 import { Dialog, IconButton, Tooltip } from '@radix-ui/themes';
-import { Cross2Icon, SunIcon, MoonIcon, TransparencyGridIcon } from '@radix-ui/react-icons';
+import { useEffect, useState } from 'react';
 
 export interface LightboxImage {
   src: string;
@@ -36,7 +36,12 @@ export function ImageLightbox({
   };
 
   const BgIcon = bgMode === 'dark' ? SunIcon : bgMode === 'light' ? TransparencyGridIcon : MoonIcon;
-  const bgTooltip = bgMode === 'dark' ? 'Light background' : bgMode === 'light' ? 'Checkerboard background' : 'Dark background';
+  const bgTooltip =
+    bgMode === 'dark'
+      ? 'Light background'
+      : bgMode === 'light'
+        ? 'Checkerboard background'
+        : 'Dark background';
 
   return (
     <Dialog.Root open={image !== null} onOpenChange={(v) => !v && onClose()}>
@@ -47,19 +52,14 @@ export function ImageLightbox({
         size="1"
         aria-describedby={undefined}
       >
-        <Dialog.Title className="visually-hidden">
-          {image?.alt || 'Image preview'}
-        </Dialog.Title>
+        <Dialog.Title className="visually-hidden">{image?.alt || 'Image preview'}</Dialog.Title>
         {image && (
           <div
             className={`lightbox-stage lightbox-stage-${zoom}`}
             onClick={() => setZoom((z) => (z === 'fit' ? 'native' : 'fit'))}
           >
             <div className="lightbox-figure">
-              <div
-                className="lightbox-controls"
-                onClick={(e) => e.stopPropagation()}
-              >
+              <div className="lightbox-controls" onClick={(e) => e.stopPropagation()}>
                 <Tooltip content={bgTooltip}>
                   <IconButton variant="soft" size="2" color="gray" onClick={cycleBg}>
                     <BgIcon />
@@ -77,10 +77,7 @@ export function ImageLightbox({
                 <img src={image.src} alt={image.alt} className={`lightbox-img zoom-${zoom}`} />
               </div>
               {image.alt && (
-                <p
-                  className="lightbox-caption"
-                  onClick={(e) => e.stopPropagation()}
-                >
+                <p className="lightbox-caption" onClick={(e) => e.stopPropagation()}>
                   {image.alt}
                 </p>
               )}

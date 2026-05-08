@@ -81,9 +81,7 @@ export function installHeadingCollapse(article: HTMLElement): void {
   const firstHeading = headings[0];
   const h1Count = headings.reduce((n, h) => (h.tagName === 'H1' ? n + 1 : n), 0);
   const documentTitle =
-    h1Count === 1 &&
-    firstHeading?.tagName === 'H1' &&
-    isDocumentTitle(firstHeading, article)
+    h1Count === 1 && firstHeading?.tagName === 'H1' && isDocumentTitle(firstHeading, article)
       ? firstHeading
       : null;
 

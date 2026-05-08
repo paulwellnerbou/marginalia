@@ -1,6 +1,6 @@
+import { DesktopIcon, MoonIcon, SunIcon } from '@radix-ui/react-icons';
 import { IconButton, Tooltip } from '@radix-ui/themes';
-import { MoonIcon, SunIcon, DesktopIcon } from '@radix-ui/react-icons';
-import { useAppearance, type Appearance } from '../lib/appearance.js';
+import { type Appearance, useAppearance } from '../lib/appearance.js';
 
 /**
  * Three-state toggle: light → dark → auto → light → …
