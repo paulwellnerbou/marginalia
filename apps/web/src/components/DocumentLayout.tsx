@@ -51,6 +51,7 @@ import {
   resolveThread as apiResolve,
   restoreHistoryVersion as apiRestoreHistoryVersion,
   revertHistoryVersion as apiRevertHistoryVersion,
+  toggleCommentReaction as apiToggleReaction,
   updateComment as apiUpdate,
   getDocument,
   getHistoryDiff,
@@ -891,6 +892,28 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [doc.uid, displayName, effectiveDisplayName],
   );
 
+  const onReact = useCallback(
+    async (nodeId: string, emoji: string) => {
+      const identity = resolveIdentity();
+      if (!identity) {
+        setError('Please set your display name first.');
+        return;
+      }
+      try {
+        // Server returns the updated thread; splice it into local state
+        // in place so a reaction toggle costs one network round-trip
+        // instead of one POST + one full listThreads refetch.
+        const updated = await apiToggleReaction(doc.uid, nodeId, emoji, identity);
+        setThreads((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
+      } catch (err) {
+        reportError('DocumentLayout.toggleReaction', err, { nodeId });
+        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Reaction failed');
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [doc.uid, displayName, effectiveDisplayName],
+  );
+
   const onRestoreHistoryVersion = useCallback(
     async (oid: string) => {
       const identity = resolveIdentity();
@@ -1507,6 +1530,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 onDeleteThread={onDeleteThread}
                 onResolveThread={onResolveThread}
                 onRepairThread={onRepairThread}
+                onReact={onReact}
                 onScrollToAnchor={scrollToAnchor}
               />
             </div>
@@ -1585,6 +1609,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onDeleteThread={onDeleteThread}
                   onResolveThread={onResolveThread}
                   onRepairThread={onRepairThread}
+                  onReact={onReact}
                   onScrollToAnchor={scrollToAnchor}
                 />
               </Tabs.Content>

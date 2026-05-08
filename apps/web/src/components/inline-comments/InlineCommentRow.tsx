@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { Comment } from '../../lib/api.js';
 import { formatTimestamp, formatTimestampLong } from '../../lib/format-time.js';
 import { reportError } from '../../lib/log.js';
+import { EmojiReactionPicker } from './EmojiReactionPicker.js';
 import { InlineAvatar } from './InlineAvatar.js';
 import { InlineCommentMarkdown } from './InlineCommentMarkdown.js';
 
@@ -13,6 +14,12 @@ interface Props {
   onEdit: (id: string, body: string) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
   onQuote?: ((text: string) => void) | undefined;
+  /**
+   * Toggle the viewer's reaction on this comment. When omitted, no
+   * picker is shown and existing reactions render read-only — used by
+   * static contexts (e.g. exports) that don't have a mutation surface.
+   */
+  onReact?: ((commentId: string, emoji: string) => Promise<void>) | undefined;
 }
 
 export function InlineCommentRow({
@@ -22,12 +29,14 @@ export function InlineCommentRow({
   onEdit,
   onDelete,
   onQuote,
+  onReact,
 }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(node.body);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [saving, setSaving] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [reacting, setReacting] = useState(false);
   const linkCopyTimer = useRef<number | null>(null);
 
   // Clean up the copy-confirmation timer if the component unmounts while it's pending.
@@ -79,6 +88,19 @@ export function InlineCommentRow({
   const showQuote = !editing && !confirmingDelete && canQuote && onQuote;
   const showEdit = !editing && !confirmingDelete && node.capabilities.edit;
   const showDelete = !editing && !confirmingDelete && node.capabilities.delete;
+  const showReact = !editing && !confirmingDelete && node.capabilities.react && onReact;
+
+  async function toggleReaction(emoji: string) {
+    if (!onReact || reacting) return;
+    setReacting(true);
+    try {
+      await onReact(node.id, emoji);
+    } catch (err) {
+      reportError('InlineCommentRow.toggleReaction', err, { commentId: node.id, emoji });
+    } finally {
+      setReacting(false);
+    }
+  }
 
   return (
     <div id={`comment-${node.id}`} className={`ic-row ic-row-${variant}`}>
@@ -165,6 +187,9 @@ export function InlineCommentRow({
                       <TrashIcon />
                     </button>
                   )}
+                  {showReact && (
+                    <EmojiReactionPicker onPick={toggleReaction} disabled={reacting} />
+                  )}
                 </>
               )}
             </div>
@@ -204,7 +229,49 @@ export function InlineCommentRow({
             <InlineCommentMarkdown>{node.body}</InlineCommentMarkdown>
           </div>
         )}
+
+        {!editing && node.reactions.length > 0 && (
+          <div className="ic-reactions" role="group" aria-label="Reactions">
+            {node.reactions.map((r) => (
+              <button
+                key={r.emoji}
+                type="button"
+                className={`ic-reaction-chip${r.reacted ? ' ic-reaction-chip-self' : ''}`}
+                onClick={() => void toggleReaction(r.emoji)}
+                disabled={reacting || !onReact || !node.capabilities.react}
+                aria-pressed={r.reacted}
+                aria-label={chipAriaLabel(r.emoji, r.count, r.reacted)}
+                title={reactionTitle(r.authors)}
+              >
+                <span className="ic-reaction-chip-emoji">{r.emoji}</span>
+                <span className="ic-reaction-chip-count" aria-hidden="true">
+                  {r.count}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
+}
+
+function reactionTitle(authors: string[]): string {
+  const MAX = 8;
+  const shown = authors.slice(0, MAX);
+  const rest = authors.length - shown.length;
+  const prefix = shown.join(', ');
+  return rest > 0 ? `${prefix} and ${rest} more` : prefix;
+}
+
+/**
+ * Accessible name for a reaction chip — without one, screen readers
+ * announce the button as just its count (e.g. "2") because the emoji
+ * span is decorative duplicate content. We voice the emoji + count and
+ * note whether the viewer is among the reactors so toggling the chip
+ * doesn't feel ambiguous.
+ */
+function chipAriaLabel(emoji: string, count: number, reacted: boolean): string {
+  const base = `${emoji}, ${count} ${count === 1 ? 'reaction' : 'reactions'}`;
+  return reacted ? `${base}, including yours` : base;
 }

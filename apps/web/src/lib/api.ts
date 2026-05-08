@@ -861,6 +861,17 @@ export interface ThreadCapabilities {
 export interface ThreadNodeCapabilities {
   edit: boolean;
   delete: boolean;
+  /** Whether the viewer is allowed to add or toggle emoji reactions. */
+  react: boolean;
+}
+
+export interface CommentReaction {
+  emoji: string;
+  count: number;
+  /** True when the requesting viewer has this reaction on this comment. */
+  reacted: boolean;
+  /** Display names of authors who reacted, ordered oldest-first. */
+  authors: string[];
 }
 
 export interface ThreadAnchor {
@@ -882,6 +893,7 @@ export interface Comment {
   body: string;
   author: { client_id: string; display_name: string };
   capabilities: ThreadNodeCapabilities;
+  reactions: CommentReaction[];
   created_at: number;
   updated_at: number;
 }
@@ -1112,6 +1124,31 @@ export async function updateComment(
     docUid: uid,
   });
   rememberThread(uid, res.thread);
+}
+
+/**
+ * Returns the updated `Thread` so callers can splice it into local
+ * state without a follow-up `listThreads()`. Pre-update local cache is
+ * still patched via `rememberThread` for any other consumer that reads
+ * straight from the snapshot.
+ */
+export async function toggleCommentReaction(
+  uid: string,
+  cid: string,
+  emoji: string,
+  identity: Identity,
+): Promise<Thread> {
+  const location = await findCommentLocation(uid, cid);
+  const tid = location.thread.id;
+  const path = `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(tid)}/comments/${encodeURIComponent(cid)}/reactions`;
+  const res = await request<ThreadMutationResponse>(path, {
+    method: 'POST',
+    body: JSON.stringify({ emoji }),
+    identity,
+    docUid: uid,
+  });
+  rememberThread(uid, res.thread);
+  return res.thread;
 }
 
 export async function deleteComment(uid: string, cid: string, identity: Identity): Promise<void> {

@@ -112,6 +112,37 @@ CREATE TABLE IF NOT EXISTS comment_mentions (
 CREATE INDEX IF NOT EXISTS idx_comment_mentions_pending
   ON comment_mentions(doc_uid, target_display_name, delivered_at);
 
+-- Emoji reactions on comments and replies. One row per
+-- (comment, viewer client_id, emoji): a user can react with several
+-- different emojis to the same comment but never twice with the same
+-- emoji. The author_display_name is the reactor's name at react time
+-- (snapshot, not joined) — used only for hover tooltips, so a later
+-- rename is acceptable drift.
+CREATE TABLE IF NOT EXISTS comment_reactions (
+  doc_uid              TEXT NOT NULL,
+  comment_id           TEXT NOT NULL,
+  emoji                TEXT NOT NULL,
+  author_client_id     TEXT NOT NULL,
+  author_display_name  TEXT NOT NULL,
+  created_at           INTEGER NOT NULL,
+  -- doc_uid leads the PK so the uniqueness scope matches every read +
+  -- write on this table (all of them filter by doc_uid). Without it,
+  -- a hypothetical comment-id collision across documents would clash
+  -- on the PK even though the rows belong to unrelated docs.
+  PRIMARY KEY (doc_uid, comment_id, author_client_id, emoji)
+);
+
+-- Covers loadCommentReactionsWire's hot read. The query's
+-- ORDER BY (comment_id, created_at) matches this index column-for-
+-- column, so SQLite can satisfy filter + sort straight from the
+-- index without a temp sort step. (Sorting by created_at alone
+-- across multiple comment_ids would NOT line up — the index sorts
+-- created_at per-comment, not globally.) Also serves any future
+-- "all reactions for one comment" lookup, so we don't keep
+-- separate single-column indexes around.
+CREATE INDEX IF NOT EXISTS idx_comment_reactions_doc_comment_created
+  ON comment_reactions(doc_uid, comment_id, created_at);
+
 -- Per-document user registry. authorize() upserts on every request; a
 -- display_name change for the same (doc_uid, client_id) fans out to
 -- comments.author_display_name and comment_mentions.target_display_name
@@ -308,6 +339,15 @@ export interface CommentMentionRow {
   delivered_at: number | null;
 }
 
+export interface CommentReactionRow {
+  doc_uid: string;
+  comment_id: string;
+  emoji: string;
+  author_client_id: string;
+  author_display_name: string;
+  created_at: number;
+}
+
 export interface DocUserRow {
   doc_uid: string;
   client_id: string;
@@ -411,7 +451,57 @@ export function openDatabase(path: string): Database {
   migrateInvitesKind(db);
   migrateEditProposalsToCommentExtensions(db);
   migrateProposalDecisionColumnsToComments(db);
+  migrateCommentReactionsPrimaryKey(db);
   return db;
+}
+
+/**
+ * Rebuild `comment_reactions` with `doc_uid` in the PRIMARY KEY when an
+ * earlier (PR #63 development) version of the table is detected. The
+ * old PK was `(comment_id, author_client_id, emoji)`, which made
+ * uniqueness global across documents — stricter than every read/write
+ * (all of them filter by doc_uid) and a hypothetical correctness hazard
+ * if comment-id generation ever loses global uniqueness. Idempotent;
+ * no-op once `doc_uid` leads the PK.
+ */
+function migrateCommentReactionsPrimaryKey(db: Database): void {
+  const cols = db.prepare(`PRAGMA table_info(comment_reactions)`).all() as Array<{
+    name: string;
+    pk: number;
+  }>;
+  const docUidPkPosition = cols.find((c) => c.name === 'doc_uid')?.pk ?? 0;
+  if (docUidPkPosition === 1) return; // already migrated
+
+  db.exec('BEGIN');
+  try {
+    db.exec(`ALTER TABLE comment_reactions RENAME TO comment_reactions_pre_doc_pk`);
+    db.exec(`
+      CREATE TABLE comment_reactions (
+        doc_uid              TEXT NOT NULL,
+        comment_id           TEXT NOT NULL,
+        emoji                TEXT NOT NULL,
+        author_client_id     TEXT NOT NULL,
+        author_display_name  TEXT NOT NULL,
+        created_at           INTEGER NOT NULL,
+        PRIMARY KEY (doc_uid, comment_id, author_client_id, emoji)
+      )
+    `);
+    db.exec(`
+      INSERT INTO comment_reactions
+        (doc_uid, comment_id, emoji, author_client_id, author_display_name, created_at)
+      SELECT doc_uid, comment_id, emoji, author_client_id, author_display_name, created_at
+        FROM comment_reactions_pre_doc_pk
+    `);
+    db.exec(`DROP TABLE comment_reactions_pre_doc_pk`);
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_comment_reactions_doc_comment_created
+        ON comment_reactions(doc_uid, comment_id, created_at)
+    `);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 }
 
 /**
