@@ -515,6 +515,7 @@ function UploadDialog({
     format === 'asciidoc' ? deriveAsciidocTitle(source) : deriveDisplayName(source);
   const effectiveDocName = docName.trim() || derivedTitle;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset is a render-local function declaration — adding it would re-fire on every render. Triggers below cover the only state changes that warrant a re-seed.
   useEffect(() => {
     if (!open || !draft || createdAdminUrl) return;
     reset(draft);

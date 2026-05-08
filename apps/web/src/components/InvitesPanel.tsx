@@ -153,6 +153,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
     }
   }, [uid]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: displayName is the explicit refetch trigger so the invite list re-pulls after the user sets/changes their identity.
   useEffect(() => {
     void refresh();
   }, [displayName, refresh]);

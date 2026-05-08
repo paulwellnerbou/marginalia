@@ -46,6 +46,7 @@ export function PasswordPromptDialog({
     () => !!loadInviteToken(docUid),
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: preparePrompt is a render-local function declaration; listing it would re-bind the listener every render. The body only depends on docUid via the freshly captured closure.
   useEffect(() => {
     function onAuthRequired(e: Event) {
       const detail = (e as CustomEvent<{ docUid: string }>).detail;

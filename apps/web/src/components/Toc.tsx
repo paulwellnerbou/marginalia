@@ -110,10 +110,12 @@ function TocItem({
   // subtree. Kept as a one-shot `setOpen(true)` rather than a
   // continuous `effectiveOpen` override so a user's manual collapse
   // is honored until the next navigation.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: activeId is the explicit re-trigger so re-clicking the same heading still re-expands a manually collapsed parent.
   useEffect(() => {
     if (hasActiveDescendant) setOpen(true);
   }, [activeId, hasActiveDescendant]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: query is the re-trigger so the active row re-scrolls after a search-driven force-open changes the surrounding layout.
   useEffect(() => {
     if (!isActive) return;
     const link = linkRef.current;

@@ -116,6 +116,7 @@ function ProposalSourceField({
     setPhase('ready');
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deps are loaded once on mount; format never changes during the lifetime of a single ProposalSourceField because the parent keys it on `${docFormat}-…`, so a format swap remounts the component with a fresh closure.
   useEffect(() => {
     let disposed = false;
     loadEditorDeps(format).then(
@@ -137,8 +138,9 @@ function ProposalSourceField({
     return () => {
       disposed = true;
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: editor is mounted once when phase flips to 'ready'; rebinding on value/id/etc. would tear down CodeMirror state on every keystroke.
   useEffect(() => {
     if (phase !== 'ready') return;
     const container = containerRef.current;
@@ -199,7 +201,7 @@ function ProposalSourceField({
       view.destroy();
       viewRef.current = null;
     };
-  }, [phase]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   if (phase === 'ready') {
     return <div ref={containerRef} className="proposal-source-editor" />;

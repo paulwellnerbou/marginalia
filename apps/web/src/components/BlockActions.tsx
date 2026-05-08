@@ -100,6 +100,7 @@ export function BlockActions({ rootRef, onPropose }: Props) {
     };
   }, [hoveredTarget, renderedTarget, rootRef]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: renderedTarget is the re-attach trigger so the observer re-binds whenever the floating button is re-shown for a different block.
   useLayoutEffect(() => {
     const btn = btnRef.current;
     if (!btn) return;

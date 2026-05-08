@@ -159,6 +159,7 @@ export function RenderedDoc({
     refreshMissingAssetPlaceholders(el, canUploadMissing, uploadCbRef);
   }, [canUploadMissing, ref]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: rendered.html is the re-attach trigger — when innerHTML is rewritten the previous text nodes are gone and highlights must be re-applied to the fresh DOM.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -170,6 +171,7 @@ export function RenderedDoc({
     return () => clearCommentHighlights(el);
   }, [highlights, rendered.html, ref]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: rendered.html re-runs after innerHTML rewrites; highlights re-runs so search highlights are re-applied after comment highlights swap mark elements in/out.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -187,6 +189,7 @@ export function RenderedDoc({
     return () => clearDocumentSearchHighlights(el);
   }, [highlights, onSearchResultsChange, ref, rendered.html, searchOptions, searchQuery]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: activeSearchVersion is the explicit re-trigger so re-clicking the same active result still scrolls to it.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;

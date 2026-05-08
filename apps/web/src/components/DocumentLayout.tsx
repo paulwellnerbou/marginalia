@@ -219,6 +219,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   // Capture the URL hash once on mount so deep links survive async thread load.
   // Re-runs on doc.uid change to handle SPA navigation to a deep-linked document.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: doc.uid is the intentional re-run trigger; the body only writes to a ref.
   useEffect(() => {
     const hash = window.location.hash;
     pendingDeepLinkCommentId.current = hash.startsWith('#comment-')
@@ -239,11 +240,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [doc.format, liveSource],
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: doc.uid is kept so a doc swap reseeds live state even if the new doc has identical source/rendered strings.
   useEffect(() => {
     setLiveSource(doc.source);
     setLiveRendered(doc.rendered);
   }, [doc.uid, doc.source, doc.rendered]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: doc.uid is the intentional re-run trigger; the body only calls stable setters.
   useEffect(() => {
     setDocSearchOpen(false);
     setDocSearchQuery('');
@@ -261,6 +264,28 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     }),
     [docSearchCaseSensitive, docSearchWholeWords],
   );
+
+  // Hoisted above the effects/callbacks that list them as deps so the dep
+  // array doesn't reference these in their TDZ during render.
+  const refreshDoc = useCallback(async () => {
+    try {
+      const fresh = await getDocument(doc.uid);
+      setLiveSource(fresh.source);
+      setLiveRendered(fresh.rendered);
+    } catch (err) {
+      reportError('DocumentLayout.refreshDoc', err, { uid: doc.uid });
+    }
+  }, [doc.uid]);
+
+  const refreshThreads = useCallback(async () => {
+    try {
+      const res = await listThreads(doc.uid, { consumeMentions: false });
+      setThreads(res.threads);
+      setMentionCandidates(res.mention_candidates);
+    } catch (err) {
+      reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
+    }
+  }, [doc.uid]);
 
   // Reactive across UserMenu, composer, invite-load seeding, other tabs.
   const displayName = useDisplayName();
@@ -307,6 +332,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     if (!canComment) setPendingDraft(null);
   }, [canComment]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: inlineCommentsOpen is the intentional re-run trigger so the column is re-measured when the panel toggles.
   useLayoutEffect(() => {
     const scroll = docScrollRef.current;
     const column = scroll?.querySelector<HTMLElement>('.ic-column') ?? null;
@@ -345,6 +371,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const headingIds = useMemo(() => flattenTocIds(liveRendered.toc), [liveRendered.toc]);
   const headingIdsKey = useMemo(() => headingIds.join('\u0000'), [headingIds]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: headingIdsKey is the deduped trigger derived from headingIds; liveRendered.html drives a re-attach against the new DOM nodes.
   useEffect(() => {
     const container = docScrollRef.current;
     const root = docRef.current;
@@ -563,19 +590,23 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       if (refreshTimer) clearTimeout(refreshTimer);
       sub.close();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc.uid]);
+  }, [doc.uid, refreshThreads]);
 
-  function resolveIdentity(providedName?: string) {
-    const name = providedName?.trim() || effectiveDisplayName;
-    if (!name) return null;
-    // setDisplayName fires an in-app event → useDisplayName re-runs, so all
-    // mirror components (AppBar UserMenu, etc.) stay in sync. The server
-    // now treats subsequent-visit header names as authoritative, so
-    // renames always flow through here cleanly.
-    if (name !== displayName) setDisplayName(name);
-    return { clientId: getClientId(), displayName: name };
-  }
+  // Memoized so downstream useCallbacks can list it as a single dep instead
+  // of mirroring [displayName, effectiveDisplayName] each time.
+  const resolveIdentity = useCallback(
+    (providedName?: string) => {
+      const name = providedName?.trim() || effectiveDisplayName;
+      if (!name) return null;
+      // setDisplayName fires an in-app event → useDisplayName re-runs, so all
+      // mirror components (AppBar UserMenu, etc.) stay in sync. The server
+      // now treats subsequent-visit header names as authoritative, so
+      // renames always flow through here cleanly.
+      if (name !== displayName) setDisplayName(name);
+      return { clientId: getClientId(), displayName: name };
+    },
+    [displayName, effectiveDisplayName],
+  );
 
   const scrollToAnchor = useCallback(
     (blockId: string, quote?: string | null, threadId?: string, scrollOffset = 0) => {
@@ -664,8 +695,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to post');
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [canComment, doc.uid, displayName, effectiveDisplayName],
+    [canComment, doc.uid, resolveIdentity, refreshThreads],
   );
 
   const onReply = useCallback(
@@ -680,8 +710,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to reply');
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName],
+    [doc.uid, resolveIdentity, refreshThreads],
   );
 
   const onResolveThread = useCallback(
@@ -726,8 +755,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         return false;
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName],
+    [doc.uid, resolveIdentity, refreshThreads, refreshDoc],
   );
 
   const onRepairThread = useCallback(
@@ -756,8 +784,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         return false;
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName],
+    [doc.uid, resolveIdentity],
   );
 
   const onEdit = useCallback(
@@ -771,29 +798,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         reportError('DocumentLayout.editComment', err, { commentId: id });
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName],
+    [doc.uid, resolveIdentity, refreshThreads],
   );
-
-  const refreshDoc = useCallback(async () => {
-    try {
-      const fresh = await getDocument(doc.uid);
-      setLiveSource(fresh.source);
-      setLiveRendered(fresh.rendered);
-    } catch (err) {
-      reportError('DocumentLayout.refreshDoc', err, { uid: doc.uid });
-    }
-  }, [doc.uid]);
-
-  const refreshThreads = useCallback(async () => {
-    try {
-      const res = await listThreads(doc.uid, { consumeMentions: false });
-      setThreads(res.threads);
-      setMentionCandidates(res.mention_candidates);
-    } catch (err) {
-      reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
-    }
-  }, [doc.uid]);
 
   const canEdit = doc.role === 'admin' || doc.role === 'editor';
 
@@ -816,8 +822,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         else setError('Upload failed');
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName, refreshDoc],
+    [doc.uid, resolveIdentity, refreshDoc],
   );
 
   const onCreateProposal = useCallback(
@@ -847,8 +852,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to propose');
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, pendingProposalTarget],
+    [doc.uid, resolveIdentity, refreshThreads, pendingProposalTarget],
   );
 
   const onDeleteThread = useCallback(
@@ -864,8 +868,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         await refreshThreads();
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName],
+    [doc.uid, resolveIdentity, refreshThreads],
   );
 
   const onDeleteNode = useCallback(
@@ -888,8 +891,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         reportError('DocumentLayout.deleteNode', err, { nodeId });
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName],
+    [doc.uid, resolveIdentity],
   );
 
   const onReact = useCallback(
@@ -910,8 +912,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Reaction failed');
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName],
+    [doc.uid, resolveIdentity],
   );
 
   const onRestoreHistoryVersion = useCallback(
@@ -932,8 +933,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         throw err;
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName, refreshDoc, refreshThreads],
+    [doc.uid, resolveIdentity, refreshDoc, refreshThreads],
   );
 
   const onRestoreAsNewDocument = useCallback(
@@ -1149,8 +1149,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         throw err;
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [doc.uid, displayName, effectiveDisplayName, openCommentThread, refreshDoc, refreshThreads],
+    [doc.uid, resolveIdentity, openCommentThread, refreshDoc, refreshThreads],
   );
 
   const updateSearchResults = useCallback((results: DocumentSearchResult[]) => {

@@ -65,12 +65,7 @@ function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'):
   let m = re.exec(source);
   while (m !== null) {
     const raw = m[1];
-    if (
-      raw &&
-      !/^[a-z][a-z0-9+.-]*:/i.test(raw) &&
-      !raw.startsWith('/') &&
-      !raw.startsWith('#')
-    ) {
+    if (raw && !/^[a-z][a-z0-9+.-]*:/i.test(raw) && !raw.startsWith('/') && !raw.startsWith('#')) {
       out.add(raw);
     }
     m = re.exec(source);
@@ -193,7 +188,7 @@ export function EditPage() {
   useEffect(() => {
     if (!doc) return;
     setTheme(getUserThemeOverride(doc.uid) ?? doc.default_theme);
-  }, [doc?.uid, doc?.default_theme]);
+  }, [doc]);
 
   useEffect(() => {
     if (!uid) return;
@@ -308,6 +303,7 @@ export function EditPage() {
   }, [source, uid, attachedRefs, assetVersions, doc?.format]);
 
   // Sync scrolling between source and preview
+  // biome-ignore lint/correctness/useExhaustiveDependencies: doc/rendered are re-attach triggers — when the document or its rendering changes, the .cm-scroller / preview elements are re-mounted and the listeners need to bind to the fresh nodes.
   useEffect(() => {
     const scroller = editorEl.current?.querySelector('.cm-scroller');
     const preview = previewEl.current;

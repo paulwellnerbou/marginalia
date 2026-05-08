@@ -128,6 +128,33 @@ interface GlobalState {
   isSticky: boolean;
 }
 
+function resolveAnchorElement(
+  doc: HTMLElement,
+  blockId: string,
+  quote?: string | null,
+): HTMLElement | null {
+  const escaped = CSS.escape(blockId);
+  const target = doc.querySelector<HTMLElement>(
+    `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
+  );
+  if (!target) return null;
+  if (!target.dataset.block || !quote) return target;
+
+  const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
+  let narrowed: HTMLElement | null = null;
+  let unique = true;
+  for (const sub of subEls) {
+    const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
+    if (!text.includes(quote)) continue;
+    if (narrowed) {
+      unique = false;
+      break;
+    }
+    narrowed = sub;
+  }
+  return unique && narrowed ? narrowed : target;
+}
+
 export function InlineCommentsLayer({
   uid,
   threads,
@@ -275,33 +302,6 @@ export function InlineCommentsLayer({
     return items;
   }, [sorted, canComment, pendingAnchor, blockOrder]);
 
-  function resolveAnchorElement(
-    doc: HTMLElement,
-    blockId: string,
-    quote?: string | null,
-  ): HTMLElement | null {
-    const escaped = CSS.escape(blockId);
-    const target = doc.querySelector<HTMLElement>(
-      `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-    );
-    if (!target) return null;
-    if (!target.dataset.block || !quote) return target;
-
-    const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
-    let narrowed: HTMLElement | null = null;
-    let unique = true;
-    for (const sub of subEls) {
-      const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
-      if (!text.includes(quote)) continue;
-      if (narrowed) {
-        unique = false;
-        break;
-      }
-      narrowed = sub;
-    }
-    return unique && narrowed ? narrowed : target;
-  }
-
   /**
    * When stacking is disabled, cards sit at their natural anchor
    * positions (no stickyTopPad offset). Wrap onScrollToAnchor to
@@ -331,6 +331,7 @@ export function InlineCommentsLayer({
   }, []);
 
   /** Anchors and heights as flat arrays in render order (for the state machine). */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: layoutVersion is the explicit re-measure trigger; the body reads ref.current values that aren't reactive.
   const orderedMetrics = useMemo(() => {
     const anchors: number[] = [];
     const heights: number[] = [];
@@ -339,7 +340,6 @@ export function InlineCommentsLayer({
       heights.push(cardHeights.current.get(item.id) ?? 96);
     }
     return { anchors, heights };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderItems, layoutVersion]);
 
   /**
@@ -623,6 +623,7 @@ export function InlineCommentsLayer({
     return () => obs.disconnect();
   }, []);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: docHtml is the explicit re-attach trigger so the observer points at the freshly rendered DOM after a content swap.
   useEffect(() => {
     if (!open) return;
     const doc = docElementRef.current;
@@ -673,6 +674,7 @@ export function InlineCommentsLayer({
     };
   }, [open, recomputeGlobalState, scrollContainerRef, stackingEnabled]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: layoutVersion / docHtml are explicit re-measure triggers; requestRemeasure is the action invoked from the body.
   useLayoutEffect(() => {
     if (!open) return;
     let heightsChanged = false;
@@ -694,8 +696,7 @@ export function InlineCommentsLayer({
     // no-op on the next pass because measurements are stable, so no
     // infinite loop.
     if (heightsChanged || naturalsChanged) requestRemeasure();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [measureNaturalTops, recomputeGlobalState, layoutVersion, docHtml, open]);
+  }, [measureNaturalTops, recomputeGlobalState, layoutVersion, docHtml, open, requestRemeasure]);
 
   // ----- focus animation -----
 
