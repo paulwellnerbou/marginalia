@@ -400,7 +400,15 @@ export function EditPage() {
     const handler = (e: ClipboardEvent) => {
       const items = e.clipboardData?.items;
       if (!items) return;
-      for (const item of Array.from(items)) {
+      const arr = Array.from(items);
+      // If the clipboard has text alongside an image (e.g. a Word paste that
+      // includes a thumbnail screenshot), let the editor handle the text and
+      // ignore the image.
+      const hasText = arr.some(
+        (i) => i.kind === 'string' && (i.type === 'text/plain' || i.type === 'text/html'),
+      );
+      if (hasText) return;
+      for (const item of arr) {
         if (item.kind !== 'file') continue;
         const file = item.getAsFile();
         if (!file || !file.type.startsWith('image/')) continue;
