@@ -154,7 +154,9 @@ export const rehypeShikiHighlight: Plugin<[ShikiOptions], Root> = (options) => {
   const dark = resolveTheme(options.dark, THEME_FALLBACKS.dark);
 
   return async (tree, file) => {
-    const warnings: Warning[] = ((file.data as { warnings?: Warning[] }).warnings ??= []);
+    const fileData = file.data as { warnings?: Warning[] };
+    fileData.warnings ??= [];
+    const warnings: Warning[] = fileData.warnings;
 
     const jobs: Array<() => Promise<void>> = [];
 
@@ -307,20 +309,21 @@ type Token =
 function tokenize(html: string): Token[] {
   const tokens: Token[] = [];
   const re = /<\/?([a-zA-Z]+)([^>]*)>|([^<]+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(html)) !== null) {
+  let m = re.exec(html);
+  while (m !== null) {
     if (m[3] !== undefined) {
       tokens.push({ kind: 'text', value: decodeEntities(m[3]) });
-      continue;
-    }
-    const name = m[1]!;
-    const rest = m[2] ?? '';
-    const selfClosing = rest.trim().endsWith('/');
-    if (m[0].startsWith('</')) {
-      tokens.push({ kind: 'close', name });
     } else {
-      tokens.push({ kind: 'open', name, attrs: parseAttrs(rest), selfClosing });
+      const name = m[1]!;
+      const rest = m[2] ?? '';
+      const selfClosing = rest.trim().endsWith('/');
+      if (m[0].startsWith('</')) {
+        tokens.push({ kind: 'close', name });
+      } else {
+        tokens.push({ kind: 'open', name, attrs: parseAttrs(rest), selfClosing });
+      }
     }
+    m = re.exec(html);
   }
   return tokens;
 }
@@ -328,12 +331,13 @@ function tokenize(html: string): Token[] {
 function parseAttrs(rest: string): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const re = /([a-zA-Z-][a-zA-Z0-9-]*)\s*=\s*"([^"]*)"/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(rest)) !== null) {
+  let m = re.exec(rest);
+  while (m !== null) {
     const key = m[1]!;
     const val = decodeEntities(m[2]!);
     if (key === 'class') out.className = val.split(' ');
     else out[key] = val;
+    m = re.exec(rest);
   }
   return out;
 }

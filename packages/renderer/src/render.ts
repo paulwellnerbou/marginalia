@@ -27,7 +27,6 @@ import type {
   MermaidBlock,
   RenderOptions,
   RenderResult,
-  TocNode,
   Warning,
 } from './types.js';
 

@@ -19,7 +19,6 @@ import {
   createSession,
   deleteSession,
   hashPassword,
-  type Identity,
   INVITE_SESSION_COOKIE,
   parseCookie,
   readIdentity,
@@ -332,6 +331,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
   const rawCommitMessage = typeof body?.commit_message === 'string' ? body.commit_message : '';
   const commitMessage =
     rawCommitMessage
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters from user input is the intent
       .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
       .trim()
       .slice(0, 1000) || undefined;

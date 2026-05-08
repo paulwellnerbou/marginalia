@@ -62,12 +62,13 @@ function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'):
   // AsciiDoc: image::src[]  /  image:src[] (inline) / include::src[]
   const adocRe = /(?:^|\s)(?:image::|image:|include::)([^\s[]+)/g;
   const re = format === 'asciidoc' ? adocRe : mdRe;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(source)) !== null) {
+  let m = re.exec(source);
+  while (m !== null) {
     const raw = m[1];
-    if (!raw) continue;
-    if (/^[a-z][a-z0-9+.-]*:/i.test(raw) || raw.startsWith('/') || raw.startsWith('#')) continue;
-    out.add(raw);
+    if (raw && !/^[a-z][a-z0-9+.-]*:/i.test(raw) && !raw.startsWith('/') && !raw.startsWith('#')) {
+      out.add(raw);
+    }
+    m = re.exec(source);
   }
   return out;
 }
@@ -187,7 +188,7 @@ export function EditPage() {
   useEffect(() => {
     if (!doc) return;
     setTheme(getUserThemeOverride(doc.uid) ?? doc.default_theme);
-  }, [doc?.uid, doc?.default_theme]);
+  }, [doc]);
 
   useEffect(() => {
     if (!uid) return;
@@ -302,6 +303,7 @@ export function EditPage() {
   }, [source, uid, attachedRefs, assetVersions, doc?.format]);
 
   // Sync scrolling between source and preview
+  // biome-ignore lint/correctness/useExhaustiveDependencies: doc/rendered are re-attach triggers — when the document or its rendering changes, the .cm-scroller / preview elements are re-mounted and the listeners need to bind to the fresh nodes.
   useEffect(() => {
     const scroller = editorEl.current?.querySelector('.cm-scroller');
     const preview = previewEl.current;

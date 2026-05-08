@@ -200,15 +200,18 @@ export async function prerasterizeMermaid(
     source: string;
   }
   const hits: Hit[] = [];
-  for (let m: RegExpExecArray | null; (m = re.exec(html)); ) {
+  let m = re.exec(html);
+  while (m !== null) {
     const index = Number.parseInt(m[1] ?? '', 10);
-    if (!Number.isInteger(index) || index < 0) continue;
-    hits.push({
-      start: m.index,
-      end: m.index + m[0].length,
-      index,
-      source: decodeHtmlEntities(m[2] ?? ''),
-    });
+    if (Number.isInteger(index) && index >= 0) {
+      hits.push({
+        start: m.index,
+        end: m.index + m[0].length,
+        index,
+        source: decodeHtmlEntities(m[2] ?? ''),
+      });
+    }
+    m = re.exec(html);
   }
   if (hits.length === 0) return html;
 
@@ -372,20 +375,21 @@ export async function inlineImageAssets(
   // the alt text).
   const hits: Hit[] = [];
   const imgRe = /<img\b[^>]*\bsrc="([^"]+)"[^>]*>/dg;
-  for (let m: RegExpExecArray | null; (m = imgRe.exec(html)); ) {
+  let m = imgRe.exec(html);
+  while (m !== null) {
     const src = m[1]!;
-    if (isAbsoluteUrl(src)) continue;
     const hit = attached.get(src);
-    if (!hit) continue;
     const srcIndices = m.indices?.[1];
-    if (!srcIndices) continue; // paranoia: requires the `d` flag to be set
-    hits.push({
-      start: srcIndices[0],
-      end: srcIndices[1],
-      ref: src,
-      mime: hit.mime,
-      assetId: hit.assetId,
-    });
+    if (!isAbsoluteUrl(src) && hit && srcIndices) {
+      hits.push({
+        start: srcIndices[0],
+        end: srcIndices[1],
+        ref: src,
+        mime: hit.mime,
+        assetId: hit.assetId,
+      });
+    }
+    m = imgRe.exec(html);
   }
   if (hits.length === 0) return html;
 

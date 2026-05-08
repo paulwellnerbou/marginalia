@@ -515,6 +515,7 @@ function UploadDialog({
     format === 'asciidoc' ? deriveAsciidocTitle(source) : deriveDisplayName(source);
   const effectiveDocName = docName.trim() || derivedTitle;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset is a render-local function declaration — adding it would re-fire on every render. Triggers below cover the only state changes that warrant a re-seed.
   useEffect(() => {
     if (!open || !draft || createdAdminUrl) return;
     reset(draft);
@@ -870,6 +871,7 @@ function MarkdownDropZone({
   const depth = useRef(0);
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: drop-target wrapper around an editable textarea; not a clickable element
     <div
       className={`drop-zone ${over ? 'drop-zone--over' : ''}`}
       onDragEnter={(e) => {
@@ -938,6 +940,7 @@ function FileDropZone({
   }
 
   return (
+    // biome-ignore lint/a11y/useSemanticElements: <button> can't host the drag-and-drop and dashed-panel rendering
     <div
       className={`file-drop ${over ? 'file-drop--over' : ''}`}
       role="button"

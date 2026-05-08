@@ -41,6 +41,7 @@ export function ViewPage() {
     });
   }, [uid, token]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: token / reloadNonce are explicit refetch triggers — token swap drives re-auth and reloadNonce is bumped after password unlock.
   useEffect(() => {
     if (!uid) return;
     let cancelled = false;

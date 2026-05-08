@@ -22,9 +22,10 @@ export const remarkSlugger: Plugin<[], Root> = () => {
       const base = slugify(text);
       const id = dedupe(base, seen);
 
-      const data = (node.data ??= {});
-      const props = ((data as { hProperties?: Record<string, unknown> }).hProperties ??= {});
-      (props as Record<string, unknown>).id = id;
+      node.data ??= {};
+      const data = node.data as { hProperties?: Record<string, unknown> };
+      data.hProperties ??= {};
+      (data.hProperties as Record<string, unknown>).id = id;
 
       anchors.push({ level: node.depth, text, id });
     });

@@ -54,6 +54,7 @@ export function EmojiReactionPicker({ onPick, disabled }: Props) {
       >
         {/* Close before awaiting onPick — snappier UX, and the parent
             handles its own busy state. */}
+        {/* biome-ignore lint/a11y/useSemanticElements: <fieldset> is form-only; this groups action buttons */}
         <div className="ic-emoji-quick-row" role="group" aria-label="Common reactions">
           {QUICK_REACTIONS.map(({ emoji, label }) => (
             <button

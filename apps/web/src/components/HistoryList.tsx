@@ -50,6 +50,7 @@ export function HistoryList({
   const diffRequestToken = useRef(0);
   const currentOid = entries?.[0]?.oid ?? null;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version is the explicit refetch trigger so a save bumps it and we re-pull history.
   useEffect(() => {
     let cancelled = false;
     setLoadError(null);
@@ -70,6 +71,7 @@ export function HistoryList({
     };
   }, [uid, version]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: uid is the intentional reset trigger when the document changes; the body only writes refs/state.
   useEffect(() => {
     diffRequestToken.current += 1;
     setLoadingDiffOid(null);

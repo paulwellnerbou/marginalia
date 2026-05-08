@@ -222,7 +222,7 @@ export function DiffView({ before, after, contextLines = null, active = true }: 
         </div>
       </div>
       {overviewMarkers.length ? (
-        <div className="diff-overview" aria-label="Diff overview">
+        <div className="diff-overview">
           <button
             type="button"
             className="diff-overview-track"

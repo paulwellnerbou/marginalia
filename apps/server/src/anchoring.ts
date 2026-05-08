@@ -155,7 +155,10 @@ function scoreCandidate(
     originalPath.length === candidate.headingPath.length
   ) {
     let score = 10_000;
-    score -= Math.abs(candidate.sectionIndex - originalIndexPath?.[originalIndexPath.length - 1]!);
+    const lastIdx = originalIndexPath?.[originalIndexPath.length - 1];
+    if (lastIdx !== undefined) {
+      score -= Math.abs(candidate.sectionIndex - lastIdx);
+    }
     return score;
   }
 
