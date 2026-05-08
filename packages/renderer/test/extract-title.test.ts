@@ -16,19 +16,11 @@ describe('extractDocumentTitle — markdown', () => {
   });
 
   test('falls back to first H1 when frontmatter has no title', () => {
-    expect(extractDocumentTitle('# Hello World\n\nBody.\n', 'markdown')).toBe(
-      'Hello World',
-    );
+    expect(extractDocumentTitle('# Hello World\n\nBody.\n', 'markdown')).toBe('Hello World');
   });
 
   test('handles frontmatter without title by scanning body', () => {
-    const md = [
-      '---',
-      'author: Paul',
-      '---',
-      '',
-      '# Body Title',
-    ].join('\n');
+    const md = ['---', 'author: Paul', '---', '', '# Body Title'].join('\n');
     expect(extractDocumentTitle(md, 'markdown')).toBe('Body Title');
   });
 
@@ -50,10 +42,7 @@ describe('extractDocumentTitle — markdown', () => {
 
   test('quoted frontmatter titles are unquoted', () => {
     expect(
-      extractDocumentTitle(
-        '---\ntitle: "Quoted: with colon"\n---\n\n# H1\n',
-        'markdown',
-      ),
+      extractDocumentTitle('---\ntitle: "Quoted: with colon"\n---\n\n# H1\n', 'markdown'),
     ).toBe('Quoted: with colon');
   });
 
@@ -66,13 +55,7 @@ describe('extractDocumentTitle — markdown', () => {
   });
 
   test('ignores H2/H3 and picks the first H1', () => {
-    const md = [
-      '## Subsection first',
-      '',
-      '# Real title',
-      '',
-      '## More',
-    ].join('\n');
+    const md = ['## Subsection first', '', '# Real title', '', '## More'].join('\n');
     expect(extractDocumentTitle(md, 'markdown')).toBe('Real title');
   });
 
@@ -95,13 +78,7 @@ describe('extractDocumentTitle — markdown', () => {
   });
 
   test('ignores `# ...` inside fenced code blocks (tildes)', () => {
-    const md = [
-      '~~~',
-      '# Not a heading',
-      '~~~',
-      '',
-      '# The Actual Title',
-    ].join('\n');
+    const md = ['~~~', '# Not a heading', '~~~', '', '# The Actual Title'].join('\n');
     expect(extractDocumentTitle(md, 'markdown')).toBe('The Actual Title');
   });
 
@@ -142,25 +119,12 @@ describe('extractDocumentTitle — asciidoc', () => {
   });
 
   test('skips leading attributes and comments', () => {
-    const adoc = [
-      '// comment',
-      ':author: Paul',
-      '',
-      '= After Preamble',
-      '',
-      'Body.',
-    ].join('\n');
+    const adoc = ['// comment', ':author: Paul', '', '= After Preamble', '', 'Body.'].join('\n');
     expect(extractDocumentTitle(adoc, 'asciidoc')).toBe('After Preamble');
   });
 
   test('frontmatter title still wins when both are present', () => {
-    const adoc = [
-      '---',
-      'title: YAML Wins',
-      '---',
-      '',
-      '= AsciiDoc Header',
-    ].join('\n');
+    const adoc = ['---', 'title: YAML Wins', '---', '', '= AsciiDoc Header'].join('\n');
     expect(extractDocumentTitle(adoc, 'asciidoc')).toBe('YAML Wins');
   });
 
@@ -175,9 +139,7 @@ describe('sanitizeDocumentFilename', () => {
   });
 
   test('preserves dots and hyphens (useful in filenames)', () => {
-    expect(sanitizeDocumentFilename('v1.2-release-notes', 'fb')).toBe(
-      'v1.2-release-notes',
-    );
+    expect(sanitizeDocumentFilename('v1.2-release-notes', 'fb')).toBe('v1.2-release-notes');
   });
 
   test('collapses runs of non-word characters to a single underscore', () => {

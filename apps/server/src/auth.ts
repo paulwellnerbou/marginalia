@@ -167,7 +167,7 @@ export function authorize(
 
   const invSession = inviteSessionToken ? readSession(db, inviteSessionToken) : null;
   const validInviteSession = invSession?.doc_uid === doc.uid ? invSession : null;
-  const isInviteSession = !!(validInviteSession?.invite_role);
+  const isInviteSession = !!validInviteSession?.invite_role;
 
   // Password gate is unconditional — invites (including admin) and invite
   // sessions never bypass it. Only a password-type session satisfies it.
@@ -219,7 +219,13 @@ export function authorize(
       }
     }
     const identity = clientId && resolvedName ? { clientId, displayName: resolvedName } : null;
-    return recordAndReturn(db, doc.uid, { ok: true, role, identity, invite: null, isInviteSession: true });
+    return recordAndReturn(db, doc.uid, {
+      ok: true,
+      role,
+      identity,
+      invite: null,
+      isInviteSession: true,
+    });
   }
 
   if (invite) {

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { readFileSync } from 'node:fs';
 /**
  * End-to-end check: upload the Köln Zoo document, navigate to its URL in
  * a real Chromium, and confirm the mermaid block renders an <svg>.
@@ -8,7 +9,6 @@
  *   - web:    http://localhost:5173
  */
 import { chromium } from 'playwright';
-import { readFileSync } from 'node:fs';
 
 const SERVER = 'http://localhost:3434';
 const WEB = 'http://localhost:5173';

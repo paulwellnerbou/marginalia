@@ -1,20 +1,20 @@
 import { Box, Code, Flex, Text } from '@radix-ui/themes';
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { formatAnchorQuote } from '../lib/anchor-quote.js';
 import {
   type Comment,
+  getHistory,
+  getHistoryDiff,
   type HistoryEntry,
   type Thread,
   type ThreadResolution,
-  getHistory,
-  getHistoryDiff,
 } from '../lib/api.js';
-import { formatAnchorQuote } from '../lib/anchor-quote.js';
 import { formatTimestamp, formatTimestampLong } from '../lib/format-time.js';
 import { describeEntry, historyActorLabel, shortOid } from '../lib/history-format.js';
 import { reportError } from '../lib/log.js';
 import { DiffDialog } from './DiffDialog.js';
-import { ShowDiffButton } from './ShowDiffButton.js';
 import { InlineAvatar } from './inline-comments/InlineAvatar.js';
+import { ShowDiffButton } from './ShowDiffButton.js';
 
 function buildRowProps(
   targetId: string | undefined,

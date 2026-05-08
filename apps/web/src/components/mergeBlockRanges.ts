@@ -1,4 +1,4 @@
-import { canMergeMultiBlock, type BlockSourceRange } from '@marginalia/renderer';
+import { type BlockSourceRange, canMergeMultiBlock } from '@marginalia/renderer';
 import type { DocumentFormat } from '../lib/api.js';
 
 /**

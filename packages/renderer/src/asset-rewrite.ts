@@ -1,8 +1,8 @@
-import { unified } from 'unified';
+import type { Element, Root } from 'hast';
 import rehypeParse from 'rehype-parse';
 import rehypeStringify from 'rehype-stringify';
+import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
-import type { Root, Element } from 'hast';
 
 export interface RewriteOptions {
   /** Document UID — goes into the proxy URL. */
@@ -40,10 +40,7 @@ export interface RewriteOptions {
  * client-rendered HTML before displaying. That keeps the missing-asset
  * placeholder flow identical in both paths.
  */
-export async function rewriteAssetReferences(
-  html: string,
-  opts: RewriteOptions,
-): Promise<string> {
+export async function rewriteAssetReferences(html: string, opts: RewriteOptions): Promise<string> {
   const base = opts.apiBase ?? '/api/documents';
   const prefix = `${base}/${encodeURIComponent(opts.docUid)}/assets/`;
 

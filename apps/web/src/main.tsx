@@ -1,10 +1,10 @@
-import { Suspense, StrictMode, lazy } from 'react';
-import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Container, Text, Theme } from '@radix-ui/themes';
-import { HomePage } from './pages/HomePage.js';
+import { lazy, StrictMode, Suspense } from 'react';
+import { createRoot } from 'react-dom/client';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ToastContainer } from './components/ToastContainer.js';
 import { AppearanceProvider, useAppearance } from './lib/appearance.js';
+import { HomePage } from './pages/HomePage.js';
 
 // Radix UI base + our markdown theme baseline. Radix styles come first so
 // document theme CSS wins when selectors collide.

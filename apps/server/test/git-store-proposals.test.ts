@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import fs from 'node:fs';
-import { mkdtempSync, rmSync } from 'node:fs';
+import fs, { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as git from 'isomorphic-git';
-import { GitStore, type DocLocator } from '../src/git-store.js';
+import { type DocLocator, GitStore } from '../src/git-store.js';
 
 /**
  * Tests for the proposal-branch primitives on GitStore. The lifecycle:

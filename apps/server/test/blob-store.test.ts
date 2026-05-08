@@ -2,12 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  FsBlobStore,
-  S3BlobStore,
-  createBlobStore,
-  sha256Hex,
-} from '../src/blob-store.js';
+import { createBlobStore, FsBlobStore, S3BlobStore, sha256Hex } from '../src/blob-store.js';
 
 describe('FsBlobStore', () => {
   let dir: string;
@@ -80,8 +75,6 @@ describe('createBlobStore factory', () => {
   });
 
   test('blobStorage=s3 with no s3 block throws a clear error', () => {
-    expect(() => createBlobStore({ blobStorage: 's3', blobDir: dir })).toThrow(
-      /blobStorage=s3/,
-    );
+    expect(() => createBlobStore({ blobStorage: 's3', blobDir: dir })).toThrow(/blobStorage=s3/);
   });
 });

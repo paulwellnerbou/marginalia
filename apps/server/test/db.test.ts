@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -78,9 +78,10 @@ describe('openDatabase migrations', () => {
 
     // Idempotent: a second open is a no-op (same shape, same rows).
     const db2 = openDatabase(dbPath);
-    const rows2 = db2
-      .prepare('SELECT token, kind FROM invites ORDER BY token')
-      .all() as Array<{ token: string; kind: string }>;
+    const rows2 = db2.prepare('SELECT token, kind FROM invites ORDER BY token').all() as Array<{
+      token: string;
+      kind: string;
+    }>;
     expect(rows2).toEqual([
       { token: 'adm', kind: 'admin' },
       { token: 'nmd', kind: 'named' },
@@ -107,22 +108,27 @@ describe('openDatabase migrations', () => {
         );
       `);
       const now = Date.now();
-      seed.prepare(
-        `INSERT INTO invites (token, doc_uid, display_name, role, note, created_at, created_by_name)
+      seed
+        .prepare(
+          `INSERT INTO invites (token, doc_uid, display_name, role, note, created_at, created_by_name)
          VALUES (?, ?, ?, ?, NULL, ?, ?)`,
-      ).run('tok-1', 'doc-1', 'Bob', 'commentor', now, 'Alice');
-      seed.prepare(
-        `INSERT INTO invites (token, doc_uid, display_name, role, note, created_at, created_by_name)
+        )
+        .run('tok-1', 'doc-1', 'Bob', 'commentor', now, 'Alice');
+      seed
+        .prepare(
+          `INSERT INTO invites (token, doc_uid, display_name, role, note, created_at, created_by_name)
          VALUES (?, ?, ?, ?, NULL, ?, ?)`,
-      ).run('tok-2', 'doc-1', 'Carol', 'collaborator', now, 'Alice');
+        )
+        .run('tok-2', 'doc-1', 'Carol', 'collaborator', now, 'Alice');
       seed.close();
     }
 
     // Open via the production path → migration runs.
     const db = openDatabase(dbPath);
-    const rows = db
-      .prepare('SELECT token, role FROM invites ORDER BY token')
-      .all() as Array<{ token: string; role: string }>;
+    const rows = db.prepare('SELECT token, role FROM invites ORDER BY token').all() as Array<{
+      token: string;
+      role: string;
+    }>;
     expect(rows).toEqual([
       { token: 'tok-1', role: 'collaborator' }, // migrated from commentor
       { token: 'tok-2', role: 'collaborator' }, // unchanged
@@ -245,37 +251,39 @@ describe('openDatabase migrations', () => {
         );
       `);
       const now = Date.now();
-      seed.prepare(
-        `INSERT INTO edit_proposals
+      seed
+        .prepare(
+          `INSERT INTO edit_proposals
            (id, doc_uid, anchor_block_id, anchor_quote, anchor_kind, proposed_text,
             rationale, author_client_id, author_display_name, status,
             decided_at, decided_by_name, created_at, updated_at, deleted_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        'prop-1',
-        'doc-1',
-        'block-1',
-        'Original block',
-        'paragraph',
-        'Edited block',
-        'Why this should change',
-        'client-1',
-        'Alice',
-        'pending',
-        null,
-        null,
-        now,
-        now,
-        null,
-      );
+        )
+        .run(
+          'prop-1',
+          'doc-1',
+          'block-1',
+          'Original block',
+          'paragraph',
+          'Edited block',
+          'Why this should change',
+          'client-1',
+          'Alice',
+          'pending',
+          null,
+          null,
+          now,
+          now,
+          null,
+        );
       seed.close();
     }
 
     const db = openDatabase(dbPath);
 
-    const oldTable = db.prepare(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'edit_proposals'`,
-    ).get() as { name: string } | null;
+    const oldTable = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'edit_proposals'`)
+      .get() as { name: string } | null;
     expect(oldTable).toBeNull();
 
     const proposalCols = db.prepare('PRAGMA table_info(comments_edit_proposals)').all() as Array<{
@@ -284,11 +292,13 @@ describe('openDatabase migrations', () => {
     expect(proposalCols.some((col) => col.name === 'decided_at')).toBe(false);
     expect(proposalCols.some((col) => col.name === 'decided_by_name')).toBe(false);
 
-    const migratedComment = db.prepare(
-      `SELECT id, doc_uid, anchor_block_id, anchor_quote, body, link_status, author_client_id, author_display_name
+    const migratedComment = db
+      .prepare(
+        `SELECT id, doc_uid, anchor_block_id, anchor_quote, body, link_status, author_client_id, author_display_name
          FROM comments
         WHERE id = ?`,
-    ).get('prop-1') as {
+      )
+      .get('prop-1') as {
       id: string;
       doc_uid: string;
       anchor_block_id: string | null;
@@ -309,11 +319,13 @@ describe('openDatabase migrations', () => {
       author_display_name: 'Alice',
     });
 
-    const migratedProposal = db.prepare(
-      `SELECT comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid
+    const migratedProposal = db
+      .prepare(
+        `SELECT comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid
          FROM comments_edit_proposals
         WHERE comment_id = ?`,
-    ).get('prop-1') as {
+      )
+      .get('prop-1') as {
       comment_id: string;
       anchor_kind: string | null;
       source_snapshot: string | null;
@@ -373,8 +385,9 @@ describe('openDatabase migrations', () => {
           decided_by_name        TEXT
         );
       `);
-      seed.prepare(
-        `INSERT INTO comments
+      seed
+        .prepare(
+          `INSERT INTO comments
            (id, doc_uid, parent_id, parent_proposal_id,
             anchor_block_id, anchor_quote, anchor_prefix, anchor_suffix,
             anchor_start_offset, anchor_end_offset,
@@ -382,31 +395,34 @@ describe('openDatabase migrations', () => {
             author_client_id, author_display_name, body, link_status,
             resolved_at, resolved_by_name, created_at, updated_at, deleted_at)
          VALUES (?, ?, NULL, NULL, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, 'linked', NULL, NULL, ?, ?, NULL)`,
-      ).run(
-        'prop-accepted',
-        'doc-1',
-        'block-1',
-        'Original block',
-        'client-1',
-        'Alice',
-        'Why this should change',
-        now,
-        now,
-      );
-      seed.prepare(
-        `INSERT INTO comments_edit_proposals
+        )
+        .run(
+          'prop-accepted',
+          'doc-1',
+          'block-1',
+          'Original block',
+          'client-1',
+          'Alice',
+          'Why this should change',
+          now,
+          now,
+        );
+      seed
+        .prepare(
+          `INSERT INTO comments_edit_proposals
            (comment_id, anchor_kind, source_snapshot, proposed_text, status, accepted_oid, decided_at, decided_by_name)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        'prop-accepted',
-        'paragraph',
-        'Original block',
-        'Edited block',
-        'accepted',
-        'oid-1',
-        now,
-        'Alice',
-      );
+        )
+        .run(
+          'prop-accepted',
+          'paragraph',
+          'Original block',
+          'Edited block',
+          'accepted',
+          'oid-1',
+          now,
+          'Alice',
+        );
       seed.close();
     }
 
@@ -418,11 +434,13 @@ describe('openDatabase migrations', () => {
     expect(proposalCols.some((col) => col.name === 'decided_at')).toBe(false);
     expect(proposalCols.some((col) => col.name === 'decided_by_name')).toBe(false);
 
-    const migratedComment = db.prepare(
-      `SELECT resolved_at, resolved_by_name
+    const migratedComment = db
+      .prepare(
+        `SELECT resolved_at, resolved_by_name
          FROM comments
         WHERE id = ?`,
-    ).get('prop-accepted') as {
+      )
+      .get('prop-accepted') as {
       resolved_at: number | null;
       resolved_by_name: string | null;
     };
@@ -431,11 +449,13 @@ describe('openDatabase migrations', () => {
       resolved_by_name: 'Alice',
     });
 
-    const migratedProposal = db.prepare(
-      `SELECT status, accepted_oid
+    const migratedProposal = db
+      .prepare(
+        `SELECT status, accepted_oid
          FROM comments_edit_proposals
         WHERE comment_id = ?`,
-    ).get('prop-accepted') as {
+      )
+      .get('prop-accepted') as {
       status: string;
       accepted_oid: string | null;
     };

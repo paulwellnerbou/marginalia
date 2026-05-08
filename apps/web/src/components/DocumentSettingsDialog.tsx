@@ -43,9 +43,9 @@ export function DocumentSettingsDialog({
   // Sentinel for "follow the server default" — Select needs a non-null
   // value, and translating at the API boundary is cleaner than
   // teaching the dropdown to render `null`.
-  const [mermaidChoice, setMermaidChoice] = useState<MermaidRenderer | typeof DEFAULT_RENDERER_VALUE>(
-    doc.mermaid_renderer ?? DEFAULT_RENDERER_VALUE,
-  );
+  const [mermaidChoice, setMermaidChoice] = useState<
+    MermaidRenderer | typeof DEFAULT_RENDERER_VALUE
+  >(doc.mermaid_renderer ?? DEFAULT_RENDERER_VALUE);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,8 +65,7 @@ export function DocumentSettingsDialog({
       const patch: Parameters<typeof updateDocumentSettings>[1] = {
         name: docName.trim() ? docName.trim() : null,
         default_theme: defaultTheme,
-        mermaid_renderer:
-          mermaidChoice === DEFAULT_RENDERER_VALUE ? null : mermaidChoice,
+        mermaid_renderer: mermaidChoice === DEFAULT_RENDERER_VALUE ? null : mermaidChoice,
       };
       const result = await updateDocumentSettings(doc.uid, patch, identity);
       onChange(result);
@@ -107,7 +106,12 @@ export function DocumentSettingsDialog({
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger>
-        <IconButton variant="soft" size="2" aria-label="Document settings" title="Document settings">
+        <IconButton
+          variant="soft"
+          size="2"
+          aria-label="Document settings"
+          title="Document settings"
+        >
           <GearIcon />
         </IconButton>
       </Dialog.Trigger>
@@ -164,9 +168,9 @@ export function DocumentSettingsDialog({
               Mermaid renderer (exports only)
             </Text>
             <Text size="1" color="gray">
-              Affects PDF and Word downloads only — the viewer always uses
-              mermaid.js. "Default" follows the server setting. Pick "High
-              fidelity" if some diagrams render incorrectly under "Fast".
+              Affects PDF and Word downloads only — the viewer always uses mermaid.js. "Default"
+              follows the server setting. Pick "High fidelity" if some diagrams render incorrectly
+              under "Fast".
             </Text>
             <Select.Root
               value={mermaidChoice}
@@ -178,9 +182,7 @@ export function DocumentSettingsDialog({
               <Select.Content position="popper">
                 <Select.Item value={DEFAULT_RENDERER_VALUE}>Default</Select.Item>
                 <Select.Item value="mmdr">Fast (native, lower fidelity)</Select.Item>
-                <Select.Item value="chromium">
-                  High fidelity (Chromium, slower)
-                </Select.Item>
+                <Select.Item value="chromium">High fidelity (Chromium, slower)</Select.Item>
               </Select.Content>
             </Select.Root>
           </Flex>
@@ -192,9 +194,9 @@ export function DocumentSettingsDialog({
               JSON bundle
             </Text>
             <Text size="1" color="gray">
-              Versioned bundle with the source, comments, and renderer metadata for tooling or
-              later import. For day-to-day source or DOCX downloads, use the download icon
-              next to this gear instead.
+              Versioned bundle with the source, comments, and renderer metadata for tooling or later
+              import. For day-to-day source or DOCX downloads, use the download icon next to this
+              gear instead.
             </Text>
             <Flex>
               <Button variant="soft" onClick={exportJson} disabled={exporting}>

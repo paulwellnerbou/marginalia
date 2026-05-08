@@ -174,10 +174,7 @@ interface ParsedTable {
   body: string[][][];
 }
 
-async function renderGridTable(
-  block: string[],
-  options: GridTableOptions,
-): Promise<string> {
+async function renderGridTable(block: string[], options: GridTableOptions): Promise<string> {
   const boundaries = columnBoundaries(block[0]!);
   const parsed = parseTable(block, boundaries);
   return renderAsHtml(parsed, options);
@@ -209,8 +206,7 @@ function parseTable(block: string[], boundaries: number[]): ParsedTable {
     const segment = alignSource.slice(l, r);
     const left = segment.startsWith(':');
     const right = segment.endsWith(':');
-    columnAligns[c] =
-      left && right ? 'center' : right ? 'right' : left ? 'left' : 'default';
+    columnAligns[c] = left && right ? 'center' : right ? 'right' : left ? 'left' : 'default';
   }
 
   // Collect physical content rows between each pair of borders.
@@ -244,9 +240,8 @@ function parseTable(block: string[], boundaries: number[]): ParsedTable {
     return cells;
   });
 
-  const header = headerEnd >= 0 ? logicalRows[headerEnd] ?? null : null;
-  const body =
-    headerEnd >= 0 ? logicalRows.slice(headerEnd + 1) : logicalRows;
+  const header = headerEnd >= 0 ? (logicalRows[headerEnd] ?? null) : null;
+  const body = headerEnd >= 0 ? logicalRows.slice(headerEnd + 1) : logicalRows;
 
   return {
     columnAligns,
@@ -271,10 +266,7 @@ function dedent(lines: string[]): string {
   return lines.map((l) => l.slice(min)).join('\n');
 }
 
-async function renderAsHtml(
-  table: ParsedTable,
-  options: GridTableOptions,
-): Promise<string> {
+async function renderAsHtml(table: ParsedTable, options: GridTableOptions): Promise<string> {
   const parts: string[] = [];
   parts.push('<table class="grid-table">');
 

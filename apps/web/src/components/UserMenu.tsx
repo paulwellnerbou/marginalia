@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { PersonIcon } from '@radix-ui/react-icons';
 import {
   Badge,
-  Button,
   Box,
+  Button,
   Code,
   Dialog,
   DropdownMenu,
@@ -11,7 +11,7 @@ import {
   Text,
   TextField,
 } from '@radix-ui/themes';
-import { PersonIcon } from '@radix-ui/react-icons';
+import { useState } from 'react';
 import { logoutPasswordSession, type Role } from '../lib/api.js';
 import { getClientId, setDisplayName as persistName, useDisplayName } from '../lib/identity.js';
 import { clearSavedPassword, useSavedPassword } from '../lib/passwords.js';

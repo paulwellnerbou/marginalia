@@ -1,21 +1,21 @@
+import { Button, Container, Flex, Text } from '@radix-ui/themes';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { Button, Container, Flex, Text } from '@radix-ui/themes';
-import {
-  getDocument,
-  claimInvite,
-  ApiError,
-  type Document,
-  type DocumentSettingsResponse,
-} from '../lib/api.js';
+import { AppBar } from '../components/AppBar.js';
 import { DocumentLayout } from '../components/DocumentLayout.js';
 import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
+import {
+  ApiError,
+  claimInvite,
+  type Document,
+  type DocumentSettingsResponse,
+  getDocument,
+} from '../lib/api.js';
 import { documentTitle } from '../lib/doc-title.js';
+import { getDisplayName, setDisplayName } from '../lib/identity.js';
+import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
 import { reportError } from '../lib/log.js';
 import { recordVisit } from '../lib/recent-docs.js';
-import { AppBar } from '../components/AppBar.js';
-import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
-import { getDisplayName, setDisplayName } from '../lib/identity.js';
 
 export function ViewPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
@@ -123,7 +123,9 @@ export function ViewPage() {
         <AppBar />
         {uid && <PasswordPromptDialog docUid={uid} />}
         <Container size="2" py="8">
-          <Text as="p" color="red">{error}</Text>
+          <Text as="p" color="red">
+            {error}
+          </Text>
           <Flex gap="3" mt="3">
             <Link to="/">← Home</Link>
             {uid && (

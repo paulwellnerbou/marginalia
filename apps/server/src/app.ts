@@ -1,15 +1,15 @@
-import { extname, isAbsolute, join, normalize, relative } from 'node:path';
 import type { Database } from 'bun:sqlite';
+import { extname, isAbsolute, join, normalize, relative } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import { Hono } from 'hono';
 import { createBunWebSocket } from 'hono/bun';
 import { createBlobStore } from './blob-store.js';
 import type { ServerConfig } from './config.js';
 import { dropLegacyProposalColumns, openDatabase } from './db.js';
+import { closeExportBrowser } from './export/pdf.js';
 import { GitStore } from './git-store.js';
 import { backfillProposalBranches } from './proposal-branch-backfill.js';
 import { Realtime } from './realtime.js';
-import { closeExportBrowser } from './export/pdf.js';
 import { assetsRouter } from './routes/assets.js';
 import { documentsRouter } from './routes/documents.js';
 import { eventsRouter } from './routes/events.js';

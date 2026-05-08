@@ -18,5 +18,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
-  "files": ["css", "src"]
+  "files": [
+    "css",
+    "src"
+  ]
 }

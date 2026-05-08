@@ -260,7 +260,7 @@ export function getActiveShortcode(value: string, caret: number): ActiveShortcod
   if (query.length === 0) return null;
   // Bail on anything that can't appear in a shortcode key. Shortcodes
   // are `[a-z0-9_+-]`; uppercase is folded to lowercase for matching.
-  if (!/^[A-Za-z0-9_+\-]+$/.test(query)) return null;
+  if (!/^[A-Za-z0-9_+-]+$/.test(query)) return null;
   return { start: colon, end: caret, query: query.toLowerCase() };
 }
 
@@ -293,6 +293,8 @@ export function filterShortcodes(query: string, limit: number): ShortcodeMatch[]
       substring.push({ shortcode, emoji });
     }
   }
-  const ranked: ShortcodeMatch[] = exact ? [exact, ...prefix, ...substring] : [...prefix, ...substring];
+  const ranked: ShortcodeMatch[] = exact
+    ? [exact, ...prefix, ...substring]
+    : [...prefix, ...substring];
   return ranked.slice(0, limit);
 }

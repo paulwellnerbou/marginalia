@@ -22,7 +22,14 @@ const STEP_LARGE = 48;
  * Vertical drag handle used to resize a side pane. Supports mouse drag and
  * keyboard (Arrow keys, Shift+Arrow for larger steps).
  */
-export function ResizeHandle({ side, width, onResize, min = 160, max = 640, label = 'Resize pane' }: Props) {
+export function ResizeHandle({
+  side,
+  width,
+  onResize,
+  min = 160,
+  max = 640,
+  label = 'Resize pane',
+}: Props) {
   const dragging = useRef<{ startX: number; startWidth: number } | null>(null);
 
   useEffect(() => {
@@ -48,7 +55,9 @@ export function ResizeHandle({ side, width, onResize, min = 160, max = 640, labe
     };
   }, [side, onResize, min, max]);
 
-  function clamp(v: number) { return Math.max(min, Math.min(max, v)); }
+  function clamp(v: number) {
+    return Math.max(min, Math.min(max, v));
+  }
 
   return (
     <div

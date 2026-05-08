@@ -1,24 +1,23 @@
 import Asciidoctor from '@asciidoctor/core';
-import { unified } from 'unified';
+import type { Root as HastRoot } from 'hast';
 
 import rehypeParse from 'rehype-parse';
 import rehypeSanitize from 'rehype-sanitize';
 import rehypeStringify from 'rehype-stringify';
-import type { Root as HastRoot } from 'hast';
-
-import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
+import { unified } from 'unified';
 import {
   MARGINALIA_BLOCK_MARKER_PREFIX,
   MARGINALIA_SUBBLOCK_MARKER_PREFIX,
   type SubBlockEntry,
 } from './asciidoc-markers.js';
-import { sanitizeSchema } from './plugins/sanitize-schema.js';
-import { rehypeShikiHighlight } from './plugins/shiki.js';
-import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
-import { rehypeAsciidocBlockIds } from './plugins/asciidoc-block-ids.js';
+import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
 import { rehypeAsciidocAnchorsToc } from './plugins/asciidoc-anchors-toc.js';
 import { rehypeAsciidocAssetCollector } from './plugins/asciidoc-asset-collector.js';
+import { rehypeAsciidocBlockIds } from './plugins/asciidoc-block-ids.js';
 import { rehypeAsciidocMermaid } from './plugins/asciidoc-mermaid.js';
+import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
+import { sanitizeSchema } from './plugins/sanitize-schema.js';
+import { rehypeShikiHighlight } from './plugins/shiki.js';
 import { buildToc } from './toc.js';
 import type {
   Anchor,
@@ -222,11 +221,7 @@ function descendForNestedLists(
   }
 }
 
-function recordSubBlock(
-  item: AsciidoctorAbstractBlock,
-  parent: BlockInfo,
-  state: WalkState,
-): void {
+function recordSubBlock(item: AsciidoctorAbstractBlock, parent: BlockInfo, state: WalkState): void {
   // list_item's own text lives in `getText()`, not `getContent()` (the
   // latter returns nested sub-block HTML and is empty for leaf items).
   const text = normalizeBlockText(getItemText(item));
@@ -256,7 +251,7 @@ function recordSubBlock(
 
 function getItemText(item: AsciidoctorAbstractBlock): string {
   const fn = (item as { getText?: () => string | undefined }).getText;
-  const raw = typeof fn === 'function' ? fn.call(item) ?? '' : '';
+  const raw = typeof fn === 'function' ? (fn.call(item) ?? '') : '';
   // getText() can return inline-formatted HTML (links, strong, etc.);
   // strip tags for the hash input.
   return stripTags(raw);
@@ -293,11 +288,7 @@ function emitSectionHeading(block: AsciidoctorAbstractBlock, state: WalkState): 
   void recordBlock(block, 'heading', text, state);
 }
 
-function emitLeafBlock(
-  block: AsciidoctorAbstractBlock,
-  ctx: string,
-  state: WalkState,
-): void {
+function emitLeafBlock(block: AsciidoctorAbstractBlock, ctx: string, state: WalkState): void {
   // `[mermaid]` on a listing/literal block lands as a "style" in the AST
   // and is otherwise dropped from the HTML. Promote it to a role so the
   // mermaid role survives into the wrapper's class list, where the
@@ -464,7 +455,7 @@ function addRole(block: AsciidoctorAbstractBlock, role: string): void {
   const attrFn = (block as { setAttribute?: (k: string, v: string) => void }).setAttribute;
   const getAttrFn = (block as { getAttribute?: (k: string) => string | undefined }).getAttribute;
   if (typeof attrFn === 'function') {
-    const existing = typeof getAttrFn === 'function' ? getAttrFn.call(block, 'role') ?? '' : '';
+    const existing = typeof getAttrFn === 'function' ? (getAttrFn.call(block, 'role') ?? '') : '';
     const next = existing ? `${existing} ${role}` : role;
     attrFn.call(block, 'role', next);
   }
@@ -482,7 +473,8 @@ function defaultAttrKeys(): Set<string> {
   if (DEFAULT_ATTRS) return DEFAULT_ATTRS;
   const empty = asciidoctor.load('', { safe: 'safe', standalone: false });
   const attrs =
-    (empty as { getAttributes?: () => Record<string, unknown> | undefined }).getAttributes?.() ?? {};
+    (empty as { getAttributes?: () => Record<string, unknown> | undefined }).getAttributes?.() ??
+    {};
   DEFAULT_ATTRS = new Set(Object.keys(attrs));
   return DEFAULT_ATTRS;
 }

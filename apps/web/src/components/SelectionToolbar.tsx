@@ -1,7 +1,7 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
 import { useEffect, useState } from 'react';
-import { captureSelection, selectionRect } from '../lib/selection.js';
 import type { CommentAnchor, DocumentFormat } from '../lib/api.js';
+import { captureSelection, selectionRect } from '../lib/selection.js';
 
 export interface ProposalTarget {
   block_id: string;
@@ -116,17 +116,18 @@ export function SelectionToolbar({ rootRef, docFormat, blockRanges, onAdd, onPro
         top: state.rect.top + window.scrollY - 40,
         left: Math.max(
           60,
-          Math.min(
-            window.innerWidth - 60,
-            state.rect.left + window.scrollX + state.rect.width / 2,
-          ),
+          Math.min(window.innerWidth - 60, state.rect.left + window.scrollX + state.rect.width / 2),
         ),
       }}
     >
       {/* mousedown so the handler fires before selectionchange clears the range */}
-      <button type="button" onMouseDown={doComment}>+ Comment</button>
+      <button type="button" onMouseDown={doComment}>
+        + Comment
+      </button>
       {onPropose && state.span && (
-        <button type="button" onMouseDown={doPropose}>{proposeLabel}</button>
+        <button type="button" onMouseDown={doPropose}>
+          {proposeLabel}
+        </button>
       )}
     </div>
   );
@@ -168,10 +169,8 @@ function resolveSpan(
   // → only the table is an ancestor of commonAncestor).
   const selector = '[data-block], [data-subblock]';
   const ca = range.commonAncestorContainer;
-  const scope =
-    (ca.nodeType === Node.ELEMENT_NODE ? (ca as Element) : ca.parentElement) ?? root;
-  const inScope =
-    scope instanceof HTMLElement && root.contains(scope) ? scope : root;
+  const scope = (ca.nodeType === Node.ELEMENT_NODE ? (ca as Element) : ca.parentElement) ?? root;
+  const inScope = scope instanceof HTMLElement && root.contains(scope) ? scope : root;
 
   const all: HTMLElement[] = [];
   if (inScope instanceof HTMLElement && inScope.matches(selector)) all.push(inScope);
@@ -244,9 +243,7 @@ function resolveSpan(
   }
 
   // Sub-block-only selection.
-  const subBlocksOnly = touched.every(
-    (el) => !!el.dataset.subblock && !el.dataset.block,
-  );
+  const subBlocksOnly = touched.every((el) => !!el.dataset.subblock && !el.dataset.block);
   if (subBlocksOnly) {
     if (touched.length === 1) {
       const only = touched[0]!;
@@ -284,8 +281,7 @@ function resolveSpan(
     const allSiblingListItems =
       firstParentStart !== undefined &&
       touched.every(
-        (el) =>
-          blockRanges.get(el.dataset.subblock ?? '')?.parentStart === firstParentStart,
+        (el) => blockRanges.get(el.dataset.subblock ?? '')?.parentStart === firstParentStart,
       );
     if (allSiblingListItems) {
       const first = touched[0]!;
@@ -372,10 +368,8 @@ function intersectsRange(range: Range, el: HTMLElement): boolean {
   // matches Range.intersectsNode (touching boundaries don't count).
   const elRange = el.ownerDocument!.createRange();
   elRange.selectNodeContents(el);
-  const startsBeforeElEnd =
-    range.compareBoundaryPoints(Range.END_TO_START, elRange) < 0;
-  const endsAfterElStart =
-    range.compareBoundaryPoints(Range.START_TO_END, elRange) > 0;
+  const startsBeforeElEnd = range.compareBoundaryPoints(Range.END_TO_START, elRange) < 0;
+  const endsAfterElStart = range.compareBoundaryPoints(Range.START_TO_END, elRange) > 0;
   return startsBeforeElEnd && endsAfterElStart;
 }
 

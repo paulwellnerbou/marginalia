@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.12-debian AS builder
+FROM oven/bun:1.3.13-debian AS builder
 WORKDIR /app
 
 # Skip the Chromium auto-download triggered by Playwright's postinstall —
@@ -35,14 +35,14 @@ RUN bun run build
 # No copyleft. See THIRD_PARTY_LICENSES.md at the repo root for
 # attribution.
 # ---------------------------------------------------------------------
-FROM rust:1.94-slim-bookworm AS mermaid-builder
+FROM rust:1.95-slim-bookworm AS mermaid-builder
 # `--locked` consumes the Cargo.lock published with the crate so the
 # binary is reproducible; bumping ${MMDR_VERSION} is the only knob
 # that should change the resulting bytes.
 ARG MMDR_VERSION=0.2.2
 RUN cargo install mermaid-rs-renderer --version ${MMDR_VERSION} --locked --root /out
 
-FROM oven/bun:1.3.12-debian AS runner
+FROM oven/bun:1.3.13-debian AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production

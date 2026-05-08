@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Flex, IconButton, Tooltip } from '@radix-ui/themes';
 import { CheckIcon, Cross2Icon, TrashIcon } from '@radix-ui/react-icons';
+import { Flex, IconButton, Tooltip } from '@radix-ui/themes';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface Props {
   /** Label shown in the default state (e.g. "Delete"). */

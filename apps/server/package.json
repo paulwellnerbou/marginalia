@@ -10,9 +10,9 @@
   "dependencies": {
     "@marginalia/renderer": "workspace:*",
     "@marginalia/themes": "workspace:*",
-    "hono": "^4.6.14",
-    "isomorphic-git": "^1.27.1",
-    "mermaid": "^11.4.1",
+    "hono": "^4.12.18",
+    "isomorphic-git": "^1.37.6",
+    "mermaid": "^11.14.0",
     "playwright": "^1.59.1"
   },
   "devDependencies": {

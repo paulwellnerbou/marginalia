@@ -1,8 +1,8 @@
-import type { Plugin } from 'unified';
-import type { Root, Element, ElementContent, Properties } from 'hast';
-import { visit } from 'unist-util-visit';
-import { createdBundledHighlighter } from 'shiki/core';
+import type { Element, ElementContent, Properties, Root } from 'hast';
+import { createBundledHighlighter } from 'shiki/core';
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
+import type { Plugin } from 'unified';
+import { visit } from 'unist-util-visit';
 import type { Warning } from '../types.js';
 
 export interface ShikiOptions {
@@ -74,7 +74,7 @@ const SUPPORTED_LANGUAGE_LOADERS = {
 
 type SupportedTheme = keyof typeof SUPPORTED_THEME_LOADERS;
 type SupportedLanguage = keyof typeof SUPPORTED_LANGUAGE_LOADERS;
-type ShikiHighlighter = Awaited<ReturnType<typeof createBundledHighlighter>>;
+type ShikiHighlighter = Awaited<ReturnType<typeof bundledHighlighterFactory>>;
 
 const THEME_FALLBACKS = {
   dark: 'github-dark',
@@ -111,7 +111,7 @@ const LANGUAGE_ALIASES: Record<string, SupportedLanguage> = {
 
 const PLAIN_TEXT_LANGS = new Set(['plain', 'plaintext', 'text', 'txt']);
 
-const createBundledHighlighter = createdBundledHighlighter({
+const bundledHighlighterFactory = createBundledHighlighter({
   langs: SUPPORTED_LANGUAGE_LOADERS,
   themes: SUPPORTED_THEME_LOADERS,
   engine: () => createJavaScriptRegexEngine(),
@@ -125,7 +125,7 @@ async function getHighlighter(light: string, dark: string): Promise<ShikiHighlig
   const key = `${resolvedLight}:${resolvedDark}`;
   let promise = highlighterPromises.get(key);
   if (!promise) {
-    promise = createBundledHighlighter({
+    promise = bundledHighlighterFactory({
       themes: [resolvedLight, resolvedDark],
       langs: [],
     });
@@ -154,8 +154,7 @@ export const rehypeShikiHighlight: Plugin<[ShikiOptions], Root> = (options) => {
   const dark = resolveTheme(options.dark, THEME_FALLBACKS.dark);
 
   return async (tree, file) => {
-    const warnings: Warning[] = ((file.data as { warnings?: Warning[] })
-      .warnings ??= []);
+    const warnings: Warning[] = ((file.data as { warnings?: Warning[] }).warnings ??= []);
 
     const jobs: Array<() => Promise<void>> = [];
 

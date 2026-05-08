@@ -1,9 +1,9 @@
 import {
+  ChatBubbleIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronUpIcon,
-  ChatBubbleIcon,
   DotsHorizontalIcon,
 } from '@radix-ui/react-icons';
 import { DropdownMenu, IconButton } from '@radix-ui/themes';

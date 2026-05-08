@@ -1,6 +1,6 @@
-import { useId, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
 import { Flex, Separator, Text } from '@radix-ui/themes';
+import { type ReactNode, useId } from 'react';
+import { Link } from 'react-router-dom';
 import type { DocumentFormat, Role } from '../lib/api.js';
 import { AppearanceToggle } from './AppearanceToggle.js';
 import { FormatBadge } from './FormatBadge.js';

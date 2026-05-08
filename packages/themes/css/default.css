@@ -25,7 +25,7 @@
  * preserves). The styling is sensible in both worlds — kbd-as-keycap
  * reads correctly wherever it appears — so that overlap is intentional.
  */
-@import './asciidoc-compat.css';
+@import "./asciidoc-compat.css";
 
 .marginalia-theme,
 .marginalia {
@@ -34,12 +34,10 @@
   --md-max-width: 72ch;
 
   --md-font-body:
-    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
-    Arial, sans-serif;
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --md-font-heading: var(--md-font-body);
   --md-font-mono:
-    ui-monospace, 'SF Mono', 'JetBrains Mono', 'Fira Code', Menlo, Consolas,
-    monospace;
+    ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
 
   --md-font-size: 17px;
   --md-line-height: 1.65;
@@ -90,7 +88,7 @@
   hyphens: auto;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  font-feature-settings: 'kern', 'liga', 'calt';
+  font-feature-settings: "kern", "liga", "calt";
   word-wrap: break-word;
 }
 
@@ -143,7 +141,7 @@
   user-select: none;
 }
 .marginalia .marginalia-toc-marker::before {
-  content: '§';
+  content: "§";
   font-family: var(--md-font-heading);
   font-style: italic;
   font-weight: 600;
@@ -152,7 +150,7 @@
   color: var(--md-color-accent);
 }
 .marginalia .marginalia-toc-marker::after {
-  content: 'Table of contents';
+  content: "Table of contents";
 }
 
 .marginalia mark.comment-highlight {
@@ -223,11 +221,17 @@
   animation: md-anchor-flash 1.6s ease-out;
 }
 @keyframes md-anchor-flash {
-  0% { background: var(--md-color-comment-highlight-bg); }
-  100% { background: transparent; }
+  0% {
+    background: var(--md-color-comment-highlight-bg);
+  }
+  100% {
+    background: transparent;
+  }
 }
 
-.marginalia > * + * { margin-top: var(--md-space-block); }
+.marginalia > * + * {
+  margin-top: var(--md-space-block);
+}
 
 /* --- Headings ----------------------------------------------------- */
 
@@ -241,18 +245,45 @@
   position: relative;
 }
 
-.marginalia > :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+.marginalia > :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: 0;
+}
 
 /* Use `em` so viewer-level text zoom on `.marginalia` scales headings too. */
-.marginalia h1 { font-size: 2.1em; margin-top: 0; }
-.marginalia h2 { font-size: 1.55em; }
-.marginalia h3 { font-size: 1.25em; }
-.marginalia h4 { font-size: 1.05em; }
-.marginalia h5 { font-size: 0.95em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--md-color-fg-muted); }
-.marginalia h6 { font-size: 0.85em; text-transform: uppercase; letter-spacing: 0.06em; color: var(--md-color-fg-muted); }
+.marginalia h1 {
+  font-size: 2.1em;
+  margin-top: 0;
+}
+.marginalia h2 {
+  font-size: 1.55em;
+}
+.marginalia h3 {
+  font-size: 1.25em;
+}
+.marginalia h4 {
+  font-size: 1.05em;
+}
+.marginalia h5 {
+  font-size: 0.95em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--md-color-fg-muted);
+}
+.marginalia h6 {
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--md-color-fg-muted);
+}
 
-.marginalia h1 { border-bottom: 1px solid var(--md-color-border); padding-bottom: 0.3em; }
-.marginalia h2 { border-bottom: 1px solid var(--md-color-border); padding-bottom: 0.2em; }
+.marginalia h1 {
+  border-bottom: 1px solid var(--md-color-border);
+  padding-bottom: 0.3em;
+}
+.marginalia h2 {
+  border-bottom: 1px solid var(--md-color-border);
+  padding-bottom: 0.2em;
+}
 
 .marginalia :is(h1, h2, h3, h4, h5, h6) > a.heading-anchor {
   position: absolute;
@@ -280,7 +311,9 @@
 
 /* --- Paragraphs & inline ----------------------------------------- */
 
-.marginalia p { margin: 0 0 0.5em; }
+.marginalia p {
+  margin: 0 0 0.5em;
+}
 
 .marginalia a {
   color: var(--md-color-accent);
@@ -289,21 +322,43 @@
   text-decoration-thickness: 1px;
   text-underline-offset: 2px;
 }
-.marginalia a:hover { text-decoration-color: var(--md-color-accent); }
+.marginalia a:hover {
+  text-decoration-color: var(--md-color-accent);
+}
 
-.marginalia strong { font-weight: 650; }
-.marginalia em { font-style: italic; }
-.marginalia del { text-decoration: line-through; color: var(--md-color-fg-muted); }
+.marginalia strong {
+  font-weight: 650;
+}
+.marginalia em {
+  font-style: italic;
+}
+.marginalia del {
+  text-decoration: line-through;
+  color: var(--md-color-fg-muted);
+}
 
 /* --- Lists -------------------------------------------------------- */
 
-.marginalia :is(ul, ol) { padding-left: 1.4em; margin: 0; }
-.marginalia :is(ul, ol) + p { margin-top: 1em; }
-.marginalia li + li { margin-top: var(--md-space-list-item); }
-.marginalia li > :is(ul, ol) { margin-top: var(--md-space-list-item); }
-.marginalia li > p + p { margin-top: 0.6em; }
-.marginalia li::marker { color: var(--md-color-fg-muted); }
-.marginalia li input[type='checkbox'] {
+.marginalia :is(ul, ol) {
+  padding-left: 1.4em;
+  margin: 0;
+}
+.marginalia :is(ul, ol) + p {
+  margin-top: 1em;
+}
+.marginalia li + li {
+  margin-top: var(--md-space-list-item);
+}
+.marginalia li > :is(ul, ol) {
+  margin-top: var(--md-space-list-item);
+}
+.marginalia li > p + p {
+  margin-top: 0.6em;
+}
+.marginalia li::marker {
+  color: var(--md-color-fg-muted);
+}
+.marginalia li input[type="checkbox"] {
   margin-right: 0.4em;
   transform: translateY(-0.05em);
 }
@@ -317,7 +372,9 @@
   color: var(--md-color-fg-muted);
   font-style: italic;
 }
-.marginalia blockquote > * + * { margin-top: 0.6em; }
+.marginalia blockquote > * + * {
+  margin-top: 0.6em;
+}
 
 /* --- Code --------------------------------------------------------- */
 
@@ -395,9 +452,15 @@
   border-bottom-width: 2px;
   border-bottom-color: var(--md-color-fg);
 }
-.marginalia tbody tr:nth-child(even) td { background: var(--md-color-table-stripe); }
-.marginalia :is(th, td)[align='right'] { text-align: right; }
-.marginalia :is(th, td)[align='center'] { text-align: center; }
+.marginalia tbody tr:nth-child(even) td {
+  background: var(--md-color-table-stripe);
+}
+.marginalia :is(th, td)[align="right"] {
+  text-align: right;
+}
+.marginalia :is(th, td)[align="center"] {
+  text-align: center;
+}
 
 /* --- Images & figures -------------------------------------------- */
 
@@ -406,7 +469,9 @@
   max-width: 100%;
   height: auto;
 }
-.marginalia figure { margin: 0; }
+.marginalia figure {
+  margin: 0;
+}
 .marginalia figcaption {
   font-size: 0.9em;
   color: var(--md-color-fg-muted);
@@ -456,12 +521,12 @@
  * hasn't explicitly picked light.
  * ------------------------------------------------------------------ */
 
-[data-appearance='dark'] .marginalia-theme,
-[data-appearance='dark'] .marginalia,
-[data-appearance='dark'].marginalia {
+[data-appearance="dark"] .marginalia-theme,
+[data-appearance="dark"] .marginalia,
+[data-appearance="dark"].marginalia {
   --md-color-fg: #e4e7eb;
   --md-color-fg-muted: #9aa3b2;
-  --md-color-bg: transparent;        /* let app chrome bg show through */
+  --md-color-bg: transparent; /* let app chrome bg show through */
   --md-color-accent: #6ba3ff;
   --md-color-accent-muted: #2a3e66;
   --md-color-border: #262a33;
@@ -478,30 +543,30 @@
   --md-color-search-highlight-active-ring: color-mix(in srgb, #bbf7d0 52%, transparent);
 }
 
-[data-appearance='dark'] .marginalia pre.shiki,
-[data-appearance='dark'] .marginalia pre.shiki span {
+[data-appearance="dark"] .marginalia pre.shiki,
+[data-appearance="dark"] .marginalia pre.shiki span {
   color: var(--shiki-dark);
   background-color: var(--shiki-dark-bg, var(--md-color-code-bg));
   font-style: var(--shiki-dark-font-style);
   font-weight: var(--shiki-dark-font-weight);
   text-decoration: var(--shiki-dark-text-decoration);
 }
-[data-appearance='dark'] .marginalia pre.shiki code,
-[data-appearance='dark'] .marginalia pre.shiki span {
+[data-appearance="dark"] .marginalia pre.shiki code,
+[data-appearance="dark"] .marginalia pre.shiki span {
   background-color: transparent;
 }
-[data-appearance='dark'] .marginalia pre.shiki {
+[data-appearance="dark"] .marginalia pre.shiki {
   background-color: var(--shiki-dark-bg, var(--md-color-code-bg));
 }
 
-[data-appearance='dark'] .marginalia div.mermaid.mermaid-error {
+[data-appearance="dark"] .marginalia div.mermaid.mermaid-error {
   background: #2a1b1b;
   border-color: #5a3a3a;
 }
 
 @media (prefers-color-scheme: dark) {
-  [data-appearance='auto'] .marginalia-theme,
-  [data-appearance='auto'] .marginalia {
+  [data-appearance="auto"] .marginalia-theme,
+  [data-appearance="auto"] .marginalia {
     --md-color-fg: #e4e7eb;
     --md-color-fg-muted: #9aa3b2;
     --md-color-bg: transparent;
@@ -520,8 +585,8 @@
     --md-color-search-highlight-ring: color-mix(in srgb, #86efac 38%, transparent);
     --md-color-search-highlight-active-ring: color-mix(in srgb, #bbf7d0 52%, transparent);
   }
-  [data-appearance='auto'] .marginalia pre.shiki,
-  [data-appearance='auto'] .marginalia pre.shiki span {
+  [data-appearance="auto"] .marginalia pre.shiki,
+  [data-appearance="auto"] .marginalia pre.shiki span {
     color: var(--shiki-dark);
     background-color: var(--shiki-dark-bg, var(--md-color-code-bg));
     font-style: var(--shiki-dark-font-style);

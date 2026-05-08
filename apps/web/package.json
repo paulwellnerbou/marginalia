@@ -10,28 +10,28 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@codemirror/lang-markdown": "^6.3.1",
-    "@codemirror/state": "^6.5.0",
-    "@codemirror/theme-one-dark": "^6.1.2",
-    "@codemirror/view": "^6.36.1",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@codemirror/view": "^6.42.1",
     "@marginalia/renderer": "workspace:*",
     "@marginalia/themes": "workspace:*",
     "@radix-ui/react-icons": "^1.3.2",
-    "@radix-ui/themes": "^3.2.0",
-    "codemirror": "^6.0.1",
+    "@radix-ui/themes": "^3.3.0",
+    "codemirror": "^6.0.2",
     "frimousse": "^0.3.0",
-    "lucide-react": "^1.9.0",
-    "mermaid": "^11.4.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "lucide-react": "^1.14.0",
+    "mermaid": "^11.14.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
     "react-markdown": "^10.1.0",
-    "react-router-dom": "^7.1.1",
+    "react-router-dom": "^7.15.0",
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
-    "@types/react": "^19.0.2",
-    "@types/react-dom": "^19.0.2",
-    "@vitejs/plugin-react": "^4.3.4",
-    "vite": "^6.0.5"
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "vite": "^8.0.11"
   }
 }

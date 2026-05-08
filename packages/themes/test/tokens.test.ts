@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { THEME_IDS, THEME_TOKENS, type ThemeTokens, getThemeTokens } from '../src/tokens.js';
+import { getThemeTokens, THEME_IDS, THEME_TOKENS, type ThemeTokens } from '../src/tokens.js';
 
 const THEMES_DIR = dirname(fileURLToPath(import.meta.url));
 const CSS_DIR = join(THEMES_DIR, '..', 'css');

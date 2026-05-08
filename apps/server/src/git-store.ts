@@ -1,7 +1,6 @@
 import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import fs from 'node:fs';
-import {
+import fs, {
   existsSync,
   mkdirSync,
   mkdtempSync,

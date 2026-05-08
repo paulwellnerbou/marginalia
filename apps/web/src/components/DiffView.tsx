@@ -1,9 +1,9 @@
 import { Text } from '@radix-ui/themes';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  type DiffOverviewLineLayout,
   buildDiffOverviewMarkers,
   buildMeasuredDiffOverviewMarkers,
+  type DiffOverviewLineLayout,
   getDiffOverviewViewport,
 } from '../lib/diff-overview.js';
 import { type DiffLine, diffLines } from '../lib/line-diff.js';
@@ -202,12 +202,8 @@ export function DiffView({ before, after, contextLines = null, active = true }: 
                 }}
                 className={`diff-line diff-${line?.op ?? 'omitted'}`}
               >
-                <span className="diff-line-number diff-line-number-old">
-                  {oldLineNumber ?? ''}
-                </span>
-                <span className="diff-line-number diff-line-number-new">
-                  {newLineNumber ?? ''}
-                </span>
+                <span className="diff-line-number diff-line-number-old">{oldLineNumber ?? ''}</span>
+                <span className="diff-line-number diff-line-number-new">{newLineNumber ?? ''}</span>
                 <span className="diff-marker">
                   {line ? (line.op === 'add' ? '+' : line.op === 'remove' ? '−' : ' ') : '⋯'}
                 </span>

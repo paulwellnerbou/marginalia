@@ -212,9 +212,7 @@ describe('assets API', () => {
     const doc = await upload();
     const bytes = new Uint8Array([42, 42, 42, 42]);
     await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', bytes);
-    expect(
-      (app.db.prepare('SELECT COUNT(*) as c FROM assets').get() as { c: number }).c,
-    ).toBe(1);
+    expect((app.db.prepare('SELECT COUNT(*) as c FROM assets').get() as { c: number }).c).toBe(1);
 
     const del = await app.hono.fetch(
       new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
@@ -223,24 +221,18 @@ describe('assets API', () => {
       }),
     );
     expect(del.status).toBe(204);
-    expect(
-      (app.db.prepare('SELECT COUNT(*) as c FROM assets').get() as { c: number }).c,
-    ).toBe(0);
+    expect((app.db.prepare('SELECT COUNT(*) as c FROM assets').get() as { c: number }).c).toBe(0);
   });
 
   test('replace upload GCs the previous blob if nothing else points to it', async () => {
     const doc = await upload();
     await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', new Uint8Array([1]));
     const beforeIds = new Set(
-      (app.db.prepare('SELECT id FROM assets').all() as Array<{ id: string }>).map(
-        (r) => r.id,
-      ),
+      (app.db.prepare('SELECT id FROM assets').all() as Array<{ id: string }>).map((r) => r.id),
     );
     await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', new Uint8Array([2, 2]));
     const afterIds = new Set(
-      (app.db.prepare('SELECT id FROM assets').all() as Array<{ id: string }>).map(
-        (r) => r.id,
-      ),
+      (app.db.prepare('SELECT id FROM assets').all() as Array<{ id: string }>).map((r) => r.id),
     );
     // Exactly one row; the old id was swept.
     expect(afterIds.size).toBe(1);
@@ -260,9 +252,7 @@ describe('assets API', () => {
     expect(
       (app.db.prepare('SELECT COUNT(*) as c FROM document_assets').get() as { c: number }).c,
     ).toBe(0);
-    expect(
-      (app.db.prepare('SELECT COUNT(*) as c FROM assets').get() as { c: number }).c,
-    ).toBe(0);
+    expect((app.db.prepare('SELECT COUNT(*) as c FROM assets').get() as { c: number }).c).toBe(0);
   });
 
   test('stored mime is derived from ref_name, ignoring the client-sent type', async () => {

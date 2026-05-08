@@ -191,7 +191,8 @@ export async function prerasterizeMermaid(
   // `[\s\S]*?` lets the inner source span newlines without needing
   // the `s` flag. The capture groups are: (1) the data-mermaid-index
   // value, (2) the inner (escaped) source text.
-  const re = /<div\b[^>]*\bclass="mermaid"[^>]*\bdata-mermaid-index="(\d+)"[^>]*>([\s\S]*?)<\/div>/g;
+  const re =
+    /<div\b[^>]*\bclass="mermaid"[^>]*\bdata-mermaid-index="(\d+)"[^>]*>([\s\S]*?)<\/div>/g;
   interface Hit {
     start: number;
     end: number;
@@ -293,7 +294,8 @@ export function countLiveMermaidBlocks(html: string): number {
   // attribute somewhere in the tag. The lookahead doesn't anchor
   // attribute order — both upstream plugins emit different orderings
   // and we shouldn't depend on either.
-  const re = /<div\b[^>]*\bclass="[^"]*\bmermaid\b[^"]*"(?=[^>]*\bdata-mermaid-(?:index|mode)=)[^>]*>/g;
+  const re =
+    /<div\b[^>]*\bclass="[^"]*\bmermaid\b[^"]*"(?=[^>]*\bdata-mermaid-(?:index|mode)=)[^>]*>/g;
   return (html.match(re) ?? []).length;
 }
 
@@ -369,7 +371,7 @@ export async function inlineImageAssets(
   // (e.g. `alt="logo.png image"` with `src="logo.png"` would target
   // the alt text).
   const hits: Hit[] = [];
-  const imgRe = /<img\b[^>]*\bsrc="([^"]+)"[^>]*>/gd;
+  const imgRe = /<img\b[^>]*\bsrc="([^"]+)"[^>]*>/dg;
   for (let m: RegExpExecArray | null; (m = imgRe.exec(html)); ) {
     const src = m[1]!;
     if (isAbsoluteUrl(src)) continue;
@@ -426,7 +428,7 @@ function toDataUrl(bytes: Uint8Array, mime: string): string {
 function escapeMime(mime: string): string {
   // Defensive: the attached.mime comes from the DB, but make sure a
   // rogue value can't escape the data-URL grammar.
-  return mime.replace(/[^a-zA-Z0-9/+.\-]/g, '');
+  return mime.replace(/[^a-zA-Z0-9/+.-]/g, '');
 }
 
 function isAbsoluteUrl(src: string): boolean {

@@ -1,6 +1,6 @@
 import Asciidoctor from '@asciidoctor/core';
 import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
-import { canMergeMultiBlock, type BlockSourceRange } from './locate-block.js';
+import { type BlockSourceRange, canMergeMultiBlock } from './locate-block.js';
 
 declare global {
   var __asciidoctor: ReturnType<typeof Asciidoctor> | undefined;

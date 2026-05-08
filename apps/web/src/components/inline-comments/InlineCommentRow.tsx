@@ -1,4 +1,11 @@
-import { CheckIcon, Cross2Icon, Link2Icon, Pencil2Icon, QuoteIcon, TrashIcon } from '@radix-ui/react-icons';
+import {
+  CheckIcon,
+  Cross2Icon,
+  Link2Icon,
+  Pencil2Icon,
+  QuoteIcon,
+  TrashIcon,
+} from '@radix-ui/react-icons';
 import { useEffect, useRef, useState } from 'react';
 import type { Comment } from '../../lib/api.js';
 import { formatTimestamp, formatTimestampLong } from '../../lib/format-time.js';
@@ -187,9 +194,7 @@ export function InlineCommentRow({
                       <TrashIcon />
                     </button>
                   )}
-                  {showReact && (
-                    <EmojiReactionPicker onPick={toggleReaction} disabled={reacting} />
-                  )}
+                  {showReact && <EmojiReactionPicker onPick={toggleReaction} disabled={reacting} />}
                 </>
               )}
             </div>

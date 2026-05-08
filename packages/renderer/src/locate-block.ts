@@ -1,10 +1,10 @@
-import { unified } from 'unified';
-import remarkParse from 'remark-parse';
-import remarkGfm from 'remark-gfm';
-import remarkFrontmatter from 'remark-frontmatter';
-import { visit } from 'unist-util-visit';
-import { toString as mdastToString } from 'mdast-util-to-string';
 import type { ListItem, Root, RootContent, TableCell } from 'mdast';
+import { toString as mdastToString } from 'mdast-util-to-string';
+import remarkFrontmatter from 'remark-frontmatter';
+import remarkGfm from 'remark-gfm';
+import remarkParse from 'remark-parse';
+import { unified } from 'unified';
+import { visit } from 'unist-util-visit';
 import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
 
 /**
@@ -134,12 +134,7 @@ function narrowedRange(
   const children = node.children ?? [];
   const first = children[0]?.position;
   const last = children[children.length - 1]?.position;
-  if (
-    first &&
-    last &&
-    first.start.offset !== undefined &&
-    last.end.offset !== undefined
-  ) {
+  if (first && last && first.start.offset !== undefined && last.end.offset !== undefined) {
     return { start: first.start.offset, end: last.end.offset };
   }
   // Empty cell: return a zero-length insertion point just inside the
@@ -151,10 +146,7 @@ function narrowedRange(
   return { start: mid, end: mid };
 }
 
-export function locateBlockSource(
-  markdown: string,
-  blockId: string,
-): BlockSourceRange | null {
+export function locateBlockSource(markdown: string, blockId: string): BlockSourceRange | null {
   return locateAllBlocks(markdown).get(blockId) ?? null;
 }
 

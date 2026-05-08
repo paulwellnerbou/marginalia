@@ -30,7 +30,7 @@ import { fileURLToPath } from 'node:url';
  * `.exec()` loops would read / reset each other's `lastIndex` and
  * miss imports). Constructing per call is the defensive fix.
  */
-const RELATIVE_IMPORT_PATTERN = "@import\\s+(['\"])((?:\\.{1,2}/)[^'\"]+?)\\1\\s*;";
+const RELATIVE_IMPORT_PATTERN = '@import\\s+([\'"])((?:\\.{1,2}/)[^\'"]+?)\\1\\s*;';
 
 /** In-memory cache of resolved theme CSS keyed by theme name. Flipped
  * per-process: the themes package only changes on deploy. */

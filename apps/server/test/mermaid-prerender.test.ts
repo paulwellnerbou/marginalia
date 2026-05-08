@@ -5,10 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 
-import {
-  countLiveMermaidBlocks,
-  prerasterizeMermaid,
-} from '../src/export/html-envelope.js';
+import { countLiveMermaidBlocks, prerasterizeMermaid } from '../src/export/html-envelope.js';
 
 const MD_DIV = (idx: number, body: string): string =>
   `<div class="mermaid" data-block-kind="mermaid" data-mermaid-index="${idx}" data-mermaid-mode="client">${body}</div>`;
@@ -70,8 +67,7 @@ describe('prerasterizeMermaid', () => {
   test('handles asciidoc-style mermaid divs (extra attrs in any order)', async () => {
     // Asciidoc plugin adds a `data-block` attr; the helper should
     // still match and find the index attribute regardless of order.
-    const html =
-      `<div class="mermaid" data-block-kind="mermaid" data-block="abc123" data-mermaid-index="0" data-mermaid-mode="client">graph TD\nA --&gt; B</div>`;
+    const html = `<div class="mermaid" data-block-kind="mermaid" data-block="abc123" data-mermaid-index="0" data-mermaid-mode="client">graph TD\nA --&gt; B</div>`;
     let called = 0;
     await prerasterizeMermaid(html, async () => {
       called += 1;
@@ -86,8 +82,7 @@ describe('prerasterizeMermaid', () => {
   test('mixes resolved and unresolved blocks correctly', async () => {
     // First block resolves, second returns null → should keep the
     // second untouched while replacing the first.
-    const html =
-      `${MD_DIV(0, 'graph TD\nA --&gt; B')}\n${MD_DIV(1, 'graph LR\nX --&gt; Y')}`;
+    const html = `${MD_DIV(0, 'graph TD\nA --&gt; B')}\n${MD_DIV(1, 'graph LR\nX --&gt; Y')}`;
     const out = await prerasterizeMermaid(html, async (_s, idx) =>
       idx === 0
         ? { bytes: new TextEncoder().encode('<svg id="ok"/>'), mime: 'image/svg+xml' }
@@ -115,10 +110,7 @@ describe('prerasterizeMermaid', () => {
   test('decodes the small set of HTML entities (& < > " \\")', async () => {
     // Ampersands are tricky — they must come last during decode so
     // `&amp;lt;` doesn't double-decode to `<`.
-    const html = MD_DIV(
-      0,
-      'sequenceDiagram\nA-&gt;&gt;B: &quot;hi &amp;lt; bye&quot;',
-    );
+    const html = MD_DIV(0, 'sequenceDiagram\nA-&gt;&gt;B: &quot;hi &amp;lt; bye&quot;');
     let captured = '';
     await prerasterizeMermaid(html, async (s) => {
       captured = s;

@@ -96,11 +96,7 @@ export interface BlockInfo {
 /** Ordered list of top-level blocks, by document order. */
 export type BlockMap = BlockInfo[];
 
-export type WarningKind =
-  | 'broken-ref'
-  | 'missing-alt'
-  | 'sanitized-element'
-  | 'unknown-language';
+export type WarningKind = 'broken-ref' | 'missing-alt' | 'sanitized-element' | 'unknown-language';
 
 export interface Warning {
   kind: WarningKind;

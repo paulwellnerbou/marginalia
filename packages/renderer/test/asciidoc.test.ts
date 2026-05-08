@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  renderAsciidoc,
-  renderDocument,
+  isDocumentFormat,
   locateAllBlocksAsciidoc,
   locateBlockRangeAsciidoc,
-  isDocumentFormat,
+  renderAsciidoc,
+  renderDocument,
 } from '../src/index.js';
 
 describe('renderAsciidoc', () => {
@@ -199,9 +199,7 @@ const x = 1;
   });
 
   test('`:experimental:` is on by default — kbd/btn/menu macros resolve', async () => {
-    const r = await renderAsciidoc(
-      `Press kbd:[Ctrl+S]. Click btn:[Submit]. Use menu:File[Open].`,
-    );
+    const r = await renderAsciidoc(`Press kbd:[Ctrl+S]. Click btn:[Submit]. Use menu:File[Open].`);
     expect(r.html).toContain('<kbd>Ctrl</kbd>');
     expect(r.html).toContain('<kbd>S</kbd>');
     expect(r.html).toContain('class="button"');

@@ -29,8 +29,12 @@
   --ui-doc-chrome-bg:
     linear-gradient(90deg, var(--accent-a2) 0%, transparent 60%, var(--ui-accent-muted-faint) 100%),
     var(--color-panel-solid);
-  --ui-title-gradient:
-    linear-gradient(120deg, var(--ui-accent-strong) 0%, var(--ui-accent-muted-strong) 48%, var(--gray-12) 100%);
+  --ui-title-gradient: linear-gradient(
+    120deg,
+    var(--ui-accent-strong) 0%,
+    var(--ui-accent-muted-strong) 48%,
+    var(--gray-12) 100%
+  );
   --ui-hero-bg:
     radial-gradient(ellipse 80% 60% at 50% 0%, var(--accent-a5), transparent 70%),
     radial-gradient(ellipse 45% 55% at 100% 10%, var(--ui-accent-muted-soft), transparent 65%),

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
 import { Button, Callout, Checkbox, Dialog, Flex, Text } from '@radix-ui/themes';
+import { useEffect, useState } from 'react';
 import {
   ApiError,
   AUTH_REQUIRED_EVENT,

@@ -241,11 +241,7 @@ function buildArgv(outPath: string, format: MermaidImageFormat): string[] {
   return ['-i', '-', '-o', outPath, '-e', format];
 }
 
-function runRenderer(
-  source: string,
-  outPath: string,
-  format: MermaidImageFormat,
-): Promise<void> {
+function runRenderer(source: string, outPath: string, format: MermaidImageFormat): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const argv = buildArgv(outPath, format);
     const child = spawn(config.bin, argv, {
@@ -295,10 +291,7 @@ function runRenderer(
         return;
       }
       reject(
-        new MermaidRenderError(
-          `Mermaid renderer exited with code ${code ?? '?'}`,
-          stderr.trim(),
-        ),
+        new MermaidRenderError(`Mermaid renderer exited with code ${code ?? '?'}`, stderr.trim()),
       );
     });
 

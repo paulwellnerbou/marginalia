@@ -50,11 +50,24 @@
  * (e.g. inside `.content` of another block, or when the doc has no
  * sections at all).
  */
-.marginalia
-  * + :is(.paragraph, .listingblock, .literalblock, .ulist, .olist, .dlist,
-          .imageblock, .videoblock, .audioblock, .admonitionblock,
-          .quoteblock, .verseblock, .exampleblock, .sidebarblock,
-          .openblock) {
+.marginalia *
+  + :is(
+    .paragraph,
+    .listingblock,
+    .literalblock,
+    .ulist,
+    .olist,
+    .dlist,
+    .imageblock,
+    .videoblock,
+    .audioblock,
+    .admonitionblock,
+    .quoteblock,
+    .verseblock,
+    .exampleblock,
+    .sidebarblock,
+    .openblock
+  ) {
   margin-top: var(--md-space-block);
 }
 
@@ -63,7 +76,9 @@
  * gives it `#preamble`. Keep it flush at the top so the doc doesn't
  * start with double spacing.
  */
-.marginalia > #preamble { margin-top: 0; }
+.marginalia > #preamble {
+  margin-top: 0;
+}
 
 /* --- Paragraphs, lists, description lists ------------------------ */
 
@@ -72,22 +87,41 @@
  * div already drives rhythm (rule above); the inner <p> shouldn't
  * contribute its own bottom margin.
  */
-.marginalia .paragraph > p { margin: 0; }
+.marginalia .paragraph > p {
+  margin: 0;
+}
 
 /*
  * Asciidoctor wraps every list item's prose in a `<p>` even for simple
  * lists (`<li><p>Item</p></li>`). Without a reset, `.marginalia p`
  * gives each item an extra 0.5em gap that markdown lists never have.
  */
-.marginalia :is(.ulist, .olist) li > p { margin: 0; }
-.marginalia :is(.ulist, .olist) li > p + :is(p, ul, ol) { margin-top: 0.4em; }
-.marginalia :is(.ulist, .olist) > :is(ul, ol) { margin: 0; }
+.marginalia :is(.ulist, .olist) li > p {
+  margin: 0;
+}
+.marginalia :is(.ulist, .olist) li > p + :is(p, ul, ol) {
+  margin-top: 0.4em;
+}
+.marginalia :is(.ulist, .olist) > :is(ul, ol) {
+  margin: 0;
+}
 
-.marginalia .dlist dl { margin: 0; }
-.marginalia .dlist dt { font-weight: 650; margin-top: 0.6em; }
-.marginalia .dlist dt:first-child { margin-top: 0; }
-.marginalia .dlist dd { margin: 0 0 0 1.4em; }
-.marginalia .dlist dd > p { margin: 0; }
+.marginalia .dlist dl {
+  margin: 0;
+}
+.marginalia .dlist dt {
+  font-weight: 650;
+  margin-top: 0.6em;
+}
+.marginalia .dlist dt:first-child {
+  margin-top: 0;
+}
+.marginalia .dlist dd {
+  margin: 0 0 0 1.4em;
+}
+.marginalia .dlist dd > p {
+  margin: 0;
+}
 
 /* --- Code listings & literal blocks ------------------------------ */
 
@@ -96,7 +130,9 @@
  * visually; collapse its margins so the `<pre>` keeps its own padding
  * from `.marginalia pre`.
  */
-.marginalia :is(.listingblock, .literalblock) > .content { margin: 0; }
+.marginalia :is(.listingblock, .literalblock) > .content {
+  margin: 0;
+}
 
 /* --- Images, videos, audio --------------------------------------- */
 
@@ -162,24 +198,44 @@
   text-transform: uppercase;
   color: var(--md-color-fg-muted);
 }
-.marginalia .admonitionblock td.icon .title { font-style: normal; color: inherit; margin: 0; }
-.marginalia .admonitionblock td.content > :first-child { margin-top: 0; }
-.marginalia .admonitionblock td.content > :last-child { margin-bottom: 0; }
+.marginalia .admonitionblock td.icon .title {
+  font-style: normal;
+  color: inherit;
+  margin: 0;
+}
+.marginalia .admonitionblock td.content > :first-child {
+  margin-top: 0;
+}
+.marginalia .admonitionblock td.content > :last-child {
+  margin-bottom: 0;
+}
 
 /* Semantic colors per admonition type — use the theme's accent where
  * it's appropriate, fall back to built-in hues otherwise. */
-.marginalia .admonitionblock.note { border-left-color: var(--md-color-accent, #2d6cdf); }
-.marginalia .admonitionblock.tip { border-left-color: #2ea44f; }
-.marginalia .admonitionblock.important { border-left-color: #cc0000; }
-.marginalia .admonitionblock.warning { border-left-color: #d38c00; }
-.marginalia .admonitionblock.caution { border-left-color: #d16e00; }
+.marginalia .admonitionblock.note {
+  border-left-color: var(--md-color-accent, #2d6cdf);
+}
+.marginalia .admonitionblock.tip {
+  border-left-color: #2ea44f;
+}
+.marginalia .admonitionblock.important {
+  border-left-color: #cc0000;
+}
+.marginalia .admonitionblock.warning {
+  border-left-color: #d38c00;
+}
+.marginalia .admonitionblock.caution {
+  border-left-color: #d16e00;
+}
 
 /* --- Quotes, sidebars, examples, open blocks -------------------- */
 
 .marginalia .quoteblock {
   margin-left: 0;
 }
-.marginalia .quoteblock blockquote { margin: 0; }
+.marginalia .quoteblock blockquote {
+  margin: 0;
+}
 .marginalia .quoteblock .attribution {
   margin-top: 0.4em;
   font-size: 0.9em;
@@ -191,8 +247,12 @@
   background: var(--md-color-block-bg, color-mix(in srgb, var(--md-color-fg) 4%, transparent));
   border-radius: 6px;
 }
-.marginalia :is(.sidebarblock, .exampleblock) > .content > :first-child { margin-top: 0; }
-.marginalia :is(.sidebarblock, .exampleblock) > .content > :last-child { margin-bottom: 0; }
+.marginalia :is(.sidebarblock, .exampleblock) > .content > :first-child {
+  margin-top: 0;
+}
+.marginalia :is(.sidebarblock, .exampleblock) > .content > :last-child {
+  margin-bottom: 0;
+}
 
 .marginalia .verseblock pre {
   background: transparent;
@@ -214,9 +274,16 @@
  * prose inside a `<p class="tableblock">`. Strip that inner paragraph's
  * default margins so cells read like markdown GFM cells.
  */
-.marginalia table.tableblock { width: auto; margin: 0 auto; }
-.marginalia table.tableblock p.tableblock { margin: 0; }
-.marginalia table.tableblock.frame-all { border: 1px solid var(--md-color-border); }
+.marginalia table.tableblock {
+  width: auto;
+  margin: 0 auto;
+}
+.marginalia table.tableblock p.tableblock {
+  margin: 0;
+}
+.marginalia table.tableblock.frame-all {
+  border: 1px solid var(--md-color-border);
+}
 
 /* --- TOC --------------------------------------------------------- */
 

@@ -74,9 +74,7 @@ function parseBlobStorageEnv(): 'fs' | 's3' {
   const normalized = raw.trim().toLowerCase();
   if (normalized === '' || normalized === 'fs') return 'fs';
   if (normalized === 's3') return 's3';
-  throw new Error(
-    `MARGINALIA_BLOB_STORAGE must be "fs" or "s3" (got: ${JSON.stringify(raw)}).`,
-  );
+  throw new Error(`MARGINALIA_BLOB_STORAGE must be "fs" or "s3" (got: ${JSON.stringify(raw)}).`);
 }
 
 /**
@@ -100,9 +98,7 @@ function loadS3ConfigFromEnv(): S3StorageConfig {
 function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) {
-    throw new Error(
-      `MARGINALIA_BLOB_STORAGE=s3 requires ${name} (see README for S3 config).`,
-    );
+    throw new Error(`MARGINALIA_BLOB_STORAGE=s3 requires ${name} (see README for S3 config).`);
   }
   return v;
 }

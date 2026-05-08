@@ -112,9 +112,7 @@ function parsePositiveIntEnv(name: string, defaultValue: number): number {
   if (raw === undefined || raw.trim() === '') return defaultValue;
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new Error(
-      `${name} must be a positive integer; got ${JSON.stringify(raw)}`,
-    );
+    throw new Error(`${name} must be a positive integer; got ${JSON.stringify(raw)}`);
   }
   return parsed;
 }
@@ -225,8 +223,7 @@ export async function getBrowser(): Promise<Browser> {
         // `'chromium'` when debugging against a local full-Chrome
         // install, or to `''` to let Playwright pick its default.
         const channelOverride = process.env.MARGINALIA_PDF_CHANNEL;
-        const channel =
-          channelOverride === undefined ? 'chromium-headless-shell' : channelOverride;
+        const channel = channelOverride === undefined ? 'chromium-headless-shell' : channelOverride;
         return await chromium.launch({
           headless: true,
           ...(channel ? { channel } : {}),
@@ -463,26 +460,28 @@ export async function exportPdf(opts: ExportPdfOptions): Promise<Uint8Array> {
     // Local asset refs never reach this layer — they were already
     // inlined as `data:` URLs by inlineImageAssets() in the HTML
     // envelope.
-    await race(page.route('**/*', (route) => {
-      const url = route.request().url();
-      if (url.startsWith('data:') || url.startsWith('about:')) {
-        return route.continue();
-      }
-      try {
-        const { protocol, hostname } = new URL(url);
-        // `https:` only — no cleartext HTTP even for allowlisted hosts.
-        // Protects against MITM-triggered content swaps and stops
-        // anyone with network-path access from coaxing the worker
-        // into a downgrade attack via a user-authored `http://…`
-        // asset that happens to resolve to an allowlist hostname.
-        if (protocol === 'https:' && ALLOWED_EXPORT_HOSTS.has(hostname)) {
+    await race(
+      page.route('**/*', (route) => {
+        const url = route.request().url();
+        if (url.startsWith('data:') || url.startsWith('about:')) {
           return route.continue();
         }
-      } catch {
-        // Unparseable URL — fall through to abort.
-      }
-      return route.abort('blockedbyclient');
-    }));
+        try {
+          const { protocol, hostname } = new URL(url);
+          // `https:` only — no cleartext HTTP even for allowlisted hosts.
+          // Protects against MITM-triggered content swaps and stops
+          // anyone with network-path access from coaxing the worker
+          // into a downgrade attack via a user-authored `http://…`
+          // asset that happens to resolve to an allowlist hostname.
+          if (protocol === 'https:' && ALLOWED_EXPORT_HOSTS.has(hostname)) {
+            return route.continue();
+          }
+        } catch {
+          // Unparseable URL — fall through to abort.
+        }
+        return route.abort('blockedbyclient');
+      }),
+    );
 
     // Conditional spread — `mermaidUmd` is only present on the object
     // when we actually loaded it, so `exactOptionalPropertyTypes`
