@@ -41,7 +41,7 @@ export function ViewPage() {
     });
   }, [uid, token]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: token / reloadNonce are explicit refetch triggers — token swap drives re-auth and reloadNonce is bumped after password unlock.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: token / reloadNonce are explicit refetch triggers — token swap drives re-auth and reloadNonce is bumped by the "Try again" button on the error screen to retry the load.
   useEffect(() => {
     if (!uid) return;
     let cancelled = false;

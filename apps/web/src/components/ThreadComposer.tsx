@@ -116,7 +116,7 @@ function ProposalSourceField({
     setPhase('ready');
   };
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: deps are loaded once on mount; format is captured from initial props because the composer never re-mounts with a different format in practice.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: deps are loaded once on mount; format never changes during the lifetime of a single ProposalSourceField because the parent keys it on `${docFormat}-…`, so a format swap remounts the component with a fresh closure.
   useEffect(() => {
     let disposed = false;
     loadEditorDeps(format).then(
