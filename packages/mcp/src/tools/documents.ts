@@ -2,8 +2,16 @@ import { readFile } from 'node:fs/promises';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { HistoryEntryWire, InviteWire, UploadResponseWire } from '../api-types.js';
-import { clip, matchBlocks } from '../blocks.js';
-import { blockList, documentHeader, gutter, lineDiff, outline, timestamp } from '../format.js';
+import { clip, matchBlocks, resolveSection, sectionContains } from '../blocks.js';
+import {
+  blockList,
+  documentHeader,
+  gutter,
+  lineDiff,
+  outline,
+  sectionHeader,
+  timestamp,
+} from '../format.js';
 import {
   blockDriftNote,
   documentArg,
@@ -124,30 +132,56 @@ export function registerDocumentTools(server: McpServer, ctx: ToolContext): void
   server.registerTool(
     'get_document',
     {
-      title: 'Read a Marginalia document',
+      title: 'Read a Marginalia document, or one section of it',
       description:
-        'Fetch a document: metadata, your access role, the heading outline, and the full ' +
-        'source. Read this before commenting or proposing so quotes match the real text.',
+        'Fetch a document: metadata, your access role, the outline, and the source. Read this ' +
+        'before commenting or proposing so quotes match the real text.\n\n' +
+        'On anything book-length, do not pull the whole thing. Call it once with ' +
+        '`include_source: false` to get the outline — every section with its line range and ' +
+        'size — then call it again with `section` set to the one chapter you need. `section` ' +
+        'takes the heading text, its `#slug`, or a "Parent > Child" path, and returns that ' +
+        'heading plus everything nested under it.',
       inputSchema: {
         document: documentArg,
-        include_source: z.boolean().optional().describe('Include the full source. Default true.'),
+        section: z
+          .string()
+          .optional()
+          .describe(
+            'Return only this section instead of the whole document. Heading text, `#slug`, or ' +
+              '"Parent > Child". Omit for the whole source.',
+          ),
+        include_source: z
+          .boolean()
+          .optional()
+          .describe('Include the source text. Default true. False gives the outline alone.'),
         include_outline: z
           .boolean()
           .optional()
-          .describe('Include the heading outline. Default true.'),
+          .describe(
+            'Include the outline of sections. Defaults to true for the whole document, false ' +
+              'when `section` is set (you already navigated).',
+          ),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async (args) =>
       guard(async () => {
         const { ref, doc, blocks } = await loadDocument(ctx, args.document);
+        const section = args.section ? resolveSection(blocks, args.section) : null;
+        const showOutline = args.include_outline ?? section === null;
+        const body = section ? section.source : doc.source;
         return text(
-          documentHeader(doc, ref),
-          args.include_outline === false ? null : `outline:\n${outline(doc.rendered.toc)}`,
+          documentHeader(doc, ref, blocks),
+          section ? sectionHeader(section) : null,
+          showOutline ? `outline:\n${outline(blocks.sections)}` : null,
           blockDriftNote(blocks),
           args.include_source === false
             ? 'source omitted (include_source=false)'
-            : `--- source (${doc.format}) ---\n${doc.source}`,
+            : `--- ${section ? `section source` : 'source'} (${doc.format}) ---\n${body}`,
+          section === null && blocks.sections.length > 1 && doc.source.length > 8000
+            ? 'note: this is the whole document. To spend less context next time, request one ' +
+                '`section` at a time — the outline above lists them with their sizes.'
+            : null,
         );
       }),
   );
@@ -161,18 +195,22 @@ export function registerDocumentTools(server: McpServer, ctx: ToolContext): void
         'source. Block ids are what comments and edit proposals anchor to, and a proposal ' +
         'replaces a block’s entire source range — so read the block here before proposing a ' +
         'replacement for it. List items and table cells appear as their own blocks in addition ' +
-        'to the enclosing list or table, so either granularity can be targeted. Filter with ' +
-        '`query` on long documents.',
+        'to the enclosing list or table, so either granularity can be targeted. On a long ' +
+        'document always narrow with `section` or `query` — unfiltered, this returns the whole ' +
+        'source one block at a time.',
       inputSchema: {
         document: documentArg,
         query: z
           .string()
           .optional()
           .describe('Only blocks whose source or text contains this string.'),
-        heading: z
+        section: z
           .string()
           .optional()
-          .describe('Only blocks under a heading whose path contains this string.'),
+          .describe(
+            'Only blocks in this section and its subsections. Heading text, `#slug`, or ' +
+              '"Parent > Child" — the same values get_document takes.',
+          ),
         block_ids: z.array(z.string()).optional().describe('Only these specific block ids.'),
         offset: z.number().int().min(0).optional().describe('Skip this many matches. Default 0.'),
         limit: z
@@ -192,17 +230,13 @@ export function registerDocumentTools(server: McpServer, ctx: ToolContext): void
     async (args) =>
       guard(async () => {
         const { doc, blocks } = await loadDocument(ctx, args.document);
+        const section = args.section ? resolveSection(blocks, args.section) : null;
         let selected = blocks.blocks;
         if (args.block_ids?.length) {
           const wanted = new Set(args.block_ids);
           selected = selected.filter((b) => wanted.has(b.id));
         }
-        if (args.heading) {
-          const needle = args.heading.toLowerCase();
-          selected = selected.filter((b) =>
-            b.headingPath.some((h) => h.toLowerCase().includes(needle)),
-          );
-        }
+        if (section) selected = selected.filter((b) => sectionContains(section, b));
         if (args.query) selected = matchBlocks(selected, args.query);
 
         const total = selected.length;
@@ -215,6 +249,7 @@ export function registerDocumentTools(server: McpServer, ctx: ToolContext): void
             : '';
         return text(
           `document ${doc.uid} — ${blocks.blocks.length} blocks total`,
+          section ? sectionHeader(section) : null,
           blockDriftNote(blocks),
           `${blockList(page, total, {
             includeSource: args.include_source !== false,

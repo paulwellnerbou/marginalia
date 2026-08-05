@@ -34,8 +34,37 @@ export interface DocumentBlock {
   endLine: number | null;
 }
 
+/**
+ * A heading and everything under it, down to the next heading at the
+ * same or shallower nesting. The unit a reader thinks in — "chapter
+ * three" — and the unit worth fetching on its own, since pulling a whole
+ * book's source to look at one chapter is the expensive mistake.
+ */
+export interface DocumentSection {
+  /** Position among all sections, document order. */
+  index: number;
+  /** The heading's own text. */
+  heading: string;
+  /** Enclosing headings, outermost first, including this one. */
+  path: string[];
+  /** Nesting depth (1 for a top-level heading). Not the markdown level. */
+  depth: number;
+  /** Slug for `#fragment` links, when the heading list lines up with the block list. */
+  slug: string | null;
+  /** Verbatim source of the whole section, heading line included. */
+  source: string;
+  start: number;
+  end: number;
+  startLine: number;
+  endLine: number;
+  /** Index range into `DocumentBlockMap.blocks`, `[from, to)`. */
+  fromBlock: number;
+  toBlock: number;
+}
+
 export interface DocumentBlockMap {
   blocks: DocumentBlock[];
+  sections: DocumentSection[];
   /**
    * Block ids the server rendered but the local source walk could not
    * place. Non-empty means the renderer used here disagrees with the
@@ -57,7 +86,96 @@ export async function buildBlockMap(doc: DocumentWire): Promise<DocumentBlockMap
     if (!range) unresolved.push(block.id);
     return toDocumentBlock(block, index, range, doc.source);
   });
-  return { blocks, unresolved };
+  return { blocks, sections: buildSections(blocks, doc), unresolved };
+}
+
+/**
+ * Slice the block list into sections.
+ *
+ * A section runs from its heading block to just before the next heading
+ * at the same or shallower depth, so the source span is a plain
+ * `slice(heading.start, nextHeading.start)` — no need to reason about
+ * where sub-blocks end.
+ *
+ * Slugs come from `rendered.anchors`, which lists headings flat in
+ * document order, the same order heading blocks appear in. They are
+ * zipped by position and only when the two lists are the same length:
+ * an off-by-one would attach the wrong `#fragment` to every heading,
+ * and a missing slug is far cheaper than a wrong one.
+ */
+function buildSections(blocks: DocumentBlock[], doc: DocumentWire): DocumentSection[] {
+  const headings = blocks.filter((b) => b.kind === 'heading' && b.start !== null);
+  const anchors = doc.rendered.anchors ?? [];
+  const slugs = anchors.length === headings.length ? anchors.map((a) => a.id) : null;
+
+  return headings.map((heading, i) => {
+    const depth = Math.max(1, heading.headingPath.length);
+    const next = headings.slice(i + 1).find((h) => Math.max(1, h.headingPath.length) <= depth);
+    const end = next ? (next.start as number) : doc.source.length;
+    const start = heading.start as number;
+    const source = doc.source.slice(start, end).replace(/\s+$/u, '');
+    return {
+      index: i,
+      heading: heading.text,
+      path: heading.headingPath,
+      depth,
+      slug: slugs?.[i] ?? null,
+      source,
+      start,
+      end: start + source.length,
+      startLine: heading.startLine as number,
+      endLine: lineAt(doc.source, Math.max(start, start + source.length - 1)),
+      fromBlock: heading.index,
+      toBlock: next ? next.index : blocks.length,
+    };
+  });
+}
+
+/**
+ * Find the section the caller means. Accepts the heading text, a
+ * `#slug`, or a `Parent > Child` path; an exact heading or slug match
+ * wins outright, otherwise a substring must be unique. Ambiguity is an
+ * error listing the candidates — silently picking one chapter of three
+ * that share a word would waste the whole point of asking for one.
+ */
+export function resolveSection(map: DocumentBlockMap, query: string): DocumentSection {
+  const raw = query.trim().replace(/^#/, '');
+  const needle = raw.toLowerCase();
+  if (!needle) throw new BlockLookupError('Name the section to read.');
+  if (map.sections.length === 0) {
+    throw new BlockLookupError('This document has no headings, so it has no sections.');
+  }
+
+  const exact = map.sections.filter(
+    (s) => s.heading.toLowerCase() === needle || s.slug?.toLowerCase() === needle,
+  );
+  const matches =
+    exact.length > 0
+      ? exact
+      : map.sections.filter(
+          (s) =>
+            s.heading.toLowerCase().includes(needle) ||
+            s.path.join(' > ').toLowerCase().includes(needle),
+        );
+
+  if (matches.length === 0) {
+    throw new BlockLookupError(
+      `No section matches ${JSON.stringify(clip(raw, 60))}. Available sections:\n` +
+        map.sections.map((s) => `  ${'  '.repeat(s.depth - 1)}${s.heading}`).join('\n'),
+    );
+  }
+  if (matches.length > 1) {
+    throw new BlockLookupError(
+      `${matches.length} sections match ${JSON.stringify(clip(raw, 60))}. Name one exactly, or ` +
+        `use its path:\n${matches.map((s) => `  ${s.path.join(' > ')}`).join('\n')}`,
+    );
+  }
+  return matches[0] as DocumentSection;
+}
+
+/** Does this block sit inside the section (including its subsections)? */
+export function sectionContains(section: DocumentSection, block: DocumentBlock): boolean {
+  return block.index >= section.fromBlock && block.index < section.toBlock;
 }
 
 async function locateBlocks(

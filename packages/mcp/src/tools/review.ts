@@ -1,7 +1,13 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ListThreadsWire, ProposalDiffWire, ThreadWire } from '../api-types.js';
-import { buildAnchor, type DocumentBlock, resolveBlock } from '../blocks.js';
+import {
+  buildAnchor,
+  type DocumentBlock,
+  resolveBlock,
+  resolveSection,
+  sectionContains,
+} from '../blocks.js';
 import { lineDiff, threadDetail, threadList, threadStatus } from '../format.js';
 import {
   blockDriftNote,
@@ -52,6 +58,14 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           ),
         kind: z.enum(['all', 'comments', 'proposals']).optional().describe('Default "all".'),
         thread_id: z.string().optional().describe('Show just this one thread, in full.'),
+        section: z
+          .string()
+          .optional()
+          .describe(
+            'Only threads anchored inside this section and its subsections — the way to work ' +
+              'through a long document one chapter at a time. Heading text, `#slug`, or ' +
+              '"Parent > Child".',
+          ),
         author: z
           .string()
           .optional()
@@ -76,8 +90,23 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         const loaded = await loadDocument(ctx, args.document);
         const listed = await fetchThreads(ctx, loaded);
 
+        const section = args.section ? resolveSection(loaded.blocks, args.section) : null;
+
         let threads = listed.threads;
         if (args.thread_id) threads = threads.filter((t) => t.id === args.thread_id);
+        if (section) {
+          const inSection = new Set(
+            loaded.blocks.blocks.filter((b) => sectionContains(section, b)).map((b) => b.id),
+          );
+          // An orphaned thread has no block id left, so fall back to the
+          // heading path it was captured under — otherwise a chapter's
+          // orphans would silently vanish from its own review queue.
+          threads = threads.filter((t) =>
+            t.anchor.block_id
+              ? inSection.has(t.anchor.block_id)
+              : startsWithPath(t.anchor.heading_path, section.path),
+          );
+        }
         if (args.kind === 'comments') threads = threads.filter((t) => t.proposal === null);
         if (args.kind === 'proposals') threads = threads.filter((t) => t.proposal !== null);
         const state = args.state ?? 'open';
@@ -105,6 +134,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         const counts = summarize(listed.threads);
         const header = [
           `document ${loaded.doc.uid} — ${counts}`,
+          section ? `section: ${section.path.join(' › ')}` : null,
           `showing ${threads.length} of ${total} matching thread(s)`,
           `you are "${ctx.client.displayName}" with role "${loaded.doc.role}"`,
           listed.pending_mentions.length > 0
@@ -544,4 +574,10 @@ function summarize(threads: ThreadWire[]): string {
     `${proposals.length} edit proposal(s) (${openProposals} open)` +
     (orphaned > 0 ? `, ${orphaned} with a lost anchor` : '')
   );
+}
+
+/** Is `path` inside `prefix` (or equal to it)? */
+function startsWithPath(path: string[] | null, prefix: string[]): boolean {
+  if (!path || path.length < prefix.length) return false;
+  return prefix.every((segment, i) => path[i] === segment);
 }

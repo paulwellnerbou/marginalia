@@ -31,6 +31,10 @@ and found the same number both times.
 
 - Water rations: four days
 - Distance to the well: unknown
+
+## Chapter Three
+
+They reached the well on the fourth evening, which Ibrahim considered luck.
 `;
 
 /** A human reviewer, talking to the server directly rather than through MCP. */
@@ -183,6 +187,102 @@ describe('marginalia MCP server', () => {
     expect(output).toContain('your role: admin');
     expect(output).toContain('- Chapter One');
     expect(output).toContain('The caravan left before dawn');
+  });
+
+  test('gives an outline with per-section sizes without any source', async () => {
+    const { adminUrl } = await seedBook();
+    const output = await call('get_document', { document: adminUrl, include_source: false });
+    expect(output).toContain('source omitted');
+    expect(output).not.toContain('The caravan left before dawn');
+    // Every section addressable, with enough detail to choose one.
+    expect(output).toContain('- Chapter Two');
+    expect(output).toContain('#chapter-two');
+    expect(output).toMatch(/lines \d+-\d+, \d+ chars, \d+ lines/);
+  });
+
+  test('returns one section instead of the whole document', async () => {
+    const { adminUrl } = await seedBook();
+    const output = await call('get_document', { document: adminUrl, section: 'Chapter Two' });
+
+    expect(output).toContain('section: The Salt Road › Chapter Two');
+    expect(output).toContain('By noon the dunes had swallowed the horizon');
+    expect(output).toContain('Water rations: four days');
+    // Neither neighbour leaks in, and the outline isn't repeated.
+    expect(output).not.toContain('The caravan left before dawn');
+    expect(output).not.toContain('They reached the well');
+    expect(output).not.toContain('outline:');
+  });
+
+  test('addresses a section by slug or by path, and a parent pulls its children', async () => {
+    const { adminUrl } = await seedBook();
+    const bySlug = await call('get_document', { document: adminUrl, section: '#chapter-three' });
+    expect(bySlug).toContain('They reached the well');
+    expect(bySlug).not.toContain('By noon the dunes');
+
+    const byPath = await call('get_document', {
+      document: adminUrl,
+      section: 'The Salt Road > Chapter One',
+    });
+    expect(byPath).toContain('The caravan left before dawn');
+    expect(byPath).not.toContain('By noon the dunes');
+
+    // The top-level heading's section is the whole book.
+    const whole = await call('get_document', { document: adminUrl, section: 'The Salt Road' });
+    expect(whole).toContain('The caravan left before dawn');
+    expect(whole).toContain('They reached the well');
+  });
+
+  test('flags text that sits before the first heading', async () => {
+    const { adminUrl } = await seedBook('A note to the reader.\n\n# Title\n\nBody.\n');
+    const output = await call('get_document', { document: adminUrl, include_source: false });
+    expect(output).toContain('outside every section');
+  });
+
+  test('lists the available sections when the name does not match', async () => {
+    const { adminUrl } = await seedBook();
+    const message = await callExpectingError('get_document', {
+      document: adminUrl,
+      section: 'Chapter Nine',
+    });
+    expect(message).toContain('No section matches');
+    expect(message).toContain('Chapter One');
+    expect(message).toContain('Chapter Three');
+  });
+
+  test('refuses an ambiguous section rather than picking one', async () => {
+    const { adminUrl } = await seedBook();
+    const message = await callExpectingError('get_document', {
+      document: adminUrl,
+      section: 'Chapter',
+    });
+    expect(message).toContain('3 sections match');
+  });
+
+  test('narrows blocks and threads to a single section', async () => {
+    const { adminUrl } = await seedBook();
+    const blocks = await call('list_blocks', { document: adminUrl, section: 'Chapter Three' });
+    expect(blocks).toContain('They reached the well');
+    expect(blocks).not.toContain('By noon the dunes');
+
+    await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      body: 'Comment in chapter one.',
+    });
+    await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'They reached the well',
+      body: 'Comment in chapter three.',
+    });
+
+    const inThree = await call('list_threads', { document: adminUrl, section: 'Chapter Three' });
+    expect(inThree).toContain('section: The Salt Road › Chapter Three');
+    expect(inThree).toContain('Comment in chapter three.');
+    expect(inThree).not.toContain('Comment in chapter one.');
+
+    const inOne = await call('list_threads', { document: adminUrl, section: 'Chapter One' });
+    expect(inOne).toContain('Comment in chapter one.');
+    expect(inOne).not.toContain('Comment in chapter three.');
   });
 
   test('lists blocks with ids, line ranges and verbatim source', async () => {

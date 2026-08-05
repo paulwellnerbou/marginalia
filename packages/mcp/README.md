@@ -99,8 +99,8 @@ approval apart.
 | Tool | |
 | --- | --- |
 | `get_identity` | Who the server acts as, which instance, which documents it has links for. |
-| `get_document` | Metadata, your role, heading outline, full source. |
-| `list_blocks` | Every anchorable block with its id, section, line range and verbatim source. Filter with `query`. |
+| `get_document` | Metadata, your role, the outline, and the source — whole document or one `section`. |
+| `list_blocks` | Every anchorable block with its id, section, line range and verbatim source. Filter with `section` or `query`. |
 | `get_rendered_html` | The HTML the browser viewer shows. |
 | `list_history` / `get_version_diff` | Revisions and their diffs. |
 
@@ -108,7 +108,7 @@ approval apart.
 
 | Tool | |
 | --- | --- |
-| `list_threads` | Comments and edit proposals with their discussion and anchored text. `awaiting_my_response: true` is the work queue. |
+| `list_threads` | Comments and edit proposals with their discussion and anchored text. `awaiting_my_response: true` is the work queue; `section` scopes it to one chapter. |
 | `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet). |
 | `create_proposal` | A suggested replacement. `reply_to_thread_id` links it back to the comment it answers. |
 | `reply_to_thread` | Answer a comment thread or an edit proposal. |
@@ -127,6 +127,29 @@ approval apart.
 | `export_document` | Write `source`, `bundle`, `docx`, `pdf` to disk — `formats: ["all"]` for everything. |
 | `create_document` | Upload a local markdown/AsciiDoc file and get links back. |
 | `create_invite`, `list_invites`, `authenticate` | Access management. |
+
+## Reading a chapter at a time
+
+These are long documents, and pulling a whole book's source to work on one chapter spends
+the context the work itself needs. `get_document` with `include_source: false` returns the
+outline alone — every section with its line range and size:
+
+```
+- The Salt Road  #the-salt-road
+    lines 1-40, 1.4k chars, 40 lines
+  - Chapter One — Departure  #chapter-one-departure
+    lines 5-14, 420 chars, 10 lines
+  - Chapter Two — The Dunes  #chapter-two-the-dunes
+    lines 16-30, 610 chars, 15 lines
+```
+
+`get_document`, `list_blocks` and `list_threads` then all take a `section` — the heading
+text, its `#slug`, or a `Parent > Child` path — scoping them to that heading and everything
+nested under it. Naming a parent pulls its children too, so `section: "The Salt Road"` is
+the whole book and `section: "Chapter Two"` is one chapter.
+
+A name that matches nothing gets the section list back; a name that matches several gets
+their full paths, rather than a silently chosen wrong chapter.
 
 ## Anchoring, and why `list_blocks` matters
 

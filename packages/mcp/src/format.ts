@@ -1,6 +1,6 @@
 import { createPatch } from 'diff';
-import type { DocumentWire, ThreadWire, TocNodeWire } from './api-types.js';
-import { clip, type DocumentBlock, type DocumentBlockMap } from './blocks.js';
+import type { DocumentWire, ThreadWire } from './api-types.js';
+import { clip, type DocumentBlock, type DocumentBlockMap, type DocumentSection } from './blocks.js';
 import type { DocumentRef } from './document-ref.js';
 import { documentUrl } from './document-ref.js';
 
@@ -26,7 +26,7 @@ export function timestamp(ms: number | null | undefined): string {
   return `${new Date(ms).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 }
 
-export function documentHeader(doc: DocumentWire, ref: DocumentRef): string {
+export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: DocumentBlockMap): string {
   const lines = [
     `document: ${doc.name ?? '(untitled)'}`,
     `uid: ${doc.uid}`,
@@ -35,8 +35,8 @@ export function documentHeader(doc: DocumentWire, ref: DocumentRef): string {
     `your role: ${doc.role}${roleHint(doc.role)}`,
     `password protected: ${doc.password_protected ? 'yes' : 'no'}`,
     `updated: ${timestamp(doc.updated_at)}`,
-    `source length: ${doc.source.length} chars, ${doc.source.split('\n').length} lines`,
-    `blocks: ${doc.rendered.blocks.length}`,
+    `whole document: ${size(doc.source)}`,
+    `blocks: ${map.blocks.length}, sections: ${map.sections.length}`,
   ];
   if (doc.attached_assets.length > 0) {
     lines.push(
@@ -74,16 +74,49 @@ function roleHint(role: string): string {
   }
 }
 
-export function outline(toc: TocNodeWire[]): string {
-  const lines: string[] = [];
-  const walk = (nodes: TocNodeWire[], depth: number): void => {
-    for (const node of nodes) {
-      lines.push(`${'  '.repeat(depth)}- ${node.text}  (#${node.id})`);
-      walk(node.children, depth + 1);
-    }
-  };
-  walk(toc, 0);
-  return lines.length > 0 ? lines.join('\n') : '(no headings)';
+/**
+ * The document's sections with their size, so a caller can decide what
+ * to read before paying for it. Each line is addressable: the heading
+ * text (or its slug) is what `section` takes.
+ */
+export function outline(sections: DocumentSection[]): string {
+  if (sections.length === 0) return '(no headings — this document has no sections)';
+  const lines = sections.map((section) => {
+    const indent = '  '.repeat(section.depth - 1);
+    const slug = section.slug ? `  #${section.slug}` : '';
+    return (
+      `${indent}- ${section.heading}${slug}\n` +
+      `${indent}    lines ${section.startLine}-${section.endLine}, ${size(section.source)}`
+    );
+  });
+  // Text before the first heading belongs to no section, so a caller
+  // reading section by section would never see it. Say so rather than
+  // let it disappear.
+  const preamble = (sections[0] as DocumentSection).start;
+  if (preamble > 0) {
+    lines.unshift(
+      `(${preamble} chars before the first heading are outside every section — read the whole ` +
+        'document to see them)',
+    );
+  }
+  return lines.join('\n');
+}
+
+export function sectionHeader(section: DocumentSection): string {
+  return [
+    `section: ${section.path.join(' › ')}`,
+    section.slug ? `slug: #${section.slug}` : null,
+    `lines ${section.startLine}-${section.endLine}, ${size(section.source)}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
+
+function size(text: string): string {
+  const chars = text.length;
+  const lines = text.split('\n').length;
+  const human = chars >= 1000 ? `${(chars / 1000).toFixed(1)}k chars` : `${chars} chars`;
+  return `${human}, ${lines} lines`;
 }
 
 export interface BlockListOptions {

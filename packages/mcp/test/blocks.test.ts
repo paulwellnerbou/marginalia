@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { renderDocument } from '@marginalia/renderer';
 import type { DocumentWire } from '../src/api-types.js';
-import { buildAnchor, buildBlockMap, type DocumentBlock, resolveBlock } from '../src/blocks.js';
+import {
+  buildAnchor,
+  buildBlockMap,
+  type DocumentBlock,
+  resolveBlock,
+  resolveSection,
+  sectionContains,
+} from '../src/blocks.js';
 
 const SOURCE = `# Guide
 
@@ -26,7 +33,8 @@ async function documentFrom(source: string): Promise<DocumentWire> {
     source,
     rendered: {
       html: rendered.html,
-      toc: [],
+      anchors: rendered.anchors,
+      toc: rendered.toc,
       blocks: rendered.blocks,
       frontmatter: rendered.frontmatter,
       warnings: rendered.warnings,
@@ -64,6 +72,85 @@ describe('buildBlockMap', () => {
     const cell = map.blocks.find((b) => b.kind === 'tableCell' && b.text === 'cell');
     // A cell's range excludes the surrounding pipes, so a proposal can't break the table.
     expect(cell?.source).toBe('cell');
+  });
+});
+
+const NESTED = `# Book
+
+Preface paragraph.
+
+## One
+
+Alpha.
+
+### One A
+
+Alpha nested.
+
+## Two
+
+Beta.
+`;
+
+describe('sections', () => {
+  test('runs from a heading to the next heading at the same or shallower depth', async () => {
+    const map = await buildBlockMap(await documentFrom(NESTED));
+    const one = resolveSection(map, 'One');
+    expect(one.source).toBe('## One\n\nAlpha.\n\n### One A\n\nAlpha nested.');
+    expect(one.path).toEqual(['Book', 'One']);
+    expect(one.depth).toBe(2);
+
+    // A deeper heading ends at the next same-or-shallower one, not at EOF.
+    const oneA = resolveSection(map, 'One A');
+    expect(oneA.source).toBe('### One A\n\nAlpha nested.');
+
+    // The last section runs to the end of the document.
+    expect(resolveSection(map, 'Two').source).toBe('## Two\n\nBeta.');
+  });
+
+  test('a parent section contains its children and the text before them', async () => {
+    const map = await buildBlockMap(await documentFrom(NESTED));
+    const book = resolveSection(map, 'Book');
+    expect(book.source).toContain('Preface paragraph.');
+    expect(book.source).toContain('Alpha nested.');
+    expect(book.source).toContain('Beta.');
+  });
+
+  test('reports line ranges that match the source', async () => {
+    const map = await buildBlockMap(await documentFrom(NESTED));
+    const two = resolveSection(map, 'Two');
+    expect(
+      NESTED.split('\n')
+        .slice(two.startLine - 1, two.endLine)
+        .join('\n'),
+    ).toBe(two.source);
+  });
+
+  test('carries the anchor slug for #fragment addressing', async () => {
+    const map = await buildBlockMap(await documentFrom(NESTED));
+    expect(resolveSection(map, 'One A').slug).toBe('one-a');
+    expect(resolveSection(map, '#one-a').heading).toBe('One A');
+  });
+
+  test('sectionContains covers a child section’s blocks', async () => {
+    const map = await buildBlockMap(await documentFrom(NESTED));
+    const one = resolveSection(map, 'One');
+    const nested = map.blocks.find((b) => b.text === 'Alpha nested.') as DocumentBlock;
+    const outside = map.blocks.find((b) => b.text === 'Beta.') as DocumentBlock;
+    expect(sectionContains(one, nested)).toBe(true);
+    expect(sectionContains(one, outside)).toBe(false);
+  });
+
+  test('an exact heading match beats a substring one', async () => {
+    const map = await buildBlockMap(await documentFrom(NESTED));
+    // 'One' is a substring of 'One A' too; the exact match must win.
+    expect(resolveSection(map, 'One').heading).toBe('One');
+  });
+
+  test('says so when the document has no headings', async () => {
+    const map = await buildBlockMap(await documentFrom('Just a paragraph.\n'));
+    expect(map.sections).toEqual([]);
+    expect(() => resolveSection(map, 'anything')).toThrow(/no headings/);
   });
 });
 

@@ -20,10 +20,14 @@ export interface BlockInfoWire {
   sectionIndexPath: number[];
 }
 
-export interface TocNodeWire {
+export interface AnchorWire {
   level: number;
   text: string;
+  /** Slug used as the element id, and as the `#fragment` in a viewer link. */
   id: string;
+}
+
+export interface TocNodeWire extends AnchorWire {
   children: TocNodeWire[];
 }
 
@@ -43,6 +47,8 @@ export interface DocumentWire {
   source: string;
   rendered: {
     html: string;
+    /** Every heading, flat, in document order. */
+    anchors: AnchorWire[];
     toc: TocNodeWire[];
     blocks: BlockInfoWire[];
     frontmatter: Record<string, unknown>;
