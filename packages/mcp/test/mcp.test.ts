@@ -192,6 +192,7 @@ describe('marginalia MCP server', () => {
         'repair_proposal_anchor',
         'respond_to_thread',
         'update_document',
+        'update_proposal',
       ].sort(),
     );
     for (const tool of tools) {
@@ -582,6 +583,86 @@ describe('marginalia MCP server', () => {
       body: 'The vagueness is deliberate.',
     });
     expect(out).toContain('reject → now rejected');
+  });
+
+  test('revises a proposal in place and the accept applies the new text', async () => {
+    const { adminUrl } = await seedBook();
+    const created = await call('create_proposal', {
+      document: adminUrl,
+      anchor_text: 'Water rations: four days',
+      proposed_text: '- Water rations: six days',
+      rationale: 'Four days looks too tight for an unknown distance.',
+    });
+    const proposalId = /^thread_id: (\S+)/m.exec(created)?.[1] as string;
+
+    // Feedback arrives: six is too generous. Same thread, new text.
+    const updated = await call('update_proposal', {
+      document: adminUrl,
+      thread_id: proposalId,
+      proposed_text: '- Water rations: five days',
+      rationale: 'Five days — six exceeds what the camels can carry.',
+    });
+    expect(updated).toContain(`Updated proposal ${proposalId}`);
+    expect(updated).toContain('Rationale updated too.');
+    expect(updated).toContain('-- Water rations: four days');
+    expect(updated).toContain('+- Water rations: five days');
+
+    // Still one thread, carrying the new rationale and the update capability.
+    const threads = await call('list_threads', { document: adminUrl, kind: 'proposals' });
+    expect(threads).toContain('EDIT PROPOSAL 1/1 — open');
+    expect(threads).toContain('six exceeds what the camels can carry');
+    expect(threads).not.toContain('too tight for an unknown distance');
+    expect(threads).toMatch(/you can: .*update/);
+
+    const diff = await call('get_proposal_diff', { document: adminUrl, thread_id: proposalId });
+    expect(diff).toContain('applies cleanly: clean');
+    expect(diff).toContain('+- Water rations: five days');
+
+    const accepted = await call('respond_to_thread', {
+      document: adminUrl,
+      thread_id: proposalId,
+      action: 'accept',
+    });
+    expect(accepted).toContain('accept → now accepted');
+    const after = await call('get_document', { document: adminUrl });
+    expect(after).toContain('Water rations: five days');
+  });
+
+  test('update_proposal refreshes a proposal the document moved away from', async () => {
+    const { adminUrl } = await seedBook();
+    const created = await call('create_proposal', {
+      document: adminUrl,
+      anchor_text: 'Distance to the well: unknown',
+      proposed_text: '- Distance to the well: 40km',
+      rationale: 'Concrete numbers read better.',
+    });
+    const proposalId = /^thread_id: (\S+)/m.exec(created)?.[1] as string;
+
+    // The document changes elsewhere while the proposal sits open.
+    await call('edit_document', {
+      document: adminUrl,
+      edits: [{ find: 'They reached the well', replace: 'They finally reached the well' }],
+    });
+
+    const updated = await call('update_proposal', {
+      document: adminUrl,
+      thread_id: proposalId,
+      proposed_text: '- Distance to the well: 40km, by the old map',
+    });
+    expect(updated).toContain('+- Distance to the well: 40km, by the old map');
+
+    const diff = await call('get_proposal_diff', { document: adminUrl, thread_id: proposalId });
+    expect(diff).toContain('applies cleanly: clean');
+
+    const accepted = await call('respond_to_thread', {
+      document: adminUrl,
+      thread_id: proposalId,
+      action: 'accept',
+    });
+    expect(accepted).toContain('accept → now accepted');
+    const after = await call('get_document', { document: adminUrl });
+    expect(after).toContain('Distance to the well: 40km, by the old map');
+    expect(after).toContain('They finally reached the well');
   });
 
   test('diffs a multi-block span against the whole span, not just its first block', async () => {

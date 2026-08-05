@@ -60,6 +60,7 @@ function threadOn(blockId: string | null, endBlockId: string | null): ThreadWire
       resolve: true,
       accept: false,
       reject: false,
+      update: false,
       repair: false,
       reopen: false,
     },

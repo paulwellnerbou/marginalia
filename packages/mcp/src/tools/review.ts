@@ -272,7 +272,9 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         'the quoted phrase. Read the block with list_blocks first and send back the complete ' +
         'rewritten block, keeping its markdown structure (heading markers, list bullets, ' +
         'indentation). A list item’s range includes its bullet; a table cell’s is just the text ' +
-        'between the pipes. The result is shown as a diff so you can verify it.',
+        'between the pipes. The result is shown as a diff so you can verify it.\n\n' +
+        'To revise a proposal that already exists, use update_proposal instead of creating a ' +
+        'second one.',
       inputSchema: {
         document: documentArg,
         proposed_text: z
@@ -389,6 +391,58 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
   );
 
   server.registerTool(
+    'update_proposal',
+    {
+      title: 'Revise an edit proposal in place',
+      description:
+        'Replace the proposed text of an open edit proposal you authored. The thread keeps its ' +
+        'id, discussion, reactions and comment links — use this to act on feedback about a ' +
+        'proposal instead of deleting and re-creating it.\n\n' +
+        'The replacement is rebuilt against the CURRENT document source, so it also refreshes ' +
+        'a proposal whose diff reports "conflict" or "stale". Same rule as create_proposal: ' +
+        '`proposed_text` replaces the anchored block(s)’ ENTIRE source range, so send the ' +
+        'complete rewritten block(s). The anchor itself cannot be moved.',
+      inputSchema: {
+        document: documentArg,
+        thread_id: z.string().describe('Proposal thread id from list_threads.'),
+        proposed_text: z
+          .string()
+          .describe('Complete replacement source for the proposal’s anchored block(s).'),
+        rationale: z
+          .string()
+          .optional()
+          .describe('New opening-comment text, when the reasoning changed too.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) =>
+      guard(async () => {
+        const ref = ctx.client.resolve(args.document);
+        const res = await ctx.client.json<ThreadMutationWire>(
+          ref,
+          `/api/documents/${encodeURIComponent(ref.uid)}/threads/${encodeURIComponent(args.thread_id)}`,
+          {
+            method: 'PATCH',
+            body: {
+              proposal: { proposed_text: args.proposed_text },
+              ...(args.rationale !== undefined ? { body: args.rationale } : {}),
+            },
+          },
+        );
+        const proposal = res.thread.proposal;
+        const diff =
+          proposal?.source_snapshot != null && proposal.proposed_text != null
+            ? lineDiff(proposal.source_snapshot, proposal.proposed_text)
+            : '(diff unavailable)';
+        return text(
+          `Updated proposal ${args.thread_id} — same thread, new proposed text.`,
+          args.rationale !== undefined ? 'Rationale updated too.' : null,
+          `diff against the current document:\n${diff}`,
+        );
+      }),
+  );
+
+  server.registerTool(
     'reply_to_thread',
     {
       title: 'Reply to a comment or edit proposal',
@@ -472,7 +526,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
       title: 'Diff an edit proposal',
       description:
         'The before/after text for an edit proposal, plus whether it still applies cleanly to ' +
-        'the current document ("clean", "conflict", or "stale" — needing re-creation).',
+        'the current document ("clean", "conflict", or "stale"). A conflicted or stale proposal ' +
+        'of yours can be refreshed with update_proposal.',
       inputSchema: {
         document: documentArg,
         thread_id: z.string().describe('Proposal thread id from list_threads.'),
@@ -534,7 +589,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
       description:
         'Permanently remove a thread you opened (or a single reply of yours). Deleting a ' +
         'thread removes its replies too. Prefer resolving or rejecting over deleting — those ' +
-        'keep the discussion visible.',
+        'keep the discussion visible — and prefer update_proposal over delete + re-create ' +
+        'when only a proposal’s text needs to change.',
       inputSchema: {
         document: documentArg,
         thread_id: z.string().describe('Thread id from list_threads.'),

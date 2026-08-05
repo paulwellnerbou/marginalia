@@ -576,8 +576,16 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
 /**
  * `PATCH /:uid/threads/:tid`
  *
- * Edits only the root comment body of a thread. Proposal roots use this for
- * rationale edits; plain threads use it for the root comment text.
+ * Edits the root of a thread: the root comment body (a proposal's
+ * rationale or a plain thread's opener), a proposal's proposed text, or
+ * both in one request. Author-only.
+ *
+ * A `proposal.proposed_text` update rebuilds the proposal branch against
+ * *current* main — the author revised the suggestion against the source
+ * they just read — so it doubles as a rebase: a conflicted or stale
+ * proposal comes back cleanly appliable while the thread keeps its id,
+ * discussion, links and reactions instead of being deleted and
+ * re-created.
  */
 async function editThreadRoot(c: Context, deps: AppDeps) {
   const { db, realtime, store } = deps;
@@ -587,33 +595,164 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  const identity = decision.identity;
 
   const tid = c.req.param('tid');
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const row = loadThreadRow(db, tid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
-  if (row.author_client_id !== decision.identity.clientId)
-    return c.json({ error: 'forbidden' }, 403);
+  if (row.author_client_id !== identity.clientId) return c.json({ error: 'forbidden' }, 403);
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
 
   const next = parseThreadRootBody(body.body, isProposalRow(row));
   if (!next.ok) return c.json({ error: 'invalid-body' }, 400);
-  if (next.body === undefined) return c.json({ error: 'body-required' }, 400);
+  const parsedUpdate = asProposalUpdate(body.proposal);
+  if (!parsedUpdate.ok) return c.json({ error: parsedUpdate.error }, 400);
+  const proposalUpdate = parsedUpdate.update;
+  if (next.body === undefined && !proposalUpdate) return c.json({ error: 'body-required' }, 400);
+
+  let branchUpdate: { baseOid: string; rangeStart: number; rangeEnd: number } | null = null;
+  // The old tip's full source, so a failed DB write can put the branch
+  // back instead of leaving git and the stored splice range disagreeing.
+  let previousTipSource: string | null = null;
+  if (proposalUpdate) {
+    if (!isProposalRow(row)) return c.json({ error: 'proposal-required' }, 400);
+    if (row.proposal_status !== 'open') return c.json({ error: 'not-open' }, 400);
+    if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
+    if (row.branch_ref !== `refs/proposals/${row.id}` || !row.base_oid) {
+      return c.json({ error: 'proposal-update-unavailable' }, 409);
+    }
+    const anchorBlockId = row.anchor_block_id;
+    if (row.is_whole_document !== 1 && (row.link_status === 'orphaned' || !anchorBlockId)) {
+      return c.json({ error: 'proposal-orphaned' }, 409);
+    }
+
+    // Same shape as createThread: base is current main, source read at
+    // that one oid so a concurrent accept can't slip between the reads.
+    let baseOid: string;
+    let currentSource: string;
+    try {
+      baseOid = await store.mainOid(doc);
+      currentSource = await store.readAt(doc, baseOid);
+      previousTipSource = await store.readProposalTip(doc, row.id);
+    } catch (err) {
+      console.warn(
+        `[marginalia] reading base for proposal update ${tid} (${doc.uid}) failed:`,
+        err,
+      );
+      return c.json({ error: 'proposal-storage-unavailable' }, 503);
+    }
+
+    let blockRange: BlockSourceRange | null;
+    if (row.is_whole_document === 1 || !anchorBlockId) {
+      blockRange = { start: 0, end: currentSource.length, kind: 'multi', text: '' };
+    } else {
+      blockRange = locateAnchorRange(doc, currentSource, anchorBlockId, row.anchor_end_block_id);
+    }
+    if (!blockRange) {
+      // The anchor died since the last orphan sweep; record that (as the
+      // accept path does) rather than fail with a state clients can't see.
+      const now = Date.now();
+      db.prepare(
+        `UPDATE comments
+            SET link_status = 'orphaned', anchor_block_id = NULL, anchor_end_block_id = NULL,
+                updated_at = ?
+          WHERE id = ?`,
+      ).run(now, tid);
+      const orphaned = loadProposalRow(db, tid, doc.uid);
+      if (orphaned) {
+        realtime.broadcast(
+          doc.uid,
+          { type: 'edit_proposal.updated', edit_proposal: toProposalWire(orphaned) },
+          identity.clientId,
+        );
+      }
+      return c.json({ error: 'proposal-orphaned' }, 409);
+    }
+
+    if (next.body === undefined && baseOid === row.base_oid) {
+      const current = await readProposalContent(store, doc, row);
+      if (current && current.proposed_text === proposalUpdate.proposedText) {
+        // Same base, same text — nothing would change; skip the branch
+        // rewrite instead of minting an identical commit.
+        const replies = loadReplies(db, doc.uid, tid);
+        const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [row]);
+        return c.json({
+          thread: await toThreadWire(db, store, doc, row, replies, decision, reopenableAccepted),
+        });
+      }
+    }
+
+    try {
+      await store.createProposalBranch(
+        doc,
+        baseOid,
+        row.id,
+        currentSource.slice(0, blockRange.start) +
+          proposalUpdate.proposedText +
+          currentSource.slice(blockRange.end),
+        identity,
+        next.body !== undefined ? next.body : row.body,
+      );
+    } catch (err) {
+      console.warn(`[marginalia] proposal-branch rewrite failed for ${tid} (${doc.uid}):`, err);
+      return c.json({ error: 'proposal-storage-unavailable' }, 503);
+    }
+    branchUpdate = { baseOid, rangeStart: blockRange.start, rangeEnd: blockRange.end };
+  }
 
   const now = Date.now();
-  db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(next.body, now, tid);
+  db.exec('BEGIN');
+  try {
+    if (branchUpdate) {
+      db.prepare(
+        `UPDATE comments_edit_proposals
+            SET base_oid = ?, base_block_start = ?, base_block_end = ?
+          WHERE comment_id = ?`,
+      ).run(branchUpdate.baseOid, branchUpdate.rangeStart, branchUpdate.rangeEnd, tid);
+      // The rebuilt branch targets exactly this range of current main,
+      // so any earlier 'conflict'/'low-confidence' state is resolved by
+      // construction.
+      db.prepare(`UPDATE comments SET link_status = 'linked', updated_at = ? WHERE id = ?`).run(
+        now,
+        tid,
+      );
+    }
+    if (next.body !== undefined) {
+      db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(
+        next.body,
+        now,
+        tid,
+      );
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    if (branchUpdate && isProposalRow(row) && row.base_oid) {
+      const undo =
+        previousTipSource !== null
+          ? store.createProposalBranch(
+              doc,
+              row.base_oid,
+              tid,
+              previousTipSource,
+              identity,
+              row.body,
+            )
+          : store.deleteProposalBranch(doc, tid);
+      await undo.catch(() => undefined);
+    }
+    throw err;
+  }
 
   const updated = loadThreadRow(db, tid, doc.uid);
   if (!updated) return c.json({ error: 'not-found' }, 404);
-  const mentionTargets = storeMentionsForComment(
-    db,
-    doc.uid,
-    updated.id,
-    updated.body,
-    updated.author_display_name,
-  );
+  const mentionTargets =
+    next.body !== undefined
+      ? storeMentionsForComment(db, doc.uid, updated.id, updated.body, updated.author_display_name)
+      : [];
 
   if (isProposalRow(updated)) {
     realtime.broadcast(
@@ -1658,6 +1797,19 @@ async function toThreadWire(
         (row.is_whole_document === 1 || row.anchor_block_id !== null),
       reject:
         proposal && state === 'open' && decision.ok && (canEdit(decision.role) || isRootAuthor),
+      // Change the proposed text in place (author-only). Orphans need a
+      // repair first; a 'conflict' anchor is fine — updating rebuilds the
+      // branch against current main, which is exactly what clears it.
+      update:
+        proposal &&
+        state === 'open' &&
+        isRootAuthor &&
+        decision.ok &&
+        canPropose(decision.role) &&
+        row.branch_ref === `refs/proposals/${row.id}` &&
+        row.base_oid !== null &&
+        (row.is_whole_document === 1 ||
+          (row.link_status !== 'orphaned' && row.anchor_block_id !== null)),
       repair:
         proposal &&
         state === 'open' &&
@@ -2230,6 +2382,26 @@ function asProposal(
       answersThreadId: asString(proposal.answers_thread_id),
     },
   };
+}
+
+/**
+ * The `proposal` payload of a PATCH: only `proposed_text` is mutable.
+ * The anchor, `whole_document`, and `answers_thread_id` are fixed at
+ * create time — moving a proposal is a delete + re-create.
+ */
+function asProposalUpdate(
+  v: unknown,
+):
+  | { ok: true; update: { proposedText: string } | null }
+  | { ok: false; error: 'proposal-text-required' | 'proposal-text-too-long' } {
+  if (v === null || v === undefined) return { ok: true, update: null };
+  if (typeof v !== 'object') return { ok: false, error: 'proposal-text-required' };
+  const proposedText = (v as Record<string, unknown>).proposed_text;
+  if (typeof proposedText !== 'string') return { ok: false, error: 'proposal-text-required' };
+  if (proposedText.length > MAX_PROPOSED_TEXT_LENGTH) {
+    return { ok: false, error: 'proposal-text-too-long' };
+  }
+  return { ok: true, update: { proposedText } };
 }
 
 /**
