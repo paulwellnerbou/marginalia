@@ -48,6 +48,30 @@ describe('McpState', () => {
     expect(mode).toBe(0o600);
   });
 
+  test('drops entries whose fields are not strings', async () => {
+    const file = join(dir, 'state.json');
+    await Bun.write(
+      file,
+      JSON.stringify({
+        clientId: 'a-persisted-client-id',
+        documents: {
+          good: { baseUrl: 'https://m.example', token: 'tok' },
+          numericToken: { baseUrl: 'https://m.example', token: 42 },
+          noToken: { baseUrl: 'https://m.example' },
+          badBase: { baseUrl: 7, token: 'tok' },
+          notAnObject: 'nonsense',
+        },
+      }),
+    );
+    const state = new McpState(dir, null);
+    expect(state.recall('good')?.token).toBe('tok');
+    // A non-string token must never reach an HTTP header.
+    expect(state.recall('numericToken')).toEqual({ baseUrl: 'https://m.example', token: null });
+    expect(state.recall('noToken')?.token).toBeNull();
+    expect(state.recall('badBase')).toBeNull();
+    expect(state.recall('notAnObject')).toBeNull();
+  });
+
   test('survives a corrupt state file by starting fresh', () => {
     const file = join(dir, 'state.json');
     Bun.write(file, 'not json');

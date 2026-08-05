@@ -139,6 +139,26 @@ describe('marginalia MCP server', () => {
     return payload.thread.id;
   }
 
+  /** Reply as the human reviewer, straight against the HTTP API. */
+  async function reviewerReplies(
+    uid: string,
+    token: string,
+    threadId: string,
+    body: string,
+  ): Promise<void> {
+    const res = await fetch(`${baseUrl}/api/documents/${uid}/threads/${threadId}/respond`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-marginalia-client': REVIEWER.clientId,
+        'x-marginalia-client-name': REVIEWER.displayName,
+        'x-marginalia-invite': token,
+      },
+      body: JSON.stringify({ body }),
+    });
+    expect(res.status).toBe(200);
+  }
+
   test('advertises every tool with a description', async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
@@ -326,6 +346,52 @@ describe('marginalia MCP server', () => {
     });
     expect(message).toContain('ambiguous');
     expect(message).toMatch(/block_id/);
+  });
+
+  test('the work queue tracks who spoke last, not who has spoken', async () => {
+    const { adminUrl, uid } = await seedBook();
+    const invite = await call('create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+      display_name: REVIEWER.displayName,
+    });
+    const token = new URL(/(http\S+)/.exec(invite)?.[1] as string).pathname.split('/')[3] as string;
+
+    // Our own unanswered comment: nobody is waiting on us.
+    const mine = await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'They reached the well',
+      body: 'Is this ending intentional?',
+    });
+    const myThread = /^thread_id: (\S+)/m.exec(mine)?.[1] as string;
+    expect(
+      await call('list_threads', { document: adminUrl, awaiting_my_response: true }),
+    ).toContain('No threads matched.');
+
+    // Once the reviewer answers it, it is ours to deal with again.
+    await reviewerReplies(uid, token, myThread, 'Yes — leave it.');
+    const answered = await call('list_threads', {
+      document: adminUrl,
+      awaiting_my_response: true,
+    });
+    expect(answered).toContain(myThread);
+
+    // We reply; the queue clears.
+    await call('reply_to_thread', {
+      document: adminUrl,
+      thread_id: myThread,
+      body: 'Understood, leaving it.',
+    });
+    expect(
+      await call('list_threads', { document: adminUrl, awaiting_my_response: true }),
+    ).toContain('No threads matched.');
+
+    // The reviewer comes back after our reply — back on the queue, which a
+    // "have I posted in this thread at all" test would have missed.
+    await reviewerReplies(uid, token, myThread, 'Actually, one more thought.');
+    expect(
+      await call('list_threads', { document: adminUrl, awaiting_my_response: true }),
+    ).toContain(myThread);
   });
 
   test('works through a reviewer comment into an accepted proposal', async () => {

@@ -74,8 +74,10 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .boolean()
           .optional()
           .describe(
-            `Only open threads "${ctx.client.displayName}" has not replied to yet — the work ` +
-              'queue when asked to tackle a reviewer’s comments.',
+            `Only open threads whose latest message is from someone other than ` +
+              `"${ctx.client.displayName}" — the work queue when asked to tackle a reviewer’s ` +
+              'comments. Excludes threads you opened and nobody answered, and re-includes ones ' +
+              'where the reviewer came back after your reply.',
           ),
         include_anchor_source: z
           .boolean()
@@ -119,13 +121,15 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           );
         }
         if (args.awaiting_my_response) {
-          threads = threads.filter(
-            (t) =>
-              t.state === 'open' &&
-              !t.comments.some(
-                (c, index) => index > 0 && c.author.client_id === ctx.client.clientId,
-              ),
-          );
+          // "The last word is not mine." A thread I opened that nobody
+          // answered is not waiting on me, and one where the reviewer
+          // came back after my reply is — neither of which a
+          // "have I posted in it at all" test gets right.
+          threads = threads.filter((t) => {
+            if (t.state !== 'open') return false;
+            const last = t.comments[t.comments.length - 1];
+            return last !== undefined && last.author.client_id !== ctx.client.clientId;
+          });
         }
 
         const total = threads.length;

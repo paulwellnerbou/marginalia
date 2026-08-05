@@ -25,9 +25,14 @@ export interface DocumentMemory {
   token: string | null;
 }
 
+/**
+ * As read back from disk. `documents` stays `unknown` because the file
+ * is user-editable and may have been half-written — every field is
+ * validated on the way in, not asserted.
+ */
 interface PersistedState {
   clientId: string;
-  documents: Record<string, DocumentMemory>;
+  documents: Record<string, unknown>;
 }
 
 export class McpState {
@@ -39,10 +44,13 @@ export class McpState {
     this.file = stateDir ? join(stateDir, 'state.json') : null;
     const loaded = this.file ? readState(this.file) : null;
     this.clientId = clientIdOverride ?? loaded?.clientId ?? newClientId();
-    for (const [uid, memory] of Object.entries(loaded?.documents ?? {})) {
-      if (typeof memory?.baseUrl === 'string') {
-        this.documents.set(uid, { baseUrl: memory.baseUrl, token: memory.token ?? null });
-      }
+    // Both fields go on the wire — `baseUrl` as a URL, `token` as a
+    // header value — so a hand-edited or half-written state file must
+    // not smuggle a non-string through into a request, where it would
+    // surface as a baffling auth failure rather than a bad cache entry.
+    for (const [uid, raw] of Object.entries(loaded?.documents ?? {})) {
+      const memory = asDocumentMemory(raw);
+      if (memory) this.documents.set(uid, memory);
     }
     // A generated client id is only useful if it outlives the process.
     if (!loaded || loaded.clientId !== this.clientId) this.flush();
@@ -105,13 +113,25 @@ function readState(file: string): PersistedState | null {
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as Partial<PersistedState>;
     if (typeof parsed.clientId !== 'string' || parsed.clientId.length < 8) return null;
-    return {
-      clientId: parsed.clientId,
-      documents: (parsed.documents ?? {}) as Record<string, DocumentMemory>,
-    };
+    const documents =
+      parsed.documents && typeof parsed.documents === 'object' ? parsed.documents : {};
+    return { clientId: parsed.clientId, documents };
   } catch {
     return null;
   }
+}
+
+/**
+ * Accept an entry only if both fields are strings. A missing or
+ * malformed token degrades the entry to "known document, no access
+ * link" — the caller re-supplies the URL — rather than putting a
+ * non-string into an HTTP header.
+ */
+function asDocumentMemory(raw: unknown): DocumentMemory | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { baseUrl, token } = raw as { baseUrl?: unknown; token?: unknown };
+  if (typeof baseUrl !== 'string' || baseUrl.length === 0) return null;
+  return { baseUrl, token: typeof token === 'string' && token.length > 0 ? token : null };
 }
 
 /** Matches the web client's format: 32 lowercase hex chars. */

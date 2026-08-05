@@ -108,7 +108,7 @@ approval apart.
 
 | Tool | |
 | --- | --- |
-| `list_threads` | Comments and edit proposals with their discussion and anchored text. `awaiting_my_response: true` is the work queue; `section` scopes it to one chapter. |
+| `list_threads` | Comments and edit proposals with their discussion and anchored text. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter. |
 | `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet). |
 | `create_proposal` | A suggested replacement. `reply_to_thread_id` links it back to the comment it answers. |
 | `reply_to_thread` | Answer a comment thread or an edit proposal. |
