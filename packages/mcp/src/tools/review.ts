@@ -102,6 +102,19 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .boolean()
           .optional()
           .describe('Include the anchored block’s current source under each thread. Default true.'),
+        context_blocks: z
+          .number()
+          .int()
+          .min(0)
+          .max(3)
+          .optional()
+          .describe(
+            'Also show this many blocks of source either side of the anchor — the surrounding ' +
+              'paragraphs a comment argues about but does not quote. Default 0; worth raising ' +
+              'once narrowed to one thread, since every thread pays for it. Nested blocks are ' +
+              'stepped over, so context on a list item is the text around the whole list. ' +
+              'Ignored when include_anchor_source is false.',
+          ),
         limit: z.number().int().min(1).max(200).optional().describe('Max threads. Default 50.'),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
@@ -194,6 +207,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           blockDriftNote(loaded.blocks),
           threadList(threads, {
             includeAnchorSource: args.include_anchor_source !== false,
+            contextBlocks: args.context_blocks ?? 0,
             blockMap: loaded.blocks,
           }),
         );
@@ -360,7 +374,9 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           }
         }
 
-        const before = args.whole_document ? loaded.doc.source : (block.source ?? '');
+        const before = args.whole_document
+          ? loaded.doc.source
+          : spanSource(loaded.doc.source, block, endBlock);
         return text(
           args.whole_document
             ? 'Created a whole-document edit proposal.'
@@ -610,10 +626,31 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         );
         return text(
           `Repaired proposal ${args.thread_id} — link status is now "${res.thread.link_status}".`,
-          threadDetail(res.thread, 1, 1, { includeAnchorSource: true, blockMap: loaded.blocks }),
+          threadDetail(res.thread, 1, 1, {
+            includeAnchorSource: true,
+            contextBlocks: 0,
+            blockMap: loaded.blocks,
+          }),
         );
       }),
   );
+}
+
+/**
+ * The source an accept will replace. For a span that is every block from
+ * the first through the last, not just the anchor — mirroring the range
+ * the server derives from the same two ids (`locateAnchorRange`), so the
+ * diff shown here is the change that will actually be applied.
+ */
+function spanSource(source: string, block: DocumentBlock, endBlock: DocumentBlock | null): string {
+  if (!endBlock || endBlock.id === block.id) return block.source ?? '';
+  // A block the local source walk could not place has no offsets; the
+  // anchor block's own source is then the best available answer.
+  if (block.start === null || block.end === null) return block.source ?? '';
+  if (endBlock.start === null || endBlock.end === null) return block.source ?? '';
+  // min/max rather than assuming document order: the endpoints are two
+  // ids from the caller, in whatever order they passed them.
+  return source.slice(Math.min(block.start, endBlock.start), Math.max(block.end, endBlock.end));
 }
 
 async function fetchThreads(ctx: ToolContext, loaded: LoadedDocument): Promise<ListThreadsWire> {

@@ -13,11 +13,14 @@ import { reportError } from '../../lib/log.js';
 import { CollapsibleCommentBody } from './CollapsibleCommentBody.js';
 import { EmojiReactionPicker } from './EmojiReactionPicker.js';
 import { InlineAvatar } from './InlineAvatar.js';
+import type { ThreadRefApi } from './threadRefs.js';
 
 interface Props {
   node: Comment;
   variant?: 'opener' | 'reply';
   canQuote: boolean;
+  /** Resolves thread ids mentioned in the body into links. */
+  threadRefs: ThreadRefApi;
   onEdit: (id: string, body: string) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
   onQuote?: ((text: string) => void) | undefined;
@@ -33,6 +36,7 @@ export function InlineCommentRow({
   node,
   variant = 'opener',
   canQuote,
+  threadRefs,
   onEdit,
   onDelete,
   onQuote,
@@ -235,7 +239,7 @@ export function InlineCommentRow({
             </div>
           </div>
         ) : (
-          <CollapsibleCommentBody>{node.body}</CollapsibleCommentBody>
+          <CollapsibleCommentBody threadRefs={threadRefs}>{node.body}</CollapsibleCommentBody>
         )}
 
         {!editing && node.reactions.length > 0 && (

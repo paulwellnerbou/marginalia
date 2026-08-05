@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { renderDocument } from '@marginalia/renderer';
 import type { DocumentWire } from '../src/api-types.js';
 import {
+  anchorNeighbourhood,
   buildAnchor,
   buildBlockMap,
   type DocumentBlock,
@@ -247,5 +248,74 @@ describe('line numbers', () => {
     const wrapped = map.blocks[1] as DocumentBlock;
     expect(wrapped.startLine).toBe(3);
     expect(wrapped.endLine).toBe(5);
+  });
+});
+
+describe('anchorNeighbourhood', () => {
+  test('reads whole blocks either side of the anchor', async () => {
+    const map = await buildBlockMap(await documentFrom(SOURCE));
+    const intro = map.blocks.find((b) => b.text.startsWith('Intro')) as DocumentBlock;
+
+    const around = anchorNeighbourhood(map, intro, null, 1);
+    expect(around?.anchored).toBe('Intro paragraph with a distinctive phrase inside it.');
+    expect(around?.before).toBe('# Guide');
+    expect(around?.after).toBe('## Details');
+  });
+
+  test('returns no surroundings when none were asked for', async () => {
+    const map = await buildBlockMap(await documentFrom(SOURCE));
+    const intro = map.blocks.find((b) => b.text.startsWith('Intro')) as DocumentBlock;
+
+    const around = anchorNeighbourhood(map, intro, null, 0);
+    expect(around?.before).toBeNull();
+    expect(around?.after).toBeNull();
+    expect(around?.beforeBlocks).toBe(0);
+  });
+
+  test('steps over the list a bullet sits in rather than restating it', async () => {
+    const map = await buildBlockMap(await documentFrom(SOURCE));
+    const alpha = map.blocks.find((b) => b.text === 'alpha item') as DocumentBlock;
+
+    const around = anchorNeighbourhood(map, alpha, null, 1);
+    expect(around?.anchored).toBe('- alpha item');
+    // The enclosing list overlaps the anchor, so context is what reads
+    // around the list — not the list itself, which the anchor is inside.
+    expect(around?.before).toBe('## Details');
+    expect(around?.after).toContain('| head | other |');
+  });
+
+  test('covers every block of a span, not just its first', async () => {
+    const map = await buildBlockMap(await documentFrom(SOURCE));
+    const items = map.blocks.filter((b) => b.kind === 'listItem');
+
+    const around = anchorNeighbourhood(
+      map,
+      items[0] as DocumentBlock,
+      items[1] as DocumentBlock,
+      0,
+    );
+    expect(around?.anchored).toBe('- alpha item\n- beta item');
+  });
+
+  test('describes the same stretch when a span was selected backwards', async () => {
+    const map = await buildBlockMap(await documentFrom(SOURCE));
+    const items = map.blocks.filter((b) => b.kind === 'listItem');
+
+    const around = anchorNeighbourhood(
+      map,
+      items[1] as DocumentBlock,
+      items[0] as DocumentBlock,
+      0,
+    );
+    expect(around?.anchored).toBe('- alpha item\n- beta item');
+  });
+
+  test('clamps at the edges of the document', async () => {
+    const map = await buildBlockMap(await documentFrom(SOURCE));
+    const heading = map.blocks[0] as DocumentBlock;
+
+    const around = anchorNeighbourhood(map, heading, null, 3);
+    expect(around?.before).toBeNull();
+    expect(around?.afterBlocks).toBe(3);
   });
 });

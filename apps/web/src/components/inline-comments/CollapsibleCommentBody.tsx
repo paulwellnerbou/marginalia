@@ -1,8 +1,11 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { InlineCommentMarkdown } from './InlineCommentMarkdown.js';
+import type { ThreadRefApi } from './threadRefs.js';
 
 interface Props {
   children: string;
+  /** Resolves thread ids mentioned in the body into links. */
+  threadRefs: ThreadRefApi;
 }
 
 /**
@@ -24,7 +27,7 @@ export function isClipped(contentHeight: number, clampHeight: number): boolean {
  * the first paint is already clipped; this measures against the clamp
  * the browser applied rather than recomputing it here.
  */
-export function CollapsibleCommentBody({ children }: Props) {
+export function CollapsibleCommentBody({ children, threadRefs }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [clipped, setClipped] = useState(false);
   const clipRef = useRef<HTMLDivElement>(null);
@@ -61,7 +64,7 @@ export function CollapsibleCommentBody({ children }: Props) {
         data-clipped={clipped && !expanded ? 'true' : undefined}
       >
         <div ref={contentRef}>
-          <InlineCommentMarkdown>{children}</InlineCommentMarkdown>
+          <InlineCommentMarkdown threadRefs={threadRefs}>{children}</InlineCommentMarkdown>
         </div>
       </div>
       {clipped && (

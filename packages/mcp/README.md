@@ -187,7 +187,7 @@ approval apart.
 
 | Tool | |
 | --- | --- |
-| `list_threads` | Comments and edit proposals with their discussion and anchored text. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter. |
+| `list_threads` | Comments and edit proposals with their discussion and anchored text. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter; `context_blocks` widens each one to the paragraphs around it. |
 | `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet). |
 | `create_proposal` | A suggested replacement. `answers_thread_id` links it to the comment it answers. |
 | `reply_to_thread` | Answer a comment thread or an edit proposal. |
@@ -229,6 +229,29 @@ the whole book and `section: "Chapter Two"` is one chapter.
 
 A name that matches nothing gets the section list back; a name that matches several gets
 their full paths, rather than a silently chosen wrong chapter.
+
+## Reading around a comment
+
+A comment often argues about text it never quotes — *"this contradicts the paragraph
+above"*. `list_threads` shows the anchored block by default, and `context_blocks: 1` (up to
+3) adds that many blocks either side of it:
+
+```
+source before the anchor (1 block):
+  | By noon the dunes had swallowed the horizon.
+current source of the anchored block:
+  | - Water rations: four days
+source after the anchor (1 block):
+  | ## Chapter Three
+```
+
+Context is whole blocks, never a character window — half a sentence of markdown is worse
+than none. Nested blocks are stepped over, so context on a list item is what reads around
+the *whole list* rather than the neighbouring bullet.
+
+It defaults to off because every thread in the list pays for it; raise it once narrowed to
+one thread with `thread_id`. A comment covering several blocks — the viewer writes one when
+a selection spans paragraphs — shows all of them, not just the first.
 
 ## Comments become proposals
 

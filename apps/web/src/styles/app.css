@@ -2439,6 +2439,17 @@ button.primary:disabled {
 .diff-scroll-empty {
   padding: 0.5rem;
 }
+.diff-copy {
+  /* Zero-height sticky row so the button overlays the top-right corner
+   * without displacing diff lines. */
+  position: sticky;
+  top: 0.35rem;
+  height: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding-right: 0.35rem;
+  z-index: 2;
+}
 .diff-line {
   display: grid;
   grid-template-columns: 4ch 4ch 1ch minmax(0, 1fr);
@@ -2831,6 +2842,19 @@ button.primary:disabled {
   flex-shrink: 0;
 }
 
+.ic-card-anchor-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+/* `auto` rather than the row's justify-content: the anchor is optional,
+   and the button still belongs at the right edge without it. */
+.ic-card-copy-id {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .ic-card-badges {
   display: flex;
   flex-wrap: wrap;
@@ -2892,6 +2916,8 @@ button.primary:disabled {
   background: transparent;
   border: 0;
   padding: 0;
+  /* Long quotes wrap inside the row instead of pushing the copy button out. */
+  min-width: 0;
   text-align: left;
   font-size: 0.74rem;
   color: var(--ui-fg-muted);
@@ -3271,6 +3297,16 @@ button.primary:disabled {
   padding: 0 0.25rem;
   border-radius: 3px;
   background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
+}
+/* A thread id mentioned in a comment body, linked to that thread. */
+.ic-row-body .ic-thread-ref {
+  color: var(--ui-accent-strong);
+  text-decoration: none;
+  cursor: pointer;
+}
+.ic-row-body .ic-thread-ref:hover,
+.ic-row-body .ic-thread-ref:focus-visible {
+  text-decoration: underline;
 }
 .ic-row-body blockquote {
   margin: 0.3rem 0;
