@@ -76,9 +76,25 @@ export function findAnchorElement(root: HTMLElement, blockId: string): HTMLEleme
 }
 
 function intersectsRange(range: Range, el: HTMLElement): boolean {
-  // Range.intersectsNode is non-standard but widely supported; fall back
-  // to the boundary-point comparison it is specified against.
+  // Range.intersectsNode is non-standard but widely supported.
   if (typeof range.intersectsNode === 'function') return range.intersectsNode(el);
+
+  // Fallback: the standard overlap test, range.start < el.end AND
+  // range.end > el.start.
+  //
+  // `compareBoundaryPoints(how, other)` reads how as <otherPoint>_TO_
+  // <thisPoint> — the point named FIRST belongs to `other`, the one
+  // named SECOND to the receiver. So END_TO_START compares this.start
+  // against other.end, and START_TO_END compares this.end against
+  // other.start. Reading the constants the other way round inverts the
+  // test into one that is false for every input.
+  //
+  // Strict inequalities, so touching at a boundary doesn't count. That
+  // makes this marginally stricter than intersectsNode, which treats a
+  // range ending at `(el, 0)` as intersecting `el` because it compares
+  // against el's position in its parent rather than its contents.
+  // Either way the caller drops such a block: clamping the range to it
+  // yields an empty fragment.
   const elRange = el.ownerDocument.createRange();
   elRange.selectNodeContents(el);
   const startsBeforeElEnd = range.compareBoundaryPoints(Range.END_TO_START, elRange) < 0;
