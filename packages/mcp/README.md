@@ -76,6 +76,12 @@ comment — which the viewer strips the token from once an invite has been claim
 in a pasted URL still wins, and a token for one document simply resolves to nothing on
 another.
 
+It never travels to a different host. A document's text can talk an agent into fetching a
+URL, so a tokenless reference naming another instance is sent without it; likewise a token
+learned for one instance is not replayed to a second. Set `MARGINALIA_ALLOWED_HOSTS` to
+refuse those requests outright rather than merely sending them empty-handed — the hosted
+endpoint already pins itself that way.
+
 The document viewer has an **MCP** tab that generates all of this for you, with an access
 link for the agent alongside it.
 
