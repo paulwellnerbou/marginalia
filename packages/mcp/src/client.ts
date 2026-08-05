@@ -21,6 +21,13 @@ export class MarginaliaApiError extends Error {
   }
 }
 
+/**
+ * Just the call signature — not `typeof fetch`, whose static extras
+ * (`preconnect` and friends) an injected dispatcher has no reason to
+ * implement.
+ */
+export type FetchLike = (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>;
+
 export interface RequestOptions {
   method?: string;
   body?: unknown;
@@ -34,6 +41,14 @@ export class MarginaliaClient {
   constructor(
     private readonly config: McpConfig,
     private readonly state: McpState,
+    /**
+     * How requests reach Marginalia. Defaults to the global `fetch`, which
+     * is what a standalone stdio server wants. The server's own hosted
+     * `/mcp` endpoint injects its Hono dispatcher instead, so tool calls
+     * are handled in-process rather than looping back out over the
+     * network — no port guessing, no proxy round-trip.
+     */
+    private readonly fetchImpl: FetchLike = fetch,
   ) {}
 
   get displayName(): string {
@@ -148,7 +163,7 @@ export class MarginaliaClient {
 
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await this.fetchImpl(url, {
         method: options.method ?? 'GET',
         headers,
         body,

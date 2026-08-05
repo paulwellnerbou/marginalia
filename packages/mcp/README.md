@@ -16,7 +16,45 @@ edit proposals you can accept with one click — or comment on again.
 
 ## Setup
 
-The server runs on Bun and speaks MCP over stdio.
+There are two ways to run this. Pick the first unless you have a reason not to.
+
+### Over HTTP — nothing to install
+
+Your Marginalia instance serves the tools itself, at `/mcp`. The agent needs a URL and
+nothing else: no checkout of this repo, no Bun, no local process.
+
+```bash
+claude mcp add --transport http marginalia https://marginalia.example.com/mcp
+```
+
+or, in `.mcp.json` / your client's MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "marginalia": {
+      "type": "http",
+      "url": "https://marginalia.example.com/mcp"
+    }
+  }
+}
+```
+
+Codex: `codex mcp add marginalia --url https://marginalia.example.com/mcp`.
+
+Everything the agent writes is signed "Claude". Append `?name=Codex` to the URL to change
+that. The name also derives the identity Marginalia uses to decide who may edit or delete a
+comment, so it stays stable across reconnects — which also means two agents connecting
+under the same name share one identity. Add `&client_id=…` to keep them apart.
+
+The document viewer has an **MCP** tab that generates all of this for you, with an access
+link for the agent alongside it.
+
+### Over stdio — for local development
+
+Runs the server as a local process instead, against any instance you name. Useful when
+you're working on this package, or pointing an agent at a Marginalia that isn't reachable
+from where the agent runs.
 
 ```json
 {
@@ -33,24 +71,13 @@ The server runs on Bun and speaks MCP over stdio.
 }
 ```
 
-That block goes in `.mcp.json` at the root of a project (Claude Code) or
-in `claude_desktop_config.json` (Claude Desktop). Claude Code can also
-register it from the command line:
+`bun` is the command because this package is TypeScript run directly from source — Bun
+executes it without a build step. That is the cost of the stdio route, and the reason the
+HTTP one exists.
 
-```bash
-claude mcp add marginalia --env MARGINALIA_BASE_URL=https://marginalia.example.com -- bun /absolute/path/to/marginalia/packages/mcp/src/bin.ts
-```
+### Environment (stdio only)
 
-Codex uses TOML with the same three fields:
-
-```toml
-[mcp_servers.marginalia]
-command = "bun"
-args = ["/absolute/path/to/marginalia/packages/mcp/src/bin.ts"]
-env = { MARGINALIA_BASE_URL = "https://marginalia.example.com" }
-```
-
-### Environment
+The hosted endpoint takes its settings from the URL; these apply to the stdio server.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -62,6 +89,9 @@ env = { MARGINALIA_BASE_URL = "https://marginalia.example.com" }
 | `MARGINALIA_MCP_STATE_DIR` | `~/.config/marginalia-mcp` | Where the client id and per-document links are cached (mode 0600). |
 | `MARGINALIA_MCP_NO_PERSIST` | *(unset)* | `1` keeps everything in memory. Document links must then be re-supplied each session, and older comments stop being editable. |
 | `MARGINALIA_DOWNLOAD_DIR` | current directory | Default destination for `export_document`. |
+
+`export_document` writes files to the machine running the server, so over HTTP it lands on
+the Marginalia host, not yours. If you want downloads locally, use the stdio route.
 
 ## Access: give the agent its own link
 

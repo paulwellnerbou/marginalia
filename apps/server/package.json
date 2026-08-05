@@ -8,8 +8,10 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@marginalia/mcp": "workspace:*",
     "@marginalia/renderer": "workspace:*",
     "@marginalia/themes": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "hono": "^4.12.18",
     "isomorphic-git": "^1.37.6",
     "mermaid": "^11.14.0",

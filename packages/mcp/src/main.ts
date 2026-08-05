@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { MarginaliaClient } from './client.js';
+import { type FetchLike, MarginaliaClient } from './client.js';
 import { loadMcpConfig, type McpConfig } from './config.js';
 import { McpState } from './state.js';
 import type { ToolContext } from './tools/context.js';
@@ -63,12 +63,20 @@ function instructions(config: McpConfig): string {
   ].join('\n');
 }
 
-export function createMarginaliaMcpServer(config = loadMcpConfig()): {
+export interface McpServerDeps {
+  /** Overrides how tool calls reach Marginalia. See `MarginaliaClient`. */
+  fetchImpl?: FetchLike;
+}
+
+export function createMarginaliaMcpServer(
+  config = loadMcpConfig(),
+  deps: McpServerDeps = {},
+): {
   server: McpServer;
   context: ToolContext;
 } {
   const state = new McpState(config.stateDir, config.clientId);
-  const client = new MarginaliaClient(config, state);
+  const client = new MarginaliaClient(config, state, deps.fetchImpl ?? fetch);
   const context: ToolContext = { client, config, state };
 
   const server = new McpServer(

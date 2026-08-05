@@ -87,6 +87,7 @@ import { HistoryList } from './HistoryList.js';
 import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
 import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
 import { COMMENT_FLASH_MS } from './inline-comments/inlineUtils.js';
+import { McpPanel } from './McpPanel.js';
 import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
@@ -138,9 +139,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     const saved = localStorage.getItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
     return saved === 'true';
   });
-  const [rightTab, setRightTab] = useState<'comments' | 'history' | 'search' | 'activities'>(
-    'activities',
-  );
+  const [rightTab, setRightTab] = useState<
+    'comments' | 'history' | 'search' | 'activities' | 'mcp'
+  >('activities');
   const [historyVersion, setHistoryVersion] = useState(0);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   // Gates the deferred scrolls launched by `scrollToAnchor` (now
@@ -1542,7 +1543,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             <Tabs.Root
               value={rightTab}
               onValueChange={(v) =>
-                setRightTab(v as 'comments' | 'history' | 'search' | 'activities')
+                setRightTab(v as 'comments' | 'history' | 'search' | 'activities' | 'mcp')
               }
               className="right-tabs"
             >
@@ -1560,6 +1561,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     </Flex>
                   </Tabs.Trigger>
                   <Tabs.Trigger value="history">History</Tabs.Trigger>
+                  <Tabs.Trigger value="mcp">MCP</Tabs.Trigger>
                   {hasSearchResults && (
                     <Tabs.Trigger value="search">
                       <Flex align="center" gap="2">
@@ -1607,6 +1609,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onReact={onReact}
                   onScrollToAnchor={scrollToAnchor}
                 />
+              </Tabs.Content>
+              <Tabs.Content value="mcp" className="right-tab-panel">
+                <McpPanel uid={doc.uid} canManageInvites={doc.role === 'admin'} />
               </Tabs.Content>
               <Tabs.Content value="history" className="right-tab-panel">
                 <HistoryList
