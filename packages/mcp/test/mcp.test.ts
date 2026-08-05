@@ -194,6 +194,16 @@ describe('marginalia MCP server', () => {
     }
   });
 
+  test('names the path when an upload source file cannot be read', async () => {
+    const message = await callExpectingError('create_document', {
+      source_path: join(downloadDir, 'no-such-book.md'),
+    });
+    expect(message).toContain('Could not read');
+    expect(message).toContain('no-such-book.md');
+    // A typo'd path is a recoverable user error, not a stack trace.
+    expect(message).not.toContain('Unexpected failure');
+  });
+
   test('reports the identity comments will be signed with', async () => {
     const output = await call('get_identity');
     expect(output).toContain('display name: Claude');

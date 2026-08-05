@@ -80,13 +80,18 @@ const MAX_ANCHOR_QUOTE_LENGTH = 60000;
 
 export async function buildBlockMap(doc: DocumentWire): Promise<DocumentBlockMap> {
   const ranges = await locateBlocks(doc.source, doc.format);
+  // One forward scan for the whole document, then a binary search per
+  // lookup. Counting newlines from the start for each of a book's few
+  // thousand blocks is quadratic in the source length, and every tool
+  // call that loads a document pays it.
+  const lines = lineStarts(doc.source);
   const unresolved: string[] = [];
   const blocks = doc.rendered.blocks.map((block, index) => {
     const range = ranges.get(block.id);
     if (!range) unresolved.push(block.id);
-    return toDocumentBlock(block, index, range, doc.source);
+    return toDocumentBlock(block, index, range, doc.source, lines);
   });
-  return { blocks, sections: buildSections(blocks, doc), unresolved };
+  return { blocks, sections: buildSections(blocks, doc, lines), unresolved };
 }
 
 /**
@@ -103,7 +108,11 @@ export async function buildBlockMap(doc: DocumentWire): Promise<DocumentBlockMap
  * an off-by-one would attach the wrong `#fragment` to every heading,
  * and a missing slug is far cheaper than a wrong one.
  */
-function buildSections(blocks: DocumentBlock[], doc: DocumentWire): DocumentSection[] {
+function buildSections(
+  blocks: DocumentBlock[],
+  doc: DocumentWire,
+  lines: number[],
+): DocumentSection[] {
   const headings = blocks.filter((b) => b.kind === 'heading' && b.start !== null);
   const anchors = doc.rendered.anchors ?? [];
   const slugs = anchors.length === headings.length ? anchors.map((a) => a.id) : null;
@@ -124,7 +133,7 @@ function buildSections(blocks: DocumentBlock[], doc: DocumentWire): DocumentSect
       start,
       end: start + source.length,
       startLine: heading.startLine as number,
-      endLine: lineAt(doc.source, Math.max(start, start + source.length - 1)),
+      endLine: lineAt(lines, Math.max(start, start + source.length - 1)),
       fromBlock: heading.index,
       toBlock: next ? next.index : blocks.length,
     };
@@ -195,6 +204,7 @@ function toDocumentBlock(
   index: number,
   range: BlockSourceRange | undefined,
   source: string,
+  lines: number[],
 ): DocumentBlock {
   return {
     index,
@@ -207,18 +217,30 @@ function toDocumentBlock(
     source: range ? source.slice(range.start, range.end) : null,
     start: range?.start ?? null,
     end: range?.end ?? null,
-    startLine: range ? lineAt(source, range.start) : null,
-    endLine: range ? lineAt(source, Math.max(range.start, range.end - 1)) : null,
+    startLine: range ? lineAt(lines, range.start) : null,
+    endLine: range ? lineAt(lines, Math.max(range.start, range.end - 1)) : null,
   };
 }
 
-/** 1-based line number of a character offset. */
-function lineAt(source: string, offset: number): number {
-  let line = 1;
-  for (let i = 0; i < offset && i < source.length; i++) {
-    if (source[i] === '\n') line++;
+/** Character offset at which each line starts, ascending. Index 0 is line 1. */
+function lineStarts(source: string): number[] {
+  const starts = [0];
+  for (let i = 0; i < source.length; i++) {
+    if (source[i] === '\n') starts.push(i + 1);
   }
-  return line;
+  return starts;
+}
+
+/** 1-based line number of a character offset, by binary search over `lineStarts`. */
+function lineAt(starts: number[], offset: number): number {
+  let low = 0;
+  let high = starts.length - 1;
+  while (low < high) {
+    const mid = (low + high + 1) >> 1;
+    if ((starts[mid] as number) <= offset) low = mid;
+    else high = mid - 1;
+  }
+  return low + 1;
 }
 
 export interface AnchorPayload {

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 /**
@@ -100,6 +100,11 @@ export class McpState {
     try {
       mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
       writeFileSync(this.file, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+      // `mode` on writeFileSync only applies when the file is created, so
+      // a state.json left behind world-readable — by an older build, or a
+      // permissive umask — would keep leaking invite tokens on every
+      // write. Enforce it every time instead of trusting creation.
+      chmodSync(this.file, 0o600);
     } catch (err) {
       // Losing the cache degrades ergonomics, never correctness — the
       // caller can always re-supply the full URL. stderr is safe to

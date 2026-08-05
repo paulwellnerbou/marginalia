@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadMcpConfig } from '../src/config.js';
@@ -46,6 +46,19 @@ describe('McpState', () => {
     new McpState(dir, null);
     const mode = statSync(join(dir, 'state.json')).mode & 0o777;
     expect(mode).toBe(0o600);
+  });
+
+  test('tightens the permissions of a pre-existing world-readable state file', async () => {
+    const file = join(dir, 'state.json');
+    await Bun.write(file, JSON.stringify({ clientId: 'an-existing-client-id', documents: {} }));
+    chmodSync(file, 0o644);
+
+    // `mode` on writeFileSync applies only at creation, so a write into
+    // an existing loose file would otherwise leave the tokens readable.
+    const state = new McpState(dir, null);
+    state.remember('doc1', { baseUrl: 'https://m.example', token: 'tok' });
+
+    expect(statSync(file).mode & 0o777).toBe(0o600);
   });
 
   test('drops entries whose fields are not strings', async () => {

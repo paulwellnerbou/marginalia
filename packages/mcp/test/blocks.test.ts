@@ -223,3 +223,29 @@ describe('buildAnchor', () => {
     expect(anchor.end_block_id).toBe((items[1] as DocumentBlock).id);
   });
 });
+
+describe('line numbers', () => {
+  test('are correct at every block, including the first and last line', async () => {
+    const source = Array.from({ length: 200 }, (_, i) => `Paragraph ${i + 1}.`).join('\n\n');
+    const map = await buildBlockMap(await documentFrom(source));
+    expect(map.blocks).toHaveLength(200);
+
+    // Paragraph n sits on line 2n-1 given the blank line between each.
+    map.blocks.forEach((block, i) => {
+      expect(block.startLine).toBe(2 * i + 1);
+      expect(block.endLine).toBe(2 * i + 1);
+    });
+    // And the reported line really contains the block.
+    const last = map.blocks[map.blocks.length - 1] as DocumentBlock;
+    expect(source.split('\n')[(last.startLine as number) - 1]).toBe('Paragraph 200.');
+  });
+
+  test('handle a block spanning several lines', async () => {
+    const map = await buildBlockMap(
+      await documentFrom('First.\n\nline one\nline two\nline three\n'),
+    );
+    const wrapped = map.blocks[1] as DocumentBlock;
+    expect(wrapped.startLine).toBe(3);
+    expect(wrapped.endLine).toBe(5);
+  });
+});

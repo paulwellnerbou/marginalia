@@ -91,8 +91,18 @@ export function registerDocumentTools(server: McpServer, ctx: ToolContext): void
     },
     async (args) =>
       guard(async () => {
-        const source =
-          args.source ?? (args.source_path ? await readFile(args.source_path, 'utf8') : null);
+        let source = args.source ?? null;
+        if (source === null && args.source_path) {
+          try {
+            source = await readFile(args.source_path, 'utf8');
+          } catch (err) {
+            // A wrong path is a typo, not a crash — say which path and let
+            // the caller correct it, rather than surfacing a stack trace.
+            return failure(
+              `Could not read ${args.source_path}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
         if (!source) return failure('Provide either `source` or `source_path`.');
         const format =
           args.format ??
