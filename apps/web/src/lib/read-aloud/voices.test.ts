@@ -99,6 +99,15 @@ describe('needsBetterVoice', () => {
   test('says nothing when there is no voice at all', () => {
     expect(needsBetterVoice(null)).toBe(false);
   });
+
+  test('judges what is installed, not what is selected', () => {
+    // Reader deliberately picked Anna while Petra Premium is installed:
+    // telling them to install a voice they already have is wrong.
+    const installed = [anna, petraPremium];
+    const selected = pickVoice(installed, 'de-DE', anna.voiceURI);
+    expect(selected).toEqual(anna);
+    expect(needsBetterVoice(rankVoices(installed, 'de-DE')[0] ?? null)).toBe(false);
+  });
 });
 
 describe('resolveDocLang', () => {

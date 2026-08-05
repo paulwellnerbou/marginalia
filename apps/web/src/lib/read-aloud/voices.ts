@@ -130,11 +130,15 @@ export function pickVoice<T extends VoiceLike>(
 }
 
 /**
- * True when the best available voice is a compact OS default, i.e. the
- * reader would get noticeably better results by installing one.
+ * True when `best` is only a compact OS default, i.e. the reader would
+ * get noticeably better results by installing a voice.
+ *
+ * Pass the top of `rankVoices`, not the reader's current selection:
+ * someone who deliberately picked a lesser voice while a Premium one is
+ * installed should not be told to go and install one.
  */
-export function needsBetterVoice(voice: VoiceLike | null): boolean {
-  return voice !== null && voiceTier(voice) <= VOICE_TIER.compact;
+export function needsBetterVoice(best: VoiceLike | null): boolean {
+  return best !== null && voiceTier(best) <= VOICE_TIER.compact;
 }
 
 const LANG_TAG = /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i;

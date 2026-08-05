@@ -242,12 +242,12 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
     const root = rootRef.current;
     if (!root) return;
 
-    const spoken = segmentsRef.current[index]?.text ?? null;
+    const spoken = segmentsRef.current[index] ?? null;
     const segments = collectSegments(root, lang);
     segmentsRef.current = segments;
     setTotal(segments.length);
 
-    const resumeAt = spoken ? segments.findIndex((segment) => segment.text === spoken) : -1;
+    const resumeAt = spoken ? findResumeIndex(segments, spoken) : -1;
     if (resumeAt < 0) {
       stop();
       return;
@@ -279,7 +279,9 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
     rate,
     setRate,
     missingLanguageVoice,
-    showVoiceHint: needsBetterVoice(voice),
+    // Keyed on what is *available*, not what is selected — see
+    // `needsBetterVoice`.
+    showVoiceHint: needsBetterVoice(rankedVoices[0] ?? null),
     error,
     play,
     pause,
@@ -288,6 +290,32 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
     next,
     previous,
   };
+}
+
+/**
+ * Where to continue after the article was re-rendered.
+ *
+ * Block ids are content hashes, so an id match means the block's text
+ * is byte-for-byte what it was; pinning id *and* offset identifies the
+ * exact sentence even when the same wording occurs several times in
+ * the document (repeated table cells, one-word list items), which
+ * matching on text alone would resolve to the first occurrence.
+ * Text-only is the fallback for blocks the renderer left unmarked.
+ */
+export function findResumeIndex(
+  segments: readonly ReadAloudSegment[],
+  previous: ReadAloudSegment,
+): number {
+  if (previous.blockId) {
+    const exact = segments.findIndex(
+      (segment) =>
+        segment.blockId === previous.blockId &&
+        segment.start === previous.start &&
+        segment.text === previous.text,
+    );
+    if (exact >= 0) return exact;
+  }
+  return segments.findIndex((segment) => segment.text === previous.text);
 }
 
 /**
