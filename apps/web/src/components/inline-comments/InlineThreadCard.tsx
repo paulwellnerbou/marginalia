@@ -7,6 +7,7 @@ import { reportError } from '../../lib/log.js';
 import { DiffDialog } from '../DiffDialog.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
 import { InlineComposer, type InlineComposerHandle } from './InlineComposer.js';
+import type { ThreadRefApi } from './threadRefs.js';
 
 /**
  * The threads on the other end of this one's proposal link, resolved by
@@ -25,6 +26,8 @@ interface Props {
   links: ThreadLinks;
   /** Focus another thread; absent when the target has no anchor to scroll to. */
   onFocusLinked: (target: Thread) => void;
+  /** Resolves thread ids mentioned in comment bodies into links. */
+  threadRefs: ThreadRefApi;
   canComment: boolean;
   needsName: boolean;
   focused: boolean;
@@ -86,6 +89,7 @@ export function InlineThreadCard({
   thread,
   links,
   onFocusLinked,
+  threadRefs,
   canComment,
   needsName,
   focused,
@@ -363,6 +367,7 @@ export function InlineThreadCard({
             node={openerNode}
             variant="opener"
             canQuote={canComment}
+            threadRefs={threadRefs}
             onEdit={onEdit}
             onDelete={() => onDeleteThread(thread.id)}
             onQuote={canComment ? handleQuote : undefined}
@@ -375,6 +380,7 @@ export function InlineThreadCard({
               node={reply}
               variant="reply"
               canQuote={canComment}
+              threadRefs={threadRefs}
               onEdit={onEdit}
               onDelete={onDeleteNode}
               onQuote={canComment ? handleQuote : undefined}

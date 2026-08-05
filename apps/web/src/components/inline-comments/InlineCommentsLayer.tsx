@@ -21,6 +21,7 @@ import { InlineCommentsToolbar } from './InlineCommentsToolbar.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 import { COMMENT_FLASH_MS, threadLinks, threadsById } from './inlineUtils.js';
+import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
 interface Props {
   uid: string;
@@ -324,6 +325,11 @@ export function InlineCommentsLayer({
     },
     [scrollToAnchorWithOffset],
   );
+
+  const threadRefs = useMemo<ThreadRefApi>(() => {
+    const index = threadRefIndex(visibleThreads);
+    return { resolve: (id) => index.get(id) ?? null, focus: focusLinked };
+  }, [visibleThreads, focusLinked]);
 
   const cardEls = useRef<Map<string, HTMLDivElement>>(new Map());
   const cardHeights = useRef<Map<string, number>>(new Map());
@@ -806,6 +812,7 @@ export function InlineCommentsLayer({
         thread={item.thread}
         links={threadLinks(item.thread, byId)}
         onFocusLinked={focusLinked}
+        threadRefs={threadRefs}
         canComment={canComment}
         needsName={!displayName}
         focused={focusedId === id}
