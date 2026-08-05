@@ -1,5 +1,5 @@
-import { FileTextIcon, PilcrowIcon } from '@radix-ui/react-icons';
-import { type ReactNode, useMemo, useRef, useState } from 'react';
+import { CheckIcon, ClipboardCopyIcon, FileTextIcon, PilcrowIcon } from '@radix-ui/react-icons';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { Comment, ProposalDiff, Thread } from '../../lib/api.js';
 import { getEditProposalDiff, isProposal, proposalStatus } from '../../lib/api.js';
@@ -119,6 +119,26 @@ export function InlineThreadCard({
   const [resolvedDiff, setResolvedDiff] = useState<ProposalDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [loadingDiff, setLoadingDiff] = useState(false);
+  const [idCopied, setIdCopied] = useState(false);
+  const idCopyTimer = useRef<number | null>(null);
+
+  // Clean up the copy-confirmation timer if the component unmounts while it's pending.
+  useEffect(() => {
+    return () => {
+      if (idCopyTimer.current !== null) window.clearTimeout(idCopyTimer.current);
+    };
+  }, []);
+
+  async function copyThreadId() {
+    try {
+      await navigator.clipboard.writeText(thread.id);
+      setIdCopied(true);
+      if (idCopyTimer.current !== null) window.clearTimeout(idCopyTimer.current);
+      idCopyTimer.current = window.setTimeout(() => setIdCopied(false), 1500);
+    } catch (err) {
+      reportError('InlineThreadCard.copyThreadId', err, { threadId: thread.id });
+    }
+  }
 
   const proposal = isProposal(thread);
   const status = proposal ? proposalStatus(thread) : null;
@@ -337,16 +357,29 @@ export function InlineThreadCard({
             ))}
           </div>
         )}
-        {onJump && (
+        <div className="ic-card-anchor-row">
+          {onJump && (
+            <button
+              type="button"
+              className="ic-card-anchor"
+              title="Jump to this location in the document"
+              onClick={onJump}
+            >
+              <span aria-hidden>↗</span> {anchorQuote ? `"${anchorQuote}"` : 'Jump to anchor'}
+            </button>
+          )}
           <button
             type="button"
-            className="ic-card-anchor"
-            title="Jump to this location in the document"
-            onClick={onJump}
+            className="ic-icon-btn ic-card-copy-id"
+            onClick={() => void copyThreadId()}
+            title={
+              idCopied ? 'Thread id copied!' : 'Copy thread id — what an agent takes as thread_id'
+            }
+            aria-label={idCopied ? 'Thread id copied!' : 'Copy thread id'}
           >
-            <span aria-hidden>↗</span> {anchorQuote ? `"${anchorQuote}"` : 'Jump to anchor'}
+            {idCopied ? <CheckIcon /> : <ClipboardCopyIcon />}
           </button>
-        )}
+        </div>
         <button
           type="button"
           className="ic-btn ic-btn-link ic-card-collapse"
