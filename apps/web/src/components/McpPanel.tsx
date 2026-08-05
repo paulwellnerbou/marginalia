@@ -66,9 +66,15 @@ export function McpPanel({ uid, canManageInvites }: Props) {
     setError(null);
     try {
       const name = agentName.trim() || DEFAULT_AGENT_NAME;
+      // Generic, not named: a named invite seeds its own display name on
+      // the first request from a new client, which would author the
+      // agent's first write under the invite's name instead of the one
+      // in its connection URL. Generic leaves the name entirely to the
+      // agent, so the two can never disagree — the note keeps the link
+      // identifiable in the access panel.
       await createInvite(
         uid,
-        { kind: 'named', display_name: name, role: 'collaborator', note: 'AI agent' },
+        { kind: 'generic', role: 'collaborator', note: `AI agent: ${name}` },
         { clientId: getClientId(), displayName: getDisplayName() },
       );
       await refresh();
@@ -153,7 +159,7 @@ export function McpPanel({ uid, canManageInvites }: Props) {
               {agentInvites.map((invite) => (
                 <Box key={invite.token} mb="2">
                   <Text as="p" size="1" color="gray">
-                    {invite.display_name ?? 'any name'} · {invite.role}
+                    {invite.note ?? invite.display_name ?? 'any name'} · {invite.role}
                   </Text>
                   <Copyable text={`${origin}${invite.url}`} multiline size="1" />
                 </Box>

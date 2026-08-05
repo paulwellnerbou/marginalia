@@ -43,9 +43,19 @@ or, in `.mcp.json` / your client's MCP settings:
 Codex: `codex mcp add marginalia --url https://marginalia.example.com/mcp`.
 
 Everything the agent writes is signed "Claude". Append `?name=Codex` to the URL to change
-that. The name also derives the identity Marginalia uses to decide who may edit or delete a
-comment, so it stays stable across reconnects — which also means two agents connecting
-under the same name share one identity. Add `&client_id=…` to keep them apart.
+that — the server sends it on every request as the same `x-marginalia-client-name` header
+the browser sends, so nothing has to be configured on the agent's side. (The browser reads
+that name from `localStorage`; the MCP server never touches a browser, and takes it from
+the URL instead.)
+
+The name also derives the `x-marginalia-client` id Marginalia uses to decide who may edit
+or delete a comment, so it stays stable across reconnects — which also means two agents
+connecting under the same name share one identity. Add `&client_id=…` to keep them apart.
+
+Give the agent a **generic** invite rather than a named one. A named invite seeds its own
+display name onto a client's first request, which would author the agent's first write
+under the invite's name instead of the one in its URL. The MCP tab mints the right kind
+for you.
 
 The document viewer has an **MCP** tab that generates all of this for you, with an access
 link for the agent alongside it.

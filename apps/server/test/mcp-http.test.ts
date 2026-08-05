@@ -118,6 +118,38 @@ describe('hosted MCP endpoint', () => {
     await second.close();
   });
 
+  test('the name in the URL wins from the very first write', async () => {
+    const admin = await connect('?name=Paul');
+    const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+    const thread = await callText(admin, 'create_comment', {
+      document: adminUrl,
+      anchor_text: 'Alpha.',
+      body: 'a question',
+    });
+    const threadId = /^thread_id: (\S+)/m.exec(thread)?.[1] as string;
+    const invite = await callText(admin, 'create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+    });
+    const link = /(http\S+)/.exec(invite)?.[1] as string;
+
+    // A write as the agent's very first request, with no prior read to
+    // establish it. A named invite would seed its own display name here
+    // and author this reply under it; a generic one must not.
+    const agent = await connect('?name=Codex');
+    await callText(agent, 'reply_to_thread', {
+      document: link,
+      thread_id: threadId,
+      body: 'the only reply',
+    });
+    await agent.close();
+
+    const threads = await callText(admin, 'list_threads', { document: adminUrl });
+    expect(threads).toContain('[reply 1] Codex');
+    await admin.close();
+  });
+
   test('refuses to reach a different Marginalia instance', async () => {
     const client = await connect();
     const res = (await client.callTool({
