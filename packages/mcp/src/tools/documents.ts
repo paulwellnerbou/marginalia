@@ -73,7 +73,7 @@ export function registerDocumentTools(
         'the browser. Returns the admin link (keep private) and instructions for sharing a ' +
         `reviewer link. ${allowLocalFiles ? 'Pass either `source` or `source_path`.' : 'Pass the text as `source`.'}`,
       inputSchema: {
-        source: z.string().describe('The document text.').optional(),
+        source: z.string().optional().describe('The document text.'),
         // Reading a local file is only meaningful when this server runs
         // on the caller's own machine; a hosted one would be reading the
         // Marginalia host's disk out to whoever connected.

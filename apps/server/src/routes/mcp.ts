@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   createMarginaliaMcpServer,
   MAX_CLIENT_ID_LENGTH,
-  MAX_DISPLAY_NAME_LENGTH,
+  normalizeAgentName,
   sanitizeIdentityValue,
 } from '@marginalia/mcp';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
@@ -85,7 +85,7 @@ async function handleMcp(c: Context, app: Hono): Promise<Response> {
 }
 
 function readDisplayName(url: URL): string {
-  return sanitizeIdentityValue(url.searchParams.get('name'), MAX_DISPLAY_NAME_LENGTH) || 'Claude';
+  return normalizeAgentName(url.searchParams.get('name'));
 }
 
 /**

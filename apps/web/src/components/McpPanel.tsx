@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_NAME, normalizeAgentName } from '@marginalia/mcp/identity';
 import {
   Badge,
   Box,
@@ -21,8 +22,6 @@ interface Props {
 }
 
 type Setup = 'cli' | 'json';
-
-const DEFAULT_AGENT_NAME = 'Claude';
 
 /**
  * Marks an invite as belonging to an agent rather than a person. Without
@@ -63,13 +62,16 @@ export function McpPanel({ uid, canManageInvites }: Props) {
 
   const agentInvites = (invites ?? []).filter((i) => i.note === AGENT_NOTE);
 
-  const trimmedName = agentName.trim() || DEFAULT_AGENT_NAME;
-  // Marginalia derives an agent's client id from its name, and decides
-  // who may edit or delete a comment by client id — so two agents
-  // sharing a name are one participant, each able to rewrite the other's
-  // work. People may share a name; agents must not.
+  // Normalize exactly as the server will before comparing or minting.
+  // Marginalia derives an agent's client id from its name and decides
+  // who may edit or delete a comment by client id, so two agents sharing
+  // a name are one participant, each able to rewrite the other's work.
+  // Comparing raw input would let "Cla<CR><LF>ude" look distinct here
+  // and then collapse onto "Claude" server-side. People may share a
+  // name; agents must not.
+  const normalizedName = normalizeAgentName(agentName);
   const nameTaken = agentInvites.some(
-    (i) => (i.display_name ?? '').toLowerCase() === trimmedName.toLowerCase(),
+    (i) => normalizeAgentName(i.display_name).toLowerCase() === normalizedName.toLowerCase(),
   );
 
   async function mint() {
@@ -77,7 +79,7 @@ export function McpPanel({ uid, canManageInvites }: Props) {
     setCreating(true);
     setError(null);
     try {
-      const name = trimmedName;
+      const name = normalizedName;
       // Named, so the agent is @-mentionable before it has ever
       // connected — you can write "@Claude look at this" and let it find
       // the mention on its first visit. The cost is that a named invite
@@ -176,8 +178,8 @@ export function McpPanel({ uid, canManageInvites }: Props) {
           </Flex>
           {nameTaken && (
             <Text as="p" size="1" color="orange" mb="2">
-              “{trimmedName}” already has a link on this document. Agents are identified by name, so
-              two sharing one would count as the same participant and could edit each other’s
+              “{normalizedName}” already has a link on this document. Agents are identified by name,
+              so two sharing one would count as the same participant and could edit each other’s
               comments. Pick a different name.
             </Text>
           )}

@@ -1,5 +1,11 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import {
+  MAX_CLIENT_ID_LENGTH,
+  MAX_DISPLAY_NAME_LENGTH,
+  normalizeAgentName,
+  sanitizeIdentityValue,
+} from './identity.js';
 
 /**
  * Runtime configuration, entirely from the environment — an MCP server
@@ -30,39 +36,10 @@ export interface McpConfig {
 
 const DEFAULT_BASE_URL = 'http://localhost:3434';
 
-/**
- * Clean a value that becomes an identity header.
- *
- * Control characters have to go before the value is used, not after.
- * `x-marginalia-client-name` is percent-encoded on the way out, so a
- * newline survives the trip and lands in the database as a raw CR/LF —
- * harmless to render, but it corrupts the line-oriented text the tools
- * emit and reads as a broken name in the viewer. `x-marginalia-client`
- * is sent verbatim, where `Headers.set` rejects the same characters and
- * takes the whole tool call down with it.
- *
- * Shared so the stdio and hosted entry points cannot drift: the hosted
- * one also hashes the name into a client id, and a value that hashed
- * differently from the one it sent would split an agent's identity.
- */
-// Hoisted so the suppression sits directly above the pattern: biome
-// applies `biome-ignore` to the following line only, and the formatter
-// splits a long call chain between the two.
-// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the intent
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/g;
-
-export function sanitizeIdentityValue(raw: string | null | undefined, maxLength: number): string {
-  return (raw ?? '').replace(CONTROL_CHARACTERS, '').trim().slice(0, maxLength);
-}
-
-export const MAX_DISPLAY_NAME_LENGTH = 80;
-export const MAX_CLIENT_ID_LENGTH = 200;
-
 export function loadMcpConfig(env: Record<string, string | undefined> = process.env): McpConfig {
   return {
     baseUrl: normalizeBaseUrl(env.MARGINALIA_BASE_URL ?? DEFAULT_BASE_URL),
-    displayName:
-      sanitizeIdentityValue(env.MARGINALIA_DISPLAY_NAME, MAX_DISPLAY_NAME_LENGTH) || 'Claude',
+    displayName: normalizeAgentName(env.MARGINALIA_DISPLAY_NAME),
     clientId: nonEmpty(sanitizeIdentityValue(env.MARGINALIA_CLIENT_ID, MAX_CLIENT_ID_LENGTH)),
     allowedHosts: (env.MARGINALIA_ALLOWED_HOSTS ?? '')
       .split(',')
