@@ -895,6 +895,21 @@ describe('marginalia MCP server', () => {
     expect(three).not.toContain('Ibrahim left alone');
   });
 
+  test('takes a section replacement padded with blank lines at either end', async () => {
+    const { adminUrl } = await seedBook();
+    await call('update_document', {
+      document: adminUrl,
+      section: 'Chapter Two',
+      source: '\n\n## Chapter Two\n\nThe dunes closed behind them.\n\n',
+    });
+    const whole = await call('get_document', { document: adminUrl });
+    // Padding is the caller's, not the document's: the blank lines between
+    // sections sit outside the replaced range, so keeping either end would
+    // double a separator rather than preserve anything.
+    expect(whole).toContain('## Chapter Two\n\nThe dunes closed behind them.\n\n## Chapter Three');
+    expect(whole).not.toContain('\n\n\n');
+  });
+
   test('refuses a section replacement that would dissolve the heading', async () => {
     const { adminUrl } = await seedBook();
     const message = await callExpectingError('update_document', {
@@ -915,7 +930,9 @@ describe('marginalia MCP server', () => {
       name: 'The Salt Road (adoc)',
       format: 'asciidoc',
     });
-    const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(output)?.[1] as string;
+    const matched = /^admin link[^:]*: (\S+)$/m.exec(output)?.[1];
+    expect(matched).toBeTruthy();
+    const adminUrl = matched as string;
 
     const replaced = await call('update_document', {
       document: adminUrl,

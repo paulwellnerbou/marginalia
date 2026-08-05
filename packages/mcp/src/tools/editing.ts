@@ -123,11 +123,15 @@ export function registerEditingTools(server: McpServer, ctx: ToolContext): void 
       guard(async () => {
         const { ref, doc, blocks } = await loadDocument(ctx, args.document);
         const section = args.section ? resolveSection(blocks, args.section) : null;
-        // `section.source` was trimmed of trailing whitespace when the
-        // section was cut, so the blank lines separating it from the next
-        // heading sit outside the replaced range. Trim the replacement the
-        // same way and a chapter read back verbatim splices in unchanged,
-        // however many newlines the caller left on the end.
+        // The replaced range runs heading to heading with the blank lines
+        // between sections outside it on both sides: `section.source` was
+        // cut with its trailing whitespace stripped, and what precedes
+        // `section.start` already ends with the separator. So whitespace
+        // the caller left on either end is theirs, not the document's —
+        // keeping it would double the separator into a growing gap, and
+        // leading blank lines would additionally push the heading off line
+        // one and trip the check below with a message describing a problem
+        // the caller does not have.
         const replacement = section ? args.source.replace(/^\s+|\s+$/gu, '') : args.source;
 
         if (section) {
