@@ -90,6 +90,12 @@ button produces. The `#comment-<id>` fragment selects that thread — the id may
 reply, which resolves to the thread containing it. `list_threads` also takes any message's
 id as `thread_id`.
 
+The same works in reverse: every thread, comment, or proposal a tool reports comes with a
+`url:` line carrying that `#comment-<id>` link, so the agent can point you at what it did
+with a clickable URL rather than a bare id. These links are deliberately token-free —
+opening `/d/<uid>/<token>` claims that invite, so a link carrying the agent's token would
+hand the agent's identity to whoever clicks it.
+
 ### Over stdio — for local development
 
 Runs the server as a local process instead, against any instance you name. Useful when

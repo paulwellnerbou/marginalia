@@ -144,3 +144,19 @@ export function assertHostAllowed(baseUrl: string, allowedHosts: string[]): void
 export function documentUrl(ref: DocumentRef): string {
   return ref.token ? `${ref.baseUrl}/d/${ref.uid}/${ref.token}` : `${ref.baseUrl}/d/${ref.uid}`;
 }
+
+/** The viewer link without the invite token — safe to hand to people. */
+export function viewerUrl(ref: DocumentRef): string {
+  return `${ref.baseUrl}/d/${ref.uid}`;
+}
+
+/**
+ * Deep link to one message in a thread — the same URL the viewer's own
+ * "copy link" button produces. Deliberately token-free: opening
+ * /d/<uid>/<token> claims that invite, so a link carrying this agent's
+ * token would hand the agent's identity and access to whoever clicks it.
+ * Readers open the thread with whatever access they already have.
+ */
+export function commentUrl(ref: DocumentRef, commentId: string): string {
+  return `${viewerUrl(ref)}#comment-${commentId}`;
+}

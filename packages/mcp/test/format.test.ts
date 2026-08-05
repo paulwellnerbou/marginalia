@@ -83,6 +83,7 @@ const options = (map: DocumentBlockMap | null) => ({
   includeAnchorSource: true,
   contextBlocks: 0,
   blockMap: map,
+  ref: { baseUrl: 'https://marginalia.test', uid: 'test-uid', token: 'secret-invite-token-1' },
 });
 
 describe('threadDetail anchors', () => {
@@ -154,5 +155,15 @@ describe('threadDetail anchors', () => {
     const out = threadDetail(threadOn('ffffffffffffffff', null), 1, 1, options(null));
     expect(out).toContain('section Guide');
     expect(out).not.toContain('end_block_id=');
+  });
+});
+
+describe('threadDetail links', () => {
+  test('carries a token-free deep link to the thread', async () => {
+    const out = threadDetail(threadOn(null, null), 1, 1, options(null));
+    // Token-free on purpose: opening /d/<uid>/<token> claims that invite,
+    // so a link with the agent's token would hijack whoever clicks it.
+    expect(out).toContain('url: https://marginalia.test/d/test-uid#comment-thread-1');
+    expect(out).not.toContain('secret-invite-token-1');
   });
 });

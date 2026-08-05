@@ -8,6 +8,7 @@ import {
   resolveSection,
   sectionContains,
 } from '../blocks.js';
+import { commentUrl } from '../document-ref.js';
 import { lineDiff, threadDetail, threadList, threadStatus } from '../format.js';
 import {
   blockDriftNote,
@@ -209,6 +210,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
             includeAnchorSource: args.include_anchor_source !== false,
             contextBlocks: args.context_blocks ?? 0,
             blockMap: loaded.blocks,
+            ref: loaded.ref,
           }),
         );
       }),
@@ -256,6 +258,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         return text(
           `Commented as "${ctx.client.displayName}" on block ${block.id} (${block.kind}, lines ${block.startLine}-${block.endLine}).`,
           `thread_id: ${thread.id}`,
+          `url: ${commentUrl(loaded.ref, thread.id)}`,
           `highlighted: ${JSON.stringify(anchor.quote.slice(0, 200))}`,
         );
       }),
@@ -382,6 +385,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
             ? 'Created a whole-document edit proposal.'
             : `Created an edit proposal on block ${block.id}${endBlock ? `…${endBlock.id}` : ''} (lines ${block.startLine}-${(endBlock ?? block).endLine}).`,
           `thread_id: ${thread.id}  status: open`,
+          `url: ${commentUrl(loaded.ref, thread.id)}`,
           notice,
           `diff:\n${lineDiff(before, args.proposed_text)}`,
         );
@@ -415,6 +419,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         return text(
           `Replied as "${ctx.client.displayName}" in thread ${args.thread_id} (now ${threadStatus(res.thread)}).`,
           `comment_id: ${res.created_reply_id ?? 'unknown'}`,
+          `url: ${commentUrl(ref, res.created_reply_id ?? args.thread_id)}`,
         );
       }),
   );
@@ -456,6 +461,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         );
         return text(
           `Thread ${args.thread_id}: ${args.action} → now ${threadStatus(res.thread)}.`,
+          `url: ${commentUrl(ref, args.thread_id)}`,
           res.resolved_answered_thread_id
             ? `Also resolved comment thread ${res.resolved_answered_thread_id}, which this proposal answered.`
             : null,
@@ -489,6 +495,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         );
         return text(
           `proposal ${args.thread_id} — applies cleanly: ${diff.mergeable ?? 'not evaluated'}`,
+          `url: ${commentUrl(ref, args.thread_id)}`,
           `diff:\n${lineDiff(diff.before, diff.after)}`,
         );
       }),
@@ -523,7 +530,10 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           method: 'PATCH',
           body: { body: args.body },
         });
-        return text(`Updated comment ${args.comment_id}.`);
+        return text(
+          `Updated comment ${args.comment_id}.`,
+          `url: ${commentUrl(ref, args.comment_id)}`,
+        );
       }),
   );
 
@@ -630,6 +640,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
             includeAnchorSource: true,
             contextBlocks: 0,
             blockMap: loaded.blocks,
+            ref: loaded.ref,
           }),
         );
       }),

@@ -8,7 +8,7 @@ import {
   type DocumentSection,
 } from './blocks.js';
 import type { DocumentRef } from './document-ref.js';
-import { documentUrl } from './document-ref.js';
+import { commentUrl, documentUrl, viewerUrl } from './document-ref.js';
 
 /**
  * Human-and-model-readable rendering of the API's payloads.
@@ -33,10 +33,20 @@ export function timestamp(ms: number | null | undefined): string {
 }
 
 export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: DocumentBlockMap): string {
+  const access = documentUrl(ref);
+  const share = viewerUrl(ref);
   const lines = [
     `document: ${doc.name ?? '(untitled)'}`,
     `uid: ${doc.uid}`,
-    `url: ${documentUrl(ref)}`,
+    // When the ref carries a token the two links differ, and the
+    // difference matters: opening the tokened one claims this agent's
+    // invite for whoever clicks it.
+    ...(access === share
+      ? [`url: ${share}`]
+      : [
+          `url: ${access} (carries your invite token — pass to tools, never show to people)`,
+          `share url: ${share} (token-free — use this when telling a person where something is)`,
+        ]),
     `format: ${doc.format}`,
     `your role: ${doc.role}${roleHint(doc.role)}`,
     `password protected: ${doc.password_protected ? 'yes' : 'no'}`,
@@ -166,6 +176,8 @@ export interface ThreadListOptions {
   /** Whole blocks of surrounding source to add either side of it. */
   contextBlocks: number;
   blockMap: DocumentBlockMap | null;
+  /** Where the threads live, so each can carry its shareable link. */
+  ref: DocumentRef;
 }
 
 export function threadList(threads: ThreadWire[], options: ThreadListOptions): string {
@@ -186,6 +198,7 @@ export function threadDetail(
   const lines: string[] = [];
   lines.push(`=== ${kind} ${position}/${total} — ${status} ===`);
   lines.push(`thread_id: ${thread.id}`);
+  lines.push(`url: ${commentUrl(options.ref, thread.id)}`);
 
   const anchor = thread.anchor;
   const findBlock = (id: string | null): DocumentBlock | null =>
