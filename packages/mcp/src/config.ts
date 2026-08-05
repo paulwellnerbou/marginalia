@@ -45,12 +45,14 @@ const DEFAULT_BASE_URL = 'http://localhost:3434';
  * one also hashes the name into a client id, and a value that hashed
  * differently from the one it sent would split an agent's identity.
  */
+// Hoisted so the suppression sits directly above the pattern: biome
+// applies `biome-ignore` to the following line only, and the formatter
+// splits a long call chain between the two.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching control characters is the intent
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/g;
+
 export function sanitizeIdentityValue(raw: string | null | undefined, maxLength: number): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the intent
-  return (raw ?? '')
-    .replace(/[\u0000-\u001f\u007f]/g, '')
-    .trim()
-    .slice(0, maxLength);
+  return (raw ?? '').replace(CONTROL_CHARACTERS, '').trim().slice(0, maxLength);
 }
 
 export const MAX_DISPLAY_NAME_LENGTH = 80;
