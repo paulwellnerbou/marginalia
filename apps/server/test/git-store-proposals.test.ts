@@ -296,6 +296,43 @@ Para C baseline.
     expect(await store.readProposalTip(doc, 'never')).toBeNull();
   });
 
+  test('proposalMergeStatus and accept survive criss-cross accept histories', async () => {
+    // Sequentially accepted sibling proposals build a merge-commit web in
+    // which iso-git's findMergeBase can return several merge bases (it
+    // lacks the recursive strategy and doesn't fully reduce candidates).
+    // git.merge then throws MergeNotSupportedError even though native git
+    // merges the same refs cleanly. Topology copied from a real repo:
+    // five proposals branched at A, accepted one by one (FF, then 3-way
+    // merges), with X branched from the intermediate merge commit M2.
+    const paras = [1, 2, 3, 4, 5, 6].map((n) => `Para ${n} baseline.`);
+    const base = `# Title\n\n${paras.join('\n\n')}\n`;
+    await store.write(doc, base, author, 'update');
+    const baseOid = await mainOid();
+    const edit = (n: number) => base.replace(`Para ${n} baseline.`, `Para ${n} edited.`);
+
+    for (const n of [1, 2, 3, 4, 5]) {
+      await store.createProposalBranch(doc, baseOid, `p${n}`, edit(n), author);
+    }
+    expect((await store.mergeProposalBranch(doc, 'p1', author)).ok).toBe(true);
+    expect((await store.mergeProposalBranch(doc, 'p2', author)).ok).toBe(true);
+
+    const m2Oid = await mainOid();
+    const xProposed = store.read(doc).replace('Para 6 baseline.', 'Para 6 from x.');
+    await store.createProposalBranch(doc, m2Oid, 'x', xProposed, author);
+
+    expect((await store.mergeProposalBranch(doc, 'p3', author)).ok).toBe(true);
+    expect((await store.mergeProposalBranch(doc, 'p4', author)).ok).toBe(true);
+    expect((await store.mergeProposalBranch(doc, 'p5', author)).ok).toBe(true);
+
+    expect(await store.proposalMergeStatus(doc, 'x')).toBe('clean');
+
+    const accepted = await store.mergeProposalBranch(doc, 'x', author);
+    expect(accepted.ok).toBe(true);
+    const after = store.read(doc);
+    for (const n of [1, 2, 3, 4, 5]) expect(after).toContain(`Para ${n} edited.`);
+    expect(after).toContain('Para 6 from x.');
+  });
+
   test('mergeProposalBranch updates the working tree on a non-FF merge', async () => {
     // Regression: iso-git's `merge` advances the ref but leaves the
     // working tree pointing at the old tree. We force a checkout after
