@@ -187,20 +187,31 @@
 
 /* --- Ornamental horizontal rule --------------------------------- */
 
+/* Tapered rules meeting a diamond cluster, drawn as a mask over
+ * `currentColor` rather than a tinted background image — the flourish
+ * then follows the theme's muted ink in light, dark, and print
+ * without shipping three recoloured copies of the artwork. Inlined as
+ * a data URI because the PDF exporter feeds the stylesheet to
+ * `page.setContent()`, which has no base URL to resolve a file
+ * reference against. */
 .marginalia hr {
+  --md-hr-ornament: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 720 72'%3E%3Cg fill='black'%3E%3Cpolygon points='30,36 300,32.8 300,39.2'/%3E%3Cpolygon points='690,36 420,32.8 420,39.2'/%3E%3Cpolygon points='322,36 328,30 334,36 328,42'/%3E%3Cpolygon points='398,36 392,30 386,36 392,42'/%3E%3Cpolygon points='360,20 374,36 360,52 346,36'/%3E%3C/g%3E%3C/svg%3E");
+
   border: 0;
-  text-align: center;
-  margin: 2.8em 0;
-  height: 1em;
-  overflow: visible;
-}
-.marginalia hr::before {
-  content: "§";
-  font-family: var(--md-font-heading);
-  font-style: italic;
+  /* Tighter than the surrounding block rhythm because the artwork
+   * reserves ~28% of its own height as padding above and below. */
+  margin: 2em auto;
+  /* A scene break, not a banner: hold it to a third of the measure so
+   * it stays quieter than the text it separates, and fall back to the
+   * column width on narrow screens. */
+  width: min(100%, 16em);
+  /* Matches the artwork's 720×72 viewBox so it scales without
+   * letterboxing. */
+  aspect-ratio: 10 / 1;
   color: var(--md-color-fg-muted);
-  font-size: 1.5em;
-  letter-spacing: 0.4em;
+  background-color: currentColor;
+  -webkit-mask: var(--md-hr-ornament) center / contain no-repeat;
+  mask: var(--md-hr-ornament) center / contain no-repeat;
 }
 
 /* --- Tables ------------------------------------------------------- */

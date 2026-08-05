@@ -97,7 +97,12 @@ CREATE TABLE IF NOT EXISTS comments_edit_proposals (
   branch_ref             TEXT,
   base_oid               TEXT,
   base_block_start       INTEGER,
-  base_block_end         INTEGER
+  base_block_end         INTEGER,
+  -- Root comment thread this proposal was written to answer, if any.
+  -- Lives on the proposal (not the comment) because one comment can
+  -- accumulate several proposals — a rejected first attempt and its
+  -- replacement both point back at the same request.
+  answers_comment_id     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS comment_mentions (
@@ -391,6 +396,7 @@ export interface EditProposalRow {
   base_oid: string | null;
   base_block_start: number | null;
   base_block_end: number | null;
+  answers_comment_id: string | null;
 }
 
 export interface EditProposalThreadRow extends CommentRow {
@@ -402,6 +408,7 @@ export interface EditProposalThreadRow extends CommentRow {
   base_block_start: number | null;
   base_block_end: number | null;
   is_whole_document: number;
+  answers_comment_id: string | null;
   decided_at: number | null;
   decided_by_name: string | null;
 }
@@ -431,6 +438,7 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments_edit_proposals', 'base_block_start', 'INTEGER');
   ensureColumn(db, 'comments_edit_proposals', 'base_block_end', 'INTEGER');
   ensureColumn(db, 'comments_edit_proposals', 'is_whole_document', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'comments_edit_proposals', 'answers_comment_id', 'TEXT');
   ensureColumn(db, 'sessions', 'persistent', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'sessions', 'invite_display_name', 'TEXT');
   ensureColumn(db, 'sessions', 'invite_role', 'TEXT');

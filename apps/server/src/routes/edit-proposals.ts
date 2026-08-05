@@ -23,6 +23,7 @@ const PROPOSAL_SELECT = `
     cep.base_block_start,
     cep.base_block_end,
     cep.is_whole_document,
+    cep.answers_comment_id,
     c.resolved_at AS decided_at,
     c.resolved_by_name AS decided_by_name
   FROM comments c
@@ -234,6 +235,7 @@ export function toWire(row: EditProposalThreadRow): Record<string, unknown> {
     decided_at: row.decided_at,
     decided_by_name: row.decided_by_name,
     whole_document: row.is_whole_document === 1,
+    answers_thread_id: row.answers_comment_id,
   };
 }
 

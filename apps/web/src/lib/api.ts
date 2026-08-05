@@ -900,6 +900,12 @@ export interface Comment {
 
 export interface ThreadProposalData {
   whole_document: boolean;
+  /**
+   * Root comment thread this proposal was written to answer, or null if
+   * it stands on its own. The reverse direction is
+   * `Thread.answered_by_thread_ids`.
+   */
+  answers_thread_id: string | null;
 }
 
 export interface Thread {
@@ -911,6 +917,11 @@ export interface Thread {
   capabilities: ThreadCapabilities;
   /** Ordered oldest-first. comments[0] is the opener; remaining are replies. */
   comments: [Comment, ...Comment[]];
+  /**
+   * Edit proposals written to answer this thread, oldest first. Always
+   * empty for a proposal thread — a proposal is not itself a request.
+   */
+  answered_by_thread_ids: string[];
   proposal: ThreadProposalData | null;
 }
 

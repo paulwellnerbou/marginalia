@@ -12,6 +12,7 @@ See [REQUIREMENTS.md](REQUIREMENTS.md) and [PLAN.md](PLAN.md).
 
 - `packages/renderer` — core library: Markdown → HTML + metadata
 - `packages/cli` — `marginalia` CLI
+- `packages/mcp` — MCP server so AI agents can review documents
 - `packages/element` — `<marginalia-doc>` web component (Shadow DOM)
 - `packages/react` — thin React wrapper
 - `packages/themes` — CSS themes
@@ -31,6 +32,38 @@ bun run dev
 bun run build
 bun run start
 ```
+
+## AI review (MCP)
+
+[`packages/mcp`](packages/mcp/README.md) is an MCP server that gives an
+agent the same review surface a human reviewer has: it can read a
+document, read the comments and edit proposals on it, reply to them,
+leave its own comments, suggest edits, and download the document in any
+supported format.
+
+The loop it exists for: read a draft in the viewer, comment where
+something is off, then hand the agent the document URL and ask it to
+work through your comments and turn them into edit proposals you can
+accept or push back on.
+
+```json
+{
+  "mcpServers": {
+    "marginalia": {
+      "command": "bun",
+      "args": ["/absolute/path/to/marginalia/packages/mcp/src/bin.ts"],
+      "env": { "MARGINALIA_BASE_URL": "https://marginalia.example.com" }
+    }
+  }
+}
+```
+
+Access works the same way it does for people — through an invite link.
+Mint the agent its own `collaborator` link (suggest everything, decide
+nothing) or `editor` link (also accept proposals and edit directly)
+rather than sharing your admin link. See the
+[package README](packages/mcp/README.md) for the full tool list and
+configuration.
 
 ## Document assets
 
