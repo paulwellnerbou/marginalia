@@ -216,6 +216,7 @@ export function DiffView({ before, after, contextLines = null, active = true }: 
           <div className="diff-copy">
             <Tooltip content={copied ? 'Copied' : 'Copy diff'}>
               <IconButton
+                type="button"
                 size="1"
                 variant="soft"
                 color={copied ? 'green' : 'gray'}

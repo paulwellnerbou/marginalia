@@ -1,8 +1,21 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
-const port = Number(process.env.PORT ?? 5173);
-const serverPort = Number(process.env.MARGINALIA_SERVER_PORT ?? 3434);
+/** A launcher may set these to anything; a bad value should not start a
+ *  server on port NaN, so fall back to the default instead. */
+function envPort(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+    console.warn(`[vite] ignoring ${name}=${raw}; using ${fallback}`);
+    return fallback;
+  }
+  return parsed;
+}
+
+const port = envPort('PORT', 5173);
+const serverPort = envPort('MARGINALIA_SERVER_PORT', 3434);
 
 export default defineConfig({
   plugins: [react()],

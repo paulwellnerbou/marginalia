@@ -10,5 +10,9 @@ export function formatUnifiedDiff(lines: DiffLine[]): string {
   const body = lines.map(
     (line) => (line.op === 'add' ? '+' : line.op === 'remove' ? '-' : ' ') + line.text,
   );
-  return ['--- before', '+++ after', `@@ -1,${oldCount} +1,${newCount} @@`, ...body].join('\n');
+  // A side with no lines starts at 0, not 1 — what `diff -u` emits, and
+  // what patch(1) expects.
+  const range = (count: number) => `${count === 0 ? 0 : 1},${count}`;
+  const hunk = `@@ -${range(oldCount)} +${range(newCount)} @@`;
+  return ['--- before', '+++ after', hunk, ...body].join('\n');
 }

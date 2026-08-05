@@ -16,6 +16,20 @@ test('formats a mixed diff as a single full-context hunk', () => {
   );
 });
 
+test('starts a side with no lines at 0, as diff -u does', () => {
+  const added = formatUnifiedDiff([
+    { op: 'add', text: 'alpha' },
+    { op: 'add', text: 'beta' },
+  ]);
+  expect(added).toContain('@@ -0,0 +1,2 @@');
+
+  const removed = formatUnifiedDiff([
+    { op: 'remove', text: 'alpha' },
+    { op: 'remove', text: 'beta' },
+  ]);
+  expect(removed).toContain('@@ -1,2 +0,0 @@');
+});
+
 test('counts pure insertions only on the new side', () => {
   const text = formatUnifiedDiff([
     { op: 'equal', text: 'one' },
