@@ -1,4 +1,4 @@
-import { useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useId, useLayoutEffect, useRef, useState } from 'react';
 import { InlineCommentMarkdown } from './InlineCommentMarkdown.js';
 
 interface Props {
@@ -31,26 +31,26 @@ export function CollapsibleCommentBody({ children }: Props) {
   const contentRef = useRef<HTMLDivElement>(null);
   const clipId = useId();
 
-  const measure = useCallback(() => {
+  useLayoutEffect(() => {
+    // Only the collapsed box knows the clamp height, and an open body
+    // keeps its toggle regardless — so nothing here has to run until it
+    // collapses again, at which point this effect re-runs and re-measures.
+    if (expanded) return;
     const clip = clipRef.current;
     const content = contentRef.current;
-    // Only the collapsed box knows the clamp height; while expanded the
-    // toggle has to stay put anyway, so the stale reading is the right one.
-    if (!clip || !content || expanded) return;
-    setClipped(isClipped(content.scrollHeight, clip.clientHeight));
-  }, [expanded]);
+    if (!clip || !content) return;
 
-  useLayoutEffect(() => {
+    const measure = () => setClipped(isClipped(content.scrollHeight, clip.clientHeight));
     measure();
-    const content = contentRef.current;
-    if (!content || typeof ResizeObserver === 'undefined') return;
+
+    if (typeof ResizeObserver === 'undefined') return;
     // Everything that changes the body's height after the first paint —
     // an edit, the pane resizing, a markdown image loading, a font
     // swapping in — arrives as a resize of the content box.
     const observer = new ResizeObserver(measure);
     observer.observe(content);
     return () => observer.disconnect();
-  }, [measure]);
+  }, [expanded]);
 
   return (
     <div className="ic-row-body">

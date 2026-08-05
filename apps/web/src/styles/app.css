@@ -3165,8 +3165,11 @@ button.primary:disabled {
    rather than a background gradient: the card's own background is a
    color-mix() that a gradient would have to duplicate to blend into.
    The clamp lands on a line boundary, so the fade only has to cover the
-   bottom of the last line — the text above it stays fully legible. */
+   bottom of the last line — the text above it stays fully legible.
+   Prefixed as well: Chromium understood `1lh` (109) eleven releases
+   before it understood an unprefixed mask (120). */
 .ic-body-clip[data-clipped="true"] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 0.6em), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 0.6em), transparent);
 }
 
@@ -3182,6 +3185,7 @@ button.primary:disabled {
 @media print {
   .ic-body-clip {
     max-height: none;
+    -webkit-mask-image: none;
     mask-image: none;
   }
   .ic-body-toggle {

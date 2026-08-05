@@ -136,10 +136,13 @@ describe('emoji shortcode autocomplete', () => {
 });
 
 describe('comment body clipping', () => {
-  const CLAMP = 59.2; // three lines at 0.85rem × 1.45
+  // Illustrative pixels, not the real metrics — the decision is pure
+  // arithmetic on whatever the browser measured.
+  const LINE = 20;
+  const CLAMP = 3 * LINE;
 
   test('a body that fits its clamp offers no toggle', () => {
-    expect(isClipped(19.7, CLAMP)).toBe(false);
+    expect(isClipped(LINE, CLAMP)).toBe(false);
     expect(isClipped(CLAMP, CLAMP)).toBe(false);
   });
 
@@ -148,7 +151,7 @@ describe('comment body clipping', () => {
   });
 
   test('a body taller than its clamp is clipped', () => {
-    expect(isClipped(CLAMP + 19.7, CLAMP)).toBe(true);
+    expect(isClipped(CLAMP + LINE, CLAMP)).toBe(true);
   });
 
   test('an unmeasurable clamp reports nothing clipped', () => {
