@@ -10,9 +10,9 @@ import { useEffect, useRef, useState } from 'react';
 import type { Comment } from '../../lib/api.js';
 import { formatTimestamp, formatTimestampLong } from '../../lib/format-time.js';
 import { reportError } from '../../lib/log.js';
+import { CollapsibleCommentBody } from './CollapsibleCommentBody.js';
 import { EmojiReactionPicker } from './EmojiReactionPicker.js';
 import { InlineAvatar } from './InlineAvatar.js';
-import { InlineCommentMarkdown } from './InlineCommentMarkdown.js';
 import type { ThreadRefApi } from './threadRefs.js';
 
 interface Props {
@@ -239,9 +239,7 @@ export function InlineCommentRow({
             </div>
           </div>
         ) : (
-          <div className="ic-row-body">
-            <InlineCommentMarkdown threadRefs={threadRefs}>{node.body}</InlineCommentMarkdown>
-          </div>
+          <CollapsibleCommentBody threadRefs={threadRefs}>{node.body}</CollapsibleCommentBody>
         )}
 
         {!editing && node.reactions.length > 0 && (

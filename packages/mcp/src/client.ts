@@ -73,10 +73,23 @@ export class MarginaliaClient {
     const remembered = this.state.recall(parsed.uid);
     const baseUrl = parsed.baseUrl ?? remembered?.baseUrl ?? this.config.baseUrl;
     assertHostAllowed(baseUrl, this.config.allowedHosts);
+    // A token is a capability for one instance, so a token we hold is
+    // only replayed when the reference actually resolves to the instance
+    // it belongs to. Without this, a tokenless absolute URL naming any
+    // other host — which a document's own text could talk an agent into
+    // fetching — would carry the agent's invite straight to it.
+    const rememberedToken = remembered?.baseUrl === baseUrl ? (remembered.token ?? null) : null;
+    const connectionToken = baseUrl === this.config.baseUrl ? this.config.defaultToken : null;
+
     const ref: DocumentRef = {
       baseUrl,
       uid: parsed.uid,
-      token: parsed.token ?? remembered?.token ?? null,
+      // An explicit token always wins, then one seen earlier for this
+      // same instance, then the connection's own. The last is what lets
+      // a tokenless link — a copied comment link, say — still arrive
+      // with the agent's access.
+      token: parsed.token ?? rememberedToken ?? connectionToken,
+      commentId: parsed.commentId,
     };
     this.state.remember(ref.uid, { baseUrl: ref.baseUrl, token: ref.token });
     return ref;

@@ -61,7 +61,14 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
             'Default "open". "resolved" covers resolved comments and accepted/rejected proposals.',
           ),
         kind: z.enum(['all', 'comments', 'proposals']).optional().describe('Default "all".'),
-        thread_id: z.string().optional().describe('Show just this one thread, in full.'),
+        thread_id: z
+          .string()
+          .optional()
+          .describe(
+            'Show just this one thread, in full. Accepts the id of any message in it, not only ' +
+              'the opener — a `#comment-<id>` link from the viewer often names a reply. A ' +
+              'document URL carrying such a fragment selects the thread on its own.',
+          ),
         section: z
           .string()
           .optional()
@@ -107,7 +114,17 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         const section = args.section ? resolveSection(loaded.blocks, args.section) : null;
 
         let threads = listed.threads;
-        if (args.thread_id) threads = threads.filter((t) => t.id === args.thread_id);
+        // A `#comment-<id>` fragment in the document URL means "this
+        // thread", so honour it when no id was passed outright. Match on
+        // any message in the thread: the viewer's copy-link button sits
+        // on replies too, and matching only openers made those links
+        // silently return nothing.
+        const targetId = args.thread_id ?? loaded.ref.commentId ?? null;
+        if (targetId) {
+          threads = threads.filter(
+            (t) => t.id === targetId || t.comments.some((c) => c.id === targetId),
+          );
+        }
         if (section) {
           const inSection = new Set(
             loaded.blocks.blocks.filter((b) => sectionContains(section, b)).map((b) => b.id),
@@ -157,6 +174,9 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         const header = [
           `document ${loaded.doc.uid} — ${counts}`,
           section ? `section: ${section.path.join(' › ')}` : null,
+          !args.thread_id && loaded.ref.commentId
+            ? `filtered to the thread named by the link's #comment-${loaded.ref.commentId}`
+            : null,
           `showing ${threads.length} of ${total} matching thread(s)`,
           `you are "${ctx.client.displayName}" with role "${loaded.doc.role}"`,
           listed.pending_mentions.length > 0

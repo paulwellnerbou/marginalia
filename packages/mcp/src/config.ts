@@ -28,6 +28,14 @@ export interface McpConfig {
   allowedHosts: string[];
   /** Password for password-protected documents, so it never has to be typed into a chat. */
   password: string | null;
+  /**
+   * Invite token applied to a document reference that carries none of
+   * its own — so a bare uid, or a link the viewer stripped the token
+   * from, still arrives with the agent's access. A token names one
+   * document, so using it on another simply resolves to nothing and
+   * the caller falls back to reader; it cannot leak sideways.
+   */
+  defaultToken: string | null;
   /** Where the client id + per-document invite tokens are cached. Null disables persistence. */
   stateDir: string | null;
   /** Default destination for `export_document`. */
@@ -46,6 +54,9 @@ export function loadMcpConfig(env: Record<string, string | undefined> = process.
       .map((h) => h.trim().toLowerCase())
       .filter((h) => h.length > 0),
     password: nonEmpty(env.MARGINALIA_PASSWORD),
+    defaultToken: nonEmpty(
+      sanitizeIdentityValue(env.MARGINALIA_INVITE_TOKEN, MAX_CLIENT_ID_LENGTH),
+    ),
     stateDir: isTruthy(env.MARGINALIA_MCP_NO_PERSIST)
       ? null
       : (nonEmpty(env.MARGINALIA_MCP_STATE_DIR) ?? join(homedir(), '.config', 'marginalia-mcp')),

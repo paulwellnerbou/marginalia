@@ -69,9 +69,15 @@ export class McpState {
     // A URL without a token must not erase a token learned earlier —
     // `/d/<uid>` is a perfectly normal way to refer to a document you
     // already have access to.
+    //
+    // Only across the same instance, though. A token belongs to one
+    // origin, so carrying it onto a different `baseUrl` would file the
+    // agent's capability under someone else's host and hand it over on
+    // the next bare-uid reference.
+    const carriedToken = prior?.baseUrl === memory.baseUrl ? (prior.token ?? null) : null;
     const next: DocumentMemory = {
       baseUrl: memory.baseUrl,
-      token: memory.token ?? prior?.token ?? null,
+      token: memory.token ?? carriedToken,
     };
     if (prior && prior.baseUrl === next.baseUrl && prior.token === next.token) return;
     this.documents.set(uid, next);

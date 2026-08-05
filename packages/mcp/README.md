@@ -60,8 +60,35 @@ names disagree, the agent's first write is signed with the invite's name and eve
 after it with the URL's. The MCP tab generates the connection string from the invite, so
 they cannot drift.
 
+Add `&token=<invite token>` and the connection carries the agent's access, so any reference
+to that document works even without a token in it:
+
+```bash
+claude mcp add --transport http marginalia \
+  'https://marginalia.example.com/mcp?name=Claude&token=<invite token>'
+```
+
+Quote it — an unquoted `&` in a shell backgrounds everything before it and runs the rest as
+a separate command, so the token would go missing without a word of complaint.
+
+The token applies to a reference that has none of its own, including a link copied from a
+comment — which the viewer strips the token from once an invite has been claimed. A token
+in a pasted URL still wins, and a token for one document simply resolves to nothing on
+another.
+
+It never travels to a different host. A document's text can talk an agent into fetching a
+URL, so a tokenless reference naming another instance is sent without it; likewise a token
+learned for one instance is not replayed to a second. Set `MARGINALIA_ALLOWED_HOSTS` to
+refuse those requests outright rather than merely sending them empty-handed — the hosted
+endpoint already pins itself that way.
+
 The document viewer has an **MCP** tab that generates all of this for you, with an access
 link for the agent alongside it.
+
+To point an agent at one comment, hand it the link the viewer's "copy link to this comment"
+button produces. The `#comment-<id>` fragment selects that thread — the id may belong to a
+reply, which resolves to the thread containing it. `list_threads` also takes any message's
+id as `thread_id`.
 
 ### Over stdio — for local development
 
@@ -98,6 +125,7 @@ The hosted endpoint takes its settings from the URL; these apply to the stdio se
 | `MARGINALIA_DISPLAY_NAME` | `Claude` | The name every comment and proposal is signed with. |
 | `MARGINALIA_ALLOWED_HOSTS` | *(unset — any host)* | Comma-separated allowlist. When set, a URL pointing anywhere else is refused. |
 | `MARGINALIA_PASSWORD` | *(unset)* | Password for password-protected documents, so it never has to be typed into a chat. |
+| `MARGINALIA_INVITE_TOKEN` | *(unset)* | Invite token applied to a document reference that carries none — the stdio equivalent of `&token=`. |
 | `MARGINALIA_CLIENT_ID` | *(generated once)* | Identity marker. Override to share one identity across machines. |
 | `MARGINALIA_MCP_STATE_DIR` | `~/.config/marginalia-mcp` | Where the client id and per-document links are cached (mode 0600). |
 | `MARGINALIA_MCP_NO_PERSIST` | *(unset)* | `1` keeps everything in memory. Document links must then be re-supplied each session, and older comments stop being editable. |
