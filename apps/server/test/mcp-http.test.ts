@@ -361,6 +361,159 @@ describe('hosted MCP endpoint', () => {
     await admin.close();
   });
 
+  test('remembers a document’s link for the rest of the session', async () => {
+    const admin = await connect('?name=Paul');
+    const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+    const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+    const invite = await callText(admin, 'create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+      display_name: 'Claude',
+    });
+    const link = /(http\S+)/.exec(invite)?.[1] as string;
+    await admin.close();
+
+    // An invite names one document, so an agent working across several
+    // has to be handed each one's link. It should only need telling once.
+    const agent = await connect('?name=Claude');
+    const bare = `${baseUrl}/d/${uid}`;
+    expect(
+      await callText(agent, 'get_document', { document: bare, include_source: false }),
+    ).toContain('your role: reader');
+    await callText(agent, 'get_document', { document: link, include_source: false });
+    expect(
+      await callText(agent, 'get_document', { document: bare, include_source: false }),
+    ).toContain('your role: collaborator');
+    // The shape this exists for: a comment link, which carries no token.
+    // Its fragment has to be a real id — an unrecognized one is ignored,
+    // and asserting against that would prove nothing.
+    const comment = await callText(agent, 'create_comment', {
+      document: bare,
+      anchor_text: 'Alpha.',
+      body: 'written through a remembered token',
+    });
+    const threadId = /^thread_id: (\S+)/m.exec(comment)?.[1] as string;
+    const viaCommentLink = await callText(agent, 'list_threads', {
+      document: `${bare}#comment-${threadId}`,
+    });
+    expect(viaCommentLink).toContain(`#comment-${threadId}`);
+    expect(viaCommentLink).toContain('written through a remembered token');
+    await agent.close();
+  });
+
+  test('one session’s tokens are invisible to another', async () => {
+    const admin = await connect('?name=Paul');
+    const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+    const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+    const invite = await callText(admin, 'create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+      display_name: 'Claude',
+    });
+    const link = /(http\S+)/.exec(invite)?.[1] as string;
+
+    // Two connections at once: the endpoint is shared, so what one is
+    // told must not become the other's access.
+    const first = await connect('?name=Claude');
+    const second = await connect('?name=Claude');
+    await callText(first, 'get_document', { document: link, include_source: false });
+
+    expect(
+      await callText(second, 'get_document', {
+        document: `${baseUrl}/d/${uid}`,
+        include_source: false,
+      }),
+    ).toContain('your role: reader');
+    expect(
+      await callText(first, 'get_document', {
+        document: `${baseUrl}/d/${uid}`,
+        include_source: false,
+      }),
+    ).toContain('your role: collaborator');
+
+    await first.close();
+    await second.close();
+    await admin.close();
+  });
+
+  test('a request that never initializes leaves nothing behind', async () => {
+    // `handleRequest` can reject, and an un-sessioned server has no id to
+    // reach it by afterwards — so a burst of bad requests must not strand
+    // one apiece. The endpoint staying responsive afterwards is the
+    // observable part; the close happens in a finally.
+    for (let i = 0; i < 25; i++) {
+      const res = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: 'not json at all',
+      });
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.headers.get('mcp-session-id')).toBeNull();
+    }
+
+    const client = await connect();
+    expect((await client.listTools()).tools.length).toBeGreaterThan(20);
+    await client.close();
+  });
+
+  test('a DELETE ends the session and its remembered tokens', async () => {
+    // Driven by hand rather than through the SDK client, because the
+    // point is what happens to the session id itself.
+    const init = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 't', version: '0' },
+        },
+      }),
+    });
+    const sessionId = init.headers.get('mcp-session-id');
+    expect(sessionId).toBeTruthy();
+
+    const deleted = await fetch(`${baseUrl}/mcp`, {
+      method: 'DELETE',
+      headers: { 'mcp-session-id': sessionId as string },
+    });
+    expect(deleted.status).toBeLessThan(500);
+
+    // Gone: whatever it had been told is no longer reachable, and the
+    // client is expected to initialize again.
+    const after = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': sessionId as string,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
+    });
+    expect(after.status).toBe(404);
+  });
+
+  test('an unknown session id is refused rather than silently starting a new one', async () => {
+    const res = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': 'a-session-that-does-not-exist',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
   test('refuses to reach a different Marginalia instance', async () => {
     const client = await connect();
     const res = (await client.callTool({
