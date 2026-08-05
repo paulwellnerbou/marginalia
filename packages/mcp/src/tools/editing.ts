@@ -126,13 +126,18 @@ export function registerEditingTools(server: McpServer, ctx: ToolContext): void 
         // The replaced range runs heading to heading with the blank lines
         // between sections outside it on both sides: `section.source` was
         // cut with its trailing whitespace stripped, and what precedes
-        // `section.start` already ends with the separator. So whitespace
-        // the caller left on either end is theirs, not the document's —
-        // keeping it would double the separator into a growing gap, and
-        // leading blank lines would additionally push the heading off line
-        // one and trip the check below with a message describing a problem
-        // the caller does not have.
-        const replacement = section ? args.source.replace(/^\s+|\s+$/gu, '') : args.source;
+        // `section.start` already ends with the separator. So blank lines
+        // the caller left on either end are theirs, not the document's —
+        // keeping them would double the separator into a growing gap, and
+        // leading ones would additionally push the heading off line one and
+        // trip the check below with a message describing a problem the
+        // caller does not have.
+        //
+        // Only whole blank lines go. Indentation on the first surviving
+        // line is content: stripping it would let four spaces — an indented
+        // code block, not a heading — be de-indented into one and satisfy a
+        // check the caller's actual text fails.
+        const replacement = section ? trimSectionPadding(args.source) : args.source;
 
         if (section) {
           const heading = headingLine(replacement, doc.format);
@@ -166,6 +171,11 @@ export function registerEditingTools(server: McpServer, ctx: ToolContext): void 
         );
       }),
   );
+}
+
+/** Drop the caller's own blank lines from both ends, indentation intact. */
+function trimSectionPadding(source: string): string {
+  return source.replace(/^(?:[ \t]*\n)+/u, '').replace(/\s+$/u, '');
 }
 
 /**

@@ -905,9 +905,38 @@ describe('marginalia MCP server', () => {
     const whole = await call('get_document', { document: adminUrl });
     // Padding is the caller's, not the document's: the blank lines between
     // sections sit outside the replaced range, so keeping either end would
-    // double a separator rather than preserve anything.
-    expect(whole).toContain('## Chapter Two\n\nThe dunes closed behind them.\n\n## Chapter Three');
-    expect(whole).not.toContain('\n\n\n');
+    // double a separator rather than preserve anything. Both seams are
+    // checked — the leading half of the trim is what holds the one above.
+    expect(whole).toContain(
+      'both times.\n\n## Chapter Two\n\nThe dunes closed behind them.\n\n## Chapter Three',
+    );
+  });
+
+  test('will not de-indent a code block into a section heading', async () => {
+    const { adminUrl } = await seedBook();
+    // Four spaces is an indented code block, not a heading. Trimming it
+    // flush would manufacture the heading the check is there to demand.
+    const message = await callExpectingError('update_document', {
+      document: adminUrl,
+      section: 'Chapter Two',
+      source: '    ## Chapter Two\n\nThe dunes closed behind them.',
+    });
+    expect(message).toContain('has to start with the section’s heading line');
+    expect(await call('get_document', { document: adminUrl })).toContain('By noon the dunes');
+  });
+
+  test('keeps a section heading’s own indentation verbatim', async () => {
+    const { adminUrl } = await seedBook();
+    // Up to three spaces is still a heading, and the indentation is the
+    // caller's text rather than padding to be tidied away.
+    await call('update_document', {
+      document: adminUrl,
+      section: 'Chapter Two',
+      source: '  ## Chapter Two\n\nThe dunes closed behind them.',
+    });
+    expect(await call('get_document', { document: adminUrl })).toContain(
+      '\n  ## Chapter Two\n\nThe dunes closed behind them.\n\n## Chapter Three',
+    );
   });
 
   test('refuses a section replacement that would dissolve the heading', async () => {
