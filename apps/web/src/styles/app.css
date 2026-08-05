@@ -3211,7 +3211,8 @@ button.primary:disabled {
   text-decoration: none;
   cursor: pointer;
 }
-.ic-row-body .ic-thread-ref:hover {
+.ic-row-body .ic-thread-ref:hover,
+.ic-row-body .ic-thread-ref:focus-visible {
   text-decoration: underline;
 }
 .ic-row-body blockquote {

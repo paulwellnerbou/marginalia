@@ -1,7 +1,7 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
 import { DotsHorizontalIcon } from '@radix-ui/react-icons';
 import { DropdownMenu, Flex, IconButton, SegmentedControl, Text } from '@radix-ui/themes';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
@@ -236,15 +236,20 @@ export function InlineCommentsList({
   const refIndex = useMemo(() => threadRefIndex(threads), [threads]);
 
   /** Jump to a linked thread by scrolling to its anchor, which focuses it. */
-  function focusLinked(target: Thread) {
-    const blockId = target.anchor.block_id;
-    if (blockId) onScrollToAnchor(blockId, target.anchor.quote, target.id);
-  }
+  const focusLinked = useCallback(
+    (target: Thread) => {
+      const blockId = target.anchor.block_id;
+      if (blockId) onScrollToAnchor(blockId, target.anchor.quote, target.id);
+    },
+    [onScrollToAnchor],
+  );
 
-  const threadRefs: ThreadRefApi = {
-    resolve: (id) => refIndex.get(id) ?? null,
-    focus: focusLinked,
-  };
+  // Held stable: every comment body's markdown pipeline is keyed on this
+  // object, so a fresh one per render re-runs all of them.
+  const threadRefs = useMemo<ThreadRefApi>(
+    () => ({ resolve: (id) => refIndex.get(id) ?? null, focus: focusLinked }),
+    [refIndex, focusLinked],
+  );
 
   function renderItem(item: ThreadListItem) {
     const blockId = item.thread.anchor.block_id;
