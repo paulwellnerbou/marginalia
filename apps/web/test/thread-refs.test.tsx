@@ -175,6 +175,13 @@ describe('InlineCommentMarkdown thread references', () => {
     );
   });
 
+  test('a hand-written link to a thread keeps what its author put on it', () => {
+    const html = render(`[the proposal](#comment-${PROPOSAL_ID} "Claude's rewrite")`);
+    expect(html).toContain(
+      `<a href="#comment-${PROPOSAL_ID}" class="ic-thread-ref" title="Claude&#x27;s rewrite">the proposal</a>`,
+    );
+  });
+
   test('does not link a thread whose anchor is gone', () => {
     const orphan = thread({
       ...proposalThread,

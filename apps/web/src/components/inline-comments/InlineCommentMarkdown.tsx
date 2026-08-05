@@ -30,21 +30,25 @@ export function InlineCommentMarkdown({ children, threadRefs }: Props) {
   const components = useMemo<Components>(
     () => ({
       a(props) {
-        const { node: _node, href, children: label, ...rest } = props;
+        const { node: _node, href, children: label, className, title, ...rest } = props;
         const id = href ? parseThreadRefHref(href) : null;
         const thread = id ? target(id) : null;
         if (!thread) {
           return (
-            <a href={href} {...rest}>
+            <a href={href} className={className} title={title} {...rest}>
               {label}
             </a>
           );
         }
+        // Focusing the thread in place is the whole point of the branch,
+        // so the handler is ours — everything else the author wrote on
+        // the link survives.
         return (
           <a
+            {...rest}
             href={href}
-            className="ic-thread-ref"
-            title={describeThreadRef(thread)}
+            className={className ? `${className} ic-thread-ref` : 'ic-thread-ref'}
+            title={title ?? describeThreadRef(thread)}
             onClick={(event) => {
               event.preventDefault();
               threadRefs.focus(thread);
