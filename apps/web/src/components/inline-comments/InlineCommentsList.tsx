@@ -1,5 +1,6 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
 import {
+  Cross2Icon,
   DotsHorizontalIcon,
   MagnifyingGlassIcon,
   MixerHorizontalIcon,
@@ -507,6 +508,24 @@ export function InlineCommentsList({
                 <TextField.Slot>
                   <MagnifyingGlassIcon />
                 </TextField.Slot>
+                {searchQuery !== '' && (
+                  <TextField.Slot side="right" className="ic-list-search-clear-slot">
+                    {/* Keeps the caret in the field, so typing can continue. */}
+                    <button
+                      type="button"
+                      className="ic-list-search-clear"
+                      aria-label="Clear thread search"
+                      title="Clear search"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setSearchQuery('');
+                        searchInputRef.current?.focus({ preventScroll: true });
+                      }}
+                    >
+                      <Cross2Icon className="ic-list-search-clear-icon" />
+                    </button>
+                  </TextField.Slot>
+                )}
               </TextField.Root>
               {searchNeedle !== '' && (
                 <Text size="1" color="gray" className="ic-list-search-count">

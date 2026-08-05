@@ -1732,7 +1732,16 @@ button.primary:disabled {
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 0.4rem;
-  margin-bottom: 0.25rem;
+  /* Sort, filters and search stay reachable while the threads scroll under
+     them. The negative margins cancel .ic-list's padding so the opaque strip
+     spans the pane edge to edge; the padding puts the spacing back inside. */
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: -0.8rem -0.9rem 0.25rem;
+  padding: 0.8rem 0.9rem 0.45rem;
+  background: var(--ui-surface);
+  border-bottom: 1px solid var(--ui-border);
 }
 
 /* Each control keeps its own label, so wrapping stays readable: the pane
@@ -1797,6 +1806,31 @@ button.primary:disabled {
 .ic-list-search-count {
   flex: none;
   white-space: nowrap;
+}
+
+/* Same clear affordance as the TOC filter (.toc-search-clear). */
+.ic-list-search-clear-slot {
+  padding-right: 0.2rem;
+}
+
+.ic-list-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--gray-11);
+  cursor: pointer;
+}
+
+.ic-list-search-clear:hover {
+  color: var(--gray-12);
+}
+
+.ic-list-search-clear-icon {
+  width: 14px;
+  height: 14px;
 }
 
 .ic-list-filter-toggle {
