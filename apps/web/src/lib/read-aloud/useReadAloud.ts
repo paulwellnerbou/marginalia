@@ -2,7 +2,7 @@ import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } fro
 import { expandAncestors } from '../heading-collapse.js';
 import { clearHighlight, paintSegment } from './highlight.js';
 import { collectSegments, type ReadAloudSegment, resolveSegmentRange } from './segment.js';
-import { needsBetterVoice, pickVoice, rankVoices } from './voices.js';
+import { needsBetterVoice, selectVoices } from './voices.js';
 
 const VOICE_KEY = 'marginalia.readAloud.voice';
 const RATE_KEY = 'marginalia.readAloud.rate';
@@ -85,16 +85,11 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
     return () => synth.removeEventListener('voiceschanged', load);
   }, [synth]);
 
-  const rankedVoices = useMemo(() => rankVoices(allVoices, lang), [allVoices, lang]);
-  const missingLanguageVoice = allVoices.length > 0 && rankedVoices.length === 0;
-  // With nothing for the document's language, offer everything rather
-  // than an empty picker — a wrong-language voice the reader chose
-  // knowingly beats no choice at all.
-  const voices = rankedVoices.length > 0 ? rankedVoices : allVoices;
-  const voice = useMemo(
-    () => pickVoice(allVoices, lang, voiceUri) ?? voices[0] ?? null,
-    [allVoices, lang, voiceUri, voices],
+  const selection = useMemo(
+    () => selectVoices(allVoices, lang, voiceUri),
+    [allVoices, lang, voiceUri],
   );
+  const { offered: voices, active: voice, missingLanguage: missingLanguageVoice } = selection;
   const voiceRef = useRef(voice);
   voiceRef.current = voice;
 
@@ -279,9 +274,10 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
     rate,
     setRate,
     missingLanguageVoice,
-    // Keyed on what is *available*, not what is selected — see
-    // `needsBetterVoice`.
-    showVoiceHint: needsBetterVoice(rankedVoices[0] ?? null),
+    // Keyed on the best voice *available* for the language, not the one
+    // selected — see `needsBetterVoice`. Suppressed when the language
+    // isn't covered at all, since `missingLanguageVoice` says more.
+    showVoiceHint: !missingLanguageVoice && needsBetterVoice(voices[0] ?? null),
     error,
     play,
     pause,

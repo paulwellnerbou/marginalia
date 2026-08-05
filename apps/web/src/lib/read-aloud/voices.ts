@@ -85,12 +85,26 @@ export function primaryLanguage(tag: string): string {
 }
 
 /**
+ * POSIX-style tags (`de_DE`, `sr_Latn_RS`) show up in OS voice lists
+ * while documents and the Web Speech API use hyphens. Unify on hyphens,
+ * every separator — not just the first.
+ */
+function hyphenate(tag: string): string {
+  return tag.replace(/_/g, '-');
+}
+
+/** Case- and separator-insensitive form, for comparing two tags. */
+function comparableTag(tag: string): string {
+  return hyphenate(tag).toLowerCase();
+}
+
+/**
  * Voices usable for `lang`, best first. Filtered to the language —
  * an English voice reading German is unusable regardless of its tier.
  */
 export function rankVoices<T extends VoiceLike>(voices: readonly T[], lang: string): T[] {
   const primary = primaryLanguage(lang);
-  const wanted = lang.toLowerCase().replace('_', '-');
+  const wanted = comparableTag(lang);
 
   return voices
     .filter((voice) => primaryLanguage(voice.lang) === primary)
@@ -99,7 +113,7 @@ export function rankVoices<T extends VoiceLike>(voices: readonly T[], lang: stri
       index,
       tier: voiceTier(voice),
       // Prefer the exact region when the document asked for one.
-      exact: voice.lang.toLowerCase().replace('_', '-') === wanted ? 1 : 0,
+      exact: comparableTag(voice.lang) === wanted ? 1 : 0,
     }))
     .sort(
       (a, b) =>
@@ -129,6 +143,43 @@ export function pickVoice<T extends VoiceLike>(
   return ranked[0] ?? null;
 }
 
+export interface VoiceSelection<T extends VoiceLike> {
+  /** Voices to offer in the picker, best first. */
+  offered: T[];
+  /** The voice to speak with. */
+  active: T | null;
+  /** Voices are installed, but none for the document's language. */
+  missingLanguage: boolean;
+}
+
+/**
+ * Everything the UI needs about voices, in one place: what to list, what
+ * to speak with, and whether the document's language is covered at all.
+ */
+export function selectVoices<T extends VoiceLike>(
+  all: readonly T[],
+  lang: string,
+  savedVoiceUri: string | null,
+): VoiceSelection<T> {
+  const ranked = rankVoices(all, lang);
+  if (ranked.length > 0) {
+    return { offered: ranked, active: pickVoice(all, lang, savedVoiceUri), missingLanguage: false };
+  }
+
+  // Nothing for this language: offer every installed voice rather than
+  // an empty picker, and resolve the saved pick against that same full
+  // list — `pickVoice` filters by language, so it could only ever
+  // return null here and the reader's choice would be discarded.
+  const explicit = savedVoiceUri
+    ? (all.find((voice) => voice.voiceURI === savedVoiceUri) ?? null)
+    : null;
+  return {
+    offered: [...all],
+    active: explicit ?? all[0] ?? null,
+    missingLanguage: all.length > 0,
+  };
+}
+
 /**
  * True when `best` is only a compact OS default, i.e. the reader would
  * get noticeably better results by installing a voice.
@@ -154,8 +205,9 @@ export function resolveDocLang(
   for (const key of ['lang', 'language', 'locale']) {
     const value = frontmatter?.[key];
     if (typeof value !== 'string') continue;
-    // Authors write either `de-DE` or the POSIX-style `de_DE`.
-    const normalized = value.trim().replace(/_/g, '-');
+    // Authors write either `de-DE` or the POSIX-style `de_DE`. Case is
+    // preserved — BCP-47 conventionally capitalizes region subtags.
+    const normalized = hyphenate(value.trim());
     if (LANG_TAG.test(normalized)) return normalized;
   }
   return fallback;

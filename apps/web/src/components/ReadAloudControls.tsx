@@ -55,6 +55,14 @@ export function ReadAloudControls({ rootRef, htmlKey, frontmatter, inlineComment
   // than a button that silently does nothing.
   if (!reader.supported) return null;
 
+  // Three states, not two: without the paused case a screen reader
+  // announces "Start reading aloud" on a control that will resume.
+  const transportLabel = playing
+    ? 'Pause reading'
+    : status === 'paused'
+      ? 'Continue reading'
+      : 'Start reading aloud';
+
   const toggle = () => {
     if (status === 'idle') {
       reader.play();
@@ -102,7 +110,7 @@ export function ReadAloudControls({ rootRef, htmlKey, frontmatter, inlineComment
                   variant="soft"
                   color={APP_ACCENT_COLOR}
                   onClick={toggle}
-                  aria-label={playing ? 'Pause reading' : 'Start reading aloud'}
+                  aria-label={transportLabel}
                 >
                   {playing ? <PauseIcon /> : <PlayIcon />}
                 </IconButton>
