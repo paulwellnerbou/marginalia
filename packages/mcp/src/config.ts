@@ -1,5 +1,11 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import {
+  MAX_CLIENT_ID_LENGTH,
+  MAX_DISPLAY_NAME_LENGTH,
+  normalizeAgentName,
+  sanitizeIdentityValue,
+} from './identity.js';
 
 /**
  * Runtime configuration, entirely from the environment — an MCP server
@@ -33,8 +39,8 @@ const DEFAULT_BASE_URL = 'http://localhost:3434';
 export function loadMcpConfig(env: Record<string, string | undefined> = process.env): McpConfig {
   return {
     baseUrl: normalizeBaseUrl(env.MARGINALIA_BASE_URL ?? DEFAULT_BASE_URL),
-    displayName: (env.MARGINALIA_DISPLAY_NAME ?? 'Claude').trim().slice(0, 80) || 'Claude',
-    clientId: nonEmpty(env.MARGINALIA_CLIENT_ID),
+    displayName: normalizeAgentName(env.MARGINALIA_DISPLAY_NAME),
+    clientId: nonEmpty(sanitizeIdentityValue(env.MARGINALIA_CLIENT_ID, MAX_CLIENT_ID_LENGTH)),
     allowedHosts: (env.MARGINALIA_ALLOWED_HOSTS ?? '')
       .split(',')
       .map((h) => h.trim().toLowerCase())

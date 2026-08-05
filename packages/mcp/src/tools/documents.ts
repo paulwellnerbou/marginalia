@@ -22,7 +22,12 @@ import {
   text,
 } from './context.js';
 
-export function registerDocumentTools(server: McpServer, ctx: ToolContext): void {
+export function registerDocumentTools(
+  server: McpServer,
+  ctx: ToolContext,
+  options: { allowLocalFiles: boolean } = { allowLocalFiles: true },
+): void {
+  const { allowLocalFiles } = options;
   server.registerTool(
     'get_identity',
     {
@@ -66,10 +71,20 @@ export function registerDocumentTools(server: McpServer, ctx: ToolContext): void
       description:
         'Create a new Marginalia document from markdown or AsciiDoc so it can be reviewed in ' +
         'the browser. Returns the admin link (keep private) and instructions for sharing a ' +
-        'reviewer link. Pass either `source` or `source_path`.',
+        `reviewer link. ${allowLocalFiles ? 'Pass either `source` or `source_path`.' : 'Pass the text as `source`.'}`,
       inputSchema: {
         source: z.string().optional().describe('The document text.'),
-        source_path: z.string().optional().describe('Path to a local file to upload instead.'),
+        // Reading a local file is only meaningful when this server runs
+        // on the caller's own machine; a hosted one would be reading the
+        // Marginalia host's disk out to whoever connected.
+        ...(allowLocalFiles
+          ? {
+              source_path: z
+                .string()
+                .optional()
+                .describe('Path to a local file to upload instead.'),
+            }
+          : {}),
         name: z
           .string()
           .optional()
@@ -92,7 +107,7 @@ export function registerDocumentTools(server: McpServer, ctx: ToolContext): void
     async (args) =>
       guard(async () => {
         let source = args.source ?? null;
-        if (source === null && args.source_path) {
+        if (source === null && allowLocalFiles && args.source_path) {
           try {
             source = await readFile(args.source_path, 'utf8');
           } catch (err) {
@@ -103,10 +118,16 @@ export function registerDocumentTools(server: McpServer, ctx: ToolContext): void
             );
           }
         }
-        if (!source) return failure('Provide either `source` or `source_path`.');
+        if (!source) {
+          return failure(
+            allowLocalFiles
+              ? 'Provide either `source` or `source_path`.'
+              : 'Provide the document text as `source`. This server has no access to local files.',
+          );
+        }
         const format =
           args.format ??
-          (args.source_path && /\.adoc$|\.asciidoc$/i.test(args.source_path)
+          (allowLocalFiles && args.source_path && /\.adoc$|\.asciidoc$/i.test(args.source_path)
             ? 'asciidoc'
             : 'markdown');
 

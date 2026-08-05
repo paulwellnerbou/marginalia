@@ -122,6 +122,19 @@ describe('loadMcpConfig', () => {
     ).toEqual(['a.example', 'b.example']);
   });
 
+  test('strips control characters from the identity env vars', () => {
+    const config = loadMcpConfig({
+      MARGINALIA_DISPLAY_NAME: 'Ev\r\nil',
+      MARGINALIA_CLIENT_ID: 'aaaa\r\nbbbb',
+    });
+    expect(config.displayName).toBe('Evil');
+    expect(config.clientId).toBe('aaaabbbb');
+  });
+
+  test('falls back to Claude when the name is only control characters', () => {
+    expect(loadMcpConfig({ MARGINALIA_DISPLAY_NAME: '\r\n\t' }).displayName).toBe('Claude');
+  });
+
   test('MARGINALIA_MCP_NO_PERSIST disables the state file', () => {
     expect(loadMcpConfig({ MARGINALIA_MCP_NO_PERSIST: '1' }).stateDir).toBeNull();
     expect(loadMcpConfig({}).stateDir).not.toBeNull();

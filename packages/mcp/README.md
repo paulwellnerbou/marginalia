@@ -16,7 +16,58 @@ edit proposals you can accept with one click — or comment on again.
 
 ## Setup
 
-The server runs on Bun and speaks MCP over stdio.
+There are two ways to run this. Pick the first unless you have a reason not to.
+
+### Over HTTP — nothing to install
+
+Your Marginalia instance serves the tools itself, at `/mcp`. The agent needs a URL and
+nothing else: no checkout of this repo, no Bun, no local process.
+
+```bash
+claude mcp add --transport http marginalia https://marginalia.example.com/mcp
+```
+
+or, in `.mcp.json` / your client's MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "marginalia": {
+      "type": "http",
+      "url": "https://marginalia.example.com/mcp"
+    }
+  }
+}
+```
+
+Codex: `codex mcp add marginalia --url https://marginalia.example.com/mcp`.
+
+Everything the agent writes is signed "Claude". Append `?name=Codex` to the URL to change
+that — the server sends it on every request as the same `x-marginalia-client-name` header
+the browser sends, so nothing has to be configured on the agent's side. (The browser reads
+that name from `localStorage`; the MCP server never touches a browser, and takes it from
+the URL instead.)
+
+The name also derives the `x-marginalia-client` id Marginalia uses to decide who may edit
+or delete a comment, so it stays stable across reconnects — which also means two agents
+connecting under the same name share one identity. Add `&client_id=…` to keep them apart.
+
+Give the agent a **named** invite, and make `?name=` match the name on it. Naming the
+invite is what puts the agent on the @-mention roster before it has ever connected, so you
+can write "@Claude look at this" and let it find the mention on arrival. The catch is that
+a named invite also seeds its own display name onto a client's first request: if the two
+names disagree, the agent's first write is signed with the invite's name and everything
+after it with the URL's. The MCP tab generates the connection string from the invite, so
+they cannot drift.
+
+The document viewer has an **MCP** tab that generates all of this for you, with an access
+link for the agent alongside it.
+
+### Over stdio — for local development
+
+Runs the server as a local process instead, against any instance you name. Useful when
+you're working on this package, or pointing an agent at a Marginalia that isn't reachable
+from where the agent runs.
 
 ```json
 {
@@ -33,24 +84,13 @@ The server runs on Bun and speaks MCP over stdio.
 }
 ```
 
-That block goes in `.mcp.json` at the root of a project (Claude Code) or
-in `claude_desktop_config.json` (Claude Desktop). Claude Code can also
-register it from the command line:
+`bun` is the command because this package is TypeScript run directly from source — Bun
+executes it without a build step. That is the cost of the stdio route, and the reason the
+HTTP one exists.
 
-```bash
-claude mcp add marginalia --env MARGINALIA_BASE_URL=https://marginalia.example.com -- bun /absolute/path/to/marginalia/packages/mcp/src/bin.ts
-```
+### Environment (stdio only)
 
-Codex uses TOML with the same three fields:
-
-```toml
-[mcp_servers.marginalia]
-command = "bun"
-args = ["/absolute/path/to/marginalia/packages/mcp/src/bin.ts"]
-env = { MARGINALIA_BASE_URL = "https://marginalia.example.com" }
-```
-
-### Environment
+The hosted endpoint takes its settings from the URL; these apply to the stdio server.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -62,6 +102,17 @@ env = { MARGINALIA_BASE_URL = "https://marginalia.example.com" }
 | `MARGINALIA_MCP_STATE_DIR` | `~/.config/marginalia-mcp` | Where the client id and per-document links are cached (mode 0600). |
 | `MARGINALIA_MCP_NO_PERSIST` | *(unset)* | `1` keeps everything in memory. Document links must then be re-supplied each session, and older comments stop being editable. |
 | `MARGINALIA_DOWNLOAD_DIR` | current directory | Default destination for `export_document`. |
+
+### Filesystem access is stdio-only
+
+Over stdio the server runs on your machine, so `export_document` saves where you asked and
+`create_document`'s `source_path` reads the file you named.
+
+The hosted endpoint withholds both. Its filesystem is the Marginalia host's, not yours: a
+`source_path` there would read the server's files out to whoever connected, and an export
+would write chosen bytes to a chosen path — neither behind any access check, since creating
+a document needs no invite. The results would be unreachable by the caller anyway, so
+nothing is lost. Use the stdio route when you want files on your own disk.
 
 ## Access: give the agent its own link
 
@@ -124,8 +175,8 @@ approval apart.
 | --- | --- |
 | `edit_document` | Search-and-replace edits saved as a revision. `dry_run` shows the diff first. |
 | `update_document` | Replace the whole source. |
-| `export_document` | Write `source`, `bundle`, `docx`, `pdf` to disk — `formats: ["all"]` for everything. |
-| `create_document` | Upload a local markdown/AsciiDoc file and get links back. |
+| `export_document` | Write `source`, `bundle`, `docx`, `pdf` to disk — `formats: ["all"]` for everything. **stdio only.** |
+| `create_document` | Upload markdown/AsciiDoc and get links back. `source_path` reads a local file — **stdio only**. |
 | `create_invite`, `list_invites`, `authenticate` | Access management. |
 
 ## Reading a chapter at a time

@@ -13,6 +13,7 @@ import { Realtime } from './realtime.js';
 import { assetsRouter } from './routes/assets.js';
 import { documentsRouter } from './routes/documents.js';
 import { eventsRouter } from './routes/events.js';
+import { mcpRouter } from './routes/mcp.js';
 import { threadsRouter } from './routes/threads.js';
 
 export interface App {
@@ -64,6 +65,9 @@ export async function createApp(config: ServerConfig): Promise<App> {
   hono.route('/api/documents', assetsRouter({ db, blobs, config }));
   hono.route('/api/documents', threadsRouter(deps));
   hono.route('/api/documents', eventsRouter({ db, realtime, upgradeWebSocket }));
+  // Marginalia's own MCP endpoint. Mounted after the API routes because
+  // it dispatches tool calls back through this same app.
+  hono.route('/mcp', mcpRouter({ hono }));
   hono.get('*', async (c) => {
     const fileResponse = await serveWebAsset(config.webDir, c.req.path);
     return fileResponse ?? c.notFound();

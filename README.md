@@ -6,8 +6,6 @@ Documents, comments, invites, sessions, and assets are persisted on the
 server. The browser only stores local auth/session helpers and UI state
 such as invite tokens, display name, recent docs, and theme.
 
-See [REQUIREMENTS.md](REQUIREMENTS.md) and [PLAN.md](PLAN.md).
-
 ## Layout
 
 - `packages/renderer` — core library: Markdown → HTML + metadata
@@ -46,24 +44,22 @@ something is off, then hand the agent the document URL and ask it to
 work through your comments and turn them into edit proposals you can
 accept or push back on.
 
-```json
-{
-  "mcpServers": {
-    "marginalia": {
-      "command": "bun",
-      "args": ["/absolute/path/to/marginalia/packages/mcp/src/bin.ts"],
-      "env": { "MARGINALIA_BASE_URL": "https://marginalia.example.com" }
-    }
-  }
-}
+The server hosts the tools itself at `/mcp`, so connecting an agent is a
+URL — nothing to install, nothing running locally:
+
+```bash
+claude mcp add --transport http marginalia https://marginalia.example.com/mcp
 ```
 
-Access works the same way it does for people — through an invite link.
-Mint the agent its own `collaborator` link (suggest everything, decide
-nothing) or `editor` link (also accept proposals and edit directly)
-rather than sharing your admin link. See the
-[package README](packages/mcp/README.md) for the full tool list and
-configuration.
+Every document has an **MCP** tab in its right-hand pane that generates
+that command (and the JSON equivalent) along with an access link for the
+agent. Access works the same way it does for people — mint the agent its
+own `collaborator` link, so it can suggest everything and decide nothing.
+
+`packages/mcp` also runs standalone over stdio, which is what you want
+while developing it. See the
+[package README](packages/mcp/README.md) for that, the full tool list,
+and configuration.
 
 ## Document assets
 

@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { MarginaliaClient } from './client.js';
+import { type FetchLike, MarginaliaClient } from './client.js';
 import { loadMcpConfig, type McpConfig } from './config.js';
 import { McpState } from './state.js';
 import type { ToolContext } from './tools/context.js';
@@ -63,12 +63,34 @@ function instructions(config: McpConfig): string {
   ].join('\n');
 }
 
-export function createMarginaliaMcpServer(config = loadMcpConfig()): {
+export interface McpServerDeps {
+  /** Overrides how tool calls reach Marginalia. See `MarginaliaClient`. */
+  fetchImpl?: FetchLike;
+  /**
+   * Whether tools may touch the filesystem of the machine this server
+   * runs on. True over stdio, where that machine is the user's own and
+   * reading a manuscript or saving a PDF is the point.
+   *
+   * MUST be false for a hosted endpoint. There the filesystem belongs to
+   * the Marginalia host, so `create_document`'s `source_path` would read
+   * the server's files out to whoever connected, and `export_document`
+   * would write attacker-chosen bytes to an attacker-chosen path —
+   * neither behind any access check, since creating a document needs no
+   * invite. The results would also be unreachable by the caller, so
+   * there is nothing lost by withholding them.
+   */
+  allowLocalFiles?: boolean;
+}
+
+export function createMarginaliaMcpServer(
+  config = loadMcpConfig(),
+  deps: McpServerDeps = {},
+): {
   server: McpServer;
   context: ToolContext;
 } {
   const state = new McpState(config.stateDir, config.clientId);
-  const client = new MarginaliaClient(config, state);
+  const client = new MarginaliaClient(config, state, deps.fetchImpl ?? fetch);
   const context: ToolContext = { client, config, state };
 
   const server = new McpServer(
@@ -76,10 +98,11 @@ export function createMarginaliaMcpServer(config = loadMcpConfig()): {
     { capabilities: { tools: {} }, instructions: instructions(config) },
   );
 
-  registerDocumentTools(server, context);
+  const allowLocalFiles = deps.allowLocalFiles !== false;
+  registerDocumentTools(server, context, { allowLocalFiles });
   registerReviewTools(server, context);
   registerEditingTools(server, context);
-  registerExportTools(server, context);
+  if (allowLocalFiles) registerExportTools(server, context);
 
   return { server, context };
 }
