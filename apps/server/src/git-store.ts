@@ -235,6 +235,11 @@ export class GitStore {
    * Build a one-commit branch on `refs/proposals/<proposalId>` parented at
    * `baseOid`, with the doc file replaced by `nextSource`. Uses plumbing
    * so main's working tree isn't touched.
+   *
+   * Re-pointing an existing ref (a proposal-content update) keeps the
+   * previous tip under `refs/proposals-original/<id>/<old-tip>` — same
+   * convention as repair's branch rewrite — so no authored version is
+   * ever dropped.
    */
   async createProposalBranch(
     doc: DocLocator,
@@ -297,6 +302,21 @@ export class GitStore {
       });
 
       const refName = proposalRef(proposalId);
+      let previousTip: string | null = null;
+      try {
+        previousTip = await git.resolveRef({ fs, dir, ref: refName });
+      } catch {
+        // No existing ref — a plain create.
+      }
+      if (previousTip && previousTip !== commitOid) {
+        await git.writeRef({
+          fs,
+          dir,
+          ref: `refs/proposals-original/${proposalId}/${previousTip}`,
+          value: previousTip,
+          force: true,
+        });
+      }
       await git.writeRef({ fs, dir, ref: refName, value: commitOid, force: true });
       return { commitOid, refName };
     });

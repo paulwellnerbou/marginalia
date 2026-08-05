@@ -196,6 +196,7 @@ approval apart.
 | `list_threads` | Comments and edit proposals with their discussion and anchored text. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter; `context_blocks` widens each one to the paragraphs around it. |
 | `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet). |
 | `create_proposal` | A suggested replacement. `answers_thread_id` links it to the comment it answers. |
+| `update_proposal` | Revise your own open proposal in place — new text, same thread, discussion intact. Rebuilds it against the current source, so it also refreshes a stale or conflicted proposal. |
 | `reply_to_thread` | Answer a comment thread or an edit proposal. |
 | `respond_to_thread` | `resolve` / `accept` / `reject` / `reopen`, with an optional reply. Accepting a linked proposal also resolves the comment it answers. |
 | `react_to_comment` | Toggle an emoji on any message — a comment, a proposal's rationale, or a reply. |
@@ -271,7 +272,9 @@ proposal then resolves the comment — its request has been carried out. Rejecti
 open, because the request still stands.
 
 The link lives on the proposal, so one comment can collect several: a first attempt you
-reject and its replacement both point back at the same request.
+reject and its replacement both point back at the same request. When the feedback is
+*"almost — change one thing"*, don't open a second proposal: `update_proposal` swaps in
+new text while the thread, its link and the discussion stay put.
 
 `list_threads` with `needs_proposal: true` is the resulting backlog — open comment threads
 that no proposal answers yet. It differs from `awaiting_my_response` in the case that

@@ -96,6 +96,8 @@ export interface ThreadWire {
     resolve: boolean;
     accept: boolean;
     reject: boolean;
+    /** Whether the viewer may replace this proposal's proposed text in place. */
+    update: boolean;
     repair: boolean;
     reopen: boolean;
   };

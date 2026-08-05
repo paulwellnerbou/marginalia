@@ -1386,6 +1386,306 @@ describe('documents API', () => {
     expect(await app.store.readProposalTip(docLocator, proposal.thread.id)).toBeNull();
   });
 
+  /** Upload a doc and open one proposal on the block containing `anchorText`. */
+  async function seedProposal(
+    source: string,
+    anchorText: string,
+    proposedText: string,
+  ): Promise<{ created: CreateResponse; threadId: string; blockId: string }> {
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(([, range]) =>
+      range.text.includes(anchorText),
+    )?.[0] as string;
+    expect(blockId).toBeString();
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: anchorText },
+          body: 'please change',
+          proposal: { proposed_text: proposedText },
+        }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { thread } = (await res.json()) as { thread: { id: string } };
+    return { created, threadId: thread.id, blockId };
+  }
+
+  async function patchThread(
+    created: CreateResponse,
+    threadId: string,
+    body: Record<string, unknown>,
+    client: typeof CLIENT_A = CLIENT_A,
+  ): Promise<Response> {
+    return app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads/${threadId}`, {
+        method: 'PATCH',
+        headers: withInvite(headersFor(client), created.admin_invite.token),
+        body: JSON.stringify(body),
+      }),
+    );
+  }
+
+  async function saveSource(created: CreateResponse, source: string): Promise<void> {
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ source }),
+      }),
+    );
+    expect(res.status).toBe(200);
+  }
+
+  async function acceptThread(created: CreateResponse, threadId: string): Promise<Response> {
+    return app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads/${threadId}/respond`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+  }
+
+  async function readSource(created: CreateResponse): Promise<string> {
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { source: string }).source;
+  }
+
+  test('PATCH proposal.proposed_text revises the branch in place; accept applies the new text', async () => {
+    const source = '# Title\n\nalpha';
+    const { created, threadId } = await seedProposal(source, 'alpha', 'beta');
+    const docLocator = { uid: created.uid, format: 'markdown' as const };
+    expect(await app.store.readProposalTip(docLocator, threadId)).toBe('# Title\n\nbeta');
+
+    const res = await patchThread(created, threadId, { proposal: { proposed_text: 'gamma' } });
+    expect(res.status).toBe(200);
+    const { thread } = (await res.json()) as {
+      thread: {
+        link_status: string;
+        proposal: { proposed_text: string | null; source_snapshot: string | null };
+        capabilities: Record<string, boolean>;
+        comments: Array<{ body: string }>;
+      };
+    };
+    expect(thread.proposal.proposed_text).toBe('gamma');
+    expect(thread.proposal.source_snapshot).toBe('alpha');
+    expect(thread.comments[0]?.body).toBe('please change');
+    expect(thread.capabilities.update).toBe(true);
+    expect(await app.store.readProposalTip(docLocator, threadId)).toBe('# Title\n\ngamma');
+
+    // Re-sending the same text is a no-op: the row is left untouched.
+    const updatedAtBefore = (
+      app.db.prepare('SELECT updated_at FROM comments WHERE id = ?').get(threadId) as {
+        updated_at: number;
+      }
+    ).updated_at;
+    const noop = await patchThread(created, threadId, { proposal: { proposed_text: 'gamma' } });
+    expect(noop.status).toBe(200);
+    const updatedAtAfter = (
+      app.db.prepare('SELECT updated_at FROM comments WHERE id = ?').get(threadId) as {
+        updated_at: number;
+      }
+    ).updated_at;
+    expect(updatedAtAfter).toBe(updatedAtBefore);
+
+    // Rationale and text can change together in one request.
+    const combined = await patchThread(created, threadId, {
+      body: 'sharper wording',
+      proposal: { proposed_text: 'delta' },
+    });
+    expect(combined.status).toBe(200);
+    const combinedThread = (await combined.json()) as {
+      thread: { proposal: { proposed_text: string | null }; comments: Array<{ body: string }> };
+    };
+    expect(combinedThread.thread.proposal.proposed_text).toBe('delta');
+    expect(combinedThread.thread.comments[0]?.body).toBe('sharper wording');
+
+    expect((await acceptThread(created, threadId)).status).toBe(200);
+    expect(await readSource(created)).toBe('# Title\n\ndelta');
+
+    // A decided proposal is frozen.
+    const afterAccept = await patchThread(created, threadId, {
+      proposal: { proposed_text: 'epsilon' },
+    });
+    expect(afterAccept.status).toBe(400);
+    expect(await afterAccept.json()).toEqual({ error: 'not-open' });
+  });
+
+  test('PATCH proposal.proposed_text rebases the branch onto current main', async () => {
+    const source = '# Title\n\nalpha\n\nomega';
+    const { created, threadId } = await seedProposal(source, 'alpha', 'beta');
+    const docLocator = { uid: created.uid, format: 'markdown' as const };
+
+    // Move main underneath the proposal with an unrelated direct edit.
+    await saveSource(created, '# Title\n\nalpha\n\nOMEGA');
+
+    const res = await patchThread(created, threadId, { proposal: { proposed_text: 'gamma' } });
+    expect(res.status).toBe(200);
+
+    // The rewritten branch parents at the moved main: stored base
+    // follows, and the tip carries the other edit.
+    const row = app.db
+      .prepare('SELECT base_oid FROM comments_edit_proposals WHERE comment_id = ?')
+      .get(threadId) as { base_oid: string };
+    expect(row.base_oid).toBe(await app.store.mainOid(docLocator));
+    expect(await app.store.readProposalTip(docLocator, threadId)).toBe('# Title\n\ngamma\n\nOMEGA');
+
+    const diffRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads/${threadId}/diff`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(diffRes.status).toBe(200);
+    const diff = (await diffRes.json()) as { before: string; after: string; mergeable: string };
+    expect(diff.before).toBe('alpha');
+    expect(diff.after).toBe('gamma');
+    expect(diff.mergeable).toBe('clean');
+
+    expect((await acceptThread(created, threadId)).status).toBe(200);
+    expect(await readSource(created)).toBe('# Title\n\ngamma\n\nOMEGA');
+  });
+
+  test('PATCH proposal guards: author-only, proposals-only, well-formed, branch-backed, anchored', async () => {
+    const source = '# Title\n\nalpha';
+    const { created, threadId, blockId } = await seedProposal(source, 'alpha', 'beta');
+
+    // Another client — even over the same admin link — is not the author.
+    const asBob = await patchThread(
+      created,
+      threadId,
+      { proposal: { proposed_text: 'x' } },
+      CLIENT_B,
+    );
+    expect(asBob.status).toBe(403);
+
+    const nonObject = await patchThread(created, threadId, { proposal: 'x' });
+    expect(nonObject.status).toBe(400);
+    expect(await nonObject.json()).toEqual({ error: 'proposal-text-required' });
+    const wrongType = await patchThread(created, threadId, { proposal: { proposed_text: 42 } });
+    expect(wrongType.status).toBe(400);
+    expect(await wrongType.json()).toEqual({ error: 'proposal-text-required' });
+
+    // A plain comment thread has no proposed text to update.
+    const commentRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'alpha' }, body: 'a note' }),
+      }),
+    );
+    expect(commentRes.status).toBe(201);
+    const commentThread = ((await commentRes.json()) as { thread: { id: string } }).thread;
+    const onComment = await patchThread(created, commentThread.id, {
+      proposal: { proposed_text: 'x' },
+    });
+    expect(onComment.status).toBe(400);
+    expect(await onComment.json()).toEqual({ error: 'proposal-required' });
+
+    // A legacy row without branch storage cannot be updated in place.
+    app.db
+      .prepare('UPDATE comments_edit_proposals SET branch_ref = NULL WHERE comment_id = ?')
+      .run(threadId);
+    const legacy = await patchThread(created, threadId, { proposal: { proposed_text: 'x' } });
+    expect(legacy.status).toBe(409);
+    expect(await legacy.json()).toEqual({ error: 'proposal-update-unavailable' });
+    app.db
+      .prepare('UPDATE comments_edit_proposals SET branch_ref = ? WHERE comment_id = ?')
+      .run(`refs/proposals/${threadId}`, threadId);
+
+    // Rewriting the anchored paragraph out from under it orphans the
+    // proposal; an orphan needs repair, not new text.
+    await saveSource(created, '# Title\n\nsomething else entirely');
+    const orphaned = await patchThread(created, threadId, { proposal: { proposed_text: 'x' } });
+    expect(orphaned.status).toBe(409);
+    expect(await orphaned.json()).toEqual({ error: 'proposal-orphaned' });
+  });
+
+  test('updating a conflicted proposal rebuilds it against current main and clears the conflict', async () => {
+    const source = '# Title\n\nalpha line here\n\nend';
+    const { created, threadId } = await seedProposal(source, 'alpha line here', 'beta line here');
+
+    // Rewrite the anchored paragraph directly: the proposal orphans, and
+    // repair can re-attach it only as a conflict (both sides edited the
+    // same line).
+    await saveSource(created, '# Title\n\ngamma line here\n\nend');
+    const repairRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads/${threadId}/repair`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(repairRes.status).toBe(200);
+    const repaired = (await repairRes.json()) as { thread: { link_status: string } };
+    expect(repaired.thread.link_status).toBe('conflict');
+
+    // The author rewrites the suggestion against what is there now —
+    // that is the fix for a conflict, and it clears the flag.
+    const res = await patchThread(created, threadId, {
+      proposal: { proposed_text: 'delta line here' },
+    });
+    expect(res.status).toBe(200);
+    const { thread } = (await res.json()) as {
+      thread: {
+        link_status: string;
+        proposal: { source_snapshot: string | null };
+        capabilities: Record<string, boolean>;
+      };
+    };
+    expect(thread.link_status).toBe('linked');
+    expect(thread.proposal.source_snapshot).toBe('gamma line here');
+    expect(thread.capabilities.accept).toBe(true);
+
+    expect((await acceptThread(created, threadId)).status).toBe(200);
+    expect(await readSource(created)).toBe('# Title\n\ndelta line here\n\nend');
+  });
+
+  test('updating a whole-document proposal replaces the whole current source', async () => {
+    const source = '# Title\n\nalpha';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).keys()][0] as string;
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: '' },
+          body: 'full rewrite',
+          proposal: { proposed_text: '# Rewrite\n\none\n', whole_document: true },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const threadId = ((await proposeRes.json()) as { thread: { id: string } }).thread.id;
+
+    // Whole-document proposals survive any drift — update splices the
+    // full current source even after main moved.
+    await saveSource(created, '# Title\n\nalpha\n\nadded');
+    const res = await patchThread(created, threadId, {
+      proposal: { proposed_text: '# Rewrite\n\ntwo\n' },
+    });
+    expect(res.status).toBe(200);
+    const docLocator = { uid: created.uid, format: 'markdown' as const };
+    expect(await app.store.readProposalTip(docLocator, threadId)).toBe('# Rewrite\n\ntwo\n');
+    const row = app.db
+      .prepare(
+        'SELECT base_block_start, base_block_end FROM comments_edit_proposals WHERE comment_id = ?',
+      )
+      .get(threadId) as { base_block_start: number; base_block_end: number };
+    expect(row.base_block_start).toBe(0);
+    expect(row.base_block_end).toBe('# Title\n\nalpha\n\nadded'.length);
+
+    expect((await acceptThread(created, threadId)).status).toBe(200);
+    expect(await readSource(created)).toBe('# Rewrite\n\ntwo\n');
+  });
+
   test('accept returns 409 proposal-orphaned when the branch ref has vanished (#25)', async () => {
     // Without `proposed_text` in a column anymore the branch tip is the
     // only source of truth, so a missing ref means the proposal can't

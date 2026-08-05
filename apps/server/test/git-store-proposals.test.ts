@@ -79,6 +79,41 @@ Para C baseline.
     expect(store.read(doc)).toBe(INITIAL);
   });
 
+  test('createProposalBranch keeps the previous tip under refs/proposals-original when re-pointing', async () => {
+    const baseOid = await mainOid();
+    const first = INITIAL.replace('Para B baseline.', 'Para B, first attempt.');
+    const { commitOid: firstTip } = await store.createProposalBranch(
+      doc,
+      baseOid,
+      'p1',
+      first,
+      author,
+    );
+
+    const second = INITIAL.replace('Para B baseline.', 'Para B, revised.');
+    const { commitOid: secondTip, refName } = await store.createProposalBranch(
+      doc,
+      baseOid,
+      'p1',
+      second,
+      author,
+      'revised after feedback',
+    );
+
+    expect(secondTip).not.toBe(firstTip);
+    expect(await store.readProposalTip(doc, 'p1')).toBe(second);
+    expect(await git.resolveRef({ fs, dir: store.repoDir(doc.uid), ref: refName })).toBe(secondTip);
+
+    // The overwritten version stays reachable, same convention as
+    // rewriteProposalBranchToMergedSource.
+    const backup = await git.resolveRef({
+      fs,
+      dir: store.repoDir(doc.uid),
+      ref: `refs/proposals-original/p1/${firstTip}`,
+    });
+    expect(backup).toBe(firstTip);
+  });
+
   test('createProposalBranch embeds the rationale in the commit message body', async () => {
     const baseOid = await mainOid();
     const proposed = INITIAL.replace('Para B baseline.', 'Para B from p2.');

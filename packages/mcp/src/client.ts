@@ -278,9 +278,17 @@ function describeApiError(status: number, code: string, ref: DocumentRef): strin
         'list (the document may have changed since) and retry with a current block_id.'
       );
     case 'proposal-orphaned':
-      return 'The text this proposal was anchored to no longer exists. Re-create the proposal against the current source.';
+      return (
+        'The text this proposal was anchored to no longer exists. Try repair_proposal_anchor ' +
+        'first; if that fails, re-create the proposal against the current source.'
+      );
     case 'proposal-conflict':
-      return 'The document changed underneath this proposal. Re-create it against the current source.';
+      return (
+        'The document changed underneath this proposal. If it is yours, refresh it with ' +
+        'update_proposal using text based on the current source; otherwise re-create it.'
+      );
+    case 'proposal-update-unavailable':
+      return 'This proposal predates branch storage and cannot be updated in place. Re-create it against the current source.';
     case 'proposal-storage-unavailable':
       return 'The server could not write the proposal branch to its git store.';
     case 'not-open':
