@@ -9,10 +9,17 @@ import {
   renderDocument,
   rewriteAssetReferences,
   sanitizeDocumentFilename,
+  spanHead,
 } from '@marginalia/renderer';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
-import { reanchor } from '../anchoring.js';
+import {
+  REANCHOR_COMMENT_SQL,
+  reanchor,
+  reanchorParams,
+  TOP_LEVEL_COMMENTS_SQL,
+  type TopLevelCommentRow,
+} from '../anchoring.js';
 import {
   authorize,
   canEdit,
@@ -349,22 +356,14 @@ async function updateDocument(c: Context, deps: AppDeps) {
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
   const rendered = await renderDocument(nextSource, doc.format);
-  const topLevel = db
-    .prepare(
-      `SELECT * FROM comments
-         WHERE doc_uid = ? AND parent_id IS NULL AND deleted_at IS NULL`,
-    )
-    .all(doc.uid) as CommentRow[];
-  const updateStmt = db.prepare(
-    `UPDATE comments
-        SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-            link_status = ?, updated_at = ?
-      WHERE id = ?`,
-  );
+  const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
+  const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
   const now = Date.now();
   for (const comment of topLevel) {
-    const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
+    const upd = reanchor(comment, rendered.blocks, {
+      isEditProposal: comment.is_edit_proposal === 1,
+    });
+    updateStmt.run(...reanchorParams(upd, now, comment.id));
   }
 
   // Include sub-block ids so proposals on list items / table cells don't
@@ -718,8 +717,10 @@ async function loadReviewThreadsForExport(
       // The exporter uses `anchor_quote` to wrap just the
       // highlighted substring (instead of the whole paragraph).
       // Stale quotes that no longer match the live block degrade
-      // to whole-paragraph wrap inside the renderer.
-      anchor_quote: row.anchor_quote,
+      // to whole-paragraph wrap inside the renderer. A span quote
+      // is per-block, so hand over only the part that belongs to
+      // `block_id` — the joined form matches no single block.
+      anchor_quote: row.anchor_quote === null ? null : spanHead(row.anchor_quote),
       comments: [opener, ...threadReplies],
       proposal,
     };

@@ -820,6 +820,13 @@ export function rotateAdminInvite(
 
 export interface CommentAnchor {
   block_id: string;
+  /**
+   * Last block of a multi-block span; null when the anchor covers a single
+   * block. `quote` then holds one `SPAN_SEPARATOR`-joined fragment per
+   * covered block, and `start_offset`/`end_offset` are offsets into
+   * `block_id` and `end_block_id` respectively.
+   */
+  end_block_id?: string | null;
   quote: string;
   prefix: string;
   suffix: string;

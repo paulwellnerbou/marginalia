@@ -1,4 +1,4 @@
-import type { BlockInfo } from '@marginalia/renderer';
+import { type BlockInfo, splitSpanQuote } from '@marginalia/renderer';
 import type { CommentLinkStatus, CommentRow } from './db.js';
 
 /**
@@ -22,11 +22,87 @@ import type { CommentLinkStatus, CommentRow } from './db.js';
 export interface AnchorUpdate {
   linkStatus: CommentLinkStatus;
   blockId: string | null;
+  /** Last block of a multi-block span; null once the anchor covers one block. */
+  endBlockId: string | null;
   startOffset: number | null;
   endOffset: number | null;
+  /**
+   * Rewritten quote, or null to keep the stored one. Only set when a span
+   * collapses and the surviving fragments no longer match what was stored.
+   */
+  quote: string | null;
 }
 
-export function reanchor(comment: CommentRow, blocks: BlockInfo[]): AnchorUpdate {
+/**
+ * Every anchored root comment in a document, flagged with whether it is an
+ * edit proposal — proposals re-anchor under different rules, see
+ * `ReanchorOptions.isEditProposal`.
+ */
+export const TOP_LEVEL_COMMENTS_SQL = `
+  SELECT c.*, (cep.comment_id IS NOT NULL) AS is_edit_proposal
+    FROM comments c
+    LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+   WHERE c.doc_uid = ? AND c.parent_id IS NULL AND c.deleted_at IS NULL`;
+
+export type TopLevelCommentRow = CommentRow & { is_edit_proposal: number };
+
+/**
+ * Statement every re-anchoring pass writes through. `anchor_quote` is only
+ * overwritten when the update carries a rewritten one — a collapsed span —
+ * so the common case leaves the stored quote untouched.
+ */
+export const REANCHOR_COMMENT_SQL = `
+  UPDATE comments
+     SET anchor_block_id = ?,
+         anchor_end_block_id = ?,
+         anchor_start_offset = ?,
+         anchor_end_offset = ?,
+         anchor_quote = COALESCE(?, anchor_quote),
+         link_status = ?,
+         updated_at = ?
+   WHERE id = ?`;
+
+export function reanchorParams(
+  upd: AnchorUpdate,
+  now: number,
+  commentId: string,
+): [
+  string | null,
+  string | null,
+  number | null,
+  number | null,
+  string | null,
+  string,
+  number,
+  string,
+] {
+  return [
+    upd.blockId,
+    upd.endBlockId,
+    upd.startOffset,
+    upd.endOffset,
+    upd.quote,
+    upd.linkStatus,
+    now,
+    commentId,
+  ];
+}
+
+export interface ReanchorOptions {
+  /**
+   * Edit proposals also carry `anchor_end_block_id`, but their quote is a
+   * snapshot of the spliced source rather than a per-block fragment list,
+   * and `reanchorProposals` owns their span endpoints. Re-anchoring one
+   * here must never collapse or rewrite that span, so proposals opt out.
+   */
+  isEditProposal?: boolean;
+}
+
+export function reanchor(
+  comment: CommentRow,
+  blocks: BlockInfo[],
+  options: ReanchorOptions = {},
+): AnchorUpdate {
   const quote = comment.anchor_quote;
   if (!quote) {
     return noop(comment);
@@ -34,12 +110,120 @@ export function reanchor(comment: CommentRow, blocks: BlockInfo[]): AnchorUpdate
 
   const originalPath = parseHeadingPath(comment.anchor_heading_path);
   const originalIndexPath = parseIntArray(comment.anchor_section_index_path);
+  const ctx: Context = { comment, blocks, originalPath, originalIndexPath };
 
-  const byId = new Map<string, BlockInfo>();
-  for (const b of blocks) byId.set(b.id, b);
+  const fragments = splitSpanQuote(quote);
+  if (!options.isEditProposal && comment.anchor_end_block_id && fragments.length > 1) {
+    return reanchorSpan(ctx, fragments);
+  }
+  const found = locateFragment(ctx, quote, comment.anchor_block_id, {
+    prefix: comment.anchor_prefix,
+    suffix: comment.anchor_suffix,
+  });
+  return {
+    ...found,
+    endBlockId: options.isEditProposal ? comment.anchor_end_block_id : null,
+    quote: null,
+  };
+}
+
+interface Context {
+  comment: CommentRow;
+  blocks: BlockInfo[];
+  originalPath: string[] | null;
+  originalIndexPath: number[] | null;
+}
+
+interface FragmentMatch {
+  linkStatus: CommentLinkStatus;
+  blockId: string | null;
+  startOffset: number | null;
+  endOffset: number | null;
+}
+
+/**
+ * Re-anchor a span by re-anchoring its two endpoints independently: the
+ * leading fragment against `anchor_block_id`, the trailing one against
+ * `anchor_end_block_id`. The fragments in between are not stored — the
+ * client re-derives them from the DOM — so content edited inside the span
+ * doesn't weaken the anchor.
+ *
+ * A span survives as a span only while both endpoints resolve and stay in
+ * document order. Otherwise it collapses to whichever endpoint is left,
+ * and the quote is rewritten to that endpoint's fragment so `block_id`
+ * and the leading fragment stay in sync for every downstream reader.
+ */
+function reanchorSpan(ctx: Context, fragments: string[]): AnchorUpdate {
+  const head = fragments[0]!;
+  const tail = fragments[fragments.length - 1]!;
+  // The stored prefix sits before the head and the suffix after the tail;
+  // neither endpoint gets to use the other's context.
+  const start = locateFragment(ctx, head, ctx.comment.anchor_block_id, {
+    prefix: ctx.comment.anchor_prefix,
+    suffix: null,
+  });
+  const end = locateFragment(ctx, tail, ctx.comment.anchor_end_block_id, {
+    prefix: null,
+    suffix: ctx.comment.anchor_suffix,
+  });
+
+  if (start.linkStatus === 'orphaned') {
+    // Leading block gone: keep the comment on the surviving tail rather
+    // than orphaning the whole thread, but it is no longer a span.
+    if (end.linkStatus === 'orphaned') {
+      return {
+        linkStatus: 'orphaned',
+        blockId: null,
+        endBlockId: null,
+        startOffset: null,
+        endOffset: null,
+        quote: null,
+      };
+    }
+    return { ...end, linkStatus: 'low-confidence', endBlockId: null, quote: tail };
+  }
+  if (end.linkStatus === 'orphaned') {
+    return { ...start, linkStatus: 'low-confidence', endBlockId: null, quote: head };
+  }
+
+  // Both endpoints found, but an edit may have reordered them (or moved
+  // one into the other's block). A span that no longer runs forwards
+  // can't be painted, so keep only its head.
+  const startIdx = ctx.blocks.findIndex((b) => b.id === start.blockId);
+  const endIdx = ctx.blocks.findIndex((b) => b.id === end.blockId);
+  if (start.blockId === end.blockId || startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+    return { ...start, linkStatus: 'low-confidence', endBlockId: null, quote: head };
+  }
+
+  return {
+    linkStatus:
+      start.linkStatus === 'linked' && end.linkStatus === 'linked' ? 'linked' : 'low-confidence',
+    blockId: start.blockId,
+    endBlockId: end.blockId,
+    startOffset: start.startOffset,
+    endOffset: end.endOffset,
+    // Middle fragments are never read back — the client re-derives the
+    // blocks between the endpoints from the DOM — so leave the stored
+    // quote alone even when the span's interior changed.
+    quote: null,
+  };
+}
+
+/**
+ * Locate one quote fragment, preferring `preferredBlockId`. This is the
+ * original single-block ladder: same block → same block fuzzily → the
+ * best-scoring other block containing it → prefix+quote+suffix.
+ */
+function locateFragment(
+  ctx: Context,
+  quote: string,
+  preferredBlockId: string | null,
+  context: { prefix: string | null; suffix: string | null },
+): FragmentMatch {
+  const { blocks, originalPath, originalIndexPath } = ctx;
 
   // 1. Block with same ID: quote still present? confident.
-  const sameBlock = comment.anchor_block_id ? byId.get(comment.anchor_block_id) : undefined;
+  const sameBlock = preferredBlockId ? blocks.find((b) => b.id === preferredBlockId) : undefined;
   if (sameBlock) {
     const idx = sameBlock.text.indexOf(quote);
     if (idx >= 0) {
@@ -64,7 +248,7 @@ export function reanchor(comment: CommentRow, blocks: BlockInfo[]): AnchorUpdate
   // 2. Quote present in one or more other blocks? Pick the candidate with the
   //    strongest heading-path/section-index affinity, not just the first hit.
   const quoteMatches = blocks
-    .filter((b) => b.id !== comment.anchor_block_id && b.text.includes(quote))
+    .filter((b) => b.id !== preferredBlockId && b.text.includes(quote))
     .map((b) => ({
       block: b,
       offset: b.text.indexOf(quote),
@@ -83,19 +267,20 @@ export function reanchor(comment: CommentRow, blocks: BlockInfo[]): AnchorUpdate
 
   // 3. prefix + quote + suffix fuzzy search — again, prefer the structurally
   //    closest candidate.
-  const context = (comment.anchor_prefix ?? '') + quote + (comment.anchor_suffix ?? '');
-  if (context.length > quote.length) {
+  const prefix = context.prefix ?? '';
+  const needle = prefix + quote + (context.suffix ?? '');
+  if (needle.length > quote.length) {
     const ctxMatches = blocks
-      .filter((b) => b.text.includes(context))
+      .filter((b) => b.text.includes(needle))
       .map((b) => ({
         block: b,
-        offset: b.text.indexOf(context),
+        offset: b.text.indexOf(needle),
         score: scoreCandidate(b, originalPath, originalIndexPath),
       }));
     if (ctxMatches.length) {
       ctxMatches.sort((a, b) => b.score - a.score);
       const best = ctxMatches[0]!;
-      const start = best.offset + (comment.anchor_prefix?.length ?? 0);
+      const start = best.offset + prefix.length;
       return {
         linkStatus: 'low-confidence',
         blockId: best.block.id,
@@ -113,8 +298,10 @@ function noop(comment: CommentRow): AnchorUpdate {
   return {
     linkStatus: comment.link_status,
     blockId: comment.anchor_block_id,
+    endBlockId: comment.anchor_end_block_id,
     startOffset: comment.anchor_start_offset,
     endOffset: comment.anchor_end_offset,
+    quote: null,
   };
 }
 

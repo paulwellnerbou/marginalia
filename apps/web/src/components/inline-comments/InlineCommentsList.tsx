@@ -2,6 +2,7 @@ import type { BlockSourceRange } from '@marginalia/renderer';
 import { DotsHorizontalIcon } from '@radix-ui/react-icons';
 import { DropdownMenu, Flex, IconButton, SegmentedControl, Text } from '@radix-ui/themes';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import {
@@ -308,7 +309,7 @@ export function InlineCommentsList({
 
       {canComment && pendingAnchor && (
         <div className="ic-card ic-card-pending">
-          <div className="ic-pending-quote">"{truncate(pendingAnchor.quote, 160)}"</div>
+          <div className="ic-pending-quote">"{formatAnchorQuote(pendingAnchor.quote, 160)}"</div>
           <InlineComposer
             placeholder="Your comment…"
             needsName={!displayName}
@@ -385,10 +386,4 @@ function compareDocument(a: ThreadListItem, b: ThreadListItem): number {
   }
   if (a.startOffset !== b.startOffset) return a.startOffset - b.startOffset;
   return a.createdAt - b.createdAt;
-}
-
-function truncate(s: string | null, n: number): string {
-  if (!s) return '';
-  if (s.length <= n) return s;
-  return `${s.slice(0, n)}…`;
 }

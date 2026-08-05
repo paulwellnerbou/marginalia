@@ -9,6 +9,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import {
@@ -778,7 +779,7 @@ export function InlineCommentsLayer({
       if (!pendingAnchor || !canComment) return null;
       return (
         <div className="ic-card ic-card-pending">
-          <div className="ic-pending-quote">"{truncate(pendingAnchor.quote, 160)}"</div>
+          <div className="ic-pending-quote">"{formatAnchorQuote(pendingAnchor.quote, 160)}"</div>
           <InlineComposer
             placeholder="Your comment…"
             needsName={!displayName}
@@ -948,10 +949,4 @@ function shouldAutoCollapse(t: Thread): boolean {
     if (s === 'accepted' || s === 'rejected') return true;
   }
   return false;
-}
-
-function truncate(s: string | null, n: number): string {
-  if (!s) return '';
-  if (s.length <= n) return s;
-  return `${s.slice(0, n)}…`;
 }

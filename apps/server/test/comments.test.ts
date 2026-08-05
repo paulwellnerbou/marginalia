@@ -481,6 +481,172 @@ describe('threads API', () => {
     expect(comments[0]!.link_status).toBe('orphaned');
   });
 
+  describe('multi-block anchors', () => {
+    const SPAN_DOC = '# Title\n\nAlpha one.\n\nBravo two.\n\nCharlie three.\n';
+    const SPAN_SEPARATOR = '\n\n';
+
+    async function paragraphIds(uid: string): Promise<string[]> {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+      );
+      const j = (await res.json()) as {
+        rendered: { blocks: Array<{ id: string; kind: string }> };
+      };
+      return j.rendered.blocks.filter((b) => b.kind === 'paragraph').map((b) => b.id);
+    }
+
+    /** Comment spanning all three paragraphs, each covered whole. */
+    async function addSpan(uid: string, ids: string[]): Promise<string> {
+      const fragments = ['Alpha one.', 'Bravo two.', 'Charlie three.'];
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: headersFor(ALICE),
+          body: JSON.stringify({
+            anchor: {
+              block_id: ids[0],
+              end_block_id: ids[2],
+              quote: fragments.join(SPAN_SEPARATOR),
+              prefix: '',
+              suffix: '',
+              start_offset: 0,
+              end_offset: fragments[2]!.length,
+            },
+            body: 'spans three paragraphs',
+          }),
+        }),
+      );
+      expect(res.status).toBe(201);
+      const j = (await res.json()) as { thread: ThreadShape };
+      return j.thread.id;
+    }
+
+    async function save(uid: string, markdown: string): Promise<void> {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}`, {
+          method: 'PUT',
+          headers: asAdmin(),
+          body: JSON.stringify({ markdown }),
+        }),
+      );
+      expect(res.status).toBe(200);
+    }
+
+    async function anchorOf(uid: string): Promise<ThreadAnchorShape> {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, { headers: headersFor(ALICE) }),
+      );
+      const j = (await res.json()) as { threads: ThreadShape[] };
+      return j.threads[0]!.anchor;
+    }
+
+    test('round-trips end_block_id and the joined quote', async () => {
+      const uid = await newDoc(SPAN_DOC);
+      const ids = await paragraphIds(uid);
+      await addSpan(uid, ids);
+
+      const anchor = await anchorOf(uid);
+      expect(anchor.block_id).toBe(ids[0]!);
+      expect(anchor.end_block_id).toBe(ids[2]!);
+      expect(anchor.quote!.split(SPAN_SEPARATOR)).toEqual([
+        'Alpha one.',
+        'Bravo two.',
+        'Charlie three.',
+      ]);
+      expect(anchor.end_offset).toBe('Charlie three.'.length);
+    });
+
+    test('stays linked when only the text between the endpoints changes', async () => {
+      const uid = await newDoc(SPAN_DOC);
+      const ids = await paragraphIds(uid);
+      await addSpan(uid, ids);
+
+      await save(uid, '# Title\n\nAlpha one.\n\nBravo two, rewritten.\n\nCharlie three.\n');
+
+      const anchor = await anchorOf(uid);
+      expect(anchor.block_id).toBe(ids[0]!);
+      expect(anchor.end_block_id).toBe(ids[2]!);
+      const threads = await list(uid, ALICE);
+      expect(threads[0]!.link_status).toBe('linked');
+    });
+
+    test('collapses onto the head when the last block disappears', async () => {
+      const uid = await newDoc(SPAN_DOC);
+      const ids = await paragraphIds(uid);
+      await addSpan(uid, ids);
+
+      await save(uid, '# Title\n\nAlpha one.\n\nBravo two.\n');
+
+      const anchor = await anchorOf(uid);
+      expect(anchor.block_id).toBe(ids[0]!);
+      expect(anchor.end_block_id).toBeNull();
+      // The quote is rewritten so it still describes `block_id` alone.
+      expect(anchor.quote).toBe('Alpha one.');
+      const threads = await list(uid, ALICE);
+      expect(threads[0]!.link_status).toBe('low-confidence');
+    });
+
+    test('collapses onto the tail when the first block disappears', async () => {
+      const uid = await newDoc(SPAN_DOC);
+      const ids = await paragraphIds(uid);
+      await addSpan(uid, ids);
+
+      await save(uid, '# Title\n\nBravo two.\n\nCharlie three.\n');
+
+      const anchor = await anchorOf(uid);
+      expect(anchor.block_id).toBe(ids[2]!);
+      expect(anchor.end_block_id).toBeNull();
+      expect(anchor.quote).toBe('Charlie three.');
+      const threads = await list(uid, ALICE);
+      expect(threads[0]!.link_status).toBe('low-confidence');
+    });
+
+    test('orphans when both endpoints disappear', async () => {
+      const uid = await newDoc(SPAN_DOC);
+      const ids = await paragraphIds(uid);
+      await addSpan(uid, ids);
+
+      await save(uid, '# Title\n\nBravo two.\n');
+
+      const anchor = await anchorOf(uid);
+      expect(anchor.block_id).toBeNull();
+      expect(anchor.end_block_id).toBeNull();
+      const threads = await list(uid, ALICE);
+      expect(threads[0]!.link_status).toBe('orphaned');
+    });
+
+    test('collapses when an edit reverses the endpoints', async () => {
+      const uid = await newDoc(SPAN_DOC);
+      const ids = await paragraphIds(uid);
+      await addSpan(uid, ids);
+
+      // Same blocks, opposite order: the span no longer runs forwards.
+      await save(uid, '# Title\n\nCharlie three.\n\nBravo two.\n\nAlpha one.\n');
+
+      const anchor = await anchorOf(uid);
+      expect(anchor.block_id).toBe(ids[0]!);
+      expect(anchor.end_block_id).toBeNull();
+      expect(anchor.quote).toBe('Alpha one.');
+      const threads = await list(uid, ALICE);
+      expect(threads[0]!.link_status).toBe('low-confidence');
+    });
+
+    test('single-block comments are unaffected by span handling', async () => {
+      const uid = await newDoc(SPAN_DOC);
+      const ids = await paragraphIds(uid);
+      await addComment(uid, ALICE, { block_id: ids[1]!, quote: 'Bravo' }, 'c');
+
+      await save(uid, '# New Title\n\nAlpha one.\n\nBravo two.\n\nCharlie three.\n');
+
+      const anchor = await anchorOf(uid);
+      expect(anchor.block_id).toBe(ids[1]!);
+      expect(anchor.end_block_id).toBeNull();
+      expect(anchor.quote).toBe('Bravo');
+      const threads = await list(uid, ALICE);
+      expect(threads[0]!.link_status).toBe('linked');
+    });
+  });
+
   test('identity required to post', async () => {
     const uid = await newDoc('# Hi');
     const blockId = await firstBlockId(uid);
@@ -1270,6 +1436,60 @@ describe('threads API', () => {
     const accepted = listJson.threads.find((t) => t.id === proposed.thread.id);
     expect(accepted).toBeDefined();
     expect(accepted!.anchor.end_block_id).toBeNull();
+  });
+
+  test('multi-block proposal: a save that breaks the span orphans it, never shrinks it', async () => {
+    // A proposal's quote is also `\n\n`-joined, but it is a snapshot of
+    // the spliced source, not a per-block fragment list. Comment
+    // re-anchoring must leave it alone: collapsing it onto its head
+    // would leave the proposal open and quietly re-targeted at one
+    // paragraph, so accepting it would replace the wrong span.
+    const uid = await newDoc('Alpha paragraph.\n\nBeta paragraph.\n\nGamma paragraph.\n');
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const docJson = (await docRes.json()) as {
+      rendered: { blocks: Array<{ id: string; text: string }> };
+    };
+    const [alpha, , gamma] = docJson.rendered.blocks;
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: {
+            block_id: alpha!.id,
+            end_block_id: gamma!.id,
+            quote: 'Alpha paragraph.\n\nBeta paragraph.\n\nGamma paragraph.',
+          },
+          proposal: { anchor_kind: 'paragraph', proposed_text: 'REPLACED.' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposalId = ((await proposeRes.json()) as { thread: ThreadShape }).thread.id;
+
+    // Rewrite the span's last paragraph: its content-hash id changes, so
+    // the far endpoint no longer resolves.
+    const put = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, {
+        method: 'PUT',
+        headers: asAdmin(),
+        body: JSON.stringify({
+          markdown: 'Alpha paragraph.\n\nBeta paragraph.\n\nDelta paragraph.\n',
+        }),
+      }),
+    );
+    expect(put.status).toBe(200);
+
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, { headers: headersFor(ALICE) }),
+    );
+    const { threads } = (await listRes.json()) as { threads: ThreadShape[] };
+    const proposal = threads.find((t) => t.id === proposalId);
+    expect(proposal).toBeDefined();
+    expect(proposal!.link_status).toBe('orphaned');
   });
 
   test('multi-block proposal: list-item endpoints span the items and splice cleanly', async () => {
