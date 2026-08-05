@@ -1761,11 +1761,11 @@ interface ReactionWire {
   authors: string[];
 }
 
-// Conservative cap on the `comment_id IN (?, ?, …)` list. SQLite's
+// Conservative cap on an `IN (?, ?, …)` list. SQLite's
 // `SQLITE_MAX_VARIABLE_NUMBER` is 999 on older builds and 32766 on
 // recent ones; 500 is well under the floor and lets us batch without
 // caring which build is active. Plus 1 for `doc_uid`.
-const REACTION_QUERY_BATCH = 500;
+const ID_QUERY_BATCH = 500;
 
 /**
  * Reverse of `answers_comment_id`: which proposals answer each thread.
@@ -1780,23 +1780,31 @@ function loadAnswersByThread(
 ): Map<string, string[]> {
   const out = new Map<string, string[]>();
   if (threadIds.length === 0) return out;
-  const wanted = new Set(threadIds);
-  const rows = db
-    .prepare(
-      `SELECT cep.comment_id, cep.answers_comment_id
-         FROM comments_edit_proposals cep
-         JOIN comments c ON c.id = cep.comment_id
-        WHERE c.doc_uid = ?
-          AND c.deleted_at IS NULL
-          AND cep.answers_comment_id IS NOT NULL
-        ORDER BY c.created_at ASC`,
-    )
-    .all(docUid) as Array<{ comment_id: string; answers_comment_id: string }>;
-  for (const row of rows) {
-    if (!wanted.has(row.answers_comment_id)) continue;
-    const list = out.get(row.answers_comment_id);
-    if (list) list.push(row.comment_id);
-    else out.set(row.answers_comment_id, [row.comment_id]);
+
+  // Filter on the requested ids in SQL rather than reading every linked
+  // proposal in the document and discarding most of them. For the
+  // listThreads page that is the same set either way, but the
+  // single-thread handlers ask about exactly one id and shouldn't pay
+  // for a document-wide scan.
+  for (let i = 0; i < threadIds.length; i += ID_QUERY_BATCH) {
+    const batch = threadIds.slice(i, i + ID_QUERY_BATCH);
+    const placeholders = batch.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT cep.comment_id, cep.answers_comment_id
+           FROM comments_edit_proposals cep
+           JOIN comments c ON c.id = cep.comment_id
+          WHERE c.doc_uid = ?
+            AND c.deleted_at IS NULL
+            AND cep.answers_comment_id IN (${placeholders})
+          ORDER BY cep.answers_comment_id, c.created_at ASC`,
+      )
+      .all(docUid, ...batch) as Array<{ comment_id: string; answers_comment_id: string }>;
+    for (const row of rows) {
+      const list = out.get(row.answers_comment_id);
+      if (list) list.push(row.comment_id);
+      else out.set(row.answers_comment_id, [row.comment_id]);
+    }
   }
   return out;
 }
@@ -1812,8 +1820,8 @@ function loadCommentReactionsWire(
 
   // Group reactions per (comment_id, emoji) as we read across batches.
   const grouped = new Map<string, Map<string, ReactionWire>>();
-  for (let i = 0; i < commentIds.length; i += REACTION_QUERY_BATCH) {
-    const batch = commentIds.slice(i, i + REACTION_QUERY_BATCH);
+  for (let i = 0; i < commentIds.length; i += ID_QUERY_BATCH) {
+    const batch = commentIds.slice(i, i + ID_QUERY_BATCH);
     const placeholders = batch.map(() => '?').join(',');
     // ORDER BY (comment_id, created_at) lines up with the
     // (doc_uid, comment_id, created_at) index so the sort is index-

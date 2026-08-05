@@ -1,5 +1,5 @@
 import { FileTextIcon, PilcrowIcon } from '@radix-ui/react-icons';
-import { useMemo, useRef, useState } from 'react';
+import { type ReactNode, useMemo, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { Comment, ProposalDiff, Thread } from '../../lib/api.js';
 import { getEditProposalDiff, isProposal, proposalStatus } from '../../lib/api.js';
@@ -45,6 +45,40 @@ interface Props {
   ) => Promise<boolean>;
   onRepairThread: (id: string) => Promise<boolean>;
   onReact: (commentId: string, emoji: string) => Promise<void>;
+}
+
+/**
+ * A pointer to the thread on the other end of a proposal link.
+ *
+ * Jumping there goes through the anchor, so a target whose anchor was
+ * lost (orphaned by an accepted edit) has nowhere to scroll to. Render
+ * that case as plain text rather than a button that does nothing —
+ * knowing the link exists is still worth showing, but a control that
+ * silently ignores clicks is not.
+ */
+function ThreadLink({
+  target,
+  onFocus,
+  title,
+  children,
+}: {
+  target: Thread;
+  onFocus: (target: Thread) => void;
+  title: string;
+  children: ReactNode;
+}) {
+  if (!target.anchor.block_id) {
+    return (
+      <span className="ic-card-link ic-card-link-static" title={`${title} (anchor lost)`}>
+        {children}
+      </span>
+    );
+  }
+  return (
+    <button type="button" className="ic-card-link" onClick={() => onFocus(target)} title={title}>
+      {children}
+    </button>
+  );
 }
 
 export function InlineThreadCard({
@@ -280,28 +314,26 @@ export function InlineThreadCard({
         </div>
         {diffError && <span className="ic-error">{diffError}</span>}
         {links.answers && (
-          <button
-            type="button"
-            className="ic-card-link"
-            onClick={() => onFocusLinked(links.answers as Thread)}
+          <ThreadLink
+            target={links.answers}
+            onFocus={onFocusLinked}
             title={`Written to answer ${links.answers.comments[0].author.display_name}'s comment`}
           >
             Answers: {formatAnchorQuote(links.answers.anchor.quote, 48) || 'a comment'}
-          </button>
+          </ThreadLink>
         )}
         {links.answeredBy.length > 0 && (
           <div className="ic-card-answers">
             {links.answeredBy.map((target, index) => (
-              <button
+              <ThreadLink
                 key={target.id}
-                type="button"
-                className="ic-card-link"
-                onClick={() => onFocusLinked(target)}
+                target={target}
+                onFocus={onFocusLinked}
                 title={`${target.comments[0].author.display_name} proposed a change for this comment`}
               >
                 See proposed change{links.answeredBy.length > 1 ? ` ${index + 1}` : ''}
                 {proposalStatus(target) !== 'open' ? ` (${proposalStatus(target)})` : ''}
-              </button>
+              </ThreadLink>
             ))}
           </div>
         )}

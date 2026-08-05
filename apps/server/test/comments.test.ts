@@ -2081,6 +2081,43 @@ describe('threads API', () => {
       expect((await propose(uid, ALICE, blockId, '# X', otherComment)).status).toBe(400);
     });
 
+    test('only reports the proposals for the threads asked about', async () => {
+      const uid = await newDoc('# Title\n\nA paragraph.\n');
+      const blockId = await firstBlockId(uid);
+
+      // Two independent comments, each answered by its own proposal, so a
+      // query that ignored the requested ids would cross-report them.
+      const firstComment = await seedComment(uid, blockId);
+      const secondComment = await seedComment(uid, blockId);
+      const firstProposal = await propose(uid, ALICE, blockId, '# One', firstComment);
+      const secondProposal = await propose(uid, ALICE, blockId, '# Two', secondComment);
+
+      const threads = await threadsOf(uid);
+      expect(threads.find((t) => t.id === firstComment)!.answered_by_thread_ids).toEqual([
+        firstProposal.id as string,
+      ]);
+      expect(threads.find((t) => t.id === secondComment)!.answered_by_thread_ids).toEqual([
+        secondProposal.id as string,
+      ]);
+    });
+
+    test('a deleted proposal stops answering its comment', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const commentId = await seedComment(uid, blockId);
+      const proposal = await propose(uid, ALICE, blockId, '# Fixed', commentId);
+
+      await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${proposal.id}`, {
+          method: 'DELETE',
+          headers: asAdmin(),
+        }),
+      );
+
+      const threads = await threadsOf(uid);
+      expect(threads.find((t) => t.id === commentId)!.answered_by_thread_ids).toEqual([]);
+    });
+
     test('accepting the proposal resolves the comment it answers', async () => {
       const uid = await newDoc('# Title\n');
       const blockId = await firstBlockId(uid);
