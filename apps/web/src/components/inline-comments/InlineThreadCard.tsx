@@ -1,4 +1,10 @@
-import { CheckIcon, ClipboardCopyIcon, FileTextIcon, PilcrowIcon } from '@radix-ui/react-icons';
+import {
+  ChatBubbleIcon,
+  CheckIcon,
+  ClipboardCopyIcon,
+  FileTextIcon,
+  PilcrowIcon,
+} from '@radix-ui/react-icons';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { Comment, ProposalDiff, Thread } from '../../lib/api.js';
@@ -107,6 +113,16 @@ export function InlineThreadCard({
   onReact,
 }: Props) {
   const composerRef = useRef<InlineComposerHandle>(null);
+  // The reply composer stays closed until asked for — one textarea per
+  // expanded thread crowds the column out of the reading space.
+  const [replyOpen, setReplyOpen] = useState(false);
+  // A quote requested while the composer was closed: it can only be
+  // inserted once the composer exists, so park it for the open effect.
+  const pendingQuote = useRef<string | null>(null);
+  // Closing unmounts whatever had focus (textarea, Cancel), which would
+  // drop the keyboard user back to the document body.
+  const replyButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreReplyFocus = useRef(false);
   // Track BOTH the kind and the render location that started the action.
   // The same proposal can render Accept/Reject in up to two places at
   // once (the underlying card + the open diff dialog); without `source`
@@ -182,9 +198,33 @@ export function InlineThreadCard({
       .split('\n')
       .map((line) => `> ${line}`)
       .join('\n');
+    if (!replyOpen) {
+      pendingQuote.current = quoted;
+      setReplyOpen(true);
+      return;
+    }
     composerRef.current?.insertText(quoted);
     composerRef.current?.focus();
   }
+
+  function closeReply() {
+    restoreReplyFocus.current = true;
+    setReplyOpen(false);
+  }
+
+  useEffect(() => {
+    if (!replyOpen) {
+      if (!restoreReplyFocus.current) return;
+      restoreReplyFocus.current = false;
+      replyButtonRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    const quoted = pendingQuote.current;
+    if (!quoted) return;
+    pendingQuote.current = null;
+    composerRef.current?.insertText(quoted);
+    composerRef.current?.focus();
+  }, [replyOpen]);
 
   async function showDiff() {
     if (!proposalThread || loadingDiff) return;
@@ -421,7 +461,7 @@ export function InlineThreadCard({
             />
           ))}
 
-          {canComment ? (
+          {canComment && replyOpen ? (
             <InlineComposer
               ref={composerRef}
               placeholder="Reply…"
@@ -429,7 +469,13 @@ export function InlineThreadCard({
               mentionCandidates={mentionCandidates}
               rows={2}
               submitLabel="Reply"
-              onSubmit={(body, name) => onReply(thread.id, body, name)}
+              showCancel
+              autoFocus
+              onCancel={closeReply}
+              onSubmit={async (body, name) => {
+                await onReply(thread.id, body, name);
+                closeReply();
+              }}
               leftActions={
                 canAccept || canReject || canResolve || canReopen
                   ? ({ canRunAction, runAction }) => {
@@ -515,8 +561,8 @@ export function InlineThreadCard({
               }
             />
           ) : (
-            (canAccept || canReject || canResolve || canReopen) && (
-              <div className="ic-card-workflow ic-card-workflow-standalone">
+            (canComment || canAccept || canReject || canResolve || canReopen) && (
+              <div className="ic-card-actions">
                 {canAccept && (
                   <button
                     type="button"
@@ -563,6 +609,18 @@ export function InlineThreadCard({
                     aria-label="Reopen"
                   >
                     {workflowContent('Reopen', isRunning('reopen', 'standalone'))}
+                  </button>
+                )}
+                {canComment && (
+                  <button
+                    ref={replyButtonRef}
+                    type="button"
+                    className="ic-btn ic-btn-ghost ic-card-reply-open"
+                    onClick={() => setReplyOpen(true)}
+                    title="Write a reply"
+                  >
+                    <ChatBubbleIcon aria-hidden="true" />
+                    Reply
                   </button>
                 )}
               </div>
