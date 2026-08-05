@@ -10,6 +10,14 @@ import {
   getActiveMention,
 } from '../src/components/inline-comments/InlineComposer.js';
 import { inlineAvatarInitials } from '../src/components/inline-comments/inlineUtils.js';
+import {
+  ALL_THREAD_FILTERS,
+  activeThreadFilterLabels,
+  isFilteringThreads,
+  type ThreadFilters,
+  threadMatchesFilters,
+} from '../src/components/inline-comments/threadFilters.js';
+import type { Thread } from '../src/lib/api.js';
 
 describe('inlineAvatarInitials', () => {
   test('single names use their first two letters', () => {
@@ -132,6 +140,114 @@ describe('emoji shortcode autocomplete', () => {
 
   test('filterShortcodes respects the limit', () => {
     expect(filterShortcodes('a', 3).length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('threads-tab filters', () => {
+  function makeThread(over: {
+    id: string;
+    state?: Thread['state'];
+    resolution?: Thread['resolution'];
+    proposal?: Thread['proposal'];
+  }): Thread {
+    return {
+      id: over.id,
+      state: over.state ?? 'open',
+      resolution: over.resolution ?? null,
+      link_status: 'linked',
+      anchor: {
+        block_id: 'b1',
+        quote: 'quote',
+        prefix: '',
+        suffix: '',
+        start_offset: 0,
+        end_offset: 5,
+        heading_path: null,
+        section_index: null,
+        section_index_path: null,
+      },
+      capabilities: {
+        reply: true,
+        resolve: true,
+        accept: false,
+        reject: false,
+        repair: false,
+        reopen: false,
+      },
+      comments: [
+        {
+          id: `${over.id}-c1`,
+          body: 'hi',
+          author: { client_id: 'c', display_name: 'Bob' },
+          capabilities: { edit: true, delete: true, react: true },
+          reactions: [],
+          created_at: 1,
+          updated_at: 1,
+        },
+      ],
+      answered_by_thread_ids: [],
+      proposal: over.proposal ?? null,
+    };
+  }
+
+  const openComment = makeThread({ id: 'open-comment' });
+  const resolvedComment = makeThread({
+    id: 'resolved-comment',
+    state: 'resolved',
+    resolution: { kind: 'resolve', at: 2, by_name: 'Bob' },
+  });
+  const openProposal = makeThread({
+    id: 'open-proposal',
+    proposal: { whole_document: false, answers_thread_id: null },
+  });
+  const acceptedProposal = makeThread({
+    id: 'accepted-proposal',
+    state: 'resolved',
+    resolution: { kind: 'accept', at: 3, by_name: 'Bob' },
+    proposal: { whole_document: false, answers_thread_id: null },
+  });
+
+  const all = [openComment, resolvedComment, openProposal, acceptedProposal];
+  const matching = (filters: ThreadFilters) =>
+    all.filter((t) => threadMatchesFilters(t, filters)).map((t) => t.id);
+
+  test('the default filters keep every thread', () => {
+    expect(matching(ALL_THREAD_FILTERS)).toEqual([
+      'open-comment',
+      'resolved-comment',
+      'open-proposal',
+      'accepted-proposal',
+    ]);
+    expect(isFilteringThreads(ALL_THREAD_FILTERS)).toBe(false);
+  });
+
+  test('unresolved drops resolved comments and decided proposals alike', () => {
+    expect(matching({ status: 'unresolved', kind: 'all' })).toEqual([
+      'open-comment',
+      'open-proposal',
+    ]);
+  });
+
+  test('edit proposals drops plain comments, decided ones included', () => {
+    expect(matching({ status: 'all', kind: 'proposals' })).toEqual([
+      'open-proposal',
+      'accepted-proposal',
+    ]);
+  });
+
+  test('both filters apply together', () => {
+    expect(matching({ status: 'unresolved', kind: 'proposals' })).toEqual(['open-proposal']);
+    expect(isFilteringThreads({ status: 'unresolved', kind: 'proposals' })).toBe(true);
+    expect(isFilteringThreads({ status: 'all', kind: 'proposals' })).toBe(true);
+  });
+
+  test('a collapsed filter row can name what is active', () => {
+    expect(activeThreadFilterLabels(ALL_THREAD_FILTERS)).toEqual([]);
+    expect(activeThreadFilterLabels({ status: 'unresolved', kind: 'all' })).toEqual(['Unresolved']);
+    expect(activeThreadFilterLabels({ status: 'unresolved', kind: 'proposals' })).toEqual([
+      'Unresolved',
+      'Proposals',
+    ]);
   });
 });
 
