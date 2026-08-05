@@ -3148,6 +3148,47 @@ button.primary:disabled {
   word-wrap: break-word;
   overflow-wrap: anywhere;
 }
+
+/* Long bodies stay at a glanceable height until asked to open. `lh`
+   keeps the clamp on a line boundary, so the last visible line is never
+   sliced through. `overflow: hidden` also makes this a block formatting
+   context, keeping the children's margins inside the clamp. */
+.ic-body-clip {
+  --ic-body-clamp-lines: 3;
+  max-height: calc(var(--ic-body-clamp-lines) * 1lh);
+  overflow: hidden;
+}
+.ic-body-clip-open {
+  max-height: none;
+}
+/* Softening the tail of the last line marks the cut as a cut. A mask
+   rather than a background gradient: the card's own background is a
+   color-mix() that a gradient would have to duplicate to blend into.
+   The clamp lands on a line boundary, so the fade only has to cover the
+   bottom of the last line — the text above it stays fully legible. */
+.ic-body-clip[data-clipped="true"] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 0.6em), transparent);
+}
+
+/* Block-level so it sits on its own line, `fit-content` so the hover
+   background only covers the label. */
+.ic-body-toggle {
+  display: flex;
+  width: fit-content;
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+}
+
+@media print {
+  .ic-body-clip {
+    max-height: none;
+    mask-image: none;
+  }
+  .ic-body-toggle {
+    display: none;
+  }
+}
+
 .ic-row-body p {
   margin: 0 0 0.3rem;
 }
