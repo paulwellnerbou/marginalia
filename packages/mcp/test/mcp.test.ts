@@ -855,6 +855,147 @@ describe('marginalia MCP server', () => {
     expect(message).toContain('occurs 2 times');
   });
 
+  test('rewrites one section and leaves the rest of the document alone', async () => {
+    const { adminUrl } = await seedBook();
+    const output = await call('update_document', {
+      document: adminUrl,
+      section: 'Chapter Two',
+      // Trailing newlines the caller happened to leave on must not open a
+      // gap between this section and the next.
+      source: '## Chapter Two\n\nThe dunes closed behind them before the sun was high.\n\n',
+      commit_message: 'Rewrite chapter two',
+    });
+    expect(output).toContain('Replaced section The Salt Road › Chapter Two');
+
+    const whole = await call('get_document', { document: adminUrl });
+    expect(whole).toContain('The dunes closed behind them');
+    expect(whole).not.toContain('By noon the dunes');
+    expect(whole).not.toContain('Water rations');
+    // Its neighbours are untouched, and the chapter still reads as its own.
+    expect(whole).toContain('The caravan left before dawn');
+    expect(whole).toContain('They reached the well');
+    expect(whole).toContain(
+      'The dunes closed behind them before the sun was high.\n\n## Chapter Three',
+    );
+
+    const outline = await call('get_document', { document: adminUrl, include_source: false });
+    expect(outline).toContain('- Chapter Two');
+    expect(outline).toContain('- Chapter Three');
+  });
+
+  test('replacing a section keeps every other section addressable', async () => {
+    const { adminUrl } = await seedBook();
+    await call('update_document', {
+      document: adminUrl,
+      section: '#chapter-one',
+      source: '## Chapter One\n\nIbrahim left alone, and told nobody which way he had gone.',
+    });
+    const three = await call('get_document', { document: adminUrl, section: 'Chapter Three' });
+    expect(three).toContain('They reached the well');
+    expect(three).not.toContain('Ibrahim left alone');
+  });
+
+  test('takes a section replacement padded with blank lines at either end', async () => {
+    const { adminUrl } = await seedBook();
+    await call('update_document', {
+      document: adminUrl,
+      section: 'Chapter Two',
+      source: '\n\n## Chapter Two\n\nThe dunes closed behind them.\n\n',
+    });
+    const whole = await call('get_document', { document: adminUrl });
+    // Padding is the caller's, not the document's: the blank lines between
+    // sections sit outside the replaced range, so keeping either end would
+    // double a separator rather than preserve anything. Both seams are
+    // checked — the leading half of the trim is what holds the one above.
+    expect(whole).toContain(
+      'both times.\n\n## Chapter Two\n\nThe dunes closed behind them.\n\n## Chapter Three',
+    );
+  });
+
+  test('will not de-indent a code block into a section heading', async () => {
+    const { adminUrl } = await seedBook();
+    // Four spaces is an indented code block, not a heading. Trimming it
+    // flush would manufacture the heading the check is there to demand.
+    const message = await callExpectingError('update_document', {
+      document: adminUrl,
+      section: 'Chapter Two',
+      source: '    ## Chapter Two\n\nThe dunes closed behind them.',
+    });
+    expect(message).toContain('has to start with the section’s heading line');
+    expect(await call('get_document', { document: adminUrl })).toContain('By noon the dunes');
+  });
+
+  test('keeps a section heading’s own indentation verbatim', async () => {
+    const { adminUrl } = await seedBook();
+    // Up to three spaces is still a heading, and the indentation is the
+    // caller's text rather than padding to be tidied away.
+    await call('update_document', {
+      document: adminUrl,
+      section: 'Chapter Two',
+      source: '  ## Chapter Two\n\nThe dunes closed behind them.',
+    });
+    expect(await call('get_document', { document: adminUrl })).toContain(
+      '\n  ## Chapter Two\n\nThe dunes closed behind them.\n\n## Chapter Three',
+    );
+  });
+
+  test('refuses a section replacement that would dissolve the heading', async () => {
+    const { adminUrl } = await seedBook();
+    const message = await callExpectingError('update_document', {
+      document: adminUrl,
+      section: 'Chapter Two',
+      source: 'The dunes closed behind them before the sun was high.',
+    });
+    expect(message).toContain('has to start with the section’s heading line');
+    expect(message).toContain('Chapter Two');
+    // Nothing was written.
+    expect(await call('get_document', { document: adminUrl })).toContain('By noon the dunes');
+  });
+
+  test('recognises an asciidoc heading when replacing a section', async () => {
+    const output = await call('create_document', {
+      source:
+        '= The Salt Road\n\n== Chapter One\n\nThey left before dawn.\n\n== Chapter Two\n\nThe dunes.\n',
+      name: 'The Salt Road (adoc)',
+      format: 'asciidoc',
+    });
+    const matched = /^admin link[^:]*: (\S+)$/m.exec(output)?.[1];
+    expect(matched).toBeTruthy();
+    const adminUrl = matched as string;
+
+    const replaced = await call('update_document', {
+      document: adminUrl,
+      section: 'Chapter One',
+      source: '== Chapter One\n\nThey left at midnight instead.',
+    });
+    expect(replaced).toContain('Replaced section');
+
+    const whole = await call('get_document', { document: adminUrl });
+    expect(whole).toContain('They left at midnight instead.');
+    expect(whole).toContain('== Chapter Two');
+
+    // `#` is not an asciidoc heading, so it must not pass the check.
+    const message = await callExpectingError('update_document', {
+      document: adminUrl,
+      section: 'Chapter Two',
+      source: '## Chapter Two\n\nThe dunes.',
+    });
+    expect(message).toContain('has to start with the section’s heading line');
+  });
+
+  test('notes that renaming a section’s heading moves its slug', async () => {
+    const { adminUrl } = await seedBook();
+    const output = await call('update_document', {
+      document: adminUrl,
+      section: 'Chapter Two',
+      source: '## Chapter Two — The Dunes\n\nBy noon the dunes had swallowed the horizon.',
+    });
+    expect(output).toContain('#slug changes with it');
+    expect(await call('get_document', { document: adminUrl, include_source: false })).toContain(
+      '#chapter-two-the-dunes',
+    );
+  });
+
   test('downloads the document in several formats', async () => {
     const { adminUrl } = await seedBook();
     await call('create_comment', {

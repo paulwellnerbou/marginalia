@@ -219,7 +219,7 @@ approval apart.
 | Tool | |
 | --- | --- |
 | `edit_document` | Search-and-replace edits saved as a revision. `dry_run` shows the diff first. |
-| `update_document` | Replace the whole source. |
+| `update_document` | Replace the whole source — or, with `section`, just one chapter. |
 | `export_document` | Write `source`, `bundle`, `docx`, `pdf` to disk — `formats: ["all"]` for everything. **stdio only.** |
 | `create_document` | Upload markdown/AsciiDoc and get links back. `source_path` reads a local file — **stdio only**. |
 | `create_invite`, `list_invites`, `authenticate` | Access management. |
@@ -246,6 +246,32 @@ the whole book and `section: "Chapter Two"` is one chapter.
 
 A name that matches nothing gets the section list back; a name that matches several gets
 their full paths, rather than a silently chosen wrong chapter.
+
+## Writing a chapter back
+
+`update_document` takes the same `section`, which makes the round trip symmetric: read one
+chapter, rewrite it, send that chapter back. Only the heading and everything nested under
+it is replaced, so a rewrite costs one chapter in each direction instead of the whole book.
+
+```
+get_document     document=<url>  section="Chapter Two"
+update_document  document=<url>  section="Chapter Two"  source="## Chapter Two\n\n…"
+```
+
+`source` is the section as `get_document` returned it — **its heading line included**. A
+replacement that starts with anything else is refused rather than saved: a section runs
+from its heading to the next one, so dropping the heading merges the text into the chapter
+above and reparents every subsection below it, and the diff of the prose looks correct
+while the outline has quietly collapsed. Trailing blank lines are trimmed, so a chapter
+handed back verbatim splices in unchanged whatever the caller left on the end.
+
+Rewriting the heading itself is allowed — that is how a chapter gets renamed — and the
+result says so, because the section's `#slug` moves with it and links to the old one stop
+resolving.
+
+Without `section` the whole source is replaced, as before. Either way this needs editor
+access and writes directly; `create_proposal` is the tool when the change should be
+reviewed first.
 
 ## Reading around a comment
 
