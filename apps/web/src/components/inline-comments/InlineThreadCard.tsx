@@ -617,7 +617,7 @@ export function InlineThreadCard({
                   <button
                     ref={replyButtonRef}
                     type="button"
-                    className="ic-btn ic-btn-ghost ic-card-reply-open"
+                    className="ic-btn ic-btn-primary ic-card-reply-open"
                     onClick={() => setReplyOpen(true)}
                     title="Write a reply"
                   >
