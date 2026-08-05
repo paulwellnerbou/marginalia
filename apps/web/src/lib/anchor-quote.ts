@@ -1,5 +1,14 @@
+import { SPAN_SEPARATOR } from '@marginalia/renderer';
+
 function normalizeWs(s: string): string {
   return s.replace(/\s+/gu, ' ').trim();
+}
+
+// A multi-block quote joins one fragment per covered block. Whitespace
+// normalization would run them together into one sentence, so mark the
+// block boundaries before it does.
+function markBlockBoundaries(s: string): string {
+  return s.split(SPAN_SEPARATOR).join(' … ');
 }
 
 // Mermaid's runtime SVG can contain a large inlined stylesheet whose
@@ -17,7 +26,7 @@ function stripMermaidRuntimeCss(s: string): string {
 
 export function formatAnchorQuote(raw: string | null | undefined, maxLen = 160): string {
   if (!raw) return '';
-  const cleaned = stripMermaidRuntimeCss(normalizeWs(raw));
+  const cleaned = stripMermaidRuntimeCss(normalizeWs(markBlockBoundaries(raw)));
   if (cleaned.length <= maxLen) return cleaned;
   return `${cleaned.slice(0, maxLen)}...`;
 }

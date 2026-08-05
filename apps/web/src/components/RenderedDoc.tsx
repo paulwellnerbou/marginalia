@@ -1,6 +1,7 @@
-import type { RenderResult } from '@marginalia/renderer';
+import { type RenderResult, splitSpanQuote } from '@marginalia/renderer';
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import type { ThreadState } from '../lib/api.js';
+import { spanElements } from '../lib/block-span.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
@@ -576,6 +577,9 @@ function applyCommentHighlights(
     scope?: 'range' | 'block';
     threadId?: string;
     blockId: string;
+    /** Last block of a multi-block span; the blocks in between are
+     *  re-derived from the DOM rather than stored on the anchor. */
+    endBlockId?: string | null;
     quote: string;
     startOffset: number;
     endOffset: number;
@@ -585,62 +589,89 @@ function applyCommentHighlights(
   const rangesByBlock = new Map<HTMLElement, HighlightRange[]>();
 
   for (const highlight of highlights) {
-    const block = findHighlightBlock(root, highlight.blockId, highlight.quote);
-    if (!block) continue;
+    // A span quote holds one fragment per covered block. Only the first
+    // and last are positioned by the stored offsets; blocks in between
+    // are highlighted whole, so a fragment list that drifted from the
+    // live DOM (content inserted inside the span) still paints sanely.
+    const fragments = splitSpanQuote(highlight.quote);
+    const head = fragments[0] ?? '';
+    const tail = fragments[fragments.length - 1] ?? '';
 
-    const map = buildBlockTextMap(block);
-    let rawStart: number | undefined;
-    let rawEnd: number | undefined;
+    const startBlock = findHighlightBlock(root, highlight.blockId, head);
+    if (!startBlock) continue;
+    const endBlock = highlight.endBlockId
+      ? findHighlightBlock(root, highlight.endBlockId, tail)
+      : null;
+    // A span whose far end no longer resolves degrades to its first
+    // block rather than dropping the highlight entirely.
+    const blocks =
+      endBlock && endBlock !== startBlock ? spanElements(root, startBlock, endBlock) : [];
+    if (blocks.length === 0) blocks.push(startBlock);
 
-    if (highlight.scope === 'block') {
-      if (map.rawLength <= 0) continue;
-      block.dataset.commentHighlightBlock = 'true';
-      const hasOpen = highlight.state === 'open';
-      if (hasOpen) {
-        block.classList.add('comment-highlight-block');
-      }
-      if (highlight.threadId) {
-        block.dataset.commentThreadId = highlight.threadId;
+    for (let i = 0; i < blocks.length; i++) {
+      const block = blocks[i]!;
+      const isFirst = i === 0;
+      const isLast = i === blocks.length - 1;
+
+      const map = buildBlockTextMap(block);
+      let rawStart: number | undefined;
+      let rawEnd: number | undefined;
+
+      if (highlight.scope === 'block') {
+        if (map.rawLength <= 0) continue;
+        block.dataset.commentHighlightBlock = 'true';
+        const hasOpen = highlight.state === 'open';
         if (hasOpen) {
-          block.tabIndex = 0;
-          block.setAttribute('role', 'button');
-          block.setAttribute('aria-label', 'Open comment thread');
+          block.classList.add('comment-highlight-block');
         }
+        if (highlight.threadId) {
+          block.dataset.commentThreadId = highlight.threadId;
+          if (hasOpen) {
+            block.tabIndex = 0;
+            block.setAttribute('role', 'button');
+            block.setAttribute('aria-label', 'Open comment thread');
+          }
+        }
+        // Resolved block-scope highlights only need the block-level
+        // dataset for click/scroll targeting — wrapping the entire
+        // block's text in transparent <mark>s adds DOM bloat with no
+        // visible effect. Click/flash falls back to [data-block].
+        if (!hasOpen) continue;
+        rawStart = 0;
+        rawEnd = map.rawLength;
+      } else if (isFirst || isLast) {
+        // Endpoints keep their exact sub-block-text range; the stored
+        // offsets index the first block from its start and the last
+        // block up to its end.
+        const fragment = isFirst ? head : tail;
+        const start = isFirst ? highlight.startOffset : highlight.endOffset - fragment.length;
+        const end = isFirst ? highlight.startOffset + fragment.length : highlight.endOffset;
+        if (!fragment || end <= start) continue;
+
+        const resolved = resolveNormalizedRange(map.normalizedText, fragment, start, end);
+        if (!resolved) continue;
+
+        rawStart = map.normalizedToRaw[resolved.start];
+        const rawEndChar = map.normalizedToRaw[resolved.end - 1];
+        if (rawStart === undefined || rawEndChar === undefined) continue;
+        rawEnd = rawEndChar + 1;
+      } else {
+        if (map.rawLength <= 0) continue;
+        rawStart = 0;
+        rawEnd = map.rawLength;
       }
-      // Resolved block-scope highlights only need the block-level
-      // dataset for click/scroll targeting — wrapping the entire
-      // block's text in transparent <mark>s adds DOM bloat with no
-      // visible effect. Click/flash falls back to [data-block].
-      if (!hasOpen) continue;
-      rawStart = 0;
-      rawEnd = map.rawLength;
-    } else {
-      if (highlight.endOffset <= highlight.startOffset || !highlight.quote) continue;
 
-      const resolved = resolveNormalizedRange(
-        map.normalizedText,
-        highlight.quote,
-        highlight.startOffset,
-        highlight.endOffset,
-      );
-      if (!resolved) continue;
-
-      rawStart = map.normalizedToRaw[resolved.start];
-      const rawEndChar = map.normalizedToRaw[resolved.end - 1];
-      if (rawStart === undefined || rawEndChar === undefined) continue;
-      rawEnd = rawEndChar + 1;
+      const blockRanges = rangesByBlock.get(block) ?? [];
+      blockRanges.push({
+        rawStart,
+        rawEnd,
+        threads:
+          highlight.threadId && highlight.state
+            ? [{ id: highlight.threadId, state: highlight.state }]
+            : [],
+      });
+      rangesByBlock.set(block, blockRanges);
     }
-
-    const blockRanges = rangesByBlock.get(block) ?? [];
-    blockRanges.push({
-      rawStart,
-      rawEnd,
-      threads:
-        highlight.threadId && highlight.state
-          ? [{ id: highlight.threadId, state: highlight.state }]
-          : [],
-    });
-    rangesByBlock.set(block, blockRanges);
   }
 
   for (const [block, ranges] of rangesByBlock) {

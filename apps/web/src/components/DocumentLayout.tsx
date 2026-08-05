@@ -1,4 +1,4 @@
-import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
+import { locateAllBlocks, locateAllBlocksAsciidoc, spanTail } from '@marginalia/renderer';
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -971,6 +971,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       scope: 'range' | 'block';
       threadId?: string;
       blockId: string;
+      endBlockId?: string | null;
       quote: string;
       startOffset: number;
       endOffset: number;
@@ -994,14 +995,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         // [0, quote.length] lets the renderer's resolveNormalizedRange
         // walk into its "find quote anywhere in the block" branch
         // instead of dropping the highlight entirely.
-        const quoteLen = thread.anchor.quote.length;
+        // `end_offset` indexes the span's LAST block, so the fallback
+        // is the trailing fragment's length, not the whole quote's.
         const start = thread.anchor.start_offset ?? 0;
-        const end = thread.anchor.end_offset ?? quoteLen;
+        const end = thread.anchor.end_offset ?? spanTail(thread.anchor.quote).length;
         if (end > start) {
           highlights.push({
             scope: 'range',
             threadId: thread.id,
             blockId: thread.anchor.block_id,
+            endBlockId: thread.anchor.end_block_id ?? null,
             quote: thread.anchor.quote,
             startOffset: start,
             endOffset: end,
@@ -1019,6 +1022,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           scope: 'block',
           threadId: thread.id,
           blockId: thread.anchor.block_id,
+          endBlockId: thread.anchor.end_block_id ?? null,
           quote: thread.anchor.quote,
           startOffset: 0,
           endOffset: thread.anchor.quote.length,
@@ -1036,6 +1040,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       highlights.push({
         scope: 'range',
         blockId: pendingAnchor.block_id,
+        endBlockId: pendingAnchor.end_block_id ?? null,
         quote: pendingAnchor.quote,
         startOffset: pendingAnchor.start_offset,
         endOffset: pendingAnchor.end_offset,

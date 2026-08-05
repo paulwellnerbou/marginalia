@@ -4,7 +4,13 @@ import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
 import { canMergeMultiBlock, renderDocument } from '@marginalia/renderer';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
-import { reanchor } from '../anchoring.js';
+import {
+  REANCHOR_COMMENT_SQL,
+  reanchor,
+  reanchorParams,
+  TOP_LEVEL_COMMENTS_SQL,
+  type TopLevelCommentRow,
+} from '../anchoring.js';
 import {
   authorize,
   canComment,
@@ -1366,21 +1372,9 @@ async function prepareAcceptProposalThread(
       const now = Date.now();
       deps.db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
-      const updateCommentStmt = deps.db.prepare(
-        `UPDATE comments
-            SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-                link_status = ?, updated_at = ?
-          WHERE id = ?`,
-      );
+      const updateCommentStmt = deps.db.prepare(REANCHOR_COMMENT_SQL);
       for (const upd of commentAnchorUpdates) {
-        updateCommentStmt.run(
-          upd.blockId,
-          upd.startOffset,
-          upd.endOffset,
-          upd.linkStatus,
-          now,
-          upd.commentId,
-        );
+        updateCommentStmt.run(...reanchorParams(upd, now, upd.commentId));
       }
 
       deps.db
@@ -1452,14 +1446,11 @@ async function prepareReopenAcceptedProposalThread(
   });
 
   const rendered = await renderDocument(diff.before, doc.format);
-  const topLevel = deps.db
-    .prepare(
-      `SELECT * FROM comments
-         WHERE doc_uid = ? AND parent_id IS NULL AND deleted_at IS NULL`,
-    )
-    .all(doc.uid) as CommentRow[];
+  const topLevel = deps.db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
   const commentAnchorUpdates = topLevel.map((comment) => {
-    const upd = reanchor(comment, rendered.blocks);
+    const upd = reanchor(comment, rendered.blocks, {
+      isEditProposal: comment.is_edit_proposal === 1,
+    });
     return { commentId: comment.id, ...upd };
   });
 
@@ -1470,21 +1461,9 @@ async function prepareReopenAcceptedProposalThread(
       const now = Date.now();
       deps.db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
-      const updateStmt = deps.db.prepare(
-        `UPDATE comments
-            SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-                link_status = ?, updated_at = ?
-          WHERE id = ?`,
-      );
+      const updateStmt = deps.db.prepare(REANCHOR_COMMENT_SQL);
       for (const upd of commentAnchorUpdates) {
-        updateStmt.run(
-          upd.blockId,
-          upd.startOffset,
-          upd.endOffset,
-          upd.linkStatus,
-          now,
-          upd.commentId,
-        );
+        updateStmt.run(...reanchorParams(upd, now, upd.commentId));
       }
 
       const reopened = reopenAcceptedProposal(deps.db, doc.uid, row.id, now);

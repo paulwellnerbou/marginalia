@@ -1,3 +1,10 @@
+export {
+  joinSpanQuote,
+  SPAN_SEPARATOR,
+  spanHead,
+  spanTail,
+  splitSpanQuote,
+} from './anchor-span.js';
 export type { RewriteOptions as AssetRewriteOptions } from './asset-rewrite.js';
 export { rewriteAssetReferences } from './asset-rewrite.js';
 export type {
