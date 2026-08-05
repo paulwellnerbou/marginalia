@@ -1725,8 +1725,75 @@ button.primary:disabled {
   font-size: 0.85rem;
 }
 
-.ic-list-toolbar {
+/* Wraps too, so the actions drop to their own line on a pane too narrow to
+   hold them beside the controls rather than overlapping them. */
+.ic-list-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.4rem;
   margin-bottom: 0.25rem;
+}
+
+/* Each control keeps its own label, so wrapping stays readable: the pane
+   decides whether they sit on one row or stack. The min-content basis is
+   what lets the actions share line one whenever the widest single control
+   still leaves room for them. */
+.ic-list-control-groups {
+  flex: 1 1 min-content;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.6rem;
+}
+
+/* flex: none so a tight pane wraps whole controls instead of squeezing
+   their labels onto two lines. */
+.ic-list-control {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+}
+
+/* A shared label width lines every control up on the same x once the row
+   wraps — the widest label ("Sort by") sets it. */
+.ic-list-control > label {
+  min-width: 2.6rem;
+}
+
+/* Right-aligned on whichever line it lands on. Generous gap: the ghost
+   buttons' negative margins eat into it. */
+.ic-list-controls-actions {
+  flex: none;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.ic-list-controls-divider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 1.1rem;
+  background: var(--ui-border);
+}
+
+.ic-list-filter-toggle {
+  position: relative;
+}
+
+/* Says a filter is on while the controls that set it are hidden. */
+.ic-list-filter-toggle[data-filtering]::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-9);
 }
 
 .ic-list-orphans {

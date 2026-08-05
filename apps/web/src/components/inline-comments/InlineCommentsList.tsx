@@ -1,6 +1,6 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
-import { DotsHorizontalIcon } from '@radix-ui/react-icons';
-import { DropdownMenu, Flex, IconButton, SegmentedControl, Text } from '@radix-ui/themes';
+import { DotsHorizontalIcon, MixerHorizontalIcon } from '@radix-ui/react-icons';
+import { DropdownMenu, IconButton, SegmentedControl, Text } from '@radix-ui/themes';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
@@ -13,6 +13,15 @@ import {
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 import { threadLinks, threadsById } from './inlineUtils.js';
+import {
+  ALL_THREAD_FILTERS,
+  activeThreadFilterLabels,
+  isFilteringThreads,
+  type ThreadFilters,
+  type ThreadKindFilter,
+  type ThreadStatusFilter,
+  threadMatchesFilters,
+} from './threadFilters.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
 /**
@@ -128,6 +137,8 @@ export function InlineCommentsList({
   }, [threads, blockOrder]);
 
   const [sortMode, setSortMode] = useState<SortMode>('document');
+  const [filters, setFilters] = useState<ThreadFilters>(ALL_THREAD_FILTERS);
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   const sortedActive = useMemo(() => sortItems(activeItems, sortMode), [activeItems, sortMode]);
   const sortedOrphans = useMemo(
@@ -135,6 +146,18 @@ export function InlineCommentsList({
     [orphanedItems, sortMode],
   );
 
+  const visibleActive = useMemo(
+    () => sortedActive.filter((item) => threadMatchesFilters(item.thread, filters)),
+    [sortedActive, filters],
+  );
+  const visibleOrphans = useMemo(
+    () => sortedOrphans.filter((item) => threadMatchesFilters(item.thread, filters)),
+    [sortedOrphans, filters],
+  );
+  const visibleCount = visibleActive.length + visibleOrphans.length;
+
+  // Collapse state spans every thread, filtered out or not, so toggling a
+  // filter never re-expands what the reader collapsed.
   const collapseDefaults = useMemo(
     () =>
       [...sortedOrphans, ...sortedActive].map((item) => ({
@@ -154,6 +177,10 @@ export function InlineCommentsList({
 
   const threadIds = useMemo(() => collapseDefaults.map((d) => d.id), [collapseDefaults]);
   const totalThreads = threadIds.length;
+  const visibleIds = useMemo(
+    () => new Set([...visibleOrphans, ...visibleActive].map((item) => item.id)),
+    [visibleActive, visibleOrphans],
+  );
   const allCollapsed = totalThreads > 0 && threadIds.every((id) => collapsed.has(id));
 
   const [focusedId, setFocusedId] = useState<string | null>(null);
@@ -164,6 +191,13 @@ export function InlineCommentsList({
     if (!focusedThread) return;
     if (lastHandledFocusNonce.current === focusedThread.nonce) return;
     if (!threadIds.includes(focusedThread.threadId)) return;
+
+    // Opening a thread from elsewhere (activities, history) wins over the
+    // filters that would otherwise hide it.
+    if (!visibleIds.has(focusedThread.threadId)) {
+      setFilters(ALL_THREAD_FILTERS);
+      return;
+    }
 
     if (collapsed.has(focusedThread.threadId)) {
       setCollapseState((prev) => {
@@ -197,7 +231,14 @@ export function InlineCommentsList({
       window.clearTimeout(flashT);
       window.clearTimeout(focusT);
     };
-  }, [focusedThread, threadIds, collapsed]);
+  }, [focusedThread, threadIds, visibleIds, collapsed]);
+
+  const activeFilters = activeThreadFilterLabels(filters);
+  const filterToggleLabel = filtersOpen
+    ? 'Hide thread filters'
+    : activeFilters.length > 0
+      ? `Thread filters — ${activeFilters.join(', ')}`
+      : 'Filter threads';
 
   function toggleCollapsed(id: string) {
     setCollapseState((prev) => {
@@ -285,39 +326,115 @@ export function InlineCommentsList({
 
   return (
     <div ref={rootRef} className="ic-list">
-      {totalThreads > 1 && (
-        <Flex align="center" gap="2" className="ic-list-toolbar">
-          <Text as="label" htmlFor="ic-list-sort" size="1" color="gray">
-            Sort by
-          </Text>
-          <SegmentedControl.Root
-            id="ic-list-sort"
-            size="1"
-            value={sortMode}
-            onValueChange={(v) => setSortMode(v as SortMode)}
-            aria-label="Sort threads"
-          >
-            <SegmentedControl.Item value="document" title="Appearance in document">
-              Appearance
-            </SegmentedControl.Item>
-            <SegmentedControl.Item value="latest" title="Latest activity first">
-              Latest
-            </SegmentedControl.Item>
-          </SegmentedControl.Root>
-          <span className="spacer" />
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger>
-              <IconButton variant="ghost" size="1" aria-label="More thread actions">
-                <DotsHorizontalIcon />
-              </IconButton>
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Content align="end">
-              <DropdownMenu.Item onSelect={collapseAll} disabled={allCollapsed}>
-                Collapse all threads
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Root>
-        </Flex>
+      {/* Stay mounted while a filter is on, or deletions dropping the count to
+          one would strand the reader with no way to clear it. */}
+      {(totalThreads > 1 || isFilteringThreads(filters)) && (
+        <div className="ic-list-controls">
+          {/* Wraps: one row on a wide pane, one row per control on a narrow one. */}
+          <div className="ic-list-control-groups">
+            <div className="ic-list-control">
+              <Text as="label" htmlFor="ic-list-sort" size="1" color="gray">
+                Sort by
+              </Text>
+              <SegmentedControl.Root
+                id="ic-list-sort"
+                size="1"
+                value={sortMode}
+                onValueChange={(v) => setSortMode(v as SortMode)}
+                aria-label="Sort threads"
+              >
+                <SegmentedControl.Item value="document" title="Appearance in document">
+                  Appearance
+                </SegmentedControl.Item>
+                <SegmentedControl.Item value="latest" title="Latest activity first">
+                  Latest
+                </SegmentedControl.Item>
+              </SegmentedControl.Root>
+            </div>
+
+            {filtersOpen && (
+              <>
+                <div className="ic-list-control">
+                  <Text as="label" htmlFor="ic-list-filter-status" size="1" color="gray">
+                    Status
+                  </Text>
+                  <SegmentedControl.Root
+                    id="ic-list-filter-status"
+                    size="1"
+                    value={filters.status}
+                    onValueChange={(v) =>
+                      setFilters((prev) => ({ ...prev, status: v as ThreadStatusFilter }))
+                    }
+                    aria-label="Filter threads by status"
+                  >
+                    <SegmentedControl.Item value="all" title="Resolved and unresolved threads">
+                      All
+                    </SegmentedControl.Item>
+                    <SegmentedControl.Item value="unresolved" title="Only threads still open">
+                      Unresolved
+                    </SegmentedControl.Item>
+                  </SegmentedControl.Root>
+                </div>
+                <div className="ic-list-control">
+                  <Text as="label" htmlFor="ic-list-filter-kind" size="1" color="gray">
+                    Type
+                  </Text>
+                  <SegmentedControl.Root
+                    id="ic-list-filter-kind"
+                    size="1"
+                    value={filters.kind}
+                    onValueChange={(v) =>
+                      setFilters((prev) => ({ ...prev, kind: v as ThreadKindFilter }))
+                    }
+                    aria-label="Filter threads by type"
+                  >
+                    <SegmentedControl.Item value="all" title="Comments and edit proposals">
+                      All
+                    </SegmentedControl.Item>
+                    <SegmentedControl.Item value="proposals" title="Only edit proposals">
+                      Proposals
+                    </SegmentedControl.Item>
+                  </SegmentedControl.Root>
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="ic-list-controls-actions">
+            {/* Accent (rather than gray) while filtering, so the state carries
+                even where the indicator dot is easy to miss. */}
+            {/* Stays `ghost` in both states — `soft` drops the negative margin
+                a ghost button carries, so the icon visibly grows on toggle. */}
+            <IconButton
+              variant="ghost"
+              size="1"
+              {...(activeFilters.length > 0 ? {} : { color: 'gray' as const })}
+              className="ic-list-filter-toggle"
+              data-filtering={activeFilters.length > 0 ? 'true' : undefined}
+              aria-expanded={filtersOpen}
+              aria-label={filterToggleLabel}
+              title={filterToggleLabel}
+              onClick={() => setFiltersOpen((v) => !v)}
+            >
+              <MixerHorizontalIcon />
+            </IconButton>
+            {/* The menu has nothing to do with filtering — don't let the two
+                icons read as one control. */}
+            <span className="ic-list-controls-divider" aria-hidden="true" />
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger>
+                <IconButton variant="ghost" size="1" aria-label="More thread actions">
+                  <DotsHorizontalIcon />
+                </IconButton>
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Content align="end">
+                <DropdownMenu.Item onSelect={collapseAll} disabled={allCollapsed}>
+                  Collapse all threads
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Root>
+          </div>
+        </div>
       )}
 
       {canComment && pendingAnchor && (
@@ -337,13 +454,13 @@ export function InlineCommentsList({
         </div>
       )}
 
-      {sortedOrphans.length > 0 && (
+      {visibleOrphans.length > 0 && (
         <section className="ic-list-orphans">
           <h4 className="ic-list-section-title">Orphaned discussions</h4>
           <p className="ic-list-section-note">
             These comments or proposed changes could not be matched to the current document.
           </p>
-          {sortedOrphans.map(renderItem)}
+          {visibleOrphans.map(renderItem)}
         </section>
       )}
 
@@ -355,7 +472,11 @@ export function InlineCommentsList({
         </div>
       )}
 
-      {sortedActive.map(renderItem)}
+      {totalThreads > 0 && visibleCount === 0 && (
+        <div className="ic-list-empty">No threads match the selected filters.</div>
+      )}
+
+      {visibleActive.map(renderItem)}
     </div>
   );
 }
