@@ -412,6 +412,16 @@ button.primary:disabled {
   border-bottom: 1px solid var(--gray-a5);
   background: var(--ui-doc-chrome-bg);
   height: var(--doc-chrome-height);
+  /* Keep an overflowing toolbar's scroll inside itself. `.pane-doc` is
+     `overflow: hidden`, which still scrolls programmatically — so
+     focusing a control past the right edge (search, read-aloud) used to
+     drag the entire document pane sideways. Scrollbar hidden: the row is
+     44px tall and the controls stay reachable by wheel / trackpad. */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.doc-chrome::-webkit-scrollbar {
+  display: none;
 }
 .doc-chrome-right {
   display: contents;
@@ -667,6 +677,83 @@ button.primary:disabled {
     clip-path: none;
     opacity: 1;
   }
+}
+
+/* Read-aloud: same floating placement as the search popover, but the
+   panel is a column so the voice hint can sit under the transport. */
+.read-aloud-popover {
+  position: absolute;
+  top: var(--doc-chrome-height);
+  right: calc(var(--doc-search-inline-comments-offset, 0px) + 0.25rem);
+  left: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.5rem 1rem 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.read-aloud-panel {
+  pointer-events: auto;
+  max-width: 100%;
+  /* Without this the flex item's automatic minimum size (min-content)
+     beats `max-width`, the panel overflows the document column to the
+     left, and `.pane-doc`'s hidden overflow clips the transport. */
+  min-width: 0;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--doc-floating-toolbar-radius);
+  background: color-mix(in srgb, var(--color-panel-solid) 94%, transparent);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+/* Wraps rather than overflowing: the transport, voice picker and speed
+   control together are wider than the document column once both side
+   panes are open, and `.pane-doc` clips its overflow. */
+.read-aloud-toolbar {
+  min-height: var(--doc-floating-toolbar-height);
+  flex-wrap: wrap;
+  gap: 3px;
+  row-gap: 4px;
+}
+/* Drop the Radix ghost variant's negative margins so the row's `gap`
+   is the real spacing — same fix as the search toolbar. */
+.read-aloud-toolbar > button {
+  margin-inline: 0;
+}
+
+.read-aloud-progress {
+  min-width: 4.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.read-aloud-voice {
+  max-width: 11rem;
+}
+
+.read-aloud-rate-value {
+  min-width: 2.4rem;
+}
+
+.read-aloud-hint {
+  padding: 0.1rem 0.35rem 0.25rem;
+  line-height: 1.35;
+}
+
+/* The sentence currently being spoken. `::highlight()` only honours a
+   short list of properties; background-color and color are on it. */
+::highlight(marginalia-read-aloud) {
+  background-color: color-mix(in srgb, var(--accent-a5) 90%, transparent);
+  color: var(--accent-12);
+}
+
+/* Fallback where the CSS Custom Highlight API is missing (Safari < 17.2):
+   tint the enclosing block rather than the sentence. */
+.marginalia [data-read-aloud-block="true"] {
+  background-color: color-mix(in srgb, var(--accent-a3) 90%, transparent);
+  border-radius: 0.14rem;
 }
 
 .marginalia mark.doc-search-highlight {
