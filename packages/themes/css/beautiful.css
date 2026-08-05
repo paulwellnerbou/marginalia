@@ -209,7 +209,7 @@
    * letterboxing. */
   aspect-ratio: 10 / 1;
   color: var(--md-color-fg-muted);
-  background-color: currentcolor;
+  background-color: currentColor;
   -webkit-mask: var(--md-hr-ornament) center / contain no-repeat;
   mask: var(--md-hr-ornament) center / contain no-repeat;
 }
