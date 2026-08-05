@@ -73,10 +73,16 @@ a separate command, so the token would go missing without a word of complaint.
 
 The token applies to a reference that has none of its own, including a link copied from a
 comment — which the viewer strips the token from once an invite has been claimed. A token
-in a pasted URL still wins, and a token for one document simply resolves to nothing on
-another.
+in a pasted URL still wins.
 
-It never travels to a different host. A document's text can talk an agent into fetching a
+An invite names **one** document, so `&token=` only privileges that one. It does not tie
+the connection to it: one connection serves any number of documents — hand the agent each
+one's full `/d/<uid>/<token>` link, which is what the MCP tab gives you. It is remembered
+for the rest of the session, so later references to that document work without the token,
+comment links included. A new connection starts fresh, and one session's tokens are never
+visible to another.
+
+A token never travels to a different host. A document's text can talk an agent into fetching a
 URL, so a tokenless reference naming another instance is sent without it; likewise a token
 learned for one instance is not replayed to a second. Set `MARGINALIA_ALLOWED_HOSTS` to
 refuse those requests outright rather than merely sending them empty-handed — the hosted

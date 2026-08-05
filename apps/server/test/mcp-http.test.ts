@@ -361,6 +361,88 @@ describe('hosted MCP endpoint', () => {
     await admin.close();
   });
 
+  test('remembers a document’s link for the rest of the session', async () => {
+    const admin = await connect('?name=Paul');
+    const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+    const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+    const invite = await callText(admin, 'create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+      display_name: 'Claude',
+    });
+    const link = /(http\S+)/.exec(invite)?.[1] as string;
+    await admin.close();
+
+    // An invite names one document, so an agent working across several
+    // has to be handed each one's link. It should only need telling once.
+    const agent = await connect('?name=Claude');
+    const bare = `${baseUrl}/d/${uid}`;
+    expect(
+      await callText(agent, 'get_document', { document: bare, include_source: false }),
+    ).toContain('your role: reader');
+    await callText(agent, 'get_document', { document: link, include_source: false });
+    expect(
+      await callText(agent, 'get_document', { document: bare, include_source: false }),
+    ).toContain('your role: collaborator');
+    // Including a comment link, which is the shape that carries no token.
+    await callText(agent, 'create_comment', {
+      document: `${bare}#comment-whatever`,
+      anchor_text: 'Alpha.',
+      body: 'written through a remembered token',
+    });
+    await agent.close();
+  });
+
+  test('one session’s tokens are invisible to another', async () => {
+    const admin = await connect('?name=Paul');
+    const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+    const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+    const invite = await callText(admin, 'create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+      display_name: 'Claude',
+    });
+    const link = /(http\S+)/.exec(invite)?.[1] as string;
+
+    // Two connections at once: the endpoint is shared, so what one is
+    // told must not become the other's access.
+    const first = await connect('?name=Claude');
+    const second = await connect('?name=Claude');
+    await callText(first, 'get_document', { document: link, include_source: false });
+
+    expect(
+      await callText(second, 'get_document', {
+        document: `${baseUrl}/d/${uid}`,
+        include_source: false,
+      }),
+    ).toContain('your role: reader');
+    expect(
+      await callText(first, 'get_document', {
+        document: `${baseUrl}/d/${uid}`,
+        include_source: false,
+      }),
+    ).toContain('your role: collaborator');
+
+    await first.close();
+    await second.close();
+    await admin.close();
+  });
+
+  test('an unknown session id is refused rather than silently starting a new one', async () => {
+    const res = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': 'a-session-that-does-not-exist',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+    });
+    expect(res.status).toBe(404);
+  });
+
   test('refuses to reach a different Marginalia instance', async () => {
     const client = await connect();
     const res = (await client.callTool({

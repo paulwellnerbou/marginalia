@@ -1,10 +1,11 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   createMarginaliaMcpServer,
   MAX_CLIENT_ID_LENGTH,
   normalizeAgentName,
   sanitizeIdentityValue,
 } from '@marginalia/mcp';
+import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
@@ -18,24 +19,140 @@ import { Hono } from 'hono';
  * which is the difference between "install this repo" and "point at my
  * server".
  *
- * Stateless: every request builds a fresh server and transport, handles
- * one JSON-RPC message, and throws both away. The tools keep no state
- * between calls (access travels in the document URL the agent is given),
- * so there is nothing a session would preserve, and nothing to leak
- * between the strangers who may share this endpoint.
- *
  * Tool calls run against the same Hono app in-process rather than
  * looping back over the network: no port to guess, no proxy round-trip,
  * and no risk of the instance failing to resolve its own public name.
+ *
+ * Sessions exist for one reason: an invite token belongs to a single
+ * document, so an agent working across several has to be told each one's
+ * link. Without somewhere to put that, every request starts blind and a
+ * link that carries no token of its own — a comment link, which the
+ * viewer strips the token from — is only ever read-only. A session gives
+ * the tools the same `uid → token` memory the stdio server keeps on
+ * disk, so a document's link has to be handed over once rather than
+ * every time.
+ *
+ * The memory is per session and never shared. Session ids are generated
+ * here and unguessable, so one caller cannot address another's, which
+ * makes a session as isolated as a separate stdio process.
  */
 export function mcpRouter(deps: { hono: Hono }): Hono {
   const r = new Hono();
-  r.all('/', async (c) => handleMcp(c, deps.hono));
+  const sessions = new SessionStore();
+  r.all('/', async (c) => handleMcp(c, deps.hono, sessions));
   return r;
 }
 
-async function handleMcp(c: Context, app: Hono): Promise<Response> {
-  const url = new URL(c.req.url);
+const SESSION_HEADER = 'mcp-session-id';
+
+/**
+ * How long a session may sit unused, and how many may exist at once.
+ *
+ * Each holds an MCP server with its tool schemas plus the tokens it has
+ * been told, so they are small but not free, and nothing obliges a
+ * client to send the DELETE that would close one. The idle sweep is what
+ * actually bounds this; the cap is a backstop against a burst of
+ * initializations, and evicts whatever has gone longest untouched.
+ */
+const SESSION_IDLE_MS = 30 * 60 * 1000;
+const MAX_SESSIONS = 200;
+
+interface Session {
+  server: McpServer;
+  transport: WebStandardStreamableHTTPServerTransport;
+  lastUsed: number;
+}
+
+class SessionStore {
+  private readonly sessions = new Map<string, Session>();
+
+  get(id: string): Session | null {
+    this.sweep();
+    const session = this.sessions.get(id);
+    if (!session) return null;
+    session.lastUsed = Date.now();
+    return session;
+  }
+
+  add(id: string, session: Session): void {
+    this.sessions.set(id, session);
+    this.sweep();
+    while (this.sessions.size > MAX_SESSIONS) {
+      const oldest = [...this.sessions.entries()].reduce((a, b) =>
+        a[1].lastUsed <= b[1].lastUsed ? a : b,
+      );
+      this.drop(oldest[0]);
+    }
+  }
+
+  drop(id: string): void {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    this.sessions.delete(id);
+    void session.transport.close().catch(() => undefined);
+    void session.server.close().catch(() => undefined);
+  }
+
+  private sweep(): void {
+    const cutoff = Date.now() - SESSION_IDLE_MS;
+    for (const [id, session] of this.sessions) {
+      if (session.lastUsed < cutoff) this.drop(id);
+    }
+  }
+}
+
+async function handleMcp(c: Context, app: Hono, sessions: SessionStore): Promise<Response> {
+  const existingId = c.req.header(SESSION_HEADER);
+  if (existingId) {
+    const session = sessions.get(existingId);
+    // Unknown or expired: let the transport answer, which is a 404 the
+    // client handles by initializing again.
+    if (!session) return notFoundSession();
+    const response = await session.transport.handleRequest(c.req.raw);
+    if (c.req.method === 'DELETE') sessions.drop(existingId);
+    return response;
+  }
+
+  // No session id: an initialize request, or a malformed one the
+  // transport will reject on its own.
+  const { server, transport } = buildSession(new URL(c.req.url), app);
+  await server.connect(transport);
+  const response = await transport.handleRequest(c.req.raw);
+
+  const id = transport.sessionId;
+  if (id) {
+    sessions.add(id, { server, transport, lastUsed: Date.now() });
+  } else {
+    // Never initialized — nothing to keep, and holding it would leak an
+    // MCP server per malformed request.
+    await transport.close().catch(() => undefined);
+    await server.close().catch(() => undefined);
+  }
+  return response;
+}
+
+function notFoundSession(): Response {
+  return new Response(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      error: { code: -32001, message: 'Session not found. Initialize a new one.' },
+      id: null,
+    }),
+    { status: 404, headers: { 'content-type': 'application/json' } },
+  );
+}
+
+/**
+ * One MCP server per session, configured from the connection URL. The
+ * identity and default token are fixed at initialize: later requests
+ * carry only the session id, so there is nothing else they could come
+ * from, and letting them change mid-session would mean an agent's
+ * authorship shifting under it.
+ */
+function buildSession(
+  url: URL,
+  app: Hono,
+): { server: McpServer; transport: WebStandardStreamableHTTPServerTransport } {
   const displayName = readDisplayName(url);
 
   const { server } = createMarginaliaMcpServer(
@@ -52,10 +169,13 @@ async function handleMcp(c: Context, app: Hono): Promise<Response> {
       password: null,
       // Lets the connection carry the agent's access, so a reference
       // without a token of its own — a bare uid, or a comment link the
-      // viewer stripped the token from — still arrives with it.
+      // viewer stripped the token from — still arrives with it. Only
+      // covers the one document it names; anything else is learned
+      // during the session from the links the agent is handed.
       defaultToken: readToken(url),
-      // A stateless endpoint has nothing to remember, and nothing may be
-      // written to the server's disk on behalf of a caller.
+      // In-memory for the life of the session. Nothing may be written to
+      // the server's disk on behalf of a caller, and a token learned
+      // here must not outlive the connection that supplied it.
       stateDir: null,
       // Unused: `allowLocalFiles: false` keeps the filesystem tools off.
       downloadDir: '',
@@ -73,19 +193,11 @@ async function handleMcp(c: Context, app: Hono): Promise<Response> {
   );
 
   const transport = new WebStandardStreamableHTTPServerTransport({
-    // No sessionIdGenerator → stateless mode.
+    sessionIdGenerator: () => randomUUID(),
     enableJsonResponse: true,
   });
 
-  try {
-    await server.connect(transport);
-    return await transport.handleRequest(c.req.raw);
-  } finally {
-    // Both are per-request; dropping them here keeps a long-lived
-    // instance from accumulating one server per tool call.
-    await transport.close().catch(() => undefined);
-    await server.close().catch(() => undefined);
-  }
+  return { server, transport };
 }
 
 function readDisplayName(url: URL): string {
