@@ -115,6 +115,11 @@ describe('threadDetail anchors', () => {
     // Losing the end id here would present a truncated quote as complete.
     expect(out).toContain('end_block_id=ffffffffffffffff');
     expect(out).toContain('end block not in this document');
+    // And the source shown is only the span's start, so it must not be
+    // labelled as though it were the whole anchor.
+    expect(out).toContain('the START of the span only');
+    expect(out).toContain('- alpha item');
+    expect(out).not.toContain('- beta item');
   });
 
   test('does not invent line numbers for a block it could not place', async () => {

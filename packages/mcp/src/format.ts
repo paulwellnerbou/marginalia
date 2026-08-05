@@ -259,7 +259,7 @@ export function threadDetail(
     lines.push('proposal — proposed replacement:');
     lines.push(gutter(thread.proposal.proposed_text ?? '(unavailable)'));
   } else if (around) {
-    lines.push(`current source of the anchored ${endBlock ? 'blocks' : 'block'}:`);
+    lines.push(`${anchoredSourceLabel(endBlock !== null, spanEndId !== null)}:`);
     lines.push(gutter(around.anchored));
   }
   if (around?.after) {
@@ -268,6 +268,22 @@ export function threadDetail(
   }
 
   return lines.join('\n');
+}
+
+/**
+ * What the source printed underneath actually covers.
+ *
+ * A span whose end block is gone can only be shown from its start, while
+ * the quote above it covers more. Left as "the anchored block" that
+ * reads as the whole of it, and the missing text looks like a
+ * discrepancy in the quote rather than in the document.
+ */
+function anchoredSourceLabel(spanResolved: boolean, isSpan: boolean): string {
+  if (spanResolved) return 'current source of the anchored blocks';
+  if (isSpan) {
+    return 'current source of the anchored block — the START of the span only, since its end block is not in this document';
+  }
+  return 'current source of the anchored block';
 }
 
 /**
