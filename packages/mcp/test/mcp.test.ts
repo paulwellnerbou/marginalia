@@ -124,6 +124,7 @@ describe('marginalia MCP server', () => {
     blockId: string,
     quote: string,
     body: string,
+    endBlockId?: string,
   ): Promise<string> {
     const res = await fetch(`${baseUrl}/api/documents/${uid}/threads`, {
       method: 'POST',
@@ -133,7 +134,10 @@ describe('marginalia MCP server', () => {
         'x-marginalia-client-name': REVIEWER.displayName,
         'x-marginalia-invite': token,
       },
-      body: JSON.stringify({ anchor: { block_id: blockId, quote }, body }),
+      body: JSON.stringify({
+        anchor: { block_id: blockId, quote, ...(endBlockId ? { end_block_id: endBlockId } : {}) },
+        body,
+      }),
     });
     expect(res.status).toBe(201);
     const payload = (await res.json()) as { thread: { id: string } };
@@ -346,6 +350,64 @@ describe('marginalia MCP server', () => {
     expect(threads).toContain('COMMENT THREAD 1/1 — open');
     expect(threads).toContain('How is this reconciled');
     expect(threads).toContain('Water rations');
+  });
+
+  test('reads the paragraphs around a thread when context is asked for', async () => {
+    const { adminUrl } = await seedBook();
+    await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'Water rations: four days',
+      body: 'How is this reconciled with the unknown distance?',
+    });
+
+    const bare = await call('list_threads', { document: adminUrl });
+    expect(bare).not.toContain('By noon the dunes');
+
+    const withContext = await call('list_threads', { document: adminUrl, context_blocks: 1 });
+    expect(withContext).toContain('source before the anchor (1 block)');
+    expect(withContext).toContain('By noon the dunes had swallowed the horizon');
+    expect(withContext).toContain('source after the anchor (1 block)');
+    expect(withContext).toContain('## Chapter Three');
+    // The list enclosing the anchored bullet overlaps it, so context is
+    // what reads around the list — the sibling bullet is not surroundings.
+    expect(withContext).not.toContain('Distance to the well');
+  });
+
+  test('shows every block a comment spans, not only the first', async () => {
+    const { adminUrl, uid } = await seedBook();
+    const invite = await call('create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+      display_name: REVIEWER.displayName,
+    });
+    const token = new URL(/(http\S+)/.exec(invite)?.[1] as string).pathname.split('/')[3] as string;
+
+    // A bullet's text matches the enclosing list too, and that entry comes
+    // first — so ask for the item itself rather than the first id present.
+    const idOf = async (query: string): Promise<string> => {
+      const listed = await call('list_blocks', { document: adminUrl, query });
+      const id = /block_id=([0-9a-f]{16})\n\s+kind: listItem\b/.exec(listed)?.[1];
+      expect(id).toBeTruthy();
+      return id as string;
+    };
+
+    // What the viewer writes when a selection covers two blocks: the
+    // endpoints' ids, and one quote holding both fragments.
+    await reviewerComments(
+      uid,
+      token,
+      await idOf('Water rations: four days'),
+      'Water rations: four days\n\nDistance to the well: unknown',
+      'Both of these need a source.',
+      await idOf('Distance to the well: unknown'),
+    );
+
+    const threads = await call('list_threads', { document: adminUrl });
+    expect(threads).toContain('end_block_id=');
+    expect(threads).toContain('listItem…listItem span');
+    expect(threads).toContain('current source of the anchored blocks:');
+    expect(threads).toContain('- Water rations: four days');
+    expect(threads).toContain('- Distance to the well: unknown');
   });
 
   test('refuses an ambiguous anchor rather than guessing a block', async () => {

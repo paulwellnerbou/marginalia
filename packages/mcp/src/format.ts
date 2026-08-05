@@ -1,6 +1,12 @@
 import { createPatch } from 'diff';
 import type { DocumentWire, ThreadWire } from './api-types.js';
-import { clip, type DocumentBlock, type DocumentBlockMap, type DocumentSection } from './blocks.js';
+import {
+  anchorNeighbourhood,
+  clip,
+  type DocumentBlock,
+  type DocumentBlockMap,
+  type DocumentSection,
+} from './blocks.js';
 import type { DocumentRef } from './document-ref.js';
 import { documentUrl } from './document-ref.js';
 
@@ -157,6 +163,8 @@ export function blockList(
 export interface ThreadListOptions {
   /** Include the anchored block's current source under each thread. */
   includeAnchorSource: boolean;
+  /** Whole blocks of surrounding source to add either side of it. */
+  contextBlocks: number;
   blockMap: DocumentBlockMap | null;
 }
 
@@ -180,18 +188,24 @@ export function threadDetail(
   lines.push(`thread_id: ${thread.id}`);
 
   const anchor = thread.anchor;
-  const block = anchor.block_id
-    ? (options.blockMap?.blocks.find((b) => b.id === anchor.block_id) ?? null)
-    : null;
+  const findBlock = (id: string | null): DocumentBlock | null =>
+    id ? (options.blockMap?.blocks.find((b) => b.id === id) ?? null) : null;
+  const block = findBlock(anchor.block_id);
+  // A comment can cover several blocks, and the anchor records only its
+  // two endpoints. Showing the first alone would present a fragment of
+  // the quote as the whole of it.
+  const endBlock = anchor.end_block_id === anchor.block_id ? null : findBlock(anchor.end_block_id);
   const where = block
-    ? `${block.kind}, lines ${block.startLine}-${block.endLine}, section ${
+    ? `${blockSpan(block, endBlock)}, section ${
         block.headingPath.length > 0 ? block.headingPath.join(' › ') : '(document root)'
       }`
     : anchor.heading_path?.length
       ? `section ${anchor.heading_path.join(' › ')}`
       : 'unknown location';
   lines.push(
-    `anchor: block_id=${anchor.block_id ?? 'none'} (${where}) link_status=${thread.link_status}`,
+    `anchor: block_id=${anchor.block_id ?? 'none'}${
+      endBlock ? ` end_block_id=${endBlock.id}` : ''
+    } (${where}) link_status=${thread.link_status}`,
   );
   if (anchor.quote) lines.push(`quoted text: ${JSON.stringify(clip(anchor.quote, 240))}`);
   if (thread.proposal?.whole_document) lines.push('scope: replaces the WHOLE document on accept');
@@ -224,17 +238,41 @@ export function threadDetail(
     }
   });
 
+  const around =
+    options.includeAnchorSource && options.blockMap && block
+      ? anchorNeighbourhood(options.blockMap, block, endBlock, options.contextBlocks)
+      : null;
+  if (around?.before) {
+    lines.push(`source before the anchor (${plural(around.beforeBlocks, 'block')}):`);
+    lines.push(gutter(around.before));
+  }
   if (thread.proposal) {
     lines.push('proposal — current text:');
     lines.push(gutter(thread.proposal.source_snapshot ?? '(unavailable)'));
     lines.push('proposal — proposed replacement:');
     lines.push(gutter(thread.proposal.proposed_text ?? '(unavailable)'));
-  } else if (options.includeAnchorSource && block?.source != null) {
-    lines.push('current source of the anchored block:');
-    lines.push(gutter(block.source));
+  } else if (around) {
+    lines.push(`current source of the anchored ${endBlock ? 'blocks' : 'block'}:`);
+    lines.push(gutter(around.anchored));
+  }
+  if (around?.after) {
+    lines.push(`source after the anchor (${plural(around.afterBlocks, 'block')}):`);
+    lines.push(gutter(around.after));
   }
 
   return lines.join('\n');
+}
+
+/** "paragraph, lines 4-6", or both endpoints when the anchor spans blocks. */
+function blockSpan(first: DocumentBlock, last: DocumentBlock | null): string {
+  if (!last) return `${first.kind}, lines ${first.startLine}-${first.endLine}`;
+  const from = Math.min(first.startLine ?? 0, last.startLine ?? 0);
+  const to = Math.max(first.endLine ?? 0, last.endLine ?? 0);
+  return `${first.kind}…${last.kind} span, lines ${from}-${to}`;
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 export function threadStatus(thread: ThreadWire): string {

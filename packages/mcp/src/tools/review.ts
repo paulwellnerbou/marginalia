@@ -102,6 +102,19 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .boolean()
           .optional()
           .describe('Include the anchored block’s current source under each thread. Default true.'),
+        context_blocks: z
+          .number()
+          .int()
+          .min(0)
+          .max(3)
+          .optional()
+          .describe(
+            'Also show this many blocks of source either side of the anchor — the surrounding ' +
+              'paragraphs a comment argues about but does not quote. Default 0; worth raising ' +
+              'once narrowed to one thread, since every thread pays for it. Nested blocks are ' +
+              'stepped over, so context on a list item is the text around the whole list. ' +
+              'Ignored when include_anchor_source is false.',
+          ),
         limit: z.number().int().min(1).max(200).optional().describe('Max threads. Default 50.'),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
@@ -194,6 +207,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           blockDriftNote(loaded.blocks),
           threadList(threads, {
             includeAnchorSource: args.include_anchor_source !== false,
+            contextBlocks: args.context_blocks ?? 0,
             blockMap: loaded.blocks,
           }),
         );
@@ -610,7 +624,11 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         );
         return text(
           `Repaired proposal ${args.thread_id} — link status is now "${res.thread.link_status}".`,
-          threadDetail(res.thread, 1, 1, { includeAnchorSource: true, blockMap: loaded.blocks }),
+          threadDetail(res.thread, 1, 1, {
+            includeAnchorSource: true,
+            contextBlocks: 0,
+            blockMap: loaded.blocks,
+          }),
         );
       }),
   );
