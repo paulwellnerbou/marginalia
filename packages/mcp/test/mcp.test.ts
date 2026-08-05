@@ -584,6 +584,35 @@ describe('marginalia MCP server', () => {
     expect(out).toContain('reject → now rejected');
   });
 
+  test('diffs a multi-block span against the whole span, not just its first block', async () => {
+    const { adminUrl } = await seedBook();
+    const listing = await call('list_blocks', { document: adminUrl });
+    const items = [...listing.matchAll(/block_id=(\S+)\n\s+kind: (\w+)/g)]
+      .filter(([, , kind]) => kind === 'listItem')
+      .map(([, id]) => id as string);
+    const [startId, endId] = items;
+    expect(items).toHaveLength(2);
+
+    // proposed_text is verbatim the FIRST block, so a diff taken against
+    // that block alone reports no change — while accepting would drop the
+    // second list item.
+    const created = await call('create_proposal', {
+      document: adminUrl,
+      block_id: startId,
+      end_block_id: endId,
+      proposed_text: '- Water rations: four days',
+      rationale: 'Drops the unknown distance, which we never resolve.',
+    });
+
+    expect(created).not.toContain('(no textual difference)');
+    expect(created).toContain('-- Distance to the well: unknown');
+
+    // The diff the tool reported is the change the server will apply.
+    const proposalId = /^thread_id: (\S+)/m.exec(created)?.[1] as string;
+    const stored = await call('get_proposal_diff', { document: adminUrl, thread_id: proposalId });
+    expect(stored).toContain('-- Distance to the well: unknown');
+  });
+
   test('creates a whole-document proposal', async () => {
     const { adminUrl } = await seedBook();
     const created = await call('create_proposal', {

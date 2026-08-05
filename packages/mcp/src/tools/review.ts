@@ -374,7 +374,9 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           }
         }
 
-        const before = args.whole_document ? loaded.doc.source : (block.source ?? '');
+        const before = args.whole_document
+          ? loaded.doc.source
+          : spanSource(loaded.doc.source, block, endBlock);
         return text(
           args.whole_document
             ? 'Created a whole-document edit proposal.'
@@ -632,6 +634,23 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         );
       }),
   );
+}
+
+/**
+ * The source an accept will replace. For a span that is every block from
+ * the first through the last, not just the anchor — mirroring the range
+ * the server derives from the same two ids (`locateAnchorRange`), so the
+ * diff shown here is the change that will actually be applied.
+ */
+function spanSource(source: string, block: DocumentBlock, endBlock: DocumentBlock | null): string {
+  if (!endBlock || endBlock.id === block.id) return block.source ?? '';
+  // A block the local source walk could not place has no offsets; the
+  // anchor block's own source is then the best available answer.
+  if (block.start === null || block.end === null) return block.source ?? '';
+  if (endBlock.start === null || endBlock.end === null) return block.source ?? '';
+  // min/max rather than assuming document order: the endpoints are two
+  // ids from the caller, in whatever order they passed them.
+  return source.slice(Math.min(block.start, endBlock.start), Math.max(block.end, endBlock.end));
 }
 
 async function fetchThreads(ctx: ToolContext, loaded: LoadedDocument): Promise<ListThreadsWire> {

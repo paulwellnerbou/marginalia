@@ -2372,6 +2372,17 @@ button.primary:disabled {
 .diff-scroll-empty {
   padding: 0.5rem;
 }
+.diff-copy {
+  /* Zero-height sticky row so the button overlays the top-right corner
+   * without displacing diff lines. */
+  position: sticky;
+  top: 0.35rem;
+  height: 0;
+  display: flex;
+  justify-content: flex-end;
+  padding-right: 0.35rem;
+  z-index: 2;
+}
 .diff-line {
   display: grid;
   grid-template-columns: 4ch 4ch 1ch minmax(0, 1fr);
