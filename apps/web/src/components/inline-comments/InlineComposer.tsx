@@ -10,7 +10,12 @@ import {
 import { filterShortcodes, getActiveShortcode, type ShortcodeMatch } from './emojiShortcodes.js';
 
 export interface InlineComposerHandle {
-  insertText: (text: string) => void;
+  /**
+   * Append text to the draft. Focuses the textarea and parks the caret
+   * after it unless `focus` is false — pass false when the composer has
+   * just mounted and its own `autoFocus` owns the focus target.
+   */
+  insertText: (text: string, options?: { focus?: boolean }) => void;
   focus: () => void;
 }
 
@@ -137,7 +142,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
   }, [autoFocus, needsName]);
 
   useImperativeHandle(ref, () => ({
-    insertText(text: string) {
+    insertText(text: string, options?: { focus?: boolean }) {
       setValue((prev) => {
         const sep =
           prev.length === 0 ? '' : prev.endsWith('\n\n') ? '' : prev.endsWith('\n') ? '\n' : '\n\n';
@@ -145,10 +150,12 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
         setCaret(next.length);
         return next;
       });
+      // Deferred: the textarea's DOM value only catches up after the
+      // render that `setValue` triggers, and the caret has to land past it.
       window.setTimeout(() => {
         const el = textRef.current;
         if (!el) return;
-        el.focus({ preventScroll: true });
+        if (options?.focus !== false) el.focus({ preventScroll: true });
         const pos = el.value.length;
         el.setSelectionRange(pos, pos);
       }, 0);

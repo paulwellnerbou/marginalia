@@ -3627,15 +3627,26 @@ button.primary:disabled {
   border-left: 2px solid var(--ui-border);
 }
 
-.ic-card-workflow {
+/* Footer shown while the reply composer is closed: workflow buttons plus
+   the control that opens it. Mirrors the composer's own action row, so
+   opening a reply doesn't reshuffle the buttons. */
+.ic-card-actions {
   display: flex;
   gap: 0.4rem;
-  padding-top: 0.3rem;
-}
-.ic-card-workflow-standalone {
+  flex-wrap: wrap;
   justify-content: flex-end;
+  padding-top: 0.3rem;
   border-top: 1px dashed var(--ui-border);
   margin-top: 0.2rem;
+}
+
+.ic-card-reply-open {
+  margin-left: auto;
+  gap: 0.3rem;
+}
+.ic-card-reply-open svg {
+  width: 12px;
+  height: 12px;
 }
 
 mark.comment-highlight-resolved {
