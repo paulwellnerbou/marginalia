@@ -26,6 +26,13 @@ type Setup = 'cli' | 'json';
 const DEFAULT_AGENT_NAME = 'Claude';
 
 /**
+ * Marks an invite as belonging to an agent rather than a person. Without
+ * it this panel would also list the collaborator links minted for human
+ * reviewers and offer to "connect" them, which is not what they are.
+ */
+const AGENT_NOTE = 'AI agent';
+
+/**
  * "Connect an agent" — the two things a user has to do, in order.
  *
  * Access first, because an agent with no invite is a reader and every
@@ -55,17 +62,23 @@ export function McpPanel({ uid, canManageInvites }: Props) {
     void refresh();
   }, [refresh]);
 
-  // Any non-admin, non-reader link works for an agent; showing the ones
-  // that already exist saves minting a duplicate on every visit.
-  const agentInvites = (invites ?? []).filter(
-    (i) => i.kind !== 'admin' && (i.role === 'collaborator' || i.role === 'editor'),
+  const agentInvites = (invites ?? []).filter((i) => i.note === AGENT_NOTE);
+
+  const trimmedName = agentName.trim() || DEFAULT_AGENT_NAME;
+  // Marginalia derives an agent's client id from its name, and decides
+  // who may edit or delete a comment by client id — so two agents
+  // sharing a name are one participant, each able to rewrite the other's
+  // work. People may share a name; agents must not.
+  const nameTaken = agentInvites.some(
+    (i) => (i.display_name ?? '').toLowerCase() === trimmedName.toLowerCase(),
   );
 
   async function mint() {
+    if (nameTaken) return;
     setCreating(true);
     setError(null);
     try {
-      const name = agentName.trim() || DEFAULT_AGENT_NAME;
+      const name = trimmedName;
       // Named, so the agent is @-mentionable before it has ever
       // connected — you can write "@Claude look at this" and let it find
       // the mention on its first visit. The cost is that a named invite
@@ -74,7 +87,7 @@ export function McpPanel({ uid, canManageInvites }: Props) {
       // `connectionFor`.
       await createInvite(
         uid,
-        { kind: 'named', display_name: name, role: 'collaborator', note: 'AI agent' },
+        { kind: 'named', display_name: name, role: 'collaborator', note: AGENT_NOTE },
         { clientId: getClientId(), displayName: getDisplayName() },
       );
       await refresh();
@@ -158,13 +171,15 @@ export function McpPanel({ uid, canManageInvites }: Props) {
                 />
               </Text>
             </Box>
-            <Button size="1" onClick={() => void mint()} loading={creating}>
+            <Button size="1" onClick={() => void mint()} loading={creating} disabled={nameTaken}>
               Create link
             </Button>
           </Flex>
-          {error && (
-            <Text as="p" size="1" color="red" mb="2">
-              {error}
+          {nameTaken && (
+            <Text as="p" size="1" color="orange" mb="2">
+              “{trimmedName}” already has a link on this document. Agents are identified by name, so
+              two sharing one would count as the same participant and could edit each other’s
+              comments. Pick a different name.
             </Text>
           )}
           {error && (

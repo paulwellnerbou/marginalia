@@ -183,6 +183,48 @@ describe('hosted MCP endpoint', () => {
     await admin.close();
   });
 
+  test('two agents sharing a name share one identity', async () => {
+    // Why agent names must be unique: the client id is derived from the
+    // name, and Marginalia decides comment ownership by client id. Same
+    // name means the same participant, not two of them.
+    const admin = await connect('?name=Paul');
+    const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+
+    const first = await connect('?name=Code');
+    const comment = await callText(first, 'create_comment', {
+      document: adminUrl,
+      anchor_text: 'Alpha.',
+      body: 'written by the first agent',
+    });
+    const threadId = /^thread_id: (\S+)/m.exec(comment)?.[1] as string;
+    await first.close();
+
+    // A different agent, same name — and it can rewrite the other's comment.
+    const second = await connect('?name=Code');
+    await callText(second, 'edit_comment', {
+      document: adminUrl,
+      thread_id: threadId,
+      comment_id: threadId,
+      body: 'silently rewritten by the second agent',
+    });
+    await second.close();
+
+    expect(await callText(admin, 'list_threads', { document: adminUrl })).toContain(
+      'silently rewritten by the second agent',
+    );
+
+    // Distinct ids keep them apart, which is the escape hatch.
+    const third = await connect('?name=Code&client_id=a-separate-agent-id');
+    const res = (await third.callTool({
+      name: 'edit_comment',
+      arguments: { document: adminUrl, thread_id: threadId, comment_id: threadId, body: 'nope' },
+    })) as { isError?: boolean };
+    expect(res.isError).toBe(true);
+    await third.close();
+    await admin.close();
+  });
+
   test('refuses to reach a different Marginalia instance', async () => {
     const client = await connect();
     const res = (await client.callTool({
