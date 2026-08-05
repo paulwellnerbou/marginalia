@@ -1,4 +1,3 @@
-import { CheckIcon } from '@radix-ui/react-icons';
 import {
   Badge,
   Box,

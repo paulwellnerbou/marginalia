@@ -225,6 +225,39 @@ describe('hosted MCP endpoint', () => {
     await admin.close();
   });
 
+  test('has no filesystem tools, so it cannot be used to read or write the host', async () => {
+    const client = await connect();
+    const { tools } = await client.listTools();
+
+    // Writing files would land on the Marginalia host, unreachable by the
+    // caller, and `output_dir` accepts an absolute path — so the tool is
+    // withheld entirely rather than sandboxed.
+    expect(tools.map((t) => t.name)).not.toContain('export_document');
+
+    // Same for reading: creating a document needs no invite, so a
+    // `source_path` would hand the server's files to anyone who asked.
+    const create = tools.find((t) => t.name === 'create_document');
+    const properties = Object.keys(
+      (create?.inputSchema as { properties?: Record<string, unknown> })?.properties ?? {},
+    );
+    expect(properties).toContain('source');
+    expect(properties).not.toContain('source_path');
+    await client.close();
+  });
+
+  test('ignores a source_path even if a client sends one anyway', async () => {
+    const client = await connect();
+    // The schema omits it, but a hand-rolled client can still put it on
+    // the wire; the handler must not act on it.
+    const res = (await client.callTool({
+      name: 'create_document',
+      arguments: { source_path: '/etc/passwd', name: 'Nope' },
+    })) as { content: Array<{ text?: string }>; isError?: boolean };
+    expect(res.isError).toBe(true);
+    expect(res.content.map((c) => c.text).join('')).toContain('no access to local files');
+    await client.close();
+  });
+
   test('refuses to reach a different Marginalia instance', async () => {
     const client = await connect();
     const res = (await client.callTool({

@@ -88,6 +88,7 @@ import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
 import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
 import { COMMENT_FLASH_MS } from './inline-comments/inlineUtils.js';
 import { McpPanel } from './McpPanel.js';
+import { ReadAloudControls } from './ReadAloudControls.js';
 import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
@@ -1327,6 +1328,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 <AccessControlDialog doc={doc} onChange={onDocSettingsChanged} />
               </>
             )}
+            <ReadAloudControls
+              rootRef={docRef}
+              htmlKey={liveRendered.html}
+              frontmatter={liveRendered.frontmatter}
+              inlineCommentsOffset={inlineCommentsColumnWidth}
+            />
             <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
               <IconButton
                 variant="soft"

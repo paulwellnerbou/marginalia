@@ -103,8 +103,16 @@ The hosted endpoint takes its settings from the URL; these apply to the stdio se
 | `MARGINALIA_MCP_NO_PERSIST` | *(unset)* | `1` keeps everything in memory. Document links must then be re-supplied each session, and older comments stop being editable. |
 | `MARGINALIA_DOWNLOAD_DIR` | current directory | Default destination for `export_document`. |
 
-`export_document` writes files to the machine running the server, so over HTTP it lands on
-the Marginalia host, not yours. If you want downloads locally, use the stdio route.
+### Filesystem access is stdio-only
+
+Over stdio the server runs on your machine, so `export_document` saves where you asked and
+`create_document`'s `source_path` reads the file you named.
+
+The hosted endpoint withholds both. Its filesystem is the Marginalia host's, not yours: a
+`source_path` there would read the server's files out to whoever connected, and an export
+would write chosen bytes to a chosen path — neither behind any access check, since creating
+a document needs no invite. The results would be unreachable by the caller anyway, so
+nothing is lost. Use the stdio route when you want files on your own disk.
 
 ## Access: give the agent its own link
 
@@ -167,8 +175,8 @@ approval apart.
 | --- | --- |
 | `edit_document` | Search-and-replace edits saved as a revision. `dry_run` shows the diff first. |
 | `update_document` | Replace the whole source. |
-| `export_document` | Write `source`, `bundle`, `docx`, `pdf` to disk — `formats: ["all"]` for everything. |
-| `create_document` | Upload a local markdown/AsciiDoc file and get links back. |
+| `export_document` | Write `source`, `bundle`, `docx`, `pdf` to disk — `formats: ["all"]` for everything. **stdio only.** |
+| `create_document` | Upload markdown/AsciiDoc and get links back. `source_path` reads a local file — **stdio only**. |
 | `create_invite`, `list_invites`, `authenticate` | Access management. |
 
 ## Reading a chapter at a time

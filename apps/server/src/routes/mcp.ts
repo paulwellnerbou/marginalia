@@ -45,12 +45,22 @@ async function handleMcp(c: Context, app: Hono): Promise<Response> {
       // whoever connects to it.
       allowedHosts: [url.hostname],
       password: null,
-      // Nothing may be written to the server's disk on behalf of a
-      // caller, and a stateless endpoint has nothing to remember anyway.
+      // A stateless endpoint has nothing to remember, and nothing may be
+      // written to the server's disk on behalf of a caller.
       stateDir: null,
+      // Unused: `allowLocalFiles: false` keeps the filesystem tools off.
       downloadDir: '',
     },
-    { fetchImpl: async (input, init) => app.fetch(new Request(input as URL | string, init)) },
+    {
+      fetchImpl: async (input, init) => app.fetch(new Request(input as URL | string, init)),
+      // The filesystem here is the Marginalia host's, not the caller's.
+      // Creating a document needs no invite, so leaving these on would
+      // let anyone who can reach this endpoint read the server's files
+      // out through `source_path` and write chosen bytes to a chosen
+      // path through `export_document`. They would also produce results
+      // the caller cannot reach, so there is nothing to trade away.
+      allowLocalFiles: false,
+    },
   );
 
   const transport = new WebStandardStreamableHTTPServerTransport({

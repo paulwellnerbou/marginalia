@@ -66,6 +66,20 @@ function instructions(config: McpConfig): string {
 export interface McpServerDeps {
   /** Overrides how tool calls reach Marginalia. See `MarginaliaClient`. */
   fetchImpl?: FetchLike;
+  /**
+   * Whether tools may touch the filesystem of the machine this server
+   * runs on. True over stdio, where that machine is the user's own and
+   * reading a manuscript or saving a PDF is the point.
+   *
+   * MUST be false for a hosted endpoint. There the filesystem belongs to
+   * the Marginalia host, so `create_document`'s `source_path` would read
+   * the server's files out to whoever connected, and `export_document`
+   * would write attacker-chosen bytes to an attacker-chosen path —
+   * neither behind any access check, since creating a document needs no
+   * invite. The results would also be unreachable by the caller, so
+   * there is nothing lost by withholding them.
+   */
+  allowLocalFiles?: boolean;
 }
 
 export function createMarginaliaMcpServer(
@@ -84,10 +98,11 @@ export function createMarginaliaMcpServer(
     { capabilities: { tools: {} }, instructions: instructions(config) },
   );
 
-  registerDocumentTools(server, context);
+  const allowLocalFiles = deps.allowLocalFiles !== false;
+  registerDocumentTools(server, context, { allowLocalFiles });
   registerReviewTools(server, context);
   registerEditingTools(server, context);
-  registerExportTools(server, context);
+  if (allowLocalFiles) registerExportTools(server, context);
 
   return { server, context };
 }
