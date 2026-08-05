@@ -93,6 +93,20 @@ function readDisplayName(url: URL): string {
 }
 
 /**
+ * Optional `?token=` on the connection URL: the agent's invite for the
+ * document it was connected for. Not a secret this endpoint holds — it
+ * comes from the caller and is only replayed back to Marginalia on
+ * their behalf, exactly as if they had pasted it in the document URL.
+ *
+ * Scoped to the instance it names: `MarginaliaClient` only replays it
+ * for a reference that resolves back to this origin.
+ */
+function readToken(url: URL): string | null {
+  const raw = sanitizeIdentityValue(url.searchParams.get('token'), MAX_CLIENT_ID_LENGTH);
+  return raw.length > 0 ? raw : null;
+}
+
+/**
  * The marker Marginalia uses to decide who may edit or delete a comment.
  *
  * An agent needs it stable across reconnects or it loses ownership of
@@ -102,17 +116,6 @@ function readDisplayName(url: URL): string {
  * makes, where `clientId` is an unverified header a caller supplies.
  * Pass `client_id` explicitly to keep separate agents apart.
  */
-/**
- * Optional `?token=` on the connection URL: the agent's invite for the
- * document it was connected for. Not a secret this endpoint holds — it
- * comes from the caller and is only replayed back to Marginalia on
- * their behalf, exactly as if they had pasted it in the document URL.
- */
-function readToken(url: URL): string | null {
-  const raw = sanitizeIdentityValue(url.searchParams.get('token'), MAX_CLIENT_ID_LENGTH);
-  return raw.length > 0 ? raw : null;
-}
-
 function readClientId(url: URL, displayName: string): string {
   const explicit = sanitizeIdentityValue(url.searchParams.get('client_id'), MAX_CLIENT_ID_LENGTH);
   if (explicit.length >= 8) return explicit;
