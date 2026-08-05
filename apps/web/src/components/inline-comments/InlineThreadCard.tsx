@@ -222,9 +222,11 @@ export function InlineThreadCard({
     const quoted = pendingQuote.current;
     if (!quoted) return;
     pendingQuote.current = null;
-    composerRef.current?.insertText(quoted);
-    composerRef.current?.focus();
-  }, [replyOpen]);
+    // The freshly mounted composer autofocuses the display-name input
+    // while a name is still required, and nothing can be posted until
+    // that is filled — inserting the quote must not race it for focus.
+    composerRef.current?.insertText(quoted, { focus: !needsName });
+  }, [replyOpen, needsName]);
 
   async function showDiff() {
     if (!proposalThread || loadingDiff) return;
