@@ -1,6 +1,12 @@
 import { createPatch } from 'diff';
 import type { DocumentWire, ThreadWire } from './api-types.js';
-import { clip, type DocumentBlock, type DocumentBlockMap, type DocumentSection } from './blocks.js';
+import {
+  anchorNeighbourhood,
+  clip,
+  type DocumentBlock,
+  type DocumentBlockMap,
+  type DocumentSection,
+} from './blocks.js';
 import type { DocumentRef } from './document-ref.js';
 import { documentUrl } from './document-ref.js';
 
@@ -157,6 +163,8 @@ export function blockList(
 export interface ThreadListOptions {
   /** Include the anchored block's current source under each thread. */
   includeAnchorSource: boolean;
+  /** Whole blocks of surrounding source to add either side of it. */
+  contextBlocks: number;
   blockMap: DocumentBlockMap | null;
 }
 
@@ -180,18 +188,31 @@ export function threadDetail(
   lines.push(`thread_id: ${thread.id}`);
 
   const anchor = thread.anchor;
-  const block = anchor.block_id
-    ? (options.blockMap?.blocks.find((b) => b.id === anchor.block_id) ?? null)
-    : null;
+  const findBlock = (id: string | null): DocumentBlock | null =>
+    id ? (options.blockMap?.blocks.find((b) => b.id === id) ?? null) : null;
+  const block = findBlock(anchor.block_id);
+  // A comment can cover several blocks, and the anchor records only its
+  // two endpoints. Showing the first alone would present a fragment of
+  // the quote as the whole of it.
+  //
+  // The span is read from the anchor, not from what resolved: a document
+  // edited since keeps the id but loses the block, and a span that
+  // printed as single-block there would hide the reason its quote looks
+  // truncated.
+  const spanEndId =
+    anchor.end_block_id && anchor.end_block_id !== anchor.block_id ? anchor.end_block_id : null;
+  const endBlock = spanEndId ? findBlock(spanEndId) : null;
   const where = block
-    ? `${block.kind}, lines ${block.startLine}-${block.endLine}, section ${
+    ? `${blockSpan(block, endBlock, spanEndId !== null)}, section ${
         block.headingPath.length > 0 ? block.headingPath.join(' › ') : '(document root)'
       }`
     : anchor.heading_path?.length
       ? `section ${anchor.heading_path.join(' › ')}`
       : 'unknown location';
   lines.push(
-    `anchor: block_id=${anchor.block_id ?? 'none'} (${where}) link_status=${thread.link_status}`,
+    `anchor: block_id=${anchor.block_id ?? 'none'}${
+      spanEndId ? ` end_block_id=${spanEndId}` : ''
+    } (${where}) link_status=${thread.link_status}`,
   );
   if (anchor.quote) lines.push(`quoted text: ${JSON.stringify(clip(anchor.quote, 240))}`);
   if (thread.proposal?.whole_document) lines.push('scope: replaces the WHOLE document on accept');
@@ -224,17 +245,78 @@ export function threadDetail(
     }
   });
 
+  const around =
+    options.includeAnchorSource && options.blockMap && block
+      ? anchorNeighbourhood(options.blockMap, block, endBlock, options.contextBlocks)
+      : null;
+  if (around?.before) {
+    lines.push(`source before the anchor (${plural(around.beforeBlocks, 'block')}):`);
+    lines.push(gutter(around.before));
+  }
   if (thread.proposal) {
     lines.push('proposal — current text:');
     lines.push(gutter(thread.proposal.source_snapshot ?? '(unavailable)'));
     lines.push('proposal — proposed replacement:');
     lines.push(gutter(thread.proposal.proposed_text ?? '(unavailable)'));
-  } else if (options.includeAnchorSource && block?.source != null) {
-    lines.push('current source of the anchored block:');
-    lines.push(gutter(block.source));
+  } else if (around) {
+    lines.push(`${anchoredSourceLabel(endBlock !== null, spanEndId !== null)}:`);
+    lines.push(gutter(around.anchored));
+  }
+  if (around?.after) {
+    lines.push(`source after the anchor (${plural(around.afterBlocks, 'block')}):`);
+    lines.push(gutter(around.after));
   }
 
   return lines.join('\n');
+}
+
+/**
+ * What the source printed underneath actually covers.
+ *
+ * A span whose end block is gone can only be shown from its start, while
+ * the quote above it covers more. Left as "the anchored block" that
+ * reads as the whole of it, and the missing text looks like a
+ * discrepancy in the quote rather than in the document.
+ */
+function anchoredSourceLabel(spanResolved: boolean, isSpan: boolean): string {
+  if (spanResolved) return 'current source of the anchored blocks';
+  if (isSpan) {
+    return 'current source of the anchored block — the START of the span only, since its end block is not in this document';
+  }
+  return 'current source of the anchored block';
+}
+
+/**
+ * "paragraph, lines 4-6", or both endpoints when the anchor spans blocks.
+ *
+ * A block the local source walk could not place has no line numbers, and
+ * a range defaulted to 0 would read as a real location in the document.
+ * Say the range is unknown instead.
+ */
+function blockSpan(first: DocumentBlock, last: DocumentBlock | null, spanned: boolean): string {
+  if (!spanned) return `${first.kind}, ${lineRange(first.startLine, first.endLine)}`;
+  if (!last) return `${first.kind}…? span, end block not in this document`;
+  return `${first.kind}…${last.kind} span, ${lineRange(
+    bound(first.startLine, last.startLine, Math.min),
+    bound(first.endLine, last.endLine, Math.max),
+  )}`;
+}
+
+function lineRange(from: number | null, to: number | null): string {
+  return from === null || to === null ? 'source range unknown' : `lines ${from}-${to}`;
+}
+
+/** Null when either endpoint is unplaced — half a range would understate the span. */
+function bound(
+  a: number | null,
+  b: number | null,
+  pick: (x: number, y: number) => number,
+): number | null {
+  return a === null || b === null ? null : pick(a, b);
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 export function threadStatus(thread: ThreadWire): string {

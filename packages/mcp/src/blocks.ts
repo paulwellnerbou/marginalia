@@ -65,6 +65,8 @@ export interface DocumentSection {
 export interface DocumentBlockMap {
   blocks: DocumentBlock[];
   sections: DocumentSection[];
+  /** The source every `start`/`end` above indexes into. */
+  source: string;
   /**
    * Block ids the server rendered but the local source walk could not
    * place. Non-empty means the renderer used here disagrees with the
@@ -91,7 +93,7 @@ export async function buildBlockMap(doc: DocumentWire): Promise<DocumentBlockMap
     if (!range) unresolved.push(block.id);
     return toDocumentBlock(block, index, range, doc.source, lines);
   });
-  return { blocks, sections: buildSections(blocks, doc, lines), unresolved };
+  return { blocks, sections: buildSections(blocks, doc, lines), source: doc.source, unresolved };
 }
 
 /**
@@ -185,6 +187,93 @@ export function resolveSection(map: DocumentBlockMap, query: string): DocumentSe
 /** Does this block sit inside the section (including its subsections)? */
 export function sectionContains(section: DocumentSection, block: DocumentBlock): boolean {
   return block.index >= section.fromBlock && block.index < section.toBlock;
+}
+
+type PlacedBlock = DocumentBlock & { start: number; end: number };
+
+const topLevelCache = new WeakMap<DocumentBlockMap, PlacedBlock[]>();
+
+/**
+ * The blocks no other block encloses, in document order.
+ *
+ * The block list holds list items and table cells alongside the list or
+ * table containing them, so stepping outward from an anchor by `index`
+ * would walk back into the same list rather than reach the paragraph
+ * beside it. "A paragraph either side" means stepping over these.
+ */
+function topLevelBlocks(map: DocumentBlockMap): PlacedBlock[] {
+  const cached = topLevelCache.get(map);
+  if (cached) return cached;
+
+  const placed = map.blocks.filter((b): b is PlacedBlock => b.start !== null && b.end !== null);
+  // Longest first where two share a start, so the enclosing block is the
+  // one that claims the span and its children fall inside it.
+  const ordered = [...placed].sort((a, b) => a.start - b.start || b.end - a.end);
+  const tops: PlacedBlock[] = [];
+  let covered = -1;
+  for (const block of ordered) {
+    if (block.start < covered) continue;
+    tops.push(block);
+    covered = block.end;
+  }
+  topLevelCache.set(map, tops);
+  return tops;
+}
+
+/** An anchor's own source, and the source reading either side of it. */
+export interface AnchorNeighbourhood {
+  /** Verbatim source the anchor covers — several blocks, for a span. */
+  anchored: string;
+  before: string | null;
+  after: string | null;
+  beforeBlocks: number;
+  afterBlocks: number;
+}
+
+/**
+ * What a comment points at, plus enough of its surroundings to judge it.
+ *
+ * A comment often talks about text it does not quote — "this contradicts
+ * the paragraph above" — so the quote alone underdetermines the fix.
+ * Context is taken as whole blocks either side rather than a character
+ * window, because half a sentence of markdown is worse than none.
+ *
+ * Blocks overlapping the anchor are never context: anchoring on a list
+ * item excludes the enclosing list, so the surroundings are the
+ * paragraphs around the list rather than the list restated.
+ */
+export function anchorNeighbourhood(
+  map: DocumentBlockMap,
+  start: DocumentBlock,
+  end: DocumentBlock | null,
+  contextBlocks: number,
+): AnchorNeighbourhood | null {
+  if (start.start === null || start.end === null) return null;
+  const far = end && end.start !== null && end.end !== null ? (end as PlacedBlock) : null;
+  // The anchor records only its two endpoints, in the order they were
+  // selected. Take the outer bounds so a span written end-first still
+  // describes the same stretch of text.
+  const from = far ? Math.min(start.start, far.start) : start.start;
+  const to = far ? Math.max(start.end, far.end) : start.end;
+
+  const tops = contextBlocks > 0 ? topLevelBlocks(map) : [];
+  const before = tops.filter((b) => b.end <= from).slice(-contextBlocks);
+  const after = tops.filter((b) => b.start >= to).slice(0, contextBlocks);
+  const span = (list: PlacedBlock[]): string | null =>
+    list.length === 0
+      ? null
+      : map.source.slice(
+          (list[0] as PlacedBlock).start,
+          (list[list.length - 1] as PlacedBlock).end,
+        );
+
+  return {
+    anchored: map.source.slice(from, to),
+    before: span(before),
+    after: span(after),
+    beforeBlocks: before.length,
+    afterBlocks: after.length,
+  };
 }
 
 async function locateBlocks(

@@ -2764,6 +2764,19 @@ button.primary:disabled {
   flex-shrink: 0;
 }
 
+.ic-card-anchor-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+/* `auto` rather than the row's justify-content: the anchor is optional,
+   and the button still belongs at the right edge without it. */
+.ic-card-copy-id {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 .ic-card-badges {
   display: flex;
   flex-wrap: wrap;
@@ -2825,6 +2838,8 @@ button.primary:disabled {
   background: transparent;
   border: 0;
   padding: 0;
+  /* Long quotes wrap inside the row instead of pushing the copy button out. */
+  min-width: 0;
   text-align: left;
   font-size: 0.74rem;
   color: var(--ui-fg-muted);
