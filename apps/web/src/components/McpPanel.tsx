@@ -111,10 +111,18 @@ export function McpPanel({ uid, canManageInvites }: Props) {
    * signed with the invite's name and everything after it with the URL's.
    * Deriving one from the other makes that impossible.
    */
-  function connectionFor(inviteName: string): { url: string; cli: string; json: string } {
-    const url = `${origin}/mcp${
-      inviteName === DEFAULT_AGENT_NAME ? '' : `?name=${encodeURIComponent(inviteName)}`
-    }`;
+  function connectionFor(
+    inviteName: string,
+    token: string,
+  ): { url: string; cli: string; json: string } {
+    const params = new URLSearchParams();
+    if (inviteName !== DEFAULT_AGENT_NAME) params.set('name', inviteName);
+    // Carrying the token on the connection means any reference to this
+    // document works, even one the viewer stripped the token from — a
+    // copied comment link, say. An explicit token in a pasted URL still
+    // wins over it.
+    params.set('token', token);
+    const url = `${origin}/mcp?${params.toString()}`;
     return {
       url,
       cli: `claude mcp add --transport http marginalia ${url}`,
@@ -222,8 +230,10 @@ export function McpPanel({ uid, canManageInvites }: Props) {
         </Callout.Root>
       ) : (
         agentInvites.map((invite) => {
-          const inviteName = invite.display_name ?? DEFAULT_AGENT_NAME;
-          const connection = connectionFor(inviteName);
+          // Normalize on read too: `?name=` has to match what the server
+          // derives from it, whatever is stored.
+          const inviteName = normalizeAgentName(invite.display_name);
+          const connection = connectionFor(inviteName, invite.token);
           return (
             <Box key={invite.token} mb="4">
               <Text as="p" size="2" weight="bold" mb="1">
@@ -241,6 +251,10 @@ export function McpPanel({ uid, canManageInvites }: Props) {
                 Then give it this link to the document:
               </Text>
               <Copyable text={`${origin}${invite.url}`} multiline size="1" />
+              <Text as="p" size="1" color="gray" mt="1">
+                The connection above already carries this agent’s access, so a link copied from a
+                comment works too — even without the token in it.
+              </Text>
             </Box>
           );
         })

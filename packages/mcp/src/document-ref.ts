@@ -3,8 +3,15 @@ import { normalizeBaseUrl } from './config.js';
 export interface DocumentRef {
   baseUrl: string;
   uid: string;
-  /** Invite token from the URL, or one remembered from an earlier call. */
+  /** Invite token from the URL, one remembered earlier, or the connection default. */
   token: string | null;
+  /**
+   * Comment named by a `#comment-<id>` fragment, if the caller pasted a
+   * link to one. The viewer's "copy link to this comment" produces these,
+   * so a user handing one over means "this thread" — and the id may
+   * belong to a reply rather than the thread's opener.
+   */
+  commentId?: string | null;
 }
 
 export class DocumentRefError extends Error {}
@@ -20,6 +27,7 @@ interface ParsedRef {
   baseUrl: string | null;
   uid: string;
   token: string | null;
+  commentId: string | null;
 }
 
 /**
@@ -50,7 +58,12 @@ export function parseDocumentRef(raw: string): ParsedRef {
       `"${raw}" is not a Marginalia document. Pass the document URL (https://<host>/d/<uid>/<token>) or its uid.`,
     );
   }
-  return { baseUrl: null, uid, token: token && ID_PATTERN.test(token) ? token : null };
+  return {
+    baseUrl: null,
+    uid,
+    token: token && ID_PATTERN.test(token) ? token : null,
+    commentId: null,
+  };
 }
 
 function parseUrlRef(input: string): ParsedRef {
@@ -90,7 +103,16 @@ function parseUrlRef(input: string): ParsedRef {
   const queryToken = url.searchParams.get('invite');
   if (!token && queryToken && ID_PATTERN.test(queryToken)) token = queryToken;
 
-  return { baseUrl: normalizeBaseUrl(url.origin), uid, token };
+  return { baseUrl: normalizeBaseUrl(url.origin), uid, token, commentId: readCommentId(url) };
+}
+
+const COMMENT_FRAGMENT = '#comment-';
+
+/** `#comment-<id>` as produced by the viewer's copy-link button. */
+function readCommentId(url: URL): string | null {
+  if (!url.hash.startsWith(COMMENT_FRAGMENT)) return null;
+  const id = decodeURIComponent(url.hash.slice(COMMENT_FRAGMENT.length));
+  return id.length > 0 ? id : null;
 }
 
 /** Reject hosts outside `allowedHosts` when the operator configured an allowlist. */

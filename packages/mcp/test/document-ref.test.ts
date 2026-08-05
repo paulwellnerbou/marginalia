@@ -10,6 +10,7 @@ describe('parseDocumentRef', () => {
       baseUrl: 'https://marg.example.com',
       uid: UID,
       token: TOKEN,
+      commentId: null,
     });
   });
 
@@ -18,6 +19,7 @@ describe('parseDocumentRef', () => {
       baseUrl: 'https://marg.example.com',
       uid: UID,
       token: null,
+      commentId: null,
     });
   });
 
@@ -37,7 +39,12 @@ describe('parseDocumentRef', () => {
   });
 
   test('accepts a bare uid, leaving the instance unset', () => {
-    expect(parseDocumentRef(UID)).toEqual({ baseUrl: null, uid: UID, token: null });
+    expect(parseDocumentRef(UID)).toEqual({
+      baseUrl: null,
+      uid: UID,
+      token: null,
+      commentId: null,
+    });
   });
 
   test('accepts uid/token without a host', () => {
@@ -45,6 +52,7 @@ describe('parseDocumentRef', () => {
       baseUrl: null,
       uid: UID,
       token: TOKEN,
+      commentId: null,
     });
   });
 
@@ -54,6 +62,27 @@ describe('parseDocumentRef', () => {
 
   test('reads a token from ?invite=', () => {
     expect(parseDocumentRef(`https://marg.example.com/d/${UID}?invite=${TOKEN}`).token).toBe(TOKEN);
+  });
+
+  test('reads a comment id from a #comment- fragment', () => {
+    const ref = parseDocumentRef(
+      `https://marg.example.com/d/${UID}/${TOKEN}#comment-nMRVOjuP4e6Maa4v`,
+    );
+    expect(ref.commentId).toBe('nMRVOjuP4e6Maa4v');
+    expect(ref.token).toBe(TOKEN);
+  });
+
+  test('reads a comment id from a link the viewer stripped the token from', () => {
+    // What "copy link to this comment" produces once an invite has been
+    // claimed into a session cookie.
+    const ref = parseDocumentRef(`https://marg.example.com/d/${UID}#comment-nMRVOjuP4e6Maa4v`);
+    expect(ref.commentId).toBe('nMRVOjuP4e6Maa4v');
+    expect(ref.token).toBeNull();
+  });
+
+  test('ignores a fragment that is not a comment link', () => {
+    expect(parseDocumentRef(`https://marg.example.com/d/${UID}#chapter-two`).commentId).toBeNull();
+    expect(parseDocumentRef(`https://marg.example.com/d/${UID}`).commentId).toBeNull();
   });
 
   test('rejects input with no document id', () => {

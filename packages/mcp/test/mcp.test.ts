@@ -63,6 +63,7 @@ describe('marginalia MCP server', () => {
       clientId: 'claude-mcp-test-client-id',
       allowedHosts: [],
       password: null,
+      defaultToken: null,
       stateDir,
       downloadDir,
     };
@@ -847,6 +848,7 @@ describe('marginalia MCP server', () => {
       clientId: 'reader-only-client',
       allowedHosts: [],
       password: null,
+      defaultToken: null,
       stateDir: mkdtempSync(join(tmpdir(), 'mcp-state2-')),
       downloadDir,
     });

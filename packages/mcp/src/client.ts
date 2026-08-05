@@ -76,7 +76,12 @@ export class MarginaliaClient {
     const ref: DocumentRef = {
       baseUrl,
       uid: parsed.uid,
-      token: parsed.token ?? remembered?.token ?? null,
+      // An explicit token always wins, then one seen earlier in this
+      // session, then the connection's own. The last is what lets a
+      // tokenless link — a copied comment link, say — still arrive with
+      // the agent's access.
+      token: parsed.token ?? remembered?.token ?? this.config.defaultToken,
+      commentId: parsed.commentId,
     };
     this.state.remember(ref.uid, { baseUrl: ref.baseUrl, token: ref.token });
     return ref;

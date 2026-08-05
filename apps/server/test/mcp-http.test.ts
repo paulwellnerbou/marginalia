@@ -279,6 +279,88 @@ describe('hosted MCP endpoint', () => {
     await agent.close();
   });
 
+  test('a token on the connection covers references that carry none', async () => {
+    const admin = await connect('?name=Paul');
+    const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+    const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+    const invite = await callText(admin, 'create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+      display_name: 'Claude',
+    });
+    const token = new URL(/(http\S+)/.exec(invite)?.[1] as string).pathname.split('/')[3] as string;
+    await admin.close();
+
+    // The viewer strips the token from the URL once an invite is claimed,
+    // so a copied comment link looks like this — no token at all.
+    const tokenless = `${baseUrl}/d/${uid}`;
+
+    const without = await connect('?name=Claude');
+    expect(
+      await callText(without, 'get_document', { document: tokenless, include_source: false }),
+    ).toContain('your role: reader');
+    await without.close();
+
+    const withToken = await connect(`?name=Claude&token=${token}`);
+    expect(
+      await callText(withToken, 'get_document', { document: tokenless, include_source: false }),
+    ).toContain('your role: collaborator');
+    // And it can act, not just read.
+    await callText(withToken, 'create_comment', {
+      document: tokenless,
+      anchor_text: 'Alpha.',
+      body: 'written through the connection token',
+    });
+    await withToken.close();
+  });
+
+  test('a #comment- link selects that thread, opener or reply', async () => {
+    const admin = await connect('?name=Paul');
+    const created = await callText(admin, 'create_document', {
+      source: '# Doc\n\nAlpha.\n\nBeta.\n',
+    });
+    const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+    const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+    const token = new URL(adminUrl).pathname.split('/')[3] as string;
+
+    const first = await callText(admin, 'create_comment', {
+      document: adminUrl,
+      anchor_text: 'Alpha.',
+      body: 'the thread we want',
+    });
+    const threadId = /^thread_id: (\S+)/m.exec(first)?.[1] as string;
+    const reply = await callText(admin, 'reply_to_thread', {
+      document: adminUrl,
+      thread_id: threadId,
+      body: 'a reply inside it',
+    });
+    const replyId = /^comment_id: (\S+)/m.exec(reply)?.[1] as string;
+    await callText(admin, 'create_comment', {
+      document: adminUrl,
+      anchor_text: 'Beta.',
+      body: 'an unrelated thread',
+    });
+
+    // The copy-link button sits on replies too, so both shapes must work.
+    for (const id of [threadId, replyId]) {
+      const viaLink = await callText(admin, 'list_threads', {
+        document: `${baseUrl}/d/${uid}/${token}#comment-${id}`,
+      });
+      expect(viaLink).toContain('the thread we want');
+      expect(viaLink).not.toContain('an unrelated thread');
+      expect(viaLink).toContain(`#comment-${id}`);
+    }
+
+    // A reply id passed outright resolves to its thread as well.
+    const viaArg = await callText(admin, 'list_threads', {
+      document: adminUrl,
+      thread_id: replyId,
+    });
+    expect(viaArg).toContain('the thread we want');
+    await admin.close();
+  });
+
   test('refuses to reach a different Marginalia instance', async () => {
     const client = await connect();
     const res = (await client.callTool({

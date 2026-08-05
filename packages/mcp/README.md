@@ -60,8 +60,18 @@ names disagree, the agent's first write is signed with the invite's name and eve
 after it with the URL's. The MCP tab generates the connection string from the invite, so
 they cannot drift.
 
+Add `&token=<invite token>` and the connection carries the agent's access, so any reference
+to that document works even without a token in it — including a link copied from a comment,
+which the viewer strips the token from once an invite has been claimed. A token in a pasted
+URL still wins, and a token for one document simply resolves to nothing on another.
+
 The document viewer has an **MCP** tab that generates all of this for you, with an access
 link for the agent alongside it.
+
+To point an agent at one comment, hand it the link the viewer's "copy link to this comment"
+button produces. The `#comment-<id>` fragment selects that thread — the id may belong to a
+reply, which resolves to the thread containing it. `list_threads` also takes any message's
+id as `thread_id`.
 
 ### Over stdio — for local development
 
@@ -98,6 +108,7 @@ The hosted endpoint takes its settings from the URL; these apply to the stdio se
 | `MARGINALIA_DISPLAY_NAME` | `Claude` | The name every comment and proposal is signed with. |
 | `MARGINALIA_ALLOWED_HOSTS` | *(unset — any host)* | Comma-separated allowlist. When set, a URL pointing anywhere else is refused. |
 | `MARGINALIA_PASSWORD` | *(unset)* | Password for password-protected documents, so it never has to be typed into a chat. |
+| `MARGINALIA_INVITE_TOKEN` | *(unset)* | Invite token applied to a document reference that carries none — the stdio equivalent of `&token=`. |
 | `MARGINALIA_CLIENT_ID` | *(generated once)* | Identity marker. Override to share one identity across machines. |
 | `MARGINALIA_MCP_STATE_DIR` | `~/.config/marginalia-mcp` | Where the client id and per-document links are cached (mode 0600). |
 | `MARGINALIA_MCP_NO_PERSIST` | *(unset)* | `1` keeps everything in memory. Document links must then be re-supplied each session, and older comments stop being editable. |

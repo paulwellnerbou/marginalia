@@ -50,6 +50,10 @@ async function handleMcp(c: Context, app: Hono): Promise<Response> {
       // whoever connects to it.
       allowedHosts: [url.hostname],
       password: null,
+      // Lets the connection carry the agent's access, so a reference
+      // without a token of its own — a bare uid, or a comment link the
+      // viewer stripped the token from — still arrives with it.
+      defaultToken: readToken(url),
       // A stateless endpoint has nothing to remember, and nothing may be
       // written to the server's disk on behalf of a caller.
       stateDir: null,
@@ -98,6 +102,17 @@ function readDisplayName(url: URL): string {
  * makes, where `clientId` is an unverified header a caller supplies.
  * Pass `client_id` explicitly to keep separate agents apart.
  */
+/**
+ * Optional `?token=` on the connection URL: the agent's invite for the
+ * document it was connected for. Not a secret this endpoint holds — it
+ * comes from the caller and is only replayed back to Marginalia on
+ * their behalf, exactly as if they had pasted it in the document URL.
+ */
+function readToken(url: URL): string | null {
+  const raw = sanitizeIdentityValue(url.searchParams.get('token'), MAX_CLIENT_ID_LENGTH);
+  return raw.length > 0 ? raw : null;
+}
+
 function readClientId(url: URL, displayName: string): string {
   const explicit = sanitizeIdentityValue(url.searchParams.get('client_id'), MAX_CLIENT_ID_LENGTH);
   if (explicit.length >= 8) return explicit;
