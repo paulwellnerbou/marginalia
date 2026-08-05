@@ -385,12 +385,20 @@ describe('hosted MCP endpoint', () => {
     expect(
       await callText(agent, 'get_document', { document: bare, include_source: false }),
     ).toContain('your role: collaborator');
-    // Including a comment link, which is the shape that carries no token.
-    await callText(agent, 'create_comment', {
-      document: `${bare}#comment-whatever`,
+    // The shape this exists for: a comment link, which carries no token.
+    // Its fragment has to be a real id — an unrecognized one is ignored,
+    // and asserting against that would prove nothing.
+    const comment = await callText(agent, 'create_comment', {
+      document: bare,
       anchor_text: 'Alpha.',
       body: 'written through a remembered token',
     });
+    const threadId = /^thread_id: (\S+)/m.exec(comment)?.[1] as string;
+    const viaCommentLink = await callText(agent, 'list_threads', {
+      document: `${bare}#comment-${threadId}`,
+    });
+    expect(viaCommentLink).toContain(`#comment-${threadId}`);
+    expect(viaCommentLink).toContain('written through a remembered token');
     await agent.close();
   });
 
@@ -428,6 +436,26 @@ describe('hosted MCP endpoint', () => {
     await first.close();
     await second.close();
     await admin.close();
+  });
+
+  test('a request that never initializes leaves nothing behind', async () => {
+    // `handleRequest` can reject, and an un-sessioned server has no id to
+    // reach it by afterwards — so a burst of bad requests must not strand
+    // one apiece. The endpoint staying responsive afterwards is the
+    // observable part; the close happens in a finally.
+    for (let i = 0; i < 25; i++) {
+      const res = await fetch(`${baseUrl}/mcp`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: 'not json at all',
+      });
+      expect(res.status).toBeGreaterThanOrEqual(400);
+      expect(res.headers.get('mcp-session-id')).toBeNull();
+    }
+
+    const client = await connect();
+    expect((await client.listTools()).tools.length).toBeGreaterThan(20);
+    await client.close();
   });
 
   test('an unknown session id is refused rather than silently starting a new one', async () => {

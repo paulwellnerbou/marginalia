@@ -116,19 +116,28 @@ async function handleMcp(c: Context, app: Hono, sessions: SessionStore): Promise
   // No session id: an initialize request, or a malformed one the
   // transport will reject on its own.
   const { server, transport } = buildSession(new URL(c.req.url), app);
-  await server.connect(transport);
-  const response = await transport.handleRequest(c.req.raw);
-
-  const id = transport.sessionId;
-  if (id) {
-    sessions.add(id, { server, transport, lastUsed: Date.now() });
-  } else {
-    // Never initialized — nothing to keep, and holding it would leak an
-    // MCP server per malformed request.
-    await transport.close().catch(() => undefined);
-    await server.close().catch(() => undefined);
+  let keep = false;
+  try {
+    await server.connect(transport);
+    const response = await transport.handleRequest(c.req.raw);
+    // A session id only exists once initialize succeeded. Anything else
+    // — a malformed body, a request the transport rejects — leaves
+    // nothing worth keeping, and holding it would strand an MCP server
+    // per bad request with no session id to reach it by.
+    const id = transport.sessionId;
+    if (id) {
+      keep = true;
+      sessions.add(id, { server, transport, lastUsed: Date.now() });
+    }
+    return response;
+  } finally {
+    // Covers the throwing path too: `handleRequest` can reject, and
+    // unwinding without this would leak the pair just as silently.
+    if (!keep) {
+      await transport.close().catch(() => undefined);
+      await server.close().catch(() => undefined);
+    }
   }
-  return response;
 }
 
 function notFoundSession(): Response {
