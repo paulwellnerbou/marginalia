@@ -13,6 +13,7 @@ import {
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 import { threadLinks, threadsById } from './inlineUtils.js';
+import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
 /**
  * Right-pane list of comment threads using the same inline-comment
@@ -232,12 +233,18 @@ export function InlineCommentsList({
   }
 
   const byId = useMemo(() => threadsById(threads), [threads]);
+  const refIndex = useMemo(() => threadRefIndex(threads), [threads]);
 
   /** Jump to a linked thread by scrolling to its anchor, which focuses it. */
   function focusLinked(target: Thread) {
     const blockId = target.anchor.block_id;
     if (blockId) onScrollToAnchor(blockId, target.anchor.quote, target.id);
   }
+
+  const threadRefs: ThreadRefApi = {
+    resolve: (id) => refIndex.get(id) ?? null,
+    focus: focusLinked,
+  };
 
   function renderItem(item: ThreadListItem) {
     const blockId = item.thread.anchor.block_id;
@@ -251,6 +258,7 @@ export function InlineCommentsList({
         thread={item.thread}
         links={threadLinks(item.thread, byId)}
         onFocusLinked={focusLinked}
+        threadRefs={threadRefs}
         canComment={canComment}
         needsName={!displayName}
         focused={focusedId === item.id}

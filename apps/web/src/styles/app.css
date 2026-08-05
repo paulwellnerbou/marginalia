@@ -3160,6 +3160,15 @@ button.primary:disabled {
   border-radius: 3px;
   background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
 }
+/* A thread id mentioned in a comment body, linked to that thread. */
+.ic-row-body .ic-thread-ref {
+  color: var(--ui-accent-strong);
+  text-decoration: none;
+  cursor: pointer;
+}
+.ic-row-body .ic-thread-ref:hover {
+  text-decoration: underline;
+}
 .ic-row-body blockquote {
   margin: 0.3rem 0;
   padding: 0 0.6rem;
