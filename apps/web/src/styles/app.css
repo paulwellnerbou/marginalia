@@ -1780,6 +1780,25 @@ button.primary:disabled {
   background: var(--ui-border);
 }
 
+/* Full flex-basis drops the search box onto its own row of the controls
+   flex-wrap, under whatever the toggles wrapped into. */
+.ic-list-search {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.15rem;
+}
+
+.ic-list-search-field {
+  flex: 1;
+}
+
+.ic-list-search-count {
+  flex: none;
+  white-space: nowrap;
+}
+
 .ic-list-filter-toggle {
   position: relative;
 }

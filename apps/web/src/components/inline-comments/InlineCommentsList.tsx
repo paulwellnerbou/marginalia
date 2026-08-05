@@ -1,6 +1,10 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
-import { DotsHorizontalIcon, MixerHorizontalIcon } from '@radix-ui/react-icons';
-import { DropdownMenu, IconButton, SegmentedControl, Text } from '@radix-ui/themes';
+import {
+  DotsHorizontalIcon,
+  MagnifyingGlassIcon,
+  MixerHorizontalIcon,
+} from '@radix-ui/react-icons';
+import { DropdownMenu, IconButton, SegmentedControl, Text, TextField } from '@radix-ui/themes';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
@@ -17,10 +21,12 @@ import {
   ALL_THREAD_FILTERS,
   activeThreadFilterLabels,
   isFilteringThreads,
+  normalizeThreadSearch,
   type ThreadFilters,
   type ThreadKindFilter,
   type ThreadStatusFilter,
   threadMatchesFilters,
+  threadMatchesSearch,
 } from './threadFilters.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
@@ -101,6 +107,7 @@ export function InlineCommentsList({
   onScrollToAnchor,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const lastHandledFocusNonce = useRef<number | null>(null);
 
   /** Document-order rank (by source offset) — same approach as the inline column. */
@@ -139,6 +146,9 @@ export function InlineCommentsList({
   const [sortMode, setSortMode] = useState<SortMode>('document');
   const [filters, setFilters] = useState<ThreadFilters>(ALL_THREAD_FILTERS);
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchNeedle = useMemo(() => normalizeThreadSearch(searchQuery), [searchQuery]);
 
   const sortedActive = useMemo(() => sortItems(activeItems, sortMode), [activeItems, sortMode]);
   const sortedOrphans = useMemo(
@@ -147,12 +157,22 @@ export function InlineCommentsList({
   );
 
   const visibleActive = useMemo(
-    () => sortedActive.filter((item) => threadMatchesFilters(item.thread, filters)),
-    [sortedActive, filters],
+    () =>
+      sortedActive.filter(
+        (item) =>
+          threadMatchesFilters(item.thread, filters) &&
+          threadMatchesSearch(item.thread, searchNeedle),
+      ),
+    [sortedActive, filters, searchNeedle],
   );
   const visibleOrphans = useMemo(
-    () => sortedOrphans.filter((item) => threadMatchesFilters(item.thread, filters)),
-    [sortedOrphans, filters],
+    () =>
+      sortedOrphans.filter(
+        (item) =>
+          threadMatchesFilters(item.thread, filters) &&
+          threadMatchesSearch(item.thread, searchNeedle),
+      ),
+    [sortedOrphans, filters, searchNeedle],
   );
   const visibleCount = visibleActive.length + visibleOrphans.length;
 
@@ -193,9 +213,10 @@ export function InlineCommentsList({
     if (!threadIds.includes(focusedThread.threadId)) return;
 
     // Opening a thread from elsewhere (activities, history) wins over the
-    // filters that would otherwise hide it.
+    // filters or search that would otherwise hide it.
     if (!visibleIds.has(focusedThread.threadId)) {
       setFilters(ALL_THREAD_FILTERS);
+      setSearchQuery('');
       return;
     }
 
@@ -233,12 +254,31 @@ export function InlineCommentsList({
     };
   }, [focusedThread, threadIds, visibleIds, collapsed]);
 
+  // Focus once the input exists — it mounts a frame after the toggle.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const input = searchInputRef.current;
+    if (!input) return;
+    const frame = window.requestAnimationFrame(() => input.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [searchOpen]);
+
   const activeFilters = activeThreadFilterLabels(filters);
   const filterToggleLabel = filtersOpen
     ? 'Hide thread filters'
     : activeFilters.length > 0
       ? `Thread filters — ${activeFilters.join(', ')}`
       : 'Filter threads';
+  const searchToggleLabel = searchOpen
+    ? 'Hide thread search'
+    : 'Search threads by id, text, or author';
+
+  function toggleSearch() {
+    // Closing always clears: a query that keeps filtering from behind a
+    // closed box would look like threads had vanished.
+    if (searchOpen) setSearchQuery('');
+    setSearchOpen(!searchOpen);
+  }
 
   function toggleCollapsed(id: string) {
     setCollapseState((prev) => {
@@ -326,9 +366,9 @@ export function InlineCommentsList({
 
   return (
     <div ref={rootRef} className="ic-list">
-      {/* Stay mounted while a filter is on, or deletions dropping the count to
-          one would strand the reader with no way to clear it. */}
-      {(totalThreads > 1 || isFilteringThreads(filters)) && (
+      {/* Stay mounted while a filter or search is on, or deletions dropping the
+          count to one would strand the reader with no way to clear it. */}
+      {(totalThreads > 1 || isFilteringThreads(filters) || searchOpen) && (
         <div className="ic-list-controls">
           {/* Wraps: one row on a wide pane, one row per control on a narrow one. */}
           <div className="ic-list-control-groups">
@@ -401,6 +441,17 @@ export function InlineCommentsList({
           </div>
 
           <div className="ic-list-controls-actions">
+            <IconButton
+              variant="ghost"
+              size="1"
+              {...(searchOpen ? {} : { color: 'gray' as const })}
+              aria-expanded={searchOpen}
+              aria-label={searchToggleLabel}
+              title={searchToggleLabel}
+              onClick={toggleSearch}
+            >
+              <MagnifyingGlassIcon />
+            </IconButton>
             {/* Accent (rather than gray) while filtering, so the state carries
                 even where the indicator dot is easy to miss. */}
             {/* Stays `ghost` in both states — `soft` drops the negative margin
@@ -434,6 +485,36 @@ export function InlineCommentsList({
               </DropdownMenu.Content>
             </DropdownMenu.Root>
           </div>
+
+          {searchOpen && (
+            <div className="ic-list-search">
+              <TextField.Root
+                ref={searchInputRef}
+                size="1"
+                type="search"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Escape') return;
+                  e.preventDefault();
+                  if (searchQuery) setSearchQuery('');
+                  else toggleSearch();
+                }}
+                placeholder="Search by id, text, or author"
+                aria-label="Search threads by id, text, or author"
+                className="ic-list-search-field"
+              >
+                <TextField.Slot>
+                  <MagnifyingGlassIcon />
+                </TextField.Slot>
+              </TextField.Root>
+              {searchNeedle !== '' && (
+                <Text size="1" color="gray" className="ic-list-search-count">
+                  {visibleCount} of {totalThreads}
+                </Text>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -473,7 +554,11 @@ export function InlineCommentsList({
       )}
 
       {totalThreads > 0 && visibleCount === 0 && (
-        <div className="ic-list-empty">No threads match the selected filters.</div>
+        <div className="ic-list-empty">
+          {searchNeedle !== ''
+            ? 'No threads match this search.'
+            : 'No threads match the selected filters.'}
+        </div>
       )}
 
       {visibleActive.map(renderItem)}

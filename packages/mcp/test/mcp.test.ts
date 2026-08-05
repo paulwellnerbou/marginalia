@@ -422,6 +422,26 @@ describe('marginalia MCP server', () => {
     expect(message).toMatch(/block_id/);
   });
 
+  test('reports shareable comment links without the invite token', async () => {
+    const { adminUrl, uid } = await seedBook();
+    const adminToken = new URL(adminUrl).pathname.split('/')[3] as string;
+
+    const created = await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'They reached the well',
+      body: 'Lovely ending.',
+    });
+    const threadId = /^thread_id: (\S+)/m.exec(created)?.[1] as string;
+    // The link a person can click. Never with the token: opening
+    // /d/<uid>/<token> claims that invite for whoever clicks it.
+    expect(created).toContain(`url: ${baseUrl}/d/${uid}#comment-${threadId}`);
+    expect(created).not.toContain(adminToken);
+
+    const listed = await call('list_threads', { document: adminUrl });
+    expect(listed).toContain(`url: ${baseUrl}/d/${uid}#comment-${threadId}`);
+    expect(listed).not.toContain(adminToken);
+  });
+
   test('the work queue tracks who spoke last, not who has spoken', async () => {
     const { adminUrl, uid } = await seedBook();
     const invite = await call('create_invite', {
