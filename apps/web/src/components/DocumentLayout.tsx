@@ -1,4 +1,4 @@
-import { locateAllBlocks, locateAllBlocksAsciidoc, spanTail } from '@marginalia/renderer';
+import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -59,6 +59,7 @@ import {
   listThreads,
   uploadAsset,
 } from '../lib/api.js';
+import { highlightRange } from '../lib/block-span.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { expandAncestors } from '../lib/heading-collapse.js';
@@ -988,26 +989,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       if (!thread.anchor.block_id || !thread.anchor.quote) continue;
 
       if (!isProposal(thread)) {
-        // Low-confidence threads come back from the server's
-        // partial-match reanchor branch with null offsets — the
-        // server knows the quote is *roughly* in this block but
-        // doesn't know exactly where any more. Falling back to
-        // [0, quote.length] lets the renderer's resolveNormalizedRange
-        // walk into its "find quote anywhere in the block" branch
-        // instead of dropping the highlight entirely.
-        // `end_offset` indexes the span's LAST block, so the fallback
-        // is the trailing fragment's length, not the whole quote's.
-        const start = thread.anchor.start_offset ?? 0;
-        const end = thread.anchor.end_offset ?? spanTail(thread.anchor.quote).length;
-        if (end > start) {
+        const range = highlightRange(thread.anchor);
+        if (range) {
           highlights.push({
             scope: 'range',
             threadId: thread.id,
             blockId: thread.anchor.block_id,
             endBlockId: thread.anchor.end_block_id ?? null,
             quote: thread.anchor.quote,
-            startOffset: start,
-            endOffset: end,
+            ...range,
             state: thread.state,
           });
         }
@@ -1031,19 +1021,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     }
 
-    if (
-      canComment &&
-      pendingAnchor &&
-      pendingAnchor.quote &&
-      pendingAnchor.end_offset > pendingAnchor.start_offset
-    ) {
+    const pendingRange = canComment && pendingAnchor ? highlightRange(pendingAnchor) : null;
+    if (pendingAnchor && pendingRange) {
       highlights.push({
         scope: 'range',
         blockId: pendingAnchor.block_id,
         endBlockId: pendingAnchor.end_block_id ?? null,
         quote: pendingAnchor.quote,
-        startOffset: pendingAnchor.start_offset,
-        endOffset: pendingAnchor.end_offset,
+        ...pendingRange,
       });
     }
 

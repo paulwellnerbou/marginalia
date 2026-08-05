@@ -1,10 +1,10 @@
 /**
- * DOM helpers for comment anchors that cover more than one block.
+ * Browser-side handling of comment anchors that cover more than one block:
+ * which rendered elements a span covers, and how its stored offsets turn
+ * into a paintable range.
  *
  * The wire convention (block_id + end_block_id + a `SPAN_SEPARATOR`-joined
- * quote) lives in `@marginalia/renderer`; this module is only the browser
- * side — finding which rendered elements a span covers, both when the
- * comment is captured and when its highlight is painted back.
+ * quote) lives in `@marginalia/renderer`.
  *
  * Only the first and last block ids are stored. The blocks in between are
  * re-derived from the live DOM instead, so a span survives edits that add
@@ -12,7 +12,46 @@
  * orphan the comment as soon as one of them changed.
  */
 
+import { spanTail } from '@marginalia/renderer';
+
 const COMMENTABLE = '[data-block], [data-subblock]';
+
+/** The subset of an anchor needed to place a highlight. */
+export interface HighlightAnchor {
+  end_block_id?: string | null;
+  quote: string | null;
+  start_offset: number | null;
+  end_offset: number | null;
+}
+
+/**
+ * Offsets to paint this anchor's highlight with, or null when there is
+ * nothing paintable.
+ *
+ * `start_offset` indexes the anchor's FIRST block and `end_offset` its
+ * LAST, so for a span the two are offsets into different texts and
+ * comparing them says nothing — a selection running from late in the
+ * first block to early in the last looks inverted. Only a single-block
+ * anchor can be rejected that way; a span's endpoints are checked for
+ * emptiness per fragment while it is painted.
+ *
+ * Null offsets come from the server's partial-match reanchor branch: it
+ * knows the quote is roughly in this block but not where. Falling back to
+ * the fragment's full length lets `resolveNormalizedRange` take its "find
+ * the quote anywhere in the block" path instead of dropping the highlight.
+ */
+export function highlightRange(
+  anchor: HighlightAnchor,
+): { startOffset: number; endOffset: number } | null {
+  const quote = anchor.quote;
+  if (!quote) return null;
+  const startOffset = anchor.start_offset ?? 0;
+  if (anchor.end_block_id) {
+    return { startOffset, endOffset: anchor.end_offset ?? spanTail(quote).length };
+  }
+  const endOffset = anchor.end_offset ?? quote.length;
+  return endOffset > startOffset ? { startOffset, endOffset } : null;
+}
 
 /** Commentable elements under `root`, in document order. */
 export function commentableElements(root: HTMLElement): HTMLElement[] {
