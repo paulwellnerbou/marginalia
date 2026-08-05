@@ -61,9 +61,20 @@ after it with the URL's. The MCP tab generates the connection string from the in
 they cannot drift.
 
 Add `&token=<invite token>` and the connection carries the agent's access, so any reference
-to that document works even without a token in it — including a link copied from a comment,
-which the viewer strips the token from once an invite has been claimed. A token in a pasted
-URL still wins, and a token for one document simply resolves to nothing on another.
+to that document works even without a token in it:
+
+```bash
+claude mcp add --transport http marginalia \
+  'https://marginalia.example.com/mcp?name=Claude&token=<invite token>'
+```
+
+Quote it — an unquoted `&` in a shell backgrounds everything before it and runs the rest as
+a separate command, so the token would go missing without a word of complaint.
+
+The token applies to a reference that has none of its own, including a link copied from a
+comment — which the viewer strips the token from once an invite has been claimed. A token
+in a pasted URL still wins, and a token for one document simply resolves to nothing on
+another.
 
 The document viewer has an **MCP** tab that generates all of this for you, with an access
 link for the agent alongside it.

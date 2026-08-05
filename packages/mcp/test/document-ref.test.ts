@@ -85,6 +85,17 @@ describe('parseDocumentRef', () => {
     expect(parseDocumentRef(`https://marg.example.com/d/${UID}`).commentId).toBeNull();
   });
 
+  test('ignores a comment fragment that is not a comment id', () => {
+    // The value reaches the line-oriented text the tools emit, so it is
+    // held to the same shape as every other id rather than passed
+    // through. A malformed escape must not throw either — that would
+    // read as an unexpected failure instead of "not a comment link".
+    const bad = ['#comment-', '#comment-%0Aevil', '#comment-a b c', '#comment-%', '#comment-short'];
+    for (const fragment of bad) {
+      expect(parseDocumentRef(`https://marg.example.com/d/${UID}${fragment}`).commentId).toBeNull();
+    }
+  });
+
   test('rejects input with no document id', () => {
     expect(() => parseDocumentRef('')).toThrow();
     expect(() => parseDocumentRef('not a uid')).toThrow();

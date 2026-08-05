@@ -108,11 +108,26 @@ function parseUrlRef(input: string): ParsedRef {
 
 const COMMENT_FRAGMENT = '#comment-';
 
-/** `#comment-<id>` as produced by the viewer's copy-link button. */
+/**
+ * `#comment-<id>` as produced by the viewer's copy-link button.
+ *
+ * Held to the same shape as uids and tokens. The value reaches the
+ * line-oriented text the tools emit, so anything else — a stray word, or
+ * a control character smuggled in percent-encoded — would corrupt it;
+ * and a malformed escape makes `decodeURIComponent` throw, which would
+ * surface as an unexpected failure rather than "that isn't a comment
+ * link". Anything unrecognized is simply not a comment link.
+ */
 function readCommentId(url: URL): string | null {
   if (!url.hash.startsWith(COMMENT_FRAGMENT)) return null;
-  const id = decodeURIComponent(url.hash.slice(COMMENT_FRAGMENT.length));
-  return id.length > 0 ? id : null;
+  const raw = url.hash.slice(COMMENT_FRAGMENT.length);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  return ID_PATTERN.test(decoded) ? decoded : null;
 }
 
 /** Reject hosts outside `allowedHosts` when the operator configured an allowlist. */

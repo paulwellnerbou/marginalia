@@ -125,7 +125,10 @@ export function McpPanel({ uid, canManageInvites }: Props) {
     const url = `${origin}/mcp?${params.toString()}`;
     return {
       url,
-      cli: `claude mcp add --transport http marginalia ${url}`,
+      // Quoted: the URL carries `&token=`, and an unquoted `&` in a
+      // shell backgrounds everything before it and runs the rest as a
+      // separate command — the token would silently go missing.
+      cli: `claude mcp add --transport http marginalia '${url}'`,
       json: `{
   "mcpServers": {
     "marginalia": {
