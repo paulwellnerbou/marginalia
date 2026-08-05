@@ -1,5 +1,7 @@
-import { Text } from '@radix-ui/themes';
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { CheckIcon, CopyIcon } from '@radix-ui/react-icons';
+import { IconButton, Text, Tooltip } from '@radix-ui/themes';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { formatUnifiedDiff } from '../lib/diff-format.js';
 import {
   buildDiffOverviewMarkers,
   buildMeasuredDiffOverviewMarkers,
@@ -55,6 +57,25 @@ export function DiffView({ before, after, contextLines = null, active = true }: 
     keys: [],
     layouts: [],
   });
+
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  async function copyDiff() {
+    const text = formatUnifiedDiff(lines);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      return;
+    } catch {
+      // Clipboard API needs a secure context and permission; fall through.
+    }
+    setCopied(execCommandCopy(text));
+  }
 
   const overviewMarkers = useMemo(() => {
     const fallbackMarkers = buildDiffOverviewMarkers(overviewLines);
@@ -191,6 +212,21 @@ export function DiffView({ before, after, contextLines = null, active = true }: 
   return (
     <section className="diff-view" aria-label="Diff">
       <div ref={setScrollNode} className={`diff-scroll${hasChanges ? '' : ' diff-scroll-empty'}`}>
+        {hasChanges ? (
+          <div className="diff-copy">
+            <Tooltip content={copied ? 'Copied' : 'Copy diff'}>
+              <IconButton
+                size="1"
+                variant="soft"
+                color={copied ? 'green' : 'gray'}
+                aria-label="Copy diff"
+                onClick={copyDiff}
+              >
+                {copied ? <CheckIcon /> : <CopyIcon />}
+              </IconButton>
+            </Tooltip>
+          </div>
+        ) : null}
         <div ref={contentRef}>
           {hasChanges ? (
             renderedLines.map(({ key, line, oldLineNumber, newLineNumber, omittedCount }) => (
@@ -254,6 +290,22 @@ export function DiffView({ before, after, contextLines = null, active = true }: 
       ) : null}
     </section>
   );
+}
+
+function execCommandCopy(text: string): boolean {
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  try {
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    textarea.remove();
+  }
 }
 
 function renderLineText(line: DiffLine): React.ReactNode {
