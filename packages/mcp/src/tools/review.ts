@@ -295,14 +295,27 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           },
         );
 
+        // The proposal already exists by now. If the courtesy back-link
+        // fails — wrong thread id, thread deleted meanwhile — reporting
+        // that as a tool error would invite a retry that creates a second
+        // proposal. Report it as a partial success and name the one step
+        // left to do by hand.
         let notice: string | null = null;
         if (args.reply_to_thread_id) {
-          await ctx.client.json<ThreadMutationWire>(
-            loaded.ref,
-            `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads/${encodeURIComponent(args.reply_to_thread_id)}/respond`,
-            { method: 'POST', body: { body: `Addressed in edit proposal \`${thread.id}\`.` } },
-          );
-          notice = `Replied to thread ${args.reply_to_thread_id} pointing at this proposal.`;
+          try {
+            await ctx.client.json<ThreadMutationWire>(
+              loaded.ref,
+              `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads/${encodeURIComponent(args.reply_to_thread_id)}/respond`,
+              { method: 'POST', body: { body: `Addressed in edit proposal \`${thread.id}\`.` } },
+            );
+            notice = `Replied to thread ${args.reply_to_thread_id} pointing at this proposal.`;
+          } catch (err) {
+            notice =
+              `WARNING: the proposal was created, but replying to thread ` +
+              `${args.reply_to_thread_id} failed — ${err instanceof Error ? err.message : String(err)}\n` +
+              'Do NOT re-run create_proposal; that would duplicate it. Use reply_to_thread with a ' +
+              'correct thread_id instead.';
+          }
         }
 
         const before = args.whole_document ? loaded.doc.source : (block.source ?? '');

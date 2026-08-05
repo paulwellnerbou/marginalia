@@ -705,6 +705,45 @@ describe('marginalia MCP server', () => {
     expect([bytes[0], bytes[1]]).toEqual([0x50, 0x4b]);
   });
 
+  test('keeps a download inside the output directory', async () => {
+    const { adminUrl } = await seedBook();
+    const escapeDir = join(downloadDir, 'nested');
+
+    await call('export_document', {
+      document: adminUrl,
+      formats: ['source'],
+      output_dir: escapeDir,
+      basename: '../../escaped',
+    });
+
+    // The traversal is flattened into a single filename, not followed:
+    // one file lands in the requested directory and nothing escapes it.
+    const written = await readdir(escapeDir);
+    expect(written).toHaveLength(1);
+    expect(written[0]).toMatch(/^[^/\\.].*escaped\.md$/);
+    expect(await readdir(downloadDir)).toEqual(['nested']);
+  });
+
+  test('keeps the proposal when its courtesy reply fails', async () => {
+    const { adminUrl } = await seedBook();
+    const created = await call('create_proposal', {
+      document: adminUrl,
+      anchor_text: 'Distance to the well: unknown',
+      proposed_text: '- Distance to the well: four days out, they guessed',
+      rationale: 'Concrete enough to argue with.',
+      reply_to_thread_id: 'no-such-thread-id',
+    });
+
+    // Partial success, not a tool error: a retry would duplicate the proposal.
+    expect(created).toContain('Created an edit proposal');
+    expect(created).toContain('WARNING');
+    expect(created).toContain('Do NOT re-run create_proposal');
+    const proposalId = /^thread_id: (\S+)/m.exec(created)?.[1] as string;
+
+    const threads = await call('list_threads', { document: adminUrl, kind: 'proposals' });
+    expect(threads).toContain(proposalId);
+  });
+
   test('exports the source with open proposals folded in, without saving them', async () => {
     const { adminUrl } = await seedBook();
     await call('create_proposal', {

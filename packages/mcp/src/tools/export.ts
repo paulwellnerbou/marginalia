@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { DocumentWire } from '../api-types.js';
@@ -103,7 +103,7 @@ export function registerExportTools(server: McpServer, ctx: ToolContext): void {
                   .map(encodeURIComponent)
                   .join('/')}`,
               );
-              const target = join(assetDir, sanitizeName(asset.ref_name));
+              const target = safeJoin(assetDir, asset.ref_name);
               await writeFile(target, bytes);
               written.push(`${target} (${bytes.length} bytes)`);
             } catch (err) {
@@ -142,7 +142,7 @@ async function exportOne(
   if (format === 'source' && !applied) {
     // The source already came back with the document; no second round-trip.
     const name = `${args.basename ?? fallbackName(doc)}.${sourceExtension(doc)}`;
-    const target = join(dir, name);
+    const target = safeJoin(dir, name);
     await writeFile(target, doc.source, 'utf8');
     return `${target} (${doc.source.length} bytes, ${doc.format})`;
   }
@@ -152,7 +152,7 @@ async function exportOne(
   const name = args.basename
     ? `${args.basename}.${extensionOf(filename, format, doc)}`
     : (filename ?? `${fallbackName(doc)}.${extensionOf(null, format, doc)}`);
-  const target = join(dir, sanitizeName(name));
+  const target = safeJoin(dir, name);
   await writeFile(target, bytes);
 
   const skipped = headers.get('X-Marginalia-Proposals-Skipped');
@@ -213,7 +213,25 @@ function fallbackName(doc: DocumentWire): string {
   return sanitizeName(doc.name ?? doc.uid);
 }
 
-/** Keep downloads inside the target directory whatever the server suggested. */
+/**
+ * Build the path to write to, keeping it inside `dir`.
+ *
+ * Filenames arrive from two untrusted-ish places — the caller's
+ * `basename` and the server's `Content-Disposition` — so every write
+ * goes through here rather than a bare `join`. Flattening separators
+ * and leading dots handles the ordinary cases; the containment check
+ * afterwards is the part that has to hold, and it fails loudly instead
+ * of quietly writing somewhere else.
+ */
+function safeJoin(dir: string, name: string): string {
+  const target = join(dir, sanitizeName(name));
+  const rel = relative(dir, target);
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error(`refusing to write "${name}" outside ${dir}`);
+  }
+  return target;
+}
+
 function sanitizeName(name: string): string {
   return (
     name

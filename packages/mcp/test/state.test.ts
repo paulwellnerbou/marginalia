@@ -72,9 +72,9 @@ describe('McpState', () => {
     expect(state.recall('notAnObject')).toBeNull();
   });
 
-  test('survives a corrupt state file by starting fresh', () => {
+  test('survives a corrupt state file by starting fresh', async () => {
     const file = join(dir, 'state.json');
-    Bun.write(file, 'not json');
+    await Bun.write(file, 'not json');
     const state = new McpState(dir, null);
     expect(state.getClientId().length).toBeGreaterThan(8);
     expect(JSON.parse(readFileSync(file, 'utf8')).clientId).toBe(state.getClientId());
