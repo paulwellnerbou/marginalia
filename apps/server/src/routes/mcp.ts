@@ -108,9 +108,15 @@ async function handleMcp(c: Context, app: Hono, sessions: SessionStore): Promise
     // Unknown or expired: let the transport answer, which is a 404 the
     // client handles by initializing again.
     if (!session) return notFoundSession();
-    const response = await session.transport.handleRequest(c.req.raw);
-    if (c.req.method === 'DELETE') sessions.drop(existingId);
-    return response;
+    try {
+      return await session.transport.handleRequest(c.req.raw);
+    } finally {
+      // A DELETE means the client is done with this session whether or
+      // not the transport managed to answer, so drop it either way —
+      // otherwise a failed close leaves the session resident until the
+      // idle sweep catches it.
+      if (c.req.method === 'DELETE') sessions.drop(existingId);
+    }
   }
 
   // No session id: an initialize request, or a malformed one the

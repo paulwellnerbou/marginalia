@@ -79,8 +79,12 @@ An invite names **one** document, so `&token=` only privileges that one. It does
 the connection to it: one connection serves any number of documents — hand the agent each
 one's full `/d/<uid>/<token>` link, which is what the MCP tab gives you. It is remembered
 for the rest of the session, so later references to that document work without the token,
-comment links included. A new connection starts fresh, and one session's tokens are never
-visible to another.
+comment links included.
+
+That memory lives on the server and is deliberately bounded: a session is dropped after 30
+minutes idle, or sooner if 200 are already open. Losing it costs nothing but the link —
+hand it over again and the agent carries on. A new connection starts fresh, and one
+session's tokens are never visible to another.
 
 A token never travels to a different host. A document's text can talk an agent into fetching a
 URL, so a tokenless reference naming another instance is sent without it; likewise a token

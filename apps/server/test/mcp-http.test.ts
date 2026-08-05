@@ -458,6 +458,49 @@ describe('hosted MCP endpoint', () => {
     await client.close();
   });
 
+  test('a DELETE ends the session and its remembered tokens', async () => {
+    // Driven by hand rather than through the SDK client, because the
+    // point is what happens to the session id itself.
+    const init = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 't', version: '0' },
+        },
+      }),
+    });
+    const sessionId = init.headers.get('mcp-session-id');
+    expect(sessionId).toBeTruthy();
+
+    const deleted = await fetch(`${baseUrl}/mcp`, {
+      method: 'DELETE',
+      headers: { 'mcp-session-id': sessionId as string },
+    });
+    expect(deleted.status).toBeLessThan(500);
+
+    // Gone: whatever it had been told is no longer reachable, and the
+    // client is expected to initialize again.
+    const after = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-session-id': sessionId as string,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }),
+    });
+    expect(after.status).toBe(404);
+  });
+
   test('an unknown session id is refused rather than silently starting a new one', async () => {
     const res = await fetch(`${baseUrl}/mcp`, {
       method: 'POST',
