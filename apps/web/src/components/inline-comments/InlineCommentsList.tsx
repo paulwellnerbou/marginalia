@@ -11,6 +11,7 @@ import {
 } from '../threadCollapseState.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
+import { threadLinks, threadsById } from './inlineUtils.js';
 
 /**
  * Right-pane list of comment threads using the same inline-comment
@@ -229,6 +230,14 @@ export function InlineCommentsList({
     return onCreate(payload);
   }
 
+  const byId = useMemo(() => threadsById(threads), [threads]);
+
+  /** Jump to a linked thread by scrolling to its anchor, which focuses it. */
+  function focusLinked(target: Thread) {
+    const blockId = target.anchor.block_id;
+    if (blockId) onScrollToAnchor(blockId, target.anchor.quote, target.id);
+  }
+
   function renderItem(item: ThreadListItem) {
     const blockId = item.thread.anchor.block_id;
     const onJump = blockId
@@ -239,6 +248,8 @@ export function InlineCommentsList({
         key={item.id}
         uid={uid}
         thread={item.thread}
+        links={threadLinks(item.thread, byId)}
+        onFocusLinked={focusLinked}
         canComment={canComment}
         needsName={!displayName}
         focused={focusedId === item.id}

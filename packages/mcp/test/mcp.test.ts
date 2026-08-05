@@ -439,10 +439,11 @@ describe('marginalia MCP server', () => {
       block_id: blockId,
       proposed_text: proposed,
       rationale: 'Varies the repeated line, as Paul asked.',
-      reply_to_thread_id: threadId,
+      answers_thread_id: threadId,
     });
     expect(created).toContain('Created an edit proposal');
-    expect(created).toContain('Replied to thread');
+    expect(created).toContain(`Linked to thread ${threadId}`);
+    expect(created).toContain('Replied there too');
     const proposalId = /^thread_id: (\S+)/m.exec(created)?.[1] as string;
 
     // The reviewer's thread now carries our reply, so it drops out of the queue.
@@ -470,13 +471,9 @@ describe('marginalia MCP server', () => {
     expect(after).toContain('the desert');
     expect(after).not.toContain('By noon the dunes had swallowed the horizon. Ibrahim counted');
 
-    const resolved = await call('respond_to_thread', {
-      document: adminUrl,
-      thread_id: threadId,
-      action: 'resolve',
-      body: 'Addressed in the accepted proposal.',
-    });
-    expect(resolved).toContain('resolve → now resolved');
+    // Accepting carried out what the comment asked for, so the comment
+    // closed with it — no second call needed.
+    expect(accepted).toContain(`Also resolved comment thread ${threadId}`);
 
     const open = await call('list_threads', { document: adminUrl, state: 'open' });
     expect(open).toContain('No threads matched.');
@@ -734,24 +731,59 @@ describe('marginalia MCP server', () => {
     expect(await readdir(downloadDir)).toEqual(['nested']);
   });
 
-  test('keeps the proposal when its courtesy reply fails', async () => {
+  test('refuses to link a proposal to a thread that does not exist', async () => {
     const { adminUrl } = await seedBook();
-    const created = await call('create_proposal', {
+    // The link is validated server-side before the proposal is created,
+    // so a bad id fails outright rather than leaving an unlinked orphan.
+    const message = await callExpectingError('create_proposal', {
       document: adminUrl,
       anchor_text: 'Distance to the well: unknown',
       proposed_text: '- Distance to the well: four days out, they guessed',
       rationale: 'Concrete enough to argue with.',
-      reply_to_thread_id: 'no-such-thread-id',
+      answers_thread_id: 'no-such-thread-id',
     });
-
-    // Partial success, not a tool error: a retry would duplicate the proposal.
-    expect(created).toContain('Created an edit proposal');
-    expect(created).toContain('WARNING');
-    expect(created).toContain('Do NOT re-run create_proposal');
-    const proposalId = /^thread_id: (\S+)/m.exec(created)?.[1] as string;
+    expect(message).toContain('answers-thread-not-found');
 
     const threads = await call('list_threads', { document: adminUrl, kind: 'proposals' });
-    expect(threads).toContain(proposalId);
+    expect(threads).toContain('No threads matched.');
+  });
+
+  test('tracks which comments still have no proposal', async () => {
+    const { adminUrl } = await seedBook();
+    const first = await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      body: 'Tighten this opening.',
+    });
+    const firstId = /^thread_id: (\S+)/m.exec(first)?.[1] as string;
+    await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'They reached the well',
+      body: 'And this ending.',
+    });
+
+    const backlog = await call('list_threads', { document: adminUrl, needs_proposal: true });
+    expect(backlog).toContain('Tighten this opening.');
+    expect(backlog).toContain('And this ending.');
+
+    await call('create_proposal', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      proposed_text: 'The caravan left before dawn.',
+      rationale: 'Tightened.',
+      answers_thread_id: firstId,
+    });
+
+    // Answered by a proposal, so it drops off the backlog — even though
+    // no one has replied in words.
+    const after = await call('list_threads', { document: adminUrl, needs_proposal: true });
+    expect(after).not.toContain('Tighten this opening.');
+    expect(after).toContain('And this ending.');
+
+    // Both ends of the link are visible when listing everything.
+    const all = await call('list_threads', { document: adminUrl });
+    expect(all).toContain(`answers comment thread: ${firstId}`);
+    expect(all).toContain('answered by proposal(s):');
   });
 
   test('exports the source with open proposals folded in, without saving them', async () => {

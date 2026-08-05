@@ -143,6 +143,7 @@ interface BundleCommentRow extends CommentRow {
   base_oid: string | null;
   base_block_start: number | null;
   base_block_end: number | null;
+  answers_comment_id: string | null;
 }
 
 export function documentsRouter(deps: AppDeps): Hono {
@@ -555,7 +556,8 @@ async function exportDocument(c: Context, deps: AppDeps) {
          cep.branch_ref,
          cep.base_oid,
          cep.base_block_start,
-         cep.base_block_end
+         cep.base_block_end,
+         cep.answers_comment_id
          FROM comments c
          LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
         WHERE c.doc_uid = ? AND c.deleted_at IS NULL
@@ -1229,8 +1231,9 @@ async function importDocument(c: Context, deps: AppDeps) {
   );
   const insertEditProposal = db.prepare(
     `INSERT INTO comments_edit_proposals
-       (comment_id, status, accepted_oid, branch_ref, base_oid, base_block_start, base_block_end)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (comment_id, status, accepted_oid, branch_ref, base_oid, base_block_start,
+        base_block_end, answers_comment_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
 
   // Imported proposals get their branch built here from the bundle's
@@ -1310,8 +1313,15 @@ async function importDocument(c: Context, deps: AppDeps) {
       // row with null branch metadata; the diff endpoint returns
       // unavailable, matching the issue's "default null + block reopen
       // for pre-migration rows" stance.
+      // Comment ids are regenerated on import, so the back-link has to
+      // travel through the same map as parent_id — otherwise it would
+      // point at an id belonging to the source document.
+      const answersOldId =
+        typeof proposal.answers_comment_id === 'string' ? proposal.answers_comment_id : null;
+      const answersNewId = answersOldId ? (idMap.get(answersOldId) ?? null) : null;
+
       if (status === 'accepted') {
-        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null);
+        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null, answersNewId);
         importedEditProposals += 1;
         continue;
       }
@@ -1334,7 +1344,7 @@ async function importDocument(c: Context, deps: AppDeps) {
                   anchor_end_block_id = NULL
             WHERE id = ?`,
         ).run(newId);
-        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null);
+        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null, answersNewId);
         importedEditProposals += 1;
         continue;
       }
@@ -1359,6 +1369,7 @@ async function importDocument(c: Context, deps: AppDeps) {
           importBaseOid,
           range.start,
           range.end,
+          answersNewId,
         );
         importedEditProposals += 1;
       } catch (err) {
@@ -1366,7 +1377,7 @@ async function importDocument(c: Context, deps: AppDeps) {
           `[marginalia] import preserved undiffable proposal ${newId} (${uid}): branch creation failed:`,
           err,
         );
-        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null);
+        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null, answersNewId);
         importedEditProposals += 1;
       }
     }
@@ -1456,6 +1467,7 @@ async function bundleProposalPayload(
   proposed_text: string;
   status: EditProposalStatus;
   accepted_oid: string | null;
+  answers_comment_id: string | null;
 } | null> {
   if (row.proposal_status === null) return null;
   const content = await readProposalContent(store, doc, row);
@@ -1465,6 +1477,7 @@ async function bundleProposalPayload(
       proposed_text: content.proposed_text,
       status: row.proposal_status,
       accepted_oid: row.accepted_oid,
+      answers_comment_id: row.answers_comment_id,
     };
   }
   // Historical row without recoverable content (legacy accepted, or
@@ -1479,6 +1492,7 @@ async function bundleProposalPayload(
     proposed_text: '',
     status: row.proposal_status,
     accepted_oid: row.accepted_oid,
+    answers_comment_id: row.answers_comment_id,
   };
 }
 

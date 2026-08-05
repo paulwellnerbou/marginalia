@@ -52,6 +52,7 @@ interface ThreadRow extends CommentRow {
   base_block_start: number | null;
   base_block_end: number | null;
   is_whole_document: number | null;
+  answers_comment_id: string | null;
   decided_at: number | null;
   decided_by_name: string | null;
 }
@@ -77,6 +78,7 @@ const THREAD_SELECT = `
     cep.base_block_start,
     cep.base_block_end,
     cep.is_whole_document,
+    cep.answers_comment_id,
     c.resolved_at AS decided_at,
     c.resolved_by_name AS decided_by_name
   FROM comments c
@@ -147,6 +149,12 @@ async function listThreads(c: Context, deps: AppDeps) {
     viewerId,
   );
 
+  const answersByThread = loadAnswersByThread(
+    db,
+    doc.uid,
+    roots.map((r) => r.id),
+  );
+
   const threads = await mapWithConcurrency(roots, 4, (root) =>
     toThreadWire(
       db,
@@ -157,6 +165,7 @@ async function listThreads(c: Context, deps: AppDeps) {
       decision,
       reopenableAccepted,
       reactionsByComment,
+      answersByThread,
     ),
   );
   return c.json({
@@ -204,6 +213,9 @@ async function createThread(c: Context, deps: AppDeps) {
     if (!rootBody.body) return c.json({ error: 'body-required' }, 400);
   } else {
     if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
+    if (proposal.answersThreadId && !isAnswerableThread(db, doc.uid, proposal.answersThreadId)) {
+      return c.json({ error: 'answers-thread-not-found' }, 400);
+    }
   }
 
   const id = newCommentId();
@@ -288,8 +300,8 @@ async function createThread(c: Context, deps: AppDeps) {
         `INSERT INTO comments_edit_proposals
            (comment_id, status, accepted_oid,
             branch_ref, base_oid, base_block_start, base_block_end,
-            is_whole_document)
-         VALUES (?, 'open', NULL, ?, ?, ?, ?, ?)`,
+            is_whole_document, answers_comment_id)
+         VALUES (?, 'open', NULL, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         branchRef,
@@ -297,6 +309,7 @@ async function createThread(c: Context, deps: AppDeps) {
         blockRange?.start ?? null,
         blockRange?.end ?? null,
         proposal.wholeDocument ? 1 : 0,
+        proposal.answersThreadId,
       );
     }
     db.exec('COMMIT');
@@ -1011,6 +1024,9 @@ async function respondToThread(c: Context, deps: AppDeps) {
   }
 
   let documentOid: string | null = null;
+  // Set when accepting a proposal also closes the comment thread it was
+  // written to answer.
+  let resolvedAnsweredThreadId: string | null = null;
   let preparedWorkflow: PreparedThreadWorkflow | null = null;
   let createdReplyId: string | null = null;
   let createdReply: CommentRow | null = null;
@@ -1055,6 +1071,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
       if (!preparedWorkflow) throw new ThreadActionError(409, 'proposal-orphaned');
       documentOid = preparedWorkflow.oid;
       reanchoredProposalUpdates = preparedWorkflow.applyDb();
+      resolvedAnsweredThreadId = resolveAnsweredThread(db, doc.uid, row, identity);
     } else if (action === 'reopen') {
       const now = Date.now();
       if (!isProposal) {
@@ -1180,6 +1197,17 @@ async function respondToThread(c: Context, deps: AppDeps) {
     );
   }
 
+  if (resolvedAnsweredThreadId) {
+    const answered = loadThreadRow(db, resolvedAnsweredThreadId, doc.uid);
+    if (answered) {
+      realtime.broadcast(
+        doc.uid,
+        { type: 'comment.updated', comment: toLegacyCommentWire(answered) },
+        identity.clientId,
+      );
+    }
+  }
+
   return c.json({
     thread: await toThreadWire(
       deps.db,
@@ -1191,7 +1219,43 @@ async function respondToThread(c: Context, deps: AppDeps) {
       reopenableAccepted,
     ),
     created_reply_id: createdReplyId,
+    resolved_answered_thread_id: resolvedAnsweredThreadId,
   });
+}
+
+/**
+ * Accepting a proposal carries out what the comment it answers asked
+ * for, so close that comment too rather than leaving a request standing
+ * whose fix has already landed.
+ *
+ * Only plain comment threads are closed. A proposal thread has its own
+ * accepted/rejected lifecycle in `comments_edit_proposals.status`, and
+ * setting `resolved_at` on one without touching that would leave the two
+ * disagreeing. Already-resolved threads are left alone so the original
+ * resolver keeps the credit.
+ *
+ * Returns the id it resolved, or null if there was nothing to do.
+ */
+function resolveAnsweredThread(
+  db: Database,
+  docUid: string,
+  proposal: ThreadRow,
+  identity: Identity,
+): string | null {
+  const answeredId = proposal.answers_comment_id;
+  if (!answeredId) return null;
+  const answered = loadThreadRow(db, answeredId, docUid);
+  if (!answered) return null;
+  if (answered.proposal_status !== null) return null;
+  if (answered.resolved_at !== null) return null;
+
+  const now = Date.now();
+  db.prepare(
+    `UPDATE comments
+        SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
+      WHERE id = ? AND doc_uid = ?`,
+  ).run(now, identity.displayName, now, answeredId, docUid);
+  return answeredId;
 }
 
 async function prepareAcceptProposalThread(
@@ -1562,6 +1626,12 @@ async function toThreadWire(
    * pay the cost of one extra query, which is fine.
    */
   preloadedReactions?: Map<string, ReactionWire[]>,
+  /**
+   * Preloaded reverse index (answered thread id → proposal ids), so
+   * listThreads doesn't run one query per thread. Single-thread handlers
+   * omit it and pay for one extra query.
+   */
+  preloadedAnswers?: Map<string, string[]>,
 ): Promise<Record<string, unknown>> {
   const state = threadState(row);
   const resolution = threadResolution(row);
@@ -1578,6 +1648,7 @@ async function toThreadWire(
   const reactionsByComment =
     preloadedReactions ??
     loadCommentReactionsWire(db, doc.uid, [row.id, ...replies.map((r) => r.id)], viewerId);
+  const answeredBy = (preloadedAnswers ?? loadAnswersByThread(db, doc.uid, [row.id])).get(row.id);
 
   return {
     id: row.id,
@@ -1627,6 +1698,12 @@ async function toThreadWire(
               ? decision.ok && canEdit(decision.role) && reopenableAccepted.has(row.id)
               : false),
     },
+    /**
+     * Proposals written to answer this thread, oldest first. Empty for
+     * a thread nobody has proposed against — including every proposal
+     * thread, which is not itself a request.
+     */
+    answered_by_thread_ids: answeredBy ?? [],
     proposal: proposalRow
       ? {
           ...((await readProposalContent(store, doc, proposalRow)) ?? {
@@ -1634,6 +1711,8 @@ async function toThreadWire(
             proposed_text: null,
           }),
           whole_document: proposalRow.is_whole_document === 1,
+          /** Root thread this proposal answers, or null if it stands alone. */
+          answers_thread_id: proposalRow.answers_comment_id,
         }
       : null,
     comments: [
@@ -1687,6 +1766,40 @@ interface ReactionWire {
 // recent ones; 500 is well under the floor and lets us batch without
 // caring which build is active. Plus 1 for `doc_uid`.
 const REACTION_QUERY_BATCH = 500;
+
+/**
+ * Reverse of `answers_comment_id`: which proposals answer each thread.
+ * One query for the whole page — the forward direction is a column, but
+ * the UI and the review queue both want "has anything been proposed for
+ * this comment yet?", which only the reverse answers.
+ */
+function loadAnswersByThread(
+  db: Database,
+  docUid: string,
+  threadIds: string[],
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  if (threadIds.length === 0) return out;
+  const wanted = new Set(threadIds);
+  const rows = db
+    .prepare(
+      `SELECT cep.comment_id, cep.answers_comment_id
+         FROM comments_edit_proposals cep
+         JOIN comments c ON c.id = cep.comment_id
+        WHERE c.doc_uid = ?
+          AND c.deleted_at IS NULL
+          AND cep.answers_comment_id IS NOT NULL
+        ORDER BY c.created_at ASC`,
+    )
+    .all(docUid) as Array<{ comment_id: string; answers_comment_id: string }>;
+  for (const row of rows) {
+    if (!wanted.has(row.answers_comment_id)) continue;
+    const list = out.get(row.answers_comment_id);
+    if (list) list.push(row.comment_id);
+    else out.set(row.answers_comment_id, [row.comment_id]);
+  }
+  return out;
+}
 
 function loadCommentReactionsWire(
   db: Database,
@@ -2101,10 +2214,17 @@ function asAnchor(v: unknown): AnchorParseResult {
 
 const MAX_PROPOSED_TEXT_LENGTH = 60000;
 
+interface ParsedProposal {
+  proposedText: string;
+  wholeDocument: boolean;
+  /** Root thread this proposal answers, validated against the DB by the caller. */
+  answersThreadId: string | null;
+}
+
 function asProposal(
   v: unknown,
 ):
-  | { ok: true; proposal: { proposedText: string; wholeDocument: boolean } | null }
+  | { ok: true; proposal: ParsedProposal | null }
   | { ok: false; error: 'proposal-text-required' | 'proposal-text-too-long' } {
   if (v === null || v === undefined) return { ok: true, proposal: null };
   if (typeof v !== 'object') return { ok: false, error: 'proposal-text-required' };
@@ -2115,7 +2235,33 @@ function asProposal(
     return { ok: false, error: 'proposal-text-too-long' };
   }
   const wholeDocument = proposal.whole_document === true;
-  return { ok: true, proposal: { proposedText, wholeDocument } };
+  return {
+    ok: true,
+    proposal: {
+      proposedText,
+      wholeDocument,
+      answersThreadId: asString(proposal.answers_thread_id),
+    },
+  };
+}
+
+/**
+ * A proposal may name the root thread it answers. Only root threads
+ * qualify — a reply is not a request in its own right — and it must
+ * live in this document, so a token for one document can't be used to
+ * probe ids in another.
+ */
+function isAnswerableThread(db: Database, docUid: string, threadId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM comments
+        WHERE id = ? AND doc_uid = ?
+          AND parent_id IS NULL AND parent_proposal_id IS NULL
+          AND deleted_at IS NULL
+        LIMIT 1`,
+    )
+    .get(threadId, docUid);
+  return row !== null && row !== undefined;
 }
 
 function parseHeadingPath(raw: string | null): string[] | null {

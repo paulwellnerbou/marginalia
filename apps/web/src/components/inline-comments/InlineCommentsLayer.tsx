@@ -19,7 +19,7 @@ import {
 import { InlineCommentsToolbar } from './InlineCommentsToolbar.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
-import { COMMENT_FLASH_MS } from './inlineUtils.js';
+import { COMMENT_FLASH_MS, threadLinks, threadsById } from './inlineUtils.js';
 
 interface Props {
   uid: string;
@@ -200,6 +200,7 @@ export function InlineCommentsLayer({
     () => (hideResolved ? threads.filter((t) => t.state !== 'resolved') : threads),
     [threads, hideResolved],
   );
+  const byId = useMemo(() => threadsById(visibleThreads), [visibleThreads]);
 
   /**
    * Auto-collapse defaults derived from the current thread list.
@@ -313,6 +314,14 @@ export function InlineCommentsLayer({
       onScrollToAnchor(blockId, quote, threadId, stackingEnabled ? 0 : stickyTopPad);
     },
     [onScrollToAnchor, stackingEnabled, stickyTopPad],
+  );
+  /** Jump to a linked thread by scrolling to its anchor, which focuses it. */
+  const focusLinked = useCallback(
+    (target: Thread) => {
+      const blockId = target.anchor.block_id;
+      if (blockId) scrollToAnchorWithOffset(blockId, target.anchor.quote, target.id);
+    },
+    [scrollToAnchorWithOffset],
   );
 
   const cardEls = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -794,6 +803,8 @@ export function InlineCommentsLayer({
       <InlineThreadCard
         uid={uid}
         thread={item.thread}
+        links={threadLinks(item.thread, byId)}
+        onFocusLinked={focusLinked}
         canComment={canComment}
         needsName={!displayName}
         focused={focusedId === id}

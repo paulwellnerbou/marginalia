@@ -2755,6 +2755,33 @@ button.primary:disabled {
   opacity: 0.6;
 }
 
+/* Link between a comment and the edit proposals written to answer it.
+   Sits under the anchor quote in the card header. */
+.ic-card-link {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  font-size: 0.72rem;
+  color: var(--ui-accent-strong);
+  cursor: pointer;
+  line-height: 1.4;
+  align-self: flex-start;
+}
+.ic-card-link:hover {
+  text-decoration: underline;
+}
+.ic-card-link:active {
+  opacity: 0.6;
+}
+
+.ic-card-answers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
 .ic-card-collapse {
   align-self: flex-start;
   font-size: 0.72rem;

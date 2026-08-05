@@ -110,9 +110,9 @@ approval apart.
 | --- | --- |
 | `list_threads` | Comments and edit proposals with their discussion and anchored text. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter. |
 | `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet). |
-| `create_proposal` | A suggested replacement. `reply_to_thread_id` links it back to the comment it answers. |
+| `create_proposal` | A suggested replacement. `answers_thread_id` links it to the comment it answers. |
 | `reply_to_thread` | Answer a comment thread or an edit proposal. |
-| `respond_to_thread` | `resolve` / `accept` / `reject` / `reopen`, with an optional reply. |
+| `respond_to_thread` | `resolve` / `accept` / `reject` / `reopen`, with an optional reply. Accepting a linked proposal also resolves the comment it answers. |
 | `react_to_comment` | Toggle an emoji on any message — a comment, a proposal's rationale, or a reply. |
 | `get_proposal_diff` | Before/after, plus whether it still applies cleanly. |
 | `repair_proposal_anchor` | Re-attach a proposal orphaned by an earlier accept. |
@@ -150,6 +150,25 @@ the whole book and `section: "Chapter Two"` is one chapter.
 
 A name that matches nothing gets the section list back; a name that matches several gets
 their full paths, rather than a silently chosen wrong chapter.
+
+## Comments become proposals
+
+A comment says what is wrong; a proposal says what to write instead. Linking the two is
+what turns a review into a work queue.
+
+Pass `answers_thread_id` to `create_proposal` and Marginalia records a real link, not a
+mention in prose: the comment shows **See proposed change**, the proposal shows
+**Answers: “…”**, and each is one click from the other in the viewer. Accepting the
+proposal then resolves the comment — its request has been carried out. Rejecting leaves it
+open, because the request still stands.
+
+The link lives on the proposal, so one comment can collect several: a first attempt you
+reject and its replacement both point back at the same request.
+
+`list_threads` with `needs_proposal: true` is the resulting backlog — open comment threads
+that no proposal answers yet. It differs from `awaiting_my_response` in the case that
+matters: replying *"good point, I'll think about it"* clears the response queue but leaves
+the comment on the proposal backlog, where it belongs.
 
 ## Anchoring, and why `list_blocks` matters
 

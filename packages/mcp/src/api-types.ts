@@ -99,10 +99,14 @@ export interface ThreadWire {
     repair: boolean;
     reopen: boolean;
   };
+  /** Edit proposals written to answer this thread, oldest first. */
+  answered_by_thread_ids: string[];
   proposal: {
     source_snapshot: string | null;
     proposed_text: string | null;
     whole_document: boolean;
+    /** Root thread this proposal answers, or null if it stands alone. */
+    answers_thread_id: string | null;
   } | null;
   comments: ThreadCommentWire[];
 }

@@ -8,9 +8,23 @@ import { DiffDialog } from '../DiffDialog.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
 import { InlineComposer, type InlineComposerHandle } from './InlineComposer.js';
 
+/**
+ * The threads on the other end of this one's proposal link, resolved by
+ * the list so the card doesn't need the whole thread set.
+ */
+export interface ThreadLinks {
+  /** The comment thread this proposal answers, if it answers one. */
+  answers: Thread | null;
+  /** Proposals written to answer this comment thread, oldest first. */
+  answeredBy: Thread[];
+}
+
 interface Props {
   uid: string;
   thread: Thread;
+  links: ThreadLinks;
+  /** Focus another thread; absent when the target has no anchor to scroll to. */
+  onFocusLinked: (target: Thread) => void;
   canComment: boolean;
   needsName: boolean;
   focused: boolean;
@@ -36,6 +50,8 @@ interface Props {
 export function InlineThreadCard({
   uid,
   thread,
+  links,
+  onFocusLinked,
   canComment,
   needsName,
   focused,
@@ -263,6 +279,32 @@ export function InlineThreadCard({
           )}
         </div>
         {diffError && <span className="ic-error">{diffError}</span>}
+        {links.answers && (
+          <button
+            type="button"
+            className="ic-card-link"
+            onClick={() => onFocusLinked(links.answers as Thread)}
+            title={`Written to answer ${links.answers.comments[0].author.display_name}'s comment`}
+          >
+            Answers: {formatAnchorQuote(links.answers.anchor.quote, 48) || 'a comment'}
+          </button>
+        )}
+        {links.answeredBy.length > 0 && (
+          <div className="ic-card-answers">
+            {links.answeredBy.map((target, index) => (
+              <button
+                key={target.id}
+                type="button"
+                className="ic-card-link"
+                onClick={() => onFocusLinked(target)}
+                title={`${target.comments[0].author.display_name} proposed a change for this comment`}
+              >
+                See proposed change{links.answeredBy.length > 1 ? ` ${index + 1}` : ''}
+                {proposalStatus(target) !== 'open' ? ` (${proposalStatus(target)})` : ''}
+              </button>
+            ))}
+          </div>
+        )}
         {onJump && (
           <button
             type="button"

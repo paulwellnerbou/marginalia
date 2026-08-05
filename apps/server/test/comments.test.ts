@@ -56,7 +56,8 @@ interface ThreadShape {
     reopen: boolean;
   };
   comments: [ThreadCommentNodeShape, ...ThreadCommentNodeShape[]];
-  proposal: { whole_document?: boolean } | null;
+  answered_by_thread_ids: string[];
+  proposal: { whole_document?: boolean; answers_thread_id?: string | null } | null;
 }
 
 function threadRootToComment(thread: ThreadShape): Record<string, unknown> {
@@ -1966,6 +1967,167 @@ describe('threads API', () => {
       for (const node of list[0]!.comments) {
         expect(node.capabilities.react).toBe(true);
       }
+    });
+  });
+  describe('proposals answering a comment', () => {
+    /** Create a proposal thread, optionally linked to the comment it answers. */
+    async function propose(
+      uid: string,
+      who: typeof ALICE,
+      blockId: string,
+      proposedText: string,
+      answersThreadId?: string,
+    ): Promise<{ status: number; id: string | null }> {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: headersFor(who),
+          body: JSON.stringify({
+            anchor: { block_id: blockId, quote: 'Title' },
+            body: 'rationale',
+            proposal: {
+              proposed_text: proposedText,
+              ...(answersThreadId ? { answers_thread_id: answersThreadId } : {}),
+            },
+          }),
+        }),
+      );
+      const json = (await res.json()) as { thread?: ThreadShape };
+      return { status: res.status, id: json.thread?.id ?? null };
+    }
+
+    async function respond(uid: string, threadId: string, action: string) {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${threadId}/respond`, {
+          method: 'POST',
+          headers: asAdmin(),
+          body: JSON.stringify({ action }),
+        }),
+      );
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+    }
+
+    async function threadsOf(uid: string): Promise<ThreadShape[]> {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, { headers: headersFor(ALICE) }),
+      );
+      return ((await res.json()) as { threads: ThreadShape[] }).threads;
+    }
+
+    async function seedComment(uid: string, blockId: string): Promise<string> {
+      const res = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'please fix');
+      return (res.body.comment as { id: string }).id;
+    }
+
+    test('records the link in both directions', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const commentId = await seedComment(uid, blockId);
+
+      const proposal = await propose(uid, ALICE, blockId, '# Fixed', commentId);
+      expect(proposal.status).toBe(201);
+
+      const threads = await threadsOf(uid);
+      const comment = threads.find((t) => t.id === commentId)!;
+      const proposalThread = threads.find((t) => t.id === proposal.id)!;
+
+      expect(proposalThread.proposal?.answers_thread_id).toBe(commentId);
+      expect(comment.answered_by_thread_ids).toEqual([proposal.id as string]);
+      // A proposal is not itself a request, so nothing answers it.
+      expect(proposalThread.answered_by_thread_ids).toEqual([]);
+    });
+
+    test('a proposal with no link reports null, not a dangling id', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const proposal = await propose(uid, ALICE, blockId, '# Fixed');
+
+      const threads = await threadsOf(uid);
+      expect(threads.find((t) => t.id === proposal.id)!.proposal?.answers_thread_id).toBeNull();
+    });
+
+    test('one comment can collect several proposals, oldest first', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const commentId = await seedComment(uid, blockId);
+
+      const first = await propose(uid, ALICE, blockId, '# One', commentId);
+      const second = await propose(uid, ALICE, blockId, '# Two', commentId);
+
+      const threads = await threadsOf(uid);
+      const comment = threads.find((t) => t.id === commentId)!;
+      expect(comment.answered_by_thread_ids).toEqual([first.id as string, second.id as string]);
+    });
+
+    test('rejects a link to a reply or to nothing', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const commentId = await seedComment(uid, blockId);
+      const reply = await addReply(uid, ALICE, commentId, 'a reply');
+      const replyId = (reply.body.comment as { id: string }).id;
+
+      // A reply is not a request in its own right.
+      expect((await propose(uid, ALICE, blockId, '# X', replyId)).status).toBe(400);
+      expect((await propose(uid, ALICE, blockId, '# X', 'nonexistent')).status).toBe(400);
+    });
+
+    test('rejects a link to a thread in another document', async () => {
+      // The other document first: newDoc resets the per-doc invite tokens.
+      const other = await newDoc('# Title\n');
+      const otherComment = await seedComment(other, await firstBlockId(other));
+
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      expect((await propose(uid, ALICE, blockId, '# X', otherComment)).status).toBe(400);
+    });
+
+    test('accepting the proposal resolves the comment it answers', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const commentId = await seedComment(uid, blockId);
+      const proposal = await propose(uid, ALICE, blockId, '# Fixed', commentId);
+
+      const accept = await respond(uid, proposal.id as string, 'accept');
+      expect(accept.status).toBe(200);
+      expect(accept.body.resolved_answered_thread_id).toBe(commentId);
+
+      const threads = await threadsOf(uid);
+      const comment = threads.find((t) => t.id === commentId)!;
+      expect(comment.state).toBe('resolved');
+      expect(comment.resolution?.kind).toBe('resolve');
+    });
+
+    test('rejecting the proposal leaves the comment open', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const commentId = await seedComment(uid, blockId);
+      const proposal = await propose(uid, ALICE, blockId, '# Fixed', commentId);
+
+      await respond(uid, proposal.id as string, 'reject');
+
+      const threads = await threadsOf(uid);
+      // The request stands — it just wasn't answered this way.
+      expect(threads.find((t) => t.id === commentId)!.state).toBe('open');
+    });
+
+    test('accepting leaves an already-resolved comment credited to its resolver', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const commentId = await seedComment(uid, blockId);
+      const proposal = await propose(uid, ALICE, blockId, '# Fixed', commentId);
+
+      await respond(uid, commentId, 'resolve');
+      const accept = await respond(uid, proposal.id as string, 'accept');
+      expect(accept.body.resolved_answered_thread_id).toBeNull();
+    });
+
+    test('an unlinked proposal resolves nothing on accept', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const proposal = await propose(uid, ALICE, blockId, '# Fixed');
+
+      const accept = await respond(uid, proposal.id as string, 'accept');
+      expect(accept.body.resolved_answered_thread_id).toBeNull();
     });
   });
 });

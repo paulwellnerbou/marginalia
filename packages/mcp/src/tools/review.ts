@@ -23,6 +23,8 @@ import {
 interface ThreadMutationWire {
   thread: ThreadWire;
   created_reply_id?: string | null;
+  /** Set when accepting a proposal also closed the comment it answered. */
+  resolved_answered_thread_id?: string | null;
 }
 
 const blockIdArg = z
@@ -47,7 +49,9 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         'Every review thread on the document — plain comment threads and edit proposals alike ' +
         '— with the full discussion, the text each is anchored to, and what you are allowed to ' +
         'do with it. This is the starting point for working through a reviewer’s comments. ' +
-        'Defaults to open threads; pass state="all" to include resolved ones.',
+        'Defaults to open threads; pass state="all" to include resolved ones.\n\n' +
+        'Comments and the proposals written to answer them are shown linked in both ' +
+        'directions. `needs_proposal: true` lists the comments still waiting for one.',
       inputSchema: {
         document: documentArg,
         state: z
@@ -70,6 +74,14 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .string()
           .optional()
           .describe('Only threads opened by an author whose name contains this string.'),
+        needs_proposal: z
+          .boolean()
+          .optional()
+          .describe(
+            'Only open comment threads that no edit proposal answers yet — the exact backlog ' +
+              'when asked to turn comments into proposals. Unlike awaiting_my_response this ' +
+              'stays true even after you have replied in words, until an actual proposal exists.',
+          ),
         awaiting_my_response: z
           .boolean()
           .optional()
@@ -118,6 +130,12 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           const needle = args.author.toLowerCase();
           threads = threads.filter((t) =>
             (t.comments[0]?.author.display_name ?? '').toLowerCase().includes(needle),
+          );
+        }
+        if (args.needs_proposal) {
+          threads = threads.filter(
+            (t) =>
+              t.proposal === null && t.state === 'open' && t.answered_by_thread_ids.length === 0,
           );
         }
         if (args.awaiting_my_response) {
@@ -245,12 +263,14 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
             'Replace the entire document source with `proposed_text` on accept. Ignores ' +
               'block_id/anchor_text. Use only for sweeping rewrites.',
           ),
-        reply_to_thread_id: z
+        answers_thread_id: z
           .string()
           .optional()
           .describe(
-            'A comment thread this proposal answers. A reply is posted there pointing at the ' +
-              'new proposal, so the reviewer sees their comment was addressed.',
+            'The comment thread this proposal answers. Records a real link both ways — the ' +
+              'reviewer sees "Proposed change" on their comment — and posts a reply there. ' +
+              'Accepting the proposal then resolves that comment automatically. Set this ' +
+              'whenever the proposal comes from someone’s comment.',
           ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -290,6 +310,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
               proposal: {
                 proposed_text: args.proposed_text,
                 ...(args.whole_document ? { whole_document: true } : {}),
+                ...(args.answers_thread_id ? { answers_thread_id: args.answers_thread_id } : {}),
               },
             },
           },
@@ -301,20 +322,21 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         // proposal. Report it as a partial success and name the one step
         // left to do by hand.
         let notice: string | null = null;
-        if (args.reply_to_thread_id) {
+        if (args.answers_thread_id) {
+          notice =
+            `Linked to thread ${args.answers_thread_id}: it now shows this proposal, and ` +
+            'accepting the proposal will resolve it.';
           try {
             await ctx.client.json<ThreadMutationWire>(
               loaded.ref,
-              `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads/${encodeURIComponent(args.reply_to_thread_id)}/respond`,
+              `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads/${encodeURIComponent(args.answers_thread_id)}/respond`,
               { method: 'POST', body: { body: `Addressed in edit proposal \`${thread.id}\`.` } },
             );
-            notice = `Replied to thread ${args.reply_to_thread_id} pointing at this proposal.`;
+            notice += ' Replied there too.';
           } catch (err) {
-            notice =
-              `WARNING: the proposal was created, but replying to thread ` +
-              `${args.reply_to_thread_id} failed — ${err instanceof Error ? err.message : String(err)}\n` +
-              'Do NOT re-run create_proposal; that would duplicate it. Use reply_to_thread with a ' +
-              'correct thread_id instead.';
+            // The link is already stored server-side; only the courtesy
+            // reply failed, so this is cosmetic rather than a lost link.
+            notice += ` (Could not post the reply: ${err instanceof Error ? err.message : String(err)})`;
           }
         }
 
@@ -371,6 +393,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         '  accept  — apply an edit proposal to the document (needs editor access)\n' +
         '  reject  — decline an edit proposal\n' +
         '  reopen  — undo a resolve/accept/reject\n\n' +
+        'Accepting a proposal that names an `answers_thread_id` also resolves that comment — ' +
+        'its request has been carried out. Rejecting leaves it open.\n\n' +
         'Accepting rewrites the document, which can orphan other open proposals that touched ' +
         'the same text; re-check list_threads afterwards.',
       inputSchema: {
@@ -396,6 +420,9 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         );
         return text(
           `Thread ${args.thread_id}: ${args.action} → now ${threadStatus(res.thread)}.`,
+          res.resolved_answered_thread_id
+            ? `Also resolved comment thread ${res.resolved_answered_thread_id}, which this proposal answered.`
+            : null,
           args.action === 'accept'
             ? 'The document source changed. Other open proposals may now be orphaned or conflicting — re-run list_threads.'
             : null,
@@ -586,9 +613,12 @@ function summarize(threads: ThreadWire[]): string {
   const openComments = comments.filter((t) => t.state === 'open').length;
   const openProposals = proposals.filter((t) => t.state === 'open').length;
   const orphaned = threads.filter((t) => t.link_status === 'orphaned').length;
+  const needProposal = comments.filter(
+    (t) => t.state === 'open' && t.answered_by_thread_ids.length === 0,
+  ).length;
   return (
-    `${comments.length} comment thread(s) (${openComments} open), ` +
-    `${proposals.length} edit proposal(s) (${openProposals} open)` +
+    `${comments.length} comment thread(s) (${openComments} open, ${needProposal} with no ` +
+    `proposal yet), ${proposals.length} edit proposal(s) (${openProposals} open)` +
     (orphaned > 0 ? `, ${orphaned} with a lost anchor` : '')
   );
 }
