@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { isClipped } from '../src/components/inline-comments/CollapsibleCommentBody.js';
 import {
   filterShortcodes,
   getActiveShortcode,
@@ -131,5 +132,32 @@ describe('emoji shortcode autocomplete', () => {
 
   test('filterShortcodes respects the limit', () => {
     expect(filterShortcodes('a', 3).length).toBeLessThanOrEqual(3);
+  });
+});
+
+describe('comment body clipping', () => {
+  // Illustrative pixels, not the real metrics — the decision is pure
+  // arithmetic on whatever the browser measured.
+  const LINE = 20;
+  const CLAMP = 3 * LINE;
+
+  test('a body that fits its clamp offers no toggle', () => {
+    expect(isClipped(LINE, CLAMP)).toBe(false);
+    expect(isClipped(CLAMP, CLAMP)).toBe(false);
+  });
+
+  test('sub-pixel rounding of a full-height body is not an overflow', () => {
+    expect(isClipped(CLAMP + 0.6, CLAMP)).toBe(false);
+  });
+
+  test('a body taller than its clamp is clipped', () => {
+    expect(isClipped(CLAMP + LINE, CLAMP)).toBe(true);
+  });
+
+  test('an unmeasurable clamp reports nothing clipped', () => {
+    // Height 0 is what a body that has not been laid out yet reports —
+    // treating that as an overflow would flash a toggle on every mount.
+    expect(isClipped(0, 0)).toBe(false);
+    expect(isClipped(500, 0)).toBe(false);
   });
 });
