@@ -23,6 +23,57 @@ test('highlights inline replacements inside paired remove/add lines', () => {
   ]);
 });
 
+function markdownDoc(paragraphs: number): string[] {
+  const lines: string[] = [];
+  for (let i = 0; i < paragraphs; i++) {
+    if (i % 20 === 0) {
+      lines.push(`## Chapter ${i / 20 + 1}`, '');
+    }
+    lines.push(`Paragraph ${i}: the cold wakes him before the alarm does.`, '');
+  }
+  return lines;
+}
+
+test('recognizes an insertion in a document too large for the LCS table', () => {
+  const before = markdownDoc(400);
+  const after = [...before];
+  after.splice(before.length / 2, 0, 'Inserted paragraph one.', '', 'Inserted paragraph two.', '');
+  expect((before.length + 1) * (after.length + 1)).toBeGreaterThan(500_000);
+
+  const lines = diffLines(before.join('\n'), after.join('\n'));
+
+  expect(lines.filter((line) => line.op === 'remove')).toHaveLength(0);
+  expect(lines.filter((line) => line.op === 'add').map((line) => line.text)).toEqual([
+    'Inserted paragraph one.',
+    '',
+    'Inserted paragraph two.',
+    '',
+  ]);
+  expect(lines.filter((line) => line.op === 'equal')).toHaveLength(before.length);
+});
+
+test('keeps a localized replacement minimal in a document too large for the LCS table', () => {
+  const before = markdownDoc(400);
+  const after = [...before];
+  const target = after.indexOf('Paragraph 200: the cold wakes him before the alarm does.');
+  after[target] = 'Paragraph 200: rewritten entirely.';
+
+  const lines = diffLines(before.join('\n'), after.join('\n'));
+
+  expect(lines.filter((line) => line.op === 'remove').map((line) => line.text)).toEqual([
+    'Paragraph 200: the cold wakes him before the alarm does.',
+  ]);
+  expect(lines.filter((line) => line.op === 'add').map((line) => line.text)).toEqual([
+    'Paragraph 200: rewritten entirely.',
+  ]);
+});
+
+test('diffs identical documents as all-equal', () => {
+  const doc = markdownDoc(400).join('\n');
+  const lines = diffLines(doc, doc);
+  expect(lines.every((line) => line.op === 'equal')).toBe(true);
+});
+
 test('pairs multi-line replacement blocks line-by-line for inline highlighting', () => {
   const before = ['Alpha keeps this part', 'Beta old value', 'Gamma old tail'].join('\n');
   const after = ['Alpha keeps this part', 'Beta new value', 'Gamma new tail'].join('\n');

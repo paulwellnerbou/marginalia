@@ -1,8 +1,8 @@
 /**
  * Minimal line-level diff. Returns a list of hunks marking equal / added /
- * removed segments. Uses the classic LCS algorithm — good enough for small
- * paragraph-sized inputs; larger inputs short-circuit to a naive diff to
- * keep memory bounded.
+ * removed segments. Trims the common prefix/suffix, then runs the classic
+ * LCS algorithm on the changed middle; only when that middle is still huge
+ * does it short-circuit to a naive diff to keep memory bounded.
  */
 
 export type DiffOp = 'equal' | 'add' | 'remove';
@@ -27,10 +27,34 @@ const INLINE_LCS_MAX_CELLS = 20_000;
 export function diffLines(before: string, after: string): DiffLine[] {
   const a = before.split('\n');
   const b = after.split('\n');
+
+  // Trim the common prefix/suffix so the LCS only sees the changed middle.
+  // Without this, a localized edit in a long document blows past
+  // LCS_MAX_CELLS and degrades to the lockstep fallback, which renders an
+  // insertion as remove+add pairs of unrelated lines from there on down.
+  let prefix = 0;
+  const maxPrefix = Math.min(a.length, b.length);
+  while (prefix < maxPrefix && a[prefix] === b[prefix]) prefix++;
+  let suffix = 0;
+  const maxSuffix = maxPrefix - prefix;
+  while (suffix < maxSuffix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix++;
+
+  const out: DiffLine[] = [];
+  for (let k = 0; k < prefix; k++) out.push({ op: 'equal', text: a[k]! });
+  diffTrimmedLines(a.slice(prefix, a.length - suffix), b.slice(prefix, b.length - suffix), out);
+  for (let k = a.length - suffix; k < a.length; k++) out.push({ op: 'equal', text: a[k]! });
+  annotateInlineDiffs(out);
+  return out;
+}
+
+function diffTrimmedLines(a: string[], b: string[], out: DiffLine[]): void {
   const n = a.length;
   const m = b.length;
 
-  if ((n + 1) * (m + 1) > LCS_MAX_CELLS) return naiveDiff(a, b);
+  if ((n + 1) * (m + 1) > LCS_MAX_CELLS) {
+    naiveDiff(a, b, out);
+    return;
+  }
 
   // LCS DP table
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
@@ -41,7 +65,6 @@ export function diffLines(before: string, after: string): DiffLine[] {
     }
   }
 
-  const out: DiffLine[] = [];
   let i = 0,
     j = 0;
   while (i < n && j < m) {
@@ -63,18 +86,15 @@ export function diffLines(before: string, after: string): DiffLine[] {
   while (j < m) {
     out.push({ op: 'add', text: b[j++]! });
   }
-  annotateInlineDiffs(out);
-  return out;
 }
 
 /**
- * Fallback when the DP table would be too large. Walks both sides in
- * lockstep, marking matching lines as equal and differing positions as
- * remove+add pairs. Not minimal, but O(n+m) time & memory and readable
- * enough that the diff is still useful.
+ * Fallback when the DP table would be too large even after trimming, i.e.
+ * changes span most of a very long document. Walks both sides in lockstep,
+ * marking matching lines as equal and differing positions as remove+add
+ * pairs. Not minimal, but O(n+m) time & memory.
  */
-function naiveDiff(a: string[], b: string[]): DiffLine[] {
-  const out: DiffLine[] = [];
+function naiveDiff(a: string[], b: string[], out: DiffLine[]): void {
   const len = Math.max(a.length, b.length);
   for (let k = 0; k < len; k++) {
     const av = a[k];
@@ -86,8 +106,6 @@ function naiveDiff(a: string[], b: string[]): DiffLine[] {
       if (bv !== undefined) out.push({ op: 'add', text: bv });
     }
   }
-  annotateInlineDiffs(out);
-  return out;
 }
 
 function annotateInlineDiffs(lines: DiffLine[]): void {
