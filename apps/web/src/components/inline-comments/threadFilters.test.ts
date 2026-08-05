@@ -43,6 +43,7 @@ function thread(
       resolve: true,
       accept: false,
       reject: false,
+      update: false,
       repair: false,
       reopen: false,
     },
