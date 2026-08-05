@@ -194,9 +194,16 @@ export function threadDetail(
   // A comment can cover several blocks, and the anchor records only its
   // two endpoints. Showing the first alone would present a fragment of
   // the quote as the whole of it.
-  const endBlock = anchor.end_block_id === anchor.block_id ? null : findBlock(anchor.end_block_id);
+  //
+  // The span is read from the anchor, not from what resolved: a document
+  // edited since keeps the id but loses the block, and a span that
+  // printed as single-block there would hide the reason its quote looks
+  // truncated.
+  const spanEndId =
+    anchor.end_block_id && anchor.end_block_id !== anchor.block_id ? anchor.end_block_id : null;
+  const endBlock = spanEndId ? findBlock(spanEndId) : null;
   const where = block
-    ? `${blockSpan(block, endBlock)}, section ${
+    ? `${blockSpan(block, endBlock, spanEndId !== null)}, section ${
         block.headingPath.length > 0 ? block.headingPath.join(' › ') : '(document root)'
       }`
     : anchor.heading_path?.length
@@ -204,7 +211,7 @@ export function threadDetail(
       : 'unknown location';
   lines.push(
     `anchor: block_id=${anchor.block_id ?? 'none'}${
-      endBlock ? ` end_block_id=${endBlock.id}` : ''
+      spanEndId ? ` end_block_id=${spanEndId}` : ''
     } (${where}) link_status=${thread.link_status}`,
   );
   if (anchor.quote) lines.push(`quoted text: ${JSON.stringify(clip(anchor.quote, 240))}`);
@@ -263,12 +270,33 @@ export function threadDetail(
   return lines.join('\n');
 }
 
-/** "paragraph, lines 4-6", or both endpoints when the anchor spans blocks. */
-function blockSpan(first: DocumentBlock, last: DocumentBlock | null): string {
-  if (!last) return `${first.kind}, lines ${first.startLine}-${first.endLine}`;
-  const from = Math.min(first.startLine ?? 0, last.startLine ?? 0);
-  const to = Math.max(first.endLine ?? 0, last.endLine ?? 0);
-  return `${first.kind}…${last.kind} span, lines ${from}-${to}`;
+/**
+ * "paragraph, lines 4-6", or both endpoints when the anchor spans blocks.
+ *
+ * A block the local source walk could not place has no line numbers, and
+ * a range defaulted to 0 would read as a real location in the document.
+ * Say the range is unknown instead.
+ */
+function blockSpan(first: DocumentBlock, last: DocumentBlock | null, spanned: boolean): string {
+  if (!spanned) return `${first.kind}, ${lineRange(first.startLine, first.endLine)}`;
+  if (!last) return `${first.kind}…? span, end block not in this document`;
+  return `${first.kind}…${last.kind} span, ${lineRange(
+    bound(first.startLine, last.startLine, Math.min),
+    bound(first.endLine, last.endLine, Math.max),
+  )}`;
+}
+
+function lineRange(from: number | null, to: number | null): string {
+  return from === null || to === null ? 'source range unknown' : `lines ${from}-${to}`;
+}
+
+/** Null when either endpoint is unplaced — half a range would understate the span. */
+function bound(
+  a: number | null,
+  b: number | null,
+  pick: (x: number, y: number) => number,
+): number | null {
+  return a === null || b === null ? null : pick(a, b);
 }
 
 function plural(count: number, noun: string): string {
