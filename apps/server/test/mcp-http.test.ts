@@ -258,6 +258,27 @@ describe('hosted MCP endpoint', () => {
     await client.close();
   });
 
+  test('strips control characters out of the identity given in the URL', async () => {
+    // A newline in the name percent-encodes safely onto the wire but
+    // decodes back to a raw CR/LF in the database, where it corrupts the
+    // line-oriented text these tools emit. A newline in client_id is
+    // worse: it is sent verbatim, and Headers.set rejects it outright.
+    const agent = await connect('?name=Ev%0D%0Ail&client_id=aaaa%0D%0Abbbb');
+    const created = await callText(agent, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+    await callText(agent, 'create_comment', {
+      document: adminUrl,
+      anchor_text: 'Alpha.',
+      body: 'a note',
+    });
+
+    const threads = await callText(agent, 'list_threads', { document: adminUrl });
+    expect(threads).toContain('[opener] Evil');
+    expect(threads).not.toContain('Ev\r');
+    expect(threads).not.toContain('Ev\n');
+    await agent.close();
+  });
+
   test('refuses to reach a different Marginalia instance', async () => {
     const client = await connect();
     const res = (await client.callTool({

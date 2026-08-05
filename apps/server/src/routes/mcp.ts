@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { createMarginaliaMcpServer } from '@marginalia/mcp';
+import {
+  createMarginaliaMcpServer,
+  MAX_CLIENT_ID_LENGTH,
+  MAX_DISPLAY_NAME_LENGTH,
+  sanitizeIdentityValue,
+} from '@marginalia/mcp';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
@@ -79,11 +84,8 @@ async function handleMcp(c: Context, app: Hono): Promise<Response> {
   }
 }
 
-const MAX_NAME_LENGTH = 80;
-
 function readDisplayName(url: URL): string {
-  const raw = (url.searchParams.get('name') ?? '').trim().slice(0, MAX_NAME_LENGTH);
-  return raw || 'Claude';
+  return sanitizeIdentityValue(url.searchParams.get('name'), MAX_DISPLAY_NAME_LENGTH) || 'Claude';
 }
 
 /**
@@ -97,7 +99,7 @@ function readDisplayName(url: URL): string {
  * Pass `client_id` explicitly to keep separate agents apart.
  */
 function readClientId(url: URL, displayName: string): string {
-  const explicit = (url.searchParams.get('client_id') ?? '').trim();
-  if (explicit.length >= 8) return explicit.slice(0, 200);
+  const explicit = sanitizeIdentityValue(url.searchParams.get('client_id'), MAX_CLIENT_ID_LENGTH);
+  if (explicit.length >= 8) return explicit;
   return `mcp-${createHash('sha256').update(displayName).digest('hex').slice(0, 28)}`;
 }

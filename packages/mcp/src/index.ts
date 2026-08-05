@@ -8,6 +8,11 @@
  */
 export type { FetchLike } from './client.js';
 export type { McpConfig } from './config.js';
-export { loadMcpConfig } from './config.js';
+export {
+  loadMcpConfig,
+  MAX_CLIENT_ID_LENGTH,
+  MAX_DISPLAY_NAME_LENGTH,
+  sanitizeIdentityValue,
+} from './config.js';
 export type { McpServerDeps } from './main.js';
 export { createMarginaliaMcpServer, SERVER_NAME, SERVER_VERSION } from './main.js';
