@@ -118,7 +118,7 @@ describe('hosted MCP endpoint', () => {
     await second.close();
   });
 
-  test('the name in the URL wins from the very first write', async () => {
+  test('a named invite seeds the first write, so the URL must carry the same name', async () => {
     const admin = await connect('?name=Paul');
     const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
     const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
@@ -131,22 +131,55 @@ describe('hosted MCP endpoint', () => {
     const invite = await callText(admin, 'create_invite', {
       document: adminUrl,
       role: 'collaborator',
+      display_name: 'Claude',
     });
     const link = /(http\S+)/.exec(invite)?.[1] as string;
 
-    // A write as the agent's very first request, with no prior read to
-    // establish it. A named invite would seed its own display name here
-    // and author this reply under it; a generic one must not.
-    const agent = await connect('?name=Codex');
-    await callText(agent, 'reply_to_thread', {
+    // A write as the agent's very first request, with no prior read.
+    // `authorize()` seeds a named invite's own display name onto a
+    // client it hasn't seen, so a mismatched URL name loses this one
+    // write — which is why the MCP tab derives `?name=` from the invite
+    // rather than letting the two be set independently.
+    const mismatched = await connect('?name=Codex');
+    await callText(mismatched, 'reply_to_thread', {
       document: link,
       thread_id: threadId,
-      body: 'the only reply',
+      body: 'reply from a mismatched name',
     });
-    await agent.close();
+    await mismatched.close();
+    expect(await callText(admin, 'list_threads', { document: adminUrl })).toContain(
+      '[reply 1] Claude',
+    );
 
+    // Matching names — what the tab generates — attribute correctly from
+    // the first request onward.
+    const matched = await connect('?name=Claude');
+    await callText(matched, 'reply_to_thread', {
+      document: link,
+      thread_id: threadId,
+      body: 'reply from the matching name',
+    });
+    await matched.close();
     const threads = await callText(admin, 'list_threads', { document: adminUrl });
-    expect(threads).toContain('[reply 1] Codex');
+    expect(threads).toContain('[reply 2] Claude');
+    await admin.close();
+  });
+
+  test('a named invite makes the agent @-mentionable before it connects', async () => {
+    const admin = await connect('?name=Paul');
+    const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+    await callText(admin, 'create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+      display_name: 'Claude',
+    });
+
+    // The whole point of naming the invite: you can write "@Claude look
+    // at this" and let the agent find the mention on its first visit.
+    expect(await callText(admin, 'list_threads', { document: adminUrl })).toContain(
+      '@-mentionable names: Claude, Paul',
+    );
     await admin.close();
   });
 

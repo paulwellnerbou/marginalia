@@ -66,15 +66,15 @@ export function McpPanel({ uid, canManageInvites }: Props) {
     setError(null);
     try {
       const name = agentName.trim() || DEFAULT_AGENT_NAME;
-      // Generic, not named: a named invite seeds its own display name on
-      // the first request from a new client, which would author the
-      // agent's first write under the invite's name instead of the one
-      // in its connection URL. Generic leaves the name entirely to the
-      // agent, so the two can never disagree — the note keeps the link
-      // identifiable in the access panel.
+      // Named, so the agent is @-mentionable before it has ever
+      // connected — you can write "@Claude look at this" and let it find
+      // the mention on its first visit. The cost is that a named invite
+      // seeds its own display name onto a new client's first request, so
+      // the connection URL below always carries this same name; see
+      // `connectionFor`.
       await createInvite(
         uid,
-        { kind: 'generic', role: 'collaborator', note: `AI agent: ${name}` },
+        { kind: 'named', display_name: name, role: 'collaborator', note: 'AI agent' },
         { clientId: getClientId(), displayName: getDisplayName() },
       );
       await refresh();
@@ -87,17 +87,33 @@ export function McpPanel({ uid, canManageInvites }: Props) {
   }
 
   const origin = window.location.origin;
-  const name = agentName.trim() || DEFAULT_AGENT_NAME;
-  const mcpUrl = `${origin}/mcp${name === DEFAULT_AGENT_NAME ? '' : `?name=${encodeURIComponent(name)}`}`;
-  const cli = `claude mcp add --transport http marginalia ${mcpUrl}`;
-  const json = `{
+
+  /**
+   * The connection string for one agent.
+   *
+   * `?name=` is taken from the invite, never from the name field: a
+   * named invite seeds its own display name onto the agent's first
+   * request, so if the two disagreed the agent's first comment would be
+   * signed with the invite's name and everything after it with the URL's.
+   * Deriving one from the other makes that impossible.
+   */
+  function connectionFor(inviteName: string): { url: string; cli: string; json: string } {
+    const url = `${origin}/mcp${
+      inviteName === DEFAULT_AGENT_NAME ? '' : `?name=${encodeURIComponent(inviteName)}`
+    }`;
+    return {
+      url,
+      cli: `claude mcp add --transport http marginalia ${url}`,
+      json: `{
   "mcpServers": {
     "marginalia": {
       "type": "http",
-      "url": "${mcpUrl}"
+      "url": "${url}"
     }
   }
-}`;
+}`,
+    };
+  }
 
   return (
     <Box p="3" className="mcp-panel">
@@ -151,20 +167,10 @@ export function McpPanel({ uid, canManageInvites }: Props) {
               {error}
             </Text>
           )}
-          {agentInvites.length > 0 && (
-            <Box>
-              <Text as="p" size="1" color="gray" mb="1">
-                <CheckIcon /> Give this link to the agent along with your question:
-              </Text>
-              {agentInvites.map((invite) => (
-                <Box key={invite.token} mb="2">
-                  <Text as="p" size="1" color="gray">
-                    {invite.note ?? invite.display_name ?? 'any name'} · {invite.role}
-                  </Text>
-                  <Copyable text={`${origin}${invite.url}`} multiline size="1" />
-                </Box>
-              ))}
-            </Box>
+          {error && (
+            <Text as="p" size="1" color="red" mb="2">
+              {error}
+            </Text>
           )}
         </Box>
       )}
@@ -186,27 +192,42 @@ export function McpPanel({ uid, canManageInvites }: Props) {
         size="1"
         value={setup}
         onValueChange={(v) => setSetup(v as Setup)}
-        mb="2"
+        mb="3"
       >
         <SegmentedControl.Item value="cli">Command line</SegmentedControl.Item>
         <SegmentedControl.Item value="json">Config file</SegmentedControl.Item>
       </SegmentedControl.Root>
 
-      {setup === 'cli' ? (
-        <Box>
-          <Copyable text={cli} multiline size="1" />
-          <Text as="p" size="1" color="gray" mt="1">
-            Run once, in any project. Codex uses{' '}
-            <code>codex mcp add marginalia --url {mcpUrl}</code>.
-          </Text>
-        </Box>
+      {agentInvites.length === 0 ? (
+        <Callout.Root size="1" color="gray">
+          <Callout.Text>
+            Create an access link above and the exact command for it appears here.
+          </Callout.Text>
+        </Callout.Root>
       ) : (
-        <Box>
-          <Copyable text={json} multiline size="1" />
-          <Text as="p" size="1" color="gray" mt="1">
-            Goes in <code>.mcp.json</code> in your project, or your client's MCP settings.
-          </Text>
-        </Box>
+        agentInvites.map((invite) => {
+          const inviteName = invite.display_name ?? DEFAULT_AGENT_NAME;
+          const connection = connectionFor(inviteName);
+          return (
+            <Box key={invite.token} mb="4">
+              <Text as="p" size="2" weight="bold" mb="1">
+                {inviteName}
+              </Text>
+              <Text as="p" size="1" color="gray" mb="1">
+                Connect it:
+              </Text>
+              <Copyable
+                text={setup === 'cli' ? connection.cli : connection.json}
+                multiline
+                size="1"
+              />
+              <Text as="p" size="1" color="gray" mt="2" mb="1">
+                Then give it this link to the document:
+              </Text>
+              <Copyable text={`${origin}${invite.url}`} multiline size="1" />
+            </Box>
+          );
+        })
       )}
 
       <Text as="p" size="2" color="gray" mt="4">

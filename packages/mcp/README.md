@@ -52,10 +52,13 @@ The name also derives the `x-marginalia-client` id Marginalia uses to decide who
 or delete a comment, so it stays stable across reconnects — which also means two agents
 connecting under the same name share one identity. Add `&client_id=…` to keep them apart.
 
-Give the agent a **generic** invite rather than a named one. A named invite seeds its own
-display name onto a client's first request, which would author the agent's first write
-under the invite's name instead of the one in its URL. The MCP tab mints the right kind
-for you.
+Give the agent a **named** invite, and make `?name=` match the name on it. Naming the
+invite is what puts the agent on the @-mention roster before it has ever connected, so you
+can write "@Claude look at this" and let it find the mention on arrival. The catch is that
+a named invite also seeds its own display name onto a client's first request: if the two
+names disagree, the agent's first write is signed with the invite's name and everything
+after it with the URL's. The MCP tab generates the connection string from the invite, so
+they cannot drift.
 
 The document viewer has an **MCP** tab that generates all of this for you, with an access
 link for the agent alongside it.
