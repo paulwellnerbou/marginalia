@@ -302,10 +302,11 @@ A comment says what is wrong; a proposal says what to write instead. Linking the
 what turns a review into a work queue.
 
 Pass `answers_thread_id` to `create_proposal` and Marginalia records a real link, not a
-mention in prose: the comment shows **See proposed change**, the proposal shows
-**Answers: “…”**, and each is one click from the other in the viewer. Accepting the
-proposal then resolves the comment — its request has been carried out. Rejecting leaves it
-open, because the request still stands.
+mention in prose: the viewer renders the proposal *inside* the comment thread's card, one
+merged conversation instead of two cross-referenced cards. (When the pair can't render
+together — one side orphaned, say — the cards fall back to **See proposed change** /
+**Answers: “…”** links.) Accepting the proposal then resolves the comment — its request
+has been carried out. Rejecting leaves it open, because the request still stands.
 
 The link lives on the proposal, so one comment can collect several: a first attempt you
 reject and its replacement both point back at the same request. When the feedback is

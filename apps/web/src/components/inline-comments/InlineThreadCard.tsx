@@ -30,6 +30,18 @@ interface Props {
   uid: string;
   thread: Thread;
   links: ThreadLinks;
+  /**
+   * This card renders inside the card of the thread its proposal
+   * answers. Drops the "Answers:" link — the answered thread is the
+   * card wrapped around this one.
+   */
+  nested?: boolean;
+  /**
+   * Cards for the proposals answering this thread, rendered inside
+   * this card after the replies. Threads rendered here are filtered
+   * out of `links.answeredBy` by the caller.
+   */
+  nestedCards?: ReactNode[] | undefined;
   /** Focus another thread; absent when the target has no anchor to scroll to. */
   onFocusLinked: (target: Thread) => void;
   /** Resolves thread ids mentioned in comment bodies into links. */
@@ -94,6 +106,8 @@ export function InlineThreadCard({
   uid,
   thread,
   links,
+  nested = false,
+  nestedCards,
   onFocusLinked,
   threadRefs,
   canComment,
@@ -301,6 +315,7 @@ export function InlineThreadCard({
 
   const cardClasses = [
     'ic-card',
+    nested ? 'ic-card-nested' : '',
     focused ? 'ic-card-focused' : '',
     flashPhase ? `ic-card-flash-${flashPhase}` : '',
     isResolved ? 'ic-card-resolved' : '',
@@ -312,9 +327,12 @@ export function InlineThreadCard({
     .filter(Boolean)
     .join(' ');
 
+  const nestedCount = nestedCards?.length ?? 0;
   const summary = proposal
     ? statusLabel(thread, status)
-    : `${thread.comments.length} comment${thread.comments.length === 1 ? '' : 's'}`;
+    : `${thread.comments.length} comment${thread.comments.length === 1 ? '' : 's'}${
+        nestedCount > 0 ? ` · ${nestedCount} proposal${nestedCount === 1 ? '' : 's'}` : ''
+      }`;
   const anchorQuote = formatAnchorQuote(thread.anchor.quote, 80);
 
   return (
@@ -379,7 +397,7 @@ export function InlineThreadCard({
           )}
         </div>
         {diffError && <span className="ic-error">{diffError}</span>}
-        {links.answers && (
+        {!nested && links.answers && (
           <ThreadLink
             target={links.answers}
             onFocus={onFocusLinked}
@@ -462,6 +480,8 @@ export function InlineThreadCard({
               onReact={onReact}
             />
           ))}
+
+          {nestedCount > 0 && <div className="ic-card-nested-list">{nestedCards}</div>}
 
           {canComment && replyOpen ? (
             <InlineComposer
