@@ -3,7 +3,9 @@ import {
   adjacentThreadTarget,
   clampCardLeft,
   computeFloatingCardPosition,
+  currentThreadIndex,
   type FloatingCardPlacementInput,
+  sortThreadTopEntries,
 } from './floatingCardPosition.js';
 
 function input(overrides: Partial<FloatingCardPlacementInput>): FloatingCardPlacementInput {
@@ -110,5 +112,102 @@ describe('adjacentThreadTarget', () => {
   test('empty list returns null both ways', () => {
     expect(adjacentThreadTarget([], 0, 1)).toBeNull();
     expect(adjacentThreadTarget([], 0, -1)).toBeNull();
+  });
+
+  // Threads quoting the same text resolve to the same anchor, so they
+  // tie. Position alone always names the last of a tie, which would
+  // step straight past the others.
+  describe('threads sharing an anchor position', () => {
+    const tied = [
+      { id: 'a', top: -300 },
+      { id: 'b1', top: 0 },
+      { id: 'b2', top: 0 },
+      { id: 'c', top: 900 },
+    ];
+
+    test('without a parked thread, next skips past the whole tie', () => {
+      expect(adjacentThreadTarget(tied, 20, 1)).toBe('c');
+    });
+
+    test('next walks from the first of a tie to the second', () => {
+      expect(adjacentThreadTarget(tied, 20, 1, 'b1')).toBe('b2');
+    });
+
+    test('next leaves the tie only from its last member', () => {
+      expect(adjacentThreadTarget(tied, 20, 1, 'b2')).toBe('c');
+    });
+
+    test('prev walks back through the tie symmetrically', () => {
+      expect(adjacentThreadTarget(tied, 20, -1, 'b2')).toBe('b1');
+      expect(adjacentThreadTarget(tied, 20, -1, 'b1')).toBe('a');
+    });
+
+    test('a parked thread that is gone falls back to position', () => {
+      expect(adjacentThreadTarget(tied, 20, 1, 'filtered-out')).toBe('c');
+    });
+
+    test('the parked thread wins over the reading position', () => {
+      // refTop says everything is behind us, but the reader is on b1.
+      expect(adjacentThreadTarget(tied, 1000, 1, 'b1')).toBe('b2');
+    });
+
+    test('prev from the first thread returns null even when parked', () => {
+      expect(adjacentThreadTarget(tied, 20, -1, 'a')).toBeNull();
+    });
+  });
+});
+
+describe('sortThreadTopEntries', () => {
+  test('orders by position', () => {
+    const sorted = sortThreadTopEntries([
+      { id: 'b', top: 100 },
+      { id: 'a', top: -20 },
+      { id: 'c', top: 900 },
+    ]);
+    expect(sorted.map((e) => e.id)).toEqual(['a', 'b', 'c']);
+  });
+
+  // Threads on one anchor tie on position; the column orders them by
+  // where the quote starts, so stepping must not depend on which
+  // presentation the reader happens to be using.
+  test('breaks a tie by quote start offset, then creation time', () => {
+    const sorted = sortThreadTopEntries([
+      { id: 'later', top: 0, startOffset: 40, createdAt: 1 },
+      { id: 'oldest-at-10', top: 0, startOffset: 10, createdAt: 1 },
+      { id: 'newest-at-10', top: 0, startOffset: 10, createdAt: 9 },
+    ]);
+    expect(sorted.map((e) => e.id)).toEqual(['oldest-at-10', 'newest-at-10', 'later']);
+  });
+
+  test('entries without tiebreak fields keep a stable order', () => {
+    const sorted = sortThreadTopEntries([
+      { id: 'first', top: 0 },
+      { id: 'second', top: 0 },
+    ]);
+    expect(sorted.map((e) => e.id)).toEqual(['first', 'second']);
+  });
+});
+
+describe('currentThreadIndex', () => {
+  const entries = [
+    { id: 'a', top: -300 },
+    { id: 'b', top: 10 },
+    { id: 'c', top: 250 },
+  ];
+
+  test('is the last anchor at or above the reading position', () => {
+    expect(currentThreadIndex(entries, 20)).toBe(1);
+  });
+
+  test('is -1 above the first anchor', () => {
+    expect(currentThreadIndex(entries, -400)).toBe(-1);
+  });
+
+  test('is the parked thread when one is given', () => {
+    expect(currentThreadIndex(entries, 20, 'c')).toBe(2);
+  });
+
+  test('ignores a parked id that is not in the list', () => {
+    expect(currentThreadIndex(entries, 20, 'nope')).toBe(1);
   });
 });

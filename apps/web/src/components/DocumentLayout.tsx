@@ -1568,6 +1568,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               onSwitchToColumn={() => setCommentsDisplayMode('column')}
               docElementRef={docRef}
               scrollContainerRef={docScrollRef}
+              currentThreadId={focusedThread?.threadId ?? null}
               onOpenThread={openCommentThread}
             />
           )}
