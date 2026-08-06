@@ -39,6 +39,13 @@ export function computeThreadNesting(threads: Thread[]): ThreadNesting {
     for (const id of parent.answered_by_thread_ids) {
       const target = present.get(id);
       if (!target || !isProposal(target)) continue;
+      // Both link directions come from one server column, but the
+      // thread array can mix threads fetched at different times (a
+      // repaired anchor is spliced into an older list). Require the
+      // proposal to name this parent back, so a stale reverse index
+      // falls back to the cross-link rendering instead of filing a
+      // proposal under a comment it no longer answers.
+      if (target.proposal.answers_thread_id !== parent.id) continue;
       nested.push(target);
       parentOf.set(id, parent.id);
     }

@@ -89,6 +89,27 @@ test('standalone proposals and plain threads stay top-level', () => {
   expect(nesting.parentOf.size).toBe(0);
 });
 
+test('a proposal that does not name this parent back is not nested', () => {
+  // The two link directions come from one server column, but the thread
+  // array can mix threads fetched at different times. A reverse index
+  // that has drifted must not file a proposal under a comment it no
+  // longer answers.
+  const parent = thread('C', { answered_by_thread_ids: ['P'] });
+  const p = proposal('P', 'OTHER');
+  const nesting = computeThreadNesting([parent, p]);
+  expect(nesting.topLevel.map((t) => t.id)).toEqual(['C', 'P']);
+  expect(nesting.nestedByParent.size).toBe(0);
+  expect(nesting.parentOf.size).toBe(0);
+});
+
+test('a standalone proposal listed by a stale reverse index is not nested', () => {
+  const parent = thread('C', { answered_by_thread_ids: ['P'] });
+  const p = proposal('P', null);
+  const nesting = computeThreadNesting([parent, p]);
+  expect(nesting.topLevel.map((t) => t.id)).toEqual(['C', 'P']);
+  expect(nesting.nestedByParent.size).toBe(0);
+});
+
 test('an answered_by id pointing at a non-proposal is ignored', () => {
   // Defensive: the server never produces this, but a stale id must not
   // swallow a comment thread into another card.
