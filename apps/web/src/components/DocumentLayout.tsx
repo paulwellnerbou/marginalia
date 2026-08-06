@@ -437,8 +437,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     applying = false;
 
     if (!sectionRelations) return;
-    const reassert = () => {
+    // Re-assert only when the toggled section is one the filter locks
+    // (unrelated: held closed, ancestor: held open). Reader toggles
+    // inside focused sections are free and shouldn't pay the undo/
+    // re-apply pass. The event fires on the `.collapse-section`
+    // wrapper, whose previous sibling is its heading.
+    const reassert = (event: Event) => {
       if (applying) return;
+      const wrapper = event.target instanceof HTMLElement ? event.target : null;
+      const headingId = wrapper?.previousElementSibling?.id;
+      const relation = headingId ? sectionRelations.get(headingId) : undefined;
+      if (relation !== 'unrelated' && relation !== 'ancestor') return;
       applying = true;
       applySectionFilterToDocument(root, sectionRelations);
       applying = false;
