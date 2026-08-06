@@ -206,7 +206,7 @@ approval apart.
 | `list_threads` | Comments and edit proposals with their discussion and anchored text. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter; `context_blocks` widens each one to the paragraphs around it. |
 | `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet). |
 | `create_proposal` | A suggested replacement. `answers_thread_id` links it to the comment it answers. |
-| `update_proposal` | Revise your own open proposal in place — new text, same thread, discussion intact. Rebuilds it against the current source, so it also refreshes a stale or conflicted proposal. |
+| `update_proposal` | Revise your own open proposal in place — new text, same thread, discussion intact. Rebuilds it against the current source, so it also refreshes a stale or conflicted proposal. `comment` posts a revision note in the discussion alongside the change. |
 | `reply_to_thread` | Answer a comment thread or an edit proposal. |
 | `respond_to_thread` | `resolve` / `accept` / `reject` / `reopen`, with an optional reply. Accepting a linked proposal also resolves the comment it answers. |
 | `react_to_comment` | Toggle an emoji on any message — a comment, a proposal's rationale, or a reply. |
@@ -302,10 +302,11 @@ A comment says what is wrong; a proposal says what to write instead. Linking the
 what turns a review into a work queue.
 
 Pass `answers_thread_id` to `create_proposal` and Marginalia records a real link, not a
-mention in prose: the comment shows **See proposed change**, the proposal shows
-**Answers: “…”**, and each is one click from the other in the viewer. Accepting the
-proposal then resolves the comment — its request has been carried out. Rejecting leaves it
-open, because the request still stands.
+mention in prose: the viewer renders the proposal *inside* the comment thread's card, one
+merged conversation instead of two cross-referenced cards. (When the pair can't render
+together — one side orphaned, say — the cards fall back to **See proposed change** /
+**Answers: “…”** links.) Accepting the proposal then resolves the comment — its request
+has been carried out. Rejecting leaves it open, because the request still stands.
 
 The link lives on the proposal, so one comment can collect several: a first attempt you
 reject and its replacement both point back at the same request. When the feedback is

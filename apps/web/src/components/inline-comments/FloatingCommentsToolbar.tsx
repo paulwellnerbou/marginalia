@@ -13,6 +13,7 @@ import {
   sortThreadTopEntries,
   type ThreadTopEntry,
 } from './floatingCardPosition.js';
+import { computeThreadNesting } from './threadNesting.js';
 
 interface Props {
   threads: Thread[];
@@ -81,10 +82,17 @@ export function FloatingCommentsToolbar({
   currentThreadId,
   onOpenThread,
 }: Props) {
-  const visibleThreads = useMemo(
-    () => (hideResolved ? threads.filter((t) => t.state !== 'resolved') : threads),
-    [threads, hideResolved],
-  );
+  /**
+   * Only threads that own a card are navigable: a proposal answering a
+   * comment renders inside that comment's card, so stepping onto it
+   * would re-open the card the reader is already looking at and prev/
+   * next would read as doing nothing. Matches the column, which
+   * navigates its top-level threads.
+   */
+  const visibleThreads = useMemo(() => {
+    const shown = hideResolved ? threads.filter((t) => t.state !== 'resolved') : threads;
+    return computeThreadNesting(shown).topLevel;
+  }, [threads, hideResolved]);
 
   const jump = useCallback(
     (direction: -1 | 1) => {

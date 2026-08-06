@@ -1608,6 +1608,381 @@ describe('threads API', () => {
     ).toBe(true);
   });
 
+  /** Bob proposes `proposed_text` for the doc's first block, admin accepts. */
+  async function acceptedProposal(uid: string, rationale: string, proposedText: string) {
+    const blockId = await firstBlockId(uid);
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          body: rationale,
+          proposal: { anchor_kind: 'heading', proposed_text: proposedText },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
+
+    const acceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(acceptRes.status).toBe(200);
+    return proposed.thread.id;
+  }
+
+  test('deleting an accepted proposal keeps the history attribution', async () => {
+    const uid = await newDoc('# Title');
+    const threadId = await acceptedProposal(uid, 'Sharper title', '# Better title');
+
+    const bobDelete = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'DELETE',
+        headers: headersFor(BOB),
+      }),
+    );
+    expect(bobDelete.status).toBe(403);
+    expect(((await bobDelete.json()) as { error: string }).error).toBe('forbidden-accepted');
+
+    const adminDelete = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'DELETE',
+        headers: asAdmin(),
+      }),
+    );
+    expect(adminDelete.status).toBe(204);
+
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, { headers: asAdmin() }),
+    );
+    const listBody = (await listRes.json()) as { threads: ThreadShape[] };
+    expect(listBody.threads.find((t) => t.id === threadId)).toBeUndefined();
+
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/history`, { headers: asAdmin() }),
+    );
+    expect(historyRes.status).toBe(200);
+    const { history } = (await historyRes.json()) as {
+      history: Array<{
+        action: string;
+        proposal: {
+          id: string;
+          author: { display_name: string };
+          summary: string;
+          deleted: boolean;
+        } | null;
+      }>;
+    };
+    const acceptEntry = history.find((e) => e.action === 'accept-proposal');
+    expect(acceptEntry?.proposal).toMatchObject({
+      id: threadId,
+      author: { display_name: BOB.name },
+      summary: 'Sharper title',
+      deleted: true,
+    });
+
+    // The accepted tip stays reachable via its branch ref.
+    expect(await app.store.readProposalTip({ uid, format: 'markdown' as const }, threadId)).toBe(
+      '# Better title',
+    );
+  });
+
+  test('reverting an accept after the proposal thread was deleted does not resurrect it', async () => {
+    const uid = await newDoc('# Title');
+    const threadId = await acceptedProposal(uid, 'Sharper title', '# Better title');
+
+    const adminDelete = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'DELETE',
+        headers: asAdmin(),
+      }),
+    );
+    expect(adminDelete.status).toBe(204);
+
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/history`, { headers: asAdmin() }),
+    );
+    const { history } = (await historyRes.json()) as { history: Array<{ oid: string }> };
+
+    const revertRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/history/${history[0]!.oid}/revert`, {
+        method: 'POST',
+        headers: asAdmin(),
+      }),
+    );
+    expect(revertRes.status).toBe(200);
+    const revert = (await revertRes.json()) as { reopened_proposal_id: string | null };
+    expect(revert.reopened_proposal_id).toBeNull();
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: asAdmin() }),
+    );
+    expect(((await docRes.json()) as { source: string }).source).toBe('# Title');
+
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, { headers: asAdmin() }),
+    );
+    const listBody = (await listRes.json()) as { threads: ThreadShape[] };
+    expect(listBody.threads.find((t) => t.id === threadId)).toBeUndefined();
+  });
+
+  /** Export `uid`, import the bundle back, and hand over the new doc's admin headers. */
+  async function roundTrip(uid: string): Promise<{
+    bundle: { document: { source: string }; comments: unknown[]; history: unknown };
+    serialized: string;
+    imported: { uid: string; imported_comments: number };
+    headers: Headers;
+  }> {
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/export`, { headers: asAdmin() }),
+    );
+    expect(exportRes.status).toBe(200);
+    const bundle = (await exportRes.json()) as {
+      document: { source: string };
+      comments: unknown[];
+      history: unknown;
+    };
+    const serialized = JSON.stringify(bundle);
+
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: rawHeadersFor(ALICE),
+        body: serialized,
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as {
+      uid: string;
+      imported_comments: number;
+      admin_invite: { token: string };
+    };
+    const headers = rawHeadersFor(ALICE);
+    headers.set(INVITE_HEADER, imported.admin_invite.token);
+    return { bundle, serialized, imported, headers };
+  }
+
+  test('a deleted comment thread leaves no trace in a bundle', async () => {
+    const uid = await newDoc('# Title');
+    const blockId = await firstBlockId(uid);
+    const added = await addComment(uid, BOB, { block_id: blockId, quote: 'Title' }, 'secret note');
+    const threadId = (added.body as { comment: { id: string } }).comment.id;
+
+    const deleteRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'DELETE',
+        headers: asAdmin(),
+      }),
+    );
+    expect(deleteRes.status).toBe(204);
+
+    // A plain comment decorates no history entry, so nothing about it
+    // needs to survive — not the body, not the id.
+    const { bundle, serialized, imported } = await roundTrip(uid);
+    expect(bundle.comments).toHaveLength(0);
+    expect(serialized).not.toContain(threadId);
+    expect(serialized).not.toContain('secret note');
+    expect(imported.imported_comments).toBe(0);
+  });
+
+  test('a deleted accepted proposal keeps its history attribution through a round-trip', async () => {
+    const uid = await newDoc('# Title');
+    const threadId = await acceptedProposal(uid, 'Sharper title', '# Better title');
+
+    const deleteRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'DELETE',
+        headers: asAdmin(),
+      }),
+    );
+    expect(deleteRes.status).toBe(204);
+
+    const { bundle, imported, headers } = await roundTrip(uid);
+    expect(bundle.document.source).toBe('# Better title');
+    // The tombstone travels so the accept commit stays attributable, but
+    // it is not a comment anyone can see.
+    expect(bundle.comments).toHaveLength(1);
+    expect(imported.imported_comments).toBe(0);
+
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/threads`, { headers }),
+    );
+    const listBody = (await listRes.json()) as { threads: ThreadShape[] };
+    expect(listBody.threads).toHaveLength(0);
+
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/history`, { headers }),
+    );
+    const { history } = (await historyRes.json()) as {
+      history: Array<{
+        action: string;
+        proposal: { author: { display_name: string }; summary: string; deleted: boolean } | null;
+      }>;
+    };
+    const accepted = history.find((e) => e.action === 'accept-proposal');
+    expect(accepted?.proposal).toMatchObject({
+      author: { display_name: BOB.name },
+      summary: 'Sharper title',
+      deleted: true,
+    });
+  });
+
+  test('a bundle round-trip preserves the full document history', async () => {
+    const uid = await newDoc('# Title');
+    await acceptedProposal(uid, 'Sharper title', '# Better title');
+
+    const beforeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/history`, { headers: asAdmin() }),
+    );
+    const before = (await beforeRes.json()) as {
+      history: Array<{
+        oid: string;
+        action: string;
+        actor: { display_name: string | null };
+        timestamp: number;
+      }>;
+    };
+    expect(before.history.map((e) => e.action)).toEqual(['accept-proposal', 'upload']);
+
+    const { imported, headers } = await roundTrip(uid);
+    const afterRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/history`, { headers }),
+    );
+    const after = (await afterRes.json()) as {
+      history: Array<{
+        oid: string;
+        action: string;
+        actor: { display_name: string | null };
+        timestamp: number;
+        proposal: { author: { display_name: string }; deleted: boolean } | null;
+      }>;
+    };
+
+    // Same commits, same identities, same times — not a re-upload.
+    expect(after.history.map((e) => e.oid)).toEqual(before.history.map((e) => e.oid));
+    expect(after.history.map((e) => e.action)).toEqual(['accept-proposal', 'upload']);
+    expect(after.history.map((e) => e.timestamp)).toEqual(before.history.map((e) => e.timestamp));
+    expect(after.history.map((e) => e.actor.display_name)).toEqual(
+      before.history.map((e) => e.actor.display_name),
+    );
+    // A live (undeleted) proposal keeps its attribution too.
+    expect(after.history[0]?.proposal).toMatchObject({
+      author: { display_name: BOB.name },
+      deleted: false,
+    });
+
+    // Historical diffs are real, not reconstructed.
+    const diffRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${imported.uid}/history/${after.history[0]!.oid}/diff`,
+        { headers },
+      ),
+    );
+    expect(diffRes.status).toBe(200);
+    const diff = (await diffRes.json()) as { before: string; after: string };
+    expect(diff.before).toBe('# Title');
+    expect(diff.after).toBe('# Better title');
+  });
+
+  test('an oversized participant roster is capped rather than rejected', async () => {
+    const uid = await newDoc('# Title');
+    await acceptedProposal(uid, 'Sharper title', '# Better title');
+
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/export`, { headers: asAdmin() }),
+    );
+    const bundle = (await exportRes.json()) as Record<string, unknown> & {
+      participants: Array<{ client_id: string; display_name: string }>;
+    };
+    // Bob (the real proposal author) stays inside the retained slice;
+    // padding pushes the roster well past the cap so the endpoint has
+    // to truncate instead of importing all of it.
+    const padded = [
+      ...bundle.participants,
+      ...Array.from({ length: 5100 }, (_, i) => ({
+        client_id: `padding-client-${i}`,
+        display_name: `Padding ${i}`,
+      })),
+    ];
+
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: rawHeadersFor(ALICE),
+        body: JSON.stringify({ ...bundle, participants: padded }),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as { uid: string; admin_invite: { token: string } };
+    const headers = rawHeadersFor(ALICE);
+    headers.set(INVITE_HEADER, imported.admin_invite.token);
+
+    // The real participant's attribution survives the cap.
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/history`, { headers }),
+    );
+    const { history } = (await historyRes.json()) as {
+      history: Array<{ action: string; proposal: { author: { display_name: string } } | null }>;
+    };
+    expect(history.find((e) => e.action === 'accept-proposal')?.proposal?.author.display_name).toBe(
+      BOB.name,
+    );
+  });
+
+  test('an importable bundle without history still lands as a single upload', async () => {
+    const uid = await newDoc('# Title');
+    await acceptedProposal(uid, 'Sharper title', '# Better title');
+
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/export`, { headers: asAdmin() }),
+    );
+    const bundle = (await exportRes.json()) as Record<string, unknown>;
+    // Stand in for a pre-v5 bundle, a corrupt pack, and an oversized
+    // one: all three must degrade to a plain import rather than either
+    // failing it or decoding an unbounded buffer.
+    const oversizedPack = {
+      pack_base64: 'A'.repeat(90 * 1024 * 1024),
+      head_oid: 'f'.repeat(40),
+    };
+    for (const history of [
+      null,
+      { pack_base64: 'bm90LWEtcGFjaw==', head_oid: 'f'.repeat(40) },
+      oversizedPack,
+    ]) {
+      const importRes = await app.hono.fetch(
+        new Request('http://test/api/documents/import', {
+          method: 'POST',
+          headers: rawHeadersFor(ALICE),
+          body: JSON.stringify({ ...bundle, version: 4, history }),
+        }),
+      );
+      expect(importRes.status).toBe(201);
+      const imported = (await importRes.json()) as {
+        uid: string;
+        admin_invite: { token: string };
+      };
+      const headers = rawHeadersFor(ALICE);
+      headers.set(INVITE_HEADER, imported.admin_invite.token);
+
+      const docRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${imported.uid}`, { headers }),
+      );
+      expect(((await docRes.json()) as { source: string }).source).toBe('# Better title');
+      const historyRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${imported.uid}/history`, { headers }),
+      );
+      const { history: entries } = (await historyRes.json()) as {
+        history: Array<{ action: string }>;
+      };
+      expect(entries.map((e) => e.action)).toEqual(['upload']);
+    }
+  });
+
   test('resolving a reply is rejected', async () => {
     const uid = await newDoc('# Title');
     const blockId = await firstBlockId(uid);

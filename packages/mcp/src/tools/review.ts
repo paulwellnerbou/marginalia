@@ -405,7 +405,9 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         'The replacement is rebuilt against the CURRENT document source, so it also refreshes ' +
         'a proposal whose diff reports "conflict" or "stale". Same rule as create_proposal: ' +
         '`proposed_text` replaces the anchored block(s)’ ENTIRE source range, so send the ' +
-        'complete rewritten block(s). The anchor itself cannot be moved.',
+        'complete rewritten block(s). The anchor itself cannot be moved.\n\n' +
+        'Pass `comment` to leave a revision note in the discussion — say what you changed and ' +
+        'why, so reviewers following the thread see how the proposal evolved.',
       inputSchema: {
         document: documentArg,
         thread_id: z.string().describe('Proposal thread id from list_threads.'),
@@ -416,6 +418,13 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .string()
           .optional()
           .describe('New opening-comment text, when the reasoning changed too.'),
+        comment: z
+          .string()
+          .optional()
+          .describe(
+            'Reply posted on the thread alongside this revision — a note on what changed. ' +
+              'Unlike `rationale` it does not replace anything; it joins the discussion.',
+          ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -430,6 +439,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
             body: {
               proposal: { proposed_text: args.proposed_text },
               ...(args.rationale !== undefined ? { body: args.rationale } : {}),
+              ...(args.comment !== undefined ? { comment: args.comment } : {}),
             },
           },
         );
@@ -441,6 +451,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         return text(
           `Updated proposal ${args.thread_id} — same thread, new proposed text.`,
           args.rationale !== undefined ? 'Rationale updated too.' : null,
+          res.created_reply_id ? `Revision note posted as comment ${res.created_reply_id}.` : null,
           `diff against the current document:\n${diff}`,
         );
       }),

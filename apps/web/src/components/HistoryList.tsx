@@ -256,7 +256,9 @@ export function HistoryList({
           const canRevertLatest =
             isCurrent && displayedEntries.length > 1 && Boolean(onRevertLatest);
           const revertTitle =
-            entry.action === 'accept-proposal' ? 'Revert and reopen the change proposal' : 'Revert';
+            entry.action === 'accept-proposal' && entry.proposal && !entry.proposal.deleted
+              ? 'Revert and reopen the change proposal'
+              : 'Revert';
           const actorName = historyActorLabel(entry.actor.display_name, entry.actor.client_id);
           const proposal = entry.proposal;
           const proposalAuthor = proposal
@@ -282,6 +284,7 @@ export function HistoryList({
                     <Flex direction="column" gap="1" mt="2">
                       <Text size="1" color="gray">
                         Proposal by {proposalAuthor}
+                        {proposal.deleted ? ' · discussion deleted' : ''}
                       </Text>
                       <Text size="1">“{proposal.summary}”</Text>
                     </Flex>
@@ -315,7 +318,7 @@ export function HistoryList({
                         Compare with current
                       </Button>
                     ) : null}
-                    {proposal && onOpenThread ? (
+                    {proposal && !proposal.deleted && onOpenThread ? (
                       <Button
                         size="1"
                         variant="soft"
