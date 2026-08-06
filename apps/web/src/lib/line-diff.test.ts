@@ -1,7 +1,7 @@
 /// <reference types="bun" />
 
 import { expect, test } from 'bun:test';
-import { diffLines } from './line-diff.js';
+import { type DiffLine, diffLines } from './line-diff.js';
 
 test('highlights inline replacements inside paired remove/add lines', () => {
   const before = 'Das ist unsere klare Empfehlung: drastisch vereinfachte DSFA.';
@@ -21,6 +21,46 @@ test('highlights inline replacements inside paired remove/add lines', () => {
     { changed: true, text: 'deutlich' },
     { changed: false, text: ' vereinfachte DSFA.' },
   ]);
+});
+
+test('word-diffs a reworded paragraph against itself, not against one inserted above it', () => {
+  const maeve = (opening: string) =>
+    `${opening} in one hand, gloves shoved into it, fiery red hair already escaping whatever she tied it with that morning — a small, quick young woman, freckles across her nose and down both arms. She stops when she sees the open box, and for a moment she doesn't say anything at all — just looks.`;
+  const riders =
+    'Three riders pass the open box on their way down the aisle, helmets swinging, loud and happy with their ride, and not one of them looks in.';
+  const before = ['Intro line.', '', maeve('Maeve is first through. Helmet'), '', 'Tail line.'];
+  const after = [
+    'Intro line.',
+    '',
+    riders,
+    '',
+    maeve('Maeve is next through — helmet'),
+    '',
+    'Tail line.',
+  ];
+
+  const lines = diffLines(before.join('\n'), after.join('\n'));
+  const removed = lines.find((line) => line.op === 'remove');
+  const inserted = lines.find((line) => line.op === 'add' && line.text === riders);
+  const reworded = lines.find((line) => line.op === 'add' && line.text.startsWith('Maeve'));
+
+  // The insertion is wholly new, so it carries no inline highlighting at all.
+  expect(inserted?.segments).toBeUndefined();
+  const changedWords = (line?: DiffLine) =>
+    line?.segments?.filter((segment) => segment.changed).map((segment) => segment.text.trim());
+  expect(changedWords(removed)).toEqual(['first', '.', 'Helmet']);
+  expect(changedWords(reworded)).toEqual(['next', '—', 'helmet']);
+});
+
+test('leaves a wholly rewritten line unpaired instead of matching stray words', () => {
+  const before = 'Alpha keeps this part\nThe cold wakes him before the alarm does.';
+  const after = 'Alpha keeps this part\nRain, and the smell of wet straw.';
+
+  const lines = diffLines(before, after).filter((line) => line.op !== 'equal');
+
+  expect(lines.map((line) => line.op)).toEqual(['remove', 'add']);
+  expect(lines[0]?.segments).toBeUndefined();
+  expect(lines[1]?.segments).toBeUndefined();
 });
 
 function markdownDoc(paragraphs: number): string[] {
