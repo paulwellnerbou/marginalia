@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { BlockSourceRange } from '@marginalia/renderer';
+import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
 import { mergeBlockRanges } from './mergeBlockRanges.js';
 
 function makeRanges(entries: Array<[string, BlockSourceRange]>): Map<string, BlockSourceRange> {

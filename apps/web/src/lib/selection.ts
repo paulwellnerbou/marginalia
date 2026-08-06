@@ -1,4 +1,4 @@
-import { joinSpanQuote } from '@marginalia/renderer';
+import { joinSpanQuote } from '@marginalia/renderer/anchor-span';
 import type { CommentAnchor } from './api.js';
 import { anchorIdOf, elementsIntersectingRange } from './block-span.js';
 

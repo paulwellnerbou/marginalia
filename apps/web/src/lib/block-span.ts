@@ -12,7 +12,7 @@
  * orphan the comment as soon as one of them changed.
  */
 
-import { spanTail } from '@marginalia/renderer';
+import { spanTail } from '@marginalia/renderer/anchor-span';
 
 const COMMENTABLE = '[data-block], [data-subblock]';
 

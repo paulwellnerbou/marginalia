@@ -1,4 +1,4 @@
-import type { BlockSourceRange } from '@marginalia/renderer';
+import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
 import { useEffect, useState } from 'react';
 import type { CommentAnchor, DocumentFormat } from '../lib/api.js';
 import { captureSelection, selectionRect } from '../lib/selection.js';

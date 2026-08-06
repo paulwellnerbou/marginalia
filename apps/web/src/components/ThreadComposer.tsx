@@ -1,4 +1,5 @@
-import type { BlockSourceRange, RenderResult } from '@marginalia/renderer';
+import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
+import type { RenderResult } from '@marginalia/renderer/types';
 import { EnterFullScreenIcon, ExitFullScreenIcon } from '@radix-ui/react-icons';
 import { Button, Dialog, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -458,8 +459,8 @@ function ProposalComposerBody({
     const req = renderReqRef.current;
     const handle = setTimeout(async () => {
       try {
-        const { renderDocument, rewriteAssetReferences } = await loadRenderer();
-        const r = await renderDocument(value, docFormat);
+        const { renderDocument, rewriteAssetReferences } = await loadRenderer(docFormat);
+        const r = await renderDocument(value);
         // Match EditPage's preview: rewrite `cat.png` → `/d/<uid>/asset/<id>`
         // and surface missing-asset placeholders, so the preview matches
         // what the viewer will see after the proposal is accepted.

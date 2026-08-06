@@ -1,4 +1,4 @@
-import type { BlockSourceRange } from '@marginalia/renderer';
+import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
 import {
   type ReactNode,
   type RefObject,

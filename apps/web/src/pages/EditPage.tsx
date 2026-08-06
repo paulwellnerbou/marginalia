@@ -1,4 +1,4 @@
-import type { RenderResult } from '@marginalia/renderer';
+import type { RenderResult } from '@marginalia/renderer/types';
 import { Button, Container, Flex, Select, Slider, Text } from '@radix-ui/themes';
 import type { EditorView } from 'codemirror';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -73,6 +73,13 @@ function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'):
   return out;
 }
 
+function attachedAssetKey(assets: readonly AttachedAsset[]): string {
+  return assets
+    .map((asset) => `${asset.ref_name}\u0000${asset.asset_id}`)
+    .sort()
+    .join('\u0001');
+}
+
 export function EditPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
 
@@ -93,7 +100,7 @@ export function EditPage() {
   const [doc, setDoc] = useState<Document | null>(null);
   const [source, setSource] = useState('');
   const [savedSource, setSavedSource] = useState('');
-  const [rendered, setRendered] = useState<RenderResult | null>(null);
+  const [rendered, setRendered] = useState<Pick<RenderResult, 'html'> | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attached, setAttached] = useState<AttachedAsset[]>([]);
@@ -170,6 +177,11 @@ export function EditPage() {
     () => new Map(attached.map((a) => [a.ref_name, a.asset_id])),
     [attached],
   );
+  const attachedKey = useMemo(() => attachedAssetKey(attached), [attached]);
+  const serverAttachedKey = useMemo(
+    () => attachedAssetKey(doc?.attached_assets ?? []),
+    [doc?.attached_assets],
+  );
 
   const referencedRefs = useMemo(
     () => collectReferencedRefs(source, doc?.format ?? 'markdown'),
@@ -197,6 +209,7 @@ export function EditPage() {
         setDoc(d);
         setSource(d.source);
         setSavedSource(d.source);
+        setRendered(d.rendered);
         setAttached(d.attached_assets ?? []);
       },
       (err) => {
@@ -276,14 +289,23 @@ export function EditPage() {
       setRendered(null);
       return;
     }
+    // `getDocument()` already includes the authoritative server rendering.
+    // Use it immediately and do not load the client renderer until source or
+    // attachments actually diverge from that snapshot.
+    if (doc && source === savedSource && attachedKey === serverAttachedKey) {
+      setRendered(doc.rendered);
+      return;
+    }
     const handle = setTimeout(async () => {
       try {
-        const { renderDocument, rewriteAssetReferences } = await loadRenderer();
+        const { renderDocument, rewriteAssetReferences } = await loadRenderer(
+          doc?.format ?? 'markdown',
+        );
         // Route through renderDocument so asciidoc docs get the
         // asciidoc pipeline — `render()` is markdown-only and would
         // produce broken HTML for `image::foo[]` etc. Defaults to
         // markdown while the doc is still loading.
-        const r = await renderDocument(source, doc?.format ?? 'markdown');
+        const r = await renderDocument(source);
         // Apply the same server-side asset rewrite to the preview HTML so
         // dropzones / missing-asset placeholders match what the viewer
         // will see after save. Without this, the editor's preview would
@@ -300,7 +322,7 @@ export function EditPage() {
       }
     }, 200);
     return () => clearTimeout(handle);
-  }, [source, uid, attachedRefs, assetVersions, doc?.format]);
+  }, [source, savedSource, uid, attachedRefs, assetVersions, attachedKey, serverAttachedKey, doc]);
 
   // Sync scrolling between source and preview
   // biome-ignore lint/correctness/useExhaustiveDependencies: doc/rendered are re-attach triggers — when the document or its rendering changes, the .cm-scroller / preview elements are re-mounted and the listeners need to bind to the fresh nodes.
@@ -491,11 +513,8 @@ export function EditPage() {
       // Using savedSource (not source) keeps the anchor consistent with
       // what the server has at base — the proposed_text is the user's
       // new full source.
-      const renderer = await loadRenderer();
-      const blocks =
-        doc.format === 'asciidoc'
-          ? renderer.locateAllBlocksAsciidoc(savedSource)
-          : renderer.locateAllBlocks(savedSource);
+      const renderer = await loadRenderer(doc.format);
+      const blocks = renderer.locateAllBlocks(savedSource);
       const first = blocks.entries().next();
       if (first.done) {
         setError('Cannot propose an edit on an empty document.');

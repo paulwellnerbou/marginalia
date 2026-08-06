@@ -1,21 +1,47 @@
-// Shared lazy loader for the `@marginalia/renderer` chunk.
+// Lazy, format-aware loader for editor and proposal previews.
 //
-// Cached so callers don't re-import on every preview tick. The cache
-// drops itself on rejection so a transient chunk-load failure doesn't
-// pin every later attempt for the rest of the session — same pattern
-// as `codemirror-loader.ts`.
+// Import the narrow renderer entrypoints instead of the package barrel. The
+// barrel also exports DOCX and AsciiDoc support, which makes bundlers retain
+// the sizeable Asciidoctor/Opal runtime even for ordinary Markdown pages.
 
-type Renderer = typeof import('@marginalia/renderer');
+import type { RewriteOptions } from '@marginalia/renderer/asset-rewrite';
+import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
+import type { RenderOptions, RenderResult } from '@marginalia/renderer/types';
+import type { DocumentFormat } from './api.js';
 
-let rendererPromise: Promise<Renderer> | null = null;
+export interface LoadedRenderer {
+  renderDocument(source: string, options?: RenderOptions): Promise<RenderResult>;
+  rewriteAssetReferences(html: string, options: RewriteOptions): Promise<string>;
+  locateAllBlocks(source: string): Map<string, BlockSourceRange>;
+}
 
-export function loadRenderer(): Promise<Renderer> {
-  if (!rendererPromise) {
-    const p = import('@marginalia/renderer');
-    rendererPromise = p;
-    p.catch(() => {
-      if (rendererPromise === p) rendererPromise = null;
-    });
-  }
-  return rendererPromise;
+const rendererPromises = new Map<DocumentFormat, Promise<LoadedRenderer>>();
+
+export function loadRenderer(format: DocumentFormat): Promise<LoadedRenderer> {
+  const existing = rendererPromises.get(format);
+  if (existing) return existing;
+
+  const locatorPromise =
+    format === 'asciidoc'
+      ? import('@marginalia/renderer/locate-block-asciidoc').then(
+          (module) => module.locateAllBlocksAsciidoc,
+        )
+      : import('@marginalia/renderer/locate-block').then((module) => module.locateAllBlocks);
+
+  const promise = Promise.all([
+    import('@marginalia/renderer/render'),
+    import('@marginalia/renderer/asset-rewrite'),
+    locatorPromise,
+  ]).then(([renderer, assetRewrite, locateAllBlocks]) => ({
+    renderDocument: (source: string, options?: RenderOptions) =>
+      renderer.renderDocument(source, format, options),
+    rewriteAssetReferences: assetRewrite.rewriteAssetReferences,
+    locateAllBlocks,
+  }));
+
+  rendererPromises.set(format, promise);
+  promise.catch(() => {
+    if (rendererPromises.get(format) === promise) rendererPromises.delete(format);
+  });
+  return promise;
 }

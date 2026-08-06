@@ -4,7 +4,6 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { ToastContainer } from './components/ToastContainer.js';
 import { AppearanceProvider, useAppearance } from './lib/appearance.js';
-import { HomePage } from './pages/HomePage.js';
 
 // Radix UI base + our markdown theme baseline. Radix styles come first so
 // document theme CSS wins when selectors collide.
@@ -19,6 +18,11 @@ installGlobalErrorLogging();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root not found');
+
+const HomePage = lazy(async () => {
+  const mod = await import('./pages/HomePage.js');
+  return { default: mod.HomePage };
+});
 
 const ViewPage = lazy(async () => {
   const mod = await import('./pages/ViewPage.js');

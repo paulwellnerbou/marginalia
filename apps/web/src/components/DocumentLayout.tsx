@@ -1,4 +1,4 @@
-import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
+import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -59,6 +59,7 @@ import {
   listThreads,
   uploadAsset,
 } from '../lib/api.js';
+import { loadBlockRanges } from '../lib/block-range-loader.js';
 import { highlightRange } from '../lib/block-span.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
@@ -104,6 +105,7 @@ const INLINE_COMMENTS_OPEN_KEY = 'marginalia.inlineCommentsOpen';
 const INLINE_COMMENTS_STACKING_KEY = 'marginalia.inlineCommentsStacking';
 const INLINE_COMMENTS_HIDE_RESOLVED_KEY = 'marginalia.inlineCommentsHideResolved';
 const COLLAPSED_WIDTH = 36;
+const EMPTY_BLOCK_RANGES = new Map<string, BlockSourceRange>();
 /** Delay before scrolling to a specific reply after the parent thread has expanded (ms). */
 const REPLY_SCROLL_DELAY_MS = 900;
 
@@ -231,17 +233,43 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [doc.uid]);
 
   /*
-   * Per-block source ranges for the live document. Shared by the
-   * ProposalComposer (extracts the clicked block's source into
-   * the textarea) and CommentsPane (passed down to ThreadItems for diff
-   * display). Recomputed only when the source or format changes, so editors
-   * don't pay the parse cost on unrelated re-renders.
+   * Per-block source ranges are needed for selection comments and proposal
+   * source extraction, but not to display the server-rendered document.
+   * Load the format-specific parser after the first paint so Markdown pages
+   * never pull in Asciidoctor and neither parser delays the document shell.
    */
-  const blockRanges = useMemo(
-    () =>
-      doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(liveSource) : locateAllBlocks(liveSource),
-    [doc.format, liveSource],
-  );
+  const [loadedBlockRanges, setLoadedBlockRanges] = useState<{
+    uid: string;
+    source: string;
+    format: Document['format'];
+    ranges: Map<string, BlockSourceRange>;
+  } | null>(null);
+  const blockRangesAvailable =
+    loadedBlockRanges?.uid === doc.uid && loadedBlockRanges.format === doc.format;
+  const blockRangesReady = blockRangesAvailable && loadedBlockRanges.source === liveSource;
+  const blockRanges = blockRangesAvailable ? loadedBlockRanges.ranges : EMPTY_BLOCK_RANGES;
+  const blockRangeSource = blockRangesAvailable ? loadedBlockRanges.source : liveSource;
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      void loadBlockRanges(liveSource, doc.format).then(
+        (ranges) => {
+          if (!cancelled) {
+            setLoadedBlockRanges({ uid: doc.uid, source: liveSource, format: doc.format, ranges });
+          }
+        },
+        (err) => reportError('DocumentLayout.blockRanges', err, { uid: doc.uid }),
+      );
+    };
+    const idleHandle = window.requestIdleCallback?.(load, { timeout: 750 });
+    const timeoutHandle = idleHandle === undefined ? window.setTimeout(load, 0) : undefined;
+    return () => {
+      cancelled = true;
+      if (idleHandle !== undefined) window.cancelIdleCallback(idleHandle);
+      if (timeoutHandle !== undefined) window.clearTimeout(timeoutHandle);
+    };
+  }, [doc.uid, doc.format, liveSource]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: doc.uid is kept so a doc swap reseeds live state even if the new doc has identical source/rendered strings.
   useEffect(() => {
@@ -1483,7 +1511,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   }
                   onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
                 />
-                {canComment && (
+                {canComment && blockRangesReady && (
                   <SelectionToolbar
                     rootRef={docRef}
                     docFormat={doc.format}
@@ -1492,7 +1520,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
                   />
                 )}
-                {canComment && (
+                {canComment && blockRangesReady && (
                   <BlockActions
                     rootRef={docRef}
                     onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
@@ -1654,7 +1682,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       <ProposalComposer
         target={pendingProposalTarget}
         docUid={doc.uid}
-        docSource={liveSource}
+        docSource={blockRangeSource}
         docFormat={doc.format}
         blockRanges={blockRanges}
         attachedAssets={doc.attached_assets}
