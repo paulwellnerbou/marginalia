@@ -43,6 +43,13 @@ function domTextById(html: string): Map<string, string> {
     if (!('children' in node)) return;
     for (const child of node.children) {
       if (child.type === 'element') {
+        // Parsing an HTML string always yields the camel-cased spelling; the
+        // hyphenated one only exists on a tree still carrying raw
+        // `hProperties`, which never reaches here. `blockIdOf` in the plugin
+        // accepts both because it can be moved earlier in a pipeline — this
+        // cannot, so a second lookup here would be a branch that never runs.
+        // The elementless assertion below is what catches a lookup that has
+        // stopped finding anything.
         const props = child.properties ?? {};
         const id = props['dataSubblock'] ?? props['dataBlock'];
         if (typeof id === 'string' && !out.has(id)) {
@@ -56,14 +63,29 @@ function domTextById(html: string): Map<string, string> {
   return out;
 }
 
+/**
+ * Block kinds that legitimately reach the map with no element to compare
+ * against: Shiki replaces the `<pre>` and drops the attribute, `rehype-raw`
+ * loses it re-parsing raw HTML, and footnote definitions are moved into a
+ * generated `<section class="footnotes">`.
+ */
+const ELEMENTLESS_KINDS = new Set(['code', 'html', 'footnoteDefinition']);
+
 function expectMapMatchesDom(html: string, blocks: BlockMap): number {
   const dom = domTextById(html);
   let checked = 0;
   for (const block of blocks) {
     const rendered = dom.get(block.id);
-    // `code`, raw `html` and `footnoteDefinition` blocks reach the block map
-    // but carry no element in the output, so there is nothing to compare.
-    if (rendered === undefined) continue;
+    if (rendered === undefined) {
+      // Anything else missing means the id lookup stopped working, not that
+      // the block has no element. Skipping silently would let this whole
+      // file keep passing while checking almost nothing.
+      expect({ kind: block.kind, foundInDom: false }).toEqual({
+        kind: block.kind,
+        foundInDom: !ELEMENTLESS_KINDS.has(block.kind),
+      });
+      continue;
+    }
     checked++;
     expect({ id: block.id, kind: block.kind, text: block.text }).toEqual({
       id: block.id,
