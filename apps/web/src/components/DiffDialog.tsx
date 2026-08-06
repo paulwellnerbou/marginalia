@@ -66,8 +66,10 @@ export function DiffDialog({
         )}
 
         <Flex gap="2" justify="end" mt="4" align="center" wrap="wrap">
+          {/* Announced by the accompanying error toast, not here — two
+              assertive regions would read the same failure out twice. */}
           {actionError && (
-            <Text color="red" size="1" role="alert" style={{ marginRight: 'auto' }}>
+            <Text color="red" size="1" style={{ marginRight: 'auto' }}>
               {actionError}
             </Text>
           )}

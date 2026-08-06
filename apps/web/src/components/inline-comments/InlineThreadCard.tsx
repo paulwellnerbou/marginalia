@@ -437,11 +437,10 @@ export function InlineThreadCard({
           )}
         </div>
         {diffError && <span className="ic-error">{diffError}</span>}
-        {actionError && (
-          <span className="ic-error" role="alert">
-            {actionError}
-          </span>
-        )}
+        {/* No live-region role: the toast for this same failure is already
+            assertive, and a second one here would announce it twice. This
+            copy is persistent context to navigate back to. */}
+        {actionError && <span className="ic-error">{actionError}</span>}
         {!nested && links.answers && (
           <ThreadLink
             target={links.answers}

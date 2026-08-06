@@ -313,7 +313,11 @@ Para C baseline.
         reason: 'unavailable',
       });
     } finally {
-      process.env.PATH = realPath;
+      // Assigning `undefined` back would leave the key defined (and under
+      // Node would set the literal string "undefined"), so an unset PATH
+      // has to be restored by deleting it.
+      if (realPath === undefined) delete process.env.PATH;
+      else process.env.PATH = realPath;
     }
 
     // With the binary back, the same proposal merges cleanly — nothing
