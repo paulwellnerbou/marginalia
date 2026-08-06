@@ -240,7 +240,9 @@ function ProposalSourceField({
  * re-expand shows the loading state instead of HTML left over from the
  * previous expanded session — stale if the user edited in compact mode
  * in between. `reset` exists for callers that swap the underlying
- * target without remounting.
+ * target without remounting; it cancels any in-flight render and
+ * schedules a fresh one rather than relying on the caller to also
+ * change one of the effect's other inputs.
  */
 function useProposalPreview({
   value,
@@ -256,6 +258,11 @@ function useProposalPreview({
   attachedAssets: AttachedAsset[];
 }): { rendered: RenderResult | null; reset: () => void } {
   const [rendered, setRendered] = useState<RenderResult | null>(null);
+  // Bumped by `reset`, and a dependency of the render effect below, so a
+  // reset re-runs it: the cleanup invalidates whatever was in flight and
+  // a fresh render is scheduled. Clearing `rendered` alone would leave
+  // the preview blank whenever the reset does not also change `value`.
+  const [resetNonce, setResetNonce] = useState(0);
   const renderReqRef = useRef(0);
 
   // Memoize the inputs to `rewriteAssetReferences` so the preview
@@ -308,9 +315,12 @@ function useProposalPreview({
       // the timer but hasn't resolved yet won't apply on unmount.
       renderReqRef.current += 1;
     };
-  }, [value, expanded, docFormat, docUid, attachedRefs, assetVersions]);
+  }, [value, expanded, docFormat, docUid, attachedRefs, assetVersions, resetNonce]);
 
-  const reset = useCallback(() => setRendered(null), []);
+  const reset = useCallback(() => {
+    setRendered(null);
+    setResetNonce((n) => n + 1);
+  }, []);
   return { rendered, reset };
 }
 
