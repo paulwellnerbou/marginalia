@@ -70,6 +70,19 @@ export interface BlockInfo {
    * off the rendered tree so it matches what the browser will show, which is
    * where the quotes anchoring searches for come from. See
    * `plugins/block-text.ts`.
+   *
+   * With one exception, which is not safe to assume away. Three kinds reach
+   * this map with no element in the output carrying their id, each losing it
+   * somewhere different: a `code` block's id rides on the `<code>` element
+   * until Shiki rewrites it away, an `html` block never has one to begin with
+   * (raw HTML becomes a hast `raw` string, which has nowhere to keep
+   * properties), and a `footnoteDefinition` is rebuilt from scratch inside a
+   * generated `<section class="footnotes">`.
+   *
+   * There is nothing to read those off, so they keep the source-AST text and
+   * can differ from what the browser shows. They are also the entries the
+   * client cannot resolve to an element at all, so treat a match against one
+   * as unpaintable rather than as DOM text.
    */
   text: string;
   /**

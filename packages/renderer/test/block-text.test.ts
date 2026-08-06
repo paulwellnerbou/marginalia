@@ -65,9 +65,10 @@ function domTextById(html: string): Map<string, string> {
 
 /**
  * Block kinds that legitimately reach the map with no element to compare
- * against: Shiki replaces the `<pre>` and drops the attribute, `rehype-raw`
- * loses it re-parsing raw HTML, and footnote definitions are moved into a
- * generated `<section class="footnotes">`.
+ * against: Shiki rewrites away the `<code>` carrying a code block's id, raw
+ * HTML becomes a hast `raw` string that never had one, and a footnote
+ * definition is rebuilt inside a generated `<section class="footnotes">`.
+ * See `BlockInfo.text`.
  */
 const ELEMENTLESS_KINDS = new Set(['code', 'html', 'footnoteDefinition']);
 
