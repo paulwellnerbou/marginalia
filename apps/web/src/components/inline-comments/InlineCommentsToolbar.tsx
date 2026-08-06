@@ -26,6 +26,8 @@ interface Props {
   onToggleStacking: () => void;
   hideResolved: boolean;
   onToggleHideResolved: () => void;
+  /** Switch the comment presentation from the margin column to floating cards. */
+  onSwitchToFloating: () => void;
   /** Reuse the existing scrollToAnchor flow so jumps share the flash animation. */
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
   /** Receives the toolbar's outer element so the layer can measure its height. */
@@ -45,6 +47,7 @@ export function InlineCommentsToolbar({
   onToggleStacking,
   hideResolved,
   onToggleHideResolved,
+  onSwitchToFloating,
   onScrollToAnchor,
   rootRef,
 }: Props) {
@@ -170,6 +173,12 @@ export function InlineCommentsToolbar({
             <DropdownMenu.CheckboxItem checked={stackingEnabled} onCheckedChange={onToggleStacking}>
               Stack comments at top
             </DropdownMenu.CheckboxItem>
+            {/* One-shot mode switch, not a checkbox: this toolbar only
+                exists in column mode, so a checked state could never
+                render. */}
+            <DropdownMenu.Item onSelect={onSwitchToFloating}>
+              Float comments over text
+            </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Root>
       </div>

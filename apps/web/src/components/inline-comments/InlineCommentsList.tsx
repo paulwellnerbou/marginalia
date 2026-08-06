@@ -377,13 +377,11 @@ export function InlineCommentsList({
     const rawLinks = threadLinks(thread, byId);
     // Proposals rendered inside this card need no "See proposed change"
     // link on top — the card itself is right below.
-    const links =
-      nested.length > 0
-        ? {
-            ...rawLinks,
-            answeredBy: rawLinks.answeredBy.filter((t) => !nested.some((n) => n.id === t.id)),
-          }
-        : rawLinks;
+    let links = rawLinks;
+    if (nested.length > 0) {
+      const nestedIds = new Set(nested.map((n) => n.id));
+      links = { ...rawLinks, answeredBy: rawLinks.answeredBy.filter((t) => !nestedIds.has(t.id)) };
+    }
     return (
       <InlineThreadCard
         key={thread.id}
