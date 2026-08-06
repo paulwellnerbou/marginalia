@@ -10,7 +10,7 @@ import {
   useState,
 } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
-import { resolveAnchorElement } from '../../lib/anchor-target.js';
+import { resolveAnchorElement, resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { computeFloatingCardPosition } from './floatingCardPosition.js';
 import { InlineComposer } from './InlineComposer.js';
@@ -225,13 +225,15 @@ export function FloatingCommentsLayer({
       }
       return null;
     }
-    const highlight = doc.querySelector<HTMLElement>(
-      `[data-comment-thread-id="${CSS.escape(openId)}"]`,
-    );
-    if (highlight) return highlight;
+    // A thread quoting the same range as another merges into that
+    // range's mark, which carries only one thread id on the singular
+    // attribute — an exact match here would miss every other thread in
+    // the merge and fall through to the coarse block-level anchor.
+    // `resolveThreadScrollTarget` checks the mark's full id list instead,
+    // so this always agrees with where the jump itself landed.
     const thread = byId.get(openId);
     if (thread?.anchor.block_id) {
-      return resolveAnchorElement(doc, thread.anchor.block_id, thread.anchor.quote);
+      return resolveThreadScrollTarget(doc, thread.anchor.block_id, thread.anchor.quote, openId);
     }
     return null;
   }, [docElementRef, openId, pendingAnchor, byId]);
@@ -394,8 +396,14 @@ export function FloatingCommentsLayer({
       const active = document.activeElement;
       const focusWasInside = active === document.body || (active && cardEl.contains(active));
       if (!focusWasInside) return;
+      // Queried straight off the DOM rather than through the thread
+      // list: depending on that list here would re-run this effect on
+      // every refresh, and the cleanup would pull focus out of a card
+      // that is still open. Overlapping quotes merge into one mark that
+      // names only one thread on the singular attribute, so the merged
+      // id list has to be matched too.
       const mark = docElementRef.current?.querySelector<HTMLElement>(
-        `[data-comment-thread-id="${CSS.escape(threadId)}"]`,
+        `mark[data-comment-thread-ids~="${CSS.escape(threadId)}"], [data-comment-thread-id="${CSS.escape(threadId)}"]`,
       );
       if (!mark) return;
       // Resolved-thread highlights are painted without tabindex/role, so
