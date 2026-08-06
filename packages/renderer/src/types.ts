@@ -71,18 +71,12 @@ export interface BlockInfo {
    * where the quotes anchoring searches for come from. See
    * `plugins/block-text.ts`.
    *
-   * With one exception, which is not safe to assume away. Three kinds reach
-   * this map with no element in the output carrying their id, each losing it
-   * somewhere different: a `code` block's id rides on the `<code>` element
-   * until Shiki rewrites it away, an `html` block never has one to begin with
-   * (raw HTML becomes a hast `raw` string, which has nowhere to keep
-   * properties), and a `footnoteDefinition` is rebuilt from scratch inside a
-   * generated `<section class="footnotes">`.
-   *
-   * There is nothing to read those off, so they keep the source-AST text and
-   * can differ from what the browser shows. They are also the entries the
-   * client cannot resolve to an element at all, so treat a match against one
-   * as unpaintable rather than as DOM text.
+   * With one exception, which is not safe to assume away: a block whose id
+   * reached no element has nothing to read off, so it keeps the source-AST
+   * text and can differ from what the browser shows. `anchorable` below is
+   * exactly that set — check it rather than guessing from `kind`, which no
+   * longer separates the two (a mermaid fence and a real code block are
+   * both `code`, and only one of them has an element).
    */
   text: string;
   /**
@@ -113,6 +107,28 @@ export interface BlockInfo {
    * surviving heading".
    */
   sectionIndexPath: number[];
+  /**
+   * Whether `id` was actually written to an element in `RenderResult.html`.
+   *
+   * Not every block reaches the page as something the client can point at.
+   * Raw HTML is re-parsed by rehype-raw, mermaid fences become a generated
+   * `<div>`, YAML frontmatter renders to nothing at all, and a footnote
+   * definition nobody references is dropped — in each case the block is
+   * real in the source but has no `data-block` element to resolve.
+   *
+   * Such blocks stay in the map on purpose: `list_blocks` and the edit
+   * proposal flow resolve ids to *source* ranges via `locateAllBlocks`,
+   * which places them fine. Only the DOM-facing consumers have to care,
+   * and for them a false here means "never hand a comment to this" —
+   * `reanchor` skips it, because an anchor stored against it would resolve
+   * to nothing in the browser and the comment would vanish silently.
+   *
+   * Computed by scanning the finished tree for the ids that survived, so
+   * it reports what the pipeline did rather than what it was expected to
+   * do — a plugin that starts or stops preserving `data-block` moves this
+   * flag with it instead of drifting away from the truth.
+   */
+  anchorable: boolean;
 }
 
 /** Ordered list of top-level blocks, by document order. */

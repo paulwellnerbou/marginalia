@@ -64,29 +64,33 @@ function domTextById(html: string): Map<string, string> {
 }
 
 /**
- * Block kinds that legitimately reach the map with no element to compare
- * against: Shiki rewrites away the `<code>` carrying a code block's id, raw
- * HTML becomes a hast `raw` string that never had one, and a footnote
- * definition is rebuilt inside a generated `<section class="footnotes">`.
- * See `BlockInfo.text`.
+ * Which blocks legitimately have no element to compare against is answered
+ * per block by `anchorable`, not per kind: it is set from the ids that were
+ * actually in the finished tree, so raw HTML and a mermaid fence report
+ * false while a code block — whose id now rides on the `<pre>`, out of
+ * Shiki's way — reports true, though the last two are both `code`. See
+ * `BlockInfo.text`.
  */
-const ELEMENTLESS_KINDS = new Set(['code', 'html', 'footnoteDefinition']);
-
 function expectMapMatchesDom(html: string, blocks: BlockMap): number {
   const dom = domTextById(html);
   let checked = 0;
   for (const block of blocks) {
     const rendered = dom.get(block.id);
     if (rendered === undefined) {
-      // Anything else missing means the id lookup stopped working, not that
-      // the block has no element. Skipping silently would let this whole
-      // file keep passing while checking almost nothing.
+      // An anchorable block missing here means the id lookup stopped
+      // working, not that the block has no element. Skipping silently would
+      // let this whole file keep passing while checking almost nothing.
       expect({ kind: block.kind, foundInDom: false }).toEqual({
         kind: block.kind,
-        foundInDom: !ELEMENTLESS_KINDS.has(block.kind),
+        foundInDom: block.anchorable,
       });
       continue;
     }
+    // The converse: `anchorable` claims an element exists, and here it is.
+    expect({ id: block.id, anchorable: block.anchorable }).toEqual({
+      id: block.id,
+      anchorable: true,
+    });
     checked++;
     expect({ id: block.id, kind: block.kind, text: block.text }).toEqual({
       id: block.id,

@@ -15,6 +15,7 @@ import { rehypeAsciidocAnchorsToc } from './plugins/asciidoc-anchors-toc.js';
 import { rehypeAsciidocAssetCollector } from './plugins/asciidoc-asset-collector.js';
 import { rehypeAsciidocBlockIds } from './plugins/asciidoc-block-ids.js';
 import { rehypeAsciidocMermaid } from './plugins/asciidoc-mermaid.js';
+import { markAnchorable, renderedBlockIdsFromHtml } from './plugins/block-elements.js';
 import { rehypeBlockText } from './plugins/block-text.js';
 import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
 import { sanitizeSchema } from './plugins/sanitize-schema.js';
@@ -113,14 +114,19 @@ export async function renderAsciidoc(
   const data = file.data as AdocRenderData;
 
   const anchors = data.anchors ?? [];
+  const renderedHtml = String(file);
 
   return {
-    html: String(file),
+    html: renderedHtml,
     anchors,
     toc: buildToc(anchors),
     assets: data.assets ?? [],
     mermaid: data.mermaid ?? [],
-    blocks,
+    // `blocks` came out of the asciidoctor AST walk above, before the
+    // rehype passes ran, so which markers found an element is only
+    // knowable from the output — a `pass` block's raw HTML, for one,
+    // never picks up its marker role.
+    blocks: markAnchorable(blocks, renderedBlockIdsFromHtml(renderedHtml)),
     warnings: data.warnings ?? [],
     frontmatter,
   };
@@ -249,6 +255,7 @@ function recordSubBlock(item: AsciidoctorAbstractBlock, parent: BlockInfo, state
     headingPath: [...parent.headingPath],
     sectionIndex: parent.sectionIndex,
     sectionIndexPath: [...parent.sectionIndexPath],
+    anchorable: false,
   });
   const markerRole = `${MARGINALIA_SUBBLOCK_MARKER_PREFIX}${state.subBlockCounter}`;
   state.subBlockCounter += 1;
@@ -351,7 +358,7 @@ function synthesizeParent(state: WalkState, kind: string): BlockInfo {
     sectionIndexPath.push(state.sectionCounts.get(prefixKey) ?? 0);
   }
   const sectionIndex = sectionIndexPath[sectionIndexPath.length - 1] ?? 0;
-  return { id: '', kind, text: '', headingPath, sectionIndex, sectionIndexPath };
+  return { id: '', kind, text: '', headingPath, sectionIndex, sectionIndexPath, anchorable: false };
 }
 
 function getStyle(block: AsciidoctorAbstractBlock): string | null {
@@ -384,6 +391,7 @@ function recordBlock(
     headingPath,
     sectionIndex,
     sectionIndexPath,
+    anchorable: false,
   };
   state.blocks.push(info);
 

@@ -15,12 +15,19 @@
  * roughly fifty characters of label. Skipping it leaves the paragraph
  * reading as the empty string the server has for it — which is what an
  * image contributes to text either way.
+ *
+ * `data-footnote-backref` is a class, odd as it reads — it is the name
+ * mdast-util-to-hast gives the `↩` link it appends to every footnote
+ * definition. Now that those definitions carry a `data-block` and are
+ * commentable, the arrow would otherwise be two characters of a block
+ * nobody wrote.
  */
 
 export const INJECTED_CHROME_CLASSES: readonly string[] = [
   'heading-anchor',
   'heading-collapse-toggle',
   'missing-asset',
+  'data-footnote-backref',
 ];
 
 export const INJECTED_CHROME_SELECTOR = INJECTED_CHROME_CLASSES.map((c) => `.${c}`).join(', ');
