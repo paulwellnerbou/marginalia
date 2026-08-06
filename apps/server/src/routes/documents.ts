@@ -546,10 +546,12 @@ async function exportDocument(c: Context, deps: AppDeps) {
 
   const source = store.read(doc);
   const rendered = await renderDocument(source, doc.format);
-  // Deleted threads are omitted on purpose: deletion is meant to be
-  // complete, and bundles carry no git history whose entries their
-  // tombstones could decorate after an import (import starts a fresh
-  // repo from the source snapshot).
+  // Deleted threads are omitted — deletion is meant to be complete —
+  // with one deliberate exception: a deleted *accepted* proposal still
+  // ships as a tombstone, because the packed history below contains its
+  // accept commit and `loadAcceptedProposalHistory` needs the row to
+  // attribute that entry. This leaks nothing extra: the author and the
+  // rationale are already embedded in that commit's message.
   const comments = db
     .prepare(
       `SELECT
@@ -563,13 +565,25 @@ async function exportDocument(c: Context, deps: AppDeps) {
          cep.answers_comment_id
          FROM comments c
          LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
-        WHERE c.doc_uid = ? AND c.deleted_at IS NULL
+        WHERE c.doc_uid = ?
+          AND (c.deleted_at IS NULL OR cep.status = 'accepted')
          ORDER BY created_at ASC`,
     )
     .all(doc.uid) as BundleCommentRow[];
 
+  // A bundle without history is still importable (older bundles have
+  // none); it just lands as a single-commit document.
+  const historyPack = await store.exportHistoryPack(doc).catch(() => null);
+
+  // Commits record only client ids, so display names in a restored
+  // history resolve through `doc_users`. Without the roster every actor
+  // but the importer would render as "Unknown user".
+  const participants = db
+    .prepare('SELECT client_id, display_name FROM doc_users WHERE doc_uid = ?')
+    .all(doc.uid) as Array<{ client_id: string; display_name: string }>;
+
   const bundle = {
-    version: 4 as const,
+    version: 5 as const,
     kind: 'marginalia.document-bundle',
     exported_at: Date.now(),
     document: {
@@ -592,6 +606,18 @@ async function exportDocument(c: Context, deps: AppDeps) {
       warnings: rendered.warnings,
     },
     comments: await mapBundleComments(comments, store, doc),
+    // Git objects for main, so the import can restore the real timeline
+    // (authors, timestamps, diffs) instead of a synthetic first commit.
+    // Object ids are preserved, which is what keeps `accepted_oid` and
+    // the restored-from trailers meaningful on the other side.
+    history: historyPack
+      ? {
+          pack_base64: Buffer.from(historyPack.pack).toString('base64'),
+          head_oid: historyPack.headOid,
+          commits: historyPack.commits,
+        }
+      : null,
+    participants,
   };
 
   const filename = (doc.name ?? doc.uid).replace(/[^\w.-]+/g, '_').slice(0, 80);
@@ -1189,12 +1215,31 @@ async function importDocument(c: Context, deps: AppDeps) {
     : null;
   // Bundle's editable_by_anyone is ignored; the column is deprecated.
 
-  await store.write({ uid, format }, docSpec.source, identity, 'upload');
+  // Restore the original git history when the bundle carries it, so the
+  // imported document keeps its real timeline — original authors,
+  // timestamps, diffs, and object ids — instead of collapsing to one
+  // synthetic upload commit. Anything unusable about the pack falls back
+  // to that plain upload rather than failing the import.
+  const restoredHistory = await restoreBundleHistory(store, { uid, format }, bundle.history);
+  if (restoredHistory) {
+    // The working tree now holds main's tip. If the bundle's source
+    // disagrees (hand-edited bundle, or a tip that never matched), land
+    // the declared source as a normal edit on top rather than silently
+    // serving different content than the bundle asked for.
+    if (store.read({ uid, format }) !== docSpec.source) {
+      await store.write({ uid, format }, docSpec.source, identity, 'update');
+    }
+  } else {
+    await store.write({ uid, format }, docSpec.source, identity, 'upload');
+  }
   db.prepare(
     `INSERT INTO documents
        (uid, repo_dir, name, password_hash, editable_by_anyone, default_theme, format, mermaid_renderer, created_at, updated_at)
      VALUES (?, ?, ?, NULL, 0, ?, ?, ?, ?, ?)`,
   ).run(uid, uid, name, theme, format, mermaidRenderer, now, now);
+  // Seed the roster before the importer's own upsert so their current
+  // display name still wins for their own client id.
+  importBundleParticipants(db, uid, bundle.participants, now);
   upsertDocUser(db, uid, identity);
 
   // Fresh admin invite for the importer — not re-using the one from the
@@ -1231,8 +1276,8 @@ async function importDocument(c: Context, deps: AppDeps) {
         anchor_heading_path, anchor_section_index, anchor_section_index_path,
         author_client_id, author_display_name, body, link_status,
         resolved_at, resolved_by_name,
-        created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, updated_at, deleted_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertEditProposal = db.prepare(
     `INSERT INTO comments_edit_proposals
@@ -1262,6 +1307,9 @@ async function importDocument(c: Context, deps: AppDeps) {
     }
     const newId = idMap.get(row.id);
     if (!newId) continue;
+    // Tombstones ride along only to attribute history entries; they are
+    // re-inserted as deleted so they never surface as discussions.
+    const deletedAt = typeof row.deleted_at === 'number' ? row.deleted_at : null;
     const parentOldId = typeof row.parent_id === 'string' ? row.parent_id : null;
     const parentProposalOldId =
       typeof row.parent_proposal_id === 'string' ? row.parent_proposal_id : null;
@@ -1299,8 +1347,9 @@ async function importDocument(c: Context, deps: AppDeps) {
       typeof row.resolved_by_name === 'string' ? row.resolved_by_name : null,
       typeof row.created_at === 'number' ? row.created_at : now,
       typeof row.updated_at === 'number' ? row.updated_at : now,
+      deletedAt,
     );
-    importedComments += 1;
+    if (deletedAt === null) importedComments += 1;
 
     const proposal =
       row.edit_proposal && typeof row.edit_proposal === 'object'
@@ -1324,6 +1373,14 @@ async function importDocument(c: Context, deps: AppDeps) {
       const answersOldId =
         typeof proposal.answers_comment_id === 'string' ? proposal.answers_comment_id : null;
       const answersNewId = answersOldId ? (idMap.get(answersOldId) ?? null) : null;
+
+      // A tombstone exists only so a preserved accept commit can name its
+      // author. Keep status + accepted_oid (that oid is what links it to
+      // the commit) and skip every branch operation.
+      if (deletedAt !== null) {
+        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null, answersNewId);
+        continue;
+      }
 
       if (status === 'accepted') {
         insertEditProposal.run(newId, status, acceptedOid, null, null, null, null, answersNewId);
@@ -1404,8 +1461,60 @@ async function importDocument(c: Context, deps: AppDeps) {
   );
 }
 
-function isBundleVersion(v: unknown): v is 1 | 2 | 3 | 4 {
-  return v === 1 || v === 2 || v === 3 || v === 4;
+function isBundleVersion(v: unknown): v is 1 | 2 | 3 | 4 | 5 {
+  return v === 1 || v === 2 || v === 3 || v === 4 || v === 5;
+}
+
+/**
+ * Restore the bundle's participant roster into `doc_users` so a
+ * preserved history can name its actors. Bounded because the roster
+ * comes from a user-supplied file.
+ */
+function importBundleParticipants(db: Database, uid: string, raw: unknown, now: number): void {
+  if (!Array.isArray(raw)) return;
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO doc_users
+       (doc_uid, client_id, display_name, first_seen_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  for (const entry of raw.slice(0, 1000)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { client_id: clientId, display_name: displayName } = entry as Record<string, unknown>;
+    if (typeof clientId !== 'string' || typeof displayName !== 'string') continue;
+    const name = displayName.trim().slice(0, 200);
+    if (!clientId || !name) continue;
+    insert.run(uid, clientId, name, now, now);
+  }
+}
+
+/**
+ * Rebuild the imported doc's repo from a bundle's packed history.
+ * Returns null when the bundle has none (every version before 5) or when
+ * the pack can't be trusted — the caller then seeds a fresh repo.
+ */
+async function restoreBundleHistory(
+  store: GitStore,
+  doc: { uid: string; format: DocumentFormat },
+  raw: unknown,
+): Promise<{ oid: string } | null> {
+  if (!raw || typeof raw !== 'object') return null;
+  const history = raw as Record<string, unknown>;
+  if (typeof history.pack_base64 !== 'string' || typeof history.head_oid !== 'string') return null;
+  if (!/^[0-9a-f]{40}$/.test(history.head_oid)) return null;
+
+  let pack: Buffer;
+  try {
+    pack = Buffer.from(history.pack_base64, 'base64');
+  } catch {
+    return null;
+  }
+  if (pack.length === 0) return null;
+
+  const restored = await store.importHistoryPack(doc, pack, history.head_oid).catch(() => null);
+  if (!restored) {
+    console.warn(`[marginalia] import ${doc.uid}: unusable history pack, seeding a fresh repo`);
+  }
+  return restored;
 }
 
 function reanchorAndBroadcast(
@@ -1459,6 +1568,10 @@ async function mapBundleComments(
     resolved_by_name: row.resolved_by_name,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    // Set only for the accepted-proposal tombstones the export keeps for
+    // history attribution — import re-tombstones them so they stay
+    // invisible as discussions.
+    deleted_at: row.deleted_at,
     edit_proposal: await bundleProposalPayload(store, doc, row),
   }));
 }
@@ -2175,11 +2288,22 @@ async function loadAcceptedProposalHistory(
     INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
     WHERE c.doc_uid = ?
   `;
-  const row = (
-    proposalId
-      ? db.prepare(`${select} AND c.id = ? LIMIT 1`).get(doc.uid, proposalId)
-      : db.prepare(`${select} AND cep.accepted_oid = ? LIMIT 1`).get(doc.uid, acceptedOid)
-  ) as AcceptedProposalHistoryRow | null | undefined;
+  const byId = proposalId
+    ? (db.prepare(`${select} AND c.id = ? LIMIT 1`).get(doc.uid, proposalId) as
+        | AcceptedProposalHistoryRow
+        | null
+        | undefined)
+    : null;
+  // Fall back to the accept commit's own oid when the trailer's id finds
+  // nothing. Import regenerates comment ids but preserves object ids, so
+  // for a document restored from a bundle this is the only link between
+  // an `accept-proposal` commit and the proposal that produced it.
+  const row =
+    byId ??
+    (db.prepare(`${select} AND cep.accepted_oid = ? LIMIT 1`).get(doc.uid, acceptedOid) as
+      | AcceptedProposalHistoryRow
+      | null
+      | undefined);
   if (!row) return null;
 
   // Skip the git read when rationale is non-empty — summarize prefers
