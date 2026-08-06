@@ -135,10 +135,6 @@ const DIMMED_CLASS = 'section-filter-dimmed';
  * their chevron disabled. Selected sections and their descendants stay
  * freely togglable. Pass `relations = null` to undo everything.
  *
- * Idempotent — re-running with the same relations is cheap and changes
- * nothing, so callers can re-assert after outside code (deep links,
- * `expandAncestors`) reopens a held-closed section.
- *
  * `revealIds` names sections that should be expanded once (the ones
  * just added to the filter); that expansion is user-equivalent and
  * intentionally gets no restore marker.
@@ -164,7 +160,29 @@ export function applySectionFilterToDocument(
   }
 
   if (!relations) return;
+  enforceSectionFilter(article, relations, revealIds);
+}
 
+/**
+ * Enforce-only re-assert for when outside code (`expandAncestors` from
+ * a deep link or thread jump) reopens a held-closed section: skips the
+ * undo/restore sweep above, so only wrappers whose state actually
+ * drifted get flipped (and dispatch events) — no double-flip of every
+ * forced wrapper.
+ */
+export function reassertSectionFilterOnDocument(
+  article: HTMLElement,
+  relations: ReadonlyMap<string, SectionRelation>,
+): void {
+  enforceSectionFilter(article, relations);
+}
+
+/** Per-heading enforcement; idempotent, touches only state that is wrong. */
+function enforceSectionFilter(
+  article: HTMLElement,
+  relations: ReadonlyMap<string, SectionRelation>,
+  revealIds?: ReadonlySet<string>,
+): void {
   for (const [id, relation] of relations) {
     if (relation === 'descendant') continue;
     const heading = article.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`);

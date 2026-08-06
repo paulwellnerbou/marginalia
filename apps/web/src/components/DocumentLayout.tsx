@@ -72,6 +72,7 @@ import {
   applySectionFilterToDocument,
   collectBlockSectionIds,
   computeSectionRelations,
+  reassertSectionFilterOnDocument,
   threadTouchesSections,
 } from '../lib/section-filter.js';
 import {
@@ -440,9 +441,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     if (!sectionRelations) return;
     // Re-assert only when the toggled section is one the filter locks
     // (unrelated: held closed, ancestor: held open). Reader toggles
-    // inside focused sections are free and shouldn't pay the undo/
-    // re-apply pass. The event fires on the `.collapse-section`
-    // wrapper, whose previous sibling is its heading.
+    // inside focused sections are free and shouldn't pay any pass at
+    // all, and the enforce-only re-assert flips just the wrappers that
+    // drifted — no undo sweep, no event storm for other listeners.
+    // The event fires on the `.collapse-section` wrapper, whose
+    // previous sibling is its heading.
     const reassert = (event: Event) => {
       if (applying) return;
       const wrapper = event.target instanceof HTMLElement ? event.target : null;
@@ -450,7 +453,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       const relation = headingId ? sectionRelations.get(headingId) : undefined;
       if (relation !== 'unrelated' && relation !== 'ancestor') return;
       applying = true;
-      applySectionFilterToDocument(root, sectionRelations);
+      reassertSectionFilterOnDocument(root, sectionRelations);
       applying = false;
     };
     root.addEventListener('marginalia:collapse-toggle', reassert);
