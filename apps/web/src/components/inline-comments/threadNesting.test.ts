@@ -52,7 +52,14 @@ function thread(id: string, overrides: Partial<Thread> = {}): Thread {
 
 function proposal(id: string, answersId: string | null): Thread {
   return thread(id, {
-    proposal: { whole_document: false, answers_thread_id: answersId },
+    proposal: {
+      whole_document: false,
+      answers_thread_id: answersId,
+      // Nesting keys off `answers_thread_id` alone; the branch-derived
+      // text fields just have to be present.
+      proposed_text: null,
+      source_snapshot: null,
+    },
   });
 }
 
