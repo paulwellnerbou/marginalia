@@ -1,4 +1,4 @@
-import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer';
+import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer/extract-title';
 import { DownloadIcon } from '@radix-ui/react-icons';
 import { DropdownMenu, IconButton } from '@radix-ui/themes';
 import { useState } from 'react';

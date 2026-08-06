@@ -18,7 +18,6 @@ import { sanitizeSchema } from './plugins/sanitize-schema.js';
 import { rehypeShikiHighlight } from './plugins/shiki.js';
 import { remarkSlugger } from './plugins/slugger.js';
 import { remarkTocMarker } from './plugins/toc-marker.js';
-import { renderAsciidoc } from './render-asciidoc.js';
 import { buildToc } from './toc.js';
 import type {
   Anchor,
@@ -42,12 +41,18 @@ export function isDocumentFormat(v: unknown): v is DocumentFormat {
  * pipeline; both return the same RenderResult shape, so downstream
  * consumers (comment anchoring, TOC, search) don't care which path ran.
  */
-export function renderDocument(
+export async function renderDocument(
   source: string,
   format: DocumentFormat,
   options: RenderOptions = {},
 ): Promise<RenderResult> {
-  return format === 'asciidoc' ? renderAsciidoc(source, options) : render(source, options);
+  if (format === 'asciidoc') {
+    // Asciidoctor includes the sizeable Opal runtime. Keep it out of the
+    // Markdown browser bundle and load it only for documents that need it.
+    const { renderAsciidoc } = await import('./render-asciidoc.js');
+    return renderAsciidoc(source, options);
+  }
+  return render(source, options);
 }
 
 interface RenderData {

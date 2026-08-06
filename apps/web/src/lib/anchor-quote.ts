@@ -1,4 +1,4 @@
-import { SPAN_SEPARATOR } from '@marginalia/renderer';
+import { SPAN_SEPARATOR } from '@marginalia/renderer/anchor-span';
 
 function normalizeWs(s: string): string {
   return s.replace(/\s+/gu, ' ').trim();

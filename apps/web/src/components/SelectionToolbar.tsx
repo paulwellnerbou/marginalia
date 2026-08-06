@@ -1,4 +1,4 @@
-import type { BlockSourceRange } from '@marginalia/renderer';
+import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CommentAnchor, DocumentFormat } from '../lib/api.js';

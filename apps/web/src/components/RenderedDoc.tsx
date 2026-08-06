@@ -1,4 +1,5 @@
-import { type RenderResult, splitSpanQuote } from '@marginalia/renderer';
+import { splitSpanQuote } from '@marginalia/renderer/anchor-span';
+import type { RenderResult } from '@marginalia/renderer/types';
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import type { ThreadState } from '../lib/api.js';
 import { spanElements } from '../lib/block-span.js';

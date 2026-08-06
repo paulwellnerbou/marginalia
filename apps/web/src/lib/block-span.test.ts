@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { joinSpanQuote } from '@marginalia/renderer';
+import { joinSpanQuote } from '@marginalia/renderer/anchor-span';
 import { highlightRange } from './block-span.js';
 
 describe('highlightRange', () => {
