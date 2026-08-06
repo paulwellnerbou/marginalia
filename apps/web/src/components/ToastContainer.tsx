@@ -14,7 +14,11 @@ export function ToastContainer() {
   return (
     <div className="toast-stack">
       {toasts.map((t) => (
-        <div key={t.id} className="toast" role="status">
+        <div
+          key={t.id}
+          className={t.variant === 'error' ? 'toast toast-error' : 'toast'}
+          role={t.variant === 'error' ? 'alert' : 'status'}
+        >
           <div className="toast-head">
             <strong>{t.title}</strong>
             <button type="button" className="toast-close" onClick={() => dismissToast(t.id)}>

@@ -2,6 +2,16 @@ import type { Thread } from '../../lib/api.js';
 /** Duration of the ic-flash CSS keyframe in ms. Must stay in sync with `app.css`. */
 export const COMMENT_FLASH_MS = 760;
 
+/**
+ * Outcome of a thread workflow action (accept / reject / resolve /
+ * reopen / repair).
+ *
+ * The message travels back to the card rather than only to a toast so
+ * the failure stays visible next to the button that caused it — a toast
+ * is gone in seconds and says nothing about *which* proposal failed.
+ */
+export type ThreadActionResult = { ok: true } | { ok: false; message: string };
+
 export function inlineAvatarInitials(name: string): string {
   const trimmed = name.trim();
   if (!trimmed) return '?';

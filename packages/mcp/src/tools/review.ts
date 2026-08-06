@@ -565,8 +565,14 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           `/api/documents/${encodeURIComponent(ref.uid)}/threads/${encodeURIComponent(args.thread_id)}/diff`,
           { query: { mergeable: '1' } },
         );
+        // 'unavailable' would read as "applies cleanly: unavailable",
+        // which invites the reader to blame the proposal for a server fault.
+        const mergeNote =
+          diff.mergeable === 'unavailable'
+            ? 'merge check could not run — the server has no working `git`, so mergeability is unknown; nothing is wrong with the proposal'
+            : `applies cleanly: ${diff.mergeable ?? 'not evaluated'}`;
         return text(
-          `proposal ${args.thread_id} — applies cleanly: ${diff.mergeable ?? 'not evaluated'}`,
+          `proposal ${args.thread_id} — ${mergeNote}`,
           `url: ${commentUrl(ref, args.thread_id)}`,
           `diff:\n${lineDiff(diff.before, diff.after)}`,
         );

@@ -17,6 +17,12 @@ interface Props {
   loading?: boolean;
   /** Fetch failure to show in place of the diff. */
   error?: string | null;
+  /**
+   * Why the last footer action failed. Shown beside the buttons rather
+   * than in place of the diff — the dialog stays open on a failed
+   * accept, so the reason has to be readable next to what was clicked.
+   */
+  actionError?: string | null;
 }
 
 export function DiffDialog({
@@ -30,6 +36,7 @@ export function DiffDialog({
   replyComposer,
   loading = false,
   error = null,
+  actionError = null,
 }: Props) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -58,7 +65,12 @@ export function DiffDialog({
           </section>
         )}
 
-        <Flex gap="2" justify="end" mt="4" align="center">
+        <Flex gap="2" justify="end" mt="4" align="center" wrap="wrap">
+          {actionError && (
+            <Text color="red" size="1" role="alert" style={{ marginRight: 'auto' }}>
+              {actionError}
+            </Text>
+          )}
           {actions}
           <Dialog.Close>
             <Button variant="soft" color="gray">

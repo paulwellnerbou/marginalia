@@ -50,6 +50,16 @@ ENV NODE_ENV=production
 # Fixed UID/GID keeps the deploy script's host volume ownership predictable.
 RUN groupadd -g 999 marginalia && useradd -u 999 -g marginalia -s /bin/bash marginalia
 
+# Document storage is isomorphic-git, which needs no binary — but the
+# three-way merge behind accepting an edit proposal does. iso-git has no
+# recursive merge strategy, so GitStore falls back to `git merge-file`
+# (see mergeTextWithNativeGit) for criss-cross histories and overlapping
+# hunks. Without the binary that fallback fails and every such proposal
+# reports as an unresolvable conflict.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git \
+  && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # Vendor the single mermaid file we consume (~3 MB) out of the
 # builder's `node_modules` into a fixed path. At runtime, the PDF
 # exporter reads this file as text and inlines it into the export

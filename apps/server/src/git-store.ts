@@ -485,6 +485,7 @@ export class GitStore {
             await git.checkout({ fs, dir, ref: 'main', force: true });
             return { ok: true, oid };
           }
+          if (nativeMerge.reason === 'unavailable') return { ok: false, reason: 'unavailable' };
           return {
             ok: false,
             reason: 'conflict',
@@ -539,7 +540,7 @@ export class GitStore {
   async proposalMergeStatus(
     doc: DocLocator,
     proposalId: string,
-  ): Promise<'clean' | 'conflict' | 'merged' | 'absent'> {
+  ): Promise<'clean' | 'conflict' | 'merged' | 'absent' | 'unavailable'> {
     // Even with `dryRun: true`, iso-git's merge touches index/working-tree
     // state — serialize through the per-doc lock alongside writes/merges.
     return this.withLock(doc.uid, async () => {
@@ -758,8 +759,8 @@ export class GitStore {
 
       const base = await this.readAt(doc, baseOid);
       const proposed = await this.readAt(doc, tipOid);
-      const after = await mergeTextWithNativeGit(source, base, proposed);
-      return after === null ? { ok: false, reason: 'conflict' } : { ok: true, after };
+      const merged = await mergeTextWithNativeGit(source, base, proposed);
+      return merged.ok ? { ok: true, after: merged.text } : { ok: false, reason: merged.reason };
     });
   }
 
@@ -792,10 +793,10 @@ export class GitStore {
     const before = await this.readAt(doc, mainOid);
     const base = await this.readAt(doc, baseOid);
     const proposed = await this.readAt(doc, tipOid);
-    const after = await mergeTextWithNativeGit(before, base, proposed);
-    return after === null
-      ? { ok: false, reason: 'conflict' }
-      : { ok: true, before, after, mainOid, strategy: 'native-git' };
+    const merged = await mergeTextWithNativeGit(before, base, proposed);
+    return merged.ok
+      ? { ok: true, before, after: merged.text, mainOid, strategy: 'native-git' }
+      : { ok: false, reason: merged.reason };
   }
 }
 
@@ -815,7 +816,7 @@ export type MergeProposalResult =
         deleteByTheirs: string[];
       };
     }
-  | { ok: false; reason: 'absent' };
+  | { ok: false; reason: 'absent' | 'unavailable' };
 
 export type PreviewProposalMergeResult =
   | {
@@ -825,11 +826,11 @@ export type PreviewProposalMergeResult =
       mainOid: string;
       strategy: 'isomorphic-git' | 'native-git';
     }
-  | { ok: false; reason: 'conflict' | 'absent' | 'merged' };
+  | { ok: false; reason: 'conflict' | 'absent' | 'merged' | 'unavailable' };
 
 export type PreviewProposalMergeIntoSourceResult =
   | { ok: true; after: string }
-  | { ok: false; reason: 'conflict' | 'absent' };
+  | { ok: false; reason: 'conflict' | 'absent' | 'unavailable' };
 
 export type RewriteProposalBranchResult =
   | { ok: true; commitOid: string; baseOid: string; backupRef: string }
@@ -840,11 +841,32 @@ export interface ProposalRepairBranchResult {
   rewrite: RewriteProposalBranchResult | null;
 }
 
+export type NativeMergeResult =
+  | { ok: true; text: string }
+  | { ok: false; reason: 'conflict' | 'unavailable' };
+
+/**
+ * Only warn once per process. A missing `git` makes every proposal in
+ * every document take this path, and one line per accept attempt would
+ * bury the signal it exists to give.
+ */
+let warnedMergeToolUnavailable = false;
+
+/**
+ * Three-way merge via `git merge-file`, the fallback for everything
+ * iso-git's merge can't do.
+ *
+ * `unavailable` (the binary is missing, unrunnable, or its output blew
+ * the buffer) is kept apart from `conflict` because the two mean
+ * opposite things to a user: a conflict is theirs to resolve, an
+ * unavailable merge tool is the deployment's. Collapsing them makes a
+ * server without git report every non-trivial proposal as unresolvable.
+ */
 async function mergeTextWithNativeGit(
   ours: string,
   base: string,
   theirs: string,
-): Promise<string | null> {
+): Promise<NativeMergeResult> {
   const dir = mkdtempSync(join(tmpdir(), 'marginalia-merge-'));
   try {
     const oursPath = join(dir, 'ours');
@@ -861,10 +883,26 @@ async function mergeTextWithNativeGit(
         maxBuffer: 50 * 1024 * 1024,
       },
     );
-    if (hasConflictMarkers(stdout)) return null;
-    return stdout;
-  } catch {
-    return null;
+    if (hasConflictMarkers(stdout)) return { ok: false, reason: 'conflict' };
+    return { ok: true, text: stdout };
+  } catch (err) {
+    // merge-file exits with the number of conflicts, capped at 127; a
+    // negative status (255 here) or a non-numeric code means it failed
+    // to run at all rather than finding conflicting hunks.
+    const code = (err as { code?: string | number }).code;
+    if (typeof code === 'number' && code >= 1 && code <= 127) {
+      return { ok: false, reason: 'conflict' };
+    }
+    if (!warnedMergeToolUnavailable) {
+      warnedMergeToolUnavailable = true;
+      // Message only — a spawn failure's stack points at node internals
+      // and buries the one line that says what to fix.
+      console.error(
+        '[marginalia] `git merge-file` is unavailable, so proposals needing a three-way merge cannot be accepted. Install git in the runtime image. Cause:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+    return { ok: false, reason: 'unavailable' };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

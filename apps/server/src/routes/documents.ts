@@ -767,7 +767,10 @@ async function loadReviewThreadsForExport(
 interface AcceptedProposalsSourceResult {
   source: string;
   appliedCount: number;
-  skipped: Array<{ id: string; reason: 'proposal-conflict' | 'proposal-orphaned' }>;
+  skipped: Array<{
+    id: string;
+    reason: 'proposal-conflict' | 'proposal-orphaned' | 'proposal-merge-unavailable';
+  }>;
 }
 
 async function sourceWithAcceptedProposals(
@@ -797,7 +800,12 @@ async function sourceWithAcceptedProposals(
     if (!merge.ok) {
       skipped.push({
         id: row.id,
-        reason: merge.reason === 'conflict' ? 'proposal-conflict' : 'proposal-orphaned',
+        reason:
+          merge.reason === 'conflict'
+            ? 'proposal-conflict'
+            : merge.reason === 'unavailable'
+              ? 'proposal-merge-unavailable'
+              : 'proposal-orphaned',
       });
       continue;
     }

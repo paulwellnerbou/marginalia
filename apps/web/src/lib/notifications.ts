@@ -27,6 +27,8 @@ export interface Toast {
   id: number;
   title: string;
   body: string;
+  /** `'error'` gets the red accent and an assertive live region. */
+  variant?: 'info' | 'error';
   action?: { label: string; onClick: () => void };
 }
 
@@ -45,6 +47,11 @@ export function onToasts(fn: ToastListener): () => void {
 
 function emit() {
   for (const fn of listeners) fn(toasts);
+}
+
+/** Errors linger: they carry instructions, not just an FYI. */
+export function showErrorToast(title: string, body: string): void {
+  showToast({ title, body, variant: 'error' }, 12000);
 }
 
 export function showToast(partial: Omit<Toast, 'id'>, ttlMs = 6000): void {

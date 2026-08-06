@@ -123,7 +123,8 @@ export interface ProposalDiffWire {
   before: string;
   after: string;
   original: { before: string; after: string } | null;
-  mergeable: 'clean' | 'conflict' | 'stale' | null;
+  /** `'unavailable'` = the server could not run the merge at all. */
+  mergeable: 'clean' | 'conflict' | 'stale' | 'unavailable' | null;
 }
 
 export interface InviteWire {

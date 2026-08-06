@@ -25,7 +25,7 @@ import {
 } from '../threadCollapseState.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
-import { threadLinks, threadsById } from './inlineUtils.js';
+import { type ThreadActionResult, threadLinks, threadsById } from './inlineUtils.js';
 import {
   ALL_THREAD_FILTERS,
   activeThreadFilterLabels,
@@ -77,8 +77,8 @@ interface Props {
     kind: 'resolve' | 'reopen' | 'accept' | 'reject',
     body?: string,
     name?: string,
-  ) => Promise<boolean>;
-  onRepairThread: (id: string) => Promise<boolean>;
+  ) => Promise<ThreadActionResult>;
+  onRepairThread: (id: string) => Promise<ThreadActionResult>;
   onReact: (commentId: string, emoji: string) => Promise<void>;
   onEditProposal?: ((thread: Thread) => void) | undefined;
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;

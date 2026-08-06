@@ -14,6 +14,7 @@ import { reportError } from '../../lib/log.js';
 import { DiffDialog } from '../DiffDialog.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
 import { InlineComposer, type InlineComposerHandle } from './InlineComposer.js';
+import type { ThreadActionResult } from './inlineUtils.js';
 import type { ThreadRefApi } from './threadRefs.js';
 
 /**
@@ -64,8 +65,8 @@ interface Props {
     kind: 'resolve' | 'reopen' | 'accept' | 'reject',
     body?: string,
     name?: string,
-  ) => Promise<boolean>;
-  onRepairThread: (id: string) => Promise<boolean>;
+  ) => Promise<ThreadActionResult>;
+  onRepairThread: (id: string) => Promise<ThreadActionResult>;
   onReact: (commentId: string, emoji: string) => Promise<void>;
   /** Open the edit-proposal dialog for this thread; absent hides the button. */
   onEditProposal?: ((thread: Thread) => void) | undefined;
@@ -152,6 +153,10 @@ export function InlineThreadCard({
   const [busy, setBusy] = useState<{ kind: WorkflowKind; source: WorkflowSource } | null>(null);
   const isRunning = (kind: WorkflowKind, source: WorkflowSource) =>
     busy !== null && busy.kind === kind && busy.source === source;
+  // Why the last accept/reject/resolve/repair from this card failed.
+  // The toast says the same thing but expires and doesn't name a thread;
+  // this keeps the reason attached to the proposal it belongs to.
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const [diffOpen, setDiffOpen] = useState(false);
   const [resolvedDiff, setResolvedDiff] = useState<ProposalDiff | null>(null);
@@ -312,7 +317,9 @@ export function InlineThreadCard({
     if (busy) return false;
     setBusy({ kind, source });
     try {
-      return await onResolveThread(thread.id, kind, body, name);
+      const result = await onResolveThread(thread.id, kind, body, name);
+      setActionError(result.ok ? null : result.message);
+      return result.ok;
     } finally {
       setBusy(null);
     }
@@ -322,9 +329,9 @@ export function InlineThreadCard({
     if (busy) return;
     setBusy({ kind: 'repair', source: 'header' });
     try {
-      if (await onRepairThread(thread.id)) {
-        setResolvedDiff(null);
-      }
+      const result = await onRepairThread(thread.id);
+      setActionError(result.ok ? null : result.message);
+      if (result.ok) setResolvedDiff(null);
     } finally {
       setBusy(null);
     }
@@ -430,6 +437,11 @@ export function InlineThreadCard({
           )}
         </div>
         {diffError && <span className="ic-error">{diffError}</span>}
+        {actionError && (
+          <span className="ic-error" role="alert">
+            {actionError}
+          </span>
+        )}
         {!nested && links.answers && (
           <ThreadLink
             target={links.answers}
@@ -694,6 +706,7 @@ export function InlineThreadCard({
           contextLines={3}
           loading={loadingDiff}
           error={diffError}
+          actionError={actionError}
           replyComposer={
             canComment ? (
               <InlineComposer

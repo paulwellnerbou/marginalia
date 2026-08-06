@@ -287,6 +287,12 @@ function describeApiError(status: number, code: string, ref: DocumentRef): strin
         'The document changed underneath this proposal. If it is yours, refresh it with ' +
         'update_proposal using text based on the current source; otherwise re-create it.'
       );
+    case 'proposal-merge-unavailable':
+      return (
+        'The server could not run a three-way merge (its `git` binary is missing or broken). ' +
+        'This is a server misconfiguration, not a problem with the proposal — report it to the ' +
+        'operator and retry afterwards.'
+      );
     case 'proposal-update-unavailable':
       return 'This proposal predates branch storage and cannot be updated in place. Re-create it against the current source.';
     case 'proposal-storage-unavailable':

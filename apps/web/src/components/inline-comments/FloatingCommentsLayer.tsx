@@ -15,7 +15,12 @@ import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { computeFloatingCardPosition } from './floatingCardPosition.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
-import { COMMENT_FLASH_MS, threadLinks, threadsById } from './inlineUtils.js';
+import {
+  COMMENT_FLASH_MS,
+  type ThreadActionResult,
+  threadLinks,
+  threadsById,
+} from './inlineUtils.js';
 import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
@@ -46,8 +51,8 @@ interface Props {
     kind: 'resolve' | 'reopen' | 'accept' | 'reject',
     body?: string,
     name?: string,
-  ) => Promise<boolean>;
-  onRepairThread: (id: string) => Promise<boolean>;
+  ) => Promise<ThreadActionResult>;
+  onRepairThread: (id: string) => Promise<ThreadActionResult>;
   onReact: (commentId: string, emoji: string) => Promise<void>;
   onEditProposal?: ((thread: Thread) => void) | undefined;
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
