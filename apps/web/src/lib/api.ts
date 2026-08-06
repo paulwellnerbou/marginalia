@@ -181,10 +181,11 @@ export interface HistoryDiff {
  *   - the caller opted in but lacks propose permission — readers can't
  *     force the dry-run merge by spamming the query parameter
  *
- * A non-null value only ever appears for open, acceptable proposals
- * where the server actually ran the dry-run merge. `'unavailable'`
- * means the server could not run the merge at all (no `git` binary) —
- * a deployment fault, not a property of the proposal.
+ * A non-null value only ever appears for open, acceptable proposals —
+ * the ones where the server attempted the mergeability check. The
+ * attempt can still come back without an answer: `'unavailable'` means
+ * the check itself could not run (no `git` binary), which is a
+ * deployment fault rather than a property of the proposal.
  */
 export interface ProposalDiff extends HistoryDiff {
   mergeable: 'clean' | 'conflict' | 'stale' | 'unavailable' | null;
