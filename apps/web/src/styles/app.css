@@ -2720,6 +2720,10 @@ button.primary:disabled {
   z-index: 2;
 }
 
+.diff-dialog-reply {
+  margin-top: 1rem;
+}
+
 /* ============================================================
  * Inline comments column (lives in .doc-row, scrolls with the document)
  * Fresh layout — does not share classes with .anchor-group / .comment.
