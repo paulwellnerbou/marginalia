@@ -619,12 +619,6 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const parsedUpdate = asProposalUpdate(body.proposal);
   if (!parsedUpdate.ok) return c.json({ error: parsedUpdate.error }, 400);
   const proposalUpdate = parsedUpdate.update;
-  // Admins may revise somebody else's proposal, but the original
-  // rationale/opener remains the author's own words. An admin revision
-  // note belongs in `comment`, where it is attributed to the admin.
-  if (!isAuthor && (!proposalUpdate || next.body !== undefined)) {
-    return c.json({ error: 'forbidden' }, 403);
-  }
   const parsedComment = parseOptionalBody(body.comment);
   if (!parsedComment.ok) return c.json({ error: 'invalid-body' }, 400);
   const revisionComment = parsedComment.body;
@@ -634,6 +628,12 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
     return c.json({ error: 'comment-requires-proposal' }, 400);
   }
   if (next.body === undefined && !proposalUpdate) return c.json({ error: 'body-required' }, 400);
+  // Admins may revise somebody else's proposal, but the original
+  // rationale/opener remains the author's own words. An admin revision
+  // note belongs in `comment`, where it is attributed to the admin.
+  // Keep this after the shared payload validation above so malformed
+  // requests have the same error semantics for authors and admins.
+  if (!isAuthor && next.body !== undefined) return c.json({ error: 'forbidden' }, 403);
 
   let branchUpdate: { baseOid: string; rangeStart: number; rangeEnd: number } | null = null;
   // The old tip's full source, so a failed DB write can put the branch

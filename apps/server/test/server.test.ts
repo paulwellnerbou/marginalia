@@ -1667,6 +1667,22 @@ describe('documents API', () => {
     );
     expect(adminRationaleEdit.status).toBe(403);
 
+    // Payload validation stays role-independent: malformed admin
+    // revisions reach the same dedicated errors as author requests.
+    const adminCommentWithoutProposal = await patchThread(
+      created,
+      threadId,
+      { comment: 'orphan note' },
+      CLIENT_B,
+    );
+    expect(adminCommentWithoutProposal.status).toBe(400);
+    expect(await adminCommentWithoutProposal.json()).toEqual({
+      error: 'comment-requires-proposal',
+    });
+    const emptyAdminUpdate = await patchThread(created, threadId, {}, CLIENT_B);
+    expect(emptyAdminUpdate.status).toBe(400);
+    expect(await emptyAdminUpdate.json()).toEqual({ error: 'body-required' });
+
     const nonObject = await patchThread(created, threadId, { proposal: 'x' });
     expect(nonObject.status).toBe(400);
     expect(await nonObject.json()).toEqual({ error: 'proposal-text-required' });
