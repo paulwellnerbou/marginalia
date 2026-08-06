@@ -149,6 +149,10 @@ export function InlineThreadCard({
   // stale. Dropping the cache is enough: the fetch effect below refills
   // it while the dialog is open, so an open dialog re-renders the
   // revised change in place instead of snapping shut.
+  //
+  // Dropped during render rather than from an effect, same as the reset
+  // in ThreadComposer: an effect would commit one frame carrying the
+  // superseded diff, showing the author the version they just replaced.
   const currentProposedText = thread.proposal?.proposed_text ?? null;
   const [trackedProposedText, setTrackedProposedText] = useState(currentProposedText);
   if (trackedProposedText !== currentProposedText) {
