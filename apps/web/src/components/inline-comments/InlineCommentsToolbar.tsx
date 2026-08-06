@@ -173,9 +173,12 @@ export function InlineCommentsToolbar({
             <DropdownMenu.CheckboxItem checked={stackingEnabled} onCheckedChange={onToggleStacking}>
               Stack comments at top
             </DropdownMenu.CheckboxItem>
-            <DropdownMenu.CheckboxItem checked={false} onCheckedChange={onSwitchToFloating}>
+            {/* One-shot mode switch, not a checkbox: this toolbar only
+                exists in column mode, so a checked state could never
+                render. */}
+            <DropdownMenu.Item onSelect={onSwitchToFloating}>
               Float comments over text
-            </DropdownMenu.CheckboxItem>
+            </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Root>
       </div>

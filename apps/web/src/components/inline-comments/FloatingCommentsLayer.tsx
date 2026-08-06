@@ -346,23 +346,37 @@ export function FloatingCommentsLayer({
   }, [pos, cardEl]);
 
   // Move focus into the popover when a thread opens (the pending
-  // composer autofocuses itself), and hand it back to the thread's
-  // highlight when the popover goes away — otherwise keyboard users
-  // are dropped to <body>.
+  // composer autofocuses itself). Waits for a measured position: the
+  // card is visibility:hidden until then, and hidden elements silently
+  // refuse focus. The ref keeps later repositions from re-stealing it.
+  const focusedForOpenId = useRef<string | null>(null);
   useEffect(() => {
-    if (!openId || openId === PENDING_ID || !cardEl) return;
+    if (!openId || openId === PENDING_ID || !cardEl || !pos) return;
+    if (focusedForOpenId.current === openId) return;
+    focusedForOpenId.current = openId;
     if (!cardEl.contains(document.activeElement)) {
       cardEl.focus({ preventScroll: true });
     }
+  }, [openId, cardEl, pos]);
+
+  // Hand focus back to the thread's highlight when the popover goes
+  // away — otherwise keyboard users are dropped to <body>.
+  useEffect(() => {
+    if (!openId || openId === PENDING_ID || !cardEl) return;
     const threadId = openId;
     return () => {
+      if (focusedForOpenId.current === threadId) focusedForOpenId.current = null;
       const active = document.activeElement;
       const focusWasInside = active === document.body || (active && cardEl.contains(active));
       if (!focusWasInside) return;
       const mark = docElementRef.current?.querySelector<HTMLElement>(
         `[data-comment-thread-id="${CSS.escape(threadId)}"]`,
       );
-      mark?.focus({ preventScroll: true });
+      if (!mark) return;
+      // Resolved-thread highlights are painted without tabindex/role, so
+      // focus() on them would silently no-op and strand focus on <body>.
+      if (!mark.hasAttribute('tabindex')) mark.setAttribute('tabindex', '-1');
+      mark.focus({ preventScroll: true });
     };
   }, [openId, cardEl, docElementRef]);
 

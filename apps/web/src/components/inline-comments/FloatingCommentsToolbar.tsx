@@ -128,9 +128,12 @@ export function FloatingCommentsToolbar({
             >
               Show resolved
             </DropdownMenu.CheckboxItem>
-            <DropdownMenu.CheckboxItem checked onCheckedChange={onSwitchToColumn}>
-              Float comments over text
-            </DropdownMenu.CheckboxItem>
+            {/* One-shot mode switch, not a checkbox: this pill only
+                exists in floating mode, so an unchecked state could
+                never render. */}
+            <DropdownMenu.Item onSelect={onSwitchToColumn}>
+              Show comments in a column
+            </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Root>
       </div>
