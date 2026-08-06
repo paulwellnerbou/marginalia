@@ -10,7 +10,7 @@ import {
   useState,
 } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
-import { resolveAnchorElement } from '../../lib/anchor-target.js';
+import { resolveAnchorElement, resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { computeFloatingCardPosition } from './floatingCardPosition.js';
 import { InlineComposer } from './InlineComposer.js';
@@ -225,13 +225,15 @@ export function FloatingCommentsLayer({
       }
       return null;
     }
-    const highlight = doc.querySelector<HTMLElement>(
-      `[data-comment-thread-id="${CSS.escape(openId)}"]`,
-    );
-    if (highlight) return highlight;
+    // A thread quoting the same range as another merges into that
+    // range's mark, which carries only one thread id on the singular
+    // attribute — an exact match here would miss every other thread in
+    // the merge and fall through to the coarse block-level anchor.
+    // `resolveThreadScrollTarget` checks the mark's full id list instead,
+    // so this always agrees with where the jump itself landed.
     const thread = byId.get(openId);
     if (thread?.anchor.block_id) {
-      return resolveAnchorElement(doc, thread.anchor.block_id, thread.anchor.quote);
+      return resolveThreadScrollTarget(doc, thread.anchor.block_id, thread.anchor.quote, openId);
     }
     return null;
   }, [docElementRef, openId, pendingAnchor, byId]);
@@ -394,16 +396,19 @@ export function FloatingCommentsLayer({
       const active = document.activeElement;
       const focusWasInside = active === document.body || (active && cardEl.contains(active));
       if (!focusWasInside) return;
-      const mark = docElementRef.current?.querySelector<HTMLElement>(
-        `[data-comment-thread-id="${CSS.escape(threadId)}"]`,
-      );
+      const doc = docElementRef.current;
+      const thread = byId.get(threadId);
+      const mark =
+        doc && thread?.anchor.block_id
+          ? resolveThreadScrollTarget(doc, thread.anchor.block_id, thread.anchor.quote, threadId)
+          : null;
       if (!mark) return;
       // Resolved-thread highlights are painted without tabindex/role, so
       // focus() on them would silently no-op and strand focus on <body>.
       if (!mark.hasAttribute('tabindex')) mark.setAttribute('tabindex', '-1');
       mark.focus({ preventScroll: true });
     };
-  }, [openId, cardEl, docElementRef]);
+  }, [openId, cardEl, docElementRef, byId]);
 
   // Tap-to-dismiss: a *tap* on the document text (not a scroll gesture,
   // not a drag, not a highlight — highlights re-target the popover via

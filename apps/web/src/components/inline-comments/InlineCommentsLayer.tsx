@@ -10,7 +10,7 @@ import {
   useState,
 } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
-import { resolveAnchorElement } from '../../lib/anchor-target.js';
+import { resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import {
@@ -474,7 +474,12 @@ export function InlineCommentsLayer({
       const cardHeight = cardHeights.current.get(item.id) ?? 96;
       let nat: number | null = null;
       if (item.blockId) {
-        const el = resolveAnchorElement(doc, item.blockId, item.quote);
+        // Resolved the same way a jump to this thread resolves its
+        // target: a quote starting partway down a long paragraph sits
+        // well below the block's top, and anchoring the card to the
+        // block instead would leave it that far above the highlight the
+        // jump just parked at the top edge — clipped by the toolbar.
+        const el = resolveThreadScrollTarget(doc, item.blockId, item.quote, item.id);
         if (el) {
           nat = el.getBoundingClientRect().top - scrollRect.top + scrollTop;
         }
