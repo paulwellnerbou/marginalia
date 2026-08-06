@@ -2827,6 +2827,81 @@ describe('documents API', () => {
     expect(buf.equals(buf2)).toBe(false);
   });
 
+  test('GET /:uid/export.chapters.zip returns numbered, lossless Markdown chapters', async () => {
+    const source =
+      '# The Salt Road\n\nIntroduction.\n\n## Departure\n\nFirst.\n\n## The Dunes\n\nSecond.\n';
+    const created = await upload(CLIENT_A, { markdown: source, name: 'Salt Road' });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.chapters.zip`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/zip');
+    expect(res.headers.get('content-disposition')).toContain('Salt_Road-chapters.zip');
+
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    const names = Object.keys(zip.files).sort();
+    expect(names).toEqual(['Salt_Road-chapter-001.md', 'Salt_Road-chapter-002.md']);
+    const chapterOne = await zip.file(names[0]!)!.async('string');
+    const chapterTwo = await zip.file(names[1]!)!.async('string');
+    expect(chapterOne).toContain('# The Salt Road');
+    expect(chapterOne).toContain('## Departure');
+    expect(chapterTwo).toStartWith('## The Dunes');
+    expect(chapterOne + chapterTwo).toBe(source);
+  });
+
+  test('POST /:uid/export.epub creates chapters and a title-generated cover', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# The Salt Road\n\n## Departure\n\nFirst.\n\n## The Dunes\n\nSecond.\n',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/epub+zip');
+    expect(res.headers.get('content-disposition')).toContain('The_Salt_Road.epub');
+
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    expect(await zip.file('mimetype')!.async('string')).toBe('application/epub+zip');
+    expect(zip.file('META-INF/container.xml')).not.toBeNull();
+    expect(zip.file('EPUB/images/cover.svg')).not.toBeNull();
+    expect(zip.file('EPUB/chapter-001.xhtml')).not.toBeNull();
+    expect(zip.file('EPUB/chapter-002.xhtml')).not.toBeNull();
+    const packageXml = await zip.file('EPUB/package.opf')!.async('string');
+    expect(packageXml).toContain('properties="cover-image"');
+    expect(packageXml).toContain('<dc:title>The Salt Road</dc:title>');
+  });
+
+  test('POST /:uid/export.epub embeds an uploaded raster cover', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Covered Book\n\nBody.\n' });
+    const png = Uint8Array.from(
+      atob(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
+      ),
+      (char) => char.charCodeAt(0),
+    );
+    const form = new FormData();
+    form.append('cover', new Blob([png], { type: 'image/png' }), 'cover.png');
+    const headers = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    headers.delete('content-type');
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+        method: 'POST',
+        headers,
+        body: form,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    const exported = await zip.file('EPUB/images/cover.png')!.async('uint8array');
+    expect(exported).toEqual(png);
+    expect(zip.file('EPUB/images/cover.svg')).toBeNull();
+  });
+
   test('GET /:uid/export.docx filename derives from the document title when name is unset', async () => {
     // No explicit `name` on upload → server should fall back to the
     // H1 as the filename (not the opaque uid).
@@ -3230,6 +3305,34 @@ describe('documents API', () => {
     const documentXml = await zip.file('word/document.xml')!.async('string');
     expect(documentXml).toContain('Alpha accepted.');
     expect(documentXml).toContain('Beta accepted.');
+
+    const chaptersRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.accepted.chapters.zip`, {
+        headers: adminHeaders,
+      }),
+    );
+    expect(chaptersRes.status).toBe(200);
+    expect(chaptersRes.headers.get('x-marginalia-proposals-applied')).toBe('2');
+    const chaptersZip = await JSZip.loadAsync(Buffer.from(await chaptersRes.arrayBuffer()));
+    const chapterSource = await chaptersZip.file('Proposal_Doc-chapter-001.md')!.async('string');
+    expect(chapterSource).toContain('Alpha accepted.');
+    expect(chapterSource).toContain('Beta accepted.');
+
+    const epubRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.accepted.epub`, {
+        method: 'POST',
+        headers: adminHeaders,
+      }),
+    );
+    expect(epubRes.status).toBe(200);
+    expect(epubRes.headers.get('x-marginalia-proposals-applied')).toBe('2');
+    expect(epubRes.headers.get('content-disposition')).toContain(
+      'Proposal_Doc-proposals-accepted.epub',
+    );
+    const epubZip = await JSZip.loadAsync(Buffer.from(await epubRes.arrayBuffer()));
+    const epubChapter = await epubZip.file('EPUB/chapter-001.xhtml')!.async('string');
+    expect(epubChapter).toContain('Alpha accepted.');
+    expect(epubChapter).toContain('Beta accepted.');
 
     const afterRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}`, { headers: adminHeaders }),

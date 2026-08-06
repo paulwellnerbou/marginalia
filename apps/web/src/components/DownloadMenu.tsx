@@ -1,12 +1,14 @@
 import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer';
 import { DownloadIcon } from '@radix-ui/react-icons';
-import { DropdownMenu, IconButton } from '@radix-ui/themes';
+import { Button, Callout, Dialog, DropdownMenu, Flex, IconButton, Text } from '@radix-ui/themes';
 import { useState } from 'react';
 import type { Document } from '../lib/api.js';
 import {
   ApiError,
   downloadDocumentDocx,
   downloadDocumentDocxWithAcceptedProposals,
+  downloadDocumentEpub,
+  downloadDocumentMarkdownChapters,
   downloadDocumentPdf,
   downloadDocumentSourceWithAcceptedProposals,
 } from '../lib/api.js';
@@ -49,8 +51,19 @@ export function DownloadMenu({
   reviewExportEnabled?: boolean;
 }) {
   const [busy, setBusy] = useState<
-    null | 'source' | 'accepted-source' | 'docx' | 'accepted-docx' | 'pdf'
+    | null
+    | 'source'
+    | 'accepted-source'
+    | 'chapters'
+    | 'accepted-chapters'
+    | 'docx'
+    | 'accepted-docx'
+    | 'epub'
+    | 'pdf'
   >(null);
+  const [epubMode, setEpubMode] = useState<null | 'current' | 'accepted'>(null);
+  const [cover, setCover] = useState<File | null>(null);
+  const [epubError, setEpubError] = useState<string | null>(null);
 
   const sourceExt = doc.format === 'asciidoc' ? 'adoc' : 'md';
   const sourceLabel = doc.format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source';
@@ -147,6 +160,64 @@ export function DownloadMenu({
     }
   }
 
+  async function downloadChapters(acceptedProposals: boolean): Promise<void> {
+    setBusy(acceptedProposals ? 'accepted-chapters' : 'chapters');
+    try {
+      const { blob, filename, skippedProposals } = await downloadDocumentMarkdownChapters(
+        doc.uid,
+        acceptedProposals,
+      );
+      downloadBlob(blob, filename);
+      if (skippedProposals > 0) showSkippedToast(skippedProposals, 'chapter archive');
+    } catch (err) {
+      reportError('DownloadMenu.chapters', err, { uid: doc.uid, acceptedProposals });
+      showToast({ title: 'Chapter export failed', body: 'Try again in a moment.' });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function openEpubDialog(mode: 'current' | 'accepted'): void {
+    setCover(null);
+    setEpubError(null);
+    setEpubMode(mode);
+  }
+
+  function closeEpubDialog(): void {
+    if (busy === 'epub') return;
+    setEpubMode(null);
+    setCover(null);
+    setEpubError(null);
+  }
+
+  async function downloadEpub(): Promise<void> {
+    if (!epubMode) return;
+    const acceptedProposals = epubMode === 'accepted';
+    setBusy('epub');
+    setEpubError(null);
+    try {
+      const { blob, filename, skippedProposals } = await downloadDocumentEpub(doc.uid, {
+        acceptedProposals,
+        cover,
+      });
+      downloadBlob(blob, filename);
+      setEpubMode(null);
+      setCover(null);
+      if (skippedProposals > 0) showSkippedToast(skippedProposals, 'EPUB');
+    } catch (err) {
+      reportError('DownloadMenu.epub', err, { uid: doc.uid, acceptedProposals });
+      if (err instanceof ApiError && err.code === 'cover-too-large') {
+        setEpubError('The cover image must be 10 MB or smaller.');
+      } else if (err instanceof ApiError && err.code === 'unsupported-cover-image') {
+        setEpubError('Use a PNG, JPEG, GIF, or WebP cover image.');
+      } else {
+        setEpubError('Could not create the EPUB. Try again in a moment.');
+      }
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function downloadPdf(): Promise<void> {
     setBusy('pdf');
     try {
@@ -187,51 +258,130 @@ export function DownloadMenu({
   }
 
   return (
-    <DropdownMenu.Root>
-      {/* Radix Tooltip wraps would break the DropdownMenu.Trigger, so
+    <>
+      <DropdownMenu.Root>
+        {/* Radix Tooltip wraps would break the DropdownMenu.Trigger, so
           fall back to the plain HTML `title` attribute on the icon. */}
-      <DropdownMenu.Trigger>
-        <IconButton
-          variant="soft"
-          size="2"
-          aria-label="Download document"
-          title="Download document"
-          disabled={busy !== null}
-        >
-          <DownloadIcon />
-        </IconButton>
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Content align="end">
-        <DropdownMenu.Item onSelect={downloadSource} disabled={busy !== null}>
-          {sourceLabel} (.{sourceExt})
-        </DropdownMenu.Item>
-        <DropdownMenu.Item onSelect={downloadAcceptedSource} disabled={busy !== null}>
-          {acceptedSourceLabel} (.{sourceExt})
-        </DropdownMenu.Item>
-        {/* Word entries grouped between separators so the toolbar
-            visually pairs them as one feature. */}
-        <DropdownMenu.Separator />
-        <DropdownMenu.Item onSelect={() => downloadDocx(false)} disabled={busy !== null}>
-          Word document (.docx)
-        </DropdownMenu.Item>
-        <DropdownMenu.Item onSelect={downloadAcceptedDocx} disabled={busy !== null}>
-          Word document with proposals accepted
-        </DropdownMenu.Item>
-        {reviewExportEnabled && (
-          <DropdownMenu.Item onSelect={() => downloadDocx(true)} disabled={busy !== null}>
-            Word document with comments &amp; change proposals
+        <DropdownMenu.Trigger>
+          <IconButton
+            variant="soft"
+            size="2"
+            aria-label="Download document"
+            title="Download document"
+            disabled={busy !== null}
+          >
+            <DownloadIcon />
+          </IconButton>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Content align="end">
+          <DropdownMenu.Item onSelect={downloadSource} disabled={busy !== null}>
+            {sourceLabel} (.{sourceExt})
           </DropdownMenu.Item>
-        )}
-        <DropdownMenu.Separator />
-        <DropdownMenu.Item onSelect={downloadPdf} disabled={busy !== null}>
-          PDF document (.pdf)
-        </DropdownMenu.Item>
-        {doc.mermaid_renderer === 'chromium' && (
-          <DropdownMenu.Label>Diagrams: Chromium (high fidelity, slower)</DropdownMenu.Label>
-        )}
-      </DropdownMenu.Content>
-    </DropdownMenu.Root>
+          <DropdownMenu.Item onSelect={downloadAcceptedSource} disabled={busy !== null}>
+            {acceptedSourceLabel} (.{sourceExt})
+          </DropdownMenu.Item>
+          {doc.format === 'markdown' && (
+            <>
+              <DropdownMenu.Item onSelect={() => downloadChapters(false)} disabled={busy !== null}>
+                Markdown chapters (.zip)
+              </DropdownMenu.Item>
+              <DropdownMenu.Item onSelect={() => downloadChapters(true)} disabled={busy !== null}>
+                Markdown chapters with proposals accepted
+              </DropdownMenu.Item>
+            </>
+          )}
+          {/* Word entries grouped between separators so the toolbar
+            visually pairs them as one feature. */}
+          <DropdownMenu.Separator />
+          <DropdownMenu.Item onSelect={() => downloadDocx(false)} disabled={busy !== null}>
+            Word document (.docx)
+          </DropdownMenu.Item>
+          <DropdownMenu.Item onSelect={downloadAcceptedDocx} disabled={busy !== null}>
+            Word document with proposals accepted
+          </DropdownMenu.Item>
+          {reviewExportEnabled && (
+            <DropdownMenu.Item onSelect={() => downloadDocx(true)} disabled={busy !== null}>
+              Word document with comments &amp; change proposals
+            </DropdownMenu.Item>
+          )}
+          <DropdownMenu.Separator />
+          <DropdownMenu.Item onSelect={() => openEpubDialog('current')} disabled={busy !== null}>
+            EPUB book (.epub)
+          </DropdownMenu.Item>
+          <DropdownMenu.Item onSelect={() => openEpubDialog('accepted')} disabled={busy !== null}>
+            EPUB book with proposals accepted
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator />
+          <DropdownMenu.Item onSelect={downloadPdf} disabled={busy !== null}>
+            PDF document (.pdf)
+          </DropdownMenu.Item>
+          {doc.mermaid_renderer === 'chromium' && (
+            <DropdownMenu.Label>Diagrams: Chromium (high fidelity, slower)</DropdownMenu.Label>
+          )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Root>
+
+      <Dialog.Root open={epubMode !== null} onOpenChange={(open) => !open && closeEpubDialog()}>
+        <Dialog.Content size="2" maxWidth="520px">
+          <Dialog.Title>Download EPUB</Dialog.Title>
+          <Dialog.Description size="2" color="gray" mb="4">
+            {epubMode === 'accepted'
+              ? 'Open edit proposals will be applied to a temporary export copy.'
+              : 'The EPUB will use the current document text.'}
+          </Dialog.Description>
+          <Flex direction="column" gap="3">
+            <Flex direction="column" gap="1">
+              <Text as="label" size="2" weight="medium" htmlFor="epub-cover-upload">
+                Cover image (optional)
+              </Text>
+              <Text size="1" color="gray">
+                Upload PNG, JPEG, GIF, or WebP, up to 10 MB. If omitted, a cover is generated from
+                the document title.
+              </Text>
+              <input
+                id="epub-cover-upload"
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                disabled={busy === 'epub'}
+                onChange={(event) => setCover(event.target.files?.[0] ?? null)}
+              />
+              {cover && (
+                <Text size="1" color="gray">
+                  Selected: {cover.name}
+                </Text>
+              )}
+            </Flex>
+            {epubError && (
+              <Callout.Root color="red" size="1">
+                <Callout.Text>{epubError}</Callout.Text>
+              </Callout.Root>
+            )}
+            <Flex justify="end" gap="2">
+              <Button
+                type="button"
+                variant="soft"
+                color="gray"
+                onClick={closeEpubDialog}
+                disabled={busy === 'epub'}
+              >
+                Cancel
+              </Button>
+              <Button type="button" onClick={() => void downloadEpub()} disabled={busy === 'epub'}>
+                {busy === 'epub' ? 'Creating EPUB…' : 'Download EPUB'}
+              </Button>
+            </Flex>
+          </Flex>
+        </Dialog.Content>
+      </Dialog.Root>
+    </>
   );
+}
+
+function showSkippedToast(count: number, exportName: string): void {
+  showToast({
+    title: `Partial ${exportName}`,
+    body: `${count} proposal${count === 1 ? '' : 's'} could not be applied cleanly.`,
+  });
 }
 
 function resolveTitle(doc: Document, source: string): string | null {

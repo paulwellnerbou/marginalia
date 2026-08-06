@@ -15,6 +15,8 @@ export type {
 } from './export-docx.js';
 export { exportDocx } from './export-docx.js';
 export { extractDocumentTitle, sanitizeDocumentFilename } from './extract-title.js';
+export type { MarkdownChapter } from './split-markdown-chapters.js';
+export { splitMarkdownChapters } from './split-markdown-chapters.js';
 export type { BlockSourceRange } from './locate-block.js';
 export {
   canMergeMultiBlock,

@@ -10,9 +10,11 @@ import {
   rewriteAssetReferences,
   sanitizeDocumentFilename,
   spanHead,
+  splitMarkdownChapters,
 } from '@marginalia/renderer';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
+import JSZip from 'jszip';
 import {
   REANCHOR_COMMENT_SQL,
   reanchor,
@@ -48,6 +50,7 @@ import type {
   MermaidRenderer,
 } from '../db.js';
 import { isDocumentFormat, isInviteKind, isInviteRole, isMermaidRenderer } from '../db.js';
+import { type EpubCover, exportEpub } from '../export/epub.js';
 import {
   countLiveMermaidBlocks,
   inlineImageAssets,
@@ -166,6 +169,14 @@ export function documentsRouter(deps: AppDeps): Hono {
   );
   r.get('/:uid/export.accepted.docx', async (c) =>
     exportDocumentAsDocx(c, deps, { acceptedProposals: true }),
+  );
+  r.get('/:uid/export.chapters.zip', async (c) => exportDocumentChapters(c, deps));
+  r.get('/:uid/export.accepted.chapters.zip', async (c) =>
+    exportDocumentChapters(c, deps, { acceptedProposals: true }),
+  );
+  r.post('/:uid/export.epub', async (c) => exportDocumentAsEpub(c, deps));
+  r.post('/:uid/export.accepted.epub', async (c) =>
+    exportDocumentAsEpub(c, deps, { acceptedProposals: true }),
   );
   r.get('/:uid/export.pdf', async (c) => exportDocumentAsPdf(c, deps));
   r.put('/:uid', async (c) => updateDocument(c, deps));
@@ -883,6 +894,167 @@ async function exportDocumentSourceWithAcceptedProposals(c: Context, deps: AppDe
 }
 
 // --- GET /api/documents/:uid/export.docx -----------------------------
+
+// --- GET /api/documents/:uid/export.chapters.zip ---------------------
+
+/** Download a lossless Markdown source snapshot split into numbered chapter files. */
+async function exportDocumentChapters(
+  c: Context,
+  deps: AppDeps,
+  options: { acceptedProposals?: boolean } = {},
+) {
+  const doc = loadDoc(deps.db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (doc.format !== 'markdown') return c.json({ error: 'markdown-required' }, 400);
+
+  let source = deps.store.read(doc);
+  let accepted: AcceptedProposalsSourceResult | null = null;
+  if (options.acceptedProposals) {
+    accepted = await sourceWithAcceptedProposals(deps, doc, source);
+    source = accepted.source;
+  }
+
+  const derivedTitle = doc.name ?? extractDocumentTitle(source, doc.format);
+  const base = sanitizeDocumentFilename(derivedTitle, doc.uid);
+  const suffix = accepted ? acceptedProposalsFilenameSuffix(accepted) : '';
+  const zip = new JSZip();
+  for (const chapter of splitMarkdownChapters(source)) {
+    zip.file(`${base}-chapter-${String(chapter.index).padStart(3, '0')}.md`, chapter.source);
+  }
+  const bytes = await zip.generateAsync({
+    type: 'uint8array',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 9 },
+  });
+
+  c.header('Content-Type', 'application/zip');
+  c.header('Content-Disposition', `attachment; filename="${base}${suffix}-chapters.zip"`);
+  c.header('Cache-Control', 'private, no-store');
+  c.header('X-Content-Type-Options', 'nosniff');
+  if (accepted) setAcceptedProposalsExportHeaders(c, accepted);
+  return c.body(bytes as unknown as Uint8Array<ArrayBuffer>);
+}
+
+// --- POST /api/documents/:uid/export.epub ----------------------------
+
+/**
+ * Build an EPUB from the stored source or a temporary proposal-merged
+ * snapshot. A multipart `cover` image is optional; without it the
+ * exporter creates a deterministic typographic SVG from the book title.
+ */
+async function exportDocumentAsEpub(
+  c: Context,
+  deps: AppDeps,
+  options: { acceptedProposals?: boolean } = {},
+) {
+  const doc = loadDoc(deps.db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+
+  const coverResult = await readEpubCover(c.req.raw);
+  if ('error' in coverResult) return c.json({ error: coverResult.error }, 400);
+
+  let source = deps.store.read(doc);
+  let accepted: AcceptedProposalsSourceResult | null = null;
+  if (options.acceptedProposals) {
+    accepted = await sourceWithAcceptedProposals(deps, doc, source);
+    source = accepted.source;
+  }
+
+  const derivedTitle = doc.name ?? extractDocumentTitle(source, doc.format);
+  const title = derivedTitle?.trim() || 'Untitled';
+  const sourceChapters =
+    doc.format === 'markdown'
+      ? splitMarkdownChapters(source)
+      : [{ index: 1, title: derivedTitle, source }];
+
+  const attached = new Map<string, { assetId: string; mime: string }>();
+  for (const asset of listAttached(deps.db, doc.uid)) {
+    attached.set(asset.ref_name, { assetId: asset.asset_id, mime: asset.mime });
+  }
+  const chapters = [];
+  for (const chapter of sourceChapters) {
+    const rendered = await renderDocument(chapter.source, doc.format, { mermaid: 'svg' });
+    chapters.push({
+      title: chapter.title?.trim() || `Chapter ${chapter.index}`,
+      html: await inlineImageAssets(rendered.html, attached, deps.blobs),
+    });
+  }
+
+  const identity = readIdentity(c.req.raw.headers);
+  const bytes = await exportEpub({
+    identifier: `urn:marginalia:${doc.uid}`,
+    title,
+    author: identity?.displayName ?? null,
+    chapters,
+    cover: coverResult.cover,
+    modifiedAt: new Date(doc.updated_at),
+  });
+  const base = sanitizeDocumentFilename(derivedTitle, doc.uid);
+  const suffix = accepted ? acceptedProposalsFilenameSuffix(accepted) : '';
+
+  c.header('Content-Type', 'application/epub+zip');
+  c.header('Content-Disposition', `attachment; filename="${base}${suffix}.epub"`);
+  c.header('Cache-Control', 'private, no-store');
+  c.header('X-Content-Type-Options', 'nosniff');
+  if (accepted) setAcceptedProposalsExportHeaders(c, accepted);
+  return c.body(bytes as unknown as Uint8Array<ArrayBuffer>);
+}
+
+const EPUB_COVER_MAX_BYTES = 10 * 1024 * 1024;
+
+async function readEpubCover(
+  request: Request,
+): Promise<{ cover: EpubCover | null } | { error: string }> {
+  const contentType = request.headers.get('content-type') ?? '';
+  if (!contentType.toLowerCase().startsWith('multipart/form-data')) return { cover: null };
+
+  let form: FormData;
+  try {
+    form = await request.formData();
+  } catch {
+    return { error: 'invalid-cover-form' };
+  }
+  const value = form.get('cover');
+  if (!(value instanceof File) || value.size === 0) return { cover: null };
+  if (value.size > EPUB_COVER_MAX_BYTES) return { error: 'cover-too-large' };
+
+  const bytes = new Uint8Array(await value.arrayBuffer());
+  const mime = sniffCoverMime(bytes);
+  if (!mime) return { error: 'unsupported-cover-image' };
+  return { cover: { bytes, mime } };
+}
+
+function sniffCoverMime(bytes: Uint8Array): EpubCover['mime'] | null {
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  )
+    return 'image/png';
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    return 'image/jpeg';
+  if (bytes.length >= 6 && String.fromCharCode(...bytes.slice(0, 6)).match(/^GIF8[79]a$/))
+    return 'image/gif';
+  if (
+    bytes.length >= 12 &&
+    String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' &&
+    String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP'
+  )
+    return 'image/webp';
+  return null;
+}
 
 /**
  * DOCX export. Produces a themed Word document from the stored source
