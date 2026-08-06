@@ -550,8 +550,13 @@ async function exportDocument(c: Context, deps: AppDeps) {
   // with one deliberate exception: a deleted *accepted* proposal still
   // ships as a tombstone, because the packed history below contains its
   // accept commit and `loadAcceptedProposalHistory` needs the row to
-  // attribute that entry. This leaks nothing extra: the author and the
-  // rationale are already embedded in that commit's message.
+  // attribute that entry. That's a real (if narrow) re-exposure, not a
+  // no-op: the fast-forward accept path embeds the rationale in the
+  // commit message itself (`GitStore.createProposalBranch`), but the
+  // 3-way-merge fallback (`GitStore.mergeProposalBranch`) does not — for
+  // those, this tombstone is the only place the rationale still lives
+  // once the thread is deleted. Intentional, since attributing history
+  // is the point of carrying it, but worth knowing before exporting.
   const comments = db
     .prepare(
       `SELECT
