@@ -86,6 +86,8 @@ import {
 import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
 import { DownloadMenu } from './DownloadMenu.js';
 import { HistoryList } from './HistoryList.js';
+import { FloatingCommentsLayer } from './inline-comments/FloatingCommentsLayer.js';
+import { FloatingCommentsToolbar } from './inline-comments/FloatingCommentsToolbar.js';
 import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
 import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
 import { COMMENT_FLASH_MS } from './inline-comments/inlineUtils.js';
@@ -104,6 +106,7 @@ const COMMENTS_WIDTH_KEY = 'marginalia.commentsWidth';
 const INLINE_COMMENTS_OPEN_KEY = 'marginalia.inlineCommentsOpen';
 const INLINE_COMMENTS_STACKING_KEY = 'marginalia.inlineCommentsStacking';
 const INLINE_COMMENTS_HIDE_RESOLVED_KEY = 'marginalia.inlineCommentsHideResolved';
+const COMMENTS_DISPLAY_MODE_KEY = 'marginalia.commentsDisplayMode';
 const COLLAPSED_WIDTH = 36;
 /** Delay before scrolling to a specific reply after the parent thread has expanded (ms). */
 const REPLY_SCROLL_DELAY_MS = 900;
@@ -120,6 +123,9 @@ interface ThreadFocusTarget {
   nonce: number;
   scroll: boolean;
 }
+
+/** How comment threads render in the document pane: a margin column, or floating cards over the text. */
+type CommentsDisplayMode = 'column' | 'floating';
 
 type PendingDraft =
   | { mode: 'comment'; anchor: CommentAnchor }
@@ -142,6 +148,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     const saved = localStorage.getItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
     return saved === 'true';
   });
+  const [commentsDisplayMode, setCommentsDisplayMode] = useState<CommentsDisplayMode>(() =>
+    localStorage.getItem(COMMENTS_DISPLAY_MODE_KEY) === 'floating' ? 'floating' : 'column',
+  );
+  const floatingComments = commentsDisplayMode === 'floating';
   const [rightTab, setRightTab] = useState<
     'comments' | 'history' | 'search' | 'activities' | 'mcp'
   >('activities');
@@ -360,6 +370,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     localStorage.setItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY, String(inlineCommentsHideResolved));
   }, [inlineCommentsHideResolved]);
   useEffect(() => {
+    localStorage.setItem(COMMENTS_DISPLAY_MODE_KEY, commentsDisplayMode);
+  }, [commentsDisplayMode]);
+  useEffect(() => {
     void applyTheme(theme);
   }, [theme]);
 
@@ -371,7 +384,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     if (!canComment) setPendingDraft(null);
   }, [canComment]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: inlineCommentsOpen is the intentional re-run trigger so the column is re-measured when the panel toggles.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: inlineCommentsOpen / commentsDisplayMode are the intentional re-run triggers so the column is re-measured when the panel toggles or the column (un)mounts.
   useLayoutEffect(() => {
     const scroll = docScrollRef.current;
     const column = scroll?.querySelector<HTMLElement>('.ic-column') ?? null;
@@ -405,7 +418,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       observer.disconnect();
       window.removeEventListener('resize', updateWidth);
     };
-  }, [inlineCommentsOpen]);
+  }, [inlineCommentsOpen, commentsDisplayMode]);
 
   const headingIds = useMemo(() => flattenTocIds(liveRendered.toc), [liveRendered.toc]);
   const headingIdsKey = useMemo(() => headingIds.join('\u0000'), [headingIds]);
@@ -621,8 +634,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     // Clear so subsequent thread refreshes don't re-scroll.
     pendingDeepLinkCommentId.current = null;
 
-    // Ensure the inline comments column is visible.
-    setInlineCommentsOpen(true);
+    // Ensure the inline comments column is visible. In floating mode
+    // there is no column, and forcing the flag would clobber the
+    // user's persisted column preference.
+    if (!floatingComments) setInlineCommentsOpen(true);
 
     // The fragment is consumed now — drop it from the address bar so it
     // doesn't outlive the navigation it described.
@@ -683,7 +698,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     // threads is the real trigger; scrollToAnchor is a stable useCallback;
     // setInlineCommentsOpen/setFocusedThread are stable useState dispatchers;
     // pendingDeepLinkCommentId is a ref (not reactive).
-  }, [threads, scrollToAnchor]);
+  }, [threads, floatingComments, scrollToAnchor]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1137,6 +1152,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     if (!canComment || !pendingAnchor) return;
 
+    // Floating mode shows the composer as a popover at the selection —
+    // no column to open, no right-pane fallback.
+    if (floatingComments) return;
+
     if (!inlineCommentsOpen) {
       setInlineCommentsOpen(true);
       return;
@@ -1146,26 +1165,29 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       setCommentsOpen(true);
       setRightTab('comments');
     }
-  }, [canComment, pendingAnchor, inlineCommentsOpen, inlineCommentsVisible]);
+  }, [canComment, pendingAnchor, inlineCommentsOpen, inlineCommentsVisible, floatingComments]);
 
-  const startCommentDraft = useCallback((anchor: CommentAnchor) => {
-    const scrollTop = docScrollRef.current?.scrollTop ?? null;
-    setInlineCommentsOpen(true);
-    setPendingDraft({ mode: 'comment', anchor });
+  const startCommentDraft = useCallback(
+    (anchor: CommentAnchor) => {
+      const scrollTop = docScrollRef.current?.scrollTop ?? null;
+      if (!floatingComments) setInlineCommentsOpen(true);
+      setPendingDraft({ mode: 'comment', anchor });
 
-    if (scrollTop === null) return;
+      if (scrollTop === null) return;
 
-    const restoreScroll = () => {
-      const scroll = docScrollRef.current;
-      if (scroll) scroll.scrollTop = scrollTop;
-    };
+      const restoreScroll = () => {
+        const scroll = docScrollRef.current;
+        if (scroll) scroll.scrollTop = scrollTop;
+      };
 
-    restoreScroll();
-    window.requestAnimationFrame(() => {
       restoreScroll();
-      window.requestAnimationFrame(restoreScroll);
-    });
-  }, []);
+      window.requestAnimationFrame(() => {
+        restoreScroll();
+        window.requestAnimationFrame(restoreScroll);
+      });
+    },
+    [floatingComments],
+  );
 
   const openCommentThread = useCallback(
     (
@@ -1179,7 +1201,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       const scroll = options?.scroll ?? !jumpToAnchor;
       // Prefer the inline column when it's actually visible; otherwise
       // fall back to the right pane (and open it if it's collapsed).
-      if (!inlineCommentsVisible()) {
+      // Floating mode always shows the thread as a popover in the doc
+      // pane, so the right pane stays untouched.
+      if (!floatingComments && !inlineCommentsVisible()) {
         setCommentsOpen(true);
         setRightTab('comments');
       }
@@ -1194,7 +1218,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
       setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1, scroll }));
     },
-    [inlineCommentsVisible, scrollToAnchor, threads],
+    [floatingComments, inlineCommentsVisible, scrollToAnchor, threads],
   );
 
   const onRevertLatestHistoryVersion = useCallback(
@@ -1389,7 +1413,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               doc={doc}
               source={liveSource}
               theme={theme}
-              reviewExportEnabled={inlineCommentsOpen}
+              reviewExportEnabled={inlineCommentsOpen || floatingComments}
             />
             {children}
             {doc.role === 'admin' && onDocSettingsChanged && (
@@ -1536,6 +1560,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </Flex>
             </div>
           )}
+          {floatingComments && (
+            <FloatingCommentsToolbar
+              threads={threads}
+              hideResolved={inlineCommentsHideResolved}
+              onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
+              onSwitchToColumn={() => setCommentsDisplayMode('column')}
+              docElementRef={docRef}
+              scrollContainerRef={docScrollRef}
+              onOpenThread={openCommentThread}
+            />
+          )}
           {/* `marginalia-theme` is applied here (not just inside the
               article) so the inline comments column inherits the
               document's themed background — otherwise it would sit on
@@ -1543,7 +1578,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               different surface. */}
           <div className="doc-scroll marginalia-theme" ref={docScrollRef}>
             <div
-              className={`doc-row${inlineCommentsOpen ? ' doc-row-with-inline' : ''}`}
+              className={`doc-row${!floatingComments && inlineCommentsOpen ? ' doc-row-with-inline' : ''}${floatingComments ? ' doc-row-floating' : ''}`}
               style={{ ['--md-max-width' as string]: `${maxWidth}ch` }}
             >
               <div className="doc-body">
@@ -1579,35 +1614,61 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   />
                 )}
               </div>
-              <InlineCommentsLayer
-                uid={doc.uid}
-                threads={threads}
-                docHtml={liveRendered.html}
-                docElementRef={docRef}
-                scrollContainerRef={docScrollRef}
-                blockRanges={blockRanges}
-                canComment={canComment}
-                open={inlineCommentsOpen}
-                onToggleOpen={() => setInlineCommentsOpen((v) => !v)}
-                stackingEnabled={inlineCommentsStacking}
-                onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
-                hideResolved={inlineCommentsHideResolved}
-                onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
-                pendingAnchor={canComment ? pendingAnchor : null}
-                focusedThread={focusedThread}
-                displayName={effectiveDisplayName}
-                mentionCandidates={mentionCandidates}
-                onCancelPending={() => setPendingDraft(null)}
-                onCreate={onCreate}
-                onReply={onReply}
-                onEdit={onEdit}
-                onDeleteNode={onDeleteNode}
-                onDeleteThread={onDeleteThread}
-                onResolveThread={onResolveThread}
-                onRepairThread={onRepairThread}
-                onReact={onReact}
-                onScrollToAnchor={scrollToAnchor}
-              />
+              {floatingComments ? (
+                <FloatingCommentsLayer
+                  uid={doc.uid}
+                  threads={threads}
+                  docHtml={liveRendered.html}
+                  docElementRef={docRef}
+                  scrollContainerRef={docScrollRef}
+                  canComment={canComment}
+                  pendingAnchor={canComment ? pendingAnchor : null}
+                  focusedThread={focusedThread}
+                  displayName={effectiveDisplayName}
+                  mentionCandidates={mentionCandidates}
+                  onCancelPending={() => setPendingDraft(null)}
+                  onCreate={onCreate}
+                  onReply={onReply}
+                  onEdit={onEdit}
+                  onDeleteNode={onDeleteNode}
+                  onDeleteThread={onDeleteThread}
+                  onResolveThread={onResolveThread}
+                  onRepairThread={onRepairThread}
+                  onReact={onReact}
+                  onScrollToAnchor={scrollToAnchor}
+                />
+              ) : (
+                <InlineCommentsLayer
+                  uid={doc.uid}
+                  threads={threads}
+                  docHtml={liveRendered.html}
+                  docElementRef={docRef}
+                  scrollContainerRef={docScrollRef}
+                  blockRanges={blockRanges}
+                  canComment={canComment}
+                  open={inlineCommentsOpen}
+                  onToggleOpen={() => setInlineCommentsOpen((v) => !v)}
+                  stackingEnabled={inlineCommentsStacking}
+                  onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
+                  hideResolved={inlineCommentsHideResolved}
+                  onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
+                  onSwitchToFloating={() => setCommentsDisplayMode('floating')}
+                  pendingAnchor={canComment ? pendingAnchor : null}
+                  focusedThread={focusedThread}
+                  displayName={effectiveDisplayName}
+                  mentionCandidates={mentionCandidates}
+                  onCancelPending={() => setPendingDraft(null)}
+                  onCreate={onCreate}
+                  onReply={onReply}
+                  onEdit={onEdit}
+                  onDeleteNode={onDeleteNode}
+                  onDeleteThread={onDeleteThread}
+                  onResolveThread={onResolveThread}
+                  onRepairThread={onRepairThread}
+                  onReact={onReact}
+                  onScrollToAnchor={scrollToAnchor}
+                />
+              )}
             </div>
           </div>
         </main>

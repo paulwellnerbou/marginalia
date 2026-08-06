@@ -52,6 +52,8 @@ interface Props {
    *  participate in the sticky-stacking calculations. */
   hideResolved: boolean;
   onToggleHideResolved: () => void;
+  /** Switch the comment presentation from the margin column to floating cards. */
+  onSwitchToFloating: () => void;
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number; scroll: boolean } | null;
   displayName: string | null;
@@ -145,6 +147,7 @@ export function InlineCommentsLayer({
   onToggleStacking,
   hideResolved,
   onToggleHideResolved,
+  onSwitchToFloating,
   pendingAnchor,
   focusedThread,
   displayName,
@@ -199,7 +202,9 @@ export function InlineCommentsLayer({
   const collapsed = collapseState.collapsed;
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; phase: 'a' | 'b' } | null>(null);
-  const lastNonce = useRef<number | null>(null);
+  // Seeded with the current nonce so remounting (display-mode toggle)
+  // doesn't replay a focus signal that was already handled.
+  const lastNonce = useRef<number | null>(focusedThread?.nonce ?? null);
 
   useEffect(() => {
     setCollapseState((prev) => reconcileThreadCollapseState(prev, collapseDefaults));
@@ -877,6 +882,7 @@ export function InlineCommentsLayer({
         onToggleStacking={onToggleStacking}
         hideResolved={hideResolved}
         onToggleHideResolved={onToggleHideResolved}
+        onSwitchToFloating={onSwitchToFloating}
         onScrollToAnchor={scrollToAnchorWithOffset}
       />
       <div className="ic-column-clip" aria-hidden={!open}>
