@@ -4094,11 +4094,23 @@ function renderWholeDocBlockDiff(
     if (change.removed && next?.added) {
       const removedSlice = originalBlocks.slice(origIdx, origIdx + change.value.length);
       const addedSlice = proposedBlocks.slice(propIdx, propIdx + next.value.length);
-      const pairCount = Math.min(removedSlice.length, addedSlice.length);
-      for (let k = 0; k < pairCount; k++) {
+      let r = 0;
+      let a = 0;
+      // Blocks with no counterpart to word-diff against, rendered whole.
+      // Walking both sides in lockstep keeps a wholly-rewritten block
+      // next to its replacement rather than grouping every deletion
+      // ahead of every insertion.
+      const emitUnpaired = (rEnd: number, aEnd: number): void => {
+        while (r < rEnd || a < aEnd) {
+          if (r < rEnd) convertBlockInner(removedSlice[r++]!, delCtx(), out, defaultWalk);
+          if (a < aEnd) convertBlockInner(addedSlice[a++]!, insCtx(), out, defaultWalk);
+        }
+      };
+      for (const [pr, pa] of pairBlocks(removedSlice, addedSlice)) {
+        emitUnpaired(pr, pa);
         const inline = tryEmitInlineWordDiffForPair(
-          removedSlice[k]!,
-          addedSlice[k]!,
+          removedSlice[pr]!,
+          addedSlice[pa]!,
           author,
           date,
           ctx,
@@ -4107,18 +4119,13 @@ function renderWholeDocBlockDiff(
         if (inline) {
           out.push(mkParagraph(withParagraphContext({ children: inline }, ctx, defaultWalk), ctx));
         } else {
-          convertBlockInner(removedSlice[k]!, delCtx(), out, defaultWalk);
-          convertBlockInner(addedSlice[k]!, insCtx(), out, defaultWalk);
+          convertBlockInner(removedSlice[pr]!, delCtx(), out, defaultWalk);
+          convertBlockInner(addedSlice[pa]!, insCtx(), out, defaultWalk);
         }
+        r = pr + 1;
+        a = pa + 1;
       }
-      // Tail: leftover removed blocks (when removedSlice is longer).
-      for (let k = pairCount; k < removedSlice.length; k++) {
-        convertBlockInner(removedSlice[k]!, delCtx(), out, defaultWalk);
-      }
-      // Tail: leftover added blocks (when addedSlice is longer).
-      for (let k = pairCount; k < addedSlice.length; k++) {
-        convertBlockInner(addedSlice[k]!, insCtx(), out, defaultWalk);
-      }
+      emitUnpaired(removedSlice.length, addedSlice.length);
       origIdx += change.value.length;
       propIdx += next.value.length;
       i++; // also consumed `next`.
@@ -4165,6 +4172,104 @@ function tryEmitInlineWordDiffForPair(
   // word-diff paths share the "one revision id per logical change"
   // invariant.
   return runsForInlineWordDiff(diffWordsWithSpace(oldText, newText), author, date, ctx);
+}
+
+/** Max cells in the removed/added pairing table before we fall back to
+ *  pairing by position. */
+const BLOCK_PAIRING_MAX_CELLS = 10_000;
+/** Token overlap below which two blocks count as unrelated and stay
+ *  unpaired, so a rewritten block renders as a whole delete + whole
+ *  insert instead of a scattering of coincidental word matches. */
+const BLOCK_PAIRING_MIN_SIMILARITY = 0.3;
+
+/**
+ * Picks which removed block each added block is the rewrite of, as the
+ * order-preserving assignment with the highest total token overlap.
+ * Returns `[removedIndex, addedIndex]` pairs; blocks left out of the
+ * assignment have no counterpart and render whole.
+ *
+ * Pairing by position instead would word-diff unrelated blocks whenever
+ * a replacement mixes an insertion with an edit — e.g. a brand-new
+ * paragraph in front of a lightly reworded one, where the reworded pair
+ * sits at different offsets on the two sides.
+ */
+function pairBlocks(
+  removed: readonly Element[],
+  added: readonly Element[],
+): Array<[number, number]> {
+  const n = removed.length;
+  const m = added.length;
+  if (n === 0 || m === 0) return [];
+  if ((n + 1) * (m + 1) > BLOCK_PAIRING_MAX_CELLS) {
+    const byPosition: Array<[number, number]> = [];
+    for (let i = 0; i < Math.min(n, m); i++) byPosition.push([i, i]);
+    return byPosition;
+  }
+
+  const removedTokens = removed.map((block) => tokenBag(hastTextContent(block)));
+  const addedTokens = added.map((block) => tokenBag(hastTextContent(block)));
+  const pairScore = (i: number, j: number): number => {
+    const sim = similarity(removedTokens[i]!, addedTokens[j]!);
+    return sim >= BLOCK_PAIRING_MIN_SIMILARITY ? sim : Number.NEGATIVE_INFINITY;
+  };
+
+  // best[i][j] = highest total similarity reachable from removed[i..]/added[j..].
+  const best: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      best[i]![j] = Math.max(
+        pairScore(i, j) + best[i + 1]![j + 1]!,
+        best[i + 1]![j]!,
+        best[i]![j + 1]!,
+      );
+    }
+  }
+
+  const pairs: Array<[number, number]> = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (pairScore(i, j) + best[i + 1]![j + 1]! >= best[i]![j]!) {
+      pairs.push([i, j]);
+      i++;
+      j++;
+    } else if (best[i + 1]![j]! >= best[i]![j + 1]!) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  return pairs;
+}
+
+interface TokenBag {
+  counts: Map<string, number>;
+  size: number;
+}
+
+/** Word and standalone-punctuation tokens; whitespace never matches, so
+ *  spacing differences don't dilute the overlap score. */
+const BLOCK_TOKEN_RE = /[\p{L}\p{N}\p{M}_]+|[^\s\p{L}\p{N}\p{M}_]/gu;
+
+function tokenBag(text: string): TokenBag {
+  const counts = new Map<string, number>();
+  let size = 0;
+  for (const [token] of text.matchAll(BLOCK_TOKEN_RE)) {
+    counts.set(token, (counts.get(token) ?? 0) + 1);
+    size++;
+  }
+  return { counts, size };
+}
+
+/** Sørensen–Dice over the two token multisets: 1 for equal, 0 for disjoint. */
+function similarity(a: TokenBag, b: TokenBag): number {
+  if (a.size === 0 || b.size === 0) return a.size === b.size ? 1 : 0;
+  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+  let shared = 0;
+  for (const [token, count] of small.counts) {
+    shared += Math.min(count, large.counts.get(token) ?? 0);
+  }
+  return (2 * shared) / (a.size + b.size);
 }
 
 /**

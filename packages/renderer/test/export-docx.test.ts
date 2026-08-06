@@ -1943,6 +1943,76 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     expect(documentXml).toMatch(/<w:ins\b[^>]*>[\s\S]*?Newly appended paragraph/);
   });
 
+  test('whole-document proposal: insertion before a reworded block pairs by content', async () => {
+    // The replacement block mixes an insertion with an edit, so the
+    // reworded paragraph sits at a different offset on each side.
+    // Pairing by position would word-diff it against the brand-new
+    // paragraph and produce word salad.
+    const md = [
+      'Intro paragraph stays put.',
+      '',
+      'The committee reviewed the quarterly budget and approved the changes.',
+      '',
+      'Closing paragraph stays put.',
+      '',
+    ].join('\n');
+    const proposed = [
+      'Intro paragraph stays put.',
+      '',
+      'A brand new opening statement about scheduling logistics.',
+      '',
+      'The committee reviewed the quarterly budget and approved the revisions.',
+      '',
+      'Closing paragraph stays put.',
+      '',
+    ].join('\n');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: null,
+            comments: [{ body: 'insert and reword', author: 'Editor', date: 0 }],
+            proposal: {
+              source_snapshot: md,
+              proposed_text: proposed,
+              whole_document: true,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    const appendix = documentXml.slice(documentXml.indexOf('Alternative version proposed by'));
+
+    // Only the one reworded word is struck out. Under positional
+    // pairing the committee sentence was word-diffed against the
+    // unrelated insertion, striking out every word of it in turn.
+    const deleted = (documentXml.match(/<w:delText[^>]*>[\s\S]*?<\/w:delText>/g) ?? []).join('');
+    expect(deleted).toContain('changes');
+    expect(deleted).not.toContain('committee');
+    expect(deleted).not.toContain('scheduling');
+
+    // The new paragraph is inserted whole, in its own paragraph, with
+    // nothing deleted against it.
+    const insertedPara = paragraphContaining(appendix, 'brand new opening statement');
+    expect(insertedPara).toContain('<w:ins');
+    expect(insertedPara).toMatch(
+      /<w:t[^>]*>A brand new opening statement about scheduling logistics\.<\/w:t>/,
+    );
+    expect(insertedPara).not.toContain('<w:delText');
+
+    // The reworded paragraph word-diffs against its own earlier
+    // version: only the final word changes, so the shared opening
+    // survives as a plain run.
+    const rewordedPara = paragraphContaining(appendix, 'quarterly budget');
+    expect(rewordedPara).toMatch(/<w:delText[^>]*>changes/);
+    expect(rewordedPara).toMatch(/<w:ins\b[^>]*>[\s\S]*?<w:t[^>]*>revisions/);
+    expect(rewordedPara).toContain(
+      '<w:t xml:space="preserve">The committee reviewed the quarterly budget and approved the </w:t>',
+    );
+  });
+
   test('comment with anchor_quote wraps just the highlighted substring', async () => {
     const md = 'The quick brown fox jumps over the lazy dog.\n';
     const blockId = paragraphBlockId('The quick brown fox jumps over the lazy dog.');
