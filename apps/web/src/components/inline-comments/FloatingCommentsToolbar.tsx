@@ -6,9 +6,14 @@ import {
 } from '@radix-ui/react-icons';
 import { DropdownMenu, IconButton } from '@radix-ui/themes';
 import { type RefObject, useCallback, useMemo } from 'react';
-import type { Thread } from '../../lib/api.js';
-import { adjacentThreadTarget, type ThreadTopEntry } from './floatingCardPosition.js';
-import { resolveAnchorElement } from './inlineUtils.js';
+import { resolveThreadScrollTarget } from '../../lib/anchor-target.js';
+import { isProposal, type Thread } from '../../lib/api.js';
+import {
+  adjacentThreadTarget,
+  sortThreadTopEntries,
+  type ThreadTopEntry,
+} from './floatingCardPosition.js';
+import { computeThreadNesting } from './threadNesting.js';
 
 interface Props {
   threads: Thread[];
@@ -18,6 +23,11 @@ interface Props {
   onSwitchToColumn: () => void;
   docElementRef: RefObject<HTMLElement | null>;
   scrollContainerRef: RefObject<HTMLDivElement | null>;
+  /** Thread whose card is currently open, or null. Prev/next step from
+   *  it while the reader is still parked there — threads quoting the
+   *  same text share a position, so position alone can't tell them
+   *  apart. */
+  currentThreadId: string | null;
   /** Scrolls to the thread's anchor and opens its popover. */
   onOpenThread: (threadId: string) => void;
 }
@@ -28,6 +38,33 @@ interface Props {
  * toolbar's near-epsilon feel without a sticky stack to pad for.
  */
 const NAV_REF_TOP_PX = 20;
+/** How near the top edge the open thread's anchor must still sit for
+ *  the reader to count as parked on it. Settled jumps are within 2px. */
+const PARKED_TOLERANCE_PX = 8;
+
+/**
+ * The open thread if the reader is still parked where the jump to it
+ * left them, else null.
+ *
+ * A jump scrolls the thread's anchor to the container's top edge, so
+ * sitting at that edge means the reader hasn't moved on. At either end
+ * of the document the scroll clamps and the anchor stops short of the
+ * edge — there, being at the scroll limit is what says the jump landed.
+ */
+function parkedThreadId(
+  entries: ThreadTopEntry[],
+  openId: string | null,
+  scroll: HTMLElement,
+): string | null {
+  if (!openId) return null;
+  const entry = entries.find((e) => e.id === openId);
+  if (!entry) return null;
+  if (Math.abs(entry.top) <= PARKED_TOLERANCE_PX) return openId;
+  const maxScroll = scroll.scrollHeight - scroll.clientHeight;
+  if (entry.top > 0 && scroll.scrollTop >= maxScroll - PARKED_TOLERANCE_PX) return openId;
+  if (entry.top < 0 && scroll.scrollTop <= PARKED_TOLERANCE_PX) return openId;
+  return null;
+}
 
 /**
  * Compact floating toolbar for floating-comments mode. The margin
@@ -42,38 +79,56 @@ export function FloatingCommentsToolbar({
   onSwitchToColumn,
   docElementRef,
   scrollContainerRef,
+  currentThreadId,
   onOpenThread,
 }: Props) {
-  const visibleThreads = useMemo(
-    () => (hideResolved ? threads.filter((t) => t.state !== 'resolved') : threads),
-    [threads, hideResolved],
-  );
+  /**
+   * Only threads that own a card are navigable: a proposal answering a
+   * comment renders inside that comment's card, so stepping onto it
+   * would re-open the card the reader is already looking at and prev/
+   * next would read as doing nothing. Matches the column, which
+   * navigates its top-level threads.
+   */
+  const visibleThreads = useMemo(() => {
+    const shown = hideResolved ? threads.filter((t) => t.state !== 'resolved') : threads;
+    return computeThreadNesting(shown).topLevel;
+  }, [threads, hideResolved]);
 
   const jump = useCallback(
     (direction: -1 | 1) => {
       const doc = docElementRef.current;
       const scroll = scrollContainerRef.current;
       if (!doc || !scroll) return;
-      const scrollTop = scroll.getBoundingClientRect().top;
+      const containerTop = scroll.getBoundingClientRect().top;
 
       // Measured on demand — no continuous anchor tracking in floating
-      // mode, so build the document-order list at click time.
+      // mode, so build the document-order list at click time. Resolved
+      // the same way the jump itself resolves its target, so these tops
+      // are exactly where a jump would land.
       const entries: ThreadTopEntry[] = [];
       for (const thread of visibleThreads) {
         const blockId = thread.anchor.block_id;
         if (!blockId) continue;
-        const el =
-          doc.querySelector<HTMLElement>(`[data-comment-thread-id="${CSS.escape(thread.id)}"]`) ??
-          resolveAnchorElement(doc, blockId, thread.anchor.quote);
+        const el = resolveThreadScrollTarget(doc, blockId, thread.anchor.quote, thread.id);
         if (!el) continue;
-        entries.push({ id: thread.id, top: el.getBoundingClientRect().top - scrollTop });
+        entries.push({
+          id: thread.id,
+          top: el.getBoundingClientRect().top - containerTop,
+          startOffset: isProposal(thread) ? 0 : (thread.anchor.start_offset ?? 0),
+          createdAt: thread.comments[0].created_at,
+        });
       }
-      entries.sort((a, b) => a.top - b.top);
+      sortThreadTopEntries(entries);
 
-      const targetId = adjacentThreadTarget(entries, NAV_REF_TOP_PX, direction);
+      const targetId = adjacentThreadTarget(
+        entries,
+        NAV_REF_TOP_PX,
+        direction,
+        parkedThreadId(entries, currentThreadId, scroll),
+      );
       if (targetId) onOpenThread(targetId);
     },
-    [visibleThreads, docElementRef, scrollContainerRef, onOpenThread],
+    [visibleThreads, docElementRef, scrollContainerRef, currentThreadId, onOpenThread],
   );
 
   const count = visibleThreads.length;

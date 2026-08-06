@@ -77,20 +77,49 @@ export interface ThreadTopEntry {
   id: string;
   /** Anchor top relative to the scroll container's visible top edge. */
   top: number;
+  /**
+   * Document-order tiebreak for threads sharing an anchor position:
+   * where the quote starts within its block, then when the thread was
+   * created. Matches how the column orders the same threads, so the
+   * two presentations step through them in the same sequence.
+   */
+  startOffset?: number;
+  createdAt?: number;
+}
+
+/** Sort into the order prev/next steps through. */
+export function sortThreadTopEntries(entries: ThreadTopEntry[]): ThreadTopEntry[] {
+  return entries.sort(
+    (a, b) =>
+      a.top - b.top ||
+      (a.startOffset ?? 0) - (b.startOffset ?? 0) ||
+      (a.createdAt ?? 0) - (b.createdAt ?? 0),
+  );
 }
 
 /**
- * Pick the previous/next thread relative to the reading position.
- * `entries` must be sorted by `top` ascending. The "current" thread is
- * the last one whose anchor sits at or above `refTop` (a small pad
- * below the container's top edge); mirrors the column toolbar's
- * findCurrentIndex semantics.
+ * Index of the thread the reader is on. `entries` must be sorted by
+ * `top` ascending.
+ *
+ * `parkedId` is the thread the caller knows the reader was last taken
+ * to and has not scrolled away from. It wins outright, because position
+ * alone cannot separate threads quoting the same text: they resolve to
+ * the same anchor, so they tie, and picking by position would always
+ * name the same one of them — stepping past the rest.
+ *
+ * Without it, the current thread is the last one whose anchor sits at
+ * or above `refTop` (a small pad below the container's top edge).
+ * Returns -1 above the first thread.
  */
-export function adjacentThreadTarget(
+export function currentThreadIndex(
   entries: ThreadTopEntry[],
   refTop: number,
-  direction: -1 | 1,
-): string | null {
+  parkedId?: string | null,
+): number {
+  if (parkedId) {
+    const parked = entries.findIndex((entry) => entry.id === parkedId);
+    if (parked >= 0) return parked;
+  }
   let current = -1;
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
@@ -98,6 +127,22 @@ export function adjacentThreadTarget(
     if (entry.top <= refTop) current = i;
     else break;
   }
+  return current;
+}
+
+/**
+ * Pick the previous/next thread relative to the reading position.
+ * `entries` must be sorted by `top` ascending; see `currentThreadIndex`
+ * for how the current thread is chosen. Mirrors the column toolbar's
+ * findCurrentIndex semantics.
+ */
+export function adjacentThreadTarget(
+  entries: ThreadTopEntry[],
+  refTop: number,
+  direction: -1 | 1,
+  parkedId?: string | null,
+): string | null {
+  const current = currentThreadIndex(entries, refTop, parkedId);
   if (direction > 0) return entries[current + 1]?.id ?? null;
   return current > 0 ? (entries[current - 1]?.id ?? null) : null;
 }

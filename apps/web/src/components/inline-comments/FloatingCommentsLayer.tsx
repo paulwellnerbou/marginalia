@@ -10,11 +10,12 @@ import {
   useState,
 } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
+import { resolveAnchorElement } from '../../lib/anchor-target.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { computeFloatingCardPosition } from './floatingCardPosition.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
-import { COMMENT_FLASH_MS, resolveAnchorElement, threadLinks, threadsById } from './inlineUtils.js';
+import { COMMENT_FLASH_MS, threadLinks, threadsById } from './inlineUtils.js';
 import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 

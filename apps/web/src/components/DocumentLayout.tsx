@@ -30,6 +30,7 @@ import {
   useState,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { resolveThreadScrollTarget } from '../lib/anchor-target.js';
 import type {
   CommentAnchor,
   Document,
@@ -322,6 +323,41 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     }
   }, [doc.uid]);
 
+  const scrollToAnchor = useCallback(
+    (blockId: string, quote?: string | null, threadId?: string, scrollOffset = 0): boolean => {
+      const root = docRef.current;
+      const scroll = docScrollRef.current;
+      if (!root || !scroll) return false;
+
+      const target = resolveThreadScrollTarget(root, blockId, quote, threadId);
+      if (!target) return false;
+
+      // Every navigation to a thread also marks its card, so the reader
+      // can tell WHICH thread they landed on — essential when several
+      // threads highlight the same text. `scroll: false`: the anchor
+      // scroll below already brings the card into view.
+      if (threadId) {
+        setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1, scroll: false }));
+      }
+
+      // Reveal the target if it sits inside a folded section before
+      // measuring — otherwise the scroll lands at the pre-expansion
+      // offset and the user ends up at an empty spot. The seq guard
+      // discards a stale promise if another thread is clicked during
+      // the expand window.
+      const seq = ++scrollToAnchorSeq.current;
+      void expandAncestors(target).then(() => {
+        if (seq !== scrollToAnchorSeq.current) return;
+        scrollToTargetAndSettle(scroll, target, scrollOffset, () => {
+          return seq === scrollToAnchorSeq.current;
+        });
+        flashAnchor(target);
+      });
+      return true;
+    },
+    [],
+  );
+
   // Reactive across UserMenu, composer, invite-load seeding, other tabs.
   const displayName = useDisplayName();
   const effectiveDisplayName = displayName;
@@ -570,6 +606,90 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     };
   }, [headingIdsKey, liveRendered.html]);
 
+  /**
+   * A section fragment in the URL goes stale the moment the reader moves
+   * on — scrolling away, jumping to comments — yet it would sit in the
+   * address bar forever. Track where a fragment navigation settled and
+   * drop the fragment once the active section leaves that baseline.
+   * (#comment- fragments are consumed by the deep-link effect instead.)
+   */
+  const activeHeadingIdRef = useRef<string | null>(null);
+  const hashKeeperSyncRef = useRef<(() => void) | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: headingIdsKey is the deduped stand-in for headingIds.
+  useEffect(() => {
+    const scroll = docScrollRef.current;
+    if (!scroll) return;
+    const headingIdSet = new Set(headingIds);
+    let tracked: { hash: string; baseline: string | null } | null = null;
+    let settleTimer: number | null = null;
+
+    const sectionIdOf = (hash: string): string | null => {
+      if (hash.length <= 1) return null;
+      let id = hash.slice(1);
+      try {
+        id = decodeURIComponent(id);
+      } catch {
+        // keep the raw id
+      }
+      return headingIdSet.has(id) ? id : null;
+    };
+
+    /** Record where a fragment navigation parked the reader (scroll idle). */
+    const settle = () => {
+      const hash = window.location.hash;
+      const id = sectionIdOf(hash);
+      if (!id) {
+        tracked = null;
+        return;
+      }
+      if (tracked?.hash !== hash) tracked = { hash, baseline: null };
+      if (tracked.baseline === null) tracked.baseline = activeHeadingIdRef.current;
+    };
+
+    /** Drop the fragment once the reader has moved to another section. */
+    const sync = () => {
+      const hash = window.location.hash;
+      const id = sectionIdOf(hash);
+      if (!id) {
+        tracked = null;
+        return;
+      }
+      if (tracked?.hash !== hash) tracked = { hash, baseline: null };
+      const active = activeHeadingIdRef.current;
+      if (active === id) {
+        // Reader is at the fragment's own section — it's accurate.
+        tracked.baseline = id;
+        return;
+      }
+      // Never clear before the navigation has settled somewhere (a smooth
+      // scroll toward the target passes through other sections).
+      if (tracked.baseline === null || active === tracked.baseline) return;
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      tracked = null;
+    };
+
+    hashKeeperSyncRef.current = sync;
+    const onScroll = () => {
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(settle, 320);
+    };
+    scroll.addEventListener('scroll', onScroll, { passive: true });
+    // Fragment navigations that need no scrolling never fire a scroll
+    // event — record their baseline shortly after (re)load as well.
+    const initialTimer = window.setTimeout(settle, 600);
+    return () => {
+      hashKeeperSyncRef.current = null;
+      scroll.removeEventListener('scroll', onScroll);
+      if (settleTimer !== null) window.clearTimeout(settleTimer);
+      window.clearTimeout(initialTimer);
+    };
+  }, [headingIdsKey]);
+
+  useEffect(() => {
+    activeHeadingIdRef.current = activeHeadingId;
+    hashKeeperSyncRef.current?.();
+  }, [activeHeadingId]);
+
   useEffect(() => {
     if (!docSearchOpen) return;
     const input = docSearchInputRef.current;
@@ -633,12 +753,26 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     // user's persisted column preference.
     if (!floatingComments) setInlineCommentsOpen(true);
 
-    // Focus + scroll the thread card (works for both inline column and right pane).
-    setFocusedThread((prev) => ({
-      threadId: thread.id,
-      nonce: (prev?.nonce ?? 0) + 1,
-      scroll: true,
-    }));
+    // The fragment is consumed now — drop it from the address bar so it
+    // doesn't outlive the navigation it described.
+    if (window.location.hash.startsWith('#comment-')) {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+
+    // Scroll the DOCUMENT to the thread's anchor (which also focuses and
+    // flashes its card). Scrolling the card into view instead would use
+    // the card's current stacked position — unrelated to the anchor while
+    // the column is stacked at the top on load. Threads whose anchor no
+    // longer resolves fall back to centering the card itself.
+    const blockId = thread.anchor.block_id;
+    const jumped = blockId ? scrollToAnchor(blockId, thread.anchor.quote, thread.id) : false;
+    if (!jumped) {
+      setFocusedThread((prev) => ({
+        threadId: thread.id,
+        nonce: (prev?.nonce ?? 0) + 1,
+        scroll: true,
+      }));
+    }
 
     // For reply comments, additionally scroll to and flash the specific reply
     // element after the thread card has had time to expand.
@@ -650,8 +784,20 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     const innerTimer = { current: null as number | null };
     const outerTimer = window.setTimeout(() => {
       const el = document.getElementById(`comment-${commentId}`);
-      if (!el) return;
-      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      const scroll = docScrollRef.current;
+      if (!el || !scroll) return;
+      // Usually the anchor scroll has already pinned the thread card at
+      // the top, reply row in view — then only flash. If the row sits
+      // outside the viewport (very long thread, interrupted scroll),
+      // supersede the anchor settle and center the row itself.
+      const rowRect = el.getBoundingClientRect();
+      const scrollRect = scroll.getBoundingClientRect();
+      const fullyVisible = rowRect.top >= scrollRect.top && rowRect.bottom <= scrollRect.bottom;
+      if (!fullyVisible) {
+        const seq = ++scrollToAnchorSeq.current;
+        const centerOffset = Math.max(0, (scroll.clientHeight - rowRect.height) / 2);
+        scrollToTargetAndSettle(scroll, el, centerOffset, () => seq === scrollToAnchorSeq.current);
+      }
       el.classList.add('ic-row-flash');
       innerTimer.current = window.setTimeout(
         () => el.classList.remove('ic-row-flash'),
@@ -663,10 +809,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       window.clearTimeout(outerTimer);
       if (innerTimer.current !== null) window.clearTimeout(innerTimer.current);
     };
-    // threads is the real trigger; setInlineCommentsOpen/setFocusedThread are
-    // stable useState dispatchers; pendingDeepLinkCommentId is a ref (not reactive).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [threads, floatingComments]);
+    // threads is the real trigger; scrollToAnchor is a stable useCallback;
+    // setInlineCommentsOpen/setFocusedThread are stable useState dispatchers;
+    // pendingDeepLinkCommentId is a ref (not reactive).
+  }, [threads, floatingComments, scrollToAnchor]);
 
   useEffect(() => {
     let cancelled = false;
@@ -738,72 +884,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       return { clientId: getClientId(), displayName: name };
     },
     [displayName, effectiveDisplayName],
-  );
-
-  const scrollToAnchor = useCallback(
-    (blockId: string, quote?: string | null, threadId?: string, scrollOffset = 0) => {
-      const root = docRef.current;
-      if (!root) return;
-
-      let target: HTMLElement | null = null;
-      if (threadId) {
-        target = root.querySelector<HTMLElement>(
-          `mark[data-comment-thread-id="${CSS.escape(threadId)}"]`,
-        );
-      }
-
-      if (!target) {
-        const escaped = CSS.escape(blockId);
-        target = root.querySelector<HTMLElement>(
-          `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-        );
-        if (!target) return;
-        // Recovery for comments anchored before sub-block-aware capture
-        // landed: their stored block_id points at the enclosing top-level
-        // block. If the quote uniquely identifies one sub-block, flash
-        // that one instead of the whole container.
-        if (target.dataset.block && quote) {
-          const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
-          let narrowed: HTMLElement | null = null;
-          let unique = true;
-          for (const sub of subEls) {
-            const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
-            if (text.includes(quote)) {
-              if (narrowed) {
-                unique = false;
-                break;
-              }
-              narrowed = sub;
-            }
-          }
-          if (unique && narrowed) target = narrowed;
-        }
-      }
-
-      // Reveal the target if it sits inside a folded section before
-      // measuring — otherwise the scroll lands at the pre-expansion
-      // offset and the user ends up at an empty spot. The seq guard
-      // discards a stale promise if another thread is clicked during
-      // the expand window.
-      const scroll = docScrollRef.current;
-      const finalTarget = target;
-      const seq = ++scrollToAnchorSeq.current;
-      void expandAncestors(target).then(() => {
-        if (seq !== scrollToAnchorSeq.current) return;
-        if (scrollOffset > 0 && scroll) {
-          const targetTop =
-            finalTarget.getBoundingClientRect().top -
-            scroll.getBoundingClientRect().top +
-            scroll.scrollTop;
-          scroll.scrollTo({ top: targetTop - scrollOffset, behavior: 'smooth' });
-        } else {
-          finalTarget.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-        finalTarget.classList.add('anchor-flash');
-        window.setTimeout(() => finalTarget.classList.remove('anchor-flash'), 1600);
-      });
-    },
-    [],
   );
 
   const onCreate = useCallback(
@@ -1715,6 +1795,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               onSwitchToColumn={() => setCommentsDisplayMode('column')}
               docElementRef={docRef}
               scrollContainerRef={docScrollRef}
+              currentThreadId={focusedThread?.threadId ?? null}
               onOpenThread={openCommentThread}
             />
           )}
@@ -1966,6 +2047,95 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       />
     </div>
   );
+}
+
+const ANCHOR_FLASH_MS = 1600;
+const flashTimers = new WeakMap<HTMLElement, number>();
+
+/** Restartable anchor flash — re-navigating to the same element (e.g.
+ *  two threads sharing one mark) retriggers the animation instead of
+ *  silently re-adding the class mid-run. */
+function flashAnchor(el: HTMLElement): void {
+  const prev = flashTimers.get(el);
+  if (prev !== undefined) {
+    window.clearTimeout(prev);
+    el.classList.remove('anchor-flash');
+    // Style flush so re-adding the class restarts the CSS animation.
+    void el.offsetWidth;
+  }
+  el.classList.add('anchor-flash');
+  flashTimers.set(
+    el,
+    window.setTimeout(() => {
+      el.classList.remove('anchor-flash');
+      flashTimers.delete(el);
+    }, ANCHOR_FLASH_MS),
+  );
+}
+
+const SETTLE_TICK_MS = 150;
+const SETTLE_IDLE_MS = 140;
+const SETTLE_MAX_MS = 2600;
+const SETTLE_TOLERANCE_PX = 2;
+const SETTLE_USER_EVENTS = ['wheel', 'touchstart', 'mousedown'] as const;
+
+/**
+ * Smooth-scroll `target` to the container top (minus `offset`), then
+ * keep verifying until the position sticks. Late layout shifts — webfont
+ * and image loads, mermaid renders — move the target mid-flight, and
+ * some environments drop smooth scrolling entirely; each idle check
+ * re-measures and corrects instantly until two consecutive checks agree,
+ * the user takes over, or a newer navigation supersedes this one.
+ */
+function scrollToTargetAndSettle(
+  scroll: HTMLElement,
+  target: HTMLElement,
+  offset: number,
+  isCurrent: () => boolean,
+): void {
+  const intendedTop = (): number | null => {
+    if (!target.isConnected) return null;
+    const top =
+      target.getBoundingClientRect().top -
+      scroll.getBoundingClientRect().top +
+      scroll.scrollTop -
+      offset;
+    return Math.max(0, Math.min(Math.round(top), scroll.scrollHeight - scroll.clientHeight));
+  };
+  const first = intendedTop();
+  if (first === null) return;
+  scroll.scrollTo({ top: first, behavior: 'smooth' });
+
+  let lastScrollAt = performance.now();
+  let stableChecks = 0;
+  let corrections = 0;
+  const onScroll = () => {
+    lastScrollAt = performance.now();
+  };
+  const stop = () => {
+    window.clearInterval(timer);
+    window.clearTimeout(deadline);
+    scroll.removeEventListener('scroll', onScroll);
+    for (const ev of SETTLE_USER_EVENTS) scroll.removeEventListener(ev, stop);
+  };
+  const timer = window.setInterval(() => {
+    if (!isCurrent()) return stop();
+    if (performance.now() - lastScrollAt < SETTLE_IDLE_MS) return; // still gliding
+    const want = intendedTop();
+    if (want === null) return stop();
+    if (Math.abs(scroll.scrollTop - want) <= SETTLE_TOLERANCE_PX) {
+      if (++stableChecks >= 2) stop();
+      return;
+    }
+    stableChecks = 0;
+    if (++corrections > 4) return stop();
+    scroll.scrollTo({ top: want, behavior: 'auto' });
+  }, SETTLE_TICK_MS);
+  const deadline = window.setTimeout(stop, SETTLE_MAX_MS);
+  scroll.addEventListener('scroll', onScroll, { passive: true });
+  for (const ev of SETTLE_USER_EVENTS) {
+    scroll.addEventListener(ev, stop, { passive: true, once: true });
+  }
 }
 
 function notifyPendingMentions(threads: Thread[], pendingMentionIds: string[]): void {
