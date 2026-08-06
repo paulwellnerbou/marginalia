@@ -19,16 +19,26 @@ export function normalizeWs(s: string): string {
   return s.replace(/\s+/gu, ' ').trim();
 }
 
-/** `el`'s normalized text, minus the injected chrome. */
+/**
+ * `el`'s normalized text, minus the injected chrome.
+ *
+ * The `querySelector` guard is the fast path, not overhead: chrome only
+ * ever lives under a heading, so most blocks answer no and fall straight
+ * through to `textContent`. Testing the block's own tag name instead would
+ * be cheaper but wrong — headings nest inside blockquotes and list items,
+ * and the plugin decorates those too.
+ */
 export function blockTextOf(el: HTMLElement): string {
   if (!el.querySelector(INJECTED_CHROME_SELECTOR)) return normalizeWs(el.textContent ?? '');
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      (node.parentElement as HTMLElement | null)?.closest(INJECTED_CHROME_SELECTOR)
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT,
+  });
   let raw = '';
-  for (const node of Array.from(el.childNodes)) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      raw += node.nodeValue ?? '';
-    } else if (node instanceof HTMLElement && !node.matches(INJECTED_CHROME_SELECTOR)) {
-      raw += node.textContent ?? '';
-    }
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    raw += (node as Text).data;
   }
   return normalizeWs(raw);
 }

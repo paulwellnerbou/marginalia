@@ -132,6 +132,33 @@ describe('reanchor: short quotes', () => {
     expect(upd.blockId).toBeNull();
   });
 
+  test('a stale block id does not survive a tie when its stored context agrees nowhere', () => {
+    const blocks = blockMap([
+      { id: 'b1', text: 'And it goes on.' },
+      { id: 'b2', text: 'But it goes on.' },
+    ]);
+    const upd = reanchor(
+      comment({
+        anchor_block_id: 'b1',
+        anchor_quote: 'it',
+        anchor_prefix: 'up along the fence where ',
+        anchor_suffix: ' climbs into the trees.',
+      }),
+      blocks,
+    );
+    expect(upd.linkStatus).toBe('orphaned');
+  });
+
+  test('a block id survives a tie when there was no context to test it against', () => {
+    const blocks = blockMap([
+      { id: 'b1', text: 'And it goes on, it does.' },
+      { id: 'b2', text: 'But it goes on.' },
+    ]);
+    const upd = reanchor(comment({ anchor_block_id: 'b1', anchor_quote: 'it' }), blocks);
+    expect(upd.linkStatus).toBe('low-confidence');
+    expect(upd.blockId).toBe('b1');
+  });
+
   test('a distinctive quote that moved is still followed', () => {
     const blocks = blockMap([
       { id: 'b1', text: 'A different sentence now.' },

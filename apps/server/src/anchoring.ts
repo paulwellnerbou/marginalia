@@ -324,9 +324,15 @@ function locateFragment(
   // its stored context has been edited away, it matches half the document
   // equally well, and picking one leaves a comment silently attached to
   // unrelated prose. Orphaning says so instead.
+  //
+  // The original block is the one exception, on the grounds that its id came
+  // from somewhere — but only while it isn't the stale id this whole ladder
+  // exists to catch. Stored context that was testable and agreed nowhere in
+  // it is exactly what stale looks like, so that case orphans like any other.
+  const preferredStillCredible = best.preferred && (!hasContext || best.hit.context > 0);
   const decisive =
     !runnerUp ||
-    best.preferred ||
+    preferredStillCredible ||
     best.hit.context >= STRONG_CONTEXT ||
     best.hit.context > runnerUp.hit.context ||
     best.structural > runnerUp.structural;
