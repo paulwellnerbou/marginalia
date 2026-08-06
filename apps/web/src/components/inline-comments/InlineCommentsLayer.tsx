@@ -10,6 +10,7 @@ import {
   useState,
 } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
+import { resolveAnchorElement } from '../../lib/anchor-target.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import {
@@ -128,33 +129,6 @@ const COLUMN_WIDTH_TRANSITION_FALLBACK_MS = COLUMN_WIDTH_TRANSITION_MS + 80;
 interface GlobalState {
   epoch: number;
   isSticky: boolean;
-}
-
-function resolveAnchorElement(
-  doc: HTMLElement,
-  blockId: string,
-  quote?: string | null,
-): HTMLElement | null {
-  const escaped = CSS.escape(blockId);
-  const target = doc.querySelector<HTMLElement>(
-    `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-  );
-  if (!target) return null;
-  if (!target.dataset.block || !quote) return target;
-
-  const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
-  let narrowed: HTMLElement | null = null;
-  let unique = true;
-  for (const sub of subEls) {
-    const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
-    if (!text.includes(quote)) continue;
-    if (narrowed) {
-      unique = false;
-      break;
-    }
-    narrowed = sub;
-  }
-  return unique && narrowed ? narrowed : target;
 }
 
 export function InlineCommentsLayer({
@@ -306,6 +280,14 @@ export function InlineCommentsLayer({
   }, [sorted, canComment, pendingAnchor, blockOrder]);
 
   /**
+   * The thread most recently navigated to (toolbar arrows, card jump
+   * buttons, ref links). The toolbar steps next/prev from here when the
+   * viewport is still at that thread's position — scroll position alone
+   * can't tell apart threads anchored to the same text.
+   */
+  const lastNavThreadRef = useRef<string | null>(null);
+
+  /**
    * When stacking is disabled, cards sit at their natural anchor
    * positions (no stickyTopPad offset). Wrap onScrollToAnchor to
    * inject the stickyTopPad so the scrolled-to text appears with
@@ -313,6 +295,7 @@ export function InlineCommentsLayer({
    */
   const scrollToAnchorWithOffset = useCallback(
     (blockId: string, quote?: string | null, threadId?: string) => {
+      if (threadId) lastNavThreadRef.current = threadId;
       onScrollToAnchor(blockId, quote, threadId, stackingEnabled ? 0 : stickyTopPad);
     },
     [onScrollToAnchor, stackingEnabled, stickyTopPad],
@@ -593,10 +576,15 @@ export function InlineCommentsLayer({
     const timeout = window.setTimeout(() => {
       columnWidthTransitioning.current = false;
       if (open) measureOpenColumnWidth();
+      // The open/close transition changes the document column's width →
+      // the text reflows and every anchor below the fold moves. Remeasure
+      // here as well as in the ResizeObserver so the anchors are right
+      // even where the observer is throttled.
+      requestRemeasure();
     }, COLUMN_WIDTH_TRANSITION_FALLBACK_MS);
 
     return () => window.clearTimeout(timeout);
-  }, [open, measureOpenColumnWidth]);
+  }, [open, measureOpenColumnWidth, requestRemeasure]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -638,6 +626,35 @@ export function InlineCommentsLayer({
     obs.observe(el);
     return () => obs.disconnect();
   }, []);
+
+  // The document can reflow without a single DOM mutation — webfont and
+  // image loads, the column itself opening (which narrows the text), a
+  // reading-width change — silently shifting every anchor below the
+  // reflow point. Watching the article's box size catches all of them;
+  // without this the measured tops drift by thousands of pixels on long
+  // documents and cards render next to the wrong text.
+  useEffect(() => {
+    if (!open) return;
+    const doc = docElementRef.current;
+    if (!doc || typeof ResizeObserver === 'undefined') return;
+    const obs = new ResizeObserver(() => requestRemeasure());
+    obs.observe(doc);
+    return () => obs.disconnect();
+  }, [open, docElementRef, requestRemeasure]);
+
+  // Webfont swaps reflow the text without resizing anything the other
+  // observers watch reliably — one explicit remeasure once all fonts land.
+  useEffect(() => {
+    if (!open) return;
+    if (typeof document === 'undefined' || !document.fonts?.ready) return;
+    let cancelled = false;
+    void document.fonts.ready.then(() => {
+      if (!cancelled) requestRemeasure();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, requestRemeasure]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: docHtml is the explicit re-attach trigger so the observer points at the freshly rendered DOM after a content swap.
   useEffect(() => {
@@ -851,7 +868,8 @@ export function InlineCommentsLayer({
         rootRef={toolbarRef}
         sortedThreads={sorted.map((s) => s.thread)}
         scrollContainerRef={scrollContainerRef}
-        cardNaturalTops={naturalTops.current}
+        docElementRef={docElementRef}
+        lastNavThreadRef={lastNavThreadRef}
         stickyTopPad={stickyTopPad}
         open={open}
         onToggleOpen={onToggleOpen}
