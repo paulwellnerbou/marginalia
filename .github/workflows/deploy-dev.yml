@@ -11,6 +11,14 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+# One deploy at a time, so two runs can't interleave docker commands on the
+# VPS. Deliberately NOT cancel-in-progress: runs queue in build-completion
+# order, not commit order, so cancelling the running one can kill the newest
+# image in favour of an older one that merely queued later.
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
 jobs:
   deploy-dev:
     runs-on: ubuntu-latest
@@ -42,8 +50,29 @@ jobs:
             BRANCH_TAG="unknown"
           fi
           echo "IMAGE_TAG=${BRANCH_TAG}-${SHORT_SHA}" >> "$GITHUB_ENV"
+          echo "DEPLOY_SHA=${SHA}" >> "$GITHUB_ENV"
+
+      # Merges landing close together finish building out of order, and each
+      # build triggers its own deploy. Without this check the deploy that
+      # finishes last wins, which is not necessarily the newest commit — that
+      # is how dev ended up behind main on 2026-08-05. A superseded commit
+      # bows out; the deploy for main's tip does the work.
+      - name: Skip superseded commits
+        id: freshness
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TIP="$(gh api "repos/${{ github.repository }}/commits/main" --jq .sha)"
+          if [ "$DEPLOY_SHA" != "$TIP" ]; then
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping deploy of ${DEPLOY_SHA::7}: main is now at ${TIP::7}"
+          else
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up SSH
+        if: ${{ steps.freshness.outputs.superseded != 'true' }}
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
@@ -51,6 +80,7 @@ jobs:
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
 
       - name: Deploy to Development
+        if: ${{ steps.freshness.outputs.superseded != 'true' }}
         run: |
           ssh ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
             "DEPLOY_PATH=${{ secrets.DEPLOY_PATH }} \
@@ -61,6 +91,7 @@ jobs:
              bash -s" < deploy-scripts/deploy-instance.sh dev ${{ env.IMAGE_TAG }}
 
       - name: Verify deployment
+        if: ${{ steps.freshness.outputs.superseded != 'true' }}
         run: |
           echo "Development deployed successfully!"
           echo "URL: https://${{ vars.DOMAIN }}"
