@@ -1731,6 +1731,63 @@ describe('threads API', () => {
     expect(listBody.threads.find((t) => t.id === threadId)).toBeUndefined();
   });
 
+  test('deleted threads leave no trace in bundle export and round-trip cleanly', async () => {
+    const uid = await newDoc('# Title');
+    const threadId = await acceptedProposal(uid, 'Sharper title', '# Better title');
+
+    const deleteRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'DELETE',
+        headers: asAdmin(),
+      }),
+    );
+    expect(deleteRes.status).toBe(204);
+
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/export`, { headers: asAdmin() }),
+    );
+    expect(exportRes.status).toBe(200);
+    const bundle = (await exportRes.json()) as {
+      document: { source: string };
+      comments: unknown[];
+    };
+    // Accepted content survives; the deleted discussion is fully absent.
+    expect(bundle.document.source).toBe('# Better title');
+    expect(bundle.comments).toHaveLength(0);
+    const serialized = JSON.stringify(bundle);
+    expect(serialized).not.toContain(threadId);
+    expect(serialized).not.toContain('Sharper title');
+
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: rawHeadersFor(ALICE),
+        body: serialized,
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as {
+      uid: string;
+      imported_comments: number;
+      admin_invite: { token: string };
+    };
+    expect(imported.imported_comments).toBe(0);
+
+    // Imported docs start a fresh repo: history is the upload commit
+    // only, so there is no accept-proposal entry the deleted thread
+    // could have decorated.
+    const importedHeaders = rawHeadersFor(ALICE);
+    importedHeaders.set(INVITE_HEADER, imported.admin_invite.token);
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/history`, {
+        headers: importedHeaders,
+      }),
+    );
+    expect(historyRes.status).toBe(200);
+    const { history } = (await historyRes.json()) as { history: Array<{ action: string }> };
+    expect(history.map((e) => e.action)).toEqual(['upload']);
+  });
+
   test('resolving a reply is rejected', async () => {
     const uid = await newDoc('# Title');
     const blockId = await firstBlockId(uid);

@@ -546,6 +546,10 @@ async function exportDocument(c: Context, deps: AppDeps) {
 
   const source = store.read(doc);
   const rendered = await renderDocument(source, doc.format);
+  // Deleted threads are omitted on purpose: deletion is meant to be
+  // complete, and bundles carry no git history whose entries their
+  // tombstones could decorate after an import (import starts a fresh
+  // repo from the source snapshot).
   const comments = db
     .prepare(
       `SELECT
