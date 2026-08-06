@@ -1284,6 +1284,80 @@ describe('threads API', () => {
     expect(await acceptRes.json()).toEqual({ error: 'proposal-conflict' });
   });
 
+  test('accept answers 503 proposal-merge-unavailable when the merge tool is missing', async () => {
+    // A deployment without `git` cannot run the three-way merge that
+    // backs accept. That must not come back as 409 proposal-conflict:
+    // the proposal is fine and the user has nothing to fix.
+    // Sequentially accepted siblings build the criss-cross history that
+    // iso-git's merge refuses, which is the only route to the native
+    // fallback — and the shape a busy review document ends up in.
+    const paras = [1, 2, 3, 4, 5, 6].map((n) => `Para ${n} baseline.`);
+    const uid = await newDoc(`# Welcome\n\n${paras.join('\n\n')}\n`);
+
+    const blockFor = async (text: string) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+      );
+      const json = (await res.json()) as {
+        rendered: { blocks: Array<{ id: string; text: string }> };
+      };
+      const block = json.rendered.blocks.find((b) => b.text === text);
+      if (!block) throw new Error(`missing block: ${text}`);
+      return block.id;
+    };
+    const propose = async (text: string, replacement: string) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: headersFor(BOB),
+          body: JSON.stringify({
+            anchor: { block_id: await blockFor(text), quote: text },
+            proposal: { proposed_text: replacement },
+          }),
+        }),
+      );
+      expect(res.status).toBe(201);
+      return ((await res.json()) as { thread: ThreadShape }).thread.id;
+    };
+    const accept = (id: string) =>
+      app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${id}/respond`, {
+          method: 'POST',
+          headers: asAdmin(),
+          body: JSON.stringify({ action: 'accept' }),
+        }),
+      );
+
+    const ids: string[] = [];
+    for (const n of [1, 2, 3, 4, 5]) {
+      ids.push(await propose(`Para ${n} baseline.`, `Para ${n} edited.`));
+    }
+    for (const n of [0, 1]) expect((await accept(ids[n]!)).status).toBe(200);
+
+    // Branched off the intermediate merge commit, so accepting the rest
+    // leaves this one with several merge bases.
+    const late = await propose('Para 6 baseline.', 'Para 6 edited.');
+    for (const n of [2, 3, 4]) expect((await accept(ids[n]!)).status).toBe(200);
+
+    const realPath = process.env.PATH;
+    process.env.PATH = join(dir, 'no-binaries-here');
+    try {
+      const res = await accept(late);
+      expect(res.status).toBe(503);
+      expect(await res.json()).toEqual({ error: 'proposal-merge-unavailable' });
+    } finally {
+      // Assigning `undefined` back would leave the key defined (and under
+      // Node would set the literal string "undefined"), so an unset PATH
+      // has to be restored by deleting it.
+      if (realPath === undefined) delete process.env.PATH;
+      else process.env.PATH = realPath;
+    }
+
+    // Nothing was recorded against the proposal: with git back it
+    // accepts normally.
+    expect((await accept(late)).status).toBe(200);
+  });
+
   test('multi-block proposal: rejects table-cell endpoints as orphaned', async () => {
     // A table-cell id sneaking in as the end of a multi-block range
     // would splice mid-row through `|` pipes and corrupt the table.

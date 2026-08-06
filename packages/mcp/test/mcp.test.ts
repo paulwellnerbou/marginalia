@@ -538,7 +538,7 @@ describe('marginalia MCP server', () => {
     expect(requeued).not.toContain(threadId);
 
     const diff = await call('get_proposal_diff', { document: adminUrl, thread_id: proposalId });
-    expect(diff).toContain('applies cleanly: clean');
+    expect(diff).toContain('mergeability: clean');
     expect(diff).toContain(
       '+By noon the dunes had swallowed the horizon. Ibrahim stopped counting',
     );
@@ -635,7 +635,7 @@ describe('marginalia MCP server', () => {
     expect(threads).toMatch(/you can: .*update/);
 
     const diff = await call('get_proposal_diff', { document: adminUrl, thread_id: proposalId });
-    expect(diff).toContain('applies cleanly: clean');
+    expect(diff).toContain('mergeability: clean');
     expect(diff).toContain('+- Water rations: five days');
 
     const accepted = await call('respond_to_thread', {
@@ -698,7 +698,7 @@ describe('marginalia MCP server', () => {
     expect(updated).toContain('+- Distance to the well: 40km, by the old map');
 
     const diff = await call('get_proposal_diff', { document: adminUrl, thread_id: proposalId });
-    expect(diff).toContain('applies cleanly: clean');
+    expect(diff).toContain('mergeability: clean');
 
     const accepted = await call('respond_to_thread', {
       document: adminUrl,

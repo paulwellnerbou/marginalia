@@ -39,7 +39,6 @@ import type {
   TocNode,
 } from '../lib/api.js';
 import {
-  ApiError,
   acceptEditProposal as apiAcceptProposal,
   createComment as apiCreate,
   createEditProposal as apiCreateProposal,
@@ -61,6 +60,7 @@ import {
   listThreads,
   uploadAsset,
 } from '../lib/api.js';
+import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { loadBlockRanges } from '../lib/block-range-loader.js';
 import { highlightRange } from '../lib/block-span.js';
 import { documentTitle } from '../lib/doc-title.js';
@@ -69,7 +69,7 @@ import { expandAncestors } from '../lib/heading-collapse.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
-import { ensureNotificationPermission, notify } from '../lib/notifications.js';
+import { ensureNotificationPermission, notify, showErrorToast } from '../lib/notifications.js';
 import {
   anchorTouchesSections,
   applySectionFilterToDocument,
@@ -100,7 +100,7 @@ import { FloatingCommentsLayer } from './inline-comments/FloatingCommentsLayer.j
 import { FloatingCommentsToolbar } from './inline-comments/FloatingCommentsToolbar.js';
 import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
 import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
-import { COMMENT_FLASH_MS } from './inline-comments/inlineUtils.js';
+import { COMMENT_FLASH_MS, type ThreadActionResult } from './inline-comments/inlineUtils.js';
 import { McpPanel } from './McpPanel.js';
 import { ReadAloudControls } from './ReadAloudControls.js';
 import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
@@ -142,6 +142,22 @@ type CommentsDisplayMode = 'column' | 'floating';
 type PendingDraft =
   | { mode: 'comment'; anchor: CommentAnchor }
   | { mode: 'proposal'; target: ProposalTarget };
+
+/**
+ * Failures used to land in a text slot in the document toolbar, which is
+ * a horizontally scrolling row with a hidden scrollbar — on a narrow doc
+ * pane the message simply drifted off the right edge, so a failed accept
+ * left no trace anywhere the user was looking. A toast is the only
+ * channel guaranteed to be in view. Thread workflow failures also travel
+ * back to the card that started them, which keeps the reason attached to
+ * the proposal after the toast expires.
+ *
+ * Module scope on purpose: nothing here closes over render state, so it
+ * never has to appear in a hook dependency list.
+ */
+function reportFailure(message: string): void {
+  showErrorToast('That didn’t work', message);
+}
 
 export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const navigate = useNavigate();
@@ -220,7 +236,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
    *  accepted (auto-merged) so the displayed doc stays fresh without a reload. */
   const [liveSource, setLiveSource] = useState<string>(doc.source);
   const [liveRendered, setLiveRendered] = useState(doc.rendered);
-  const [error, setError] = useState<string | null>(null);
 
   // Pending comment / proposal anchors carry block_ids that are only
   // valid for the current document content. Drop any in-flight draft
@@ -917,18 +932,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const onCreate = useCallback(
     async (payload: { anchor: CommentAnchor; body: string; display_name?: string }) => {
       if (!canComment) {
-        setError('You have read-only access to this document.');
+        reportFailure('You have read-only access to this document.');
         return;
       }
       const identity = resolveIdentity(payload.display_name);
       if (!identity) {
-        setError('Please set your display name first.');
+        reportFailure('Please set your display name first.');
         return;
       }
       try {
         await apiCreate(doc.uid, { anchor: payload.anchor, body: payload.body }, identity);
         setPendingDraft(null);
-        setError(null);
         // A comment on a spot the section filter hides (preamble, an
         // ancestor heading) would vanish the moment it posts — lift
         // the filter so the author sees their own thread.
@@ -942,7 +956,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.createComment', err, { uid: doc.uid });
-        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to post');
+        reportFailure(apiErrorMessage(err, 'Could not post that comment'));
       }
     },
     [
@@ -966,7 +980,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.replyToThread', err, { uid: doc.uid, threadId });
-        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to reply');
+        reportFailure(apiErrorMessage(err, 'Could not post that reply'));
       }
     },
     [doc.uid, resolveIdentity, refreshThreads],
@@ -978,14 +992,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       kind: 'resolve' | 'reopen' | 'accept' | 'reject',
       body?: string,
       name?: string,
-    ): Promise<boolean> => {
+    ): Promise<ThreadActionResult> => {
       const identity = resolveIdentity(name);
       if (!identity) {
         // Match the other identity-gated actions in this file — without
         // this, the diff dialog's Accept/Reject just silently no-ops for
         // generic invitees who haven't set a display name yet.
-        setError('Please set your display name first.');
-        return false;
+        const message = 'Please set your display name first.';
+        reportFailure(message);
+        return { ok: false, message };
       }
       try {
         if (kind === 'resolve' || kind === 'reopen') {
@@ -999,30 +1014,28 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           await apiRejectProposal(doc.uid, id, identity, body);
           await refreshThreads();
         }
-        // Clear any stale error (e.g. an earlier missing-display-name
-        // toast) so the toolbar doesn't keep showing it after a later
-        // successful workflow action.
-        setError(null);
-        return true;
+        return { ok: true };
       } catch (err) {
         reportError('DocumentLayout.resolveThread', err, { id, kind });
-        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : `${kind} failed`);
+        const message = apiErrorMessage(err, `Could not ${kind} this thread`);
+        reportFailure(message);
         // Signal failure so callers (composer / diff dialog) don't clear
         // drafts or close on a failed accept/reject. Don't re-throw —
         // `void runWorkflow(...)` callsites would surface the rejection
         // through `unhandledrejection` even though it's already toasted.
-        return false;
+        return { ok: false, message };
       }
     },
     [doc.uid, resolveIdentity, refreshThreads, refreshDoc],
   );
 
   const onRepairThread = useCallback(
-    async (id: string): Promise<boolean> => {
+    async (id: string): Promise<ThreadActionResult> => {
       const identity = resolveIdentity();
       if (!identity) {
-        setError('Please set your display name first.');
-        return false;
+        const message = 'Please set your display name first.';
+        reportFailure(message);
+        return { ok: false, message };
       }
       try {
         const repaired = await apiRepairProposalAnchor(doc.uid, id, identity);
@@ -1035,12 +1048,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           next.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
           return next;
         });
-        setError(null);
-        return true;
+        return { ok: true };
       } catch (err) {
         reportError('DocumentLayout.repairThread', err, { id });
-        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Repair failed');
-        return false;
+        const message = apiErrorMessage(err, 'Could not repair the anchor');
+        reportFailure(message);
+        return { ok: false, message };
       }
     },
     [doc.uid, resolveIdentity],
@@ -1069,7 +1082,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     async (refName: string, file: File) => {
       const identity = resolveIdentity();
       if (!identity) {
-        setError('Please set your display name first.');
+        reportFailure('Please set your display name first.');
         return;
       }
       try {
@@ -1077,8 +1090,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         await refreshDoc();
       } catch (err) {
         reportError('DocumentLayout.uploadAsset', err, { uid: doc.uid, refName });
-        if (err instanceof ApiError) setError(`Upload failed: ${err.status} ${err.code}`);
-        else setError('Upload failed');
+        reportFailure(apiErrorMessage(err, 'Upload failed'));
       }
     },
     [doc.uid, resolveIdentity, refreshDoc],
@@ -1089,7 +1101,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       if (!pendingProposalTarget) return;
       const identity = resolveIdentity(payload.display_name);
       if (!identity) {
-        setError('Please set your display name first.');
+        reportFailure('Please set your display name first.');
         return;
       }
       try {
@@ -1104,7 +1116,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         if (payload.rationale) req.rationale = payload.rationale;
         await apiCreateProposal(doc.uid, req, identity);
         setPendingDraft(null);
-        setError(null);
         if (
           sectionFilterActive &&
           blockSectionIds &&
@@ -1122,7 +1133,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.createProposal', err, { uid: doc.uid });
-        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to propose');
+        reportFailure(apiErrorMessage(err, 'Could not create that proposal'));
       }
     },
     [
@@ -1149,7 +1160,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       if (!editingProposal) return;
       const identity = resolveIdentity(payload.display_name);
       if (!identity) {
-        setError('Please set your display name first.');
+        reportFailure('Please set your display name first.');
         return;
       }
       try {
@@ -1159,16 +1170,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         if (payload.comment) req.comment = payload.comment;
         await apiUpdateProposal(doc.uid, editingProposal.id, req, identity);
         setEditingProposal(null);
-        setError(null);
         await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.updateProposal', err, {
           uid: doc.uid,
           threadId: editingProposal.id,
         });
-        setError(
-          err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to update proposal',
-        );
+        reportFailure(apiErrorMessage(err, 'Could not update that proposal'));
       }
     },
     [doc.uid, editingProposal, resolveIdentity, refreshThreads],
@@ -1183,7 +1191,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         setThreads((prev) => prev.filter((t) => t.id !== threadId));
       } catch (err) {
         reportError('DocumentLayout.deleteThread', err, { threadId });
-        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Delete failed');
+        reportFailure(apiErrorMessage(err, 'Delete failed'));
         await refreshThreads();
       }
     },
@@ -1217,7 +1225,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     async (nodeId: string, emoji: string) => {
       const identity = resolveIdentity();
       if (!identity) {
-        setError('Please set your display name first.');
+        reportFailure('Please set your display name first.');
         return;
       }
       try {
@@ -1228,7 +1236,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         setThreads((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
       } catch (err) {
         reportError('DocumentLayout.toggleReaction', err, { nodeId });
-        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Reaction failed');
+        reportFailure(apiErrorMessage(err, 'Could not save that reaction'));
       }
     },
     [doc.uid, resolveIdentity],
@@ -1238,17 +1246,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     async (oid: string) => {
       const identity = resolveIdentity();
       if (!identity) {
-        setError('Please set your display name first.');
+        reportFailure('Please set your display name first.');
         throw new Error('display-name-required');
       }
       try {
         await apiRestoreHistoryVersion(doc.uid, oid, identity);
         await Promise.all([refreshDoc(), refreshThreads()]);
         setHistoryVersion((v) => v + 1);
-        setError(null);
       } catch (err) {
         reportError('DocumentLayout.restoreHistoryVersion', err, { oid, uid: doc.uid });
-        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Restore failed');
+        reportFailure(apiErrorMessage(err, 'Restore failed'));
         throw err;
       }
     },
@@ -1266,9 +1273,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         navigate('/');
       } catch (err) {
         reportError('DocumentLayout.restoreAsNewDocument', err, { oid, uid: doc.uid });
-        setError(
-          err instanceof ApiError ? `${err.status}: ${err.code}` : 'Could not open as new document',
-        );
+        reportFailure(apiErrorMessage(err, 'Could not open as a new document'));
         throw err;
       }
     },
@@ -1472,14 +1477,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     async (entry: HistoryEntry) => {
       const identity = resolveIdentity();
       if (!identity) {
-        setError('Please set your display name first.');
+        reportFailure('Please set your display name first.');
         throw new Error('display-name-required');
       }
       try {
         const res = await apiRevertHistoryVersion(doc.uid, entry.oid, identity);
         await Promise.all([refreshDoc(), refreshThreads()]);
         setHistoryVersion((v) => v + 1);
-        setError(null);
 
         const reopenedThreadId = res.reopened_proposal_id;
         if (reopenedThreadId) openCommentThread(reopenedThreadId);
@@ -1488,7 +1492,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           oid: entry.oid,
           uid: doc.uid,
         });
-        setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Revert failed');
+        reportFailure(apiErrorMessage(err, 'Revert failed'));
         throw err;
       }
     },
@@ -1655,11 +1659,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </Select.Root>
             </Flex>
             <span className="spacer" />
-            {error && (
-              <Text size="1" color="red">
-                {error}
-              </Text>
-            )}
             {/* Download is available to any reader — unlike settings /
                 access control which are admin-only. Sits next to the
                 gear so the whole toolbar cluster reads as a single set

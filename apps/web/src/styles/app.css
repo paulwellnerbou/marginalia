@@ -2027,6 +2027,12 @@ button.primary:disabled {
     transform: translateY(0);
   }
 }
+.toast-error {
+  border-left-color: var(--red-9);
+}
+.toast-error .toast-head strong {
+  color: var(--red-11);
+}
 .toast-head {
   display: flex;
   align-items: baseline;
@@ -3634,7 +3640,12 @@ button.primary:disabled {
 
 .ic-error {
   font-size: 0.72rem;
-  color: #b91c1c;
+  /* Radix red-11 holds its contrast in both appearances; the old fixed
+     hex went near-invisible on the dark panel. */
+  color: var(--red-11);
+  display: block;
+  margin-top: 0.25rem;
+  line-height: 1.35;
 }
 
 /* ---------- Avatar ---------- */

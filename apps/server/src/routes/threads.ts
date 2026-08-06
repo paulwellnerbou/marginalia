@@ -403,7 +403,7 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
   const diff = await resolveProposalDiff(doc, proposal, deps);
   if (!diff) return c.json({ error: 'proposal-diff-unavailable' }, 410);
 
-  let mergeable: 'clean' | 'conflict' | 'stale' | null = null;
+  let mergeable: 'clean' | 'conflict' | 'stale' | 'unavailable' | null = null;
   // Skip the dry-run merge when the proposal can't be accepted regardless
   // of the result (orphaned anchor, missing block id) — running it would
   // burn the per-doc lock and could surface a misleading 'clean' for a
@@ -419,8 +419,11 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
   if (wantMergeable) {
     const status = await deps.store.proposalMergeStatus(doc, proposal.id);
     // `merged` and `absent` both collapse to `stale` — the proposal
-    // can no longer be applied as-is and needs a rebase.
-    mergeable = status === 'clean' ? 'clean' : status === 'conflict' ? 'conflict' : 'stale';
+    // can no longer be applied as-is and needs a rebase. `unavailable`
+    // stays distinct: nothing is wrong with the proposal, the server
+    // just can't run the merge.
+    mergeable =
+      status === 'clean' || status === 'conflict' || status === 'unavailable' ? status : 'stale';
   }
   return c.json({ ...diff, mergeable });
 }
@@ -496,6 +499,10 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
         doc.format,
       );
       linkStatus = anchor?.linkStatus ?? null;
+    } else if (preview.reason === 'unavailable') {
+      // Recording 'conflict' here would pin a permanent conflict badge on
+      // a proposal whose merge was never actually attempted.
+      return c.json({ error: 'proposal-merge-unavailable' }, 503);
     } else if (preview.reason === 'conflict') {
       anchor = await locateConflictRepairAnchor(doc, row, store);
       linkStatus = anchor ? 'conflict' : null;
@@ -1549,6 +1556,11 @@ async function prepareAcceptProposalThread(
     if (merge.reason === 'conflict') {
       throw new ThreadActionError(409, 'proposal-conflict');
     }
+    // The merge tool itself is missing or broken — the proposal is fine,
+    // so say so instead of blaming it for a conflict it doesn't have.
+    if (merge.reason === 'unavailable') {
+      throw new ThreadActionError(503, 'proposal-merge-unavailable');
+    }
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
   const oid = merge.oid;
@@ -2527,7 +2539,7 @@ function newCommentId(): string {
 
 class ThreadActionError extends Error {
   constructor(
-    readonly status: 400 | 409,
+    readonly status: 400 | 409 | 503,
     readonly code: string,
   ) {
     super(code);

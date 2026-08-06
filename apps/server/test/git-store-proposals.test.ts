@@ -271,6 +271,62 @@ Para C baseline.
     expect(await store.proposalMergeStatus(doc, 'p3')).toBe('conflict');
   });
 
+  /**
+   * A runtime image without `git` used to report every proposal that
+   * iso-git couldn't merge as an unresolvable conflict, so proposals
+   * that merge perfectly well became permanently unacceptable. Hiding
+   * the PATH reproduces exactly that deployment; the criss-cross
+   * topology is the one that reaches the native fallback at all (see
+   * the MergeNotSupportedError case below).
+   */
+  test('a missing `git` reports unavailable rather than conflict', async () => {
+    const paras = [1, 2, 3, 4, 5, 6].map((n) => `Para ${n} baseline.`);
+    const base = `# Title\n\n${paras.join('\n\n')}\n`;
+    await store.write(doc, base, author, 'update');
+    const baseOid = await mainOid();
+    const edit = (n: number) => base.replace(`Para ${n} baseline.`, `Para ${n} edited.`);
+
+    for (const n of [1, 2, 3, 4, 5]) {
+      await store.createProposalBranch(doc, baseOid, `p${n}`, edit(n), author);
+    }
+    expect((await store.mergeProposalBranch(doc, 'p1', author)).ok).toBe(true);
+    expect((await store.mergeProposalBranch(doc, 'p2', author)).ok).toBe(true);
+
+    const m2Oid = await mainOid();
+    const xProposed = store.read(doc).replace('Para 6 baseline.', 'Para 6 from x.');
+    await store.createProposalBranch(doc, m2Oid, 'x', xProposed, author);
+
+    for (const n of [3, 4, 5]) {
+      expect((await store.mergeProposalBranch(doc, `p${n}`, author)).ok).toBe(true);
+    }
+
+    const realPath = process.env.PATH;
+    process.env.PATH = join(dir, 'no-binaries-here');
+    try {
+      expect(await store.proposalMergeStatus(doc, 'x')).toBe('unavailable');
+      expect(await store.mergeProposalBranch(doc, 'x', author)).toEqual({
+        ok: false,
+        reason: 'unavailable',
+      });
+      expect(await store.previewProposalMergeWithGit(doc, 'x')).toEqual({
+        ok: false,
+        reason: 'unavailable',
+      });
+    } finally {
+      // Assigning `undefined` back would leave the key defined (and under
+      // Node would set the literal string "undefined"), so an unset PATH
+      // has to be restored by deleting it.
+      if (realPath === undefined) delete process.env.PATH;
+      else process.env.PATH = realPath;
+    }
+
+    // With the binary back, the same proposal merges cleanly — nothing
+    // about it was ever wrong.
+    expect(await store.proposalMergeStatus(doc, 'x')).toBe('clean');
+    expect((await store.mergeProposalBranch(doc, 'x', author)).ok).toBe(true);
+    expect(store.read(doc)).toContain('Para 6 from x.');
+  });
+
   test('previewProposalMergeWithGit materializes a native three-way merge without moving main', async () => {
     const baseOid = await mainOid();
     const aProposed = INITIAL.replace('Para A baseline.', 'Para A from main.');
