@@ -213,6 +213,105 @@ export class GitStore {
     return git.resolveRef({ fs, dir: this.repoDir(doc.uid), ref: 'main' });
   }
 
+  /**
+   * Serialize main's full commit history as a git packfile, for embedding
+   * in an export bundle. Returns null when the doc has no repo yet.
+   *
+   * Only objects reachable from main are packed — proposal branches are
+   * deliberately excluded, because `refs/proposals/<id>` is keyed by a
+   * comment id that import regenerates, and open proposals are rebuilt
+   * from their bundled `proposed_text` anyway.
+   *
+   * `packObjects` packs exactly the oids it is handed (no reachability
+   * walk of its own), so the caller-side walk below has to enumerate
+   * every commit, tree, and blob itself.
+   *
+   * `commits` counts everything on main, including the seed commit that
+   * `history()` filters out — it describes the pack, not the timeline.
+   */
+  async exportHistoryPack(
+    doc: DocLocator,
+  ): Promise<{ pack: Uint8Array; headOid: string; commits: number } | null> {
+    const dir = this.repoDir(doc.uid);
+    if (!existsSync(join(dir, '.git'))) return null;
+    let headOid: string;
+    try {
+      headOid = await git.resolveRef({ fs, dir, ref: 'main' });
+    } catch {
+      return null;
+    }
+
+    const commits = await git.log({ fs, dir, ref: 'main' });
+    const oids = new Set<string>();
+    for (const entry of commits) {
+      oids.add(entry.oid);
+      await this.collectTreeObjects(dir, entry.commit.tree, oids);
+    }
+
+    const { packfile } = await git.packObjects({ fs, dir, oids: [...oids], write: false });
+    if (!packfile) return null;
+    return { pack: packfile, headOid, commits: commits.length };
+  }
+
+  /** Add a tree and everything under it to `oids`, skipping already-seen subtrees. */
+  private async collectTreeObjects(dir: string, treeOid: string, oids: Set<string>): Promise<void> {
+    if (oids.has(treeOid)) return;
+    oids.add(treeOid);
+    const { tree } = await git.readTree({ fs, dir, oid: treeOid });
+    for (const entry of tree) {
+      if (entry.type === 'tree') await this.collectTreeObjects(dir, entry.oid, oids);
+      else oids.add(entry.oid);
+    }
+  }
+
+  /**
+   * Rebuild a doc repo from a packfile produced by `exportHistoryPack`,
+   * with main pointed at `headOid`. Object ids are preserved exactly, so
+   * oids recorded in SQLite (`accepted_oid`) and in commit trailers
+   * (`X-Marginalia-Restored-From`) stay valid across the transplant.
+   *
+   * Returns null — leaving no repo behind — if the pack is unusable, so
+   * the caller can fall back to seeding a fresh single-commit repo. A
+   * corrupt or truncated bundle must not cost the user the import.
+   */
+  async importHistoryPack(
+    doc: DocLocator,
+    pack: Uint8Array,
+    headOid: string,
+  ): Promise<{ oid: string } | null> {
+    return this.withLock(doc.uid, async () => {
+      const dir = this.repoDir(doc.uid);
+      try {
+        mkdirSync(dir, { recursive: true });
+        await git.init({ fs, dir, defaultBranch: 'main' });
+
+        // indexPack reads the pack from inside the repo and writes the
+        // sibling .idx that makes its objects readable.
+        const packRelPath = join(
+          '.git',
+          'objects',
+          'pack',
+          `marginalia-import-${randomBytes(8).toString('hex')}.pack`,
+        );
+        mkdirSync(join(dir, '.git', 'objects', 'pack'), { recursive: true });
+        writeFileSync(join(dir, packRelPath), pack);
+        await git.indexPack({ fs, dir, filepath: packRelPath });
+
+        // Prove the head is actually present before adopting it: a pack
+        // that indexes cleanly can still be missing the commit we need.
+        await git.readCommit({ fs, dir, oid: headOid });
+        await git.writeRef({ fs, dir, ref: 'refs/heads/main', value: headOid, force: true });
+        await git.checkout({ fs, dir, ref: 'main', force: true });
+        this.initialized.add(doc.uid);
+        return { oid: headOid };
+      } catch {
+        rmSync(dir, { recursive: true, force: true });
+        this.initialized.delete(doc.uid);
+        return null;
+      }
+    });
+  }
+
   async readAt(doc: DocLocator, oid: string): Promise<string> {
     const { blob } = await git.readBlob({
       fs,

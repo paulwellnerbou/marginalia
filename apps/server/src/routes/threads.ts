@@ -789,8 +789,10 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
 /**
  * `DELETE /:uid/threads/:tid`
  *
- * Soft-deletes a root thread. Accepted proposal threads remain admin-delete
- * only to preserve audit history.
+ * Soft-deletes a root thread and all of its replies. Accepted proposal
+ * threads are admin-delete only; document history is unaffected either
+ * way — the accept commit stays on main and `loadAcceptedProposalHistory`
+ * reads soft-deleted rows.
  */
 async function deleteThread(c: Context, deps: AppDeps) {
   const { db, realtime } = deps;
@@ -822,7 +824,10 @@ async function deleteThread(c: Context, deps: AppDeps) {
         AND (id = ? OR parent_id = ? OR parent_proposal_id = ?)`,
   ).run(now, now, doc.uid, tid, tid, tid);
   if (isProposalRow(row)) {
-    if (row.branch_ref) {
+    // Keep the branch ref for accepted proposals: history summaries may
+    // still read the tip, and for a 3-way accept the ref is the only
+    // thing keeping the authored tip reachable.
+    if (row.branch_ref && row.proposal_status !== 'accepted') {
       await deps.store.deleteProposalBranch(doc, row.id).catch(() => undefined);
     }
     realtime.broadcast(

@@ -15,6 +15,7 @@ import { computeFloatingCardPosition } from './floatingCardPosition.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 import { COMMENT_FLASH_MS, resolveAnchorElement, threadLinks, threadsById } from './inlineUtils.js';
+import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
 interface Props {
@@ -100,6 +101,20 @@ export function FloatingCommentsLayer({
   const computeRef = useRef<(() => void) | null>(null);
 
   const byId = useMemo(() => threadsById(threads), [threads]);
+
+  /**
+   * Merge each proposal into the card of the thread it answers, as the
+   * margin column and the list pane do. Only one card is open at a
+   * time here, so nesting also decides which card an id opens: a
+   * proposal that renders inside another thread has no card of its
+   * own, and opening it means opening the card it lives in.
+   */
+  const nesting = useMemo(() => computeThreadNesting(threads), [threads]);
+  const cardIdFor = useCallback(
+    (threadId: string) => nesting.parentOf.get(threadId) ?? threadId,
+    [nesting],
+  );
+
   const openThread = openId && openId !== PENDING_ID ? (byId.get(openId) ?? null) : null;
 
   /**
@@ -128,9 +143,9 @@ export function FloatingCommentsLayer({
     (target: Thread) => {
       const blockId = target.anchor.block_id;
       if (blockId) onScrollToAnchor(blockId, target.anchor.quote, target.id);
-      setOpenId(target.id);
+      setOpenId(cardIdFor(target.id));
     },
-    [onScrollToAnchor],
+    [onScrollToAnchor, cardIdFor],
   );
 
   const threadRefs = useMemo<ThreadRefApi>(() => {
@@ -149,12 +164,16 @@ export function FloatingCommentsLayer({
   }, [canComment, pendingAnchor]);
 
   // Close when the open thread disappears (deleted, or the doc refresh
-  // dropped it).
+  // dropped it), and re-point at the parent card if a refresh turned the
+  // open thread into a nested one — `openId` must always name a card
+  // that renders, or the popover would go blank.
   useEffect(() => {
-    setOpenId((cur) =>
-      cur && cur !== PENDING_ID && !threads.some((t) => t.id === cur) ? null : cur,
-    );
-  }, [threads]);
+    setOpenId((cur) => {
+      if (!cur || cur === PENDING_ID) return cur;
+      if (!threads.some((t) => t.id === cur)) return null;
+      return cardIdFor(cur);
+    });
+  }, [threads, cardIdFor]);
 
   // Focus signal from DocumentLayout — highlight clicks, activity list,
   // deep links, toolbar navigation. Opens the popover and flashes it.
@@ -168,10 +187,13 @@ export function FloatingCommentsLayer({
     if (openId === PENDING_ID || cardHasDraftText()) return;
     if (!threads.some((t) => t.id === focusedThread.threadId)) return;
 
-    setOpenId(focusedThread.threadId);
+    // Flash whichever card actually opens: targeting a nested proposal
+    // opens the card it lives in, and `flashPhase` is that card's prop.
+    const cardId = cardIdFor(focusedThread.threadId);
+    setOpenId(cardId);
     if (focusedThread.scroll) scrollToCardPending.current = true;
-    setFlash({ id: focusedThread.threadId, phase: focusedThread.nonce % 2 === 0 ? 'b' : 'a' });
-  }, [focusedThread, threads, openId, cardHasDraftText]);
+    setFlash({ id: cardId, phase: focusedThread.nonce % 2 === 0 ? 'b' : 'a' });
+  }, [focusedThread, threads, openId, cardHasDraftText, cardIdFor]);
 
   // Separate from the focus effect: that one re-runs on openId changes,
   // and its cleanup would cancel the timer before the flash ends.
@@ -475,21 +497,36 @@ export function FloatingCommentsLayer({
       );
     }
     if (!openThread) return null;
-    const blockId = openThread.anchor.block_id;
+    return renderCard(openThread, nestedThreadsOf(nesting, openThread.id), false);
+  }
+
+  function renderCard(thread: Thread, nested: readonly Thread[], asNested: boolean): ReactNode {
+    const blockId = thread.anchor.block_id;
     const onJump = blockId
-      ? () => onScrollToAnchor(blockId, openThread.anchor.quote, openThread.id)
+      ? () => onScrollToAnchor(blockId, thread.anchor.quote, thread.id)
       : undefined;
+    const rawLinks = threadLinks(thread, byId);
+    // Proposals rendered inside this card need no "See proposed change"
+    // link on top — the card itself is right below.
+    let links = rawLinks;
+    if (nested.length > 0) {
+      const nestedIds = new Set(nested.map((n) => n.id));
+      links = { ...rawLinks, answeredBy: rawLinks.answeredBy.filter((t) => !nestedIds.has(t.id)) };
+    }
     return (
       <InlineThreadCard
+        key={thread.id}
         uid={uid}
-        thread={openThread}
-        links={threadLinks(openThread, byId)}
+        thread={thread}
+        links={links}
+        nested={asNested}
+        nestedCards={nested.length > 0 ? nested.map((n) => renderCard(n, [], true)) : undefined}
         onFocusLinked={focusLinked}
         threadRefs={threadRefs}
         canComment={canComment}
         needsName={!displayName}
         focused={false}
-        flashPhase={flash?.id === openThread.id ? flash.phase : null}
+        flashPhase={flash?.id === thread.id ? flash.phase : null}
         collapsed={false}
         mentionCandidates={mentionCandidates}
         onToggleCollapsed={() => {}}
