@@ -2233,6 +2233,10 @@ button.primary:disabled {
   z-index: 10;
   pointer-events: auto;
   white-space: nowrap;
+  /* A tap on the toolbar must act on the *document's* selection, never
+     select or highlight the toolbar's own label text. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .selection-toolbar button {
   background: transparent;
@@ -2243,12 +2247,28 @@ button.primary:disabled {
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
+  /* No double-tap-to-zoom delay or gray tap flash on iOS. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .selection-toolbar button:hover {
   /* --accent-contrast is Radix's companion token for accent-9 — the correct
      readable text color on the solid accent background in both appearances. */
   background: var(--accent-9);
   color: var(--accent-contrast);
+}
+
+/* Touch/pen selections: docked at the bottom of the viewport, clear of
+   the native selection callout, with finger-sized targets. */
+.selection-toolbar.is-docked {
+  top: auto;
+  bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
+  padding: 0.3rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.selection-toolbar.is-docked button {
+  padding: 0.65rem 1.15rem;
+  font-size: 0.95rem;
 }
 
 /* ============================================================

@@ -1,5 +1,6 @@
 import type { BlockSourceRange } from '@marginalia/renderer';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { CommentAnchor, DocumentFormat } from '../lib/api.js';
 import { captureSelection, selectionRect } from '../lib/selection.js';
 
@@ -33,7 +34,8 @@ interface ResolvedSpan {
 }
 
 /**
- * Floating toolbar next to a text selection inside the document pane.
+ * Toolbar for a text selection inside the document pane — floating next
+ * to the selection (mouse) or docked at the bottom of the pane (touch).
  * "+ Comment" captures the exact selection span. "Propose edit" expands
  * to the nearest proposal-targetable block — a top-level block
  * (paragraph, heading, code block, blockquote, list, table, …) OR a
@@ -47,10 +49,30 @@ interface ResolvedSpan {
  * entire range.
  */
 export function SelectionToolbar({ rootRef, docFormat, blockRanges, onAdd, onPropose }: Props) {
-  const [state, setState] = useState<{ rect: DOMRect; span: ResolvedSpan | null } | null>(null);
+  const [state, setState] = useState<{
+    rect: DOMRect;
+    span: ResolvedSpan | null;
+    docked: boolean;
+  } | null>(null);
+
+  // Whether the selection is being made by finger/pen rather than mouse.
+  // Touch selections get the docked toolbar (see below). Seeded from the
+  // primary-pointer media query so a tablet's first selection is docked
+  // even before any pointerdown has been observed.
+  const coarseInput = useRef(
+    typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches,
+  );
 
   useEffect(() => {
-    const handle = () => {
+    const remember = (e: PointerEvent) => {
+      coarseInput.current = e.pointerType === 'touch' || e.pointerType === 'pen';
+    };
+    document.addEventListener('pointerdown', remember, true);
+    return () => document.removeEventListener('pointerdown', remember, true);
+  }, []);
+
+  useEffect(() => {
+    const update = () => {
       const root = rootRef.current;
       if (!root) return;
       const sel = window.getSelection();
@@ -69,15 +91,36 @@ export function SelectionToolbar({ rootRef, docFormat, blockRanges, onAdd, onPro
         return;
       }
       const span = resolveSpan(root, range, docFormat, blockRanges);
-      setState({ rect, span });
+      setState({ rect, span, docked: coarseInput.current });
     };
-    document.addEventListener('selectionchange', handle);
-    return () => document.removeEventListener('selectionchange', handle);
+    // iOS WebKit (observed on 18.x) does not fire `selectionchange` for
+    // long-press selections in non-editable content — only newer versions
+    // do. Re-check after every touch/pointer release instead; the checks
+    // are staggered because the selection finalizes asynchronously after
+    // the finger lifts.
+    let timers: number[] = [];
+    const scheduleUpdate = () => {
+      for (const t of timers) window.clearTimeout(t);
+      timers = [0, 150, 400].map((ms) => window.setTimeout(update, ms));
+    };
+    document.addEventListener('selectionchange', update);
+    document.addEventListener('pointerup', scheduleUpdate, true);
+    document.addEventListener('pointercancel', scheduleUpdate, true);
+    document.addEventListener('touchend', scheduleUpdate, true);
+    document.addEventListener('touchcancel', scheduleUpdate, true);
+    return () => {
+      for (const t of timers) window.clearTimeout(t);
+      document.removeEventListener('selectionchange', update);
+      document.removeEventListener('pointerup', scheduleUpdate, true);
+      document.removeEventListener('pointercancel', scheduleUpdate, true);
+      document.removeEventListener('touchend', scheduleUpdate, true);
+      document.removeEventListener('touchcancel', scheduleUpdate, true);
+    };
   }, [rootRef, docFormat, blockRanges]);
 
   if (!state) return null;
 
-  function doComment(e: React.MouseEvent) {
+  function doComment(e: React.PointerEvent) {
     e.preventDefault();
     const root = rootRef.current;
     if (!root) return;
@@ -87,18 +130,28 @@ export function SelectionToolbar({ rootRef, docFormat, blockRanges, onAdd, onPro
     window.getSelection()?.removeAllRanges();
   }
 
-  function doPropose(e: React.MouseEvent) {
+  function doPropose(e: React.PointerEvent) {
     e.preventDefault();
-    if (!state || !state.span) return;
-    const blockText = state.span.textEls
+    const root = rootRef.current;
+    if (!root || !state) return;
+    // Recompute from the live range: handle drags on iOS may not have
+    // fired any event since the last update, leaving state.span stale.
+    const sel = window.getSelection();
+    const range = sel && sel.rangeCount > 0 && !sel.isCollapsed ? sel.getRangeAt(0) : null;
+    const span =
+      range && root.contains(range.commonAncestorContainer)
+        ? resolveSpan(root, range, docFormat, blockRanges)
+        : state.span;
+    if (!span) return;
+    const blockText = span.textEls
       .map((el) => (el.textContent ?? '').replace(/\s+/gu, ' ').trim())
       .filter((s) => s.length > 0)
       .join('\n\n');
     onPropose?.({
-      block_id: state.span.startId,
-      end_block_id: state.span.endId,
+      block_id: span.startId,
+      end_block_id: span.endId,
       block_text: blockText,
-      block_count: state.span.blockCount,
+      block_count: span.blockCount,
     });
     setState(null);
     window.getSelection()?.removeAllRanges();
@@ -109,27 +162,46 @@ export function SelectionToolbar({ rootRef, docFormat, blockRanges, onAdd, onPro
       ? `Propose edit (${state.span.blockCount} blocks)`
       : 'Propose edit';
 
-  return (
-    <div
-      className="selection-toolbar"
-      style={{
+  // Touch/pen: the native selection callout hugs the selection (above it
+  // on iPadOS ≤18, below on 26) and paints over anything anchored there,
+  // so dock the toolbar at the bottom of the doc pane instead. Mouse
+  // selections keep the floating placement next to the selection.
+  const clampX = (x: number) => Math.max(60, Math.min(window.innerWidth - 60, x));
+  const rootRect = state.docked ? rootRef.current?.getBoundingClientRect() : undefined;
+  const style: React.CSSProperties = state.docked
+    ? { left: clampX(rootRect ? rootRect.left + rootRect.width / 2 : window.innerWidth / 2) }
+    : {
         top: state.rect.top + window.scrollY - 40,
-        left: Math.max(
-          60,
-          Math.min(window.innerWidth - 60, state.rect.left + window.scrollX + state.rect.width / 2),
-        ),
-      }}
+        left: clampX(state.rect.left + window.scrollX + state.rect.width / 2),
+      };
+
+  // Pointerdown, not click: it fires while the selection still exists.
+  // A tap on iOS dismisses the selection on touchend, and the synthetic
+  // mouse events arrive after that — with only mouse/click handlers the
+  // toolbar is unmounted before they're delivered.
+  const stopMouse = (e: React.MouseEvent) => e.preventDefault();
+  // Portal to the theme root: the toolbar renders inside `.doc-scroll`,
+  // whose `container-type` makes it the containing block for fixed
+  // descendants on spec-following engines (observed on iOS 18 WebKit) —
+  // `position: fixed` coordinates would resolve against the scroller's
+  // content, not the viewport. The `.radix-themes` wrapper is
+  // viewport-sized, uncontained, and still carries the color tokens.
+  const portalTarget = rootRef.current?.closest('.radix-themes') ?? document.body;
+  return createPortal(
+    <div
+      className={state.docked ? 'selection-toolbar is-docked' : 'selection-toolbar'}
+      style={style}
     >
-      {/* mousedown so the handler fires before selectionchange clears the range */}
-      <button type="button" onMouseDown={doComment}>
+      <button type="button" onPointerDown={doComment} onMouseDown={stopMouse}>
         + Comment
       </button>
       {onPropose && state.span && (
-        <button type="button" onMouseDown={doPropose}>
+        <button type="button" onPointerDown={doPropose} onMouseDown={stopMouse}>
           {proposeLabel}
         </button>
       )}
-    </div>
+    </div>,
+    portalTarget,
   );
 }
 
