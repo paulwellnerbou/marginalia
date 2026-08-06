@@ -21,6 +21,7 @@ import { InlineCommentsToolbar } from './InlineCommentsToolbar.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 import { COMMENT_FLASH_MS, threadLinks, threadsById } from './inlineUtils.js';
+import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
 interface Props {
@@ -205,6 +206,15 @@ export function InlineCommentsLayer({
   const byId = useMemo(() => threadsById(visibleThreads), [visibleThreads]);
 
   /**
+   * Merge each proposal into the card of the thread it answers. Only
+   * top-level threads get their own anchored card; nested proposals
+   * render inside the parent's card. Computed over the post-filter
+   * set so a proposal whose answered thread is hidden (resolved +
+   * hide-resolved) keeps its own card.
+   */
+  const nesting = useMemo(() => computeThreadNesting(visibleThreads), [visibleThreads]);
+
+  /**
    * Auto-collapse defaults derived from the current thread list.
    * Threads start collapsed when they're already resolved or accepted/
    * rejected proposals. The shared reconciler tracks "auto-collapse
@@ -248,7 +258,7 @@ export function InlineCommentsLayer({
   }, [blockRanges]);
 
   const sorted = useMemo<OrderItem[]>(() => {
-    const items: OrderItem[] = visibleThreads.map((t) => ({
+    const items: OrderItem[] = nesting.topLevel.map((t) => ({
       thread: t,
       blockIndex: t.anchor.block_id
         ? (blockOrder.get(t.anchor.block_id) ?? Number.MAX_SAFE_INTEGER)
@@ -261,7 +271,7 @@ export function InlineCommentsLayer({
         a.blockIndex - b.blockIndex || a.startOffset - b.startOffset || a.createdAt - b.createdAt,
     );
     return items;
-  }, [visibleThreads, blockOrder]);
+  }, [nesting, blockOrder]);
 
   /** O(1) lookup of thread by id — avoids `sorted.find(...)` per render in renderCardById. */
   const sortedById = useMemo<Map<string, OrderItem>>(() => {
@@ -719,19 +729,30 @@ export function InlineCommentsLayer({
   useEffect(() => {
     if (!focusedThread) return;
     if (lastNonce.current === focusedThread.nonce) return;
-    lastNonce.current = focusedThread.nonce;
 
     const exists = threads.some((t) => t.id === focusedThread.threadId);
     if (!exists) return;
 
-    if (collapsed.has(focusedThread.threadId)) {
+    // A nested proposal renders inside its answered thread's card, so
+    // that card must be expanded too for the target to be visible.
+    // Expand first and leave the nonce unhandled: the collapse-state
+    // change re-runs this effect, and only that second pass — with the
+    // target actually in the DOM — scrolls and flashes.
+    const parentId = nesting.parentOf.get(focusedThread.threadId);
+    const toExpand = [focusedThread.threadId, ...(parentId ? [parentId] : [])].filter((id) =>
+      collapsed.has(id),
+    );
+    if (toExpand.length > 0) {
       setCollapseState((prev) => {
-        if (!prev.collapsed.has(focusedThread.threadId)) return prev;
+        const expand = toExpand.filter((id) => prev.collapsed.has(id));
+        if (expand.length === 0) return prev;
         const next = new Set(prev.collapsed);
-        next.delete(focusedThread.threadId);
+        for (const id of expand) next.delete(id);
         return { ...prev, collapsed: next };
       });
+      return;
     }
+    lastNonce.current = focusedThread.nonce;
 
     const phase: 'a' | 'b' = focusedThread.nonce % 2 === 0 ? 'b' : 'a';
     setFocusedId(focusedThread.threadId);
@@ -756,7 +777,7 @@ export function InlineCommentsLayer({
       window.clearTimeout(flashT);
       window.clearTimeout(focusT);
     };
-  }, [focusedThread, threads, collapsed]);
+  }, [focusedThread, threads, collapsed, nesting]);
 
   function toggle(id: string) {
     setCollapseState((prev) => {
@@ -802,24 +823,41 @@ export function InlineCommentsLayer({
     }
     const item = sortedById.get(id);
     if (!item) return null;
-    const blockId = item.thread.anchor.block_id;
+    return renderCard(item.thread, nestedThreadsOf(nesting, id), false);
+  }
+
+  function renderCard(thread: Thread, nested: readonly Thread[], asNested: boolean): ReactNode {
+    const blockId = thread.anchor.block_id;
     const onJump = blockId
-      ? () => scrollToAnchorWithOffset(blockId, item.thread.anchor.quote, item.thread.id)
+      ? () => scrollToAnchorWithOffset(blockId, thread.anchor.quote, thread.id)
       : undefined;
+    const rawLinks = threadLinks(thread, byId);
+    // Proposals rendered inside this card need no "See proposed change"
+    // link on top — the card itself is right below.
+    const links =
+      nested.length > 0
+        ? {
+            ...rawLinks,
+            answeredBy: rawLinks.answeredBy.filter((t) => !nested.some((n) => n.id === t.id)),
+          }
+        : rawLinks;
     return (
       <InlineThreadCard
+        key={thread.id}
         uid={uid}
-        thread={item.thread}
-        links={threadLinks(item.thread, byId)}
+        thread={thread}
+        links={links}
+        nested={asNested}
+        nestedCards={nested.length > 0 ? nested.map((n) => renderCard(n, [], true)) : undefined}
         onFocusLinked={focusLinked}
         threadRefs={threadRefs}
         canComment={canComment}
         needsName={!displayName}
-        focused={focusedId === id}
-        flashPhase={flash?.id === id ? flash.phase : null}
-        collapsed={collapsed.has(id)}
+        focused={focusedId === thread.id}
+        flashPhase={flash?.id === thread.id ? flash.phase : null}
+        collapsed={collapsed.has(thread.id)}
         mentionCandidates={mentionCandidates}
-        onToggleCollapsed={() => toggle(id)}
+        onToggleCollapsed={() => toggle(thread.id)}
         onJump={onJump}
         onReply={onReply}
         onEdit={onEdit}

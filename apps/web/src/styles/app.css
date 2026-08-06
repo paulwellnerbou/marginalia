@@ -3028,6 +3028,28 @@ button.primary:disabled {
   font-size: 0.72rem;
 }
 
+/* ---------- Nested proposal cards ---------- */
+
+/* A proposal rendered inside the card of the thread it answers.
+   A slightly stronger tint than the parent's 5% mix marks the
+   boundary without extra chrome. */
+.ic-card-nested {
+  background: color-mix(
+    in srgb,
+    var(--md-color-fg, currentColor) 8%,
+    var(--md-color-bg, var(--ui-surface))
+  );
+  border-radius: 8px;
+  box-shadow: none;
+  padding: 0.55rem 0.6rem 0.5rem;
+}
+
+.ic-card-nested-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
 /* ---------- Rows (comments / replies) ---------- */
 
 .ic-card-body {
