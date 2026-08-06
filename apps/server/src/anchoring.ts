@@ -210,9 +210,29 @@ function reanchorSpan(ctx: Context, fragments: string[]): AnchorUpdate {
 }
 
 /**
- * Locate one quote fragment, preferring `preferredBlockId`. This is the
- * original single-block ladder: same block → same block fuzzily → the
- * best-scoring other block containing it → prefix+quote+suffix.
+ * Chars of surviving prefix/suffix agreement that make one occurrence of a
+ * quote trustworthy on its own. Both sides are captured 32 chars wide, so
+ * this is a modest fraction of an untouched neighbourhood — but far more
+ * than a common short word picks up by accident.
+ */
+const STRONG_CONTEXT = 12;
+
+/** One place `quote` occurs, with how much of the stored context survives there. */
+interface Occurrence {
+  offset: number;
+  context: number;
+}
+
+/**
+ * Locate one quote fragment, preferring `preferredBlockId`.
+ *
+ * The quote alone is not evidence of anything: short ones ("it", "that")
+ * occur in most blocks of a real document, so every step here weighs the
+ * stored prefix/suffix around a candidate occurrence rather than taking
+ * the first `indexOf` hit. The ladder is: an unambiguous occurrence in the
+ * original block → that block still recognisably holding the quote → the
+ * best-supported occurrence anywhere → orphaned when nothing distinguishes
+ * the candidates from each other.
  */
 function locateFragment(
   ctx: Context,
@@ -221,19 +241,33 @@ function locateFragment(
   context: { prefix: string | null; suffix: string | null },
 ): FragmentMatch {
   const { blocks, originalPath, originalIndexPath } = ctx;
+  const prefix = context.prefix ?? '';
+  const suffix = context.suffix ?? '';
 
-  // 1. Block with same ID: quote still present? confident.
   const sameBlock = preferredBlockId ? blocks.find((b) => b.id === preferredBlockId) : undefined;
-  if (sameBlock) {
-    const idx = sameBlock.text.indexOf(quote);
-    if (idx >= 0) {
-      return {
-        linkStatus: 'linked',
-        blockId: sameBlock.id,
-        startOffset: idx,
-        endOffset: idx + quote.length,
-      };
-    }
+  const sameHits = sameBlock ? occurrencesOf(sameBlock.text, quote, prefix, suffix) : [];
+  const sameBest = sameHits[0];
+
+  const sameBlockHit = (): FragmentMatch => ({
+    linkStatus: 'linked',
+    blockId: sameBlock!.id,
+    startOffset: sameBest!.offset,
+    endOffset: sameBest!.offset + quote.length,
+  });
+
+  // 1. Same block, and the stored context still surrounds the quote there.
+  //    Block ids are content hashes, so a block that kept its id kept its
+  //    text: context that agrees nowhere in it means the id is a stale
+  //    pointer left by an earlier bad match, not an edited neighbourhood.
+  const hasContext = prefix.length > 0 || suffix.length > 0;
+  if (sameBlock && sameBest) {
+    if (sameBest.context >= STRONG_CONTEXT) return sameBlockHit();
+    if (sameHits.length === 1 && (!hasContext || sameBest.context > 0)) return sameBlockHit();
+  }
+
+  // 2. Same block, quote gone, but most of it survives there — an edit
+  //    inside the quoted range. Keep the comment on the block, unpositioned.
+  if (sameBlock && !sameBest) {
     const partial = longestCommonSubstringLength(sameBlock.text, quote);
     if (partial >= quote.length * 0.7) {
       return {
@@ -245,53 +279,141 @@ function locateFragment(
     }
   }
 
-  // 2. Quote present in one or more other blocks? Pick the candidate with the
-  //    strongest heading-path/section-index affinity, not just the first hit.
-  const quoteMatches = blocks
-    .filter((b) => b.id !== preferredBlockId && b.text.includes(quote))
-    .map((b) => ({
-      block: b,
-      offset: b.text.indexOf(quote),
-      score: scoreCandidate(b, originalPath, originalIndexPath),
-    }));
-  if (quoteMatches.length) {
-    quoteMatches.sort((a, b) => b.score - a.score);
-    const best = quoteMatches[0]!;
-    return {
-      linkStatus: 'low-confidence',
-      blockId: best.block.id,
-      startOffset: best.offset,
-      endOffset: best.offset + quote.length,
-    };
+  // 3. Rank every block holding the quote — including the original one when
+  //    its occurrences were ambiguous. Surviving context outranks section
+  //    affinity: a matching neighbourhood identifies the spot, while a
+  //    section index only narrows it down.
+  const candidates: Array<{
+    block: BlockInfo;
+    hit: Occurrence;
+    structural: number;
+    preferred: boolean;
+  }> = [];
+  for (const block of blocks) {
+    const hit =
+      block.id === sameBlock?.id ? sameBest : occurrencesOf(block.text, quote, prefix, suffix)[0];
+    if (!hit) continue;
+    candidates.push({
+      block,
+      hit,
+      structural: scoreCandidate(block, originalPath, originalIndexPath),
+      preferred: block.id === preferredBlockId,
+    });
+  }
+  candidates.sort(
+    (a, b) =>
+      b.hit.context - a.hit.context ||
+      b.structural - a.structural ||
+      Number(b.preferred) - Number(a.preferred),
+  );
+
+  // A quote occurring exactly once in the whole document identifies its own
+  // spot, so the block it was already anchored to keeps it linked even when
+  // nothing recognisable is left around it. Uniqueness alone is not enough
+  // to hand a comment to a block it was never on: `linked` means the stored
+  // block still holds the quote (§3.6), and a quote that turned up somewhere
+  // else is a comment sitting on text nobody attached it to. That stays
+  // low-confidence however distinctive it is.
+  if (sameBlock && sameBest && sameHits.length === 1 && candidates.length === 1) {
+    return sameBlockHit();
   }
 
-  // 3. prefix + quote + suffix fuzzy search — again, prefer the structurally
-  //    closest candidate.
-  const prefix = context.prefix ?? '';
-  const needle = prefix + quote + (context.suffix ?? '');
-  if (needle.length > quote.length) {
-    const ctxMatches = blocks
-      .filter((b) => b.text.includes(needle))
-      .map((b) => ({
-        block: b,
-        offset: b.text.indexOf(needle),
-        score: scoreCandidate(b, originalPath, originalIndexPath),
-      }));
-    if (ctxMatches.length) {
-      ctxMatches.sort((a, b) => b.score - a.score);
-      const best = ctxMatches[0]!;
-      const start = best.offset + prefix.length;
-      return {
-        linkStatus: 'low-confidence',
-        blockId: best.block.id,
-        startOffset: start,
-        endOffset: start + quote.length,
-      };
-    }
+  const best = candidates[0];
+  const runnerUp = candidates[1];
+  if (!best) {
+    return { linkStatus: 'orphaned', blockId: null, startOffset: null, endOffset: null };
   }
 
-  // 4. Orphaned — no match.
-  return { linkStatus: 'orphaned', blockId: null, startOffset: null, endOffset: null };
+  // A winner only by tie-break is not a winner. When the quote is short and
+  // its stored context has been edited away, it matches half the document
+  // equally well, and picking one leaves a comment silently attached to
+  // unrelated prose. Orphaning says so instead.
+  //
+  // The original block is the one exception, on the grounds that its id came
+  // from somewhere — but only while it isn't the stale id this whole ladder
+  // exists to catch. Stored context that was testable and agreed nowhere in
+  // it is exactly what stale looks like, so that case orphans like any other.
+  const preferredStillCredible = best.preferred && (!hasContext || best.hit.context > 0);
+  const decisive =
+    !runnerUp ||
+    preferredStillCredible ||
+    best.hit.context >= STRONG_CONTEXT ||
+    best.hit.context > runnerUp.hit.context ||
+    best.structural > runnerUp.structural;
+  if (!decisive) {
+    return { linkStatus: 'orphaned', blockId: null, startOffset: null, endOffset: null };
+  }
+
+  return {
+    linkStatus: 'low-confidence',
+    blockId: best.block.id,
+    startOffset: best.hit.offset,
+    endOffset: best.hit.offset + quote.length,
+  };
+}
+
+/**
+ * Every occurrence of `quote` in `text` that the stored context permits,
+ * best-supported first.
+ *
+ * A quote that stood on its own word boundaries when it was captured has to
+ * do so here too — "it" inside "its" is a different word, not a shifted
+ * one — which is what keeps one-word anchors from landing mid-word.
+ */
+function occurrencesOf(text: string, quote: string, prefix: string, suffix: string): Occurrence[] {
+  if (!quote) return [];
+  const wantsWordBounds = isWordBounded(prefix + quote + suffix, prefix.length, quote.length);
+  const out: Occurrence[] = [];
+  for (let idx = text.indexOf(quote); idx >= 0; idx = text.indexOf(quote, idx + 1)) {
+    if (wantsWordBounds && !isWordBounded(text, idx, quote.length)) continue;
+    out.push({ offset: idx, context: contextAgreement(text, idx, quote.length, prefix, suffix) });
+  }
+  out.sort((a, b) => b.context - a.context);
+  return out;
+}
+
+/**
+ * Chars of stored prefix/suffix still present around `text[idx..idx+len)`.
+ *
+ * Agreement that is only whitespace counts for nothing: almost every word in
+ * the document has a space on either side of it, so a shared space says only
+ * that the match is word-shaped, which the word-bound check already covers.
+ */
+function contextAgreement(
+  text: string,
+  idx: number,
+  len: number,
+  prefix: string,
+  suffix: string,
+): number {
+  let back = 0;
+  while (back < prefix.length && idx - back > 0 && text[idx - back - 1] === prefix.at(-1 - back)) {
+    back++;
+  }
+  let forward = 0;
+  const end = idx + len;
+  while (forward < suffix.length && text[end + forward] === suffix[forward]) forward++;
+  return (
+    substantial(prefix.slice(prefix.length - back), back) +
+    substantial(suffix.slice(0, forward), forward)
+  );
+}
+
+function substantial(matched: string, length: number): number {
+  return matched.trim().length > 0 ? length : 0;
+}
+
+const WORD_CHAR = /[\p{L}\p{N}_]/u;
+
+/** Does `text[idx..idx+len)` begin and end on word boundaries? */
+function isWordBounded(text: string, idx: number, len: number): boolean {
+  const first = text[idx];
+  const last = text[idx + len - 1];
+  const before = text[idx - 1];
+  const after = text[idx + len];
+  if (first && before && WORD_CHAR.test(first) && WORD_CHAR.test(before)) return false;
+  if (last && after && WORD_CHAR.test(last) && WORD_CHAR.test(after)) return false;
+  return true;
 }
 
 function noop(comment: CommentRow): AnchorUpdate {
@@ -329,17 +451,37 @@ function scoreCandidate(
   originalIndexPath: number[] | null,
 ): number {
   if (!originalPath) return 0;
+  // Stored paths may sit deeper in the tree than they claim: a client that
+  // captured before an outer heading existed (or before it was part of the
+  // walk) recorded only the inner levels. Try every alignment of the stored
+  // path against the candidate's and keep the best — offset 0 is the plain
+  // left-aligned comparison, so nothing that used to match stops matching.
+  let best = 0;
+  const maxOffset = Math.max(0, candidate.headingPath.length - originalPath.length);
+  for (let offset = 0; offset <= maxOffset; offset++) {
+    const score = scoreAlignment(candidate, originalPath, originalIndexPath, offset);
+    if (score > best) best = score;
+  }
+  return best;
+}
+
+function scoreAlignment(
+  candidate: BlockInfo,
+  originalPath: string[],
+  originalIndexPath: number[] | null,
+  offset: number,
+): number {
   let commonPrefix = 0;
-  const maxCommon = Math.min(originalPath.length, candidate.headingPath.length);
+  const maxCommon = Math.min(originalPath.length, candidate.headingPath.length - offset);
   for (let i = 0; i < maxCommon; i++) {
-    if (originalPath[i] === candidate.headingPath[i]) commonPrefix++;
+    if (headingSegmentsMatch(originalPath[i]!, candidate.headingPath[offset + i]!)) commonPrefix++;
     else break;
   }
 
   // Exact match on the whole path — strongest signal.
   if (
     commonPrefix === originalPath.length &&
-    originalPath.length === candidate.headingPath.length
+    originalPath.length === candidate.headingPath.length - offset
   ) {
     let score = 10_000;
     const lastIdx = originalIndexPath?.[originalIndexPath.length - 1];
@@ -356,14 +498,25 @@ function scoreCandidate(
   // headings at all).
   const deepestCommonLevel = commonPrefix; // 0..originalPath.length
   let score = deepestCommonLevel * 1_000;
-  if (originalIndexPath && candidate.sectionIndexPath.length > deepestCommonLevel) {
+  if (originalIndexPath && candidate.sectionIndexPath.length > deepestCommonLevel + offset) {
     const origIdx = originalIndexPath[deepestCommonLevel];
-    const candIdx = candidate.sectionIndexPath[deepestCommonLevel];
+    const candIdx = candidate.sectionIndexPath[deepestCommonLevel + offset];
     if (typeof origIdx === 'number' && typeof candIdx === 'number') {
       score -= Math.abs(candIdx - origIdx);
     }
   }
   return score;
+}
+
+/**
+ * Heading paths captured from the DOM used to include the rehype `#`
+ * permalink sigil that gets grafted into every heading, so a stored
+ * `"#Chapter 4"` describes the same heading as the block map's
+ * `"Chapter 4"`. Exactly one leading `#` is discounted — a heading whose
+ * text genuinely starts with `#` stored two of them.
+ */
+function headingSegmentsMatch(stored: string, candidate: string): boolean {
+  return stored === candidate || stored === `#${candidate}`;
 }
 
 function parseHeadingPath(raw: string | null): string[] | null {
