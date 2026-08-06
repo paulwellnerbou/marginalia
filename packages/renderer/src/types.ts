@@ -61,7 +61,29 @@ export interface BlockInfo {
   id: string;
   /** Type of the block (mdast node type) */
   kind: string;
-  /** Normalized plain text content — used for comment anchoring */
+  /**
+   * Normalized plain text content — used for comment anchoring.
+   *
+   * NOT the string `id` was hashed from, and re-hashing it will not
+   * reproduce `id`. The id is fingerprinted from the source AST so it can be
+   * recomputed without rendering (see `locateAllBlocks`); this is read back
+   * off the rendered tree so it matches what the browser will show, which is
+   * where the quotes anchoring searches for come from. See
+   * `plugins/block-text.ts`.
+   *
+   * With one exception, which is not safe to assume away. Three kinds reach
+   * this map with no element in the output carrying their id, each losing it
+   * somewhere different: a `code` block's id rides on the `<code>` element
+   * until Shiki rewrites it away, an `html` block never has one to begin with
+   * (raw HTML becomes a hast `raw` string, which has nowhere to keep
+   * properties), and a `footnoteDefinition` is rebuilt from scratch inside a
+   * generated `<section class="footnotes">`.
+   *
+   * There is nothing to read those off, so they keep the source-AST text and
+   * can differ from what the browser shows. They are also the entries the
+   * client cannot resolve to an element at all, so treat a match against one
+   * as unpaintable rather than as DOM text.
+   */
   text: string;
   /**
    * Enclosing heading hierarchy (normalized heading texts, outermost first).

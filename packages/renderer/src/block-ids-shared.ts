@@ -22,6 +22,13 @@ export function normalizeBlockText(text: string): string {
  * collisions at this bit width are vanishingly rare for reasonable block
  * counts, and a collision only causes two different blocks to share an
  * anchor (which the re-anchoring flow handles gracefully).
+ *
+ * `text` here is the source-AST reading, and must stay that way: it is the
+ * only text `locateAllBlocks` can produce without running the renderer, and
+ * every id in every stored comment anchor was derived from it. It is
+ * deliberately not `BlockInfo.text`, which is re-read from the rendered tree
+ * (see `plugins/block-text.ts`) — feeding that in instead would re-hash
+ * every list and multi-child blockquote in every document.
  */
 export function hashBlock(kind: string, text: string): string {
   const input = `${kind}\u0000${text}`;
