@@ -9,6 +9,12 @@ import remarkParse from 'remark-parse';
 import remarkRehype from 'remark-rehype';
 import { unified } from 'unified';
 import { remarkAssetCollector } from './plugins/asset-collector.js';
+import {
+  markAnchorable,
+  rehypeCollectRenderedBlockIds,
+  rehypeFootnoteBlockIds,
+  rehypeHoistCodeBlockIds,
+} from './plugins/block-elements.js';
 import { remarkBlockIds } from './plugins/block-ids.js';
 import { remarkExtractFrontmatter } from './plugins/frontmatter.js';
 import { preprocessGridTables } from './plugins/grid-tables.js';
@@ -60,6 +66,7 @@ interface RenderData {
   assets?: AssetRef[];
   mermaid?: MermaidBlock[];
   blocks?: BlockMap;
+  renderedBlockIds?: Set<string>;
   warnings?: Warning[];
   frontmatter?: Record<string, unknown>;
 }
@@ -80,10 +87,17 @@ export async function render(markdown: string, options: RenderOptions = {}): Pro
     .use(remarkTocMarker)
     .use(remarkAssetCollector)
     .use(remarkRehype, { allowDangerousHtml: true })
+    // Before rehype-raw: it re-parses the tree, and the source positions
+    // this pass matches footnote definitions on don't survive that.
+    .use(rehypeFootnoteBlockIds)
     .use(rehypeRaw)
     .use(rehypeHeadingAnchors)
     .use(rehypeSanitize, sanitizeSchema)
+    // Before Shiki, which rebuilds the code subtree from its own output
+    // and carries over only the <pre>'s properties.
+    .use(rehypeHoistCodeBlockIds)
     .use(rehypeShikiHighlight, options.highlight ?? {})
+    .use(rehypeCollectRenderedBlockIds)
     .use(rehypeStringify, { allowDangerousHtml: false });
 
   const file = await processor.process(preprocessed);
@@ -98,7 +112,7 @@ export async function render(markdown: string, options: RenderOptions = {}): Pro
     toc: buildToc(anchors),
     assets: data.assets ?? [],
     mermaid: data.mermaid ?? [],
-    blocks: data.blocks ?? [],
+    blocks: markAnchorable(data.blocks ?? [], data.renderedBlockIds),
     warnings,
     frontmatter: data.frontmatter ?? {},
   };

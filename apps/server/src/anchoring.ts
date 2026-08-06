@@ -94,6 +94,14 @@ export interface ReanchorOptions {
    * snapshot of the spliced source rather than a per-block fragment list,
    * and `reanchorProposals` owns their span endpoints. Re-anchoring one
    * here must never collapse or rewrite that span, so proposals opt out.
+   *
+   * They also opt out of the elementless-block filter below: a proposal
+   * is applied by splicing the block's *source* range, which
+   * `locateAllBlocks` resolves for raw HTML and frontmatter as readily as
+   * for a paragraph. Orphaning one for want of an element would make an
+   * otherwise applicable proposal unacceptable (threads.ts refuses to
+   * diff or accept an orphan), which is a worse outcome than a card that
+   * renders without a highlight to sit next to.
    */
   isEditProposal?: boolean;
 }
@@ -110,7 +118,18 @@ export function reanchor(
 
   const originalPath = parseHeadingPath(comment.anchor_heading_path);
   const originalIndexPath = parseIntArray(comment.anchor_section_index_path);
-  const ctx: Context = { comment, blocks, originalPath, originalIndexPath };
+  // Blocks the renderer never gave an element to are not candidates for a
+  // comment. Their text is real — raw HTML, frontmatter, a mermaid
+  // diagram's source — so a quote can match one as readily as any
+  // paragraph, but the id we would store is one no client can resolve:
+  // `resolveAnchorElement` finds nothing and the comment's highlight
+  // silently never appears. Orphaning says so; a dead id doesn't.
+  const ctx: Context = {
+    comment,
+    blocks: options.isEditProposal ? blocks : blocks.filter((b) => b.anchorable),
+    originalPath,
+    originalIndexPath,
+  };
 
   const fragments = splitSpanQuote(quote);
   if (!options.isEditProposal && comment.anchor_end_block_id && fragments.length > 1) {

@@ -14,6 +14,8 @@ interface BlockSpec {
   text: string;
   headingPath?: string[];
   sectionIndexPath?: number[];
+  /** Defaults true — the elementless case is exercised explicitly. */
+  anchorable?: boolean;
 }
 
 function blockMap(specs: BlockSpec[]): BlockInfo[] {
@@ -27,6 +29,7 @@ function blockMap(specs: BlockSpec[]): BlockInfo[] {
       headingPath,
       sectionIndex: sectionIndexPath[sectionIndexPath.length - 1]!,
       sectionIndexPath,
+      anchorable: s.anchorable ?? true,
     };
   });
 }
@@ -232,5 +235,98 @@ describe('reanchor: heading-path affinity', () => {
     );
     expect(upd.linkStatus).toBe('low-confidence');
     expect(upd.blockId).toBe('ch4');
+  });
+});
+
+describe('reanchor: blocks with no element', () => {
+  // Raw HTML, YAML frontmatter, mermaid fences and unreferenced footnote
+  // definitions all reach the block map with real text but no `data-block`
+  // element in the rendered HTML. They are still in the map because edit
+  // proposals resolve ids against the *source*, where they place fine —
+  // but a comment anchored to one resolves to nothing in the browser.
+  test('a quote found only in an elementless block orphans rather than pointing at it', () => {
+    const upd = reanchor(
+      comment({ anchor_block_id: null, anchor_quote: 'data-role="banner"' }),
+      blockMap([
+        { id: 'p1', text: 'Ordinary prose about layout.' },
+        { id: 'rawhtml', text: '<div data-role="banner">Hi</div>', anchorable: false },
+      ]),
+    );
+    expect(upd.linkStatus).toBe('orphaned');
+    expect(upd.blockId).toBeNull();
+  });
+
+  test('an anchor already stored against one is not renewed', () => {
+    // The state the bug persisted comments in: `anchor_block_id` names a
+    // block whose text still holds the quote, so the id looks healthy and
+    // survives every re-anchoring pass — while the client resolves it to
+    // nothing and the highlight never appears.
+    const upd = reanchor(
+      comment({
+        anchor_block_id: 'frontmatter',
+        anchor_quote: 'Design Notes',
+        anchor_prefix: 'title: ',
+      }),
+      blockMap([
+        { id: 'frontmatter', text: 'title: Design Notes', anchorable: false },
+        { id: 'p1', text: 'Unrelated prose.' },
+      ]),
+    );
+    expect(upd.blockId).not.toBe('frontmatter');
+    expect(upd.linkStatus).toBe('orphaned');
+  });
+
+  test('the same quote in a real block wins instead of tying with the elementless one', () => {
+    const upd = reanchor(
+      comment({ anchor_block_id: null, anchor_quote: 'const timeout = 30' }),
+      blockMap([
+        { id: 'mermaid', text: 'const timeout = 30', anchorable: false },
+        { id: 'code', text: 'const timeout = 30' },
+      ]),
+    );
+    // With both ranked there is no way to separate them and the ladder
+    // orphans; with only the resolvable one left it is unambiguous.
+    expect(upd.blockId).toBe('code');
+    expect(upd.linkStatus).toBe('low-confidence');
+  });
+
+  test('an elementless block does not displace a linked anchor', () => {
+    const upd = reanchor(
+      comment({
+        anchor_block_id: 'p1',
+        anchor_quote: 'the retry budget',
+        anchor_prefix: 'we should raise ',
+        anchor_suffix: ' before launch.',
+      }),
+      blockMap([
+        { id: 'raw', text: 'we should raise the retry budget before launch.', anchorable: false },
+        { id: 'p1', text: 'we should raise the retry budget before launch.' },
+      ]),
+    );
+    expect(upd.linkStatus).toBe('linked');
+    expect(upd.blockId).toBe('p1');
+  });
+});
+
+describe('reanchor: edit proposals against elementless blocks', () => {
+  test('keep their anchor — acceptance splices source, which resolves fine', () => {
+    // A proposal rewriting a frontmatter field or a raw HTML block is
+    // applicable: `locateAllBlocks` places both in the source. Orphaning
+    // it for want of a `data-block` element would make it undiffable and
+    // unacceptable, so the filter that protects comments skips proposals.
+    const upd = reanchor(
+      comment({
+        anchor_block_id: 'frontmatter',
+        anchor_quote: 'title: Design Notes',
+        link_status: 'linked',
+      }),
+      blockMap([
+        { id: 'frontmatter', text: 'title: Design Notes', anchorable: false },
+        { id: 'p1', text: 'Unrelated prose.' },
+      ]),
+      { isEditProposal: true },
+    );
+    expect(upd.linkStatus).toBe('linked');
+    expect(upd.blockId).toBe('frontmatter');
   });
 });

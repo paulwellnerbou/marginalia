@@ -91,6 +91,28 @@ export interface BlockInfo {
    * surviving heading".
    */
   sectionIndexPath: number[];
+  /**
+   * Whether `id` was actually written to an element in `RenderResult.html`.
+   *
+   * Not every block reaches the page as something the client can point at.
+   * Raw HTML is re-parsed by rehype-raw, mermaid fences become a generated
+   * `<div>`, YAML frontmatter renders to nothing at all, and a footnote
+   * definition nobody references is dropped — in each case the block is
+   * real in the source but has no `data-block` element to resolve.
+   *
+   * Such blocks stay in the map on purpose: `list_blocks` and the edit
+   * proposal flow resolve ids to *source* ranges via `locateAllBlocks`,
+   * which places them fine. Only the DOM-facing consumers have to care,
+   * and for them a false here means "never hand a comment to this" —
+   * `reanchor` skips it, because an anchor stored against it would resolve
+   * to nothing in the browser and the comment would vanish silently.
+   *
+   * Computed by scanning the finished tree for the ids that survived, so
+   * it reports what the pipeline did rather than what it was expected to
+   * do — a plugin that starts or stops preserving `data-block` moves this
+   * flag with it instead of drifting away from the truth.
+   */
+  anchorable: boolean;
 }
 
 /** Ordered list of top-level blocks, by document order. */
