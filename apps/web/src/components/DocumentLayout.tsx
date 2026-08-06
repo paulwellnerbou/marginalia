@@ -70,6 +70,14 @@ import { reportError } from '../lib/log.js';
 import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
 import { ensureNotificationPermission, notify } from '../lib/notifications.js';
 import {
+  anchorTouchesSections,
+  applySectionFilterToDocument,
+  collectBlockSectionIds,
+  computeSectionRelations,
+  reassertSectionFilterOnDocument,
+  threadTouchesSections,
+} from '../lib/section-filter.js';
+import {
   applyTheme,
   BUILT_IN_THEMES,
   getUserThemeOverride,
@@ -111,6 +119,7 @@ const COMMENTS_DISPLAY_MODE_KEY = 'marginalia.commentsDisplayMode';
 const COLLAPSED_WIDTH = 36;
 /** Delay before scrolling to a specific reply after the parent thread has expanded (ms). */
 const REPLY_SCROLL_DELAY_MS = 900;
+const EMPTY_SECTION_FILTER: ReadonlySet<string> = new Set();
 
 interface Props {
   doc: Document;
@@ -434,6 +443,98 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [inlineCommentsOpen, commentsDisplayMode]);
 
   const headingIds = useMemo(() => flattenTocIds(liveRendered.toc), [liveRendered.toc]);
+  const headingIdSet = useMemo(() => new Set(headingIds), [headingIds]);
+
+  /** Heading ids the reader focused via the TOC funnel buttons; empty = no filter. */
+  const [sectionFilter, setSectionFilter] = useState<ReadonlySet<string>>(EMPTY_SECTION_FILTER);
+  const sectionFilterActive = sectionFilter.size > 0;
+  /**
+   * block id → enclosing heading-id chain, walked from the live
+   * article DOM. `null` until the first walk. Recomputed whenever the
+   * rendered HTML is rewritten (this effect runs after RenderedDoc's
+   * innerHTML effect — child effects fire first).
+   */
+  const [blockSectionIds, setBlockSectionIds] = useState<Map<string, string[]> | null>(null);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: liveRendered.html is the re-walk trigger — after an innerHTML rewrite the same heading ids point at brand-new DOM nodes.
+  useEffect(() => {
+    const root = docRef.current;
+    setBlockSectionIds(root ? collectBlockSectionIds(root, headingIdSet) : null);
+  }, [liveRendered.html, headingIdSet]);
+
+  // Heading ids are content-derived slugs, so an edit can invalidate a
+  // focused id. Drop the stale ones instead of filtering against
+  // sections that no longer exist.
+  useEffect(() => {
+    setSectionFilter((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set([...prev].filter((id) => headingIdSet.has(id)));
+      if (next.size === prev.size) return prev;
+      return next.size === 0 ? EMPTY_SECTION_FILTER : next;
+    });
+  }, [headingIdSet]);
+
+  const sectionRelations = useMemo(
+    () => (sectionFilterActive ? computeSectionRelations(liveRendered.toc, sectionFilter) : null),
+    [sectionFilterActive, liveRendered.toc, sectionFilter],
+  );
+
+  /**
+   * Enforce the filter on the document's collapse state, and keep
+   * enforcing it: outside code (deep links, thread jumps, TOC clicks)
+   * calls `expandAncestors`, which reopens held-closed sections — each
+   * such change fires `marginalia:collapse-toggle`, and the listener
+   * re-asserts. The `applying` flag ignores the events our own
+   * (synchronous) application dispatches.
+   */
+  const prevSectionFilterRef = useRef<ReadonlySet<string>>(EMPTY_SECTION_FILTER);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: liveRendered.html re-applies against the fresh DOM after an innerHTML rewrite wipes the filter's markers.
+  useEffect(() => {
+    const root = docRef.current;
+    if (!root) return;
+    const prev = prevSectionFilterRef.current;
+    prevSectionFilterRef.current = sectionFilter;
+    const added = new Set([...sectionFilter].filter((id) => !prev.has(id)));
+
+    let applying = true;
+    applySectionFilterToDocument(root, sectionRelations, added);
+    applying = false;
+
+    if (!sectionRelations) return;
+    // Re-assert only when the toggled section is one the filter locks
+    // (unrelated: held closed, ancestor: held open). Reader toggles
+    // inside focused sections are free and shouldn't pay any pass at
+    // all, and the enforce-only re-assert flips just the wrappers that
+    // drifted — no undo sweep, no event storm for other listeners.
+    // The event fires on the `.collapse-section` wrapper, whose
+    // previous sibling is its heading.
+    const reassert = (event: Event) => {
+      if (applying) return;
+      const wrapper = event.target instanceof HTMLElement ? event.target : null;
+      const headingId = wrapper?.previousElementSibling?.id;
+      const relation = headingId ? sectionRelations.get(headingId) : undefined;
+      if (relation !== 'unrelated' && relation !== 'ancestor') return;
+      applying = true;
+      reassertSectionFilterOnDocument(root, sectionRelations);
+      applying = false;
+    };
+    root.addEventListener('marginalia:collapse-toggle', reassert);
+    return () => root.removeEventListener('marginalia:collapse-toggle', reassert);
+  }, [sectionRelations, sectionFilter, liveRendered.html]);
+
+  const toggleSectionFilter = useCallback((id: string) => {
+    setSectionFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      // Removing the last id hands back the canonical empty set, so
+      // "no filter" keeps one stable identity everywhere.
+      return next.size === 0 ? EMPTY_SECTION_FILTER : next;
+    });
+  }, []);
+  const clearSectionFilter = useCallback(() => {
+    setSectionFilter(EMPTY_SECTION_FILTER);
+  }, []);
   const headingIdsKey = useMemo(() => headingIds.join('\u0000'), [headingIds]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: headingIdsKey is the deduped trigger derived from headingIds; liveRendered.html drives a re-attach against the new DOM nodes.
@@ -800,13 +901,32 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         await apiCreate(doc.uid, { anchor: payload.anchor, body: payload.body }, identity);
         setPendingDraft(null);
         setError(null);
+        // A comment on a spot the section filter hides (preamble, an
+        // ancestor heading) would vanish the moment it posts — lift
+        // the filter so the author sees their own thread.
+        if (
+          sectionFilterActive &&
+          blockSectionIds &&
+          !anchorTouchesSections(payload.anchor, blockSectionIds, sectionFilter)
+        ) {
+          clearSectionFilter();
+        }
         await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.createComment', err, { uid: doc.uid });
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to post');
       }
     },
-    [canComment, doc.uid, resolveIdentity, refreshThreads],
+    [
+      canComment,
+      doc.uid,
+      resolveIdentity,
+      refreshThreads,
+      sectionFilterActive,
+      blockSectionIds,
+      sectionFilter,
+      clearSectionFilter,
+    ],
   );
 
   const onReply = useCallback(
@@ -957,13 +1077,36 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         await apiCreateProposal(doc.uid, req, identity);
         setPendingDraft(null);
         setError(null);
+        if (
+          sectionFilterActive &&
+          blockSectionIds &&
+          !anchorTouchesSections(
+            {
+              block_id: pendingProposalTarget.block_id,
+              end_block_id: pendingProposalTarget.end_block_id ?? null,
+            },
+            blockSectionIds,
+            sectionFilter,
+          )
+        ) {
+          clearSectionFilter();
+        }
         await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.createProposal', err, { uid: doc.uid });
         setError(err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to propose');
       }
     },
-    [doc.uid, resolveIdentity, refreshThreads, pendingProposalTarget],
+    [
+      doc.uid,
+      resolveIdentity,
+      refreshThreads,
+      pendingProposalTarget,
+      sectionFilterActive,
+      blockSectionIds,
+      sectionFilter,
+      clearSectionFilter,
+    ],
   );
 
   const onEditProposal = useCallback((thread: Thread) => {
@@ -1111,7 +1254,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   };
 
   const title = documentTitle(doc);
-  const threadCount = useMemo(() => threads.length, [threads]);
+
+  /**
+   * Threads inside the focused sections — every thread while no filter
+   * is set. Feeds the inline column, the Threads tab, and its badge.
+   * Activities and the in-document highlights keep the full list: the
+   * feed is a log, and highlights in held-closed sections are invisible
+   * anyway.
+   */
+  const sectionVisibleThreads = useMemo(() => {
+    if (!sectionFilterActive || !blockSectionIds) return threads;
+    return threads.filter((t) => threadTouchesSections(t, blockSectionIds, sectionFilter));
+  }, [threads, sectionFilterActive, blockSectionIds, sectionFilter]);
+  const threadCount = sectionVisibleThreads.length;
 
   const commentHighlights = useMemo(() => {
     const highlights: Array<{
@@ -1249,6 +1404,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     ) => {
       const jumpToAnchor = options?.jumpToAnchor ?? true;
       const scroll = options?.scroll ?? !jumpToAnchor;
+      // Opening a thread the section filter hides (from Activities,
+      // History, a deep link) wins over the filter — lift it so the
+      // thread card can actually appear.
+      if (sectionFilterActive && !sectionVisibleThreads.some((t) => t.id === threadId)) {
+        clearSectionFilter();
+      }
       // Prefer the inline column when it's actually visible; otherwise
       // fall back to the right pane (and open it if it's collapsed).
       // Floating mode always shows the thread as a popover in the doc
@@ -1268,7 +1429,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
       setFocusedThread((prev) => ({ threadId, nonce: (prev?.nonce ?? 0) + 1, scroll }));
     },
-    [floatingComments, inlineCommentsVisible, scrollToAnchor, threads],
+    [
+      floatingComments,
+      inlineCommentsVisible,
+      scrollToAnchor,
+      threads,
+      sectionFilterActive,
+      sectionVisibleThreads,
+      clearSectionFilter,
+    ],
   );
 
   const onRevertLatestHistoryVersion = useCallback(
@@ -1369,7 +1538,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               </Text>
             )}
           </Flex>
-          {tocOpen && <Toc nodes={liveRendered.toc} activeId={activeHeadingId} />}
+          {tocOpen && (
+            <Toc
+              nodes={liveRendered.toc}
+              activeId={activeHeadingId}
+              filterIds={sectionFilter}
+              onToggleFilter={toggleSectionFilter}
+              onClearFilter={clearSectionFilter}
+            />
+          )}
           {tocOpen && <ResizeHandle side="left" width={tocWidth} onResize={setTocWidth} />}
         </aside>
 
@@ -1668,7 +1845,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               {floatingComments ? (
                 <FloatingCommentsLayer
                   uid={doc.uid}
-                  threads={threads}
+                  threads={sectionVisibleThreads}
                   docHtml={liveRendered.html}
                   docElementRef={docRef}
                   scrollContainerRef={docScrollRef}
@@ -1692,7 +1869,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               ) : (
                 <InlineCommentsLayer
                   uid={doc.uid}
-                  threads={threads}
+                  threads={sectionVisibleThreads}
                   docHtml={liveRendered.html}
                   docElementRef={docRef}
                   scrollContainerRef={docScrollRef}
@@ -1782,7 +1959,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               <Tabs.Content value="comments" className="right-tab-panel">
                 <InlineCommentsList
                   uid={doc.uid}
-                  threads={threads}
+                  threads={sectionVisibleThreads}
+                  sectionFilterCount={sectionFilter.size}
+                  onClearSectionFilter={clearSectionFilter}
                   blockRanges={blockRanges}
                   canComment={canComment}
                   pendingAnchor={canComment ? pendingAnchor : null}
