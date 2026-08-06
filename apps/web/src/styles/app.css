@@ -1011,17 +1011,23 @@ button.primary:disabled {
   align-self: center;
   margin-right: 0.35rem;
   opacity: 0;
+  /* While hidden it must not be an invisible click target; keyboard
+     focus still reaches it (pointer-events is mouse-only) and the
+     focus-visible rule below makes it appear. */
+  pointer-events: none;
   transition: opacity 120ms ease;
 }
 .toc-row:hover .toc-filter-btn,
 .toc-filter-btn:focus-visible,
 .toc-filter-btn[data-active="true"] {
   opacity: 1;
+  pointer-events: auto;
 }
 /* No hover on touch devices — keep the affordance reachable. */
 @media (hover: none) {
   .toc-filter-btn {
     opacity: 1;
+    pointer-events: auto;
   }
 }
 .toc .toc-filter-btn svg {

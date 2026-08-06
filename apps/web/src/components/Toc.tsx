@@ -231,9 +231,8 @@ function TocItem({
           ? true
           : open;
 
-  const filterLabel = isFiltered
-    ? `Stop focusing on "${plainText}"`
-    : `Focus on "${plainText}" only`;
+  // No "only": clicking adds to the focused set, it doesn't replace it.
+  const filterLabel = isFiltered ? `Stop focusing on "${plainText}"` : `Focus on "${plainText}"`;
 
   return (
     <li className={`toc-item toc-l${node.level} ${isActive ? 'active' : ''}`}>

@@ -406,7 +406,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     setSectionFilter((prev) => {
       if (prev.size === 0) return prev;
       const next = new Set([...prev].filter((id) => headingIdSet.has(id)));
-      return next.size === prev.size ? prev : next;
+      if (next.size === prev.size) return prev;
+      return next.size === 0 ? EMPTY_SECTION_FILTER : next;
     });
   }, [headingIdSet]);
 
@@ -461,7 +462,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      return next;
+      // Removing the last id hands back the canonical empty set, so
+      // "no filter" keeps one stable identity everywhere.
+      return next.size === 0 ? EMPTY_SECTION_FILTER : next;
     });
   }, []);
   const clearSectionFilter = useCallback(() => {
