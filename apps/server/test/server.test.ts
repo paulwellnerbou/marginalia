@@ -1521,6 +1521,57 @@ describe('documents API', () => {
     expect(await afterAccept.json()).toEqual({ error: 'not-open' });
   });
 
+  test('PATCH proposal update with `comment` posts the revision note as a reply', async () => {
+    const source = '# Title\n\nalpha';
+    const { created, threadId } = await seedProposal(source, 'alpha', 'beta');
+    const docLocator = { uid: created.uid, format: 'markdown' as const };
+
+    const res = await patchThread(created, threadId, {
+      proposal: { proposed_text: 'gamma' },
+      comment: 'Tightened the phrasing per feedback.',
+    });
+    expect(res.status).toBe(200);
+    const { thread, created_reply_id } = (await res.json()) as {
+      thread: {
+        proposal: { proposed_text: string | null };
+        comments: Array<{ id: string; body: string; author: { display_name: string } }>;
+      };
+      created_reply_id: string | null;
+    };
+    expect(thread.proposal.proposed_text).toBe('gamma');
+    expect(await app.store.readProposalTip(docLocator, threadId)).toBe('# Title\n\ngamma');
+    expect(thread.comments).toHaveLength(2);
+    expect(thread.comments[1]?.body).toBe('Tightened the phrasing per feedback.');
+    expect(thread.comments[1]?.author.display_name).toBe(CLIENT_A.name);
+    expect(created_reply_id).toBe(thread.comments[1]?.id as string);
+    // The rationale (opener) is untouched by a comment-only note.
+    expect(thread.comments[0]?.body).toBe('please change');
+
+    // Identical text + comment: the branch rewrite is skipped but the
+    // note still lands, so nothing the author wrote is dropped.
+    const noop = await patchThread(created, threadId, {
+      proposal: { proposed_text: 'gamma' },
+      comment: 'Same text, just confirming.',
+    });
+    expect(noop.status).toBe(200);
+    const noopBody = (await noop.json()) as {
+      thread: { comments: Array<{ body: string }> };
+      created_reply_id: string | null;
+    };
+    expect(noopBody.thread.comments).toHaveLength(3);
+    expect(noopBody.thread.comments[2]?.body).toBe('Same text, just confirming.');
+    expect(noopBody.created_reply_id).toBeString();
+
+    // A comment needs a proposal update to annotate — plain replies go
+    // through POST /respond.
+    const withoutProposal = await patchThread(created, threadId, {
+      body: 'new rationale',
+      comment: 'orphan note',
+    });
+    expect(withoutProposal.status).toBe(400);
+    expect(await withoutProposal.json()).toEqual({ error: 'comment-requires-proposal' });
+  });
+
   test('PATCH proposal.proposed_text rebases the branch onto current main', async () => {
     const source = '# Title\n\nalpha\n\nomega';
     const { created, threadId } = await seedProposal(source, 'alpha', 'beta');
