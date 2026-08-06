@@ -396,19 +396,22 @@ export function FloatingCommentsLayer({
       const active = document.activeElement;
       const focusWasInside = active === document.body || (active && cardEl.contains(active));
       if (!focusWasInside) return;
-      const doc = docElementRef.current;
-      const thread = byId.get(threadId);
-      const mark =
-        doc && thread?.anchor.block_id
-          ? resolveThreadScrollTarget(doc, thread.anchor.block_id, thread.anchor.quote, threadId)
-          : null;
+      // Queried straight off the DOM rather than through the thread
+      // list: depending on that list here would re-run this effect on
+      // every refresh, and the cleanup would pull focus out of a card
+      // that is still open. Overlapping quotes merge into one mark that
+      // names only one thread on the singular attribute, so the merged
+      // id list has to be matched too.
+      const mark = docElementRef.current?.querySelector<HTMLElement>(
+        `mark[data-comment-thread-ids~="${CSS.escape(threadId)}"], [data-comment-thread-id="${CSS.escape(threadId)}"]`,
+      );
       if (!mark) return;
       // Resolved-thread highlights are painted without tabindex/role, so
       // focus() on them would silently no-op and strand focus on <body>.
       if (!mark.hasAttribute('tabindex')) mark.setAttribute('tabindex', '-1');
       mark.focus({ preventScroll: true });
     };
-  }, [openId, cardEl, docElementRef, byId]);
+  }, [openId, cardEl, docElementRef]);
 
   // Tap-to-dismiss: a *tap* on the document text (not a scroll gesture,
   // not a drag, not a highlight — highlights re-target the popover via
