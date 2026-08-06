@@ -11,6 +11,8 @@ interface Props {
   contextLines?: number | null;
   /** Rendered in the dialog footer. E.g. Accept/Reject buttons. */
   actions?: React.ReactNode;
+  /** Optional reply composer for diffs that originate from a comment thread. */
+  replyComposer?: React.ReactNode;
   /** True while the caller is (re)fetching `before`/`after`. */
   loading?: boolean;
   /** Fetch failure to show in place of the diff. */
@@ -25,6 +27,7 @@ export function DiffDialog({
   after,
   contextLines = null,
   actions,
+  replyComposer,
   loading = false,
   error = null,
 }: Props) {
@@ -47,6 +50,12 @@ export function DiffDialog({
           </Text>
         ) : (
           <DiffView before={before} after={after} contextLines={contextLines} active={open} />
+        )}
+
+        {replyComposer && (
+          <section className="diff-dialog-reply" aria-label="Reply to thread">
+            {replyComposer}
+          </section>
         )}
 
         <Flex gap="2" justify="end" mt="4" align="center">

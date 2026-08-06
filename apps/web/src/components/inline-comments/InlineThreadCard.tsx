@@ -694,6 +694,18 @@ export function InlineThreadCard({
           contextLines={3}
           loading={loadingDiff}
           error={diffError}
+          replyComposer={
+            canComment ? (
+              <InlineComposer
+                placeholder="Add a comment to this thread…"
+                needsName={needsName}
+                mentionCandidates={mentionCandidates}
+                rows={3}
+                submitLabel="Comment"
+                onSubmit={(body, name) => onReply(thread.id, body, name)}
+              />
+            ) : undefined
+          }
           actions={
             status === 'open' && (canAccept || canReject || canUpdate) ? (
               <>
