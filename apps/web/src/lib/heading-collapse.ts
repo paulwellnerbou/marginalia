@@ -176,6 +176,30 @@ function applyCollapsedState(button: HTMLElement, wrapper: HTMLElement, collapse
 }
 
 /**
+ * Programmatic collapse/expand of one section, keeping the toggle
+ * button's ARIA state, the inner `inert` flag, and the
+ * `marginalia:collapse-toggle` notification in sync with what a user
+ * click would produce. No-op when the wrapper is already in the
+ * requested state, so callers can re-assert freely.
+ */
+export function setSectionCollapsed(wrapper: HTMLElement, collapsed: boolean): void {
+  if (wrapper.classList.contains('is-collapsed') === collapsed) return;
+  wrapper.classList.toggle('is-collapsed', collapsed);
+  const heading = wrapper.previousElementSibling;
+  const button = heading?.querySelector<HTMLElement>(':scope > .heading-collapse-toggle') ?? null;
+  if (button) {
+    applyCollapsedState(button, wrapper, collapsed);
+    return;
+  }
+  const inner = wrapper.firstElementChild as HTMLElement | null;
+  if (inner) {
+    if (collapsed) inner.setAttribute('inert', '');
+    else inner.removeAttribute('inert');
+  }
+  wrapper.dispatchEvent(new CustomEvent('marginalia:collapse-toggle', { bubbles: true }));
+}
+
+/**
  * Reveal `target` by expanding every collapsed `.collapse-section`
  * ancestor. Returns a Promise that resolves once the expand
  * animations have settled, so callers can `await` it before
