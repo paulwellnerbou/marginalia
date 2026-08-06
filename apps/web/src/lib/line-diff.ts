@@ -22,7 +22,17 @@ export interface DiffLine {
  *  well within budget even on modest devices; beyond that the LCS walk
  *  gets noticeably slow so we hand back a simple line-by-line diff. */
 const LCS_MAX_CELLS = 500_000;
-const INLINE_LCS_MAX_CELLS = 20_000;
+/** Tokens include whitespace runs, so a prose paragraph is easily 300+ per
+ *  side; too low a cap sends ordinary paragraphs to the coarse edge-based
+ *  fallback. 250k cells ≈ 2MB, allocated per paired line and short-lived. */
+const INLINE_LCS_MAX_CELLS = 250_000;
+/** Max cells in the remove/add pairing table before we fall back to pairing by
+ *  position. */
+const PAIRING_MAX_CELLS = 10_000;
+/** Token overlap below which two lines count as unrelated and stay unpaired,
+ *  so a rewritten line renders as a whole-line change instead of a scattering
+ *  of coincidental word matches. */
+const PAIRING_MIN_SIMILARITY = 0.3;
 
 export function diffLines(before: string, after: string): DiffLine[] {
   const a = before.split('\n');
@@ -125,10 +135,7 @@ function annotateInlineDiffs(lines: DiffLine[]): void {
       else if (line.op === 'add') adds.push(line);
     }
 
-    const pairCount = Math.min(removes.length, adds.length);
-    for (let i = 0; i < pairCount; i++) {
-      const removeLine = removes[i]!;
-      const addLine = adds[i]!;
+    for (const [removeLine, addLine] of pairLines(removes, adds)) {
       const inline = diffInline(removeLine.text, addLine.text);
       removeLine.segments = inline.before;
       addLine.segments = inline.after;
@@ -136,6 +143,87 @@ function annotateInlineDiffs(lines: DiffLine[]): void {
 
     blockStart = blockEnd;
   }
+}
+
+/**
+ * Picks which removed line each added line is the rewrite of, as the
+ * order-preserving assignment with the highest total token overlap. Pairing by
+ * position instead would word-diff unrelated lines whenever a block mixes an
+ * insertion with an edit — e.g. a new paragraph in front of a lightly reworded
+ * one, where the reworded pair sits at different offsets on the two sides.
+ */
+function pairLines(removes: DiffLine[], adds: DiffLine[]): Array<[DiffLine, DiffLine]> {
+  const n = removes.length;
+  const m = adds.length;
+  if (n === 0 || m === 0) return [];
+  if ((n + 1) * (m + 1) > PAIRING_MAX_CELLS) {
+    const pairCount = Math.min(n, m);
+    const byPosition: Array<[DiffLine, DiffLine]> = [];
+    for (let i = 0; i < pairCount; i++) byPosition.push([removes[i]!, adds[i]!]);
+    return byPosition;
+  }
+
+  const removeTokens = removes.map((line) => tokenBag(line.text));
+  const addTokens = adds.map((line) => tokenBag(line.text));
+  const pairScore = (i: number, j: number): number => {
+    const sim = similarity(removeTokens[i]!, addTokens[j]!);
+    return sim >= PAIRING_MIN_SIMILARITY ? sim : Number.NEGATIVE_INFINITY;
+  };
+
+  // best[i][j] = highest total similarity reachable from removes[i..]/adds[j..].
+  const best: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      best[i]![j] = Math.max(
+        pairScore(i, j) + best[i + 1]![j + 1]!,
+        best[i + 1]![j]!,
+        best[i]![j + 1]!,
+      );
+    }
+  }
+
+  const pairs: Array<[DiffLine, DiffLine]> = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (pairScore(i, j) + best[i + 1]![j + 1]! >= best[i]![j]!) {
+      pairs.push([removes[i]!, adds[j]!]);
+      i++;
+      j++;
+    } else if (best[i + 1]![j]! >= best[i]![j + 1]!) {
+      i++;
+    } else {
+      j++;
+    }
+  }
+  return pairs;
+}
+
+interface TokenBag {
+  counts: Map<string, number>;
+  size: number;
+}
+
+function tokenBag(text: string): TokenBag {
+  const counts = new Map<string, number>();
+  let size = 0;
+  for (const token of tokenizeInline(text)) {
+    if (!token.trim()) continue;
+    counts.set(token, (counts.get(token) ?? 0) + 1);
+    size++;
+  }
+  return { counts, size };
+}
+
+/** Sørensen–Dice over the two token multisets: 1 for equal, 0 for disjoint. */
+function similarity(a: TokenBag, b: TokenBag): number {
+  if (a.size === 0 || b.size === 0) return a.size === b.size ? 1 : 0;
+  const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+  let shared = 0;
+  for (const [token, count] of small.counts) {
+    shared += Math.min(count, large.counts.get(token) ?? 0);
+  }
+  return (2 * shared) / (a.size + b.size);
 }
 
 function diffInline(
