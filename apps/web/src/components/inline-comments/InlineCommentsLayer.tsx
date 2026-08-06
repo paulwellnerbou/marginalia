@@ -76,6 +76,7 @@ interface Props {
   ) => Promise<boolean>;
   onRepairThread: (id: string) => Promise<boolean>;
   onReact: (commentId: string, emoji: string) => Promise<void>;
+  onEditProposal?: ((thread: Thread) => void) | undefined;
   onScrollToAnchor: (
     blockId: string,
     quote?: string | null,
@@ -161,6 +162,7 @@ export function InlineCommentsLayer({
   onResolveThread,
   onRepairThread,
   onReact,
+  onEditProposal,
   onScrollToAnchor,
 }: Props) {
   const rootRef = useRef<HTMLElement>(null);
@@ -842,6 +844,7 @@ export function InlineCommentsLayer({
         onResolveThread={onResolveThread}
         onRepairThread={onRepairThread}
         onReact={onReact}
+        onEditProposal={onEditProposal}
       />
     );
   }

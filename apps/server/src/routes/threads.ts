@@ -586,6 +586,11 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
  * proposal comes back cleanly appliable while the thread keeps its id,
  * discussion, links and reactions instead of being deleted and
  * re-created.
+ *
+ * An optional `comment` (proposal updates only) is posted as a reply in
+ * the same request — the revision note lives in the discussion, where it
+ * survives later rewrites. It is NOT the branch commit message: that
+ * embeds the rationale and is rebuilt wholesale on every update.
  */
 async function editThreadRoot(c: Context, deps: AppDeps) {
   const { db, realtime, store } = deps;
@@ -611,6 +616,14 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const parsedUpdate = asProposalUpdate(body.proposal);
   if (!parsedUpdate.ok) return c.json({ error: parsedUpdate.error }, 400);
   const proposalUpdate = parsedUpdate.update;
+  const parsedComment = parseOptionalBody(body.comment);
+  if (!parsedComment.ok) return c.json({ error: 'invalid-body' }, 400);
+  const revisionComment = parsedComment.body;
+  // A revision note without a revision has no meaning here — plain
+  // replies go through POST /respond.
+  if (revisionComment && !proposalUpdate) {
+    return c.json({ error: 'comment-requires-proposal' }, 400);
+  }
   if (next.body === undefined && !proposalUpdate) return c.json({ error: 'body-required' }, 400);
 
   let branchUpdate: { baseOid: string; rangeStart: number; rangeEnd: number } | null = null;
@@ -676,11 +689,25 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
       const current = await readProposalContent(store, doc, row);
       if (current && current.proposed_text === proposalUpdate.proposedText) {
         // Same base, same text — nothing would change; skip the branch
-        // rewrite instead of minting an identical commit.
+        // rewrite instead of minting an identical commit. A revision
+        // comment still lands as a reply rather than being dropped.
+        let noopReply: { reply: CommentRow; mentionTargets: string[] } | null = null;
+        if (revisionComment) {
+          db.exec('BEGIN');
+          try {
+            noopReply = insertThreadReply(db, doc.uid, row, revisionComment, identity);
+            db.exec('COMMIT');
+          } catch (err) {
+            db.exec('ROLLBACK');
+            throw err;
+          }
+          broadcastReplyCreated(deps, doc.uid, noopReply, identity);
+        }
         const replies = loadReplies(db, doc.uid, tid);
         const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [row]);
         return c.json({
           thread: await toThreadWire(db, store, doc, row, replies, decision, reopenableAccepted),
+          created_reply_id: noopReply?.reply.id ?? null,
         });
       }
     }
@@ -704,6 +731,7 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   }
 
   const now = Date.now();
+  let createdReply: { reply: CommentRow; mentionTargets: string[] } | null = null;
   db.exec('BEGIN');
   try {
     if (branchUpdate) {
@@ -726,6 +754,9 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
         now,
         tid,
       );
+    }
+    if (revisionComment) {
+      createdReply = insertThreadReply(db, doc.uid, row, revisionComment, identity);
     }
     db.exec('COMMIT');
   } catch (err) {
@@ -754,6 +785,7 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
       ? storeMentionsForComment(db, doc.uid, updated.id, updated.body, updated.author_display_name)
       : [];
 
+  if (createdReply) broadcastReplyCreated(deps, doc.uid, createdReply, identity);
   if (isProposalRow(updated)) {
     realtime.broadcast(
       doc.uid,
@@ -783,7 +815,72 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updated]);
   return c.json({
     thread: await toThreadWire(db, store, doc, updated, replies, decision, reopenableAccepted),
+    created_reply_id: createdReply?.reply.id ?? null,
   });
+}
+
+/**
+ * Insert one reply row under a thread root and record its @mentions.
+ * Caller owns the surrounding transaction and the post-commit
+ * `broadcastReplyCreated`.
+ */
+function insertThreadReply(
+  db: Database,
+  docUid: string,
+  root: ThreadRow,
+  body: string,
+  identity: Identity,
+): { reply: CommentRow; mentionTargets: string[] } {
+  const isProposal = isProposalRow(root);
+  const id = newCommentId();
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO comments
+       (id, doc_uid, parent_id, parent_proposal_id,
+        author_client_id, author_display_name,
+        body, link_status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'linked', ?, ?)`,
+  ).run(
+    id,
+    docUid,
+    isProposal ? null : root.id,
+    isProposal ? root.id : null,
+    identity.clientId,
+    identity.displayName,
+    body,
+    now,
+    now,
+  );
+  const reply = db.prepare('SELECT * FROM comments WHERE id = ?').get(id) as CommentRow;
+  const mentionTargets = storeMentionsForComment(
+    db,
+    docUid,
+    reply.id,
+    reply.body,
+    reply.author_display_name,
+  );
+  return { reply, mentionTargets };
+}
+
+function broadcastReplyCreated(
+  deps: AppDeps,
+  docUid: string,
+  created: { reply: CommentRow; mentionTargets: string[] },
+  identity: Identity,
+): void {
+  deps.realtime.broadcast(
+    docUid,
+    { type: 'comment.created', comment: toLegacyCommentWire(created.reply) },
+    identity.clientId,
+  );
+  if (created.mentionTargets.length > 0) {
+    deps.realtime.broadcastToDisplayNames(
+      docUid,
+      created.mentionTargets,
+      { type: 'mention.created', comment: toLegacyCommentWire(created.reply) },
+      identity.clientId,
+    );
+  }
 }
 
 /**
@@ -1249,36 +1346,10 @@ async function respondToThread(c: Context, deps: AppDeps) {
     }
 
     if (replyBody.body) {
-      const now = Date.now();
-      createdReplyId = newCommentId();
-      db.prepare(
-        `INSERT INTO comments
-           (id, doc_uid, parent_id, parent_proposal_id,
-            author_client_id, author_display_name,
-            body, link_status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'linked', ?, ?)`,
-      ).run(
-        createdReplyId,
-        doc.uid,
-        isProposal ? null : tid,
-        isProposal ? tid : null,
-        identity.clientId,
-        identity.displayName,
-        replyBody.body,
-        now,
-        now,
-      );
-
-      createdReply = db
-        .prepare('SELECT * FROM comments WHERE id = ?')
-        .get(createdReplyId) as CommentRow;
-      createdReplyMentionTargets = storeMentionsForComment(
-        db,
-        doc.uid,
-        createdReply.id,
-        createdReply.body,
-        createdReply.author_display_name,
-      );
+      const created = insertThreadReply(db, doc.uid, row, replyBody.body, identity);
+      createdReplyId = created.reply.id;
+      createdReply = created.reply;
+      createdReplyMentionTargets = created.mentionTargets;
     }
 
     db.exec('COMMIT');
@@ -1291,19 +1362,12 @@ async function respondToThread(c: Context, deps: AppDeps) {
   }
 
   if (createdReply) {
-    realtime.broadcast(
+    broadcastReplyCreated(
+      deps,
       doc.uid,
-      { type: 'comment.created', comment: toLegacyCommentWire(createdReply) },
-      identity.clientId,
+      { reply: createdReply, mentionTargets: createdReplyMentionTargets },
+      identity,
     );
-    if (createdReplyMentionTargets.length > 0) {
-      realtime.broadcastToDisplayNames(
-        doc.uid,
-        createdReplyMentionTargets,
-        { type: 'mention.created', comment: toLegacyCommentWire(createdReply) },
-        identity.clientId,
-      );
-    }
   }
   for (const proposal of reanchoredProposalUpdates) {
     realtime.broadcast(

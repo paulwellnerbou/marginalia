@@ -1,4 +1,4 @@
-import { Button, Dialog, Flex } from '@radix-ui/themes';
+import { Button, Dialog, Flex, Text } from '@radix-ui/themes';
 import { DiffView } from './DiffView.js';
 
 interface Props {
@@ -11,6 +11,10 @@ interface Props {
   contextLines?: number | null;
   /** Rendered in the dialog footer. E.g. Accept/Reject buttons. */
   actions?: React.ReactNode;
+  /** True while the caller is (re)fetching `before`/`after`. */
+  loading?: boolean;
+  /** Fetch failure to show in place of the diff. */
+  error?: string | null;
 }
 
 export function DiffDialog({
@@ -21,6 +25,8 @@ export function DiffDialog({
   after,
   contextLines = null,
   actions,
+  loading = false,
+  error = null,
 }: Props) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -31,7 +37,17 @@ export function DiffDialog({
           shown for context.
         </Dialog.Description>
 
-        <DiffView before={before} after={after} contextLines={contextLines} active={open} />
+        {error ? (
+          <Text color="red" size="2" as="p">
+            {error}
+          </Text>
+        ) : loading ? (
+          <Text color="gray" size="2" as="p">
+            Loading diff…
+          </Text>
+        ) : (
+          <DiffView before={before} after={after} contextLines={contextLines} active={open} />
+        )}
 
         <Flex gap="2" justify="end" mt="4" align="center">
           {actions}

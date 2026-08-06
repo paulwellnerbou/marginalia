@@ -3,6 +3,7 @@ import {
   CheckIcon,
   ClipboardCopyIcon,
   FileTextIcon,
+  Pencil1Icon,
   PilcrowIcon,
 } from '@radix-ui/react-icons';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
@@ -66,6 +67,8 @@ interface Props {
   ) => Promise<boolean>;
   onRepairThread: (id: string) => Promise<boolean>;
   onReact: (commentId: string, emoji: string) => Promise<void>;
+  /** Open the edit-proposal dialog for this thread; absent hides the button. */
+  onEditProposal?: ((thread: Thread) => void) | undefined;
 }
 
 /**
@@ -125,6 +128,7 @@ export function InlineThreadCard({
   onResolveThread,
   onRepairThread,
   onReact,
+  onEditProposal,
 }: Props) {
   const composerRef = useRef<InlineComposerHandle>(null);
   // The reply composer stays closed until asked for — one textarea per
@@ -153,6 +157,22 @@ export function InlineThreadCard({
   const [resolvedDiff, setResolvedDiff] = useState<ProposalDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [loadingDiff, setLoadingDiff] = useState(false);
+
+  // An in-place content update (ours via the edit dialog, or another
+  // client's arriving through a thread refresh) makes any cached diff
+  // stale. Dropping the cache is enough: the fetch effect below refills
+  // it while the dialog is open, so an open dialog re-renders the
+  // revised change in place instead of snapping shut.
+  //
+  // Dropped during render rather than from an effect, same as the reset
+  // in ThreadComposer: an effect would commit one frame carrying the
+  // superseded diff, showing the author the version they just replaced.
+  const currentProposedText = thread.proposal?.proposed_text ?? null;
+  const [trackedProposedText, setTrackedProposedText] = useState(currentProposedText);
+  if (trackedProposedText !== currentProposedText) {
+    setTrackedProposedText(currentProposedText);
+    setResolvedDiff(null);
+  }
   const [idCopied, setIdCopied] = useState(false);
   const idCopyTimer = useRef<number | null>(null);
 
@@ -190,6 +210,13 @@ export function InlineThreadCard({
   const canRepair = proposal && thread.capabilities.repair;
   const canResolve = !proposal && !isResolved && thread.capabilities.resolve;
   const canReopen = !proposal && isResolved && thread.capabilities.reopen;
+  // proposed_text is null when the branch tip is unreadable — nothing
+  // to prefill an editor with, so no button either.
+  const canUpdate =
+    proposal &&
+    thread.capabilities.update &&
+    onEditProposal !== undefined &&
+    proposalThread?.proposal.proposed_text != null;
 
   // Once a proposal leaves the open state, freeze edits: an accepted
   // proposal's rationale may already be quoted in a history entry (for
@@ -246,28 +273,31 @@ export function InlineThreadCard({
     composerRef.current?.insertText(quoted, { focus: !needsName });
   }, [replyOpen, needsName]);
 
-  async function showDiff() {
-    if (!proposalThread || loadingDiff) return;
-    setDiffError(null);
-    if (resolvedDiff) {
-      setDiffOpen(true);
-      return;
-    }
+  // Fetch whenever the dialog is open without a diff for the current
+  // text — the initial open, and every cache drop above while it stays
+  // open. Errors don't loop: the effect re-runs only when the dialog
+  // reopens or the text changes again.
+  const threadId = thread.id;
+  useEffect(() => {
+    if (!diffOpen || !proposal || resolvedDiff !== null) return;
+    let cancelled = false;
     setLoadingDiff(true);
-    try {
-      const diff = await getEditProposalDiff(uid, thread.id);
-      setResolvedDiff(diff);
-      setDiffOpen(true);
-    } catch (err) {
-      reportError('InlineThreadCard.getEditProposalDiff', err, {
-        uid,
-        threadId: thread.id,
+    setDiffError(null);
+    getEditProposalDiff(uid, threadId)
+      .then((diff) => {
+        if (!cancelled) setResolvedDiff(diff);
+      })
+      .catch((err) => {
+        reportError('InlineThreadCard.getEditProposalDiff', err, { uid, threadId });
+        if (!cancelled) setDiffError('Could not load diff');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDiff(false);
       });
-      setDiffError('Could not load diff');
-    } finally {
-      setLoadingDiff(false);
-    }
-  }
+    return () => {
+      cancelled = true;
+    };
+  }, [diffOpen, proposal, resolvedDiff, uid, threadId]);
 
   async function runWorkflow(
     kind: ThreadWorkflowKind,
@@ -378,11 +408,10 @@ export function InlineThreadCard({
               <button
                 type="button"
                 className="ic-btn ic-btn-ghost ic-card-show-diff"
-                onClick={() => void showDiff()}
-                disabled={loadingDiff}
+                onClick={() => setDiffOpen(true)}
                 title="Show the proposed text change"
               >
-                {loadingDiff ? 'Loading…' : 'Show diff'}
+                Show diff
               </button>
               {canRepair && (
                 <button
@@ -663,9 +692,23 @@ export function InlineThreadCard({
           before={resolvedDiff?.original?.before ?? resolvedDiff?.before ?? ''}
           after={resolvedDiff?.original?.after ?? resolvedDiff?.after ?? ''}
           contextLines={3}
+          loading={loadingDiff}
+          error={diffError}
           actions={
-            status === 'open' && (canAccept || canReject) ? (
+            status === 'open' && (canAccept || canReject || canUpdate) ? (
               <>
+                {canUpdate && (
+                  <button
+                    type="button"
+                    className="ic-btn ic-btn-ghost"
+                    onClick={() => onEditProposal?.(thread)}
+                    disabled={loadingDiff}
+                    title="Revise the proposed text — with an optional comment on what changed"
+                  >
+                    <Pencil1Icon aria-hidden="true" />
+                    Edit
+                  </button>
+                )}
                 {canAccept && (
                   <button
                     type="button"
