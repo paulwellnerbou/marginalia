@@ -899,6 +899,7 @@ describe('documents API', () => {
           id: string;
           author: { client_id: string; display_name: string };
           summary: string;
+          deleted: boolean;
         } | null;
       }>;
     };
@@ -907,6 +908,7 @@ describe('documents API', () => {
       id: proposal.thread.id,
       author: { client_id: CLIENT_B.id, display_name: 'Robert' },
       summary: 'Proposed change',
+      deleted: false,
     });
   });
 

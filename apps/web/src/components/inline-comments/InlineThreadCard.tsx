@@ -178,8 +178,9 @@ export function InlineThreadCard({
   const canReopen = !proposal && isResolved && thread.capabilities.reopen;
 
   // Once a proposal leaves the open state, its rationale is part of the
-  // accept-commit message in git — freeze edits, and freeze deletes once
-  // accepted so the recorded history can't be erased from this UI.
+  // accept-commit message in git — freeze edits. Deletes follow the
+  // server capability (admin-only once accepted); the history entry
+  // keeps its attribution even after the thread is deleted.
   const openerNode: Comment = useMemo(() => {
     if (!proposal) return thread.comments[0];
     const base = thread.comments[0];
@@ -187,7 +188,7 @@ export function InlineThreadCard({
       ...base,
       capabilities: {
         edit: base.capabilities.edit && status === 'open',
-        delete: base.capabilities.delete && status !== 'accepted',
+        delete: base.capabilities.delete,
         react: base.capabilities.react,
       },
     };

@@ -1608,6 +1608,129 @@ describe('threads API', () => {
     ).toBe(true);
   });
 
+  /** Bob proposes `proposed_text` for the doc's first block, admin accepts. */
+  async function acceptedProposal(uid: string, rationale: string, proposedText: string) {
+    const blockId = await firstBlockId(uid);
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          body: rationale,
+          proposal: { anchor_kind: 'heading', proposed_text: proposedText },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
+
+    const acceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(acceptRes.status).toBe(200);
+    return proposed.thread.id;
+  }
+
+  test('deleting an accepted proposal keeps the history attribution', async () => {
+    const uid = await newDoc('# Title');
+    const threadId = await acceptedProposal(uid, 'Sharper title', '# Better title');
+
+    const bobDelete = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'DELETE',
+        headers: headersFor(BOB),
+      }),
+    );
+    expect(bobDelete.status).toBe(403);
+    expect(((await bobDelete.json()) as { error: string }).error).toBe('forbidden-accepted');
+
+    const adminDelete = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'DELETE',
+        headers: asAdmin(),
+      }),
+    );
+    expect(adminDelete.status).toBe(204);
+
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, { headers: asAdmin() }),
+    );
+    const listBody = (await listRes.json()) as { threads: ThreadShape[] };
+    expect(listBody.threads.find((t) => t.id === threadId)).toBeUndefined();
+
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/history`, { headers: asAdmin() }),
+    );
+    expect(historyRes.status).toBe(200);
+    const { history } = (await historyRes.json()) as {
+      history: Array<{
+        action: string;
+        proposal: {
+          id: string;
+          author: { display_name: string };
+          summary: string;
+          deleted: boolean;
+        } | null;
+      }>;
+    };
+    const acceptEntry = history.find((e) => e.action === 'accept-proposal');
+    expect(acceptEntry?.proposal).toMatchObject({
+      id: threadId,
+      author: { display_name: BOB.name },
+      summary: 'Sharper title',
+      deleted: true,
+    });
+
+    // The accepted tip stays reachable via its branch ref.
+    expect(await app.store.readProposalTip({ uid, format: 'markdown' as const }, threadId)).toBe(
+      '# Better title',
+    );
+  });
+
+  test('reverting an accept after the proposal thread was deleted does not resurrect it', async () => {
+    const uid = await newDoc('# Title');
+    const threadId = await acceptedProposal(uid, 'Sharper title', '# Better title');
+
+    const adminDelete = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'DELETE',
+        headers: asAdmin(),
+      }),
+    );
+    expect(adminDelete.status).toBe(204);
+
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/history`, { headers: asAdmin() }),
+    );
+    const { history } = (await historyRes.json()) as { history: Array<{ oid: string }> };
+
+    const revertRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/history/${history[0]!.oid}/revert`, {
+        method: 'POST',
+        headers: asAdmin(),
+      }),
+    );
+    expect(revertRes.status).toBe(200);
+    const revert = (await revertRes.json()) as { reopened_proposal_id: string | null };
+    expect(revert.reopened_proposal_id).toBeNull();
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: asAdmin() }),
+    );
+    expect(((await docRes.json()) as { source: string }).source).toBe('# Title');
+
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, { headers: asAdmin() }),
+    );
+    const listBody = (await listRes.json()) as { threads: ThreadShape[] };
+    expect(listBody.threads.find((t) => t.id === threadId)).toBeUndefined();
+  });
+
   test('resolving a reply is rejected', async () => {
     const uid = await newDoc('# Title');
     const blockId = await firstBlockId(uid);

@@ -2051,6 +2051,7 @@ interface AcceptedProposalHistoryRow {
   base_oid: string | null;
   base_block_start: number | null;
   base_block_end: number | null;
+  deleted_at: number | null;
 }
 
 async function toHistoryWire(
@@ -2151,6 +2152,10 @@ async function loadAcceptedProposalHistory(
   userNames: Map<string, string>,
   proposalId: string | null,
 ): Promise<Record<string, unknown> | null> {
+  // Deliberately no `deleted_at` filter: the accept commit is part of
+  // the document's history, so its attribution must survive deleting
+  // the proposal thread. `deleted` only tells clients there is no live
+  // thread to open.
   const select = `
     SELECT
       c.id,
@@ -2160,11 +2165,11 @@ async function loadAcceptedProposalHistory(
       cep.branch_ref,
       cep.base_oid,
       cep.base_block_start,
-      cep.base_block_end
+      cep.base_block_end,
+      c.deleted_at
     FROM comments c
     INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
     WHERE c.doc_uid = ?
-      AND c.deleted_at IS NULL
   `;
   const row = (
     proposalId
@@ -2185,6 +2190,7 @@ async function loadAcceptedProposalHistory(
       display_name: userNames.get(row.author_client_id) ?? row.author_display_name,
     },
     summary: summarizeProposalHistory(row.rationale, proposedText),
+    deleted: row.deleted_at !== null,
   };
 }
 
