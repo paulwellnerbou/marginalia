@@ -20,7 +20,7 @@ import {
 import { InlineCommentsToolbar } from './InlineCommentsToolbar.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
-import { COMMENT_FLASH_MS, threadLinks, threadsById } from './inlineUtils.js';
+import { COMMENT_FLASH_MS, resolveAnchorElement, threadLinks, threadsById } from './inlineUtils.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
 interface Props {
@@ -51,6 +51,8 @@ interface Props {
    *  participate in the sticky-stacking calculations. */
   hideResolved: boolean;
   onToggleHideResolved: () => void;
+  /** Switch the comment presentation from the margin column to floating cards. */
+  onSwitchToFloating: () => void;
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number; scroll: boolean } | null;
   displayName: string | null;
@@ -130,33 +132,6 @@ interface GlobalState {
   isSticky: boolean;
 }
 
-function resolveAnchorElement(
-  doc: HTMLElement,
-  blockId: string,
-  quote?: string | null,
-): HTMLElement | null {
-  const escaped = CSS.escape(blockId);
-  const target = doc.querySelector<HTMLElement>(
-    `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-  );
-  if (!target) return null;
-  if (!target.dataset.block || !quote) return target;
-
-  const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
-  let narrowed: HTMLElement | null = null;
-  let unique = true;
-  for (const sub of subEls) {
-    const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
-    if (!text.includes(quote)) continue;
-    if (narrowed) {
-      unique = false;
-      break;
-    }
-    narrowed = sub;
-  }
-  return unique && narrowed ? narrowed : target;
-}
-
 export function InlineCommentsLayer({
   uid,
   threads,
@@ -171,6 +146,7 @@ export function InlineCommentsLayer({
   onToggleStacking,
   hideResolved,
   onToggleHideResolved,
+  onSwitchToFloating,
   pendingAnchor,
   focusedThread,
   displayName,
@@ -225,7 +201,9 @@ export function InlineCommentsLayer({
   const collapsed = collapseState.collapsed;
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; phase: 'a' | 'b' } | null>(null);
-  const lastNonce = useRef<number | null>(null);
+  // Seeded with the current nonce so remounting (display-mode toggle)
+  // doesn't replay a focus signal that was already handled.
+  const lastNonce = useRef<number | null>(focusedThread?.nonce ?? null);
 
   useEffect(() => {
     setCollapseState((prev) => reconcileThreadCollapseState(prev, collapseDefaults));
@@ -859,6 +837,7 @@ export function InlineCommentsLayer({
         onToggleStacking={onToggleStacking}
         hideResolved={hideResolved}
         onToggleHideResolved={onToggleHideResolved}
+        onSwitchToFloating={onSwitchToFloating}
         onScrollToAnchor={scrollToAnchorWithOffset}
       />
       <div className="ic-column-clip" aria-hidden={!open}>

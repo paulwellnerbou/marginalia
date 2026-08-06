@@ -2804,6 +2804,128 @@ button.primary:disabled {
   }
 }
 
+/* ============================================================
+ * Floating comments mode: one thread at a time opens as a popover
+ * card anchored to its highlight, in content space so it scrolls
+ * with the document. Reuses all .ic-card internals unchanged.
+ * ============================================================ */
+
+/* Positioning context for the floating host — only added in floating
+   mode so column mode's layout is untouched. */
+.doc-row-floating {
+  position: relative;
+}
+.ic-float-host {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.ic-float-card {
+  position: absolute;
+  pointer-events: auto;
+  /* Above static doc content, but below the floating chrome (search /
+     read-aloud / pill popovers at 3, selection toolbar at 10) — the
+     card is content and scrolls under the chrome. */
+  z-index: 2;
+  width: min(400px, calc(100cqw - 24px));
+  font-size: 0.85rem;
+  color: var(--ui-fg);
+}
+.ic-float-card > .ic-card {
+  /* Long threads scroll inside the card instead of burying the text. */
+  max-height: min(65vh, 34rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* .ic-card's own background mixes into --md-color-bg, which the
+     bundled themes set to `transparent` in dark appearance — fine over
+     the column's opaque pane, see-through as a popover over text. Mix
+     into the app background instead: always opaque, appearance-aware. */
+  background: color-mix(in srgb, var(--md-color-fg, var(--ui-fg)) 5%, var(--ui-bg));
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 28%, transparent);
+}
+/* Keep the pending composer's blue tint, layered over an opaque base. */
+.ic-float-card > .ic-card-pending {
+  background:
+    linear-gradient(
+      var(--ui-bg-muted, rgba(59, 130, 246, 0.04)),
+      var(--ui-bg-muted, rgba(59, 130, 246, 0.04))
+    ),
+    var(--ui-bg);
+}
+/* The column dims resolved cards; a translucent popover lets the text
+   underneath bleed through, so keep it opaque — the badge carries the
+   state. */
+.ic-float-card > .ic-card-resolved {
+  opacity: 1;
+}
+/* Collapse is a column affordance; the popover opens fresh and closes
+   entirely instead. */
+.ic-float-card .ic-card-collapse {
+  display: none;
+}
+.ic-float-close {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  /* Same auto-flipping high-contrast pair as .selection-toolbar. */
+  background: var(--gray-12);
+  color: var(--gray-1);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+.ic-float-close:hover {
+  background: var(--accent-9);
+  color: var(--accent-contrast);
+}
+
+/* Pill toolbar for floating mode — same vertical placement as
+   .doc-search-popover / .read-aloud-popover but LEFT-aligned, so it
+   never collides with those right-aligned panels. */
+.ic-float-toolbar-popover {
+  position: absolute;
+  top: var(--doc-chrome-height);
+  right: 0;
+  left: 0.25rem;
+  display: flex;
+  justify-content: flex-start;
+  padding: 0.5rem 1rem 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.ic-float-toolbar {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: var(--doc-floating-toolbar-height);
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--doc-floating-toolbar-radius);
+  background: color-mix(in srgb, var(--color-panel-solid) 94%, transparent);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
+  backdrop-filter: blur(14px);
+}
+.ic-float-toolbar > button {
+  margin-inline: 0;
+}
+.ic-float-toolbar-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--ui-fg-muted);
+  flex-shrink: 0;
+}
+.ic-float-toolbar .ic-toolbar-count {
+  margin-inline: 2px 4px;
+}
+
 /* ---------- Card ---------- */
 
 .ic-card {
