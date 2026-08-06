@@ -10,6 +10,7 @@ import {
   useState,
 } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
+import { resolveAnchorElement } from '../../lib/anchor-target.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import {
@@ -21,6 +22,7 @@ import { InlineCommentsToolbar } from './InlineCommentsToolbar.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 import { COMMENT_FLASH_MS, threadLinks, threadsById } from './inlineUtils.js';
+import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
 interface Props {
@@ -51,6 +53,8 @@ interface Props {
    *  participate in the sticky-stacking calculations. */
   hideResolved: boolean;
   onToggleHideResolved: () => void;
+  /** Switch the comment presentation from the margin column to floating cards. */
+  onSwitchToFloating: () => void;
   pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number; scroll: boolean } | null;
   displayName: string | null;
@@ -73,6 +77,7 @@ interface Props {
   ) => Promise<boolean>;
   onRepairThread: (id: string) => Promise<boolean>;
   onReact: (commentId: string, emoji: string) => Promise<void>;
+  onEditProposal?: ((thread: Thread) => void) | undefined;
   onScrollToAnchor: (
     blockId: string,
     quote?: string | null,
@@ -130,33 +135,6 @@ interface GlobalState {
   isSticky: boolean;
 }
 
-function resolveAnchorElement(
-  doc: HTMLElement,
-  blockId: string,
-  quote?: string | null,
-): HTMLElement | null {
-  const escaped = CSS.escape(blockId);
-  const target = doc.querySelector<HTMLElement>(
-    `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-  );
-  if (!target) return null;
-  if (!target.dataset.block || !quote) return target;
-
-  const subEls = target.querySelectorAll<HTMLElement>('[data-subblock]');
-  let narrowed: HTMLElement | null = null;
-  let unique = true;
-  for (const sub of subEls) {
-    const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
-    if (!text.includes(quote)) continue;
-    if (narrowed) {
-      unique = false;
-      break;
-    }
-    narrowed = sub;
-  }
-  return unique && narrowed ? narrowed : target;
-}
-
 export function InlineCommentsLayer({
   uid,
   threads,
@@ -171,6 +149,7 @@ export function InlineCommentsLayer({
   onToggleStacking,
   hideResolved,
   onToggleHideResolved,
+  onSwitchToFloating,
   pendingAnchor,
   focusedThread,
   displayName,
@@ -184,6 +163,7 @@ export function InlineCommentsLayer({
   onResolveThread,
   onRepairThread,
   onReact,
+  onEditProposal,
   onScrollToAnchor,
 }: Props) {
   const rootRef = useRef<HTMLElement>(null);
@@ -203,6 +183,15 @@ export function InlineCommentsLayer({
     [threads, hideResolved],
   );
   const byId = useMemo(() => threadsById(visibleThreads), [visibleThreads]);
+
+  /**
+   * Merge each proposal into the card of the thread it answers. Only
+   * top-level threads get their own anchored card; nested proposals
+   * render inside the parent's card. Computed over the post-filter
+   * set so a proposal whose answered thread is hidden (resolved +
+   * hide-resolved) keeps its own card.
+   */
+  const nesting = useMemo(() => computeThreadNesting(visibleThreads), [visibleThreads]);
 
   /**
    * Auto-collapse defaults derived from the current thread list.
@@ -225,7 +214,9 @@ export function InlineCommentsLayer({
   const collapsed = collapseState.collapsed;
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; phase: 'a' | 'b' } | null>(null);
-  const lastNonce = useRef<number | null>(null);
+  // Seeded with the current nonce so remounting (display-mode toggle)
+  // doesn't replay a focus signal that was already handled.
+  const lastNonce = useRef<number | null>(focusedThread?.nonce ?? null);
 
   useEffect(() => {
     setCollapseState((prev) => reconcileThreadCollapseState(prev, collapseDefaults));
@@ -248,7 +239,7 @@ export function InlineCommentsLayer({
   }, [blockRanges]);
 
   const sorted = useMemo<OrderItem[]>(() => {
-    const items: OrderItem[] = visibleThreads.map((t) => ({
+    const items: OrderItem[] = nesting.topLevel.map((t) => ({
       thread: t,
       blockIndex: t.anchor.block_id
         ? (blockOrder.get(t.anchor.block_id) ?? Number.MAX_SAFE_INTEGER)
@@ -261,7 +252,7 @@ export function InlineCommentsLayer({
         a.blockIndex - b.blockIndex || a.startOffset - b.startOffset || a.createdAt - b.createdAt,
     );
     return items;
-  }, [visibleThreads, blockOrder]);
+  }, [nesting, blockOrder]);
 
   /** O(1) lookup of thread by id — avoids `sorted.find(...)` per render in renderCardById. */
   const sortedById = useMemo<Map<string, OrderItem>>(() => {
@@ -306,6 +297,14 @@ export function InlineCommentsLayer({
   }, [sorted, canComment, pendingAnchor, blockOrder]);
 
   /**
+   * The thread most recently navigated to (toolbar arrows, card jump
+   * buttons, ref links). The toolbar steps next/prev from here when the
+   * viewport is still at that thread's position — scroll position alone
+   * can't tell apart threads anchored to the same text.
+   */
+  const lastNavThreadRef = useRef<string | null>(null);
+
+  /**
    * When stacking is disabled, cards sit at their natural anchor
    * positions (no stickyTopPad offset). Wrap onScrollToAnchor to
    * inject the stickyTopPad so the scrolled-to text appears with
@@ -313,6 +312,7 @@ export function InlineCommentsLayer({
    */
   const scrollToAnchorWithOffset = useCallback(
     (blockId: string, quote?: string | null, threadId?: string) => {
+      if (threadId) lastNavThreadRef.current = threadId;
       onScrollToAnchor(blockId, quote, threadId, stackingEnabled ? 0 : stickyTopPad);
     },
     [onScrollToAnchor, stackingEnabled, stickyTopPad],
@@ -593,10 +593,15 @@ export function InlineCommentsLayer({
     const timeout = window.setTimeout(() => {
       columnWidthTransitioning.current = false;
       if (open) measureOpenColumnWidth();
+      // The open/close transition changes the document column's width →
+      // the text reflows and every anchor below the fold moves. Remeasure
+      // here as well as in the ResizeObserver so the anchors are right
+      // even where the observer is throttled.
+      requestRemeasure();
     }, COLUMN_WIDTH_TRANSITION_FALLBACK_MS);
 
     return () => window.clearTimeout(timeout);
-  }, [open, measureOpenColumnWidth]);
+  }, [open, measureOpenColumnWidth, requestRemeasure]);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -638,6 +643,35 @@ export function InlineCommentsLayer({
     obs.observe(el);
     return () => obs.disconnect();
   }, []);
+
+  // The document can reflow without a single DOM mutation — webfont and
+  // image loads, the column itself opening (which narrows the text), a
+  // reading-width change — silently shifting every anchor below the
+  // reflow point. Watching the article's box size catches all of them;
+  // without this the measured tops drift by thousands of pixels on long
+  // documents and cards render next to the wrong text.
+  useEffect(() => {
+    if (!open) return;
+    const doc = docElementRef.current;
+    if (!doc || typeof ResizeObserver === 'undefined') return;
+    const obs = new ResizeObserver(() => requestRemeasure());
+    obs.observe(doc);
+    return () => obs.disconnect();
+  }, [open, docElementRef, requestRemeasure]);
+
+  // Webfont swaps reflow the text without resizing anything the other
+  // observers watch reliably — one explicit remeasure once all fonts land.
+  useEffect(() => {
+    if (!open) return;
+    if (typeof document === 'undefined' || !document.fonts?.ready) return;
+    let cancelled = false;
+    void document.fonts.ready.then(() => {
+      if (!cancelled) requestRemeasure();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, requestRemeasure]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: docHtml is the explicit re-attach trigger so the observer points at the freshly rendered DOM after a content swap.
   useEffect(() => {
@@ -719,19 +753,30 @@ export function InlineCommentsLayer({
   useEffect(() => {
     if (!focusedThread) return;
     if (lastNonce.current === focusedThread.nonce) return;
-    lastNonce.current = focusedThread.nonce;
 
     const exists = threads.some((t) => t.id === focusedThread.threadId);
     if (!exists) return;
 
-    if (collapsed.has(focusedThread.threadId)) {
+    // A nested proposal renders inside its answered thread's card, so
+    // that card must be expanded too for the target to be visible.
+    // Expand first and leave the nonce unhandled: the collapse-state
+    // change re-runs this effect, and only that second pass — with the
+    // target actually in the DOM — scrolls and flashes.
+    const parentId = nesting.parentOf.get(focusedThread.threadId);
+    const toExpand = [focusedThread.threadId, ...(parentId ? [parentId] : [])].filter((id) =>
+      collapsed.has(id),
+    );
+    if (toExpand.length > 0) {
       setCollapseState((prev) => {
-        if (!prev.collapsed.has(focusedThread.threadId)) return prev;
+        const expand = toExpand.filter((id) => prev.collapsed.has(id));
+        if (expand.length === 0) return prev;
         const next = new Set(prev.collapsed);
-        next.delete(focusedThread.threadId);
+        for (const id of expand) next.delete(id);
         return { ...prev, collapsed: next };
       });
+      return;
     }
+    lastNonce.current = focusedThread.nonce;
 
     const phase: 'a' | 'b' = focusedThread.nonce % 2 === 0 ? 'b' : 'a';
     setFocusedId(focusedThread.threadId);
@@ -756,7 +801,7 @@ export function InlineCommentsLayer({
       window.clearTimeout(flashT);
       window.clearTimeout(focusT);
     };
-  }, [focusedThread, threads, collapsed]);
+  }, [focusedThread, threads, collapsed, nesting]);
 
   function toggle(id: string) {
     setCollapseState((prev) => {
@@ -802,24 +847,39 @@ export function InlineCommentsLayer({
     }
     const item = sortedById.get(id);
     if (!item) return null;
-    const blockId = item.thread.anchor.block_id;
+    return renderCard(item.thread, nestedThreadsOf(nesting, id), false);
+  }
+
+  function renderCard(thread: Thread, nested: readonly Thread[], asNested: boolean): ReactNode {
+    const blockId = thread.anchor.block_id;
     const onJump = blockId
-      ? () => scrollToAnchorWithOffset(blockId, item.thread.anchor.quote, item.thread.id)
+      ? () => scrollToAnchorWithOffset(blockId, thread.anchor.quote, thread.id)
       : undefined;
+    const rawLinks = threadLinks(thread, byId);
+    // Proposals rendered inside this card need no "See proposed change"
+    // link on top — the card itself is right below.
+    let links = rawLinks;
+    if (nested.length > 0) {
+      const nestedIds = new Set(nested.map((n) => n.id));
+      links = { ...rawLinks, answeredBy: rawLinks.answeredBy.filter((t) => !nestedIds.has(t.id)) };
+    }
     return (
       <InlineThreadCard
+        key={thread.id}
         uid={uid}
-        thread={item.thread}
-        links={threadLinks(item.thread, byId)}
+        thread={thread}
+        links={links}
+        nested={asNested}
+        nestedCards={nested.length > 0 ? nested.map((n) => renderCard(n, [], true)) : undefined}
         onFocusLinked={focusLinked}
         threadRefs={threadRefs}
         canComment={canComment}
         needsName={!displayName}
-        focused={focusedId === id}
-        flashPhase={flash?.id === id ? flash.phase : null}
-        collapsed={collapsed.has(id)}
+        focused={focusedId === thread.id}
+        flashPhase={flash?.id === thread.id ? flash.phase : null}
+        collapsed={collapsed.has(thread.id)}
         mentionCandidates={mentionCandidates}
-        onToggleCollapsed={() => toggle(id)}
+        onToggleCollapsed={() => toggle(thread.id)}
         onJump={onJump}
         onReply={onReply}
         onEdit={onEdit}
@@ -828,6 +888,7 @@ export function InlineCommentsLayer({
         onResolveThread={onResolveThread}
         onRepairThread={onRepairThread}
         onReact={onReact}
+        onEditProposal={onEditProposal}
       />
     );
   }
@@ -851,7 +912,8 @@ export function InlineCommentsLayer({
         rootRef={toolbarRef}
         sortedThreads={sorted.map((s) => s.thread)}
         scrollContainerRef={scrollContainerRef}
-        cardNaturalTops={naturalTops.current}
+        docElementRef={docElementRef}
+        lastNavThreadRef={lastNavThreadRef}
         stickyTopPad={stickyTopPad}
         open={open}
         onToggleOpen={onToggleOpen}
@@ -859,6 +921,7 @@ export function InlineCommentsLayer({
         onToggleStacking={onToggleStacking}
         hideResolved={hideResolved}
         onToggleHideResolved={onToggleHideResolved}
+        onSwitchToFloating={onSwitchToFloating}
         onScrollToAnchor={scrollToAnchorWithOffset}
       />
       <div className="ic-column-clip" aria-hidden={!open}>

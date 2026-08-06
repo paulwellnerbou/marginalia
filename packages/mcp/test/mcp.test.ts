@@ -648,6 +648,32 @@ describe('marginalia MCP server', () => {
     expect(after).toContain('Water rations: five days');
   });
 
+  test('update_proposal posts the revision comment into the discussion', async () => {
+    const { adminUrl } = await seedBook();
+    const created = await call('create_proposal', {
+      document: adminUrl,
+      anchor_text: 'Water rations: four days',
+      proposed_text: '- Water rations: six days',
+      rationale: 'Four days looks too tight for an unknown distance.',
+    });
+    const proposalId = /^thread_id: (\S+)/m.exec(created)?.[1] as string;
+
+    const updated = await call('update_proposal', {
+      document: adminUrl,
+      thread_id: proposalId,
+      proposed_text: '- Water rations: five days',
+      comment: 'Scaled back to five after checking the camel loads.',
+    });
+    expect(updated).toContain(`Updated proposal ${proposalId}`);
+    expect(updated).toContain('Revision note posted as comment');
+
+    // The note joins the discussion as a reply; the rationale stays.
+    const threads = await call('list_threads', { document: adminUrl, kind: 'proposals' });
+    expect(threads).toContain('Scaled back to five after checking the camel loads.');
+    expect(threads).toContain('Four days looks too tight for an unknown distance.');
+    expect(threads).toContain('- Water rations: five days');
+  });
+
   test('update_proposal refreshes a proposal the document moved away from', async () => {
     const { adminUrl } = await seedBook();
     const created = await call('create_proposal', {

@@ -1004,6 +1004,11 @@ function wrapTextSlice(
   const isVisuallyOpen = threads.length === 0 || openThread !== undefined;
   mark.className = isVisuallyOpen ? 'comment-highlight' : 'comment-highlight-resolved';
   const targetThread = openThread ?? threads[0];
+  if (threads.length > 0) {
+    // Overlapping ranges merge into one mark; every covered thread must
+    // stay findable for scroll-to-thread, not just the click target.
+    mark.dataset.commentThreadIds = threads.map((t) => t.id).join(' ');
+  }
   if (targetThread) {
     mark.dataset.commentThreadId = targetThread.id;
     if (openThread) {

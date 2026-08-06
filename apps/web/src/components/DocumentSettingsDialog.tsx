@@ -194,9 +194,10 @@ export function DocumentSettingsDialog({
               JSON bundle
             </Text>
             <Text size="1" color="gray">
-              Versioned bundle with the source, comments, and renderer metadata for tooling or later
-              import. For day-to-day source or DOCX downloads, use the download icon next to this
-              gear instead.
+              Versioned bundle with the source, comments, full document history, and renderer
+              metadata for tooling or later import. Re-importing restores the original revisions,
+              authors, and timestamps. For day-to-day source or DOCX downloads, use the download
+              icon next to this gear instead.
             </Text>
             <Flex>
               <Button variant="soft" onClick={exportJson} disabled={exporting}>

@@ -5,8 +5,16 @@ import {
   MagnifyingGlassIcon,
   MixerHorizontalIcon,
 } from '@radix-ui/react-icons';
-import { DropdownMenu, IconButton, SegmentedControl, Text, TextField } from '@radix-ui/themes';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Button,
+  DropdownMenu,
+  IconButton,
+  SegmentedControl,
+  Text,
+  TextField,
+} from '@radix-ui/themes';
+import { FunnelIcon } from 'lucide-react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
@@ -29,6 +37,7 @@ import {
   threadMatchesFilters,
   threadMatchesSearch,
 } from './threadFilters.js';
+import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
 /**
@@ -44,6 +53,9 @@ import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 interface Props {
   uid: string;
   threads: Thread[];
+  /** Number of sections the TOC's section filter is focused on; 0 = filter off. */
+  sectionFilterCount?: number;
+  onClearSectionFilter?: () => void;
   blockRanges: Map<string, BlockSourceRange>;
   canComment: boolean;
   pendingAnchor: CommentAnchor | null;
@@ -68,6 +80,7 @@ interface Props {
   ) => Promise<boolean>;
   onRepairThread: (id: string) => Promise<boolean>;
   onReact: (commentId: string, emoji: string) => Promise<void>;
+  onEditProposal?: ((thread: Thread) => void) | undefined;
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
 }
 
@@ -76,6 +89,8 @@ type SortMode = 'document' | 'latest';
 interface ThreadListItem {
   id: string;
   thread: Thread;
+  /** Proposal threads rendered inside this card (they answer this thread). */
+  nested: readonly Thread[];
   blockIndex: number;
   sectionIndexPath: number[];
   startOffset: number;
@@ -90,6 +105,8 @@ const FOCUS_HIGHLIGHT_MS = 1800;
 export function InlineCommentsList({
   uid,
   threads,
+  sectionFilterCount = 0,
+  onClearSectionFilter,
   blockRanges,
   canComment,
   pendingAnchor,
@@ -105,6 +122,7 @@ export function InlineCommentsList({
   onResolveThread,
   onRepairThread,
   onReact,
+  onEditProposal,
   onScrollToAnchor,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -120,28 +138,47 @@ export function InlineCommentsList({
     return order;
   }, [blockRanges]);
 
-  const { activeItems, orphanedItems } = useMemo(() => {
-    const active: ThreadListItem[] = [];
-    const orphans: ThreadListItem[] = [];
+  const { activeItems, orphanedItems, parentOf } = useMemo(() => {
+    const activeThreads: Thread[] = [];
+    const orphanThreads: Thread[] = [];
     for (const t of threads) {
       const orphan =
         t.link_status === 'orphaned' && (!isProposal(t) || proposalStatus(t) !== 'accepted');
-      const item: ThreadListItem = {
-        id: t.id,
-        thread: t,
-        blockIndex: t.anchor.block_id
-          ? (blockOrder.get(t.anchor.block_id) ?? Number.MAX_SAFE_INTEGER)
-          : Number.MAX_SAFE_INTEGER,
-        sectionIndexPath: t.anchor.section_index_path ?? [],
-        startOffset: isProposal(t) ? 0 : (t.anchor.start_offset ?? 0),
-        createdAt: t.comments[0].created_at,
-        latestActivityAt: latestActivityTs(t),
-        isOrphan: orphan,
-      };
-      if (orphan) orphans.push(item);
-      else active.push(item);
+      if (orphan) orphanThreads.push(t);
+      else activeThreads.push(t);
     }
-    return { activeItems: active, orphanedItems: orphans };
+    // Nesting is bucket-local: a proposal only merges into its answered
+    // thread's card when both would render in the same section, so
+    // e.g. an orphaned proposal keeps its standalone card under
+    // "Orphaned discussions" instead of vanishing into a linked card.
+    const parents = new Map<string, string>();
+    const buildItems = (bucket: Thread[], isOrphan: boolean): ThreadListItem[] => {
+      const nesting = computeThreadNesting(bucket);
+      for (const [id, parentId] of nesting.parentOf) parents.set(id, parentId);
+      return nesting.topLevel.map((t) => {
+        const nested = nestedThreadsOf(nesting, t.id);
+        let latest = latestActivityTs(t);
+        for (const n of nested) latest = Math.max(latest, latestActivityTs(n));
+        return {
+          id: t.id,
+          thread: t,
+          nested,
+          blockIndex: t.anchor.block_id
+            ? (blockOrder.get(t.anchor.block_id) ?? Number.MAX_SAFE_INTEGER)
+            : Number.MAX_SAFE_INTEGER,
+          sectionIndexPath: t.anchor.section_index_path ?? [],
+          startOffset: isProposal(t) ? 0 : (t.anchor.start_offset ?? 0),
+          createdAt: t.comments[0].created_at,
+          latestActivityAt: latest,
+          isOrphan,
+        };
+      });
+    };
+    return {
+      activeItems: buildItems(activeThreads, false),
+      orphanedItems: buildItems(orphanThreads, true),
+      parentOf: parents,
+    };
   }, [threads, blockOrder]);
 
   const [sortMode, setSortMode] = useState<SortMode>('document');
@@ -157,34 +194,36 @@ export function InlineCommentsList({
     [orphanedItems, sortMode],
   );
 
+  // A merged card is one unit: it stays visible when the thread OR any
+  // proposal nested inside it matches, so the "Proposals" filter still
+  // surfaces a proposal that now renders inside its answered thread.
+  const itemMatches = useCallback(
+    (item: ThreadListItem) =>
+      (threadMatchesFilters(item.thread, filters) ||
+        item.nested.some((n) => threadMatchesFilters(n, filters))) &&
+      (threadMatchesSearch(item.thread, searchNeedle) ||
+        item.nested.some((n) => threadMatchesSearch(n, searchNeedle))),
+    [filters, searchNeedle],
+  );
   const visibleActive = useMemo(
-    () =>
-      sortedActive.filter(
-        (item) =>
-          threadMatchesFilters(item.thread, filters) &&
-          threadMatchesSearch(item.thread, searchNeedle),
-      ),
-    [sortedActive, filters, searchNeedle],
+    () => sortedActive.filter(itemMatches),
+    [sortedActive, itemMatches],
   );
   const visibleOrphans = useMemo(
-    () =>
-      sortedOrphans.filter(
-        (item) =>
-          threadMatchesFilters(item.thread, filters) &&
-          threadMatchesSearch(item.thread, searchNeedle),
-      ),
-    [sortedOrphans, filters, searchNeedle],
+    () => sortedOrphans.filter(itemMatches),
+    [sortedOrphans, itemMatches],
   );
   const visibleCount = visibleActive.length + visibleOrphans.length;
 
   // Collapse state spans every thread, filtered out or not, so toggling a
-  // filter never re-expands what the reader collapsed.
+  // filter never re-expands what the reader collapsed. Nested proposals
+  // carry their own entries — their cards collapse independently.
   const collapseDefaults = useMemo(
     () =>
-      [...sortedOrphans, ...sortedActive].map((item) => ({
-        id: item.id,
-        autoCollapse: shouldAutoCollapse(item.thread),
-      })),
+      [...sortedOrphans, ...sortedActive].flatMap((item) => [
+        { id: item.id, autoCollapse: shouldAutoCollapse(item.thread) },
+        ...item.nested.map((n) => ({ id: n.id, autoCollapse: shouldAutoCollapse(n) })),
+      ]),
     [sortedActive, sortedOrphans],
   );
   const [collapseState, setCollapseState] = useState<ThreadCollapseState>(() =>
@@ -197,12 +236,17 @@ export function InlineCommentsList({
   }, [collapseDefaults]);
 
   const threadIds = useMemo(() => collapseDefaults.map((d) => d.id), [collapseDefaults]);
-  const totalThreads = threadIds.length;
-  const visibleIds = useMemo(
-    () => new Set([...visibleOrphans, ...visibleActive].map((item) => item.id)),
-    [visibleActive, visibleOrphans],
-  );
-  const allCollapsed = totalThreads > 0 && threadIds.every((id) => collapsed.has(id));
+  /** Cards in the list — merged units count once, unlike `threadIds`. */
+  const totalCards = activeItems.length + orphanedItems.length;
+  const visibleIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const item of [...visibleOrphans, ...visibleActive]) {
+      ids.add(item.id);
+      for (const n of item.nested) ids.add(n.id);
+    }
+    return ids;
+  }, [visibleActive, visibleOrphans]);
+  const allCollapsed = threadIds.length > 0 && threadIds.every((id) => collapsed.has(id));
 
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; phase: 'a' | 'b' } | null>(null);
@@ -221,11 +265,18 @@ export function InlineCommentsList({
       return;
     }
 
-    if (collapsed.has(focusedThread.threadId)) {
+    // A nested proposal only becomes visible once the card it renders
+    // in is expanded too — expand target and parent together.
+    const parentId = parentOf.get(focusedThread.threadId);
+    const toExpand = [focusedThread.threadId, ...(parentId ? [parentId] : [])].filter((id) =>
+      collapsed.has(id),
+    );
+    if (toExpand.length > 0) {
       setCollapseState((prev) => {
-        if (!prev.collapsed.has(focusedThread.threadId)) return prev;
+        const expand = toExpand.filter((id) => prev.collapsed.has(id));
+        if (expand.length === 0) return prev;
         const next = new Set(prev.collapsed);
-        next.delete(focusedThread.threadId);
+        for (const id of expand) next.delete(id);
         return { ...prev, collapsed: next };
       });
       return;
@@ -253,7 +304,7 @@ export function InlineCommentsList({
       window.clearTimeout(flashT);
       window.clearTimeout(focusT);
     };
-  }, [focusedThread, threadIds, visibleIds, collapsed]);
+  }, [focusedThread, threadIds, visibleIds, collapsed, parentOf]);
 
   // Focus once the input exists — it mounts a frame after the toggle.
   useEffect(() => {
@@ -333,26 +384,36 @@ export function InlineCommentsList({
     [refIndex, focusLinked],
   );
 
-  function renderItem(item: ThreadListItem) {
-    const blockId = item.thread.anchor.block_id;
+  function renderCard(thread: Thread, nested: readonly Thread[], asNested: boolean): ReactNode {
+    const blockId = thread.anchor.block_id;
     const onJump = blockId
-      ? () => onScrollToAnchor(blockId, item.thread.anchor.quote, item.thread.id)
+      ? () => onScrollToAnchor(blockId, thread.anchor.quote, thread.id)
       : undefined;
+    const rawLinks = threadLinks(thread, byId);
+    // Proposals rendered inside this card need no "See proposed change"
+    // link on top — the card itself is right below.
+    let links = rawLinks;
+    if (nested.length > 0) {
+      const nestedIds = new Set(nested.map((n) => n.id));
+      links = { ...rawLinks, answeredBy: rawLinks.answeredBy.filter((t) => !nestedIds.has(t.id)) };
+    }
     return (
       <InlineThreadCard
-        key={item.id}
+        key={thread.id}
         uid={uid}
-        thread={item.thread}
-        links={threadLinks(item.thread, byId)}
+        thread={thread}
+        links={links}
+        nested={asNested}
+        nestedCards={nested.length > 0 ? nested.map((n) => renderCard(n, [], true)) : undefined}
         onFocusLinked={focusLinked}
         threadRefs={threadRefs}
         canComment={canComment}
         needsName={!displayName}
-        focused={focusedId === item.id}
-        flashPhase={flash?.id === item.id ? flash.phase : null}
-        collapsed={collapsed.has(item.id)}
+        focused={focusedId === thread.id}
+        flashPhase={flash?.id === thread.id ? flash.phase : null}
+        collapsed={collapsed.has(thread.id)}
         mentionCandidates={mentionCandidates}
-        onToggleCollapsed={() => toggleCollapsed(item.id)}
+        onToggleCollapsed={() => toggleCollapsed(thread.id)}
         onJump={onJump}
         onReply={onReply}
         onEdit={onEdit}
@@ -361,15 +422,36 @@ export function InlineCommentsList({
         onResolveThread={onResolveThread}
         onRepairThread={onRepairThread}
         onReact={onReact}
+        onEditProposal={onEditProposal}
       />
     );
   }
 
+  function renderItem(item: ThreadListItem) {
+    return renderCard(item.thread, item.nested, false);
+  }
+
   return (
     <div ref={rootRef} className="ic-list">
+      {sectionFilterCount > 0 && (
+        <div className="ic-list-section-filter-note">
+          <FunnelIcon className="ic-list-section-filter-icon" aria-hidden />
+          <Text size="1" color="gray" className="ic-list-section-filter-text">
+            Threads in{' '}
+            {sectionFilterCount === 1
+              ? '1 focused section'
+              : `${sectionFilterCount} focused sections`}
+          </Text>
+          {onClearSectionFilter && (
+            <Button size="1" variant="ghost" onClick={onClearSectionFilter}>
+              Show all
+            </Button>
+          )}
+        </div>
+      )}
       {/* Stay mounted while a filter or search is on, or deletions dropping the
           count to one would strand the reader with no way to clear it. */}
-      {(totalThreads > 1 || isFilteringThreads(filters) || searchOpen) && (
+      {(totalCards > 1 || isFilteringThreads(filters) || searchOpen) && (
         <div className="ic-list-controls">
           {/* Wraps: one row on a wide pane, one row per control on a narrow one. */}
           <div className="ic-list-control-groups">
@@ -529,7 +611,7 @@ export function InlineCommentsList({
               </TextField.Root>
               {searchNeedle !== '' && (
                 <Text size="1" color="gray" className="ic-list-search-count">
-                  {visibleCount} of {totalThreads}
+                  {visibleCount} of {totalCards}
                 </Text>
               )}
             </div>
@@ -564,15 +646,17 @@ export function InlineCommentsList({
         </section>
       )}
 
-      {totalThreads === 0 && !pendingAnchor && (
+      {totalCards === 0 && !pendingAnchor && (
         <div className="ic-list-empty">
-          {canComment
-            ? 'Select text in the document to comment.'
-            : 'You have read-only access to this document.'}
+          {sectionFilterCount > 0
+            ? 'No threads in the focused sections.'
+            : canComment
+              ? 'Select text in the document to comment.'
+              : 'You have read-only access to this document.'}
         </div>
       )}
 
-      {totalThreads > 0 && visibleCount === 0 && (
+      {totalCards > 0 && visibleCount === 0 && (
         <div className="ic-list-empty">
           {searchNeedle !== ''
             ? 'No threads match this search.'

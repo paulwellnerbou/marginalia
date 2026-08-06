@@ -8,6 +8,7 @@ import {
 } from '@radix-ui/react-icons';
 import { DropdownMenu, IconButton } from '@radix-ui/themes';
 import { type RefObject, useCallback } from 'react';
+import { resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import type { Thread } from '../../lib/api.js';
 
 interface Props {
@@ -15,10 +16,15 @@ interface Props {
   sortedThreads: Thread[];
   /** Doc-scroll container — used to read current scrollTop. */
   scrollContainerRef: RefObject<HTMLDivElement | null>;
-  /** Map of natural top positions (in scroll-container coordinates) keyed by thread id. */
-  cardNaturalTops: Map<string, number>;
-  /** Effective sticky-top offset (base pad + toolbar height) — used so a card
-   *  partly hidden under the toolbar still counts as "current," not "next". */
+  /** Rendered article root — anchors are measured fresh against it on
+   *  each press, so late reflows (fonts, images) can't desync the nav. */
+  docElementRef: RefObject<HTMLElement | null>;
+  /** Thread the last navigation targeted (shared with card jumps / ref
+   *  links). Next/prev step from it while the viewport is still there —
+   *  scroll position alone can't tell apart threads on the same text. */
+  lastNavThreadRef: { current: string | null };
+  /** Effective sticky-top offset (base pad + toolbar height) — in
+   *  non-stacking mode jumps land the anchor this far below the top. */
   stickyTopPad: number;
   open: boolean;
   onToggleOpen: () => void;
@@ -26,6 +32,8 @@ interface Props {
   onToggleStacking: () => void;
   hideResolved: boolean;
   onToggleHideResolved: () => void;
+  /** Switch the comment presentation from the margin column to floating cards. */
+  onSwitchToFloating: () => void;
   /** Reuse the existing scrollToAnchor flow so jumps share the flash animation. */
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
   /** Receives the toolbar's outer element so the layer can measure its height. */
@@ -33,11 +41,15 @@ interface Props {
 }
 
 const NEAR_EPSILON_PX = 4;
+/** How far the viewport may sit from the remembered thread's landing
+ *  position and still count as "on" it. Settled jumps are within 2px. */
+const REMEMBERED_TOLERANCE_PX = 8;
 
 export function InlineCommentsToolbar({
   sortedThreads,
   scrollContainerRef,
-  cardNaturalTops,
+  docElementRef,
+  lastNavThreadRef,
   stickyTopPad,
   open,
   onToggleOpen,
@@ -45,6 +57,7 @@ export function InlineCommentsToolbar({
   onToggleStacking,
   hideResolved,
   onToggleHideResolved,
+  onSwitchToFloating,
   onScrollToAnchor,
   rootRef,
 }: Props) {
@@ -54,45 +67,90 @@ export function InlineCommentsToolbar({
     (thread: Thread) => {
       const blockId = thread.anchor.block_id;
       if (!blockId) return;
+      lastNavThreadRef.current = thread.id;
       onScrollToAnchor(blockId, thread.anchor.quote, thread.id);
     },
-    [onScrollToAnchor],
+    [onScrollToAnchor, lastNavThreadRef],
   );
 
-  /** Index of the topmost comment whose anchor is at or above the
-   *  toolbar's bottom edge — i.e. the comment the reader is currently
-   *  on. Returns -1 when no comment has been reached yet (scrolled
-   *  above the first one). */
+  /** The scrollTop a jump to this thread lands at, or null when its
+   *  anchor doesn't resolve (orphans) — measured fresh from the DOM,
+   *  mirroring scrollToAnchor's own targeting. */
+  const jumpScrollTop = useCallback(
+    (thread: Thread): number | null => {
+      const scroll = scrollContainerRef.current;
+      const doc = docElementRef.current;
+      if (!scroll || !doc) return null;
+      const blockId = thread.anchor.block_id;
+      if (!blockId) return null;
+      const target = resolveThreadScrollTarget(doc, blockId, thread.anchor.quote, thread.id);
+      if (!target) return null;
+      const top =
+        target.getBoundingClientRect().top -
+        scroll.getBoundingClientRect().top +
+        scroll.scrollTop -
+        (stackingEnabled ? 0 : stickyTopPad);
+      return Math.max(0, Math.min(top, scroll.scrollHeight - scroll.clientHeight));
+    },
+    [scrollContainerRef, docElementRef, stackingEnabled, stickyTopPad],
+  );
+
+  /** Index of the comment the reader is currently on: the remembered
+   *  navigation target while the viewport is still at its position
+   *  (disambiguates same-anchor threads), else the last comment whose
+   *  landing position is at or above the current scrollTop. Returns -1
+   *  above the first comment. */
   const findCurrentIndex = useCallback((): number => {
     const scroll = scrollContainerRef.current;
     if (!scroll) return -1;
-    const ref = scroll.scrollTop + stickyTopPad + NEAR_EPSILON_PX;
+    const pos = scroll.scrollTop;
+
+    const remembered = lastNavThreadRef.current;
+    if (remembered) {
+      const i = sortedThreads.findIndex((t) => t.id === remembered);
+      if (i >= 0) {
+        const thread = sortedThreads[i];
+        const want = thread ? jumpScrollTop(thread) : null;
+        if (want !== null && Math.abs(pos - want) <= REMEMBERED_TOLERANCE_PX) return i;
+      }
+    }
+
     let current = -1;
     for (let i = 0; i < sortedThreads.length; i++) {
       const t = sortedThreads[i];
       if (!t) continue;
-      const top = cardNaturalTops.get(t.id);
-      if (top === undefined) continue;
-      if (top <= ref) current = i;
+      const top = jumpScrollTop(t);
+      if (top === null) continue;
+      if (top <= pos + NEAR_EPSILON_PX) current = i;
       else break;
     }
     return current;
-  }, [sortedThreads, cardNaturalTops, scrollContainerRef, stickyTopPad]);
+  }, [sortedThreads, scrollContainerRef, jumpScrollTop, lastNavThreadRef]);
 
   const onJumpPrev = useCallback(() => {
     const idx = findCurrentIndex();
-    // idx === -1: above the first comment → nothing to go prev to.
-    // idx === 0: on the first comment → also nothing prev.
-    // idx > 0: step back one.
-    const target = idx > 0 ? sortedThreads[idx - 1] : null;
-    if (target) jumpTo(target);
-  }, [findCurrentIndex, sortedThreads, jumpTo]);
+    // idx <= 0: at or above the first comment → nothing to go prev to.
+    for (let i = idx - 1; i >= 0; i--) {
+      const target = sortedThreads[i];
+      if (!target) continue;
+      // Skip threads whose anchor doesn't resolve — jumping to them
+      // would silently do nothing and the button would feel dead.
+      if (jumpScrollTop(target) === null) continue;
+      jumpTo(target);
+      return;
+    }
+  }, [findCurrentIndex, sortedThreads, jumpScrollTop, jumpTo]);
 
   const onJumpNext = useCallback(() => {
     const idx = findCurrentIndex();
-    const target = sortedThreads[idx + 1];
-    if (target) jumpTo(target);
-  }, [findCurrentIndex, sortedThreads, jumpTo]);
+    for (let i = idx + 1; i < sortedThreads.length; i++) {
+      const target = sortedThreads[i];
+      if (!target) continue;
+      if (jumpScrollTop(target) === null) continue;
+      jumpTo(target);
+      return;
+    }
+  }, [findCurrentIndex, sortedThreads, jumpScrollTop, jumpTo]);
 
   const count = sortedThreads.length;
   const countLabel = count === 1 ? '1 thread' : `${count} threads`;
@@ -170,6 +228,12 @@ export function InlineCommentsToolbar({
             <DropdownMenu.CheckboxItem checked={stackingEnabled} onCheckedChange={onToggleStacking}>
               Stack comments at top
             </DropdownMenu.CheckboxItem>
+            {/* One-shot mode switch, not a checkbox: this toolbar only
+                exists in column mode, so a checked state could never
+                render. */}
+            <DropdownMenu.Item onSelect={onSwitchToFloating}>
+              Float comments over text
+            </DropdownMenu.Item>
           </DropdownMenu.Content>
         </DropdownMenu.Root>
       </div>

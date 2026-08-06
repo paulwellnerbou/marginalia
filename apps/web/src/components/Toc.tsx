@@ -1,5 +1,6 @@
 import { ChevronDownIcon, Cross2Icon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
-import { IconButton, Text, TextField } from '@radix-ui/themes';
+import { Button, IconButton, Text, TextField } from '@radix-ui/themes';
+import { FunnelIcon } from 'lucide-react';
 import {
   Fragment,
   type ReactNode,
@@ -11,14 +12,41 @@ import {
 } from 'react';
 import type { TocNode } from '../lib/api.js';
 import { waitForExpansionToSettle } from '../lib/heading-collapse.js';
+import { computeSectionRelations, type SectionRelation } from '../lib/section-filter.js';
 
-export function Toc({ nodes, activeId }: { nodes: TocNode[]; activeId?: string | null }) {
+interface TocFilter {
+  ids: ReadonlySet<string>;
+  relations: ReadonlyMap<string, SectionRelation> | null;
+  onToggle: (id: string) => void;
+}
+
+export function Toc({
+  nodes,
+  activeId,
+  filterIds,
+  onToggleFilter,
+  onClearFilter,
+}: {
+  nodes: TocNode[];
+  activeId?: string | null;
+  filterIds: ReadonlySet<string>;
+  onToggleFilter: (id: string) => void;
+  onClearFilter: () => void;
+}) {
   const [query, setQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const deferredQuery = useDeferredValue(query);
   const filteredNodes = useMemo(
     () => filterNodes(nodes, deferredQuery.trim()),
     [deferredQuery, nodes],
+  );
+  const filter = useMemo<TocFilter>(
+    () => ({
+      ids: filterIds,
+      relations: filterIds.size > 0 ? computeSectionRelations(nodes, filterIds) : null,
+      onToggle: onToggleFilter,
+    }),
+    [nodes, filterIds, onToggleFilter],
   );
 
   if (nodes.length === 0)
@@ -61,8 +89,26 @@ export function Toc({ nodes, activeId }: { nodes: TocNode[]; activeId?: string |
           )}
         </TextField.Root>
       </div>
+      {filterIds.size > 0 && (
+        <div className="toc-filter-banner">
+          <FunnelIcon className="toc-filter-banner-icon" aria-hidden />
+          <Text size="1" color="gray" className="toc-filter-banner-text">
+            {filterIds.size === 1
+              ? 'Focused on 1 section'
+              : `Focused on ${filterIds.size} sections`}
+          </Text>
+          <Button size="1" variant="ghost" onClick={onClearFilter}>
+            Clear
+          </Button>
+        </div>
+      )}
       {filteredNodes.length > 0 ? (
-        <TocList nodes={filteredNodes} activeId={activeId ?? null} query={deferredQuery.trim()} />
+        <TocList
+          nodes={filteredNodes}
+          activeId={activeId ?? null}
+          query={deferredQuery.trim()}
+          filter={filter}
+        />
       ) : (
         <Text size="1" color="gray" className="toc-empty">
           No headings match "{query.trim()}".
@@ -76,15 +122,17 @@ function TocList({
   nodes,
   activeId,
   query,
+  filter,
 }: {
   nodes: TocNode[];
   activeId: string | null;
   query: string;
+  filter: TocFilter;
 }) {
   return (
     <ul className="toc-list">
       {nodes.map((n) => (
-        <TocItem key={n.id} node={n} activeId={activeId} query={query} />
+        <TocItem key={n.id} node={n} activeId={activeId} query={query} filter={filter} />
       ))}
     </ul>
   );
@@ -94,10 +142,12 @@ function TocItem({
   node,
   activeId,
   query,
+  filter,
 }: {
   node: TocNode;
   activeId: string | null;
   query: string;
+  filter: TocFilter;
 }) {
   const hasChildren = node.children.length > 0;
   const [open, setOpen] = useState(true);
@@ -105,6 +155,9 @@ function TocItem({
   const isActive = activeId === node.id;
   const hasActiveDescendant = containsNodeId(node.children, activeId);
   const queryActive = Boolean(query);
+  const relation = filter.relations?.get(node.id) ?? null;
+  const isFiltered = filter.ids.has(node.id);
+  const plainText = stripHtml(node.text);
 
   // Auto-expand on every `activeId` change that lands inside this
   // subtree. Kept as a one-shot `setOpen(true)` rather than a
@@ -162,13 +215,32 @@ function TocItem({
     };
   }, [isActive, query]);
 
-  // Query force-open stays in `effectiveOpen` only — never written to
-  // `open`, so a manual collapse is restored when the query clears.
-  const effectiveOpen = !hasChildren ? false : queryActive || open;
+  // Neither the query force-open nor the section-filter locks are ever
+  // written to `open`, so the reader's manual collapse state is
+  // restored when the query clears or the filter is lifted. A live
+  // query outranks the locks — search results must stay reachable even
+  // inside a filtered-out branch.
+  const locked = !queryActive && (relation === 'unrelated' || relation === 'ancestor');
+  const effectiveOpen = !hasChildren
+    ? false
+    : queryActive
+      ? true
+      : relation === 'unrelated'
+        ? false
+        : relation === 'ancestor'
+          ? true
+          : open;
+
+  // No "only": clicking adds to the focused set, it doesn't replace it.
+  const filterLabel = isFiltered ? `Stop focusing on "${plainText}"` : `Focus on "${plainText}"`;
 
   return (
     <li className={`toc-item toc-l${node.level} ${isActive ? 'active' : ''}`}>
-      <div className={`toc-row ${isActive ? 'active' : ''}`}>
+      <div
+        className={`toc-row ${isActive ? 'active' : ''} ${
+          relation === 'unrelated' ? 'section-filter-out' : ''
+        }`}
+      >
         {hasChildren ? (
           <IconButton
             size="1"
@@ -177,6 +249,7 @@ function TocItem({
             aria-label={effectiveOpen ? 'Collapse' : 'Expand'}
             aria-expanded={effectiveOpen}
             className="toc-toggle"
+            disabled={locked}
           >
             {/* One icon rotated via CSS so the chevron animates in
                 lockstep with the height transition. */}
@@ -186,8 +259,21 @@ function TocItem({
           <span className="toc-toggle-spacer" aria-hidden />
         )}
         <a ref={linkRef} href={`#${node.id}`} className={isActive ? 'active' : undefined}>
-          {renderHighlightedText(stripHtml(node.text), query)}
+          {renderHighlightedText(plainText, query)}
         </a>
+        <IconButton
+          size="1"
+          variant="ghost"
+          {...(isFiltered ? {} : { color: 'gray' as const })}
+          className="toc-filter-btn"
+          data-active={isFiltered ? 'true' : undefined}
+          aria-pressed={isFiltered}
+          aria-label={filterLabel}
+          title={filterLabel}
+          onClick={() => filter.onToggle(node.id)}
+        >
+          <FunnelIcon />
+        </IconButton>
       </div>
       {hasChildren && (
         // Always rendered so children animate in/out (rather than
@@ -195,7 +281,7 @@ function TocItem({
         // focus order and a11y tree.
         <div className={`toc-collapse-section ${effectiveOpen ? '' : 'is-collapsed'}`}>
           <div className="toc-collapse-section-inner" inert={!effectiveOpen}>
-            <TocList nodes={node.children} activeId={activeId} query={query} />
+            <TocList nodes={node.children} activeId={activeId} query={query} filter={filter} />
           </div>
         </div>
       )}

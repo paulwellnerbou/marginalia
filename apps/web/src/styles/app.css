@@ -661,6 +661,17 @@ button.primary:disabled {
     transition: none;
   }
 }
+
+/* Sections held open/closed by the TOC's section filter: the chevron
+   is disabled rather than hidden, so the structure stays legible. */
+.marginalia .heading-collapse-toggle[disabled] {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
+}
+.marginalia .section-filter-dimmed {
+  opacity: 0.45;
+}
 @media print {
   .marginalia .heading-collapse-toggle {
     display: none;
@@ -990,6 +1001,61 @@ button.primary:disabled {
 }
 .toc-empty {
   padding: 1rem;
+}
+
+/* Section filter (funnel buttons in the TOC). The button is kept in
+   layout but invisible until the row is hovered or focused, so titles
+   don't jump; an active funnel always shows. */
+.toc-filter-btn {
+  flex-shrink: 0;
+  align-self: center;
+  margin-right: 0.35rem;
+  opacity: 0;
+  /* While hidden it must not be an invisible click target; keyboard
+     focus still reaches it (pointer-events is mouse-only) and the
+     focus-visible rule below makes it appear. */
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.toc-row:hover .toc-filter-btn,
+.toc-filter-btn:focus-visible,
+.toc-filter-btn[data-active="true"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* No hover on touch devices — keep the affordance reachable. */
+@media (hover: none) {
+  .toc-filter-btn {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+.toc .toc-filter-btn svg {
+  width: 13px;
+  height: 13px;
+}
+.toc-row.section-filter-out > a {
+  color: var(--gray-9);
+}
+.toc-row.section-filter-out > a:hover,
+.toc-row.section-filter-out > a:focus-visible {
+  color: var(--ui-toc-active);
+}
+.toc-filter-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.3rem 0.5rem 0.35rem;
+}
+.toc-filter-banner-icon {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  color: var(--accent-11);
+}
+.toc-filter-banner-text {
+  flex: 1;
+  min-width: 0;
 }
 
 /* ============================================================
@@ -1725,6 +1791,23 @@ button.primary:disabled {
   font-size: 0.85rem;
 }
 
+/* One-line note that the TOC's section filter is narrowing this list. */
+.ic-list-section-filter-note {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.ic-list-section-filter-icon {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  color: var(--accent-11);
+}
+.ic-list-section-filter-text {
+  flex: 1;
+  min-width: 0;
+}
+
 /* Wraps too, so the actions drop to their own line on a pane too narrow to
    hold them beside the controls rather than overlapping them. */
 .ic-list-controls {
@@ -2233,6 +2316,10 @@ button.primary:disabled {
   z-index: 10;
   pointer-events: auto;
   white-space: nowrap;
+  /* A tap on the toolbar must act on the *document's* selection, never
+     select or highlight the toolbar's own label text. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .selection-toolbar button {
   background: transparent;
@@ -2243,12 +2330,28 @@ button.primary:disabled {
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
+  /* No double-tap-to-zoom delay or gray tap flash on iOS. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 .selection-toolbar button:hover {
   /* --accent-contrast is Radix's companion token for accent-9 — the correct
      readable text color on the solid accent background in both appearances. */
   background: var(--accent-9);
   color: var(--accent-contrast);
+}
+
+/* Touch/pen selections: docked at the bottom of the viewport, clear of
+   the native selection callout, with finger-sized targets. */
+.selection-toolbar.is-docked {
+  top: auto;
+  bottom: calc(1.25rem + env(safe-area-inset-bottom, 0px));
+  padding: 0.3rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.selection-toolbar.is-docked button {
+  padding: 0.65rem 1.15rem;
+  font-size: 0.95rem;
 }
 
 /* ============================================================
@@ -2804,6 +2907,128 @@ button.primary:disabled {
   }
 }
 
+/* ============================================================
+ * Floating comments mode: one thread at a time opens as a popover
+ * card anchored to its highlight, in content space so it scrolls
+ * with the document. Reuses all .ic-card internals unchanged.
+ * ============================================================ */
+
+/* Positioning context for the floating host — only added in floating
+   mode so column mode's layout is untouched. */
+.doc-row-floating {
+  position: relative;
+}
+.ic-float-host {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.ic-float-card {
+  position: absolute;
+  pointer-events: auto;
+  /* Above static doc content, but below the floating chrome (search /
+     read-aloud / pill popovers at 3, selection toolbar at 10) — the
+     card is content and scrolls under the chrome. */
+  z-index: 2;
+  width: min(400px, calc(100cqw - 24px));
+  font-size: 0.85rem;
+  color: var(--ui-fg);
+}
+.ic-float-card > .ic-card {
+  /* Long threads scroll inside the card instead of burying the text. */
+  max-height: min(65vh, 34rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* .ic-card's own background mixes into --md-color-bg, which the
+     bundled themes set to `transparent` in dark appearance — fine over
+     the column's opaque pane, see-through as a popover over text. Mix
+     into the app background instead: always opaque, appearance-aware. */
+  background: color-mix(in srgb, var(--md-color-fg, var(--ui-fg)) 5%, var(--ui-bg));
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 28%, transparent);
+}
+/* Keep the pending composer's blue tint, layered over an opaque base. */
+.ic-float-card > .ic-card-pending {
+  background:
+    linear-gradient(
+      var(--ui-bg-muted, rgba(59, 130, 246, 0.04)),
+      var(--ui-bg-muted, rgba(59, 130, 246, 0.04))
+    ),
+    var(--ui-bg);
+}
+/* The column dims resolved cards; a translucent popover lets the text
+   underneath bleed through, so keep it opaque — the badge carries the
+   state. */
+.ic-float-card > .ic-card-resolved {
+  opacity: 1;
+}
+/* Collapse is a column affordance; the popover opens fresh and closes
+   entirely instead. */
+.ic-float-card .ic-card-collapse {
+  display: none;
+}
+.ic-float-close {
+  position: absolute;
+  top: -8px;
+  right: -8px;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  /* Same auto-flipping high-contrast pair as .selection-toolbar. */
+  background: var(--gray-12);
+  color: var(--gray-1);
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+.ic-float-close:hover {
+  background: var(--accent-9);
+  color: var(--accent-contrast);
+}
+
+/* Pill toolbar for floating mode — same vertical placement as
+   .doc-search-popover / .read-aloud-popover but LEFT-aligned, so it
+   never collides with those right-aligned panels. */
+.ic-float-toolbar-popover {
+  position: absolute;
+  top: var(--doc-chrome-height);
+  right: 0;
+  left: 0.25rem;
+  display: flex;
+  justify-content: flex-start;
+  padding: 0.5rem 1rem 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.ic-float-toolbar {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: var(--doc-floating-toolbar-height);
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--doc-floating-toolbar-radius);
+  background: color-mix(in srgb, var(--color-panel-solid) 94%, transparent);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
+  backdrop-filter: blur(14px);
+}
+.ic-float-toolbar > button {
+  margin-inline: 0;
+}
+.ic-float-toolbar-icon {
+  width: 14px;
+  height: 14px;
+  color: var(--ui-fg-muted);
+  flex-shrink: 0;
+}
+.ic-float-toolbar .ic-toolbar-count {
+  margin-inline: 2px 4px;
+}
+
 /* ---------- Card ---------- */
 
 .ic-card {
@@ -3026,6 +3251,28 @@ button.primary:disabled {
 .ic-card-collapse {
   align-self: flex-start;
   font-size: 0.72rem;
+}
+
+/* ---------- Nested proposal cards ---------- */
+
+/* A proposal rendered inside the card of the thread it answers.
+   A slightly stronger tint than the parent's 5% mix marks the
+   boundary without extra chrome. */
+.ic-card-nested {
+  background: color-mix(
+    in srgb,
+    var(--md-color-fg, currentColor) 8%,
+    var(--md-color-bg, var(--ui-surface))
+  );
+  border-radius: 8px;
+  box-shadow: none;
+  padding: 0.55rem 0.6rem 0.5rem;
+}
+
+.ic-card-nested-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
 }
 
 /* ---------- Rows (comments / replies) ---------- */

@@ -153,6 +153,8 @@ export interface HistoryEntry {
     id: string;
     author: { client_id: string; display_name: string };
     summary: string;
+    /** The proposal thread was deleted — attribution remains, but there is no thread to open. */
+    deleted: boolean;
   } | null;
 }
 
@@ -915,6 +917,14 @@ export interface ThreadProposalData {
    * `Thread.answered_by_thread_ids`.
    */
   answers_thread_id: string | null;
+  /**
+   * The proposal's current replacement text, recovered from the branch
+   * tip. Null when the branch is unreadable (deleted repo, legacy row) —
+   * in-place editing is impossible then.
+   */
+  proposed_text: string | null;
+  /** The base source range the proposal replaces, as of its base commit. */
+  source_snapshot: string | null;
 }
 
 export interface Thread {
@@ -1248,6 +1258,37 @@ export function createDocumentProposal(
     docUid: uid,
   }).then((res) => {
     rememberThread(uid, res.thread);
+  });
+}
+
+/**
+ * Replace an open proposal's proposed text in place. Author-only —
+ * gate on `thread.capabilities.update`. The branch is rebuilt against
+ * current main, so this also clears a stale/conflicted proposal. An
+ * optional `comment` is posted as a reply in the same request, leaving
+ * a revision note in the discussion.
+ */
+export function updateEditProposal(
+  uid: string,
+  pid: string,
+  payload: { proposed_text: string; comment?: string },
+  identity: Identity,
+): Promise<Thread> {
+  const comment = payload.comment?.trim();
+  return request<ThreadMutationResponse>(
+    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        proposal: { proposed_text: payload.proposed_text },
+        ...(comment ? { comment } : {}),
+      }),
+      identity,
+      docUid: uid,
+    },
+  ).then((res) => {
+    rememberThread(uid, res.thread);
+    return res.thread;
   });
 }
 
