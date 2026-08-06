@@ -3,6 +3,7 @@ import type { RenderResult } from '@marginalia/renderer/types';
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import type { ThreadState } from '../lib/api.js';
 import { spanElements } from '../lib/block-span.js';
+import { isInjectedChromeText } from '../lib/block-text.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
@@ -679,7 +680,8 @@ function applyCommentHighlights(
     const merged = mergeRanges(ranges);
     if (merged.length === 0) continue;
 
-    const textNodes = collectTextNodes(block);
+    // Same filter as buildBlockTextMap — the merged ranges index this list.
+    const textNodes = collectTextNodes(block, isInjectedChromeText);
     for (let i = merged.length - 1; i >= 0; i--) {
       const range = merged[i]!;
       wrapRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.threads);
@@ -824,7 +826,7 @@ function buildBlockTextMap(block: HTMLElement): {
   normalizedToRaw: number[];
   rawLength: number;
 } {
-  const textNodes = collectTextNodes(block);
+  const textNodes = collectTextNodes(block, isInjectedChromeText);
   let rawText = '';
   for (const entry of textNodes) rawText += entry.node.data;
 

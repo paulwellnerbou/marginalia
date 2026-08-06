@@ -1,6 +1,7 @@
 import { joinSpanQuote } from '@marginalia/renderer/anchor-span';
 import type { CommentAnchor } from './api.js';
 import { anchorIdOf, elementsIntersectingRange } from './block-span.js';
+import { blockTextOf, normalizeWs } from './block-text.js';
 
 const CONTEXT_LEN = 32;
 
@@ -114,7 +115,7 @@ function sliceBlock(el: HTMLElement, range: Range): BlockSlice | null {
   const quote = normalizeWs(clampedText);
   if (!quote) return null;
 
-  const blockText = normalizeWs(el.textContent ?? '');
+  const blockText = blockTextOf(el);
 
   // DOM offsets are per-text-node; convert to offsets within the block's
   // normalized text by measuring the length of the un-selected prefix.
@@ -154,7 +155,7 @@ function computeSectionContext(
   const counts = new Map<string, number>();
   let result = { headingPath: [] as string[], sectionIndex: 0, sectionIndexPath: [0] };
   for (const el of blocks) {
-    const text = normalizeWs(el.textContent ?? '');
+    const text = blockTextOf(el);
     const headingMatch = /^H([1-6])$/.exec(el.tagName);
     if (headingMatch) {
       const depth = Number(headingMatch[1]);
@@ -249,8 +250,4 @@ function blockAtElementOffset(container: Node, offset: number): HTMLElement | nu
   if (!(container instanceof Element)) return null;
   const child = container.childNodes[offset] ?? container.childNodes[offset - 1];
   return child ? closestBlock(child) : null;
-}
-
-function normalizeWs(s: string): string {
-  return s.replace(/\s+/gu, ' ').trim();
 }
