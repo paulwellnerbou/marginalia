@@ -10,6 +10,7 @@ import remarkRehype from 'remark-rehype';
 import { unified } from 'unified';
 import { remarkAssetCollector } from './plugins/asset-collector.js';
 import { remarkBlockIds } from './plugins/block-ids.js';
+import { rehypeBlockText } from './plugins/block-text.js';
 import { remarkExtractFrontmatter } from './plugins/frontmatter.js';
 import { preprocessGridTables } from './plugins/grid-tables.js';
 import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
@@ -84,6 +85,8 @@ export async function render(markdown: string, options: RenderOptions = {}): Pro
     .use(rehypeHeadingAnchors)
     .use(rehypeSanitize, sanitizeSchema)
     .use(rehypeShikiHighlight, options.highlight ?? {})
+    // Last, so block text is read off the markup the client receives.
+    .use(rehypeBlockText)
     .use(rehypeStringify, { allowDangerousHtml: false });
 
   const file = await processor.process(preprocessed);

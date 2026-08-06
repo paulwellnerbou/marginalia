@@ -402,6 +402,49 @@ describe('threads API', () => {
     expect(after).toHaveLength(0);
   });
 
+  test('re-anchoring: a quote spanning two children of one block stays linked', async () => {
+    // The browser hands us a quote it read out of the DOM, so it carries the
+    // whitespace between `</h2>` and `<p>`. Nothing in the block map is
+    // allowed to lack that whitespace: the blockquote is the innermost
+    // commentable element here (its heading and paragraph carry no
+    // `data-block`), so a selection running from one child into the next has
+    // no narrower block to fall back to, and a block map built from the
+    // source AST — where the two children abut with no separator — cannot
+    // contain the quote at all. The comment orphans on its first save.
+    const source = '# Top\n\n> ## Quoted heading\n>\n> Body inside the quote.\n\nPlain para.\n';
+    const uid = await newDoc(source);
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const j = (await res.json()) as {
+      rendered: { blocks: Array<{ id: string; text: string; kind: string }> };
+    };
+    const quoteBlock = j.rendered.blocks.find((b) => b.kind === 'blockquote')!;
+    expect(quoteBlock.text).toBe('Quoted heading Body inside the quote.');
+
+    await addComment(
+      uid,
+      ALICE,
+      { block_id: quoteBlock.id, quote: 'heading Body inside', prefix: 'Quoted ' },
+      'spans the heading and the body',
+    );
+
+    const put = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, {
+        method: 'PUT',
+        headers: asAdmin(),
+        body: JSON.stringify({ markdown: source.replace('# Top', '# Renamed') }),
+      }),
+    );
+    expect(put.status).toBe(200);
+
+    const comments = await list(uid, ALICE);
+    expect(comments[0]!.link_status).toBe('linked');
+    // Offset into the rendered text: "Quoted " is 7 characters, the last of
+    // which is the whitespace the source AST does not have.
+    expect((comments[0]!.anchor as ThreadAnchorShape).start_offset).toBe(7);
+  });
+
   test('re-anchoring: confident match when surrounding text changes', async () => {
     const uid = await newDoc('# Title\n\nThe quick brown fox jumps.\n');
     const block = await (async () => {

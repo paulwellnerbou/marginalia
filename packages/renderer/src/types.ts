@@ -61,7 +61,16 @@ export interface BlockInfo {
   id: string;
   /** Type of the block (mdast node type) */
   kind: string;
-  /** Normalized plain text content — used for comment anchoring */
+  /**
+   * Normalized plain text content — used for comment anchoring.
+   *
+   * NOT the string `id` was hashed from, and re-hashing it will not
+   * reproduce `id`. The id is fingerprinted from the source AST so it can be
+   * recomputed without rendering (see `locateAllBlocks`); this is read back
+   * off the rendered tree so it matches what the browser will show, which is
+   * where the quotes anchoring searches for come from. See
+   * `plugins/block-text.ts`.
+   */
   text: string;
   /**
    * Enclosing heading hierarchy (normalized heading texts, outermost first).

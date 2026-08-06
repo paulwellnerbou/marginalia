@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./anchor-span": "./src/anchor-span.ts",
+    "./injected-chrome": "./src/injected-chrome.ts",
     "./asset-rewrite": "./src/asset-rewrite.ts",
     "./extract-title": "./src/extract-title.ts",
     "./locate-block": "./src/locate-block.ts",
