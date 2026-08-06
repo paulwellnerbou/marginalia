@@ -277,6 +277,7 @@ function useProposalPreview({
     [attachedAssets],
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resetNonce is the explicit re-run trigger — `reset` bumps it so the cleanup cancels the in-flight render and a fresh one is scheduled.
   useEffect(() => {
     // Bump the request id on every effect run (and again in cleanup):
     // any in-flight `renderDocument` from a previous run will see its
