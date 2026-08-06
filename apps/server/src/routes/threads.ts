@@ -578,11 +578,12 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
  *
  * Edits the root of a thread: the root comment body (a proposal's
  * rationale or a plain thread's opener), a proposal's proposed text, or
- * both in one request. Author-only.
+ * both in one request. Root-body edits are author-only; an admin may
+ * revise another author's proposed text without replacing their words.
  *
  * A `proposal.proposed_text` update rebuilds the proposal branch against
- * *current* main — the author revised the suggestion against the source
- * they just read — so it doubles as a rebase: a conflicted or stale
+ * *current* main — the revision targets the source the actor just read —
+ * so it doubles as a rebase: a conflicted or stale
  * proposal comes back cleanly appliable while the thread keeps its id,
  * discussion, links and reactions instead of being deleted and
  * re-created.
@@ -606,7 +607,9 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const row = loadThreadRow(db, tid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
-  if (row.author_client_id !== identity.clientId) return c.json({ error: 'forbidden' }, 403);
+  const isAuthor = row.author_client_id === identity.clientId;
+  const isAdmin = decision.role === 'admin';
+  if (!isAuthor && !isAdmin) return c.json({ error: 'forbidden' }, 403);
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
@@ -616,6 +619,12 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const parsedUpdate = asProposalUpdate(body.proposal);
   if (!parsedUpdate.ok) return c.json({ error: parsedUpdate.error }, 400);
   const proposalUpdate = parsedUpdate.update;
+  // Admins may revise somebody else's proposal, but the original
+  // rationale/opener remains the author's own words. An admin revision
+  // note belongs in `comment`, where it is attributed to the admin.
+  if (!isAuthor && (!proposalUpdate || next.body !== undefined)) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
   const parsedComment = parseOptionalBody(body.comment);
   if (!parsedComment.ok) return c.json({ error: 'invalid-body' }, 400);
   const revisionComment = parsedComment.body;
@@ -1866,13 +1875,13 @@ async function toThreadWire(
         (row.is_whole_document === 1 || row.anchor_block_id !== null),
       reject:
         proposal && state === 'open' && decision.ok && (canEdit(decision.role) || isRootAuthor),
-      // Change the proposed text in place (author-only). Orphans need a
-      // repair first; a 'conflict' anchor is fine — updating rebuilds the
-      // branch against current main, which is exactly what clears it.
+      // Change the proposed text in place (author or admin). Orphans need
+      // a repair first; a 'conflict' anchor is fine — updating rebuilds
+      // the branch against current main, which is exactly what clears it.
       update:
         proposal &&
         state === 'open' &&
-        isRootAuthor &&
+        (isRootAuthor || isAdmin) &&
         decision.ok &&
         canPropose(decision.role) &&
         row.branch_ref === `refs/proposals/${row.id}` &&

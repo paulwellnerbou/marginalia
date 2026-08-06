@@ -1606,18 +1606,66 @@ describe('documents API', () => {
     expect(await readSource(created)).toBe('# Title\n\ngamma\n\nOMEGA');
   });
 
-  test('PATCH proposal guards: author-only, proposals-only, well-formed, branch-backed, anchored', async () => {
+  test('PATCH proposal guards: author/admin-only, proposals-only, well-formed, branch-backed, anchored', async () => {
     const source = '# Title\n\nalpha';
     const { created, threadId, blockId } = await seedProposal(source, 'alpha', 'beta');
 
-    // Another client — even over the same admin link — is not the author.
-    const asBob = await patchThread(
+    // An admin sees the update capability and can revise a proposal they
+    // did not author.
+    const adminListRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        headers: withInvite(headersFor(CLIENT_B), created.admin_invite.token),
+      }),
+    );
+    expect(adminListRes.status).toBe(200);
+    const adminList = (await adminListRes.json()) as {
+      threads: Array<{ id: string; capabilities: Record<string, boolean> }>;
+    };
+    expect(adminList.threads.find((thread) => thread.id === threadId)?.capabilities.update).toBe(
+      true,
+    );
+
+    const asAdmin = await patchThread(
       created,
       threadId,
-      { proposal: { proposed_text: 'x' } },
+      {
+        proposal: { proposed_text: 'x' },
+        comment: 'Admin revision note.',
+      },
       CLIENT_B,
     );
-    expect(asBob.status).toBe(403);
+    expect(asAdmin.status).toBe(200);
+    const adminUpdate = (await asAdmin.json()) as {
+      thread: {
+        proposal: { proposed_text: string | null };
+        comments: Array<{ body: string; author: { client_id: string } }>;
+      };
+    };
+    expect(adminUpdate.thread.proposal.proposed_text).toBe('x');
+    expect(adminUpdate.thread.comments.at(-1)).toMatchObject({
+      body: 'Admin revision note.',
+      author: { client_id: CLIENT_B.id },
+    });
+
+    // A non-admin who is not the author remains forbidden.
+    const asReader = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads/${threadId}`, {
+        method: 'PATCH',
+        headers: headersFor(CLIENT_C),
+        body: JSON.stringify({ proposal: { proposed_text: 'reader rewrite' } }),
+      }),
+    );
+    expect(asReader.status).toBe(403);
+
+    // Admin proposal updates do not grant permission to replace another
+    // author's rationale.
+    const adminRationaleEdit = await patchThread(
+      created,
+      threadId,
+      { body: 'admin-authored rationale', proposal: { proposed_text: 'y' } },
+      CLIENT_B,
+    );
+    expect(adminRationaleEdit.status).toBe(403);
 
     const nonObject = await patchThread(created, threadId, { proposal: 'x' });
     expect(nonObject.status).toBe(400);

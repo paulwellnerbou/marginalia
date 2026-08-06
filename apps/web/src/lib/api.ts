@@ -1262,11 +1262,11 @@ export function createDocumentProposal(
 }
 
 /**
- * Replace an open proposal's proposed text in place. Author-only —
- * gate on `thread.capabilities.update`. The branch is rebuilt against
- * current main, so this also clears a stale/conflicted proposal. An
- * optional `comment` is posted as a reply in the same request, leaving
- * a revision note in the discussion.
+ * Replace an open proposal's proposed text in place. Authors and document
+ * admins may do this; gate on `thread.capabilities.update`. The branch is
+ * rebuilt against current main, so this also clears a stale/conflicted
+ * proposal. An optional `comment` is posted as a reply in the same request,
+ * leaving a revision note in the discussion.
  */
 export function updateEditProposal(
   uid: string,

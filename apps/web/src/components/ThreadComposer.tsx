@@ -744,7 +744,7 @@ interface ProposalEditComposerProps {
 }
 
 /**
- * Dialog for revising an existing proposal in place (author-only,
+ * Dialog for revising an existing proposal in place (author/admin,
  * gated by `thread.capabilities.update`). Prefills the editor with the
  * proposal's current text; the optional comment is posted as a reply so
  * the revision note stays in the discussion.

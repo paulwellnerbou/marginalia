@@ -399,9 +399,10 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
     {
       title: 'Revise an edit proposal in place',
       description:
-        'Replace the proposed text of an open edit proposal you authored. The thread keeps its ' +
-        'id, discussion, reactions and comment links — use this to act on feedback about a ' +
-        'proposal instead of deleting and re-creating it.\n\n' +
+        'Replace the proposed text of an open edit proposal you authored, or any open proposal ' +
+        'when you are the document admin. The thread keeps its id, discussion, reactions and ' +
+        'comment links — use this to act on feedback about a proposal instead of deleting and ' +
+        're-creating it.\n\n' +
         'The replacement is rebuilt against the CURRENT document source, so it also refreshes ' +
         'a proposal whose diff reports "conflict" or "stale". Same rule as create_proposal: ' +
         '`proposed_text` replaces the anchored block(s)’ ENTIRE source range, so send the ' +
@@ -417,7 +418,11 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         rationale: z
           .string()
           .optional()
-          .describe('New opening-comment text, when the reasoning changed too.'),
+          .describe(
+            'New opening-comment text, when the reasoning changed too. Only the proposal ' +
+              'author may replace the rationale; admins revising another author’s proposal ' +
+              'should use `comment` for an attributed revision note.',
+          ),
         comment: z
           .string()
           .optional()
@@ -544,7 +549,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
       description:
         'The before/after text for an edit proposal, plus whether it still applies cleanly to ' +
         'the current document ("clean", "conflict", or "stale"). A conflicted or stale proposal ' +
-        'of yours can be refreshed with update_proposal.',
+        'you authored — or any proposal when you are document admin — can be refreshed with ' +
+        'update_proposal.',
       inputSchema: {
         document: documentArg,
         thread_id: z.string().describe('Proposal thread id from list_threads.'),
