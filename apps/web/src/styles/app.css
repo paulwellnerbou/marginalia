@@ -661,6 +661,17 @@ button.primary:disabled {
     transition: none;
   }
 }
+
+/* Sections held open/closed by the TOC's section filter: the chevron
+   is disabled rather than hidden, so the structure stays legible. */
+.marginalia .heading-collapse-toggle[disabled] {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
+}
+.marginalia .section-filter-dimmed {
+  opacity: 0.45;
+}
 @media print {
   .marginalia .heading-collapse-toggle {
     display: none;
@@ -990,6 +1001,55 @@ button.primary:disabled {
 }
 .toc-empty {
   padding: 1rem;
+}
+
+/* Section filter (funnel buttons in the TOC). The button is kept in
+   layout but invisible until the row is hovered or focused, so titles
+   don't jump; an active funnel always shows. */
+.toc-filter-btn {
+  flex-shrink: 0;
+  align-self: center;
+  margin-right: 0.35rem;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.toc-row:hover .toc-filter-btn,
+.toc-filter-btn:focus-visible,
+.toc-filter-btn[data-active="true"] {
+  opacity: 1;
+}
+/* No hover on touch devices — keep the affordance reachable. */
+@media (hover: none) {
+  .toc-filter-btn {
+    opacity: 1;
+  }
+}
+.toc .toc-filter-btn svg {
+  width: 13px;
+  height: 13px;
+}
+.toc-row.section-filter-out > a {
+  color: var(--gray-9);
+}
+.toc-row.section-filter-out > a:hover,
+.toc-row.section-filter-out > a:focus-visible {
+  color: var(--ui-toc-active);
+}
+.toc-filter-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.3rem 0.5rem 0.35rem;
+}
+.toc-filter-banner-icon {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  color: var(--accent-11);
+}
+.toc-filter-banner-text {
+  flex: 1;
+  min-width: 0;
 }
 
 /* ============================================================
@@ -1723,6 +1783,23 @@ button.primary:disabled {
   gap: 0.6rem;
   padding: 0.8rem 0.9rem 3rem;
   font-size: 0.85rem;
+}
+
+/* One-line note that the TOC's section filter is narrowing this list. */
+.ic-list-section-filter-note {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+.ic-list-section-filter-icon {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  color: var(--accent-11);
+}
+.ic-list-section-filter-text {
+  flex: 1;
+  min-width: 0;
 }
 
 /* Wraps too, so the actions drop to their own line on a pane too narrow to

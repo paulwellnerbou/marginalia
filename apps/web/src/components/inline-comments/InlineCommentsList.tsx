@@ -5,7 +5,15 @@ import {
   MagnifyingGlassIcon,
   MixerHorizontalIcon,
 } from '@radix-ui/react-icons';
-import { DropdownMenu, IconButton, SegmentedControl, Text, TextField } from '@radix-ui/themes';
+import {
+  Button,
+  DropdownMenu,
+  IconButton,
+  SegmentedControl,
+  Text,
+  TextField,
+} from '@radix-ui/themes';
+import { FunnelIcon } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
@@ -44,6 +52,9 @@ import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 interface Props {
   uid: string;
   threads: Thread[];
+  /** Number of sections the TOC's section filter is focused on; 0 = filter off. */
+  sectionFilterCount?: number;
+  onClearSectionFilter?: () => void;
   blockRanges: Map<string, BlockSourceRange>;
   canComment: boolean;
   pendingAnchor: CommentAnchor | null;
@@ -90,6 +101,8 @@ const FOCUS_HIGHLIGHT_MS = 1800;
 export function InlineCommentsList({
   uid,
   threads,
+  sectionFilterCount = 0,
+  onClearSectionFilter,
   blockRanges,
   canComment,
   pendingAnchor,
@@ -367,6 +380,22 @@ export function InlineCommentsList({
 
   return (
     <div ref={rootRef} className="ic-list">
+      {sectionFilterCount > 0 && (
+        <div className="ic-list-section-filter-note">
+          <FunnelIcon className="ic-list-section-filter-icon" aria-hidden />
+          <Text size="1" color="gray" className="ic-list-section-filter-text">
+            Threads in{' '}
+            {sectionFilterCount === 1
+              ? '1 focused section'
+              : `${sectionFilterCount} focused sections`}
+          </Text>
+          {onClearSectionFilter && (
+            <Button size="1" variant="ghost" onClick={onClearSectionFilter}>
+              Show all
+            </Button>
+          )}
+        </div>
+      )}
       {/* Stay mounted while a filter or search is on, or deletions dropping the
           count to one would strand the reader with no way to clear it. */}
       {(totalThreads > 1 || isFilteringThreads(filters) || searchOpen) && (
@@ -566,9 +595,11 @@ export function InlineCommentsList({
 
       {totalThreads === 0 && !pendingAnchor && (
         <div className="ic-list-empty">
-          {canComment
-            ? 'Select text in the document to comment.'
-            : 'You have read-only access to this document.'}
+          {sectionFilterCount > 0
+            ? 'No threads in the focused sections.'
+            : canComment
+              ? 'Select text in the document to comment.'
+              : 'You have read-only access to this document.'}
         </div>
       )}
 
