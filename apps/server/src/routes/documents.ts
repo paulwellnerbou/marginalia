@@ -1465,10 +1465,16 @@ function isBundleVersion(v: unknown): v is 1 | 2 | 3 | 4 | 5 {
   return v === 1 || v === 2 || v === 3 || v === 4 || v === 5;
 }
 
+// One row per distinct client id that ever touched the source doc —
+// real documents land in the tens to low hundreds. High enough that
+// truncation should never fire in practice; still bounded because the
+// roster comes from a user-supplied file. Each row is a few dozen
+// bytes, so the cap is cheap even when hit.
+const MAX_IMPORTED_PARTICIPANTS = 5000;
+
 /**
  * Restore the bundle's participant roster into `doc_users` so a
- * preserved history can name its actors. Bounded because the roster
- * comes from a user-supplied file.
+ * preserved history can name its actors.
  */
 function importBundleParticipants(db: Database, uid: string, raw: unknown, now: number): void {
   if (!Array.isArray(raw)) return;
@@ -1477,7 +1483,12 @@ function importBundleParticipants(db: Database, uid: string, raw: unknown, now: 
        (doc_uid, client_id, display_name, first_seen_at, last_seen_at)
      VALUES (?, ?, ?, ?, ?)`,
   );
-  for (const entry of raw.slice(0, 1000)) {
+  if (raw.length > MAX_IMPORTED_PARTICIPANTS) {
+    console.warn(
+      `[marginalia] import ${uid}: participant roster truncated to ${MAX_IMPORTED_PARTICIPANTS} of ${raw.length} — some restored history entries may show as "Unknown user"`,
+    );
+  }
+  for (const entry of raw.slice(0, MAX_IMPORTED_PARTICIPANTS)) {
     if (!entry || typeof entry !== 'object') continue;
     const { client_id: clientId, display_name: displayName } = entry as Record<string, unknown>;
     if (typeof clientId !== 'string' || typeof displayName !== 'string') continue;
@@ -1486,6 +1497,16 @@ function importBundleParticipants(db: Database, uid: string, raw: unknown, now: 
     insert.run(uid, clientId, name, now, now);
   }
 }
+
+// A document's history pack is proportional to revision count and diff
+// size — bundles carry text (markdown/AsciiDoc) source, so even
+// thousands of revisions stay well under this. Bounds the decode buffer
+// and the subsequent on-disk write against a maliciously oversized
+// `pack_base64` field.
+const MAX_HISTORY_PACK_BYTES = 64 * 1024 * 1024;
+// Base64 encodes 3 bytes as 4 chars: reject on the encoded string's
+// length, before `Buffer.from` would allocate the decode target.
+const MAX_HISTORY_PACK_BASE64_CHARS = Math.ceil(MAX_HISTORY_PACK_BYTES / 3) * 4;
 
 /**
  * Rebuild the imported doc's repo from a bundle's packed history.
@@ -1501,6 +1522,12 @@ async function restoreBundleHistory(
   const history = raw as Record<string, unknown>;
   if (typeof history.pack_base64 !== 'string' || typeof history.head_oid !== 'string') return null;
   if (!/^[0-9a-f]{40}$/.test(history.head_oid)) return null;
+  if (history.pack_base64.length > MAX_HISTORY_PACK_BASE64_CHARS) {
+    console.warn(
+      `[marginalia] import ${doc.uid}: history pack exceeds size limit, seeding a fresh repo`,
+    );
+    return null;
+  }
 
   let pack: Buffer;
   try {
@@ -1508,7 +1535,7 @@ async function restoreBundleHistory(
   } catch {
     return null;
   }
-  if (pack.length === 0) return null;
+  if (pack.length === 0 || pack.length > MAX_HISTORY_PACK_BYTES) return null;
 
   const restored = await store.importHistoryPack(doc, pack, history.head_oid).catch(() => null);
   if (!restored) {

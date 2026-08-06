@@ -1889,6 +1889,51 @@ describe('threads API', () => {
     expect(diff.after).toBe('# Better title');
   });
 
+  test('an oversized participant roster is capped rather than rejected', async () => {
+    const uid = await newDoc('# Title');
+    await acceptedProposal(uid, 'Sharper title', '# Better title');
+
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/export`, { headers: asAdmin() }),
+    );
+    const bundle = (await exportRes.json()) as Record<string, unknown> & {
+      participants: Array<{ client_id: string; display_name: string }>;
+    };
+    // Bob (the real proposal author) stays inside the retained slice;
+    // padding pushes the roster well past the cap so the endpoint has
+    // to truncate instead of importing all of it.
+    const padded = [
+      ...bundle.participants,
+      ...Array.from({ length: 5100 }, (_, i) => ({
+        client_id: `padding-client-${i}`,
+        display_name: `Padding ${i}`,
+      })),
+    ];
+
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: rawHeadersFor(ALICE),
+        body: JSON.stringify({ ...bundle, participants: padded }),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as { uid: string; admin_invite: { token: string } };
+    const headers = rawHeadersFor(ALICE);
+    headers.set(INVITE_HEADER, imported.admin_invite.token);
+
+    // The real participant's attribution survives the cap.
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/history`, { headers }),
+    );
+    const { history } = (await historyRes.json()) as {
+      history: Array<{ action: string; proposal: { author: { display_name: string } } | null }>;
+    };
+    expect(history.find((e) => e.action === 'accept-proposal')?.proposal?.author.display_name).toBe(
+      BOB.name,
+    );
+  });
+
   test('an importable bundle without history still lands as a single upload', async () => {
     const uid = await newDoc('# Title');
     await acceptedProposal(uid, 'Sharper title', '# Better title');
@@ -1897,9 +1942,18 @@ describe('threads API', () => {
       new Request(`http://test/api/documents/${uid}/export`, { headers: asAdmin() }),
     );
     const bundle = (await exportRes.json()) as Record<string, unknown>;
-    // Stand in for a pre-v5 bundle, and for a corrupt pack: both must
-    // degrade to a plain import rather than failing it.
-    for (const history of [null, { pack_base64: 'bm90LWEtcGFjaw==', head_oid: 'f'.repeat(40) }]) {
+    // Stand in for a pre-v5 bundle, a corrupt pack, and an oversized
+    // one: all three must degrade to a plain import rather than either
+    // failing it or decoding an unbounded buffer.
+    const oversizedPack = {
+      pack_base64: 'A'.repeat(90 * 1024 * 1024),
+      head_oid: 'f'.repeat(40),
+    };
+    for (const history of [
+      null,
+      { pack_base64: 'bm90LWEtcGFjaw==', head_oid: 'f'.repeat(40) },
+      oversizedPack,
+    ]) {
       const importRes = await app.hono.fetch(
         new Request('http://test/api/documents/import', {
           method: 'POST',
