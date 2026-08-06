@@ -191,9 +191,13 @@ export function InlineThreadCard({
   const canResolve = !proposal && !isResolved && thread.capabilities.resolve;
   const canReopen = !proposal && isResolved && thread.capabilities.reopen;
 
-  // Once a proposal leaves the open state, its rationale is part of the
-  // accept-commit message in git — freeze edits, and freeze deletes once
-  // accepted so the recorded history can't be erased from this UI.
+  // Once a proposal leaves the open state, freeze edits: an accepted
+  // proposal's rationale may already be quoted in a history entry (for
+  // a fast-forward accept it's literally in the commit message — see
+  // GitStore.createProposalBranch — though a 3-way-merge accept doesn't
+  // carry it there), and a rejected one has no undo. Deletes follow the
+  // server capability (admin-only once accepted); the history entry
+  // keeps its attribution even after the thread is deleted.
   const openerNode: Comment = useMemo(() => {
     if (!proposal) return thread.comments[0];
     const base = thread.comments[0];
@@ -201,7 +205,7 @@ export function InlineThreadCard({
       ...base,
       capabilities: {
         edit: base.capabilities.edit && status === 'open',
-        delete: base.capabilities.delete && status !== 'accepted',
+        delete: base.capabilities.delete,
         react: base.capabilities.react,
       },
     };

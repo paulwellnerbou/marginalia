@@ -105,6 +105,9 @@ export function InlineCommentRow({
   const showEdit = !editing && !confirmingDelete && node.capabilities.edit;
   const showDelete = !editing && !confirmingDelete && node.capabilities.delete;
   const showReact = !editing && !confirmingDelete && node.capabilities.react && onReact;
+  // Deleting the opener deletes the whole thread, replies included.
+  const deleteLabel = variant === 'opener' ? 'Delete thread' : 'Delete';
+  const confirmDeleteLabel = variant === 'opener' ? 'Confirm delete thread' : 'Confirm delete';
 
   async function toggleReaction(emoji: string) {
     if (!onReact || reacting) return;
@@ -153,8 +156,8 @@ export function InlineCommentRow({
                     className="ic-icon-btn ic-icon-btn-danger"
                     onClick={() => void confirmDelete()}
                     disabled={saving}
-                    title="Confirm delete"
-                    aria-label="Confirm delete"
+                    title={confirmDeleteLabel}
+                    aria-label={confirmDeleteLabel}
                   >
                     <TrashIcon />
                   </button>
@@ -196,8 +199,8 @@ export function InlineCommentRow({
                     <button
                       type="button"
                       className="ic-icon-btn ic-icon-btn-danger"
-                      title="Delete"
-                      aria-label="Delete"
+                      title={deleteLabel}
+                      aria-label={deleteLabel}
                       onClick={() => setConfirmingDelete(true)}
                     >
                       <TrashIcon />

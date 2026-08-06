@@ -899,6 +899,7 @@ describe('documents API', () => {
           id: string;
           author: { client_id: string; display_name: string };
           summary: string;
+          deleted: boolean;
         } | null;
       }>;
     };
@@ -907,6 +908,7 @@ describe('documents API', () => {
       id: proposal.thread.id,
       author: { client_id: CLIENT_B.id, display_name: 'Robert' },
       summary: 'Proposed change',
+      deleted: false,
     });
   });
 
@@ -2414,7 +2416,7 @@ describe('documents API', () => {
       }>;
     };
     expect(bundle.kind).toBe('marginalia.document-bundle');
-    expect(bundle.version).toBe(4);
+    expect(bundle.version).toBe(5);
     expect(bundle.document.name).toBe('Original Name');
     expect(bundle.document.source).toContain('Original.');
     expect(bundle.document.default_theme).toBe('book');
@@ -3784,7 +3786,7 @@ describe('documents API', () => {
       version: number;
       document: { format?: string; source: string };
     };
-    expect(bundle.version).toBe(4);
+    expect(bundle.version).toBe(5);
     expect(bundle.document.format).toBe('asciidoc');
 
     const importRes = await app.hono.fetch(

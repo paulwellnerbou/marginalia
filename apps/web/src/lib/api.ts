@@ -153,6 +153,8 @@ export interface HistoryEntry {
     id: string;
     author: { client_id: string; display_name: string };
     summary: string;
+    /** The proposal thread was deleted — attribution remains, but there is no thread to open. */
+    deleted: boolean;
   } | null;
 }
 
