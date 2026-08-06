@@ -987,12 +987,18 @@ async function exportDocumentAsEpub(
   }
 
   const identity = readIdentity(c.req.raw.headers);
+  const themeParam = c.req.query('theme');
+  const theme =
+    typeof themeParam === 'string' && themeParam.length > 0
+      ? themeParam
+      : (doc.default_theme ?? 'default');
   const bytes = await exportEpub({
     identifier: `urn:marginalia:${doc.uid}`,
     title,
     author: identity?.displayName ?? null,
     chapters,
     cover: coverResult.cover,
+    theme,
     modifiedAt: new Date(doc.updated_at),
   });
   const base = sanitizeDocumentFilename(derivedTitle, doc.uid);

@@ -2853,10 +2853,11 @@ describe('documents API', () => {
 
   test('POST /:uid/export.epub creates chapters and a title-generated cover', async () => {
     const created = await upload(CLIENT_A, {
-      markdown: '# The Salt Road\n\n## Departure\n\nFirst.\n\n## The Dunes\n\nSecond.\n',
+      markdown:
+        '# The Salt Road\n\n## Departure\n\nFirst.\n\n---\n\nA scene break.\n\n## The Dunes\n\nSecond.\n',
     });
     const res = await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+      new Request(`http://test/api/documents/${created.uid}/export.epub?theme=beautiful`, {
         method: 'POST',
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
       }),
@@ -2874,6 +2875,10 @@ describe('documents API', () => {
     const packageXml = await zip.file('EPUB/package.opf')!.async('string');
     expect(packageXml).toContain('properties="cover-image"');
     expect(packageXml).toContain('<dc:title>The Salt Road</dc:title>');
+    const firstChapter = await zip.file('EPUB/chapter-001.xhtml')!.async('string');
+    expect(firstChapter).toContain('class="epub-hr-ornament"');
+    expect(firstChapter).toContain('360,20 374,36 360,52 346,36');
+    expect(firstChapter).not.toContain('<hr');
   });
 
   test('POST /:uid/export.epub embeds an uploaded raster cover', async () => {

@@ -199,6 +199,7 @@ export function DownloadMenu({
       const { blob, filename, skippedProposals } = await downloadDocumentEpub(doc.uid, {
         acceptedProposals,
         cover,
+        theme,
       });
       downloadBlob(blob, filename);
       setEpubMode(null);

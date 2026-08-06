@@ -517,16 +517,22 @@ export async function downloadDocumentMarkdownChapters(
 
 export async function downloadDocumentEpub(
   uid: string,
-  options: { acceptedProposals?: boolean; cover?: File | null } = {},
+  options: { acceptedProposals?: boolean; cover?: File | null; theme?: string } = {},
 ): Promise<{ blob: Blob; filename: string; skippedProposals: number }> {
   const route = options.acceptedProposals ? 'export.accepted.epub' : 'export.epub';
+  const params = new URLSearchParams();
+  if (options.theme) params.set('theme', options.theme);
+  const query = params.toString();
   const form = new FormData();
   if (options.cover) form.append('cover', options.cover, options.cover.name);
-  const res = await requestBinary(`/api/documents/${encodeURIComponent(uid)}/${route}`, {
-    method: 'POST',
-    body: form,
-    docUid: uid,
-  });
+  const res = await requestBinary(
+    `/api/documents/${encodeURIComponent(uid)}/${route}${query ? `?${query}` : ''}`,
+    {
+      method: 'POST',
+      body: form,
+      docUid: uid,
+    },
+  );
   return {
     blob: await res.blob(),
     filename: filenameFromResponse(res, `${uid}.epub`),

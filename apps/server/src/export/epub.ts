@@ -17,6 +17,8 @@ export interface ExportEpubOptions {
   author?: string | null;
   chapters: EpubChapter[];
   cover?: EpubCover | null;
+  /** Viewer theme selected for this export. Used for portable theme ornaments. */
+  theme?: string;
   modifiedAt?: Date;
 }
 
@@ -42,7 +44,7 @@ export async function exportEpub(options: ExportEpubOptions): Promise<Uint8Array
   const images = new Map<string, EmbeddedImage>();
   const chapters = options.chapters.map((chapter) => ({
     ...chapter,
-    html: embedDataImages(chapter.html, images),
+    html: applyThemeGraphics(embedDataImages(chapter.html, images), options.theme ?? 'default'),
   }));
   const cover = options.cover ?? null;
   const coverExt = cover ? extensionForMime(cover.mime) : 'svg';
@@ -94,6 +96,18 @@ function embedDataImages(html: string, images: Map<string, EmbeddedImage>): stri
       return `src="${path}"`;
     },
   );
+}
+
+/**
+ * EPUB readers vary widely in support for CSS masks, which the web
+ * themes use for ornamental rules. Lower known ornaments to real inline
+ * SVG so the selected theme's scene break survives in every reader.
+ */
+function applyThemeGraphics(html: string, theme: string): string {
+  // The UI calls `beautiful` "Book". Its web rule uses these same five
+  // tapered polygons as a CSS mask; inline SVG is the portable EPUB form.
+  if (theme !== 'beautiful') return html;
+  return html.replace(/<hr(?:\s[^>]*)?\s*\/?>/gi, BOOK_HORIZONTAL_RULE);
 }
 
 function packageOpf(
@@ -280,6 +294,8 @@ html { color-scheme: light; }
 body { margin: 5%; font-family: Georgia, "Times New Roman", serif; line-height: 1.55; color: #222; }
 h1, h2, h3, h4 { line-height: 1.2; break-after: avoid; }
 img, svg { max-width: 100%; height: auto; }
+hr { border: 0; border-top: 1px solid #bbb; margin: 2em 0; }
+svg.epub-hr-ornament { display: block; width: 16em; max-width: 100%; margin: 2em auto; color: #6a655a; }
 pre { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: .9em; }
 code { font-family: ui-monospace, monospace; }
 blockquote { border-left: .2em solid #aaa; margin-left: 0; padding-left: 1em; color: #555; }
@@ -288,3 +304,13 @@ th, td { border: 1px solid #bbb; padding: .35em .5em; }
 body.cover { margin: 0; padding: 0; text-align: center; }
 body.cover img { width: 100%; height: 100vh; object-fit: contain; }
 `;
+
+const BOOK_HORIZONTAL_RULE = `<svg xmlns="http://www.w3.org/2000/svg" class="epub-hr-ornament" viewBox="0 0 720 72" role="separator" aria-label="Section break">
+  <g fill="currentColor">
+    <polygon points="30,36 300,32.8 300,39.2"></polygon>
+    <polygon points="690,36 420,32.8 420,39.2"></polygon>
+    <polygon points="322,36 328,30 334,36 328,42"></polygon>
+    <polygon points="398,36 392,30 386,36 392,42"></polygon>
+    <polygon points="360,20 374,36 360,52 346,36"></polygon>
+  </g>
+</svg>`;
