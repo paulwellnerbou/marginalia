@@ -21,6 +21,7 @@ import {
   updateDocument,
   uploadAsset,
 } from '../lib/api.js';
+import { loadBlockRanges } from '../lib/block-range-loader.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
@@ -209,7 +210,7 @@ export function EditPage() {
         setDoc(d);
         setSource(d.source);
         setSavedSource(d.source);
-        setRendered(d.rendered);
+        setRendered({ html: d.rendered.html });
         setAttached(d.attached_assets ?? []);
       },
       (err) => {
@@ -293,7 +294,7 @@ export function EditPage() {
     // Use it immediately and do not load the client renderer until source or
     // attachments actually diverge from that snapshot.
     if (doc && source === savedSource && attachedKey === serverAttachedKey) {
-      setRendered(doc.rendered);
+      setRendered({ html: doc.rendered.html });
       return;
     }
     const handle = setTimeout(async () => {
@@ -310,13 +311,13 @@ export function EditPage() {
         // dropzones / missing-asset placeholders match what the viewer
         // will see after save. Without this, the editor's preview would
         // show broken `<img>` icons for every attached image.
-        r.html = await rewriteAssetReferences(r.html, {
+        const html = await rewriteAssetReferences(r.html, {
           docUid: uid,
           attached: attachedRefs,
           assetVersions,
         });
         if (previewRequestRef.current !== requestId) return;
-        setRendered(r);
+        setRendered({ html });
       } catch (err) {
         reportError('EditPage.preview', err);
       }
@@ -513,8 +514,7 @@ export function EditPage() {
       // Using savedSource (not source) keeps the anchor consistent with
       // what the server has at base — the proposed_text is the user's
       // new full source.
-      const renderer = await loadRenderer(doc.format);
-      const blocks = renderer.locateAllBlocks(savedSource);
+      const blocks = await loadBlockRanges(savedSource, doc.format);
       const first = blocks.entries().next();
       if (first.done) {
         setError('Cannot propose an edit on an empty document.');
