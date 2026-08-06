@@ -4261,9 +4261,19 @@ function tokenBag(text: string): TokenBag {
   return { counts, size };
 }
 
-/** Sørensen–Dice over the two token multisets: 1 for equal, 0 for disjoint. */
+/**
+ * Sørensen–Dice over the two token multisets: 1 for equal, 0 for disjoint.
+ *
+ * A block with no tokens (`<hr>`, an image-only paragraph) scores 0 against
+ * everything, including another empty one. Scoring two empty blocks as a
+ * perfect match would hand them the highest score in the table on no
+ * evidence, and since the assignment can't cross, that pair would crowd out
+ * a genuine rewrite sitting on the other diagonal — for nothing, because
+ * `tryEmitInlineWordDiffForPair` needs differing plain-prose text and so
+ * renders an empty pair whole either way.
+ */
 function similarity(a: TokenBag, b: TokenBag): number {
-  if (a.size === 0 || b.size === 0) return a.size === b.size ? 1 : 0;
+  if (a.size === 0 || b.size === 0) return 0;
   const [small, large] = a.size <= b.size ? [a, b] : [b, a];
   let shared = 0;
   for (const [token, count] of small.counts) {

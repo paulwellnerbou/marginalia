@@ -2013,6 +2013,53 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
     );
   });
 
+  test('whole-document proposal: text-free blocks do not crowd out a real rewrite', async () => {
+    // `<hr>` and an image-only paragraph both extract to zero tokens, and
+    // they sit on the opposite diagonal from the genuine rewrite. Scoring
+    // an empty pair as a perfect match would win it the assignment, and
+    // since the pairing cannot cross, the reworded paragraph would be left
+    // to render as a whole delete plus a whole insert.
+    const md = ['Keep me.', '---', 'Section about apples and orchards here.', 'Keep me too.'].join(
+      '\n\n',
+    );
+    const proposed = [
+      'Keep me.',
+      'Section about apples and orchard soil.',
+      `![](${PNG_1x1_DATA_URL})`,
+      'Keep me too.',
+    ].join('\n\n');
+    const buf = await exportDocx(md, {
+      review: {
+        threads: [
+          {
+            id: 't1',
+            block_id: null,
+            comments: [{ body: 'reshuffle', author: 'Editor', date: 0 }],
+            proposal: {
+              source_snapshot: md,
+              proposed_text: proposed,
+              whole_document: true,
+            },
+          },
+        ],
+      },
+    });
+    const { documentXml } = await inspectComments(buf);
+    const appendix = documentXml.slice(documentXml.indexOf('Alternative version proposed by'));
+
+    // Only the reworded words are struck out. The whole sentence landing
+    // in a single <w:delText> is the signature of the pair being skipped.
+    const deleted = (documentXml.match(/<w:delText[^>]*>[\s\S]*?<\/w:delText>/g) ?? []).join('|');
+    expect(deleted).toContain('orchards');
+    expect(deleted).toContain('here');
+    expect(deleted).not.toContain('Section about apples');
+
+    // The shared opening survives as a plain run.
+    const rewordedPara = paragraphContaining(appendix, 'Section about apples and ');
+    expect(rewordedPara).toContain('<w:t xml:space="preserve">Section about apples and </w:t>');
+    expect(rewordedPara).toMatch(/<w:ins\b[^>]*>[\s\S]*?<w:t[^>]*>soil/);
+  });
+
   test('comment with anchor_quote wraps just the highlighted substring', async () => {
     const md = 'The quick brown fox jumps over the lazy dog.\n';
     const blockId = paragraphBlockId('The quick brown fox jumps over the lazy dog.');
