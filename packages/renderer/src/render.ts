@@ -16,6 +16,7 @@ import {
   rehypeHoistCodeBlockIds,
 } from './plugins/block-elements.js';
 import { remarkBlockIds } from './plugins/block-ids.js';
+import { rehypeBlockText } from './plugins/block-text.js';
 import { remarkExtractFrontmatter } from './plugins/frontmatter.js';
 import { preprocessGridTables } from './plugins/grid-tables.js';
 import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
@@ -97,6 +98,9 @@ export async function render(markdown: string, options: RenderOptions = {}): Pro
     // and carries over only the <pre>'s properties.
     .use(rehypeHoistCodeBlockIds)
     .use(rehypeShikiHighlight, options.highlight ?? {})
+    // Last, so block text is read off the markup the client receives, and
+    // so the surviving ids are the ones the client will actually see.
+    .use(rehypeBlockText)
     .use(rehypeCollectRenderedBlockIds)
     .use(rehypeStringify, { allowDangerousHtml: false });
 

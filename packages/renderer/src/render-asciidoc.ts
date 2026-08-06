@@ -16,6 +16,7 @@ import { rehypeAsciidocAssetCollector } from './plugins/asciidoc-asset-collector
 import { rehypeAsciidocBlockIds } from './plugins/asciidoc-block-ids.js';
 import { rehypeAsciidocMermaid } from './plugins/asciidoc-mermaid.js';
 import { markAnchorable, renderedBlockIdsFromHtml } from './plugins/block-elements.js';
+import { rehypeBlockText } from './plugins/block-text.js';
 import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
 import { sanitizeSchema } from './plugins/sanitize-schema.js';
 import { rehypeShikiHighlight } from './plugins/shiki.js';
@@ -103,6 +104,10 @@ export async function renderAsciidoc(
     .use(rehypeHeadingAnchors)
     .use(rehypeSanitize, sanitizeSchema)
     .use(rehypeShikiHighlight, options.highlight ?? {})
+    // Last, so block text is read off the markup the client receives. The
+    // map is passed in because it is built before this pipeline runs, not
+    // by a plugin inside it.
+    .use(rehypeBlockText, { blocks })
     .use(rehypeStringify);
 
   const file = await processorRehype.process(html);
