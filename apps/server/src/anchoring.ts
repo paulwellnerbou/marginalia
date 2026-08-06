@@ -308,8 +308,12 @@ function locateFragment(
   );
 
   // A quote occurring exactly once in the whole document identifies its own
-  // spot — there is nothing for it to be confused with, so it stays linked
-  // even when nothing recognisable is left around it.
+  // spot, so the block it was already anchored to keeps it linked even when
+  // nothing recognisable is left around it. Uniqueness alone is not enough
+  // to hand a comment to a block it was never on: `linked` means the stored
+  // block still holds the quote (§3.6), and a quote that turned up somewhere
+  // else is a comment sitting on text nobody attached it to. That stays
+  // low-confidence however distinctive it is.
   if (sameBlock && sameBest && sameHits.length === 1 && candidates.length === 1) {
     return sameBlockHit();
   }
