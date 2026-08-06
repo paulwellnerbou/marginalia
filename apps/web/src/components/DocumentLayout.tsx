@@ -51,6 +51,7 @@ import {
   revertHistoryVersion as apiRevertHistoryVersion,
   toggleCommentReaction as apiToggleReaction,
   updateComment as apiUpdate,
+  updateEditProposal as apiUpdateProposal,
   type Comment,
   getDocument,
   getHistoryDiff,
@@ -93,7 +94,7 @@ import { ReadAloudControls } from './ReadAloudControls.js';
 import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
-import { ProposalComposer } from './ThreadComposer.js';
+import { ProposalComposer, ProposalEditComposer } from './ThreadComposer.js';
 import { Toc } from './Toc.js';
 
 const MAX_WIDTH_KEY = 'marginalia.maxWidth';
@@ -184,6 +185,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
   const pendingAnchor = pendingDraft?.mode === 'comment' ? pendingDraft.anchor : null;
   const pendingProposalTarget = pendingDraft?.mode === 'proposal' ? pendingDraft.target : null;
+  /**
+   * Proposal thread whose text is being revised in the edit dialog.
+   * A snapshot on purpose: thread refreshes while the dialog is open
+   * must not clobber the text under the author's cursor. Unlike
+   * `pendingDraft` it survives liveSource changes — the revision is
+   * re-anchored server-side against current main on submit anyway.
+   */
+  const [editingProposal, setEditingProposal] = useState<Thread | null>(null);
   const [focusedThread, setFocusedThread] = useState<ThreadFocusTarget | null>(null);
   /** Mirror of `doc.source` and `doc.rendered`, mutated when a proposal is
    *  accepted (auto-merged) so the displayed doc stays fresh without a reload. */
@@ -208,6 +217,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [trackedDocUid, setTrackedDocUid] = useState(doc.uid);
   const [trackedLiveSource, setTrackedLiveSource] = useState(liveSource);
   if (trackedDocUid !== doc.uid || trackedLiveSource !== liveSource) {
+    // The edit dialog only dies with the document: its thread id and
+    // text live server-side and are rebuilt against current main on
+    // submit, so a liveSource refresh doesn't invalidate it.
+    if (trackedDocUid !== doc.uid) setEditingProposal(null);
     setTrackedDocUid(doc.uid);
     setTrackedLiveSource(liveSource);
     setPendingDraft(null);
@@ -856,6 +869,43 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     },
     [doc.uid, resolveIdentity, refreshThreads, pendingProposalTarget],
+  );
+
+  const onEditProposal = useCallback((thread: Thread) => {
+    // Only one composer at a time — an open create-draft would sit
+    // underneath the edit dialog and reopen on close, disoriented.
+    setPendingDraft(null);
+    setEditingProposal(thread);
+  }, []);
+
+  const onUpdateProposal = useCallback(
+    async (payload: { proposed_text: string; comment?: string; display_name?: string }) => {
+      if (!editingProposal) return;
+      const identity = resolveIdentity(payload.display_name);
+      if (!identity) {
+        setError('Please set your display name first.');
+        return;
+      }
+      try {
+        const req: Parameters<typeof apiUpdateProposal>[2] = {
+          proposed_text: payload.proposed_text,
+        };
+        if (payload.comment) req.comment = payload.comment;
+        await apiUpdateProposal(doc.uid, editingProposal.id, req, identity);
+        setEditingProposal(null);
+        setError(null);
+        await refreshThreads();
+      } catch (err) {
+        reportError('DocumentLayout.updateProposal', err, {
+          uid: doc.uid,
+          threadId: editingProposal.id,
+        });
+        setError(
+          err instanceof ApiError ? `${err.status}: ${err.code}` : 'Failed to update proposal',
+        );
+      }
+    },
+    [doc.uid, editingProposal, resolveIdentity, refreshThreads],
   );
 
   const onDeleteThread = useCallback(
@@ -1526,6 +1576,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 onResolveThread={onResolveThread}
                 onRepairThread={onRepairThread}
                 onReact={onReact}
+                onEditProposal={onEditProposal}
                 onScrollToAnchor={scrollToAnchor}
               />
             </div>
@@ -1604,6 +1655,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onResolveThread={onResolveThread}
                   onRepairThread={onRepairThread}
                   onReact={onReact}
+                  onEditProposal={onEditProposal}
                   onScrollToAnchor={scrollToAnchor}
                 />
               </Tabs.Content>
@@ -1661,6 +1713,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         needsName={!displayName}
         onCancel={() => setPendingDraft(null)}
         onSubmit={onCreateProposal}
+      />
+      <ProposalEditComposer
+        thread={editingProposal}
+        docUid={doc.uid}
+        docFormat={doc.format}
+        attachedAssets={doc.attached_assets}
+        needsName={!displayName}
+        onCancel={() => setEditingProposal(null)}
+        onSubmit={onUpdateProposal}
       />
     </div>
   );

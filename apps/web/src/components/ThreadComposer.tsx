@@ -1,8 +1,9 @@
 import type { BlockSourceRange, RenderResult } from '@marginalia/renderer';
 import { EnterFullScreenIcon, ExitFullScreenIcon } from '@radix-ui/react-icons';
 import { Button, Dialog, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AttachedAsset, DocumentFormat } from '../lib/api.js';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatAnchorQuote } from '../lib/anchor-quote.js';
+import type { AttachedAsset, DocumentFormat, Thread } from '../lib/api.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { reportError } from '../lib/log.js';
 import { loadRenderer } from '../lib/renderer-loader.js';
@@ -233,6 +234,86 @@ function ProposalSourceField({
   );
 }
 
+/**
+ * Debounced rendered preview of proposal source, active only while the
+ * dialog is expanded into split view. Collapsing clears the result so a
+ * re-expand shows the loading state instead of HTML left over from the
+ * previous expanded session — stale if the user edited in compact mode
+ * in between. `reset` exists for callers that swap the underlying
+ * target without remounting.
+ */
+function useProposalPreview({
+  value,
+  expanded,
+  docUid,
+  docFormat,
+  attachedAssets,
+}: {
+  value: string;
+  expanded: boolean;
+  docUid: string;
+  docFormat: DocumentFormat;
+  attachedAssets: AttachedAsset[];
+}): { rendered: RenderResult | null; reset: () => void } {
+  const [rendered, setRendered] = useState<RenderResult | null>(null);
+  const renderReqRef = useRef(0);
+
+  // Memoize the inputs to `rewriteAssetReferences` so the preview
+  // effect only re-fires when the underlying asset set actually
+  // changes — not on every render of the parent.
+  const attachedRefs = useMemo(
+    () => new Set(attachedAssets.map((a) => a.ref_name)),
+    [attachedAssets],
+  );
+  const assetVersions = useMemo(
+    () => new Map(attachedAssets.map((a) => [a.ref_name, a.asset_id])),
+    [attachedAssets],
+  );
+
+  useEffect(() => {
+    // Bump the request id on every effect run (and again in cleanup):
+    // any in-flight `renderDocument` from a previous run will see its
+    // captured `req` no longer match `renderReqRef.current` and skip
+    // its `setRendered`. Clearing the timer alone wouldn't cover the
+    // window where the timer already fired but `renderDocument` is
+    // still resolving, which would otherwise let a stale result land
+    // after collapse / unmount.
+    renderReqRef.current += 1;
+    if (!expanded) {
+      setRendered(null);
+      return;
+    }
+    const req = renderReqRef.current;
+    const handle = setTimeout(async () => {
+      try {
+        const { renderDocument, rewriteAssetReferences } = await loadRenderer();
+        const r = await renderDocument(value, docFormat);
+        // Match EditPage's preview: rewrite `cat.png` → `/d/<uid>/asset/<id>`
+        // and surface missing-asset placeholders, so the preview matches
+        // what the viewer will see after the proposal is accepted.
+        r.html = await rewriteAssetReferences(r.html, {
+          docUid,
+          attached: attachedRefs,
+          assetVersions,
+        });
+        if (renderReqRef.current !== req) return;
+        setRendered(r);
+      } catch (err) {
+        reportError('ProposalComposer.preview', err);
+      }
+    }, 200);
+    return () => {
+      clearTimeout(handle);
+      // Invalidate this run's id too, so a render that already passed
+      // the timer but hasn't resolved yet won't apply on unmount.
+      renderReqRef.current += 1;
+    };
+  }, [value, expanded, docFormat, docUid, attachedRefs, assetVersions]);
+
+  const reset = useCallback(() => setRendered(null), []);
+  return { rendered, reset };
+}
+
 // Proposal dialog composer — used for new edit proposals.
 //
 // (Comment composer / mention autocomplete previously also lived in
@@ -260,18 +341,27 @@ interface ProposalComposerProps {
   }) => Promise<void> | void;
 }
 
-export function ProposalComposer({
-  target,
-  docUid,
-  docSource,
-  docFormat,
-  blockRanges,
-  attachedAssets,
-  needsName,
+/** Expand / drag affordances the shell hands to whichever body it hosts. */
+interface ProposalDialogChrome {
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  onTitlePointerDown: (e: React.PointerEvent) => void;
+}
+
+/**
+ * Shared dialog chrome for the proposal composers (create + edit):
+ * a Radix dialog that can expand to a split view and, while compact,
+ * be dragged aside by its title so the document stays readable.
+ */
+function ProposalDialogShell({
+  open,
   onCancel,
-  onSubmit,
-}: ProposalComposerProps) {
-  const open = target !== null;
+  children,
+}: {
+  open: boolean;
+  onCancel: () => void;
+  children: (chrome: ProposalDialogChrome) => ReactNode;
+}) {
   const [expanded, setExpanded] = useState(false);
   // User-applied drag offset on top of Radix's centered position. Lets
   // the user shove the dialog aside to read the document underneath
@@ -362,7 +452,31 @@ export function ProposalComposer({
         className={expanded ? 'proposal-dialog--expanded' : undefined}
         style={Object.keys(contentStyle).length > 0 ? contentStyle : undefined}
       >
-        {target && (
+        {children({
+          expanded,
+          onToggleExpanded: () => setExpanded((v) => !v),
+          onTitlePointerDown: handleTitlePointerDown,
+        })}
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
+export function ProposalComposer({
+  target,
+  docUid,
+  docSource,
+  docFormat,
+  blockRanges,
+  attachedAssets,
+  needsName,
+  onCancel,
+  onSubmit,
+}: ProposalComposerProps) {
+  return (
+    <ProposalDialogShell open={target !== null} onCancel={onCancel}>
+      {(chrome) =>
+        target && (
           <ProposalComposerBody
             target={target}
             docUid={docUid}
@@ -373,13 +487,13 @@ export function ProposalComposer({
             needsName={needsName}
             onCancel={onCancel}
             onSubmit={onSubmit}
-            expanded={expanded}
-            onToggleExpanded={() => setExpanded((v) => !v)}
-            onTitlePointerDown={handleTitlePointerDown}
+            expanded={chrome.expanded}
+            onToggleExpanded={chrome.onToggleExpanded}
+            onTitlePointerDown={chrome.onTitlePointerDown}
           />
-        )}
-      </Dialog.Content>
-    </Dialog.Root>
+        )
+      }
+    </ProposalDialogShell>
   );
 }
 
@@ -424,63 +538,13 @@ function ProposalComposerBody({
   const [rationale, setRationale] = useState('');
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [rendered, setRendered] = useState<RenderResult | null>(null);
-  const renderReqRef = useRef(0);
-
-  // Memoize the inputs to `rewriteAssetReferences` so the preview
-  // effect only re-fires when the underlying asset set actually
-  // changes — not on every render of the parent.
-  const attachedRefs = useMemo(
-    () => new Set(attachedAssets.map((a) => a.ref_name)),
-    [attachedAssets],
-  );
-  const assetVersions = useMemo(
-    () => new Map(attachedAssets.map((a) => [a.ref_name, a.asset_id])),
-    [attachedAssets],
-  );
-
-  useEffect(() => {
-    // Bump the request id on every effect run (and again in cleanup):
-    // any in-flight `renderDocument` from a previous run will see its
-    // captured `req` no longer match `renderReqRef.current` and skip
-    // its `setRendered`. Clearing the timer alone wouldn't cover the
-    // window where the timer already fired but `renderDocument` is
-    // still resolving, which would otherwise let a stale result land
-    // after collapse / unmount.
-    renderReqRef.current += 1;
-    if (!expanded) {
-      // Clear so a re-expand shows the loading state instead of HTML
-      // left over from the previous expanded session — which would be
-      // stale if the user edited in compact mode in between.
-      setRendered(null);
-      return;
-    }
-    const req = renderReqRef.current;
-    const handle = setTimeout(async () => {
-      try {
-        const { renderDocument, rewriteAssetReferences } = await loadRenderer();
-        const r = await renderDocument(value, docFormat);
-        // Match EditPage's preview: rewrite `cat.png` → `/d/<uid>/asset/<id>`
-        // and surface missing-asset placeholders, so the preview matches
-        // what the viewer will see after the proposal is accepted.
-        r.html = await rewriteAssetReferences(r.html, {
-          docUid,
-          attached: attachedRefs,
-          assetVersions,
-        });
-        if (renderReqRef.current !== req) return;
-        setRendered(r);
-      } catch (err) {
-        reportError('ProposalComposer.preview', err);
-      }
-    }, 200);
-    return () => {
-      clearTimeout(handle);
-      // Invalidate this run's id too, so a render that already passed
-      // the timer but hasn't resolved yet won't apply on unmount.
-      renderReqRef.current += 1;
-    };
-  }, [value, expanded, docFormat, docUid, attachedRefs, assetVersions]);
+  const { rendered, reset: resetPreview } = useProposalPreview({
+    value,
+    expanded,
+    docUid,
+    docFormat,
+    attachedAssets,
+  });
 
   // Reset the proposal text + rationale synchronously when the
   // target changes. Doing this in a useEffect would leave `value`
@@ -505,7 +569,7 @@ function ProposalComposerBody({
     setTrackedTarget({ key: targetKey, source: originalSource });
     setValue(originalSource);
     setRationale('');
-    setRendered(null);
+    resetPreview();
   }
 
   const changed = value !== originalSource;
@@ -646,6 +710,245 @@ function ProposalComposerBody({
           </Button>
           <Button onClick={send} disabled={!ready || submitting}>
             {submitting ? 'Submitting…' : 'Submit proposal'}
+          </Button>
+        </Flex>
+      </div>
+    </div>
+  );
+}
+
+interface ProposalEditComposerProps {
+  /** The proposal thread being revised; null keeps the dialog closed. */
+  thread: Thread | null;
+  docUid: string;
+  docFormat: DocumentFormat;
+  attachedAssets: AttachedAsset[];
+  needsName: boolean;
+  onCancel: () => void;
+  onSubmit: (payload: {
+    proposed_text: string;
+    comment?: string;
+    display_name?: string;
+  }) => Promise<void> | void;
+}
+
+/**
+ * Dialog for revising an existing proposal in place (author-only,
+ * gated by `thread.capabilities.update`). Prefills the editor with the
+ * proposal's current text; the optional comment is posted as a reply so
+ * the revision note stays in the discussion.
+ */
+export function ProposalEditComposer({
+  thread,
+  docUid,
+  docFormat,
+  attachedAssets,
+  needsName,
+  onCancel,
+  onSubmit,
+}: ProposalEditComposerProps) {
+  // The parent hands us a snapshot, so a concurrent realtime update
+  // can't clobber the text mid-edit; conflicts surface on submit.
+  const initialText = thread?.proposal?.proposed_text ?? null;
+  const open = thread !== null && initialText !== null;
+  return (
+    <ProposalDialogShell open={open} onCancel={onCancel}>
+      {(chrome) =>
+        thread &&
+        initialText !== null && (
+          <ProposalEditBody
+            // Remount per thread: state resets are the key's job here,
+            // unlike the create dialog whose target mutates in place.
+            key={thread.id}
+            thread={thread}
+            initialText={initialText}
+            docUid={docUid}
+            docFormat={docFormat}
+            attachedAssets={attachedAssets}
+            needsName={needsName}
+            onCancel={onCancel}
+            onSubmit={onSubmit}
+            expanded={chrome.expanded}
+            onToggleExpanded={chrome.onToggleExpanded}
+            onTitlePointerDown={chrome.onTitlePointerDown}
+          />
+        )
+      }
+    </ProposalDialogShell>
+  );
+}
+
+function ProposalEditBody({
+  thread,
+  initialText,
+  docUid,
+  docFormat,
+  attachedAssets,
+  needsName,
+  onCancel,
+  onSubmit,
+  expanded,
+  onToggleExpanded,
+  onTitlePointerDown,
+}: {
+  thread: Thread;
+  initialText: string;
+  docUid: string;
+  docFormat: DocumentFormat;
+  attachedAssets: AttachedAsset[];
+  needsName: boolean;
+  onCancel: () => void;
+  onSubmit: ProposalEditComposerProps['onSubmit'];
+  expanded: boolean;
+  onToggleExpanded: () => void;
+  onTitlePointerDown: (e: React.PointerEvent) => void;
+}) {
+  const [value, setValue] = useState(initialText);
+  const [comment, setComment] = useState('');
+  const [name, setName] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const { rendered } = useProposalPreview({
+    value,
+    expanded,
+    docUid,
+    docFormat,
+    attachedAssets,
+  });
+
+  const changed = value !== initialText;
+  // A comment alone is submittable: the server posts the note and, if
+  // the document moved under the proposal, rebases the branch too.
+  const ready = (changed || comment.trim().length > 0) && (!needsName || name.trim().length > 0);
+
+  async function send() {
+    if (!ready) return;
+    setSubmitting(true);
+    try {
+      const payload: Parameters<ProposalEditComposerProps['onSubmit']>[0] = {
+        proposed_text: value,
+      };
+      if (comment.trim()) payload.comment = comment.trim();
+      if (needsName) payload.display_name = name.trim();
+      await onSubmit(payload);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const formatLabel = docFormat === 'asciidoc' ? 'AsciiDoc' : 'Markdown';
+  const scopeNoun = thread.proposal?.whole_document ? 'the whole document' : 'the anchored text';
+  const anchorQuote = formatAnchorQuote(thread.anchor.quote, 240);
+
+  return (
+    <div
+      className={`proposal-composer-layout composer${expanded ? ' proposal-composer-layout--expanded' : ''}`}
+    >
+      <div
+        className={`proposal-composer-header${expanded ? '' : ' proposal-drag-handle'}`}
+        onPointerDown={expanded ? undefined : onTitlePointerDown}
+      >
+        <Flex align="center" gap="2" mb="1" className="proposal-composer-title-row">
+          <Dialog.Title className="proposal-composer-title">Edit proposal</Dialog.Title>
+          <IconButton
+            size="2"
+            variant="soft"
+            color="gray"
+            title={expanded ? 'Collapse editor' : 'Expand to split view'}
+            aria-label={expanded ? 'Collapse editor' : 'Expand to split view'}
+            onClick={onToggleExpanded}
+          >
+            {expanded ? <ExitFullScreenIcon /> : <EnterFullScreenIcon />}
+          </IconButton>
+        </Flex>
+        <Dialog.Description size="2" color="gray" mb="2">
+          Revise your proposed {formatLabel} replacement for {scopeNoun}. The updated diff is
+          rebuilt against the current document.
+        </Dialog.Description>
+        {!expanded && anchorQuote && <div className="composer-quote">{`“${anchorQuote}”`}</div>}
+        {needsName && (
+          <Flex direction="column" gap="1" mt="2">
+            <Text as="label" size="2" htmlFor="proposal-edit-name">
+              Your display name
+            </Text>
+            <TextField.Root
+              id="proposal-edit-name"
+              className="composer-name-field"
+              size="1"
+              placeholder="Your display name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              maxLength={80}
+              autoFocus
+            />
+          </Flex>
+        )}
+      </div>
+
+      <div className="proposal-composer-split">
+        <div className="proposal-composer-source">
+          <Text
+            as="label"
+            size="2"
+            htmlFor="proposal-edit-text"
+            id="proposal-edit-text-label"
+            className="proposal-composer-source-label"
+            onClick={(e) => {
+              // <label htmlFor> only natively focuses labelable form
+              // controls; once the textarea swaps to CodeMirror's
+              // contenteditable, clicking the label stops moving
+              // focus. Route the click manually so the visible label
+              // still acts as a focus affordance after the swap.
+              const target = document.getElementById('proposal-edit-text');
+              if (target instanceof HTMLElement && target.isContentEditable) {
+                e.preventDefault();
+                target.focus();
+              }
+            }}
+          >
+            Edited {formatLabel}
+          </Text>
+          <ProposalSourceField
+            key={`${docFormat}-${thread.id}`}
+            id="proposal-edit-text"
+            initialValue={initialText}
+            onChange={setValue}
+            autoFocus={!needsName}
+            ariaLabelledBy="proposal-edit-text-label"
+            format={docFormat}
+          />
+        </div>
+        <div className="proposal-composer-preview">
+          {rendered ? (
+            <RenderedDoc rendered={rendered} />
+          ) : (
+            <Text color="gray" size="2" as="p">
+              Preview…
+            </Text>
+          )}
+        </div>
+      </div>
+
+      <div className="proposal-composer-footer">
+        <Flex direction="column" gap="1">
+          <Text as="label" size="2" htmlFor="proposal-edit-comment">
+            Comment (optional)
+          </Text>
+          <TextArea
+            id="proposal-edit-comment"
+            className="composer-body-field"
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            placeholder="What changed in this revision? Posted as a reply on the thread."
+            rows={expanded ? 2 : 3}
+            size="1"
+          />
+        </Flex>
+        <Flex gap="2" justify="end" mt="3">
+          <Button variant="soft" color="gray" onClick={onCancel} disabled={submitting}>
+            Cancel
+          </Button>
+          <Button onClick={send} disabled={!ready || submitting}>
+            {submitting ? 'Updating…' : 'Update proposal'}
           </Button>
         </Flex>
       </div>
