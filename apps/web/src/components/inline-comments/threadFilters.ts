@@ -1,6 +1,6 @@
 import { isProposal, isResolved, type Thread } from '../../lib/api.js';
 
-/** Threads-tab filters. Both dimensions default to `'all'`. */
+/** Threads-tab filters. See threadListPrefs for what they start out as. */
 export type ThreadStatusFilter = 'all' | 'unresolved';
 export type ThreadKindFilter = 'all' | 'proposals';
 
@@ -9,6 +9,7 @@ export interface ThreadFilters {
   kind: ThreadKindFilter;
 }
 
+/** Filters nothing out — what "clear the filters" resets to. */
 export const ALL_THREAD_FILTERS: ThreadFilters = { status: 'all', kind: 'all' };
 
 /**
