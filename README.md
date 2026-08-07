@@ -31,6 +31,33 @@ bun run build
 bun run start
 ```
 
+## Installable app (PWA)
+
+The viewer installs as a standalone app. `apps/web/public` holds the
+manifest, the service worker, and the icon set.
+
+The service worker (`apps/web/public/sw.js`) is dependency-free and
+deliberately narrow. It precaches the SPA shell and the bundles it boots
+from, serves navigations network-first so a new deploy is always picked
+up, and treats `/assets/*` as immutable because Vite content-hashes those
+filenames. **Nothing under `/api` is ever cached** — documents are
+authorized per request, so a cached copy would be both stale and a way to
+read a document after access was revoked. Offline you get the app shell
+and a clear message, not the browser's error page.
+
+It only registers in production builds, so verify PWA behaviour against
+`bun run build && bun run start` rather than the Vite dev server.
+
+The icons are generated, not hand-drawn — the mark, the rounded tile, the
+full-bleed Apple variant, the Android maskable variants and the multi-size
+`favicon.ico` all come from one set of geometry in
+[`scripts/generate-icons.ts`](scripts/generate-icons.ts). Edit that file
+and re-run:
+
+```sh
+bun run icons
+```
+
 ## AI review (MCP)
 
 [`packages/mcp`](packages/mcp/README.md) is an MCP server that gives an
