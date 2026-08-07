@@ -9,6 +9,7 @@ import { type RefObject, useCallback, useMemo } from 'react';
 import { resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import { isProposal, type Thread } from '../../lib/api.js';
 import {
+  AT_THREAD_TOLERANCE_PX,
   adjacentThreadTarget,
   sortThreadTopEntries,
   type ThreadTopEntry,
@@ -38,9 +39,6 @@ interface Props {
  * toolbar's near-epsilon feel without a sticky stack to pad for.
  */
 const NAV_REF_TOP_PX = 20;
-/** How near the top edge the open thread's anchor must still sit for
- *  the reader to count as parked on it. Settled jumps are within 2px. */
-const PARKED_TOLERANCE_PX = 8;
 
 /**
  * The open thread if the reader is still parked where the jump to it
@@ -59,10 +57,10 @@ function parkedThreadId(
   if (!openId) return null;
   const entry = entries.find((e) => e.id === openId);
   if (!entry) return null;
-  if (Math.abs(entry.top) <= PARKED_TOLERANCE_PX) return openId;
+  if (Math.abs(entry.top) <= AT_THREAD_TOLERANCE_PX) return openId;
   const maxScroll = scroll.scrollHeight - scroll.clientHeight;
-  if (entry.top > 0 && scroll.scrollTop >= maxScroll - PARKED_TOLERANCE_PX) return openId;
-  if (entry.top < 0 && scroll.scrollTop <= PARKED_TOLERANCE_PX) return openId;
+  if (entry.top > 0 && scroll.scrollTop >= maxScroll - AT_THREAD_TOLERANCE_PX) return openId;
+  if (entry.top < 0 && scroll.scrollTop <= AT_THREAD_TOLERANCE_PX) return openId;
   return null;
 }
 

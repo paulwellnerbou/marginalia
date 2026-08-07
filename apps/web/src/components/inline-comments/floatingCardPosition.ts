@@ -73,9 +73,19 @@ export function clampCardLeft(
   return Math.min(Math.max(anchorLeft, margin), max);
 }
 
+/**
+ * How far the reader may sit from a thread's landing position and still
+ * count as standing on it. Settled jumps are within 2px.
+ */
+export const AT_THREAD_TOLERANCE_PX = 8;
+
 export interface ThreadTopEntry {
   id: string;
-  /** Anchor top relative to the scroll container's visible top edge. */
+  /**
+   * Where the anchor sits relative to the position a jump to it lands
+   * on: 0 means the reader is standing on the thread, negative means
+   * they have scrolled past it.
+   */
   top: number;
   /**
    * Document-order tiebreak for threads sharing an anchor position:
@@ -108,8 +118,8 @@ export function sortThreadTopEntries(entries: ThreadTopEntry[]): ThreadTopEntry[
  * name the same one of them — stepping past the rest.
  *
  * Without it, the current thread is the last one whose anchor sits at
- * or above `refTop` (a small pad below the container's top edge).
- * Returns -1 above the first thread.
+ * or above `refTop` (a small pad past the landing line). Returns -1
+ * above the first thread.
  */
 export function currentThreadIndex(
   entries: ThreadTopEntry[],
@@ -133,8 +143,12 @@ export function currentThreadIndex(
 /**
  * Pick the previous/next thread relative to the reading position.
  * `entries` must be sorted by `top` ascending; see `currentThreadIndex`
- * for how the current thread is chosen. Mirrors the column toolbar's
- * findCurrentIndex semantics.
+ * for how the current thread is chosen.
+ *
+ * Going up from a thread the reader has scrolled past leads back to it,
+ * not over it: with the comment plainly above the viewport, stepping to
+ * the one before it — or nowhere at all, when it is the first — is what
+ * makes the button look dead.
  */
 export function adjacentThreadTarget(
   entries: ThreadTopEntry[],
@@ -144,5 +158,8 @@ export function adjacentThreadTarget(
 ): string | null {
   const current = currentThreadIndex(entries, refTop, parkedId);
   if (direction > 0) return entries[current + 1]?.id ?? null;
+  if (current < 0) return null;
+  const entry = entries[current];
+  if (entry && entry.id !== parkedId && entry.top < -AT_THREAD_TOLERANCE_PX) return entry.id;
   return current > 0 ? (entries[current - 1]?.id ?? null) : null;
 }
