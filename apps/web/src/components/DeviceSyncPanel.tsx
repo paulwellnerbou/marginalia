@@ -1,9 +1,10 @@
-import { MobileIcon, UpdateIcon } from '@radix-ui/react-icons';
+import { MobileIcon, TrashIcon, UpdateIcon } from '@radix-ui/react-icons';
 import { Badge, Box, Button, Callout, Dialog, Flex, Separator, Text } from '@radix-ui/themes';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { createKeyringPairing } from '../lib/api.js';
 import {
   connectKeyring,
+  deleteKeyring,
   disconnectKeyring,
   hasKeyring,
   loadKeyringToken,
@@ -74,6 +75,20 @@ export function DeviceSyncPanel({ onSynced }: { onSynced: () => void }) {
     }
   }
 
+  async function destroy() {
+    setError(null);
+    setBusy(true);
+    try {
+      await deleteKeyring();
+      setPairing(null);
+    } catch (err) {
+      reportError('DeviceSyncPanel.delete', err);
+      setError('Could not delete the keyring. Nothing was removed — try again.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <Box className={`device-sync ${connected ? 'device-sync--connected' : ''}`}>
       <Flex justify="between" align="start" gap="3" wrap="wrap">
@@ -116,7 +131,14 @@ export function DeviceSyncPanel({ onSynced }: { onSynced: () => void }) {
               device but this one. Your documents and their access links are unaffected.
             </Text>
             <Flex gap="2">
-              <ReplaceKeyringButton onConfirm={rotate} disabled={busy} />
+              <ArmedButton
+                label="Replace keyring"
+                confirmLabel="Disconnect other devices"
+                color="amber"
+                icon={<UpdateIcon />}
+                onConfirm={rotate}
+                disabled={busy}
+              />
               <Button
                 variant="soft"
                 color="gray"
@@ -129,6 +151,22 @@ export function DeviceSyncPanel({ onSynced }: { onSynced: () => void }) {
                 Stop syncing here
               </Button>
             </Flex>
+          </Flex>
+
+          <Separator size="4" my="3" />
+          <Flex gap="3" align="center" wrap="wrap" justify="between">
+            <Text size="1" color="gray">
+              Done with syncing everywhere? Deleting the keyring stops every device and removes the
+              server's copy of your access links. Each device keeps the documents it already has.
+            </Text>
+            <ArmedButton
+              label="Delete keyring"
+              confirmLabel="Delete it everywhere"
+              color="red"
+              icon={<TrashIcon />}
+              onConfirm={destroy}
+              disabled={busy}
+            />
           </Flex>
         </>
       )}
@@ -150,14 +188,24 @@ export function DeviceSyncPanel({ onSynced }: { onSynced: () => void }) {
 }
 
 /**
- * Two-step confirm, local for the same reason InvitesPanel's rotate
- * button is: ConfirmButton is built around a trash icon and a "revoke"
- * reading, and this action destroys nothing.
+ * Two-step confirm, local rather than ConfirmButton because that one is
+ * an icon-only trash affordance: both actions here are consequential in
+ * ways a trash can doesn't convey, and each has to say in words what the
+ * second click actually does — one replaces a token, the other destroys
+ * the ring.
  */
-function ReplaceKeyringButton({
+function ArmedButton({
+  label,
+  confirmLabel,
+  color,
+  icon,
   onConfirm,
   disabled,
 }: {
+  label: string;
+  confirmLabel: string;
+  color: 'amber' | 'red';
+  icon: ReactNode;
   onConfirm: () => void | Promise<void>;
   disabled?: boolean;
 }) {
@@ -178,8 +226,8 @@ function ReplaceKeyringButton({
 
   if (!armed) {
     return (
-      <Button variant="soft" color="amber" disabled={disabled} onClick={() => setArmed(true)}>
-        <UpdateIcon /> Replace keyring
+      <Button variant="soft" color={color} disabled={disabled} onClick={() => setArmed(true)}>
+        {icon} {label}
       </Button>
     );
   }
@@ -191,14 +239,14 @@ function ReplaceKeyringButton({
       </Button>
       <Button
         variant="solid"
-        color="amber"
+        color={color}
         disabled={disabled}
         onClick={() => {
           setArmed(false);
           void onConfirm();
         }}
       >
-        Disconnect other devices
+        {confirmLabel}
       </Button>
     </Flex>
   );

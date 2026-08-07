@@ -18,6 +18,7 @@
 import {
   createKeyring as createKeyringRequest,
   deleteKeyringDoc,
+  deleteKeyring as deleteKeyringRequest,
   fetchKeyring,
   type KeyringSeed,
   type KeyringWire,
@@ -88,6 +89,27 @@ export async function connectKeyring(): Promise<KeyringWire & { token: string }>
  * devices are still using it.
  */
 export function disconnectKeyring(): void {
+  storeKeyringToken(null);
+}
+
+/**
+ * Destroy the ring for every device, and stop syncing here. The opposite
+ * end of `disconnectKeyring`: that one leaves the server holding a copy
+ * of every invite token in the ring, which is right while another device
+ * is still using it and wrong once nobody is.
+ *
+ * Not best-effort like the pushes above — someone asking for their
+ * tokens to be deleted has to be told if it didn't happen. A 404 is the
+ * exception: the ring is already gone, which is the outcome asked for.
+ */
+export async function deleteKeyring(): Promise<void> {
+  const token = loadKeyringToken();
+  if (!token) return;
+  try {
+    await deleteKeyringRequest(token);
+  } catch (err) {
+    if (!isNotFound(err)) throw err;
+  }
   storeKeyringToken(null);
 }
 

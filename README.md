@@ -128,6 +128,30 @@ works.
 already holds — that device usually has the full list, and an empty
 first keyring would look like the feature had eaten it.
 
+### How a ring ends
+
+Three doors, and they are not the same door:
+
+- **Stop syncing here** clears `marginalia.keyring` and nothing else.
+  Local, on purpose — the other devices are still using the ring.
+- **Replace keyring** rotates the token: this device keeps the ring, the
+  others fall off it. For a code shared by mistake or a lost device.
+- **Delete keyring** destroys it for everyone, including the server's
+  copies of the invite tokens. Documents keep opening on each device
+  from its own `localStorage`; only the syncing ends.
+
+Left alone, a ring is swept once nothing has pulled or changed it for
+`keyringIdleTtlMs` (default 180 days). Explicit deletion only
+reaches the people who ask for it, and the rings most worth clearing —
+a wiped browser, a replaced phone — belong to nobody who is still
+thinking about them. `updated_at` is the liveness signal: a pull
+refreshes it, at most once a day so a page load isn't a write. The sweep
+runs from `POST /api/keyrings`, since there is no scheduler here and
+that is the endpoint whose traffic tracks the table's growth — the same
+bargain the pairing sweep strikes. Losing a ring costs a re-pair, never
+access: the next pull 404s, the device drops the dead token and offers
+to sync again.
+
 ### Endpoints
 
 All except the last take the keyring token in `X-Marginalia-Keyring`.
@@ -140,6 +164,9 @@ All except the last take the keyring token in `X-Marginalia-Keyring`.
 - `PATCH  /api/keyrings/self` — set the shared `display_name`
 - `POST   /api/keyrings/self/rotate` — new token, same documents; for a
   ring you believe leaked. Outstanding pairing codes die with it
+- `DELETE /api/keyrings/self` — destroy the ring, its documents and its
+  outstanding code. Revokes nothing: every device keeps the invite
+  tokens in its own `localStorage`
 - `PUT    /api/keyrings/self/docs/:uid` — record `invite_token` (+
   `title`); the token must really be an invite on that document
 - `DELETE /api/keyrings/self/docs/:uid` — forget one, ring-wide
@@ -490,4 +517,5 @@ Everything the web app persists locally lives in `localStorage` under the
 
 Clearing `marginalia.keyring` only stops this browser syncing — it does
 not delete the ring, since other devices are still using it. Use
-**Replace keyring** to disconnect them all.
+**Replace keyring** to disconnect them all, or **Delete keyring** to
+remove it and the server's copies of your access links outright.

@@ -227,6 +227,11 @@ CREATE INDEX IF NOT EXISTS idx_document_assets_asset ON document_assets(asset_id
 -- keyring is authoritative for display_name; a device adopts it on pull
 -- rather than pushing its own, or two devices would fight through
 -- propagateRename.
+--
+-- updated_at doubles as the liveness signal: a pull refreshes it (at
+-- most daily), and rings idle past keyringIdleTtlMs are swept from the
+-- create path, so a ring's copies of someone's invite tokens don't
+-- outlive the last device that wanted them.
 CREATE TABLE IF NOT EXISTS keyrings (
   token         TEXT PRIMARY KEY,
   client_id     TEXT NOT NULL,

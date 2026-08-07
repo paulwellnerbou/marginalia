@@ -1045,6 +1045,14 @@ export function renameKeyring(
   });
 }
 
+/** Destroy the ring server-side, with its copies of the invite tokens. */
+export function deleteKeyring(token: string): Promise<void> {
+  return request<void>('/api/keyrings/self', {
+    method: 'DELETE',
+    headers: { [KEYRING_HEADER]: token },
+  });
+}
+
 export function rotateKeyring(
   token: string,
 ): Promise<{ token: string; client_id: string; display_name: string }> {
