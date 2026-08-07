@@ -58,8 +58,11 @@ export function AppBar({
                 <stop offset="100%" stopColor="var(--gray-12)" />
               </linearGradient>
             </defs>
+            {/* The app icon's mark: an annotation bracket in the margin
+                holding a passage. The gradient runs left-to-right, so the
+                bracket lands on the accent and the text on the gray end. */}
             <path
-              d="M3 10.75L12 3.75L21 10.75"
+              d="M8 5.5H5V18.5H8"
               fill="none"
               stroke={`url(#${brandGradientId})`}
               strokeWidth="1.9"
@@ -67,20 +70,25 @@ export function AppBar({
               strokeLinejoin="round"
             />
             <path
-              d="M5.5 9.9V19.25H18.5V9.9"
+              d="M11.6 8.4H19.4"
               fill="none"
               stroke={`url(#${brandGradientId})`}
               strokeWidth="1.9"
               strokeLinecap="round"
-              strokeLinejoin="round"
             />
             <path
-              d="M10 19.25V13.75H14V19.25"
+              d="M11.6 12H17.6"
               fill="none"
               stroke={`url(#${brandGradientId})`}
               strokeWidth="1.9"
               strokeLinecap="round"
-              strokeLinejoin="round"
+            />
+            <path
+              d="M11.6 15.6H15.6"
+              fill="none"
+              stroke={`url(#${brandGradientId})`}
+              strokeWidth="1.9"
+              strokeLinecap="round"
             />
           </svg>
         </span>

@@ -13,7 +13,9 @@ import {
 } from '@radix-ui/themes';
 import { useState } from 'react';
 import { logoutPasswordSession, type Role } from '../lib/api.js';
+import { accessLinkFor } from '../lib/document-link.js';
 import { getClientId, setDisplayName as persistName, useDisplayName } from '../lib/identity.js';
+import { loadInviteToken } from '../lib/invite.js';
 import { clearSavedPassword, useSavedPassword } from '../lib/passwords.js';
 import { appRoleColor } from '../styles/theme.js';
 import { Copyable } from './Copyable.js';
@@ -49,6 +51,10 @@ export function UserMenu({
   // have a stable identity.
   const clientId = getClientId();
   const shortId = clientId.slice(0, 10);
+  // Only offered when this device actually holds a token: without one the
+  // address-bar URL is already the whole story.
+  const inviteToken = docUid ? loadInviteToken(docUid) : null;
+  const accessLink = docUid && inviteToken ? accessLinkFor(docUid, inviteToken) : null;
   const savedPassword = useSavedPassword(docUid);
   const [sessionBusy, setSessionBusy] = useState(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -144,6 +150,18 @@ export function UserMenu({
             </Text>
             <Copyable text={clientId} ariaLabel="Copy user ID" size="1" />
           </Flex>
+          {accessLink && (
+            <Flex px="3" pb="3" direction="column" gap="1">
+              <Text size="1" color="gray">
+                Access link
+              </Text>
+              <Copyable text={accessLink} ariaLabel="Copy access link" size="1" />
+              <Text size="1" color="gray">
+                Opens this document on another device — the installed app keeps its own storage, so
+                it needs the link again. Anyone holding it gets {role ?? 'the same'} access.
+              </Text>
+            </Flex>
+          )}
           {passwordProtected && docUid && (
             <>
               <DropdownMenu.Separator />

@@ -13,6 +13,7 @@
     "dev": "sh ./scripts/dev.sh",
     "dev:kill": "sh ./scripts/kill-dev.sh",
     "build": "bun --filter @marginalia/web build",
+    "icons": "bun run scripts/generate-icons.ts",
     "start": "bun --bun apps/server/src/main.ts",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test",

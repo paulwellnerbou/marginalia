@@ -2,6 +2,7 @@ import { Container, Text, Theme } from '@radix-ui/themes';
 import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { RouteErrorBoundary } from './components/RouteErrorBoundary.js';
 import { ToastContainer } from './components/ToastContainer.js';
 import { AppearanceProvider, useAppearance } from './lib/appearance.js';
 
@@ -12,9 +13,11 @@ import '@marginalia/themes/default.css';
 import './styles/theme.css';
 import './styles/app.css';
 import { installGlobalErrorLogging } from './lib/log.js';
+import { registerServiceWorker } from './lib/pwa.js';
 import { APP_THEME } from './styles/theme.js';
 
 installGlobalErrorLogging();
+registerServiceWorker();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root not found');
@@ -53,16 +56,18 @@ function App() {
       appearance={resolved}
     >
       <BrowserRouter>
-        <Suspense fallback={<RouteLoading />}>
-          <Routes>
-            <Route path="/" element={<HomePage />} />
-            <Route path="/d/:uid" element={<ViewPage />} />
-            <Route path="/d/:uid/:token" element={<ViewPage />} />
-            <Route path="/d/:uid/:token/edit" element={<EditPage />} />
-            <Route path="/d/:uid/edit" element={<EditPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
+        <RouteErrorBoundary>
+          <Suspense fallback={<RouteLoading />}>
+            <Routes>
+              <Route path="/" element={<HomePage />} />
+              <Route path="/d/:uid" element={<ViewPage />} />
+              <Route path="/d/:uid/:token" element={<ViewPage />} />
+              <Route path="/d/:uid/:token/edit" element={<EditPage />} />
+              <Route path="/d/:uid/edit" element={<EditPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </RouteErrorBoundary>
         <ToastContainer />
       </BrowserRouter>
     </Theme>

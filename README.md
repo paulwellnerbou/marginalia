@@ -31,6 +31,53 @@ bun run build
 bun run start
 ```
 
+## Installable app (PWA)
+
+The viewer installs as a standalone app. `apps/web/public` holds the
+manifest, the service worker, and the icon set.
+
+The service worker (`apps/web/public/sw.js`) is dependency-free and
+deliberately narrow. It precaches the SPA shell and the bundles it boots
+from, serves navigations network-first so a new deploy is always picked
+up, and treats `/assets/*` as immutable because Vite content-hashes those
+filenames. **Nothing under `/api` is ever cached** — documents are
+authorized per request, so a cached copy would be both stale and a way to
+read a document after access was revoked. Offline you get the app shell
+and a clear message, not the browser's error page.
+
+It only registers in production builds, so verify PWA behaviour against
+`bun run build && bun run start` rather than the Vite dev server.
+
+### Getting access into the installed app
+
+Auth lives in the browser, and on iOS an installed app gets a storage
+container of its own — so a freshly installed Marginalia starts with an
+empty document list no matter what the browser already holds, and no link
+the browser offers can hand it over. (Android and desktop share the
+browser's storage, so this only bites on iOS.)
+
+The way across is the invite URL: `claimInvite` deliberately keeps the
+invite row so the same link can be re-claimed from another browser, which
+is exactly what the installed app looks like. So the home page has an
+**Open from a link** field that takes a pasted invite URL — full URL, bare
+path, or just a document id — and routes to it.
+
+Since `ViewPage` strips the token from the address bar on arrival, the
+link cannot be recovered from the URL later. **Copy access link** — on
+each document card and in the per-document user menu — hands it back. It
+is deliberately an explicit action and names the role it grants, because
+that link is a bearer credential.
+
+The icons are generated, not hand-drawn — the mark, the rounded tile, the
+full-bleed Apple variant, the Android maskable variants and the multi-size
+`favicon.ico` all come from one set of geometry in
+[`scripts/generate-icons.ts`](scripts/generate-icons.ts). Edit that file
+and re-run:
+
+```sh
+bun run icons
+```
+
 ## AI review (MCP)
 
 [`packages/mcp`](packages/mcp/README.md) is an MCP server that gives an
