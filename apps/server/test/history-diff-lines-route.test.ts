@@ -98,6 +98,39 @@ describe('history diff, lines shape', () => {
     expect(body).not.toHaveProperty('after');
   });
 
+  test('trims only for a whole non-negative context, never a partial parse', async () => {
+    const tail = Array.from({ length: 40 }, (_, i) => `Paragraph ${i}.`).join('\n\n');
+    const created = await upload(`# Title\n\nThe quick brown fox.\n\n${tail}\n`);
+    const admin = asAdmin(created.admin_invite.token);
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers: admin,
+        body: JSON.stringify({ markdown: `# Title\n\nThe quick red fox.\n\n${tail}\n` }),
+      }),
+    );
+    const oid = await latestOid(created.uid, admin);
+
+    const lineCount = async (query: string): Promise<number> => {
+      const res = await app.hono.fetch(
+        new Request(
+          `http://test/api/documents/${created.uid}/history/${oid}/diff?shape=lines${query}`,
+          { headers: admin },
+        ),
+      );
+      expect(res.status).toBe(200);
+      return ((await res.json()) as { lines: unknown[] }).lines.length;
+    };
+
+    const untrimmed = await lineCount('');
+    expect(await lineCount('&context=2')).toBeLessThan(untrimmed);
+    // `3abc` parses to 3 under parseInt; trimming on it would silently drop
+    // lines the caller never asked to lose.
+    for (const bad of ['&context=3abc', '&context=abc', '&context=-1', '&context=']) {
+      expect(await lineCount(bad)).toBe(untrimmed);
+    }
+  });
+
   test('default shape is unchanged for existing clients', async () => {
     const created = await upload('# A\n');
     const oid = await latestOid(created.uid, headers);

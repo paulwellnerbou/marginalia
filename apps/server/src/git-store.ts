@@ -212,10 +212,14 @@ export class GitStore {
   /**
    * The same revision diff as `diffAt`, already reduced to render-ready lines.
    *
-   * Git contributes only the two blobs here — isomorphic-git has no diff of
-   * its own — so the line matching is the same jsdiff pass the browser would
-   * otherwise run, moved to where both sides already live. `contextLines`
-   * elides unchanged runs further than that from any change.
+   * Git contributes only the two blobs — isomorphic-git has no diff of its
+   * own — so the matching is a jsdiff pass over text, run where both sides
+   * already live. `contextLines` elides unchanged runs further than that from
+   * any change.
+   *
+   * Not yet interchangeable with the browser's diff: `apps/web` still carries
+   * its own LCS-based matcher, which pairs lines differently on some inputs.
+   * They converge once the web imports `@marginalia/diff` instead.
    */
   // Overloaded so the `skip` op only appears in the return type when trimming
   // was actually asked for — an untrimmed caller never has to narrow for a

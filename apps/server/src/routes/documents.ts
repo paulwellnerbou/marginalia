@@ -1938,11 +1938,14 @@ async function getHistoryDiff(c: Context, deps: AppDeps) {
   // instead of both full sources. Spike: opt-in per request so existing
   // clients keep getting {before, after}.
   if (c.req.query('shape') === 'lines') {
+    // Whole non-negative integers only. parseInt would read `3abc` as 3 and
+    // silently trim a diff the caller asked to get in full.
     const raw = c.req.query('context');
-    const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
-    const lines = Number.isFinite(parsed)
-      ? await store.diffLinesAt(doc, oid, { contextLines: parsed })
-      : await store.diffLinesAt(doc, oid);
+    const context = raw !== undefined && /^\d+$/.test(raw) ? Number(raw) : null;
+    const lines =
+      context === null
+        ? await store.diffLinesAt(doc, oid)
+        : await store.diffLinesAt(doc, oid, { contextLines: context });
     if (!lines) return c.json({ error: 'not-found' }, 404);
     return c.json({ lines });
   }

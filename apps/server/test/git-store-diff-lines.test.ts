@@ -7,9 +7,14 @@ import { type DocLocator, GitStore } from '../src/git-store.js';
 
 /**
  * Spike: serving render-ready diff lines straight from the store, instead of
- * shipping both revisions and matching them in the browser. The contract that
- * matters is parity — the store must produce exactly what the browser produces
- * from the same two revisions, or the two paths drift.
+ * shipping both revisions and matching them in the browser.
+ *
+ * What these pin is that the store addresses the right two blobs and hands
+ * back the matcher's output unaltered — not parity with the browser, which
+ * still runs its own LCS matcher and would not agree on every input. That
+ * comparison only becomes meaningful once `apps/web` imports
+ * `@marginalia/diff`; until then there is one implementation under test here,
+ * deliberately.
  */
 describe('GitStore.diffLinesAt', () => {
   let dir: string;
@@ -30,7 +35,7 @@ describe('GitStore.diffLinesAt', () => {
   const BEFORE = '# Title\n\nThe quick brown fox.\n\nUnchanged tail.\n';
   const AFTER = '# Title\n\nThe quick red fox jumps.\n\nUnchanged tail.\n';
 
-  test('matches what the browser computes from the same two revisions', async () => {
+  test('returns the matcher output for the revision and its parent', async () => {
     await store.write(doc, BEFORE, alice, 'upload');
     const { oid } = await store.write(doc, AFTER, alice, 'update');
 
