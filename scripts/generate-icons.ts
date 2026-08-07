@@ -144,22 +144,26 @@ async function emit(name: string, data: Uint8Array | string) {
 
 console.log('Generating icons →', OUT_DIR);
 
-await emit('icon.svg', iconSvg('rounded'));
+try {
+  await emit('icon.svg', iconSvg('rounded'));
 
-for (const size of [192, 512]) {
-  await emit(`icon-${size}.png`, await renderPng('rounded', size));
-  await emit(`icon-maskable-${size}.png`, await renderPng('maskable', size));
+  for (const size of [192, 512]) {
+    await emit(`icon-${size}.png`, await renderPng('rounded', size));
+    await emit(`icon-maskable-${size}.png`, await renderPng('maskable', size));
+  }
+
+  // iOS rounds the touch icon itself, so it gets the full-bleed square.
+  await emit('apple-touch-icon.png', await renderPng('square', 180));
+
+  // Sequential: renderPng drives one shared page, so these cannot overlap.
+  const icoImages: { size: number; png: Uint8Array }[] = [];
+  for (const size of [16, 32, 48]) {
+    icoImages.push({ size, png: await renderPng('rounded', size) });
+  }
+  await emit('favicon.ico', buildIco(icoImages));
+} finally {
+  // A run that dies halfway should not leave a chromium behind.
+  await browser.close();
 }
 
-// iOS rounds the touch icon itself, so it gets the full-bleed square.
-await emit('apple-touch-icon.png', await renderPng('square', 180));
-
-// Sequential: renderPng drives one shared page, so these cannot overlap.
-const icoImages: { size: number; png: Uint8Array }[] = [];
-for (const size of [16, 32, 48]) {
-  icoImages.push({ size, png: await renderPng('rounded', size) });
-}
-await emit('favicon.ico', buildIco(icoImages));
-
-await browser.close();
 console.log('Done.');

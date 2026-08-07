@@ -77,6 +77,8 @@ function messageFor(result: Exclude<ReturnType<typeof parseDocumentLink>, { ok: 
     case 'other-site':
       return `That link is for ${result.host}, a different Marginalia. Open it there instead.`;
     case 'unrecognized':
-      return `That doesn't look like a document link. It should look like ${window.location.origin}/d/… — the whole link from your invite, including the part after the document id.`;
+      // A link with no token parses fine, so this must not read as though
+      // the token were required — it is advice about access, not shape.
+      return `That doesn't look like a document link. It should start ${window.location.origin}/d/. Paste the whole line from your invite: the part after the document id is what carries your access.`;
   }
 }
