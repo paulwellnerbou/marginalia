@@ -2006,10 +2006,6 @@ describe('threads API', () => {
     expect(diff.after).toBe('# Better title');
   });
 
-  // Importing a roster at the cap makes this the heaviest test here by far
-  // — roughly seven times the next slowest — and a CI runner is several
-  // times slower again, which put it over bun's 5s default. The size is the
-  // point of the test, so it gets its own budget instead.
   test('an oversized participant roster is capped rather than rejected', async () => {
     const uid = await newDoc('# Title');
     await acceptedProposal(uid, 'Sharper title', '# Better title');
@@ -2053,7 +2049,7 @@ describe('threads API', () => {
     expect(history.find((e) => e.action === 'accept-proposal')?.proposal?.author.display_name).toBe(
       BOB.name,
     );
-  }, 30_000);
+  });
 
   test('an importable bundle without history still lands as a single upload', async () => {
     const uid = await newDoc('# Title');
