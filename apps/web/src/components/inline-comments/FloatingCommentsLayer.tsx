@@ -12,6 +12,7 @@ import {
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import { resolveAnchorElement, resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
+import { PAGED_CLASS } from '../../lib/paged-reading.js';
 import { computeFloatingCardPosition } from './floatingCardPosition.js';
 import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
@@ -275,6 +276,17 @@ export function FloatingCommentsLayer({
       let next: { top: number; left: number };
       if (anchorEl) {
         const anchorRect = anchorEl.getBoundingClientRect();
+        // Paged mode: the card hangs over a still scrollport, so nothing
+        // carries it away when the reader turns past its anchor. Drop the
+        // position — a null one renders hidden — and let the page that
+        // owns the anchor bring it back.
+        if (
+          scroll.classList.contains(PAGED_CLASS) &&
+          (anchorRect.left < scrollRect.left - 1 || anchorRect.left >= scrollRect.right)
+        ) {
+          setPos(null);
+          return;
+        }
         const placed = computeFloatingCardPosition({
           anchorTop: anchorRect.top - hostRect.top,
           anchorBottom: anchorRect.bottom - hostRect.top,
@@ -353,6 +365,14 @@ export function FloatingCommentsLayer({
     const onScroll = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
+        // Every page turn changes whether the anchor is still on screen,
+        // so paged mode re-places unconditionally rather than waiting
+        // for the card itself to leave the view — it never does, being
+        // pinned over the scrollport.
+        if (scroll.classList.contains(PAGED_CLASS)) {
+          computeRef.current?.();
+          return;
+        }
         const scrollRect = scroll.getBoundingClientRect();
         const cardRect = cardEl.getBoundingClientRect();
         const outOfView = cardRect.bottom < scrollRect.top || cardRect.top > scrollRect.bottom;
