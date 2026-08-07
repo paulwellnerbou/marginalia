@@ -1,6 +1,16 @@
 import { MobileIcon, TrashIcon, UpdateIcon } from '@radix-ui/react-icons';
-import { Badge, Box, Button, Callout, Dialog, Flex, Separator, Text } from '@radix-ui/themes';
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Badge,
+  Box,
+  Button,
+  Callout,
+  Dialog,
+  Flex,
+  Separator,
+  Text,
+  TextField,
+} from '@radix-ui/themes';
+import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { createKeyringPairing } from '../lib/api.js';
 import {
   connectKeyring,
@@ -9,9 +19,11 @@ import {
   hasKeyring,
   loadKeyringToken,
   onKeyringChange,
+  pairWithCode,
   rotateKeyring,
 } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
+import { redeemErrorMessage } from '../lib/pairing-error.js';
 import { Copyable } from './Copyable.js';
 import { PairingQr } from './PairingQr.js';
 
@@ -122,6 +134,13 @@ export function DeviceSyncPanel({ onSynced }: { onSynced: () => void }) {
         </Flex>
       </Flex>
 
+      {!connected && (
+        <>
+          <Separator size="4" my="3" />
+          <JoinByCode onPaired={onSynced} />
+        </>
+      )}
+
       {connected && (
         <>
           <Separator size="4" my="3" />
@@ -183,6 +202,85 @@ export function DeviceSyncPanel({ onSynced }: { onSynced: () => void }) {
           if (!open) setPairing(null);
         }}
       />
+    </Box>
+  );
+}
+
+/**
+ * The receiving end of a pairing code, on the home page.
+ *
+ * `/k` has carried this field all along, but nothing linked to it, so the
+ * only way in was knowing the URL — which makes "or open Marginalia there
+ * and enter the code" advice nobody can follow. A device that has just
+ * been handed a code is by definition a device with an empty document
+ * list, and this panel is the first thing on it that mentions devices.
+ *
+ * No success state of its own: redeeming stores the token, which flips
+ * the whole panel to connected and repopulates the list behind it.
+ */
+function JoinByCode({ onPaired }: { onPaired: () => void }) {
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // `busy` disables the button, but only once React has re-rendered — two
+  // submits in one tick both read it as false. That spends a single-use
+  // code twice and reports the working one as invalid, which is the worst
+  // failure this form has. The ref closes the window synchronously.
+  const inFlight = useRef(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const entered = code.trim();
+    if (!entered || inFlight.current) return;
+    inFlight.current = true;
+    setError(null);
+    setBusy(true);
+    try {
+      await pairWithCode(entered);
+      setCode('');
+      onPaired();
+    } catch (err) {
+      reportError('DeviceSyncPanel.pairWithCode', err);
+      setError(redeemErrorMessage(err));
+    } finally {
+      inFlight.current = false;
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Box>
+      <Text size="2" color="gray" as="p" mb="2">
+        Already syncing on another device? Open <strong>Add a device</strong> there and enter the
+        code it shows.
+      </Text>
+      <form onSubmit={submit}>
+        <Flex gap="2" align="start" wrap="wrap">
+          <TextField.Root
+            value={code}
+            onChange={(event) => {
+              setCode(event.target.value);
+              if (error) setError(null);
+            }}
+            placeholder="ABCD-EFGH"
+            aria-label="Pairing code"
+            spellCheck={false}
+            autoCapitalize="characters"
+            autoCorrect="off"
+            autoComplete="one-time-code"
+            disabled={busy}
+            style={{ flex: '0 1 12rem', fontFamily: 'var(--code-font-family)' }}
+          />
+          <Button type="submit" variant="soft" loading={busy}>
+            Pair
+          </Button>
+        </Flex>
+      </form>
+      {error && (
+        <Callout.Root color="red" size="1" mt="2">
+          <Callout.Text>{error}</Callout.Text>
+        </Callout.Root>
+      )}
     </Box>
   );
 }

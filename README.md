@@ -124,6 +124,14 @@ container and typing the code is the way in there. Minting a code drops
 the previous one, so the code on screen is always the only one that
 works.
 
+On the receiving device the code goes into the **Your devices** panel on
+the home page, next to *Sync my devices* — the same panel, showing its
+other half. `/k` carries the same field for the QR to land on, but
+nothing needs to link there: a device holding a code is a device with an
+empty list, and the panel is already the first thing on it that mentions
+devices. Codes are normalised on the way in (`normalizePairingCode`), so
+any case, with or without the separator, is accepted.
+
 `POST /api/keyrings` seeds the ring from what the creating browser
 already holds — that device usually has the full list, and an empty
 first keyring would look like the feature had eaten it.
