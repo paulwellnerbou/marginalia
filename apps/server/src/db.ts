@@ -240,6 +240,10 @@ CREATE TABLE IF NOT EXISTS keyrings (
   updated_at    INTEGER NOT NULL
 );
 
+-- The sweep's only predicate, and this table grows until swept — unlike
+-- keyring_pairings, which createPairing bounds at one row per ring.
+CREATE INDEX IF NOT EXISTS idx_keyrings_updated_at ON keyrings(updated_at);
+
 -- One row per document a keyring knows about. invite_token is whatever
 -- capability that person holds for the doc — admin, editor, reader; the
 -- keyring neither inspects nor upgrades it. Rows can outlive the
