@@ -1,11 +1,17 @@
 /**
  * Unit tests for `prerasterizeMermaid` — the PDF mmdr-path helper
  * that walks rendered HTML and replaces `<div class="mermaid">…</div>`
- * blocks with the resolver's output (typically inline SVG).
+ * blocks with the resolver's output (typically inline SVG) — and for
+ * `demoteLiveMermaidBlocks`, the EPUB-side disposal of whatever the
+ * resolver couldn't render.
  */
 import { describe, expect, test } from 'bun:test';
 
-import { countLiveMermaidBlocks, prerasterizeMermaid } from '../src/export/html-envelope.js';
+import {
+  countLiveMermaidBlocks,
+  demoteLiveMermaidBlocks,
+  prerasterizeMermaid,
+} from '../src/export/html-envelope.js';
 
 const MD_DIV = (idx: number, body: string): string =>
   `<div class="mermaid" data-block-kind="mermaid" data-mermaid-index="${idx}" data-mermaid-mode="client">${body}</div>`;
@@ -192,5 +198,25 @@ describe('prerasterizeMermaid', () => {
     // Sanity floor: pool actually achieved >1 in flight (otherwise
     // the test passes trivially via accidental sequentialisation).
     expect(highWatermark).toBeGreaterThan(1);
+  });
+});
+
+describe('demoteLiveMermaidBlocks', () => {
+  test('rewrites a leftover mermaid div as a code listing', () => {
+    const html = `<h1>Doc</h1>\n${MD_DIV(0, 'graph TD\n  A --&gt; B')}\n<p>End.</p>`;
+    const out = demoteLiveMermaidBlocks(html);
+    // Escaping survives — the listing goes through the same XHTML
+    // serializer as the rest of the chapter.
+    expect(out).toContain('<pre class="mermaid-source"><code>graph TD\n  A --&gt; B</code></pre>');
+    expect(countLiveMermaidBlocks(out)).toBe(0);
+    expect(out).toContain('<h1>Doc</h1>');
+    expect(out).toContain('<p>End.</p>');
+  });
+
+  test('leaves already-prerendered blocks alone', () => {
+    // The prerendered wrapper keeps the `mermaid` class but drops the
+    // data-mermaid-* markers, so it must not be demoted back to text.
+    const html = '<div class="mermaid mermaid-prerendered"><svg id="d0"/></div>';
+    expect(demoteLiveMermaidBlocks(html)).toBe(html);
   });
 });

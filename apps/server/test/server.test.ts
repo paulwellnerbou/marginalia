@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,6 +35,18 @@ function withInvite(h: Headers, token: string): Headers {
   const n = new Headers(h);
   n.set(INVITE_HEADER, token);
   return n;
+}
+
+/**
+ * EPUB content documents are parsed as XML, so a reader aborts on a
+ * chapter that isn't well-formed — a class of bug string assertions
+ * can't see. `xmllint` ships with macOS and the Ubuntu CI image; where
+ * it's absent the surrounding assertions still carry the test.
+ */
+function expectWellFormedXml(name: string, xml: string): void {
+  const probe = spawnSync('xmllint', ['--noout', '-'], { input: xml, encoding: 'utf8' });
+  if (probe.error) return;
+  expect(`${name}: ${probe.stderr.trim()}`).toBe(`${name}: `);
 }
 
 interface CreateResponse {
@@ -2905,6 +2918,137 @@ describe('documents API', () => {
     const exported = await zip.file('EPUB/images/cover.png')!.async('uint8array');
     expect(exported).toEqual(png);
     expect(zip.file('EPUB/images/cover.svg')).toBeNull();
+  });
+
+  test('POST /:uid/export.epub emits well-formed XHTML without rewriting content', async () => {
+    // Regression guard for the HTML→XHTML step. Bare attributes and
+    // unclosed void elements are fatal to an EPUB reader, but so is
+    // "fixing" them with a document-wide pattern: prose that reads
+    // like an attribute, and attribute values containing `>`, both
+    // used to come out corrupted.
+    const prose =
+      'The legacy endpoint is disabled in production. Multiple readers may be selected at once; the field is readonly until checked.';
+    const created = await upload(CLIENT_A, {
+      markdown: `# Angles\n\n${prose}\n\n- [ ] open\n- [x] done\n\n![a > b](pic.png "t > u")\n\n![two checked boxes](pic2.png)\n`,
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    const chapter = await zip.file('EPUB/chapter-001.xhtml')!.async('string');
+
+    expect(chapter).toContain(prose);
+    // Void elements closed, attribute values untouched either side of
+    // the `>` that used to truncate the tag.
+    expect(chapter).toContain('<img src="pic.png" alt="a > b" title="t > u" />');
+    expect(chapter).toContain('<img src="pic2.png" alt="two checked boxes" />');
+    // Task-list booleans do get the XML treatment they need.
+    expect(chapter).toContain('<input type="checkbox" disabled="disabled" />');
+    expect(chapter).toContain('<input type="checkbox" checked="checked" disabled="disabled" />');
+
+    for (const name of [
+      'META-INF/container.xml',
+      'EPUB/package.opf',
+      'EPUB/toc.ncx',
+      'EPUB/nav.xhtml',
+      'EPUB/cover.xhtml',
+      'EPUB/chapter-001.xhtml',
+      'EPUB/images/cover.svg',
+    ]) {
+      expectWellFormedXml(name, await zip.file(name)!.async('string'));
+    }
+  });
+
+  test('POST /:uid/export.epub hides heading-anchor chrome and never ships mermaid source as prose', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Diagrams\n\n## One\n\n```mermaid\ngraph TD\n  A --> B\n```\n',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+
+    // The renderer puts an `#` permalink sigil in every heading; it's
+    // viewer chrome, and the book stylesheet has to drop it the same
+    // way the print stylesheet does.
+    expect(await zip.file('EPUB/styles.css')!.async('string')).toContain('.heading-anchor');
+
+    // Whether or not a mermaid engine is installed on this machine,
+    // no diagram may reach the reader as a bare div of source text:
+    // it's either a rasterized image or an explicit code listing.
+    const chapter = await zip.file('EPUB/chapter-001.xhtml')!.async('string');
+    expect(chapter).not.toContain('data-mermaid-index');
+    const rasterized = /<img src="images\/[^"]+\.png"/.test(chapter);
+    expect(rasterized || chapter.includes('<pre class="mermaid-source">')).toBe(true);
+    expectWellFormedXml('EPUB/chapter-001.xhtml', chapter);
+  });
+
+  test('POST /:uid/export.epub externalizes attached images and drops unusable ones', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Assets\n\n![logo](logo.png)\n\n![ledger](notes.txt)\n',
+    });
+    const assetHeaders = withInvite(
+      new Headers({ [CLIENT_HEADER]: CLIENT_A.id, [CLIENT_NAME_HEADER]: CLIENT_A.name }),
+      created.admin_invite.token,
+    );
+    const attach = async (refName: string, bytes: Uint8Array, type: string): Promise<number> => {
+      const form = new FormData();
+      form.append('file', new Blob([bytes as BlobPart], { type }), refName);
+      form.append('ref_name', refName);
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/assets`, {
+          method: 'POST',
+          headers: assetHeaders,
+          body: form,
+        }),
+      );
+      return res.status;
+    };
+    const png = Uint8Array.from(
+      atob(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
+      ),
+      (char) => char.charCodeAt(0),
+    );
+    expect(await attach('logo.png', png, 'image/png')).toBe(201);
+    // Server derives the mime from the ref_name, so this attachment is
+    // text/plain no matter what the markdown does with it.
+    expect(await attach('notes.txt', new TextEncoder().encode('not an image'), 'text/plain')).toBe(
+      201,
+    );
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    const chapter = await zip.file('EPUB/chapter-001.xhtml')!.async('string');
+    const packageXml = await zip.file('EPUB/package.opf')!.async('string');
+
+    // The PNG becomes a real container resource, declared in the manifest.
+    const embedded = /src="(images\/[0-9a-f]+\.png)"/.exec(chapter)?.[1];
+    expect(embedded).toBeDefined();
+    expect(zip.file(`EPUB/${embedded}`)).not.toBeNull();
+    expect(packageXml).toContain(`href="${embedded}"`);
+
+    // Nothing usable to point the second one at: `src=""` would re-request
+    // the chapter and a `data:` URL isn't a container resource, so the
+    // attribute goes away and the alt text stands in.
+    expect(chapter).not.toContain('src=""');
+    expect(chapter).not.toContain('data:');
+    expect(chapter).toContain('alt="ledger"');
+    expectWellFormedXml('EPUB/chapter-001.xhtml', chapter);
   });
 
   test('GET /:uid/export.docx filename derives from the document title when name is unset', async () => {

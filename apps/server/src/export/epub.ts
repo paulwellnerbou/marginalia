@@ -83,12 +83,16 @@ function embedDataImages(html: string, images: Map<string, EmbeddedImage>): stri
     (_match, rawMime: string, payload: string) => {
       const mime = rawMime.toLowerCase();
       const ext = extensionForMime(mime);
-      if (!ext) return 'src=""';
+      // A payload we can't externalize has no legal form here: `src=""`
+      // re-requests the chapter itself, and a surviving `data:` URL
+      // isn't a container resource. Drop the attribute so the reader
+      // falls back to the alt text.
+      if (!ext) return '';
       let bytes: Uint8Array;
       try {
         bytes = new Uint8Array(Buffer.from(payload, 'base64'));
       } catch {
-        return 'src=""';
+        return '';
       }
       const digest = createHash('sha256').update(bytes).digest('hex').slice(0, 16);
       const path = `images/${digest}.${ext}`;
@@ -245,13 +249,123 @@ function wrapTitle(title: string, width: number): string[] {
   return lines.length > 0 ? lines : ['Untitled'];
 }
 
+const VOID_ELEMENTS = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'param',
+  'source',
+  'track',
+  'wbr',
+]);
+
+/**
+ * Re-serialize the renderer's HTML as XHTML: XML has no bare
+ * attributes and no implicitly-closed void elements, and an EPUB
+ * reader must abort on a chapter that isn't well-formed.
+ *
+ * Walks tag by tag instead of pattern-matching the whole document,
+ * because to a regex there is nothing to distinguish markup from
+ * prose ("the field is readonly until checked") or from an attribute
+ * value that contains `>` (`alt="a > b"`) — rewriting either one
+ * corrupts the book.
+ */
 function xhtmlize(html: string): string {
-  return html
-    .replace(/\s(disabled|checked|selected|multiple|readonly)(?=[\s>])/gi, ' $1="$1"')
-    .replace(
-      /<(area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr)(\b[^>]*?)(?<!\/)\s*>/gi,
-      '<$1$2 />',
-    );
+  let out = '';
+  let cursor = 0;
+  for (;;) {
+    const open = html.indexOf('<', cursor);
+    if (open === -1) return out + html.slice(cursor);
+    const name = tagNameAt(html, open);
+    const close = name === null ? -1 : tagEnd(html, open);
+    if (name === null || close === -1) {
+      out += html.slice(cursor, open + 1);
+      cursor = open + 1;
+      continue;
+    }
+    out += html.slice(cursor, open) + rewriteTag(html.slice(open, close + 1), name);
+    cursor = close + 1;
+  }
+}
+
+/** Lowercased element name at `open`, or null when `<` opens plain text. */
+function tagNameAt(html: string, open: number): string | null {
+  let i = open + 1;
+  if (html[i] === '/') i += 1;
+  const start = i;
+  while (i < html.length && /[a-zA-Z0-9]/.test(html[i] as string)) i += 1;
+  return i > start ? html.slice(start, i).toLowerCase() : null;
+}
+
+/** Index of the `>` that ends the tag at `open`, skipping quoted values. */
+function tagEnd(html: string, open: number): number {
+  let quote: string | null = null;
+  for (let i = open + 1; i < html.length; i++) {
+    const ch = html[i] as string;
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '>') {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function rewriteTag(raw: string, lowerName: string): string {
+  if (raw.startsWith('</')) return raw;
+  // Slice the name back out of `raw` rather than using the lowercased
+  // copy: SVG has camelCase tags (`foreignObject`) whose closing tag
+  // we leave untouched, so the two have to keep matching.
+  const name = raw.slice(1, 1 + lowerName.length);
+  const inner = raw.slice(1 + name.length, -1);
+  const selfClosed = inner.trimEnd().endsWith('/');
+  const attrs = expandBareAttributes(selfClosed ? inner.trimEnd().slice(0, -1) : inner);
+  if (selfClosed || VOID_ELEMENTS.has(lowerName)) return `<${name}${attrs.trimEnd()} />`;
+  return `<${name}${attrs}>`;
+}
+
+/** `<input disabled>` is well-formed HTML but not well-formed XML. */
+function expandBareAttributes(attrs: string): string {
+  let out = '';
+  let i = 0;
+  while (i < attrs.length) {
+    if (/\s/.test(attrs[i] as string)) {
+      out += attrs[i];
+      i += 1;
+      continue;
+    }
+    let nameEnd = i;
+    while (nameEnd < attrs.length && !/[\s=]/.test(attrs[nameEnd] as string)) nameEnd += 1;
+    let valueEnd = nameEnd;
+    while (valueEnd < attrs.length && /\s/.test(attrs[valueEnd] as string)) valueEnd += 1;
+    if (attrs[valueEnd] !== '=') {
+      const name = attrs.slice(i, nameEnd);
+      out += `${name}="${name}"`;
+      i = nameEnd;
+      continue;
+    }
+    valueEnd += 1;
+    while (valueEnd < attrs.length && /\s/.test(attrs[valueEnd] as string)) valueEnd += 1;
+    const quote = attrs[valueEnd];
+    if (quote === '"' || quote === "'") {
+      const end = attrs.indexOf(quote, valueEnd + 1);
+      valueEnd = end === -1 ? attrs.length : end + 1;
+    } else {
+      while (valueEnd < attrs.length && !/\s/.test(attrs[valueEnd] as string)) valueEnd += 1;
+    }
+    out += attrs.slice(i, valueEnd);
+    i = valueEnd;
+  }
+  return out;
 }
 
 function extensionForMime(mime: string): string | null {
@@ -293,6 +407,10 @@ const BOOK_CSS = `
 html { color-scheme: light; }
 body { margin: 5%; font-family: Georgia, "Times New Roman", serif; line-height: 1.55; color: #222; }
 h1, h2, h3, h4 { line-height: 1.2; break-after: avoid; }
+/* Viewer chrome the renderer injects into every heading / TOC marker.
+   Without this the book reads "#Chapter One"; packages/themes/css/
+   _print.css drops the same two for the PDF. */
+.heading-anchor, .marginalia-toc-marker { display: none; }
 img, svg { max-width: 100%; height: auto; }
 hr { border: 0; border-top: 1px solid #bbb; margin: 2em 0; }
 svg.epub-hr-ornament { display: block; width: 16em; max-width: 100%; margin: 2em auto; color: #6a655a; }

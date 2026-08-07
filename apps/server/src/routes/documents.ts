@@ -53,6 +53,7 @@ import { isDocumentFormat, isInviteKind, isInviteRole, isMermaidRenderer } from 
 import { type EpubCover, exportEpub } from '../export/epub.js';
 import {
   countLiveMermaidBlocks,
+  demoteLiveMermaidBlocks,
   inlineImageAssets,
   type MermaidPrerasterResolver,
   prerasterizeMermaid,
@@ -977,12 +978,37 @@ async function exportDocumentAsEpub(
   for (const asset of listAttached(deps.db, doc.uid)) {
     attached.set(asset.ref_name, { assetId: asset.asset_id, mime: asset.mime });
   }
+  // Mermaid has to become real image bytes here. An EPUB has no
+  // script runtime, so a diagram div left for the client renderer
+  // reaches the reader as its own source text. PNG rather than SVG
+  // for the same reason DOCX picks it — and the raster rides into
+  // the manifest on the exporter's data-URL embedder.
+  const mermaidChoice = effectiveMermaidRenderer(doc, c);
+  let mermaidEngineWarned = false;
+  const onceWarn = (msg: string): void => {
+    if (mermaidEngineWarned) return;
+    mermaidEngineWarned = true;
+    console.warn(`[epub-export] mermaid renderer (${mermaidChoice}):`, msg);
+  };
+  const renderMermaidPng = makeMermaidResolver(mermaidChoice, 'png', onceWarn);
+  const prerasterizer: MermaidPrerasterResolver = async (source) => {
+    const img = await renderMermaidPng(source);
+    return img ? { bytes: img.bytes, mime: img.mime } : null;
+  };
+
   const chapters = [];
   for (const chapter of sourceChapters) {
     const rendered = await renderDocument(chapter.source, doc.format, { mermaid: 'svg' });
+    let html = await inlineImageAssets(rendered.html, attached, deps.blobs);
+    if (rendered.mermaid.length > 0) {
+      // Anything the renderer couldn't rasterize (engine missing,
+      // parse error) is demoted to a code listing — honest, and
+      // nothing else in the book can rescue it.
+      html = demoteLiveMermaidBlocks(await prerasterizeMermaid(html, prerasterizer));
+    }
     chapters.push({
       title: chapter.title?.trim() || `Chapter ${chapter.index}`,
-      html: await inlineImageAssets(rendered.html, attached, deps.blobs),
+      html,
     });
   }
 
