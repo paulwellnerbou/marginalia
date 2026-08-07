@@ -517,6 +517,18 @@ button.primary:disabled {
 .doc-chrome-right {
   display: contents;
 }
+/* Stacked in the popover, the sliders are the only thing worth widening:
+   space is vertical there, and these are touch targets on the small
+   screens that get the popover in the first place. */
+.doc-view-popover .doc-display-slider {
+  width: 180px;
+}
+.doc-display-slider-width {
+  width: 116px;
+}
+.doc-display-slider-zoom {
+  width: 92px;
+}
 
 .right-tabs {
   display: flex;
@@ -3151,9 +3163,16 @@ button.primary:disabled {
   background: color-mix(in srgb, var(--color-panel-solid) 94%, transparent);
   box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 20%, transparent);
   backdrop-filter: blur(14px);
+  /* Floating mode's only comment chrome — navigation and the display
+     options both live here, so it must never hang past the pane: the
+     buttons hold their size and the thread count gives up its width
+     first, down to nothing if the pane is narrow enough. */
+  max-width: 100%;
+  min-width: 0;
 }
 .ic-float-toolbar > button {
   margin-inline: 0;
+  flex-shrink: 0;
 }
 .ic-float-toolbar-icon {
   width: 14px;
@@ -3163,6 +3182,10 @@ button.primary:disabled {
 }
 .ic-float-toolbar .ic-toolbar-count {
   margin-inline: 2px 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---------- Card ---------- */

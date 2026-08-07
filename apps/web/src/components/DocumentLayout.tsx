@@ -5,12 +5,14 @@ import {
   Cross2Icon,
   LetterCaseToggleIcon,
   MagnifyingGlassIcon,
+  MixerHorizontalIcon,
 } from '@radix-ui/react-icons';
 import {
   Badge,
   Button,
   Flex,
   IconButton,
+  Popover,
   Select,
   Slider,
   Tabs,
@@ -120,6 +122,42 @@ const INLINE_COMMENTS_HIDE_RESOLVED_KEY = 'marginalia.inlineCommentsHideResolved
 const COMMENTS_DISPLAY_MODE_KEY = 'marginalia.commentsDisplayMode';
 const RIGHT_TAB_KEY = 'marginalia.rightTab';
 const COLLAPSED_WIDTH = 36;
+
+/**
+ * Viewport width up to which the three-pane layout does more harm than
+ * good. Both side panes open cost 580px, so on any iPad in portrait the
+ * document is left with a couple of hundred pixels — narrow enough that
+ * the comment column hides itself and the toolbar loses its right half
+ * off the edge. At or below this width the panes start collapsed and
+ * comments float over the text instead of taking a margin column.
+ *
+ * Read once at mount, never re-read: a rotation mid-session shouldn't
+ * yank the panes and the comment presentation out from under the reader.
+ */
+const COMPACT_LAYOUT_MAX_WIDTH = 1024;
+
+function isCompactViewport(): boolean {
+  return window.matchMedia(`(max-width: ${COMPACT_LAYOUT_MAX_WIDTH}px)`).matches;
+}
+
+/**
+ * Doc-pane width below which the toolbar's display controls (reading
+ * width, text size, theme) collapse into a single "View" menu. Laid out
+ * inline they need ~880px; the row hides its scrollbar, so past that
+ * point everything to their right — download, settings, read aloud,
+ * search — silently scrolls out of reach.
+ */
+const DOC_CHROME_INLINE_MIN_WIDTH = 900;
+
+/**
+ * `.doc-scroll` content-box width at or below which app.css hides the
+ * margin comment column outright (`@container (max-width: 700px)`).
+ * Compare against that element, not the pane around it, or a reserved
+ * scrollbar puts the two a few pixels out of step. Below it, column mode
+ * shows no comments at all.
+ */
+const COMMENTS_COLUMN_MIN_WIDTH = 700;
+
 const EMPTY_BLOCK_RANGES = new Map<string, BlockSourceRange>();
 /** Delay before scrolling to a specific reply after the parent thread has expanded (ms). */
 const REPLY_SCROLL_DELAY_MS = 900;
@@ -174,8 +212,9 @@ function reportFailure(message: string): void {
 export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const navigate = useNavigate();
   const canComment = doc.role !== 'reader';
-  const [tocOpen, setTocOpen] = useState(true);
-  const [commentsOpen, setCommentsOpen] = useState(true);
+  const [compactViewport] = useState(isCompactViewport);
+  const [tocOpen, setTocOpen] = useState(!compactViewport);
+  const [commentsOpen, setCommentsOpen] = useState(!compactViewport);
   const [inlineCommentsOpen, setInlineCommentsOpen] = useState<boolean>(() => {
     const saved = localStorage.getItem(INLINE_COMMENTS_OPEN_KEY);
     return saved === null ? true : saved === 'true';
@@ -188,9 +227,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     const saved = localStorage.getItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
     return saved === 'true';
   });
-  const [commentsDisplayMode, setCommentsDisplayMode] = useState<CommentsDisplayMode>(() =>
-    localStorage.getItem(COMMENTS_DISPLAY_MODE_KEY) === 'floating' ? 'floating' : 'column',
+  /**
+   * Only an explicit choice is stored, so an untouched preference stays
+   * free to follow the device: the margin column on a desktop, floating
+   * cards on a tablet where the column would have nowhere to live.
+   */
+  const [storedCommentsDisplayMode, setCommentsDisplayMode] = useState<CommentsDisplayMode | null>(
+    () => {
+      const saved = localStorage.getItem(COMMENTS_DISPLAY_MODE_KEY);
+      return saved === 'floating' || saved === 'column' ? saved : null;
+    },
   );
+  const commentsDisplayMode: CommentsDisplayMode =
+    storedCommentsDisplayMode ?? (compactViewport ? 'floating' : 'column');
   const floatingComments = commentsDisplayMode === 'floating';
   const [rightTab, setRightTab] = useState<RightTab>(() => {
     const saved = localStorage.getItem(RIGHT_TAB_KEY);
@@ -433,6 +482,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
 
   const docRef = useRef<HTMLElement>(null);
+  const docPaneRef = useRef<HTMLElement>(null);
   const docScrollRef = useRef<HTMLDivElement>(null);
   const docSearchInputRef = useRef<HTMLInputElement>(null);
   const [inlineCommentsColumnWidth, setInlineCommentsColumnWidth] = useState(0);
@@ -458,9 +508,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY, String(inlineCommentsHideResolved));
   }, [inlineCommentsHideResolved]);
+  // The key exists exactly when there is an explicit choice to remember,
+  // so a value written by an older build — or by hand — is cleared rather
+  // than left behind for every later read to step over.
   useEffect(() => {
-    localStorage.setItem(COMMENTS_DISPLAY_MODE_KEY, commentsDisplayMode);
-  }, [commentsDisplayMode]);
+    if (storedCommentsDisplayMode) {
+      localStorage.setItem(COMMENTS_DISPLAY_MODE_KEY, storedCommentsDisplayMode);
+    } else {
+      localStorage.removeItem(COMMENTS_DISPLAY_MODE_KEY);
+    }
+  }, [storedCommentsDisplayMode]);
   useEffect(() => {
     if (isRememberedRightTab(rightTab)) localStorage.setItem(RIGHT_TAB_KEY, rightTab);
   }, [rightTab]);
@@ -1345,6 +1402,39 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     gridTemplateColumns: `${tocPx}px 1fr ${commentsPx}px`,
   };
 
+  /**
+   * Measured rather than derived from the viewport: both side panes are
+   * resizable, so only the elements' own widths say what still fits. Two
+   * of them, because two different boxes answer the two questions — the
+   * toolbar row lays out across the pane, while the comment column's
+   * `@container` query reads `.doc-scroll`'s content box, which is
+   * narrower wherever the platform reserves room for a scrollbar. Every
+   * way either width can change is a window resize or one of the two
+   * side-column widths in the deps. 0 means "not measured yet" — the
+   * layout effect fills them in before the first paint.
+   */
+  const [docPaneWidth, setDocPaneWidth] = useState(0);
+  const [commentsHostWidth, setCommentsHostWidth] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx are the intentional re-measure triggers — the body reads widths only they can have changed.
+  useLayoutEffect(() => {
+    const measure = () => {
+      const pane = docPaneRef.current?.clientWidth ?? 0;
+      if (pane <= 0) return;
+      setDocPaneWidth(pane);
+      setCommentsHostWidth(docScrollRef.current?.clientWidth ?? 0);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [tocPx, commentsPx]);
+
+  const chromeCompact =
+    docPaneWidth === 0 ? compactViewport : docPaneWidth < DOC_CHROME_INLINE_MIN_WIDTH;
+  /** Offering the switch back to the column would be a dead action where
+   *  the stylesheet hides the column outright. */
+  const columnModeAvailable =
+    commentsHostWidth === 0 || commentsHostWidth > COMMENTS_COLUMN_MIN_WIDTH;
+
   const title = documentTitle(doc);
 
   /**
@@ -1604,6 +1694,89 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     setRightTab('comments');
   }, [hasSearchResults, rightTab]);
 
+  /**
+   * How the document reads — width, zoom, theme. Rendered inline in the
+   * toolbar when there is room and stacked inside the "View" popover when
+   * there isn't, so the same controls carry their own labels either way.
+   * One instance only: the theme label points at the select by id.
+   */
+  const displayControls = (
+    <>
+      <Flex align="center" gap="2" className="width-slider">
+        <Text size="1" color="gray">
+          Reading width
+        </Text>
+        <Slider
+          size="1"
+          className="doc-display-slider doc-display-slider-width"
+          min={40}
+          max={120}
+          step={1}
+          value={[maxWidth]}
+          onValueChange={(v) => setMaxWidth(v[0] ?? maxWidth)}
+        />
+        <Text
+          size="1"
+          color="gray"
+          style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}
+        >
+          {maxWidth}ch
+        </Text>
+      </Flex>
+      <Flex align="center" gap="2" className="width-slider">
+        <Text size="1" color="gray">
+          Text size
+        </Text>
+        <Slider
+          size="1"
+          className="doc-display-slider doc-display-slider-zoom"
+          min={80}
+          max={140}
+          step={1}
+          value={[textZoom]}
+          onValueChange={(v) => setTextZoom(v[0] ?? textZoom)}
+        />
+        <Text
+          size="1"
+          color="gray"
+          style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}
+        >
+          {textZoom}%
+        </Text>
+        <Button
+          size="1"
+          variant="ghost"
+          onClick={() => setTextZoom(100)}
+          disabled={textZoom === 100}
+        >
+          Reset
+        </Button>
+      </Flex>
+      <Flex align="center" gap="2">
+        <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
+          Theme
+        </Text>
+        <Select.Root
+          value={theme}
+          size="1"
+          onValueChange={(next) => {
+            setTheme(next);
+            setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
+          }}
+        >
+          <Select.Trigger id="doc-theme-select" variant="soft" />
+          <Select.Content position="popper" style={{ maxHeight: 360 }}>
+            {BUILT_IN_THEMES.map((t) => (
+              <Select.Item key={t.id} value={t.id}>
+                {t.label}
+              </Select.Item>
+            ))}
+          </Select.Content>
+        </Select.Root>
+      </Flex>
+    </>
+  );
+
   return (
     <div className="doc-page">
       <AppBar
@@ -1641,82 +1814,27 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           {tocOpen && <ResizeHandle side="left" width={tocWidth} onResize={setTocWidth} />}
         </aside>
 
-        <main className="pane pane-doc">
+        <main className="pane pane-doc" ref={docPaneRef}>
           {/* Document-specific toolbar lives inside the doc pane so it sits
               only over the document column, not above the side panes. */}
           <Flex align="center" gap="3" px="3" py="2" className="doc-chrome">
-            <Flex align="center" gap="2" className="width-slider">
-              <Text size="1" color="gray">
-                Reading width
-              </Text>
-              <Slider
-                size="1"
-                style={{ width: 116 }}
-                min={40}
-                max={120}
-                step={1}
-                value={[maxWidth]}
-                onValueChange={(v) => setMaxWidth(v[0] ?? maxWidth)}
-              />
-              <Text
-                size="1"
-                color="gray"
-                style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}
-              >
-                {maxWidth}ch
-              </Text>
-            </Flex>
-            <Flex align="center" gap="2" className="width-slider">
-              <Text size="1" color="gray">
-                Text size
-              </Text>
-              <Slider
-                size="1"
-                style={{ width: 92 }}
-                min={80}
-                max={140}
-                step={1}
-                value={[textZoom]}
-                onValueChange={(v) => setTextZoom(v[0] ?? textZoom)}
-              />
-              <Text
-                size="1"
-                color="gray"
-                style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}
-              >
-                {textZoom}%
-              </Text>
-              <Button
-                size="1"
-                variant="ghost"
-                onClick={() => setTextZoom(100)}
-                disabled={textZoom === 100}
-              >
-                Reset
-              </Button>
-            </Flex>
-            <Flex align="center" gap="2">
-              <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
-                Theme
-              </Text>
-              <Select.Root
-                value={theme}
-                size="1"
-                onValueChange={(next) => {
-                  setTheme(next);
-                  setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
-                }}
-              >
-                <Select.Trigger id="doc-theme-select" variant="soft" />
-                <Select.Content position="popper" style={{ maxHeight: 360 }}>
-                  {BUILT_IN_THEMES.map((t) => (
-                    <Select.Item key={t.id} value={t.id}>
-                      {t.label}
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select.Root>
-            </Flex>
+            {chromeCompact ? (
+              <Popover.Root>
+                <Popover.Trigger>
+                  <Button size="1" variant="soft" color="gray" className="doc-view-trigger">
+                    <MixerHorizontalIcon />
+                    View
+                  </Button>
+                </Popover.Trigger>
+                <Popover.Content size="1" align="start" className="doc-view-popover">
+                  <Flex direction="column" gap="3" align="start">
+                    {displayControls}
+                  </Flex>
+                </Popover.Content>
+              </Popover.Root>
+            ) : (
+              displayControls
+            )}
             <span className="spacer" />
             {/* Download is available to any reader — unlike settings /
                 access control which are admin-only. Sits next to the
@@ -1879,6 +1997,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               hideResolved={inlineCommentsHideResolved}
               onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
               onSwitchToColumn={() => setCommentsDisplayMode('column')}
+              columnModeAvailable={columnModeAvailable}
               docElementRef={docRef}
               scrollContainerRef={docScrollRef}
               currentThreadId={focusedThread?.threadId ?? null}
