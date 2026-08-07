@@ -2905,6 +2905,10 @@ button.primary:disabled {
   color: var(--ui-fg-muted);
   user-select: none;
   pointer-events: none;
+  white-space: nowrap;
+  /* The position readout changes while scrolling; proportional digits
+     would shift the arrows next to it on every step. */
+  font-variant-numeric: tabular-nums;
 }
 .ic-column-collapsed .ic-toolbar {
   inline-size: 64px;

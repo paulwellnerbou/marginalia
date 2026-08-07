@@ -7,15 +7,17 @@ import {
   DotsHorizontalIcon,
 } from '@radix-ui/react-icons';
 import { DropdownMenu, IconButton } from '@radix-ui/themes';
-import { type RefObject, useCallback } from 'react';
+import { type RefObject, useCallback, useEffect, useMemo, useState } from 'react';
 import { resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import type { Thread } from '../../lib/api.js';
 import {
   AT_THREAD_TOLERANCE_PX,
   adjacentThreadTarget,
+  currentThreadIndex,
   sortThreadTopEntries,
   type ThreadTopEntry,
 } from './floatingCardPosition.js';
+import { threadCountLabel } from './inlineUtils.js';
 
 interface Props {
   /** Threads in document order (already sorted, already filtered for visibility). */
@@ -32,6 +34,10 @@ interface Props {
   /** Effective sticky-top offset (base pad + toolbar height) — in
    *  non-stacking mode jumps land the anchor this far below the top. */
   stickyTopPad: number;
+  /** Bumped by the column whenever anchors may have moved (reflow, font
+   *  swap, card resize). Invalidates the measured landing positions the
+   *  position readout follows while scrolling. */
+  layoutVersion: number;
   open: boolean;
   onToggleOpen: () => void;
   stackingEnabled: boolean;
@@ -54,6 +60,7 @@ export function InlineCommentsToolbar({
   docElementRef,
   lastNavThreadRef,
   stickyTopPad,
+  layoutVersion,
   open,
   onToggleOpen,
   stackingEnabled,
@@ -66,22 +73,30 @@ export function InlineCommentsToolbar({
 }: Props) {
   const hasThreads = sortedThreads.length > 0;
 
+  /** Thread the readout names, by id — threads come and go, and an id
+   *  that no longer exists simply falls back to the plain count. */
+  const [currentId, setCurrentId] = useState<string | null>(null);
+
   const jumpTo = useCallback(
     (thread: Thread) => {
       const blockId = thread.anchor.block_id;
       if (!blockId) return;
       lastNavThreadRef.current = thread.id;
+      // Name the destination straight away: the scroll animates over
+      // several frames and the readout would otherwise trail the press.
+      setCurrentId(thread.id);
       onScrollToAnchor(blockId, thread.anchor.quote, thread.id);
     },
     [onScrollToAnchor, lastNavThreadRef],
   );
 
-  /** Where each thread's anchor sits relative to the scroll position a
-   *  jump to it would land on — measured fresh from the DOM, mirroring
-   *  scrollToAnchor's own targeting, so late reflows can't desync the
-   *  nav. The container's own metrics are read once for the whole sweep;
-   *  each thread costs one lookup and one rect. */
-  const threadOffsets = useCallback((): ThreadTopEntry[] => {
+  /** The scroll position a jump to each thread would land on — measured
+   *  fresh from the DOM, mirroring scrollToAnchor's own targeting, so
+   *  late reflows can't desync the nav. The container's own metrics are
+   *  read once for the whole sweep; each thread costs one lookup and one
+   *  rect. */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: layoutVersion is the explicit re-measure trigger — the body reads a DOM that only it knows has moved.
+  const measureLandings = useCallback((): ThreadTopEntry[] => {
     const scroll = scrollContainerRef.current;
     const doc = docElementRef.current;
     if (!scroll || !doc) return [];
@@ -104,13 +119,83 @@ export function InlineCommentsToolbar({
         Math.max(target.getBoundingClientRect().top - containerTop + pos - pad, 0),
         maxScroll,
       );
-      entries.push({ id: thread.id, top: want - pos });
+      entries.push({ id: thread.id, top: want });
     }
     // Already in document order; the sort is stable, so threads whose
     // landing positions tie (same anchor, or both clamped at an end of
     // the document) keep it.
     return sortThreadTopEntries(entries);
-  }, [sortedThreads, scrollContainerRef, docElementRef, stackingEnabled, stickyTopPad]);
+  }, [
+    sortedThreads,
+    scrollContainerRef,
+    docElementRef,
+    stackingEnabled,
+    stickyTopPad,
+    layoutVersion,
+  ]);
+
+  /** Landing positions relative to the current scroll — where the nav
+   *  reasons: 0 means the reader is standing on the thread, negative
+   *  that they have scrolled past it. */
+  const threadOffsets = useCallback((): ThreadTopEntry[] => {
+    const pos = scrollContainerRef.current?.scrollTop ?? 0;
+    return measureLandings().map((entry) => ({ ...entry, top: entry.top - pos }));
+  }, [measureLandings, scrollContainerRef]);
+
+  /** The same measurement, taken once and reused until something can
+   *  have moved an anchor: the readout follows every scroll frame, and
+   *  re-resolving every anchor that often is DOM work per frame that
+   *  grows with the thread count. A fresh closure — hence a fresh cache
+   *  — comes with each new `measureLandings`. */
+  const cachedLandings = useMemo(() => {
+    let cache: ThreadTopEntry[] | null = null;
+    return () => {
+      cache ??= measureLandings();
+      return cache;
+    };
+  }, [measureLandings]);
+
+  /** Which thread the reader is on, decided by the rules the arrows step
+   *  by, so the readout and the next press can't disagree. */
+  const updatePosition = useCallback(() => {
+    const scroll = scrollContainerRef.current;
+    if (!scroll) return;
+    const entries = cachedLandings();
+    const pos = scroll.scrollTop;
+    const remembered = lastNavThreadRef.current;
+    const parked = entries.find(
+      (e) => e.id === remembered && Math.abs(e.top - pos) <= AT_THREAD_TOLERANCE_PX,
+    );
+    // Entries are in document space, so the reading line moves with the
+    // scroll instead of the entries being rebased onto it.
+    const index = currentThreadIndex(entries, pos + NEAR_EPSILON_PX, parked?.id);
+    setCurrentId(entries[index]?.id ?? null);
+  }, [cachedLandings, scrollContainerRef, lastNavThreadRef]);
+
+  // Follow the reading position so the readout tracks plain scrolling
+  // too, not only arrow presses. Re-running also re-measures, and the
+  // effect's dependencies change exactly when an anchor could have
+  // moved. Coalesced into one recomputation per frame — scroll events
+  // fire faster than the display refreshes on macOS/iOS.
+  useEffect(() => {
+    if (!open) return;
+    const scroll = scrollContainerRef.current;
+    if (!scroll) return;
+    updatePosition();
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        updatePosition();
+      });
+    };
+    scroll.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      scroll.removeEventListener('scroll', onScroll);
+    };
+  }, [open, scrollContainerRef, updatePosition]);
 
   /** The thread an arrow press should jump to, sharing its stepping
    *  rules with the floating toolbar so both presentations navigate the
@@ -139,7 +224,11 @@ export function InlineCommentsToolbar({
   }, [navTarget, jumpTo]);
 
   const count = sortedThreads.length;
-  const countLabel = count === 1 ? '1 thread' : `${count} threads`;
+  // Positioned within the full column, not within the measured entries:
+  // a thread whose anchor no longer resolves is counted in the total, so
+  // ranking against anything shorter would name the wrong number.
+  const currentIndex = currentId ? sortedThreads.findIndex((t) => t.id === currentId) : -1;
+  const countLabel = threadCountLabel(count, currentIndex);
 
   return (
     <div

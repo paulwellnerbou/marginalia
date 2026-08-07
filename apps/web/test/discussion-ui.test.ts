@@ -9,7 +9,10 @@ import {
   filterMentionOptions,
   getActiveMention,
 } from '../src/components/inline-comments/InlineComposer.js';
-import { inlineAvatarInitials } from '../src/components/inline-comments/inlineUtils.js';
+import {
+  inlineAvatarInitials,
+  threadCountLabel,
+} from '../src/components/inline-comments/inlineUtils.js';
 import {
   ALL_THREAD_FILTERS,
   activeThreadFilterLabels,
@@ -34,6 +37,29 @@ describe('inlineAvatarInitials', () => {
 
   test('blank names still fall back to a placeholder', () => {
     expect(inlineAvatarInitials('   ')).toBe('?');
+  });
+});
+
+describe('threadCountLabel', () => {
+  test('counts threads while the reader is above the first one', () => {
+    expect(threadCountLabel(7)).toBe('7 threads');
+    expect(threadCountLabel(7, -1)).toBe('7 threads');
+    expect(threadCountLabel(0)).toBe('0 threads');
+  });
+
+  test('names the reader position once they are on a thread', () => {
+    expect(threadCountLabel(7, 0)).toBe('1 of 7 threads');
+    expect(threadCountLabel(7, 5)).toBe('6 of 7 threads');
+    expect(threadCountLabel(7, 6)).toBe('7 of 7 threads');
+  });
+
+  test('stays a plain count for a single thread', () => {
+    expect(threadCountLabel(1)).toBe('1 thread');
+    expect(threadCountLabel(1, 0)).toBe('1 thread');
+  });
+
+  test('drops a position the thread list no longer has', () => {
+    expect(threadCountLabel(3, 3)).toBe('3 threads');
   });
 });
 
