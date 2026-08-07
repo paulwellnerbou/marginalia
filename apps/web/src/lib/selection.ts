@@ -1,7 +1,7 @@
 import { joinSpanQuote } from '@marginalia/renderer/anchor-span';
 import type { CommentAnchor } from './api.js';
 import { anchorIdOf, elementsIntersectingRange } from './block-span.js';
-import { blockTextOf, normalizeWs } from './block-text.js';
+import { blockTextOf, isInjectedChromeText, normalizeWs } from './block-text.js';
 
 const CONTEXT_LEN = 32;
 
@@ -111,8 +111,7 @@ function sliceBlock(el: HTMLElement, range: Range): BlockSlice | null {
   }
   if (clamped.collapsed) return null;
 
-  const clampedText = clamped.toString();
-  const quote = normalizeWs(clampedText);
+  const quote = normalizeWs(selectedTextOf(el, clamped));
   if (!quote) return null;
 
   const blockText = blockTextOf(el);
@@ -122,7 +121,7 @@ function sliceBlock(el: HTMLElement, range: Range): BlockSlice | null {
   const preRange = document.createRange();
   preRange.selectNodeContents(el);
   preRange.setEnd(clamped.startContainer, clamped.startOffset);
-  const rawStart = preRange.toString().length;
+  const rawStart = selectedTextOf(el, preRange).length;
 
   // Offsets into the normalized string aren't exactly `rawStart` because
   // whitespace was collapsed, but we can approximate by locating `quote`
@@ -133,6 +132,32 @@ function sliceBlock(el: HTMLElement, range: Range): BlockSlice | null {
   if (startOffset < 0) startOffset = 0;
 
   return { el, blockId, quote, startOffset, blockText };
+}
+
+/**
+ * What `range` selects inside `el`, skipping the same injected chrome
+ * `blockTextOf` skips.
+ *
+ * `range.toString()` would include it, and a heading is where that
+ * bites: sweeping the whole line picks up the rehype `#` sigil, so the
+ * quote carries a character no block text has ever had. It then matches
+ * nowhere — `startOffset` falls back to 0, the highlight is never
+ * painted, and the anchor the server stores can't re-find its text.
+ */
+function selectedTextOf(el: HTMLElement, range: Range): string {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      isInjectedChromeText(node as Text) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  let out = '';
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node as Text;
+    if (!range.intersectsNode(text)) continue;
+    const start = text === range.startContainer ? range.startOffset : 0;
+    const end = text === range.endContainer ? range.endOffset : text.data.length;
+    out += text.data.slice(start, end);
+  }
+  return out;
 }
 
 /**

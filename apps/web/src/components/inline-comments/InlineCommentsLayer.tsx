@@ -351,10 +351,30 @@ export function InlineCommentsLayer({
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [columnHeight, setColumnHeight] = useState<number>(0);
   const [globalState, setGlobalState] = useState<GlobalState>({ epoch: 0, isSticky: true });
+  /**
+   * The scroller's visible band, in the same content coordinates the
+   * card tops use. Only the pending composer reads it (see the render
+   * pass), so it is refreshed on every scroll while a draft is open
+   * and left alone otherwise — a per-frame re-render of the whole
+   * column is worth it for one transient card, not for the rest.
+   */
+  const [viewport, setViewport] = useState<{ top: number; height: number }>({ top: 0, height: 0 });
 
   const requestRemeasure = useCallback(() => {
     setLayoutVersion((n) => n + 1);
   }, []);
+
+  const syncViewport = useCallback(() => {
+    const scroll = scrollContainerRef.current;
+    if (!scroll) return;
+    const top = scroll.scrollTop;
+    const height = scroll.clientHeight;
+    setViewport((prev) =>
+      Math.abs(prev.top - top) < 0.5 && Math.abs(prev.height - height) < 0.5
+        ? prev
+        : { top, height },
+    );
+  }, [scrollContainerRef]);
 
   /** Anchors and heights as flat arrays in render order (for the state machine). */
   // biome-ignore lint/correctness/useExhaustiveDependencies: layoutVersion is the explicit re-measure trigger; the body reads ref.current values that aren't reactive.
@@ -739,6 +759,28 @@ export function InlineCommentsLayer({
     };
   }, [open, recomputeGlobalState, scrollContainerRef, stackingEnabled]);
 
+  // Keep the visible band current for as long as a draft is open, so
+  // the composer stays clamped into view while the reader scrolls
+  // around the text they are quoting.
+  useEffect(() => {
+    if (!open || !pendingAnchor) return;
+    const scroll = scrollContainerRef.current;
+    if (!scroll) return;
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        syncViewport();
+      });
+    };
+    scroll.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      scroll.removeEventListener('scroll', onScroll);
+    };
+  }, [open, pendingAnchor, scrollContainerRef, syncViewport]);
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: layoutVersion / docHtml are explicit re-measure triggers; requestRemeasure is the action invoked from the body.
   useLayoutEffect(() => {
     if (!open) return;
@@ -754,6 +796,9 @@ export function InlineCommentsLayer({
     }
     const naturalsChanged = measureNaturalTops();
     recomputeGlobalState();
+    // Before paint, so a composer that opens off-screen is clamped on
+    // its first frame rather than jumping in after one.
+    syncViewport();
     // If refs changed but layoutVersion is the value that triggered
     // THIS effect, the orderedMetrics memo is still keyed on the
     // pre-update layoutVersion and would skip re-derivation. Bump
@@ -761,7 +806,15 @@ export function InlineCommentsLayer({
     // no-op on the next pass because measurements are stable, so no
     // infinite loop.
     if (heightsChanged || naturalsChanged) requestRemeasure();
-  }, [measureNaturalTops, recomputeGlobalState, layoutVersion, docHtml, open, requestRemeasure]);
+  }, [
+    measureNaturalTops,
+    recomputeGlobalState,
+    syncViewport,
+    layoutVersion,
+    docHtml,
+    open,
+    requestRemeasure,
+  ]);
 
   // ----- focus animation -----
 
@@ -996,10 +1049,41 @@ export function InlineCommentsLayer({
               useSticky = false;
             }
 
+            // The composer is the one card that has to be on screen — it
+            // is autofocused and about to be typed into. Its turn in the
+            // stack comes after every card anchored above it, so a block
+            // a few paragraphs into a commented run puts it below the
+            // fold while the text it quotes is in plain view, leaving the
+            // right pane's copy as the only visible one. Lift it out of
+            // the pile in that case; the other cards can afford to be
+            // scrolled away from, and the draft is gone again on post or
+            // cancel.
+            let lifted = false;
+            if (item.id === PENDING_ID && viewport.height > 0) {
+              const cardTop = useSticky
+                ? Math.min(
+                    Math.max(containerTop, viewport.top + stickyTop),
+                    containerTop + containerHeight - cardHeight,
+                  )
+                : containerTop;
+              const highest = viewport.top + stickyTopPad;
+              const lowest = Math.max(
+                highest,
+                viewport.top + viewport.height - cardHeight - STACK_GAP_PX,
+              );
+              const clamped = Math.min(Math.max(cardTop, highest), lowest);
+              if (Math.abs(clamped - cardTop) > 0.5) {
+                containerTop = clamped;
+                containerHeight = cardHeight;
+                useSticky = false;
+                lifted = true;
+              }
+            }
+
             return (
               <div
                 key={item.id}
-                className="ic-anchor-slot"
+                className={`ic-anchor-slot${lifted ? ' ic-anchor-slot-lifted' : ''}`}
                 style={{ top: `${containerTop}px`, height: `${containerHeight}px` }}
               >
                 <div
