@@ -107,23 +107,25 @@ function pairLines(removes: DiffLine[], adds: DiffLine[]): Array<[DiffLine, Diff
   const m = adds.length;
   if (n === 0 || m === 0) return [];
 
+  if ((n + 1) * (m + 1) > PAIRING_MAX_CELLS) {
+    const byPosition: Array<[DiffLine, DiffLine]> = [];
+    for (let i = 0; i < Math.min(n, m); i++) {
+      // The floor matters more here than in the table below: pairing by
+      // position lines up whatever happens to sit at the same offset, which
+      // for a block of wholly new text is a different line every time. Only
+      // the pairs on the diagonal are ever considered, so only they are worth
+      // tokenizing — the block that got here may be a whole document long.
+      if (isRewriteOf(removes[i]!, adds[i]!)) byPosition.push([removes[i]!, adds[i]!]);
+    }
+    return byPosition;
+  }
+
   const removeTokens = removes.map((line) => tokenBag(line.text));
   const addTokens = adds.map((line) => tokenBag(line.text));
   const pairScore = (i: number, j: number): number => {
     const sim = similarity(removeTokens[i]!, addTokens[j]!);
     return sim >= PAIRING_MIN_SIMILARITY ? sim : Number.NEGATIVE_INFINITY;
   };
-
-  if ((n + 1) * (m + 1) > PAIRING_MAX_CELLS) {
-    const byPosition: Array<[DiffLine, DiffLine]> = [];
-    for (let i = 0; i < Math.min(n, m); i++) {
-      // The floor matters more here than in the DP: pairing by position lines
-      // up whatever happens to sit at the same offset, which for a block of
-      // wholly new text is a different line every time.
-      if (pairScore(i, i) > Number.NEGATIVE_INFINITY) byPosition.push([removes[i]!, adds[i]!]);
-    }
-    return byPosition;
-  }
 
   // best[i][j] = highest total similarity reachable from removes[i..]/adds[j..].
   const best: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
@@ -168,6 +170,11 @@ function tokenBag(text: string): TokenBag {
     size++;
   }
   return { counts, size };
+}
+
+/** Whether two lines share enough tokens to read as a rewrite of each other. */
+function isRewriteOf(remove: DiffLine, add: DiffLine): boolean {
+  return similarity(tokenBag(remove.text), tokenBag(add.text)) >= PAIRING_MIN_SIMILARITY;
 }
 
 /** Sørensen–Dice over the two token multisets: 1 for equal, 0 for disjoint. */
