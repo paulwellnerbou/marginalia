@@ -50,7 +50,7 @@ import type {
   MermaidRenderer,
 } from '../db.js';
 import { isDocumentFormat, isInviteKind, isInviteRole, isMermaidRenderer } from '../db.js';
-import { type EpubCover, exportEpub } from '../export/epub.js';
+import { type EpubChapter, type EpubCover, exportEpub } from '../export/epub.js';
 import {
   countLiveMermaidBlocks,
   demoteLiveMermaidBlocks,
@@ -996,7 +996,7 @@ async function exportDocumentAsEpub(
     return img ? { bytes: img.bytes, mime: img.mime } : null;
   };
 
-  const chapters = [];
+  const chapters: EpubChapter[] = [];
   for (const chapter of sourceChapters) {
     const rendered = await renderDocument(chapter.source, doc.format, { mermaid: 'svg' });
     let html = await inlineImageAssets(rendered.html, attached, deps.blobs);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { splitMarkdownChapters } from '../src/split-markdown-chapters.js';
+import { splitMarkdownChapters } from '../src/index.js';
 
 describe('splitMarkdownChapters', () => {
   test('splits H2 chapters below an H1 book title and preserves the preamble', () => {
