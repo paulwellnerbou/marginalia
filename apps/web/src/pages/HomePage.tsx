@@ -34,11 +34,13 @@ import { Link, useNavigate } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { CopyAccessLinkButton } from '../components/CopyAccessLinkButton.js';
 import { Copyable } from '../components/Copyable.js';
+import { FileDropZone } from '../components/FileDropZone.js';
 import { FormatBadge } from '../components/FormatBadge.js';
 import { OpenByLink } from '../components/OpenByLink.js';
 import { PasswordDisclosureCard } from '../components/PasswordDisclosureCard.js';
 import {
   ApiError,
+  coverProxyUrl,
   type DocumentBundle,
   type DocumentFormat,
   importDocumentBundle,
@@ -420,60 +422,85 @@ function RecentCard({ doc, onRemove }: { doc: RecentDoc; onRemove: () => void })
           bar on hover and middle/cmd-click open in a new tab. The
           IconButton sits above this overlay via CSS z-index. */}
       <Link to={url} className="recent-card-link" aria-label={`Open ${doc.title}`} />
-      <Text className="recent-card-uid" size="1" color="gray" mb="1" as="div">
-        {doc.uid}
-      </Text>
-      <Flex justify="between" align="start" gap="2">
-        <Heading size="3" weight="medium" truncate className="recent-card-title">
-          {doc.title}
-        </Heading>
-        <Flex align="center" gap="1">
-          {doc.invite_token && (
-            <CopyAccessLinkButton
-              uid={doc.uid}
-              token={doc.invite_token}
-              role={doc.role}
-              className="recent-card-action"
-            />
-          )}
-          <Tooltip content="Remove from recent">
-            <IconButton
-              variant="ghost"
-              size="1"
-              color="gray"
-              aria-label="Remove from recent"
-              className="recent-card-action"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onRemove();
-              }}
-            >
-              <Cross2Icon />
-            </IconButton>
-          </Tooltip>
-        </Flex>
+      <Flex gap="3" align="start">
+        {doc.cover && <RecentCardCover doc={doc} />}
+        <Box className="recent-card-body">
+          <Text className="recent-card-uid" size="1" color="gray" mb="1" as="div">
+            {doc.uid}
+          </Text>
+          <Flex justify="between" align="start" gap="2">
+            <Heading size="3" weight="medium" truncate className="recent-card-title">
+              {doc.title}
+            </Heading>
+            <Flex align="center" gap="1">
+              {doc.invite_token && (
+                <CopyAccessLinkButton
+                  uid={doc.uid}
+                  token={doc.invite_token}
+                  role={doc.role}
+                  className="recent-card-action"
+                />
+              )}
+              <Tooltip content="Remove from recent">
+                <IconButton
+                  variant="ghost"
+                  size="1"
+                  color="gray"
+                  aria-label="Remove from recent"
+                  className="recent-card-action"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onRemove();
+                  }}
+                >
+                  <Cross2Icon />
+                </IconButton>
+              </Tooltip>
+            </Flex>
+          </Flex>
+          <Flex gap="2" mt="2" wrap="wrap" align="center">
+            <FormatBadge format={doc.format} />
+            <Badge variant="soft" color={appRoleColor(doc.role)} size="1" className="role-badge">
+              {doc.role}
+            </Badge>
+            {doc.password_protected && (
+              <Badge color="amber" variant="soft" size="1">
+                <LockClosedIcon />
+              </Badge>
+            )}
+            {updatedSinceVisit && (
+              <Badge color="green" variant="soft" size="1">
+                New since last visit
+              </Badge>
+            )}
+          </Flex>
+          <Text size="1" color="gray" mt="3" as="div" title={formatTimestampLong(doc.visited_at)}>
+            Last opened {formatRelative(doc.visited_at)}
+          </Text>
+        </Box>
       </Flex>
-      <Flex gap="2" mt="2" wrap="wrap" align="center">
-        <FormatBadge format={doc.format} />
-        <Badge variant="soft" color={appRoleColor(doc.role)} size="1" className="role-badge">
-          {doc.role}
-        </Badge>
-        {doc.password_protected && (
-          <Badge color="amber" variant="soft" size="1">
-            <LockClosedIcon />
-          </Badge>
-        )}
-        {updatedSinceVisit && (
-          <Badge color="green" variant="soft" size="1">
-            New since last visit
-          </Badge>
-        )}
-      </Flex>
-      <Text size="1" color="gray" mt="3" as="div" title={formatTimestampLong(doc.visited_at)}>
-        Last opened {formatRelative(doc.visited_at)}
-      </Text>
     </Card>
+  );
+}
+
+/**
+ * Book-cover thumbnail. The recorded cover can be stale — removed since
+ * the last visit, or behind a password session that has since expired —
+ * and the asset proxy answers 404/401 for both, so a failed load drops
+ * the image rather than leaving a broken-image glyph on the card.
+ */
+function RecentCardCover({ doc }: { doc: RecentDoc }) {
+  const [failed, setFailed] = useState(false);
+  if (!doc.cover || failed) return null;
+  return (
+    <img
+      className="cover-thumb recent-card-cover"
+      src={coverProxyUrl(doc.uid, doc.cover)}
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
   );
 }
 
@@ -780,6 +807,7 @@ function UploadDialog({
 
               <FileDropZone
                 accept=".md,.markdown,.mdx,.adoc,.asciidoc,.json,text/markdown,application/json"
+                acceptFile={isAcceptedUploadFile}
                 onFile={handleFile}
                 label="Drop a Markdown, AsciiDoc, or JSON bundle file — or click to browse"
               />
@@ -927,92 +955,6 @@ function MarkdownDropZone({
           </Text>
         </div>
       )}
-    </div>
-  );
-}
-
-/**
- * Visible pick-or-drop zone: clicking opens the native file picker via a
- * hidden `<input>`; dragging a file over it shows an `--over` state and
- * forwards the drop to `onFile`. Renders as a discoverable dashed
- * panel rather than the browser-default "Choose file" button — same
- * accept list as the textarea dropzone so both paths load the same file
- * types.
- */
-function FileDropZone({
-  accept,
-  onFile,
-  label,
-}: {
-  accept: string;
-  onFile: (file: File) => void | Promise<void>;
-  label: string;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [over, setOver] = useState(false);
-  const depth = useRef(0);
-
-  function openPicker() {
-    inputRef.current?.click();
-  }
-
-  return (
-    // biome-ignore lint/a11y/useSemanticElements: <button> can't host the drag-and-drop and dashed-panel rendering
-    <div
-      className={`file-drop ${over ? 'file-drop--over' : ''}`}
-      role="button"
-      tabIndex={0}
-      onClick={openPicker}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          openPicker();
-        }
-      }}
-      onDragEnter={(e) => {
-        if (!e.dataTransfer.types.includes('Files')) return;
-        e.preventDefault();
-        depth.current += 1;
-        setOver(true);
-      }}
-      onDragOver={(e) => {
-        if (!e.dataTransfer.types.includes('Files')) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-      }}
-      onDragLeave={() => {
-        depth.current -= 1;
-        if (depth.current <= 0) {
-          depth.current = 0;
-          setOver(false);
-        }
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        depth.current = 0;
-        setOver(false);
-        const file = e.dataTransfer.files?.[0];
-        // `accept=` on the hidden input gates the OS picker, but
-        // drag-and-drop bypasses it entirely. Apply the same filter
-        // MarkdownDropZone uses so binary / unsupported files don't
-        // reach onFile.
-        if (file && isAcceptedUploadFile(file)) void onFile(file);
-      }}
-    >
-      <input
-        ref={inputRef}
-        type="file"
-        accept={accept}
-        style={{ display: 'none' }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) void onFile(f);
-          // Reset so re-selecting the same file still fires onChange.
-          e.currentTarget.value = '';
-        }}
-      />
-      <UploadIcon width="18" height="18" />
-      <Text size="2">{label}</Text>
     </div>
   );
 }

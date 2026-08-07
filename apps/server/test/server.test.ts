@@ -2984,6 +2984,41 @@ describe('documents API', () => {
     expect(zip.file('EPUB/images/cover.svg')).toBeNull();
   });
 
+  test('POST /:uid/export.epub falls back to the document’s stored cover', async () => {
+    // The dialog saves the cover on the document once; every later
+    // export has to pick it up without the client re-sending bytes.
+    const created = await upload(CLIENT_A, { markdown: '# Stored Cover\n\nBody.\n' });
+    const png = Uint8Array.from(
+      atob(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
+      ),
+      (char) => char.charCodeAt(0),
+    );
+    const coverForm = new FormData();
+    coverForm.append('file', new Blob([png as BlobPart]), 'art.png');
+    const coverHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    coverHeaders.delete('content-type');
+    const stored = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/cover`, {
+        method: 'PUT',
+        headers: coverHeaders,
+        body: coverForm,
+      }),
+    );
+    expect(stored.status).toBe(201);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    expect(await zip.file('EPUB/images/cover.png')!.async('uint8array')).toEqual(png);
+    expect(zip.file('EPUB/images/cover.svg')).toBeNull();
+  });
+
   test('POST /:uid/export.epub emits well-formed XHTML without rewriting content', async () => {
     // Regression guard for the HTML→XHTML step. Bare attributes and
     // unclosed void elements are fatal to an EPUB reader, but so is

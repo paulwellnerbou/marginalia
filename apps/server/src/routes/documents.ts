@@ -39,6 +39,7 @@ import {
 import type { BlobStore } from '../blob-store.js';
 import { mapWithConcurrency } from '../concurrency.js';
 import type { ServerConfig } from '../config.js';
+import { COVER_MAX_BYTES, loadCoverDescriptor, loadStoredCover, sniffCoverMime } from '../cover.js';
 import type {
   CommentRow,
   DocumentFormat,
@@ -319,6 +320,7 @@ async function getDocument(c: Context, deps: AppDeps) {
     source,
     rendered,
     attached_assets: attached,
+    cover: loadCoverDescriptor(db, doc),
     format: doc.format,
     default_theme: doc.default_theme,
     mermaid_renderer: doc.mermaid_renderer,
@@ -951,8 +953,12 @@ async function exportDocumentChapters(
 
 /**
  * Build an EPUB from the stored source or a temporary proposal-merged
- * snapshot. A multipart `cover` image is optional; without it the
- * exporter creates a deterministic typographic SVG from the book title.
+ * snapshot.
+ *
+ * Cover precedence: a multipart `cover` in this request (a one-off for
+ * callers who can't write to the document), then the document's stored
+ * cover asset, then a deterministic typographic SVG generated from the
+ * book title.
  */
 async function exportDocumentAsEpub(
   c: Context,
@@ -967,6 +973,7 @@ async function exportDocumentAsEpub(
 
   const coverResult = await readEpubCover(c.req.raw);
   if ('error' in coverResult) return c.json({ error: coverResult.error }, 400);
+  const cover = coverResult.cover ?? (await loadStoredCover(deps.db, deps.blobs, doc));
 
   let source = deps.store.read(doc);
   let accepted: AcceptedProposalsSourceResult | null = null;
@@ -1031,7 +1038,7 @@ async function exportDocumentAsEpub(
     title,
     author: identity?.displayName ?? null,
     chapters,
-    cover: coverResult.cover,
+    cover,
     theme,
     modifiedAt: new Date(doc.updated_at),
   });
@@ -1045,8 +1052,6 @@ async function exportDocumentAsEpub(
   if (accepted) setAcceptedProposalsExportHeaders(c, accepted);
   return c.body(bytes as unknown as Uint8Array<ArrayBuffer>);
 }
-
-const EPUB_COVER_MAX_BYTES = 10 * 1024 * 1024;
 
 async function readEpubCover(
   request: Request,
@@ -1062,38 +1067,12 @@ async function readEpubCover(
   }
   const value = form.get('cover');
   if (!(value instanceof File) || value.size === 0) return { cover: null };
-  if (value.size > EPUB_COVER_MAX_BYTES) return { error: 'cover-too-large' };
+  if (value.size > COVER_MAX_BYTES) return { error: 'cover-too-large' };
 
   const bytes = new Uint8Array(await value.arrayBuffer());
   const mime = sniffCoverMime(bytes);
   if (!mime) return { error: 'unsupported-cover-image' };
   return { cover: { bytes, mime } };
-}
-
-function sniffCoverMime(bytes: Uint8Array): EpubCover['mime'] | null {
-  if (
-    bytes.length >= 8 &&
-    bytes[0] === 0x89 &&
-    bytes[1] === 0x50 &&
-    bytes[2] === 0x4e &&
-    bytes[3] === 0x47 &&
-    bytes[4] === 0x0d &&
-    bytes[5] === 0x0a &&
-    bytes[6] === 0x1a &&
-    bytes[7] === 0x0a
-  )
-    return 'image/png';
-  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
-    return 'image/jpeg';
-  if (bytes.length >= 6 && String.fromCharCode(...bytes.slice(0, 6)).match(/^GIF8[79]a$/))
-    return 'image/gif';
-  if (
-    bytes.length >= 12 &&
-    String.fromCharCode(...bytes.slice(0, 4)) === 'RIFF' &&
-    String.fromCharCode(...bytes.slice(8, 12)) === 'WEBP'
-  )
-    return 'image/webp';
-  return null;
 }
 
 /**

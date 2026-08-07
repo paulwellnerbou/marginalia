@@ -2,18 +2,24 @@ import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/rend
 import { DownloadIcon } from '@radix-ui/react-icons';
 import { Button, Callout, Dialog, DropdownMenu, Flex, IconButton, Text } from '@radix-ui/themes';
 import { useState } from 'react';
-import type { Document } from '../lib/api.js';
+import type { Document, DocumentCover } from '../lib/api.js';
 import {
   ApiError,
+  coverProxyUrl,
+  deleteDocumentCover,
   downloadDocumentDocx,
   downloadDocumentDocxWithAcceptedProposals,
   downloadDocumentEpub,
   downloadDocumentMarkdownChapters,
   downloadDocumentPdf,
   downloadDocumentSourceWithAcceptedProposals,
+  uploadDocumentCover,
 } from '../lib/api.js';
+import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { showToast } from '../lib/notifications.js';
+import { updateRecentDocCover } from '../lib/recent-docs.js';
+import { FileDropZone } from './FileDropZone.js';
 
 /**
  * Download affordance in the document toolbar. Opens a small menu with
@@ -63,7 +69,17 @@ export function DownloadMenu({
   >(null);
   const [epubMode, setEpubMode] = useState<null | 'current' | 'accepted'>(null);
   const [cover, setCover] = useState<File | null>(null);
+  /**
+   * The document's saved cover, as of the last time the dialog opened.
+   * Held locally because uploading one here doesn't re-fetch the parent's
+   * `doc`.
+   */
+  const [storedCover, setStoredCover] = useState<DocumentCover | null>(doc.cover);
+  const [removingCover, setRemovingCover] = useState(false);
   const [epubError, setEpubError] = useState<string | null>(null);
+
+  /** Only editors can write the cover into the document's asset store. */
+  const canStoreCover = doc.role === 'admin' || doc.role === 'editor';
 
   const sourceExt = doc.format === 'asciidoc' ? 'adoc' : 'md';
   const sourceLabel = doc.format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source';
@@ -180,6 +196,7 @@ export function DownloadMenu({
   function openEpubDialog(mode: 'current' | 'accepted'): void {
     setCover(null);
     setEpubError(null);
+    setStoredCover(doc.cover);
     setEpubMode(mode);
   }
 
@@ -190,15 +207,75 @@ export function DownloadMenu({
     setEpubError(null);
   }
 
+  async function removeStoredCover(): Promise<void> {
+    const displayName = getDisplayName();
+    if (!displayName) {
+      setEpubError('Please set your display name first.');
+      return;
+    }
+    setRemovingCover(true);
+    setEpubError(null);
+    try {
+      await deleteDocumentCover(doc.uid, { clientId: getClientId(), displayName });
+      setStoredCover(null);
+      updateRecentDocCover(doc.uid, null);
+    } catch (err) {
+      reportError('DownloadMenu.removeCover', err, { uid: doc.uid });
+      setEpubError('Could not remove the cover. Try again in a moment.');
+    } finally {
+      setRemovingCover(false);
+    }
+  }
+
+  /**
+   * Persist the picked cover on the document so every later export — and
+   * the document list — uses it. Returns false if the upload failed, so
+   * the caller can stop before producing a book with the wrong cover.
+   * Callers without edit rights skip this and pass the file to the export
+   * request instead, where it applies to that one download only.
+   */
+  async function storeCover(file: File): Promise<boolean> {
+    const displayName = getDisplayName();
+    if (!displayName) {
+      setEpubError('Please set your display name first.');
+      return false;
+    }
+    try {
+      const { cover: saved } = await uploadDocumentCover(doc.uid, file, {
+        clientId: getClientId(),
+        displayName,
+      });
+      setStoredCover(saved);
+      setCover(null);
+      updateRecentDocCover(doc.uid, saved);
+      return true;
+    } catch (err) {
+      reportError('DownloadMenu.storeCover', err, { uid: doc.uid });
+      // `forbidden` is only about edit rights on this route — the cover
+      // store is the one call here gated on them.
+      const forbidden = err instanceof ApiError && err.code === 'forbidden';
+      setEpubError(
+        coverErrorMessage(err) ??
+          (forbidden
+            ? 'You need edit rights to save a cover on this document.'
+            : 'Could not save the cover. Try again in a moment.'),
+      );
+      return false;
+    }
+  }
+
   async function downloadEpub(): Promise<void> {
     if (!epubMode) return;
     const acceptedProposals = epubMode === 'accepted';
     setBusy('epub');
     setEpubError(null);
     try {
+      // Editors save the cover first and let the server pick it up from
+      // the document; everyone else sends it along for this export only.
+      if (cover && canStoreCover && !(await storeCover(cover))) return;
       const { blob, filename, skippedProposals } = await downloadDocumentEpub(doc.uid, {
         acceptedProposals,
-        cover,
+        cover: canStoreCover ? null : cover,
         theme,
       });
       downloadBlob(blob, filename);
@@ -207,13 +284,7 @@ export function DownloadMenu({
       if (skippedProposals > 0) showSkippedToast(skippedProposals, 'EPUB');
     } catch (err) {
       reportError('DownloadMenu.epub', err, { uid: doc.uid, acceptedProposals });
-      if (err instanceof ApiError && err.code === 'cover-too-large') {
-        setEpubError('The cover image must be 10 MB or smaller.');
-      } else if (err instanceof ApiError && err.code === 'unsupported-cover-image') {
-        setEpubError('Use a PNG, JPEG, GIF, or WebP cover image.');
-      } else {
-        setEpubError('Could not create the EPUB. Try again in a moment.');
-      }
+      setEpubError(coverErrorMessage(err) ?? 'Could not create the EPUB. Try again in a moment.');
     } finally {
       setBusy(null);
     }
@@ -331,26 +402,52 @@ export function DownloadMenu({
               : 'The EPUB will use the current document text.'}
           </Dialog.Description>
           <Flex direction="column" gap="3">
-            <Flex direction="column" gap="1">
-              <Text as="label" size="2" weight="medium" htmlFor="epub-cover-upload">
-                Cover image (optional)
-              </Text>
-              <Text size="1" color="gray">
-                Upload PNG, JPEG, GIF, or WebP, up to 10 MB. If omitted, a cover is generated from
-                the document title.
-              </Text>
-              <input
-                id="epub-cover-upload"
-                type="file"
-                accept="image/png,image/jpeg,image/gif,image/webp"
-                disabled={busy === 'epub'}
-                onChange={(event) => setCover(event.target.files?.[0] ?? null)}
-              />
-              {cover && (
-                <Text size="1" color="gray">
-                  Selected: {cover.name}
-                </Text>
+            <Flex gap="3" align="start">
+              {storedCover && (
+                <img
+                  className="cover-thumb cover-thumb--dialog"
+                  src={coverProxyUrl(doc.uid, storedCover)}
+                  alt="Current cover"
+                />
               )}
+              <Flex direction="column" gap="2" flexGrow="1">
+                <Text size="2" weight="medium">
+                  Cover image (optional)
+                </Text>
+                <Text size="1" color="gray">
+                  PNG, JPEG, GIF, or WebP, up to 10 MB.{' '}
+                  {canStoreCover
+                    ? 'Saved with the document, so every later export and the document list use it.'
+                    : 'Used for this download only — saving a cover on the document needs edit rights.'}{' '}
+                  {storedCover
+                    ? 'Pick a file to replace the current cover.'
+                    : 'Without one, a cover is generated from the document title.'}
+                </Text>
+                <FileDropZone
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  acceptFile={isCoverImageFile}
+                  onFile={(file) => setCover(file)}
+                  disabled={busy === 'epub'}
+                  label={
+                    cover ? `Selected: ${cover.name}` : 'Drop a cover image — or click to browse'
+                  }
+                />
+                {storedCover && canStoreCover && (
+                  <Flex>
+                    <Button
+                      type="button"
+                      size="1"
+                      variant="soft"
+                      color="gray"
+                      mt="1"
+                      onClick={() => void removeStoredCover()}
+                      disabled={removingCover || busy === 'epub'}
+                    >
+                      {removingCover ? 'Removing…' : 'Remove saved cover'}
+                    </Button>
+                  </Flex>
+                )}
+              </Flex>
             </Flex>
             {epubError && (
               <Callout.Root color="red" size="1">
@@ -376,6 +473,36 @@ export function DownloadMenu({
       </Dialog.Root>
     </>
   );
+}
+
+/**
+ * Drag-and-drop filter for the cover picker. The server decides the real
+ * format by sniffing magic bytes; this only keeps an obviously wrong
+ * drop (a PDF, a folder of source) from reaching the upload at all.
+ */
+function isCoverImageFile(file: File): boolean {
+  if (COVER_MIME_TYPES.has(file.type)) return true;
+  return /\.(png|jpe?g|gif|webp)$/i.test(file.name);
+}
+
+const COVER_MIME_TYPES: ReadonlySet<string> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+
+/**
+ * Rejections of the cover image itself. Only codes that *no other part*
+ * of these two requests can produce belong here — the export route
+ * reuses this mapper, and a generic auth failure there has nothing to
+ * do with the cover.
+ */
+function coverErrorMessage(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null;
+  if (err.code === 'cover-too-large') return 'The cover image must be 10 MB or smaller.';
+  if (err.code === 'unsupported-cover-image') return 'Use a PNG, JPEG, GIF, or WebP cover image.';
+  return null;
 }
 
 function showSkippedToast(count: number, exportName: string): void {

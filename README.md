@@ -141,6 +141,35 @@ Asset endpoints (all gated by per-document authz; writes require
 Upload size defaults to 16 MiB; override with `maxAssetBytes` in
 [config.ts](apps/server/src/config.ts).
 
+### Book cover
+
+A document can carry one **cover image**, used for its EPUB export and
+shown as a thumbnail on the document card on the home page. It's stored
+like any other asset — a content-addressed blob plus a `document_assets`
+row under the reserved ref name `cover.<ext>` — with
+`documents.cover_ref` pointing at it. So the cover inherits the asset
+store's per-document authorization, ETag revalidation, and blob GC, and
+is fetched through the usual `/assets/:refName` proxy.
+
+- `PUT    /api/documents/:uid/cover` — multipart (`file`), `editor`+
+- `DELETE /api/documents/:uid/cover` — detach and clear the pointer
+
+The format is decided by sniffing magic bytes, never by the declared
+MIME type: PNG, JPEG, GIF, or WebP, up to 10 MB. SVG is rejected — it
+can carry script, and EPUB readers vary in how they sandbox it. Since
+the extension in the ref name determines the served `Content-Type`,
+replacing a PNG cover with a JPEG moves it to a different ref and
+detaches the old one. The ref name is a normal one, so a document whose
+source already references `cover.png` shares that asset with its cover —
+uploading a cover replaces the image the source points at.
+
+Upload happens in the **Download → EPUB** dialog. Editors' uploads are
+saved on the document, so one upload serves every later export; readers
+and collaborators can still attach a one-off cover to a single export
+(multipart `cover` on the export request), which is never persisted.
+Without any cover, the exporter generates a typographic SVG from the
+book title.
+
 ### Blob storage backend
 
 Two backends; same interface, one config switch.

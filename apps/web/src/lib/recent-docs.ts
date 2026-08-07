@@ -6,7 +6,7 @@
  * "new since X" indicators later.
  */
 
-import type { DocumentFormat } from './api.js';
+import type { DocumentCover, DocumentFormat } from './api.js';
 
 const KEY = 'marginalia.recentDocs';
 const MAX = 50;
@@ -25,6 +25,13 @@ export interface RecentDoc {
   updated_at: number;
   /** Invite token used to open this doc (undefined for public-only access). */
   invite_token?: string;
+  /**
+   * Book cover as of the last visit, so the card can render a thumbnail
+   * without the landing page having to call the server for every entry.
+   * A cover added from another browser only shows up here after the next
+   * visit; a stale one 404s and the card falls back to no thumbnail.
+   */
+  cover?: DocumentCover;
 }
 
 /** Build the URL we should navigate to when re-opening a recent doc. */
@@ -50,6 +57,25 @@ export function recordVisit(doc: RecentDoc): void {
   const trimmed = list.slice(0, MAX);
   try {
     localStorage.setItem(KEY, JSON.stringify(trimmed));
+  } catch {
+    /* quota exceeded — best-effort */
+  }
+}
+
+/**
+ * Patch the cover on an already-recorded entry. Called right after a
+ * cover upload/removal so the landing page reflects it without waiting
+ * for the document to be re-opened. No-op for a doc that isn't in the
+ * list.
+ */
+export function updateRecentDocCover(uid: string, cover: DocumentCover | null): void {
+  const list = loadRecentDocs();
+  const entry = list.find((d) => d.uid === uid);
+  if (!entry) return;
+  if (cover) entry.cover = cover;
+  else delete entry.cover;
+  try {
+    localStorage.setItem(KEY, JSON.stringify(list));
   } catch {
     /* quota exceeded — best-effort */
   }
@@ -86,6 +112,7 @@ function coerceRecentDoc(v: unknown): RecentDoc[] {
   const format: DocumentFormat = VALID_FORMATS.has(r.format as DocumentFormat)
     ? (r.format as DocumentFormat)
     : 'markdown';
+  const cover = coerceCover(r.cover);
   const out: RecentDoc = {
     uid: r.uid,
     title: r.title,
@@ -95,6 +122,18 @@ function coerceRecentDoc(v: unknown): RecentDoc[] {
     visited_at: r.visited_at,
     updated_at: r.updated_at,
     ...(typeof r.invite_token === 'string' ? { invite_token: r.invite_token } : {}),
+    ...(cover ? { cover } : {}),
   };
   return [out];
+}
+
+function coerceCover(v: unknown): DocumentCover | null {
+  if (!v || typeof v !== 'object') return null;
+  const c = v as Record<string, unknown>;
+  if (typeof c.ref_name !== 'string' || typeof c.asset_id !== 'string') return null;
+  return {
+    ref_name: c.ref_name,
+    asset_id: c.asset_id,
+    mime: typeof c.mime === 'string' ? c.mime : 'application/octet-stream',
+  };
 }

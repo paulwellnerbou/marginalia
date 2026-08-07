@@ -172,6 +172,134 @@ describe('assets API', () => {
     expect(out.length).toBe(v2.length);
   });
 
+  // --- book cover ----------------------------------------------------
+
+  /** Smallest byte sequences that satisfy the cover magic-byte sniffer. */
+  const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
+  const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 7, 7]);
+
+  async function putCover(
+    uid: string,
+    token: string,
+    bytes: Uint8Array,
+    fileName = 'my-cover.png',
+    client = ALICE,
+  ): Promise<Response> {
+    const form = new FormData();
+    form.append('file', new Blob([bytes as BlobPart]), fileName);
+    return app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/cover`, {
+        method: 'PUT',
+        headers: multipartHeaders(client, token),
+        body: form,
+      }),
+    );
+  }
+
+  function getDoc(uid: string, token: string) {
+    return app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, {
+        method: 'GET',
+        headers: headers(ALICE, { [INVITE_HEADER]: token }),
+      }),
+    );
+  }
+
+  test('cover is stored as a document asset and reported by GET /:uid', async () => {
+    const doc = await upload();
+    const put = await putCover(doc.uid, doc.admin_invite.token, PNG_BYTES);
+    expect(put.status).toBe(201);
+    const stored = (await put.json()) as { cover: { ref_name: string; mime: string } };
+    // Reserved ref name derived from the sniffed format, not the
+    // uploaded filename — the served Content-Type comes from the
+    // extension, so the two must agree.
+    expect(stored.cover.ref_name).toBe('cover.png');
+    expect(stored.cover.mime).toBe('image/png');
+
+    const payload = (await (await getDoc(doc.uid, doc.admin_invite.token)).json()) as {
+      cover: { ref_name: string; asset_id: string } | null;
+      attached_assets: Array<{ ref_name: string }>;
+    };
+    expect(payload.cover?.ref_name).toBe('cover.png');
+    expect(payload.attached_assets.map((a) => a.ref_name)).toContain('cover.png');
+
+    // Fetchable through the ordinary asset proxy.
+    const get = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/cover.png`, {
+        method: 'GET',
+        headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    expect(get.status).toBe(200);
+    expect(get.headers.get('content-type')).toBe('image/png');
+    expect(new Uint8Array(await get.arrayBuffer())).toEqual(PNG_BYTES);
+  });
+
+  test('replacing a cover with another format detaches the old ref', async () => {
+    const doc = await upload();
+    await putCover(doc.uid, doc.admin_invite.token, PNG_BYTES);
+    const put = await putCover(doc.uid, doc.admin_invite.token, JPEG_BYTES, 'other.jpeg');
+    expect(put.status).toBe(201);
+
+    const payload = (await (await getDoc(doc.uid, doc.admin_invite.token)).json()) as {
+      cover: { ref_name: string } | null;
+      attached_assets: Array<{ ref_name: string }>;
+    };
+    expect(payload.cover?.ref_name).toBe('cover.jpg');
+    expect(payload.attached_assets.map((a) => a.ref_name)).not.toContain('cover.png');
+  });
+
+  test('DELETE /:uid/cover clears the pointer and the asset', async () => {
+    const doc = await upload();
+    await putCover(doc.uid, doc.admin_invite.token, PNG_BYTES);
+    const del = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/cover`, {
+        method: 'DELETE',
+        headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    expect(del.status).toBe(204);
+
+    const payload = (await (await getDoc(doc.uid, doc.admin_invite.token)).json()) as {
+      cover: unknown;
+      attached_assets: Array<{ ref_name: string }>;
+    };
+    expect(payload.cover).toBeNull();
+    expect(payload.attached_assets.map((a) => a.ref_name)).not.toContain('cover.png');
+  });
+
+  test('deleting the cover asset through the generic route clears cover_ref', async () => {
+    const doc = await upload();
+    await putCover(doc.uid, doc.admin_invite.token, PNG_BYTES);
+    const del = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/cover.png`, {
+        method: 'DELETE',
+        headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    expect(del.status).toBe(204);
+
+    const payload = (await (await getDoc(doc.uid, doc.admin_invite.token)).json()) as {
+      cover: unknown;
+    };
+    expect(payload.cover).toBeNull();
+  });
+
+  test('cover upload rejects non-image bytes and requires editor role', async () => {
+    const doc = await upload();
+    const notAnImage = await putCover(
+      doc.uid,
+      doc.admin_invite.token,
+      new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]),
+    );
+    expect(notAnImage.status).toBe(400);
+    expect(((await notAnImage.json()) as { error: string }).error).toBe('unsupported-cover-image');
+
+    // Bob has no invite → reader.
+    const asReader = await putCover(doc.uid, '', PNG_BYTES, 'my-cover.png', BOB);
+    expect(asReader.status).toBe(403);
+  });
+
   test('GET /api/documents/:uid returns attached_assets and rewrites <img src>', async () => {
     const doc = await upload();
     const bytes = new Uint8Array([9, 9, 9]);

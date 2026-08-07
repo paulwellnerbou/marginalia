@@ -184,10 +184,13 @@ export function EditPage() {
     [doc?.attached_assets],
   );
 
-  const referencedRefs = useMemo(
-    () => collectReferencedRefs(source, doc?.format ?? 'markdown'),
-    [source, doc?.format],
-  );
+  const referencedRefs = useMemo(() => {
+    const refs = collectReferencedRefs(source, doc?.format ?? 'markdown');
+    // The book cover is referenced by the document itself rather than by
+    // its source, so it would otherwise read as an unreferenced leftover.
+    if (doc?.cover) refs.add(doc.cover.ref_name);
+    return refs;
+  }, [source, doc?.format, doc?.cover]);
 
   useEffect(() => {
     if (!doc) return;
