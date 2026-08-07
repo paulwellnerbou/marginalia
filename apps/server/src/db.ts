@@ -27,6 +27,10 @@ CREATE TABLE IF NOT EXISTS documents (
   -- MARGINALIA_MERMAID_RENDERER_DEFAULT, falling back to 'mmdr').
   -- Does NOT affect the viewer — that always uses mermaid.js.
   mermaid_renderer     TEXT,
+  -- ref_name of the document_assets row holding the book cover, or NULL.
+  -- A pointer rather than a reserved ref name so the cover keeps its own
+  -- extension and can never be shadowed by a same-named source image.
+  cover_ref            TEXT,
   created_at           INTEGER NOT NULL,
   updated_at           INTEGER NOT NULL
 );
@@ -229,6 +233,8 @@ export interface DocumentRow {
    * Does not affect the viewer.
    */
   mermaid_renderer: MermaidRenderer | null;
+  /** `document_assets.ref_name` of this document's cover image, or NULL. */
+  cover_ref: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -432,6 +438,7 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'documents', 'password_recovery_ciphertext', 'TEXT');
   ensureColumn(db, 'documents', 'password_recovery_iv', 'TEXT');
   ensureColumn(db, 'documents', 'mermaid_renderer', 'TEXT');
+  ensureColumn(db, 'documents', 'cover_ref', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'accepted_oid', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'branch_ref', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'base_oid', 'TEXT');

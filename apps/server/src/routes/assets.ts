@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { authorize, canEdit, INVITE_SESSION_COOKIE, parseCookie, SESSION_COOKIE } from '../auth.js';
 import type { BlobStore } from '../blob-store.js';
 import type { ServerConfig } from '../config.js';
+import { COVER_MAX_BYTES, coverRefName, loadCoverDescriptor, sniffCoverMime } from '../cover.js';
 import type { AssetKind, AssetRow, DocumentAssetRow, DocumentRow } from '../db.js';
 import { isAssetKind } from '../db.js';
 
@@ -18,6 +19,8 @@ export function assetsRouter(deps: AssetsDeps): Hono {
 
   r.get('/:uid/assets', async (c) => listAssets(c, deps));
   r.post('/:uid/assets', async (c) => uploadAsset(c, deps));
+  r.put('/:uid/cover', async (c) => uploadCover(c, deps));
+  r.delete('/:uid/cover', async (c) => deleteCover(c, deps));
   // Ref names can contain dots and slashes; Hono's default param matcher
   // chokes on those, so capture the rest of the path ourselves.
   r.get('/:uid/assets/:refName{.+}', async (c) => fetchAsset(c, deps));
@@ -67,7 +70,6 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
   }
 
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const assetId = await blobs.put(bytes);
   // Derive the served Content-Type from the ref_name extension only —
   // never from `file.type`. Stored on the per-document junction row
   // rather than on the globally-shared `assets` row: blobs are
@@ -82,6 +84,40 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
   // `attachment`. Client can still force a kind via the form field.
   const kindHint = form.get('kind');
   const kind: AssetKind = isAssetKind(kindHint) ? kindHint : inferKind(mime, refName);
+
+  await attachBlob(db, blobs, {
+    docUid: doc.uid,
+    refName,
+    bytes,
+    mime,
+    kind,
+    createdBy: decision.identity.displayName,
+  });
+
+  const row = loadAttached(db, doc.uid, refName);
+  return c.json({ asset: row }, 201);
+}
+
+/**
+ * Store `bytes` and (re)point `doc_uid`/`ref_name` at them, GC'ing the
+ * blob the ref used to hold when it goes unreferenced. Shared by the
+ * generic asset upload and the cover upload so both paths keep the same
+ * transactional guarantees.
+ */
+async function attachBlob(
+  db: Database,
+  blobs: BlobStore,
+  attachment: {
+    docUid: string;
+    refName: string;
+    bytes: Uint8Array;
+    mime: string;
+    kind: AssetKind;
+    createdBy: string;
+  },
+): Promise<string> {
+  const { docUid, refName, bytes, mime, kind, createdBy } = attachment;
+  const assetId = await blobs.put(bytes);
   const now = Date.now();
 
   // Wrap the metadata writes in a single transaction. Without this, a
@@ -92,19 +128,15 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
   // mime column is legacy — the authoritative Content-Type lives on the
   // per-document junction row; we still populate the NOT NULL column
   // until a later migration drops it.
-  //
-  // Capture the narrowed identity name outside the transaction closure;
-  // TypeScript drops the non-null narrowing inside the callback body.
-  const createdBy = decision.identity.displayName;
   const prior = db.transaction(() => {
     db.prepare(
       `INSERT OR IGNORE INTO assets (id, mime, size, created_at)
        VALUES (?, ?, ?, ?)`,
-    ).run(assetId, mime, file.size, now);
+    ).run(assetId, mime, bytes.byteLength, now);
 
     const existing = db
       .prepare('SELECT asset_id FROM document_assets WHERE doc_uid = ? AND ref_name = ?')
-      .get(doc.uid, refName) as { asset_id: string } | undefined;
+      .get(docUid, refName) as { asset_id: string } | undefined;
 
     db.prepare(
       `INSERT INTO document_assets
@@ -116,7 +148,7 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
          mime = excluded.mime,
          created_at = excluded.created_at,
          created_by = excluded.created_by`,
-    ).run(doc.uid, refName, assetId, kind, mime, now, createdBy);
+    ).run(docUid, refName, assetId, kind, mime, now, createdBy);
 
     return existing;
   })();
@@ -124,9 +156,80 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
   if (prior && prior.asset_id !== assetId) {
     await gcAssetIfOrphan(db, blobs, prior.asset_id);
   }
+  return assetId;
+}
 
-  const row = loadAttached(db, doc.uid, refName);
-  return c.json({ asset: row }, 201);
+/**
+ * PUT /:uid/cover — attach (or replace) the document's book cover.
+ *
+ * The cover is a normal document asset under a reserved `cover.<ext>`
+ * ref name, with `documents.cover_ref` pointing at it. Keeping it in the
+ * asset store rather than passing it per-export means one upload serves
+ * every later EPUB, the document list can show a thumbnail, and the
+ * bytes are covered by the same authorization and GC as everything else
+ * the document owns.
+ */
+async function uploadCover(c: Context, { db, blobs }: AssetsDeps) {
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeDoc(c, db, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
+
+  let form: FormData;
+  try {
+    form = await c.req.raw.formData();
+  } catch {
+    return c.json({ error: 'invalid-form' }, 400);
+  }
+
+  const file = form.get('file');
+  if (!(file instanceof File) || file.size === 0) return c.json({ error: 'file-required' }, 400);
+  if (file.size > COVER_MAX_BYTES) {
+    return c.json({ error: 'cover-too-large', limit: COVER_MAX_BYTES }, 413);
+  }
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const mime = sniffCoverMime(bytes);
+  if (!mime) return c.json({ error: 'unsupported-cover-image' }, 400);
+
+  const refName = coverRefName(mime);
+  await attachBlob(db, blobs, {
+    docUid: doc.uid,
+    refName,
+    bytes,
+    mime,
+    kind: 'image',
+    createdBy: decision.identity.displayName,
+  });
+  // A cover swapped to a different format lands under a different
+  // reserved name, so the previous one has to be detached explicitly —
+  // attachBlob only replaces bytes under the *same* ref.
+  if (doc.cover_ref && doc.cover_ref !== refName) {
+    await detachAsset(db, blobs, doc.uid, doc.cover_ref);
+  }
+  db.prepare('UPDATE documents SET cover_ref = ? WHERE uid = ?').run(refName, doc.uid);
+
+  return c.json({ cover: loadCoverDescriptor(db, { ...doc, cover_ref: refName }) }, 201);
+}
+
+/** DELETE /:uid/cover — drop the cover image and clear the pointer. */
+async function deleteCover(c: Context, { db, blobs }: AssetsDeps) {
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeDoc(c, db, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
+
+  if (doc.cover_ref) {
+    await detachAsset(db, blobs, doc.uid, doc.cover_ref);
+    db.prepare('UPDATE documents SET cover_ref = NULL WHERE uid = ?').run(doc.uid);
+  }
+  return c.body(null, 204);
 }
 
 async function fetchAsset(c: Context, { db, blobs }: AssetsDeps) {
@@ -245,17 +348,36 @@ async function deleteAsset(c: Context, { db, blobs }: AssetsDeps) {
   const refName = decodeRefName(c.req.param('refName'));
   if (!refName) return c.json({ error: 'not-found' }, 404);
 
+  if (!(await detachAsset(db, blobs, doc.uid, refName))) {
+    return c.json({ error: 'not-found' }, 404);
+  }
+  return c.body(null, 204);
+}
+
+/**
+ * Drop a ref → blob binding, GC'ing the blob if nothing else holds it.
+ * Also clears `documents.cover_ref` when the ref being detached is the
+ * cover, so removing the asset through the generic route can't leave a
+ * pointer dangling. Returns false when the ref wasn't attached.
+ */
+async function detachAsset(
+  db: Database,
+  blobs: BlobStore,
+  docUid: string,
+  refName: string,
+): Promise<boolean> {
   const row = db
     .prepare('SELECT asset_id FROM document_assets WHERE doc_uid = ? AND ref_name = ?')
-    .get(doc.uid, refName) as { asset_id: string } | undefined;
-  if (!row) return c.json({ error: 'not-found' }, 404);
+    .get(docUid, refName) as { asset_id: string } | undefined;
+  if (!row) return false;
 
-  db.prepare('DELETE FROM document_assets WHERE doc_uid = ? AND ref_name = ?').run(
-    doc.uid,
+  db.prepare('DELETE FROM document_assets WHERE doc_uid = ? AND ref_name = ?').run(docUid, refName);
+  db.prepare('UPDATE documents SET cover_ref = NULL WHERE uid = ? AND cover_ref = ?').run(
+    docUid,
     refName,
   );
   await gcAssetIfOrphan(db, blobs, row.asset_id);
-  return c.body(null, 204);
+  return true;
 }
 
 /**

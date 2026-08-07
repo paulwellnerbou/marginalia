@@ -1536,6 +1536,15 @@ button.primary:disabled {
 .file-drop svg {
   flex-shrink: 0;
 }
+.file-drop--disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.file-drop--disabled:hover {
+  border-color: var(--gray-7);
+  background: var(--gray-a2);
+  color: var(--gray-11);
+}
 
 .recent-card-title {
   flex: 1;
@@ -1553,6 +1562,28 @@ button.primary:disabled {
   /* Sits above the link overlay so the uid stays selectable. */
   position: relative;
   z-index: 2;
+}
+
+/* Book cover thumbnail. Portrait 2:3 — the proportions of a printed
+   book — with the image cropped rather than distorted, so covers of any
+   aspect ratio line up as a tidy column of spines down the grid. */
+.cover-thumb {
+  flex-shrink: 0;
+  width: 44px;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: var(--radius-2);
+  background: var(--gray-a3);
+  box-shadow: var(--shadow-2);
+}
+.cover-thumb--dialog {
+  width: 72px;
+}
+.recent-card-body {
+  /* Without this the flex child refuses to shrink and `truncate` on the
+     title has nothing to truncate against. */
+  min-width: 0;
+  flex: 1;
 }
 
 /* ============================================================

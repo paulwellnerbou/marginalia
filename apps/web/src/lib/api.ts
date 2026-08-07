@@ -119,6 +119,19 @@ export interface AttachedAsset {
   created_by: string;
 }
 
+/**
+ * The document's book cover — an ordinary attached asset the document
+ * points at, so it's fetched through the same authorized asset proxy as
+ * any other image. Used for EPUB exports and as the thumbnail on the
+ * document list.
+ */
+export interface DocumentCover {
+  ref_name: string;
+  /** sha256 of the bytes; doubles as a cache-busting URL version. */
+  asset_id: string;
+  mime: string;
+}
+
 export interface Document {
   uid: string;
   /** Human-friendly document name. Null → derive from rendered content. */
@@ -127,6 +140,8 @@ export interface Document {
   rendered: RenderedDocument;
   /** Every asset currently attached to this doc (empty array if none). */
   attached_assets: AttachedAsset[];
+  /** Stored book cover, or null when the doc has none. */
+  cover: DocumentCover | null;
   format: DocumentFormat;
   default_theme: string;
   /**
@@ -724,6 +739,40 @@ export function deleteAttachedAsset(
     `/api/documents/${encodeURIComponent(uid)}/assets/${encodeRefPath(refName)}`,
     { method: 'DELETE', identity, docUid: uid },
   );
+}
+
+// --- cover -----------------------------------------------------------
+
+/**
+ * Store `file` as the document's book cover. Needs `editor`+; readers and
+ * collaborators can still pass a one-off cover to the EPUB export instead.
+ */
+export function uploadDocumentCover(
+  uid: string,
+  file: File,
+  identity: Identity,
+): Promise<{ cover: DocumentCover }> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  return request<{ cover: DocumentCover }>(`/api/documents/${encodeURIComponent(uid)}/cover`, {
+    method: 'PUT',
+    body: form,
+    identity,
+    docUid: uid,
+  });
+}
+
+export function deleteDocumentCover(uid: string, identity: Identity): Promise<void> {
+  return request<void>(`/api/documents/${encodeURIComponent(uid)}/cover`, {
+    method: 'DELETE',
+    identity,
+    docUid: uid,
+  });
+}
+
+/** Proxy URL for a document's cover image. */
+export function coverProxyUrl(uid: string, cover: DocumentCover): string {
+  return assetProxyUrl(uid, cover.ref_name, cover.asset_id);
 }
 
 export function assetProxyUrl(uid: string, refName: string, version?: string): string {

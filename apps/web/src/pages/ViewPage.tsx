@@ -84,6 +84,7 @@ export function ViewPage() {
       visited_at: Date.now(),
       updated_at: doc.updated_at,
       ...(stored ? { invite_token: stored } : {}),
+      ...(doc.cover ? { cover: doc.cover } : {}),
     });
   }, [doc]);
 
