@@ -1,5 +1,6 @@
 import { getClientId, getDisplayName, type Identity } from './identity.js';
 import { loadInviteToken } from './invite.js';
+import { markTransportFailure } from './retry.js';
 
 export interface Anchor {
   level: number;
@@ -320,9 +321,44 @@ function waitForAuth(docUid: string): Promise<void> {
   return gate;
 }
 
+/**
+ * A timeout signal, or null where the runtime has no `AbortSignal.timeout`.
+ *
+ * Degrading to "no ceiling" is deliberate. The alternative — an
+ * `AbortController` and a timer that every exit path has to clear — is a
+ * second timeout implementation living in the one function every API
+ * call goes through, and it would only ever run on browsers older than
+ * the container queries the document layout already depends on. Losing
+ * the ceiling there restores the behaviour those browsers had anyway;
+ * calling a missing method would instead throw synchronously and turn
+ * every read into a hard failure.
+ */
+function timeoutSignal(timeoutMs: number | undefined): AbortSignal | null {
+  if (timeoutMs === undefined) return null;
+  if (typeof AbortSignal?.timeout !== 'function') return null;
+  return AbortSignal.timeout(timeoutMs);
+}
+
 async function request<T>(
   path: string,
-  init: RequestInit & { identity?: Identity | null; docUid?: string; _retry?: boolean } = {},
+  init: RequestInit & {
+    identity?: Identity | null;
+    docUid?: string;
+    _retry?: boolean;
+    /**
+     * Reject with a `TimeoutError` if the whole exchange, body included,
+     * outlasts this. Opt-in: uploads and exports are legitimately slow,
+     * and a ceiling that fits a JSON read would cut them off.
+     *
+     * A caller's own `signal` still wins where one is given. Where it
+     * isn't, the signal is minted fresh on each pass through this
+     * function rather than once per logical call, so the retry after a
+     * password prompt starts a new budget — the prompt can sit on a
+     * dialog for a minute, and a signal carried over from the first
+     * attempt would abort the second the instant it began.
+     */
+    timeoutMs?: number;
+  } = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
   // Don't set a content-type for FormData — the browser fills in
@@ -345,7 +381,20 @@ async function request<T>(
     if (token) headers.set('x-marginalia-invite', token);
   }
 
-  const res = await fetch(path, { ...init, headers, credentials: 'include' });
+  const signal = init.signal ?? timeoutSignal(init.timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...init,
+      headers,
+      credentials: 'include',
+      ...(signal ? { signal } : {}),
+    });
+  } catch (err) {
+    // Only here is a `TypeError` known to be a dead connection rather
+    // than a bug one line further down. Say so while we can.
+    throw markTransportFailure(err);
+  }
   if (!res.ok) {
     let code = 'unknown';
     try {
@@ -388,7 +437,14 @@ async function requestBinary(
     if (token) headers.set('x-marginalia-invite', token);
   }
 
-  const res = await fetch(path, { ...init, headers, credentials: 'include' });
+  // Tagged like its sibling above, so the invariant holds for the whole
+  // module: every rejection that came off the wire says so.
+  let res: Response;
+  try {
+    res = await fetch(path, { ...init, headers, credentials: 'include' });
+  } catch (err) {
+    throw markTransportFailure(err);
+  }
   if (!res.ok) {
     let code = 'unknown';
     try {
@@ -1084,6 +1140,22 @@ export function threadCreatedAt(t: Thread): number {
 
 const listThreadsInflight = new Map<string, Promise<ListThreadsResponse>>();
 
+/**
+ * Ceiling on a single thread read.
+ *
+ * Deduping in-flight reads means a request that never settles is worse
+ * than one that fails: its key is never released, so every later caller
+ * is handed the same hung promise and the document keeps its empty
+ * comment column for as long as the page is open. A half-open socket
+ * (network changed under us, a proxy that stopped answering) does
+ * exactly that. Bound it so the failure is a rejection the retry ladder
+ * and the reconnect path can both act on.
+ *
+ * Generous on purpose — this covers the body too, and the payload grows
+ * with the comment count.
+ */
+const LIST_THREADS_TIMEOUT_MS = 30_000;
+
 // LRU cache of the last-fetched thread list per document uid.
 // Capped at MAX_SNAPSHOT_DOCS entries; evicts the least-recently-used document
 // when the cap is exceeded. Map insertion order is used as the LRU key, so
@@ -1124,6 +1196,7 @@ export function listThreads(
     {
       method: 'GET',
       docUid: uid,
+      timeoutMs: LIST_THREADS_TIMEOUT_MS,
     },
   )
     .then((res) => {
@@ -1131,7 +1204,12 @@ export function listThreads(
       return res;
     })
     .finally(() => {
-      listThreadsInflight.delete(cacheKey);
+      // Only clear our own entry: a later call may already have claimed
+      // the key, and dropping that one would let a third caller start a
+      // duplicate read alongside it.
+      if (listThreadsInflight.get(cacheKey) === promise) {
+        listThreadsInflight.delete(cacheKey);
+      }
     });
 
   listThreadsInflight.set(cacheKey, promise);
