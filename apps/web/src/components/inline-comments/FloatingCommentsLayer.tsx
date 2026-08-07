@@ -21,7 +21,7 @@ import {
   threadLinks,
   threadsById,
 } from './inlineUtils.js';
-import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
+import { computeAnchoredThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
 interface Props {
@@ -117,7 +117,7 @@ export function FloatingCommentsLayer({
    * proposal that renders inside another thread has no card of its
    * own, and opening it means opening the card it lives in.
    */
-  const nesting = useMemo(() => computeThreadNesting(threads), [threads]);
+  const nesting = useMemo(() => computeAnchoredThreadNesting(threads), [threads]);
   const cardIdFor = useCallback(
     (threadId: string) => nesting.parentOf.get(threadId) ?? threadId,
     [nesting],

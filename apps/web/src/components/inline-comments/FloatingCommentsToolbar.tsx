@@ -14,7 +14,7 @@ import {
   sortThreadTopEntries,
   type ThreadTopEntry,
 } from './floatingCardPosition.js';
-import { computeThreadNesting } from './threadNesting.js';
+import { computeAnchoredThreadNesting } from './threadNesting.js';
 
 interface Props {
   threads: Thread[];
@@ -82,14 +82,15 @@ export function FloatingCommentsToolbar({
 }: Props) {
   /**
    * Only threads that own a card are navigable: a proposal answering a
-   * comment renders inside that comment's card, so stepping onto it
-   * would re-open the card the reader is already looking at and prev/
-   * next would read as doing nothing. Matches the column, which
-   * navigates its top-level threads.
+   * comment usually renders inside that comment's card, so stepping
+   * onto it would re-open the card the reader is already looking at and
+   * prev/next would read as doing nothing. Nested exactly the way
+   * `FloatingCommentsLayer` nests, or the count and the arrows would
+   * disagree with the cards the popover actually opens.
    */
   const visibleThreads = useMemo(() => {
     const shown = hideResolved ? threads.filter((t) => t.state !== 'resolved') : threads;
-    return computeThreadNesting(shown).topLevel;
+    return computeAnchoredThreadNesting(shown).topLevel;
   }, [threads, hideResolved]);
 
   const jump = useCallback(

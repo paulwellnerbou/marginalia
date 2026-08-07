@@ -28,6 +28,26 @@ const EMPTY_NESTED: readonly Thread[] = [];
  * disappearing into a card that isn't there.
  */
 export function computeThreadNesting(threads: Thread[]): ThreadNesting {
+  return nest(threads, false);
+}
+
+/**
+ * `computeThreadNesting` for the presentations that position each card
+ * at its thread's anchor — the margin column and the floating popover.
+ *
+ * There a proposal with an anchor of its own refuses a parent that has
+ * none: the merged card renders wherever the *parent* sits, and an
+ * unanchored parent sits where unanchored cards go — the foot of the
+ * column, the centre of the view — so the proposal would vanish from
+ * beside the text it is still highlighting. Flat lists pass through
+ * `computeThreadNesting` instead; a card that isn't placed by anchor
+ * has nothing to be dragged away from.
+ */
+export function computeAnchoredThreadNesting(threads: Thread[]): ThreadNesting {
+  return nest(threads, true);
+}
+
+function nest(threads: Thread[], anchoredPlacement: boolean): ThreadNesting {
   const present = new Map(threads.map((t) => [t.id, t]));
   const nestedByParent = new Map<string, Thread[]>();
   const parentOf = new Map<string, string>();
@@ -46,6 +66,7 @@ export function computeThreadNesting(threads: Thread[]): ThreadNesting {
       // falls back to the cross-link rendering instead of filing a
       // proposal under a comment it no longer answers.
       if (target.proposal.answers_thread_id !== parent.id) continue;
+      if (anchoredPlacement && target.anchor.block_id && !parent.anchor.block_id) continue;
       nested.push(target);
       parentOf.set(id, parent.id);
     }

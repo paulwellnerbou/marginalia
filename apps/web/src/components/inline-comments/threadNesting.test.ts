@@ -2,7 +2,11 @@
 
 import { expect, test } from 'bun:test';
 import type { Comment, Thread } from '../../lib/api.js';
-import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
+import {
+  computeAnchoredThreadNesting,
+  computeThreadNesting,
+  nestedThreadsOf,
+} from './threadNesting.js';
 
 function comment(id: string, body: string, author = 'Paul'): Comment {
   return {
@@ -50,7 +54,7 @@ function thread(id: string, overrides: Partial<Thread> = {}): Thread {
   };
 }
 
-function proposal(id: string, answersId: string | null): Thread {
+function proposal(id: string, answersId: string | null, overrides: Partial<Thread> = {}): Thread {
   return thread(id, {
     proposal: {
       whole_document: false,
@@ -60,7 +64,17 @@ function proposal(id: string, answersId: string | null): Thread {
       proposed_text: null,
       source_snapshot: null,
     },
+    ...overrides,
   });
+}
+
+/** A thread the server has unlinked from the document: no anchor left. */
+function orphaned(t: Thread): Thread {
+  return {
+    ...t,
+    link_status: 'orphaned',
+    anchor: { ...t.anchor, block_id: null, quote: null, start_offset: null, end_offset: null },
+  };
 }
 
 test('a proposal nests under the thread it answers', () => {
@@ -115,6 +129,45 @@ test('a standalone proposal listed by a stale reverse index is not nested', () =
   const nesting = computeThreadNesting([parent, p]);
   expect(nesting.topLevel.map((t) => t.id)).toEqual(['C', 'P']);
   expect(nesting.nestedByParent.size).toBe(0);
+});
+
+test('anchored placement keeps an anchored proposal out of an orphaned parent', () => {
+  // The margin column and the floating popover place every card at its
+  // thread's anchor, and an orphaned parent has none — merging would
+  // park the proposal at the foot of the column while its highlight
+  // stayed behind in the text.
+  const parent = orphaned(thread('C', { answered_by_thread_ids: ['P'] }));
+  const p = proposal('P', 'C');
+  const nesting = computeAnchoredThreadNesting([parent, p]);
+  expect(nesting.topLevel.map((t) => t.id)).toEqual(['C', 'P']);
+  expect(nesting.nestedByParent.size).toBe(0);
+  expect(nesting.parentOf.size).toBe(0);
+});
+
+test('a flat list still merges an anchored proposal into an orphaned parent', () => {
+  const parent = orphaned(thread('C', { answered_by_thread_ids: ['P'] }));
+  const p = proposal('P', 'C');
+  const nesting = computeThreadNesting([parent, p]);
+  expect(nesting.topLevel.map((t) => t.id)).toEqual(['C']);
+  expect(nestedThreadsOf(nesting, 'C').map((t) => t.id)).toEqual(['P']);
+});
+
+test('anchored placement still merges a proposal that has no anchor of its own', () => {
+  // Whole-document proposals carry no block id, so the answered
+  // thread's card is the only place they can sensibly render.
+  const parent = thread('C', { answered_by_thread_ids: ['P'] });
+  const p = orphaned(proposal('P', 'C'));
+  const nesting = computeAnchoredThreadNesting([parent, p]);
+  expect(nesting.topLevel.map((t) => t.id)).toEqual(['C']);
+  expect(nestedThreadsOf(nesting, 'C').map((t) => t.id)).toEqual(['P']);
+});
+
+test('anchored placement merges when neither thread has an anchor', () => {
+  const parent = orphaned(thread('C', { answered_by_thread_ids: ['P'] }));
+  const p = orphaned(proposal('P', 'C'));
+  const nesting = computeAnchoredThreadNesting([parent, p]);
+  expect(nesting.topLevel.map((t) => t.id)).toEqual(['C']);
+  expect(nestedThreadsOf(nesting, 'C').map((t) => t.id)).toEqual(['P']);
 });
 
 test('an answered_by id pointing at a non-proposal is ignored', () => {
