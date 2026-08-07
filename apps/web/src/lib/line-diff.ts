@@ -1,9 +1,11 @@
 /**
- * Minimal line-level diff. Returns a list of hunks marking equal / added /
- * removed segments. Trims the common prefix/suffix, then runs the classic
- * LCS algorithm on the changed middle; only when that middle is still huge
- * does it short-circuit to a naive diff to keep memory bounded.
+ * Line-level diff for the diff view. jsdiff does the sequence matching — the
+ * same library packages/renderer uses for DOCX tracked changes — and this
+ * module adds the part it has no opinion on: which removed line each added
+ * line is a rewrite of, so that pair can be highlighted word by word.
  */
+
+import { Diff, diffArrays } from 'diff';
 
 export type DiffOp = 'equal' | 'add' | 'remove';
 
@@ -18,14 +20,16 @@ export interface DiffLine {
   segments?: DiffSegment[];
 }
 
-/** Max cells in the DP table before we fall back. 500k ≈ 4MB at 8B/number,
- *  well within budget even on modest devices; beyond that the LCS walk
- *  gets noticeably slow so we hand back a simple line-by-line diff. */
-const LCS_MAX_CELLS = 500_000;
-/** Tokens include whitespace runs, so a prose paragraph is easily 300+ per
- *  side; too low a cap sends ordinary paragraphs to the coarse edge-based
- *  fallback. 250k cells ≈ 2MB, allocated per paired line and short-lived. */
-const INLINE_LCS_MAX_CELLS = 250_000;
+/** Edit distance past which we stop looking for a minimal diff and render the
+ *  whole thing as one block replacement. jsdiff searches without a bound by
+ *  default, and two wholly different documents then take tens of seconds with
+ *  the tab frozen. The bail-out costs ~270ms whatever the document size, and
+ *  2000 still covers rewording half the lines of a 2000-line document. */
+const MAX_LINE_EDIT_DISTANCE = 2_000;
+/** Same guard one level down, and lower because it is paid per paired line.
+ *  Only lines that already passed PAIRING_MIN_SIMILARITY get here, so reaching
+ *  1000 token edits takes a pair of enormous near-identical lines. */
+const MAX_INLINE_EDIT_DISTANCE = 1_000;
 /** Max cells in the remove/add pairing table before we fall back to pairing by
  *  position. */
 const PAIRING_MAX_CELLS = 10_000;
@@ -37,85 +41,21 @@ const PAIRING_MIN_SIMILARITY = 0.3;
 export function diffLines(before: string, after: string): DiffLine[] {
   const a = before.split('\n');
   const b = after.split('\n');
-
-  // Trim the common prefix/suffix so the LCS only sees the changed middle.
-  // Without this, a localized edit in a long document blows past
-  // LCS_MAX_CELLS and degrades to the lockstep fallback, which renders an
-  // insertion as remove+add pairs of unrelated lines from there on down.
-  let prefix = 0;
-  const maxPrefix = Math.min(a.length, b.length);
-  while (prefix < maxPrefix && a[prefix] === b[prefix]) prefix++;
-  let suffix = 0;
-  const maxSuffix = maxPrefix - prefix;
-  while (suffix < maxSuffix && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix++;
+  const changes = diffArrays(a, b, { maxEditLength: MAX_LINE_EDIT_DISTANCE });
 
   const out: DiffLine[] = [];
-  for (let k = 0; k < prefix; k++) out.push({ op: 'equal', text: a[k]! });
-  diffTrimmedLines(a.slice(prefix, a.length - suffix), b.slice(prefix, b.length - suffix), out);
-  for (let k = a.length - suffix; k < a.length; k++) out.push({ op: 'equal', text: a[k]! });
+  if (changes) {
+    for (const change of changes) {
+      const op: DiffOp = change.added ? 'add' : change.removed ? 'remove' : 'equal';
+      for (const text of change.value) out.push({ op, text });
+    }
+  } else {
+    for (const text of a) out.push({ op: 'remove', text });
+    for (const text of b) out.push({ op: 'add', text });
+  }
+
   annotateInlineDiffs(out);
   return out;
-}
-
-function diffTrimmedLines(a: string[], b: string[], out: DiffLine[]): void {
-  const n = a.length;
-  const m = b.length;
-
-  if ((n + 1) * (m + 1) > LCS_MAX_CELLS) {
-    naiveDiff(a, b, out);
-    return;
-  }
-
-  // LCS DP table
-  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      if (a[i] === b[j]) dp[i]![j] = dp[i + 1]![j + 1]! + 1;
-      else dp[i]![j] = Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
-    }
-  }
-
-  let i = 0,
-    j = 0;
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      out.push({ op: 'equal', text: a[i]! });
-      i++;
-      j++;
-    } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
-      out.push({ op: 'remove', text: a[i]! });
-      i++;
-    } else {
-      out.push({ op: 'add', text: b[j]! });
-      j++;
-    }
-  }
-  while (i < n) {
-    out.push({ op: 'remove', text: a[i++]! });
-  }
-  while (j < m) {
-    out.push({ op: 'add', text: b[j++]! });
-  }
-}
-
-/**
- * Fallback when the DP table would be too large even after trimming, i.e.
- * changes span most of a very long document. Walks both sides in lockstep,
- * marking matching lines as equal and differing positions as remove+add
- * pairs. Not minimal, but O(n+m) time & memory.
- */
-function naiveDiff(a: string[], b: string[], out: DiffLine[]): void {
-  const len = Math.max(a.length, b.length);
-  for (let k = 0; k < len; k++) {
-    const av = a[k];
-    const bv = b[k];
-    if (av !== undefined && bv !== undefined && av === bv) {
-      out.push({ op: 'equal', text: av });
-    } else {
-      if (av !== undefined) out.push({ op: 'remove', text: av });
-      if (bv !== undefined) out.push({ op: 'add', text: bv });
-    }
-  }
 }
 
 function annotateInlineDiffs(lines: DiffLine[]): void {
@@ -124,8 +64,18 @@ function annotateInlineDiffs(lines: DiffLine[]): void {
     while (blockStart < lines.length && lines[blockStart]!.op === 'equal') blockStart++;
     if (blockStart >= lines.length) return;
 
+    // A blank line that survived unchanged is a paragraph break, not the end of
+    // an edit. Where it lands between a removed paragraph and its rewrite is a
+    // coin toss between equally minimal diffs, so spanning it is what keeps the
+    // two recognizable as a pair.
+    let scan = blockStart;
     let blockEnd = blockStart;
-    while (blockEnd < lines.length && lines[blockEnd]!.op !== 'equal') blockEnd++;
+    while (scan < lines.length) {
+      const line = lines[scan]!;
+      if (line.op !== 'equal') blockEnd = ++scan;
+      else if (!line.text.trim()) scan++;
+      else break;
+    }
 
     const removes: DiffLine[] = [];
     const adds: DiffLine[] = [];
@@ -156,12 +106,6 @@ function pairLines(removes: DiffLine[], adds: DiffLine[]): Array<[DiffLine, Diff
   const n = removes.length;
   const m = adds.length;
   if (n === 0 || m === 0) return [];
-  if ((n + 1) * (m + 1) > PAIRING_MAX_CELLS) {
-    const pairCount = Math.min(n, m);
-    const byPosition: Array<[DiffLine, DiffLine]> = [];
-    for (let i = 0; i < pairCount; i++) byPosition.push([removes[i]!, adds[i]!]);
-    return byPosition;
-  }
 
   const removeTokens = removes.map((line) => tokenBag(line.text));
   const addTokens = adds.map((line) => tokenBag(line.text));
@@ -169,6 +113,17 @@ function pairLines(removes: DiffLine[], adds: DiffLine[]): Array<[DiffLine, Diff
     const sim = similarity(removeTokens[i]!, addTokens[j]!);
     return sim >= PAIRING_MIN_SIMILARITY ? sim : Number.NEGATIVE_INFINITY;
   };
+
+  if ((n + 1) * (m + 1) > PAIRING_MAX_CELLS) {
+    const byPosition: Array<[DiffLine, DiffLine]> = [];
+    for (let i = 0; i < Math.min(n, m); i++) {
+      // The floor matters more here than in the DP: pairing by position lines
+      // up whatever happens to sit at the same offset, which for a block of
+      // wholly new text is a different line every time.
+      if (pairScore(i, i) > Number.NEGATIVE_INFINITY) byPosition.push([removes[i]!, adds[i]!]);
+    }
+    return byPosition;
+  }
 
   // best[i][j] = highest total similarity reachable from removes[i..]/adds[j..].
   const best: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
@@ -226,6 +181,28 @@ function similarity(a: TokenBag, b: TokenBag): number {
   return (2 * shared) / (a.size + b.size);
 }
 
+/**
+ * Splits words from the punctuation and whitespace around them, so a reworded
+ * sentence highlights the words that changed rather than the run of text
+ * between the nearest shared spaces.
+ */
+function tokenizeInline(text: string): string[] {
+  return text.match(/(\s+|[\p{L}\p{N}\p{M}_]+|[^\s\p{L}\p{N}\p{M}_])/gu) ?? [text];
+}
+
+/** jsdiff's matcher over our own tokens; its own word diff keeps whitespace
+ *  attached to words, which blurs exactly the boundaries we want to show. */
+class InlineTokenDiff extends Diff<string, string> {
+  override tokenize(value: string): string[] {
+    return tokenizeInline(value);
+  }
+  override join(tokens: string[]): string {
+    return tokens.join('');
+  }
+}
+
+const inlineTokenDiff = new InlineTokenDiff();
+
 function diffInline(
   before: string,
   after: string,
@@ -237,46 +214,23 @@ function diffInline(
     };
   }
 
-  const a = tokenizeInline(before);
-  const b = tokenizeInline(after);
-  if ((a.length + 1) * (b.length + 1) > INLINE_LCS_MAX_CELLS) {
-    return diffInlineByEdges(before, after);
-  }
-
-  const dp: number[][] = Array.from({ length: a.length + 1 }, () =>
-    new Array(b.length + 1).fill(0),
-  );
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      if (a[i] === b[j]) dp[i]![j] = dp[i + 1]![j + 1]! + 1;
-      else dp[i]![j] = Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!);
-    }
-  }
+  const changes = inlineTokenDiff.diff(before, after, {
+    maxEditLength: MAX_INLINE_EDIT_DISTANCE,
+  });
+  if (!changes) return diffInlineByEdges(before, after);
 
   const beforeSegments: DiffSegment[] = [];
   const afterSegments: DiffSegment[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      pushSegment(beforeSegments, false, a[i]!);
-      pushSegment(afterSegments, false, b[j]!);
-      i++;
-      j++;
-    } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
-      pushSegment(beforeSegments, true, a[i]!);
-      i++;
-    } else {
-      pushSegment(afterSegments, true, b[j]!);
-      j++;
-    }
+  for (const change of changes) {
+    if (!change.added) pushSegment(beforeSegments, Boolean(change.removed), change.value);
+    if (!change.removed) pushSegment(afterSegments, Boolean(change.added), change.value);
   }
-  while (i < a.length) pushSegment(beforeSegments, true, a[i++]!);
-  while (j < b.length) pushSegment(afterSegments, true, b[j++]!);
 
   return { before: beforeSegments, after: afterSegments };
 }
 
+/** Coarse stand-in for a line too long to word-diff: keep the shared ends and
+ *  mark everything between them as changed. */
 function diffInlineByEdges(
   before: string,
   after: string,
@@ -308,10 +262,6 @@ function diffInlineByEdges(
       { changed: false, text: after.slice(afterSuffix) },
     ]),
   };
-}
-
-function tokenizeInline(text: string): string[] {
-  return text.match(/(\s+|[\p{L}\p{N}\p{M}_]+|[^\s\p{L}\p{N}\p{M}_])/gu) ?? [text];
 }
 
 function pushSegment(segments: DiffSegment[], changed: boolean, text: string): void {
