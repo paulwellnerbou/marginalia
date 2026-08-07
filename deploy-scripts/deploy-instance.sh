@@ -87,13 +87,29 @@ HOST_PORT_VALUE="${HOST_PORT:-$DEFAULT_HOST_PORT}"
 # 0. Only the deploy knows the topology.
 if [[ -n "${MARGINALIA_TRUSTED_PROXY_HOPS:-}" ]]; then
   TRUSTED_PROXY_HOPS_VALUE="$MARGINALIA_TRUSTED_PROXY_HOPS"
-  TRUSTED_PROXY_HOPS_ORIGIN="from .env.$INSTANCE"
+  # Not necessarily the env file: `set -a; source` merges that into the
+  # same environment CI may already have set the variable in, and the two
+  # are indistinguishable by here. Say "explicit" rather than naming a
+  # source we can't actually confirm.
+  TRUSTED_PROXY_HOPS_ORIGIN="set explicitly"
 else
+  # Bracketed and bare IPv6 are the same address; matching only one would
+  # make the spelling of the binding decide whether the proxy is trusted.
   case "$HOST_BIND_IP" in
-    127.*|::1|localhost) TRUSTED_PROXY_HOPS_VALUE=1 ;;
+    127.*|::1|\[::1\]|localhost) TRUSTED_PROXY_HOPS_VALUE=1 ;;
     *) TRUSTED_PROXY_HOPS_VALUE=0 ;;
   esac
   TRUSTED_PROXY_HOPS_ORIGIN="derived from HOST_BIND_IP=$HOST_BIND_IP"
+fi
+
+# Docker wants an IPv6 host address bracketed in -p; a bare `::1` would
+# be split as host:port:port and rejected. Only relevant because the hop
+# derivation above accepts `::1` as loopback — treating it as a supported
+# binding while the publish spec choked on it would be a trap.
+if [[ "$HOST_BIND_IP" == *:* && "$HOST_BIND_IP" != \[* ]]; then
+  PUBLISH_HOST="[$HOST_BIND_IP]"
+else
+  PUBLISH_HOST="$HOST_BIND_IP"
 fi
 
 DOCKER_ARGS=(
@@ -103,7 +119,7 @@ DOCKER_ARGS=(
   --memory=512m
   --memory-reservation=256m
   -v "$DEPLOY_PATH/data-$INSTANCE:/app/.data"
-  -p "$HOST_BIND_IP:$HOST_PORT_VALUE:$PORT_VALUE"
+  -p "$PUBLISH_HOST:$HOST_PORT_VALUE:$PORT_VALUE"
   -e PORT="$PORT_VALUE"
   -e MARGINALIA_DATA_DIR="$DATA_DIR_VALUE"
   -e MARGINALIA_WEB_DIR="$WEB_DIR_VALUE"
@@ -170,6 +186,6 @@ echo "=========================================="
 echo "✅ $INSTANCE deployment complete!"
 echo "Container: marginalia-$INSTANCE"
 echo "Image: $FULL_IMAGE"
-echo "Host port: $HOST_BIND_IP:$HOST_PORT_VALUE -> $PORT_VALUE"
+echo "Host port: $PUBLISH_HOST:$HOST_PORT_VALUE -> $PORT_VALUE"
 echo "Trusted proxy hops: $TRUSTED_PROXY_HOPS_VALUE ($TRUSTED_PROXY_HOPS_ORIGIN)"
 echo "=========================================="
