@@ -1705,14 +1705,21 @@ function importBundleParticipants(db: Database, uid: string, raw: unknown, now: 
       `[marginalia] import ${uid}: participant roster truncated to ${MAX_IMPORTED_PARTICIPANTS} of ${raw.length} — some restored history entries may show as "Unknown user"`,
     );
   }
-  for (const entry of raw.slice(0, MAX_IMPORTED_PARTICIPANTS)) {
-    if (!entry || typeof entry !== 'object') continue;
-    const { client_id: clientId, display_name: displayName } = entry as Record<string, unknown>;
-    if (typeof clientId !== 'string' || typeof displayName !== 'string') continue;
-    const name = displayName.trim().slice(0, 200);
-    if (!clientId || !name) continue;
-    insert.run(uid, clientId, name, now, now);
-  }
+  // One statement per row would be one implicit transaction per row, and
+  // a commit apiece; a roster near the cap makes that the slowest part of
+  // an import. This is the only path that inserts participants in bulk,
+  // so the batching belongs here rather than around the caller.
+  const insertAll = db.transaction((entries: unknown[]) => {
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue;
+      const { client_id: clientId, display_name: displayName } = entry as Record<string, unknown>;
+      if (typeof clientId !== 'string' || typeof displayName !== 'string') continue;
+      const name = displayName.trim().slice(0, 200);
+      if (!clientId || !name) continue;
+      insert.run(uid, clientId, name, now, now);
+    }
+  });
+  insertAll(raw.slice(0, MAX_IMPORTED_PARTICIPANTS));
 }
 
 // A document's history pack is proportional to revision count and diff
