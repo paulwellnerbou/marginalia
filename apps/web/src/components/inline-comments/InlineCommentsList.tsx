@@ -15,15 +15,13 @@ import {
 } from '@radix-ui/themes';
 import { FunnelIcon } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { formatAnchorQuote } from '../../lib/anchor-quote.js';
-import type { CommentAnchor, Thread } from '../../lib/api.js';
+import type { Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import {
   buildThreadCollapseState,
   reconcileThreadCollapseState,
   type ThreadCollapseState,
 } from '../threadCollapseState.js';
-import { InlineComposer } from './InlineComposer.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 import { type ThreadActionResult, threadLinks, threadsById } from './inlineUtils.js';
 import {
@@ -58,6 +56,11 @@ import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
  * Replaces the legacy CommentsPane / ThreadItem / CommentItem /
  * DiscussionUi stack — the cards from inline-comments/ are now the
  * single source of truth for thread rendering.
+ *
+ * Reading surface only: a new comment is always composed over the
+ * document, in the margin column or as a popover at the selection, so
+ * this pane never hosts the new-comment form. Reply composers inside
+ * the cards are unaffected.
  */
 interface Props {
   uid: string;
@@ -67,16 +70,9 @@ interface Props {
   onClearSectionFilter?: () => void;
   blockRanges: Map<string, BlockSourceRange>;
   canComment: boolean;
-  pendingAnchor: CommentAnchor | null;
   focusedThread: { threadId: string; nonce: number } | null;
   displayName: string | null;
   mentionCandidates: string[];
-  onCancelPending: () => void;
-  onCreate: (payload: {
-    anchor: CommentAnchor;
-    body: string;
-    display_name?: string;
-  }) => Promise<void>;
   onReply: (threadId: string, body: string, name?: string) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
   onDeleteNode: (id: string) => Promise<void>;
@@ -116,12 +112,9 @@ export function InlineCommentsList({
   onClearSectionFilter,
   blockRanges,
   canComment,
-  pendingAnchor,
   focusedThread,
   displayName,
   mentionCandidates,
-  onCancelPending,
-  onCreate,
   onReply,
   onEdit,
   onDeleteNode,
@@ -374,13 +367,6 @@ export function InlineCommentsList({
       }
       return { ...prev, collapsed: next };
     });
-  }
-
-  async function submitNew(body: string, name?: string) {
-    if (!pendingAnchor) return;
-    const payload: Parameters<typeof onCreate>[0] = { anchor: pendingAnchor, body };
-    if (name !== undefined) payload.display_name = name;
-    return onCreate(payload);
   }
 
   const byId = useMemo(() => threadsById(threads), [threads]);
@@ -640,23 +626,6 @@ export function InlineCommentsList({
         </div>
       )}
 
-      {canComment && pendingAnchor && (
-        <div className="ic-card ic-card-pending">
-          <div className="ic-pending-quote">"{formatAnchorQuote(pendingAnchor.quote, 160)}"</div>
-          <InlineComposer
-            placeholder="Your comment…"
-            needsName={!displayName}
-            mentionCandidates={mentionCandidates}
-            rows={3}
-            submitLabel="Post"
-            showCancel
-            autoFocus
-            onCancel={onCancelPending}
-            onSubmit={submitNew}
-          />
-        </div>
-      )}
-
       {visibleOrphans.length > 0 && (
         <section className="ic-list-orphans">
           <h4 className="ic-list-section-title">Orphaned discussions</h4>
@@ -667,7 +636,7 @@ export function InlineCommentsList({
         </section>
       )}
 
-      {totalCards === 0 && !pendingAnchor && (
+      {totalCards === 0 && (
         <div className="ic-list-empty">
           {sectionFilterCount > 0
             ? 'No threads in the focused sections.'

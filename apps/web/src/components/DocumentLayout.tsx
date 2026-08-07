@@ -112,6 +112,7 @@ import { FloatingCommentsToolbar } from './inline-comments/FloatingCommentsToolb
 import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
 import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
 import { COMMENT_FLASH_MS, type ThreadActionResult } from './inline-comments/inlineUtils.js';
+import { PendingCommentPopover } from './inline-comments/PendingCommentPopover.js';
 import { McpPanel } from './McpPanel.js';
 import { ReadAloudControls } from './ReadAloudControls.js';
 import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
@@ -1575,6 +1576,30 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [canComment, threads, pendingAnchor]);
 
   /**
+   * Where a new comment gets composed. It is always over the document —
+   * never in a side pane — and the margin column can only host it while
+   * it is actually on screen. Everything else (floating mode, a column
+   * the container query has hidden, a column the reader collapsed)
+   * falls to the popover at the selection.
+   *
+   * Reactive by construction: `columnModeAvailable` re-measures on
+   * resize and on either pane width, so narrowing the window hands the
+   * draft over mid-edit rather than leaving it in a hidden column.
+   */
+  const composerInColumn = !floatingComments && inlineCommentsOpen && columnModeAvailable;
+
+  /**
+   * Does a popover host mount inside the document row on this pass?
+   * Only then does the row need to be a positioning context. Column
+   * mode reaches this too now — the composer's popover is the one
+   * that mode also puts over the document. Paged mode is excluded on
+   * purpose: the row slides sideways with the pages, so both hosts
+   * hang off the still viewport instead.
+   */
+  const rowHostsPopover =
+    !paged && (floatingComments || (canComment && !!pendingAnchor && !composerInColumn));
+
+  /**
    * The inline column can be off-screen even when `inlineCommentsOpen`
    * is true: the container query on `.doc-scroll` hides `.ic-column`
    * on narrow viewports. Detect the rendered visibility of the column
@@ -1592,45 +1617,29 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return column.getClientRects().length > 0;
   }, [inlineCommentsOpen]);
 
-  useEffect(() => {
-    if (!canComment || !pendingAnchor) return;
+  const startCommentDraft = useCallback((anchor: CommentAnchor) => {
+    // Deliberately does not open the column: `composerInColumn` routes
+    // the draft to whichever surface is already showing, and forcing
+    // the column open would both override a reader who collapsed it and
+    // shove the text sideways at the moment they asked to write.
+    const scrollTop = docScrollRef.current?.scrollTop ?? null;
+    setPendingDraft({ mode: 'comment', anchor });
 
-    // Floating mode shows the composer as a popover at the selection —
-    // no column to open, no right-pane fallback.
-    if (floatingComments) return;
+    if (scrollTop === null) return;
 
-    if (!inlineCommentsOpen) {
-      setInlineCommentsOpen(true);
-      return;
-    }
+    // The pending card entering the column reflows it; hold the reader
+    // where they were.
+    const restoreScroll = () => {
+      const scroll = docScrollRef.current;
+      if (scroll) scroll.scrollTop = scrollTop;
+    };
 
-    if (!inlineCommentsVisible()) {
-      setCommentsOpen(true);
-      setRightTab('comments');
-    }
-  }, [canComment, pendingAnchor, inlineCommentsOpen, inlineCommentsVisible, floatingComments]);
-
-  const startCommentDraft = useCallback(
-    (anchor: CommentAnchor) => {
-      const scrollTop = docScrollRef.current?.scrollTop ?? null;
-      if (!floatingComments) setInlineCommentsOpen(true);
-      setPendingDraft({ mode: 'comment', anchor });
-
-      if (scrollTop === null) return;
-
-      const restoreScroll = () => {
-        const scroll = docScrollRef.current;
-        if (scroll) scroll.scrollTop = scrollTop;
-      };
-
+    restoreScroll();
+    window.requestAnimationFrame(() => {
       restoreScroll();
-      window.requestAnimationFrame(() => {
-        restoreScroll();
-        window.requestAnimationFrame(restoreScroll);
-      });
-    },
-    [floatingComments],
-  );
+      window.requestAnimationFrame(restoreScroll);
+    });
+  }, []);
 
   const openCommentThread = useCallback(
     (
@@ -1652,6 +1661,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       // fall back to the right pane (and open it if it's collapsed).
       // Floating mode always shows the thread as a popover in the doc
       // pane, so the right pane stays untouched.
+      //
+      // Kept even though a *draft* never falls back here any more:
+      // reading an existing thread is a different question. Column mode
+      // has no popover for thread cards — only for the composer — so
+      // dropping this would leave a highlight click with nowhere to
+      // land whenever the column is hidden or collapsed.
       if (!floatingComments && !inlineCommentsVisible()) {
         setCommentsOpen(true);
         setRightTab('comments');
@@ -1865,8 +1880,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       focusedThread={focusedThread}
       displayName={effectiveDisplayName}
       mentionCandidates={mentionCandidates}
-      onCancelPending={() => setPendingDraft(null)}
-      onCreate={onCreate}
       onReply={onReply}
       onEdit={onEdit}
       onDeleteNode={onDeleteNode}
@@ -1878,6 +1891,25 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       onScrollToAnchor={scrollToAnchor}
     />
   ) : null;
+
+  /**
+   * Hoisted for the same reason as the layer above, and mounted in the
+   * same two places: the composer is the one popover column mode also
+   * puts over the document, so it has to follow paged mode's host too.
+   */
+  const pendingCommentPopover =
+    canComment && pendingAnchor && !composerInColumn ? (
+      <PendingCommentPopover
+        anchor={pendingAnchor}
+        docHtml={liveRendered.html}
+        docElementRef={docRef}
+        scrollContainerRef={docScrollRef}
+        displayName={effectiveDisplayName}
+        mentionCandidates={mentionCandidates}
+        onCancel={() => setPendingDraft(null)}
+        onCreate={onCreate}
+      />
+    ) : null;
 
   return (
     <div className="doc-page">
@@ -2121,7 +2153,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               ref={docScrollRef}
             >
               <div
-                className={`doc-row${!floatingComments && inlineCommentsOpen ? ' doc-row-with-inline' : ''}${floatingComments && !paged ? ' doc-row-floating' : ''}`}
+                className={`doc-row${!floatingComments && inlineCommentsOpen ? ' doc-row-with-inline' : ''}${rowHostsPopover ? ' doc-row-floating' : ''}`}
               >
                 <div className="doc-body">
                   <RenderedDoc
@@ -2176,7 +2208,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     hideResolved={inlineCommentsHideResolved}
                     onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
                     onSwitchToFloating={() => setCommentsDisplayMode('floating')}
-                    pendingAnchor={canComment ? pendingAnchor : null}
+                    pendingAnchor={canComment && composerInColumn ? pendingAnchor : null}
                     focusedThread={focusedThread}
                     displayName={effectiveDisplayName}
                     mentionCandidates={mentionCandidates}
@@ -2193,6 +2225,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     onScrollToAnchor={scrollToAnchor}
                   />
                 )}
+                {paged ? null : pendingCommentPopover}
               </div>
             </div>
             {paged && (
@@ -2212,6 +2245,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onClick={() => pages.tap(1)}
                 />
                 {floatingCommentsLayer}
+                {pendingCommentPopover}
               </>
             )}
           </div>
@@ -2301,12 +2335,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   onClearSectionFilter={clearSectionFilter}
                   blockRanges={blockRanges}
                   canComment={canComment}
-                  pendingAnchor={canComment ? pendingAnchor : null}
                   focusedThread={focusedThread}
-                  onCancelPending={() => setPendingDraft(null)}
                   displayName={effectiveDisplayName}
                   mentionCandidates={mentionCandidates}
-                  onCreate={onCreate}
                   onReply={onReply}
                   onEdit={onEdit}
                   onDeleteNode={onDeleteNode}
