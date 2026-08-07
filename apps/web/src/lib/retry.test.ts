@@ -18,8 +18,24 @@ function failing(times: number, error: unknown, value = 'ok') {
 const noSleep = async () => {};
 
 describe('isTransientError', () => {
-  test('treats a dead connection (no status) as transient', () => {
+  test('treats the TypeError of a dead connection as transient', () => {
     expect(isTransientError(new TypeError('Failed to fetch'))).toBe(true);
+  });
+
+  test('treats an expired request timeout as transient', () => {
+    expect(isTransientError(new DOMException('signal timed out', 'TimeoutError'))).toBe(true);
+  });
+
+  test('treats a deliberate abort as final', () => {
+    expect(isTransientError(new DOMException('aborted', 'AbortError'))).toBe(false);
+  });
+
+  test('treats our own bugs as final rather than retrying them three times', () => {
+    expect(isTransientError(new SyntaxError('Unexpected token < in JSON'))).toBe(false);
+    expect(isTransientError(new Error('boom'))).toBe(false);
+    expect(isTransientError(new RangeError('nope'))).toBe(false);
+    expect(isTransientError(null)).toBe(false);
+    expect(isTransientError(undefined)).toBe(false);
   });
 
   test('treats 5xx as transient and plain 4xx as final', () => {

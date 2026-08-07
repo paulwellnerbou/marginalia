@@ -6,10 +6,10 @@
  * network blip) otherwise leaves that pane empty and self-consistent —
  * "0 threads" reads as a fact, not as a failure, so nobody reloads.
  *
- * Client errors are not retried: a 401/403/404 is an answer, and asking
- * again just delays the caller's error path. Everything else — 5xx, and
- * the `TypeError` fetch throws when the connection dies — is treated as
- * transient.
+ * Only errors `isTransientError` accepts are retried; see there for
+ * where that line falls. A retry ladder is for blips — an outage
+ * outlasts any budget worth spending here, so callers that must survive
+ * one need a recovery cue as well (the realtime reconnect, in this app).
  */
 export interface RetryOptions {
   attempts?: number;
@@ -24,12 +24,29 @@ export interface RetryOptions {
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 4xx other than 408/429 is a verdict, not a hiccup. */
+/**
+ * Whether retrying `err` could plausibly produce a different answer.
+ *
+ * Transient means the transport failed, not the request: a numeric
+ * `status` outside 4xx (an `ApiError`), the bare `TypeError` fetch
+ * rejects with when the connection dies, or the `TimeoutError` an
+ * expired `AbortSignal.timeout` raises. 4xx other than 408/429 is a
+ * verdict, not a hiccup.
+ *
+ * Everything else — a caller's deliberate `AbortError`, a `SyntaxError`
+ * from an unparseable body, any Error a bug in our own code threw — is
+ * final. Retrying those only delays the caller's error path three times
+ * over, and a defect that surfaces late is harder to place than one
+ * that surfaces at once.
+ */
 export function isTransientError(err: unknown): boolean {
   const status = (err as { status?: unknown } | null)?.status;
-  if (typeof status !== 'number') return true;
-  if (status === 408 || status === 429) return true;
-  return status < 400 || status >= 500;
+  if (typeof status === 'number') {
+    if (status === 408 || status === 429) return true;
+    return status < 400 || status >= 500;
+  }
+  if (err instanceof TypeError) return true;
+  return (err as { name?: unknown } | null)?.name === 'TimeoutError';
 }
 
 export async function retryRequest<T>(

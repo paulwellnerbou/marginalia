@@ -307,7 +307,22 @@ function waitForAuth(docUid: string): Promise<void> {
 
 async function request<T>(
   path: string,
-  init: RequestInit & { identity?: Identity | null; docUid?: string; _retry?: boolean } = {},
+  init: RequestInit & {
+    identity?: Identity | null;
+    docUid?: string;
+    _retry?: boolean;
+    /**
+     * Reject with a `TimeoutError` if the whole exchange, body included,
+     * outlasts this. Opt-in: uploads and exports are legitimately slow,
+     * and a ceiling that fits a JSON read would cut them off.
+     *
+     * The signal is minted per call rather than taken from the caller so
+     * the password-prompt retry below gets a fresh budget — it can sit
+     * on a dialog for a minute, and an already-expired signal would
+     * abort the retry the instant it started.
+     */
+    timeoutMs?: number;
+  } = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
   // Don't set a content-type for FormData — the browser fills in
@@ -330,7 +345,14 @@ async function request<T>(
     if (token) headers.set('x-marginalia-invite', token);
   }
 
-  const res = await fetch(path, { ...init, headers, credentials: 'include' });
+  const signal =
+    init.signal ?? (init.timeoutMs === undefined ? null : AbortSignal.timeout(init.timeoutMs));
+  const res = await fetch(path, {
+    ...init,
+    headers,
+    credentials: 'include',
+    ...(signal ? { signal } : {}),
+  });
   if (!res.ok) {
     let code = 'unknown';
     try {
@@ -1035,6 +1057,22 @@ export function threadCreatedAt(t: Thread): number {
 
 const listThreadsInflight = new Map<string, Promise<ListThreadsResponse>>();
 
+/**
+ * Ceiling on a single thread read.
+ *
+ * Deduping in-flight reads means a request that never settles is worse
+ * than one that fails: its key is never released, so every later caller
+ * is handed the same hung promise and the document keeps its empty
+ * comment column for as long as the page is open. A half-open socket
+ * (network changed under us, a proxy that stopped answering) does
+ * exactly that. Bound it so the failure is a rejection the retry ladder
+ * and the reconnect path can both act on.
+ *
+ * Generous on purpose — this covers the body too, and the payload grows
+ * with the comment count.
+ */
+const LIST_THREADS_TIMEOUT_MS = 30_000;
+
 // LRU cache of the last-fetched thread list per document uid.
 // Capped at MAX_SNAPSHOT_DOCS entries; evicts the least-recently-used document
 // when the cap is exceeded. Map insertion order is used as the LRU key, so
@@ -1075,6 +1113,7 @@ export function listThreads(
     {
       method: 'GET',
       docUid: uid,
+      timeoutMs: LIST_THREADS_TIMEOUT_MS,
     },
   )
     .then((res) => {
@@ -1082,7 +1121,12 @@ export function listThreads(
       return res;
     })
     .finally(() => {
-      listThreadsInflight.delete(cacheKey);
+      // Only clear our own entry: a later call may already have claimed
+      // the key, and dropping that one would let a third caller start a
+      // duplicate read alongside it.
+      if (listThreadsInflight.get(cacheKey) === promise) {
+        listThreadsInflight.delete(cacheKey);
+      }
     });
 
   listThreadsInflight.set(cacheKey, promise);
