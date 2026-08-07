@@ -80,38 +80,69 @@ describe('clampCardLeft', () => {
   });
 });
 
+// Tops are signed distances from where a jump lands the anchor, so the
+// reader always sits at 0: negative is scrolled past, positive is still
+// ahead. REF is the small "already read" pad the toolbars pass.
+const REF = 4;
+
 describe('adjacentThreadTarget', () => {
+  // The reader sits on 'b', with 'a' behind them and 'c'/'d' ahead.
   const entries = [
-    { id: 'a', top: -300 },
-    { id: 'b', top: 10 },
+    { id: 'a', top: -1200 },
+    { id: 'b', top: 0 },
     { id: 'c', top: 250 },
     { id: 'd', top: 900 },
   ];
 
   test('next steps to the first anchor below the reading position', () => {
-    expect(adjacentThreadTarget(entries, 20, 1)).toBe('c');
+    expect(adjacentThreadTarget(entries, REF, 1)).toBe('c');
   });
 
   test('next from above the first anchor lands on the first', () => {
-    expect(adjacentThreadTarget(entries, -400, 1)).toBe('a');
+    expect(adjacentThreadTarget([{ id: 'a', top: 300 }], REF, 1)).toBe('a');
   });
 
   test('next at the last anchor returns null', () => {
-    expect(adjacentThreadTarget(entries, 1000, 1)).toBeNull();
+    expect(adjacentThreadTarget(entries, REF, 1, 'd')).toBeNull();
   });
 
-  test('prev steps back one anchor', () => {
-    expect(adjacentThreadTarget(entries, 260, -1)).toBe('b');
+  test('prev steps back one anchor from the one being read', () => {
+    expect(adjacentThreadTarget(entries, REF, -1)).toBe('a');
+  });
+
+  // The dead-arrow case: the comment is plainly above the viewport, so
+  // "previous" means going back to it rather than over it.
+  test('prev returns to the comment the reader has scrolled past', () => {
+    const scrolledPast = [
+      { id: 'a', top: -1900 },
+      { id: 'b', top: -700 },
+      { id: 'c', top: 250 },
+    ];
+    expect(adjacentThreadTarget(scrolledPast, REF, -1)).toBe('b');
+  });
+
+  test('prev returns to the only comment when it is above the reader', () => {
+    expect(adjacentThreadTarget([{ id: 'a', top: -700 }], REF, -1)).toBe('a');
+  });
+
+  // Landing is exact within a couple of pixels; a jump that measured a
+  // hair short must not count as having scrolled past.
+  test('prev steps back from a thread the reader landed on inexactly', () => {
+    const landedShort = [
+      { id: 'a', top: -1200 },
+      { id: 'b', top: -3 },
+    ];
+    expect(adjacentThreadTarget(landedShort, REF, -1)).toBe('a');
   });
 
   test('prev on or above the first anchor returns null', () => {
-    expect(adjacentThreadTarget(entries, -300, -1)).toBeNull();
-    expect(adjacentThreadTarget(entries, -400, -1)).toBeNull();
+    expect(adjacentThreadTarget(entries, REF, -1, 'a')).toBeNull();
+    expect(adjacentThreadTarget([{ id: 'a', top: 300 }], REF, -1)).toBeNull();
   });
 
   test('empty list returns null both ways', () => {
-    expect(adjacentThreadTarget([], 0, 1)).toBeNull();
-    expect(adjacentThreadTarget([], 0, -1)).toBeNull();
+    expect(adjacentThreadTarget([], REF, 1)).toBeNull();
+    expect(adjacentThreadTarget([], REF, -1)).toBeNull();
   });
 
   // Threads quoting the same text resolve to the same anchor, so they
@@ -126,34 +157,42 @@ describe('adjacentThreadTarget', () => {
     ];
 
     test('without a parked thread, next skips past the whole tie', () => {
-      expect(adjacentThreadTarget(tied, 20, 1)).toBe('c');
+      expect(adjacentThreadTarget(tied, REF, 1)).toBe('c');
     });
 
     test('next walks from the first of a tie to the second', () => {
-      expect(adjacentThreadTarget(tied, 20, 1, 'b1')).toBe('b2');
+      expect(adjacentThreadTarget(tied, REF, 1, 'b1')).toBe('b2');
     });
 
     test('next leaves the tie only from its last member', () => {
-      expect(adjacentThreadTarget(tied, 20, 1, 'b2')).toBe('c');
+      expect(adjacentThreadTarget(tied, REF, 1, 'b2')).toBe('c');
     });
 
     test('prev walks back through the tie symmetrically', () => {
-      expect(adjacentThreadTarget(tied, 20, -1, 'b2')).toBe('b1');
-      expect(adjacentThreadTarget(tied, 20, -1, 'b1')).toBe('a');
+      expect(adjacentThreadTarget(tied, REF, -1, 'b2')).toBe('b1');
+      expect(adjacentThreadTarget(tied, REF, -1, 'b1')).toBe('a');
     });
 
     test('a parked thread that is gone falls back to position', () => {
-      expect(adjacentThreadTarget(tied, 20, 1, 'filtered-out')).toBe('c');
-    });
-
-    test('the parked thread wins over the reading position', () => {
-      // refTop says everything is behind us, but the reader is on b1.
-      expect(adjacentThreadTarget(tied, 1000, 1, 'b1')).toBe('b2');
+      expect(adjacentThreadTarget(tied, REF, 1, 'filtered-out')).toBe('c');
     });
 
     test('prev from the first thread returns null even when parked', () => {
-      expect(adjacentThreadTarget(tied, 20, -1, 'a')).toBeNull();
+      expect(adjacentThreadTarget(tied, REF, -1, 'a')).toBeNull();
     });
+  });
+
+  // At either end of the document the scroll clamps, so the thread the
+  // reader was taken to stops short of the landing line. The caller says
+  // they are still on it, and that beats what the positions imply.
+  test('a thread parked at a scroll limit steps off it, not back to it', () => {
+    const clamped = [
+      { id: 'a', top: -900 },
+      { id: 'b', top: -500 },
+      { id: 'c', top: -200 },
+    ];
+    expect(adjacentThreadTarget(clamped, REF, 1, 'b')).toBe('c');
+    expect(adjacentThreadTarget(clamped, REF, -1, 'b')).toBe('a');
   });
 });
 
@@ -191,23 +230,23 @@ describe('sortThreadTopEntries', () => {
 describe('currentThreadIndex', () => {
   const entries = [
     { id: 'a', top: -300 },
-    { id: 'b', top: 10 },
+    { id: 'b', top: 0 },
     { id: 'c', top: 250 },
   ];
 
   test('is the last anchor at or above the reading position', () => {
-    expect(currentThreadIndex(entries, 20)).toBe(1);
+    expect(currentThreadIndex(entries, REF)).toBe(1);
   });
 
   test('is -1 above the first anchor', () => {
-    expect(currentThreadIndex(entries, -400)).toBe(-1);
+    expect(currentThreadIndex([{ id: 'a', top: 300 }], REF)).toBe(-1);
   });
 
   test('is the parked thread when one is given', () => {
-    expect(currentThreadIndex(entries, 20, 'c')).toBe(2);
+    expect(currentThreadIndex(entries, REF, 'c')).toBe(2);
   });
 
   test('ignores a parked id that is not in the list', () => {
-    expect(currentThreadIndex(entries, 20, 'nope')).toBe(1);
+    expect(currentThreadIndex(entries, REF, 'nope')).toBe(1);
   });
 });

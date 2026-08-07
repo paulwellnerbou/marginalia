@@ -10,6 +10,12 @@ import { DropdownMenu, IconButton } from '@radix-ui/themes';
 import { type RefObject, useCallback } from 'react';
 import { resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import type { Thread } from '../../lib/api.js';
+import {
+  AT_THREAD_TOLERANCE_PX,
+  adjacentThreadTarget,
+  sortThreadTopEntries,
+  type ThreadTopEntry,
+} from './floatingCardPosition.js';
 
 interface Props {
   /** Threads in document order (already sorted, already filtered for visibility). */
@@ -41,9 +47,6 @@ interface Props {
 }
 
 const NEAR_EPSILON_PX = 4;
-/** How far the viewport may sit from the remembered thread's landing
- *  position and still count as "on" it. Settled jumps are within 2px. */
-const REMEMBERED_TOLERANCE_PX = 8;
 
 export function InlineCommentsToolbar({
   sortedThreads,
@@ -95,62 +98,47 @@ export function InlineCommentsToolbar({
     [scrollContainerRef, docElementRef, stackingEnabled, stickyTopPad],
   );
 
-  /** Index of the comment the reader is currently on: the remembered
-   *  navigation target while the viewport is still at its position
-   *  (disambiguates same-anchor threads), else the last comment whose
-   *  landing position is at or above the current scrollTop. Returns -1
-   *  above the first comment. */
-  const findCurrentIndex = useCallback((): number => {
-    const scroll = scrollContainerRef.current;
-    if (!scroll) return -1;
-    const pos = scroll.scrollTop;
+  /** The thread an arrow press should jump to, sharing its stepping
+   *  rules with the floating toolbar so both presentations navigate the
+   *  same way. */
+  const navTarget = useCallback(
+    (direction: -1 | 1): Thread | null => {
+      const scroll = scrollContainerRef.current;
+      if (!scroll) return null;
+      const pos = scroll.scrollTop;
 
-    const remembered = lastNavThreadRef.current;
-    if (remembered) {
-      const i = sortedThreads.findIndex((t) => t.id === remembered);
-      if (i >= 0) {
-        const thread = sortedThreads[i];
-        const want = thread ? jumpScrollTop(thread) : null;
-        if (want !== null && Math.abs(pos - want) <= REMEMBERED_TOLERANCE_PX) return i;
+      // Threads whose anchor no longer resolves are left out: jumping to
+      // them would silently do nothing and the arrow would feel dead.
+      const entries: ThreadTopEntry[] = [];
+      for (const thread of sortedThreads) {
+        const want = jumpScrollTop(thread);
+        if (want === null) continue;
+        entries.push({ id: thread.id, top: want - pos });
       }
-    }
+      // Already in document order; the sort is stable, so threads whose
+      // landing positions tie (same anchor, or both clamped at an end of
+      // the document) keep it.
+      sortThreadTopEntries(entries);
 
-    let current = -1;
-    for (let i = 0; i < sortedThreads.length; i++) {
-      const t = sortedThreads[i];
-      if (!t) continue;
-      const top = jumpScrollTop(t);
-      if (top === null) continue;
-      if (top <= pos + NEAR_EPSILON_PX) current = i;
-      else break;
-    }
-    return current;
-  }, [sortedThreads, scrollContainerRef, jumpScrollTop, lastNavThreadRef]);
+      const remembered = lastNavThreadRef.current;
+      const parked = entries.find(
+        (e) => e.id === remembered && Math.abs(e.top) <= AT_THREAD_TOLERANCE_PX,
+      );
+      const targetId = adjacentThreadTarget(entries, NEAR_EPSILON_PX, direction, parked?.id);
+      return sortedThreads.find((t) => t.id === targetId) ?? null;
+    },
+    [sortedThreads, scrollContainerRef, jumpScrollTop, lastNavThreadRef],
+  );
 
   const onJumpPrev = useCallback(() => {
-    const idx = findCurrentIndex();
-    // idx <= 0: at or above the first comment → nothing to go prev to.
-    for (let i = idx - 1; i >= 0; i--) {
-      const target = sortedThreads[i];
-      if (!target) continue;
-      // Skip threads whose anchor doesn't resolve — jumping to them
-      // would silently do nothing and the button would feel dead.
-      if (jumpScrollTop(target) === null) continue;
-      jumpTo(target);
-      return;
-    }
-  }, [findCurrentIndex, sortedThreads, jumpScrollTop, jumpTo]);
+    const target = navTarget(-1);
+    if (target) jumpTo(target);
+  }, [navTarget, jumpTo]);
 
   const onJumpNext = useCallback(() => {
-    const idx = findCurrentIndex();
-    for (let i = idx + 1; i < sortedThreads.length; i++) {
-      const target = sortedThreads[i];
-      if (!target) continue;
-      if (jumpScrollTop(target) === null) continue;
-      jumpTo(target);
-      return;
-    }
-  }, [findCurrentIndex, sortedThreads, jumpScrollTop, jumpTo]);
+    const target = navTarget(1);
+    if (target) jumpTo(target);
+  }, [navTarget, jumpTo]);
 
   const count = sortedThreads.length;
   const countLabel = count === 1 ? '1 thread' : `${count} threads`;
