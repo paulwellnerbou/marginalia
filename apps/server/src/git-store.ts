@@ -795,7 +795,7 @@ export class GitStore {
     const proposed = await this.readAt(doc, tipOid);
     const merged = await mergeTextWithNativeGit(before, base, proposed);
     return merged.ok
-      ? { ok: true, before, after: merged.text, mainOid, strategy: 'native-git' }
+      ? { ok: true, before, after: merged.text, mainOid }
       : { ok: false, reason: merged.reason };
   }
 }
@@ -819,13 +819,7 @@ export type MergeProposalResult =
   | { ok: false; reason: 'absent' | 'unavailable' };
 
 export type PreviewProposalMergeResult =
-  | {
-      ok: true;
-      before: string;
-      after: string;
-      mainOid: string;
-      strategy: 'isomorphic-git' | 'native-git';
-    }
+  | { ok: true; before: string; after: string; mainOid: string }
   | { ok: false; reason: 'conflict' | 'absent' | 'merged' | 'unavailable' };
 
 export type PreviewProposalMergeIntoSourceResult =
