@@ -984,6 +984,110 @@ export function rotateAdminInvite(
   });
 }
 
+// --- keyrings --------------------------------------------------------
+
+const KEYRING_HEADER = 'x-marginalia-keyring';
+
+export interface KeyringWire {
+  client_id: string;
+  display_name: string;
+  updated_at?: number;
+  docs: KeyringDocEntry[];
+}
+
+/** One document as the keyring API reports it. */
+export interface KeyringDocEntry {
+  doc_uid: string;
+  invite_token: string;
+  title: string | null;
+  /** null when the invite behind this entry was revoked or rotated away. */
+  role: Role | null;
+  format: DocumentFormat;
+  password_protected: boolean;
+  updated_at: number;
+  added_at: number;
+  cover: DocumentCover | null;
+}
+
+export interface KeyringSeed {
+  doc_uid: string;
+  invite_token: string;
+  title?: string;
+}
+
+/** Mint a keyring, seeded with the credentials this browser already holds. */
+export function createKeyring(
+  seeds: KeyringSeed[],
+  identity: Identity,
+): Promise<KeyringWire & { token: string }> {
+  return request('/api/keyrings', {
+    method: 'POST',
+    body: JSON.stringify({ docs: seeds }),
+    identity,
+  });
+}
+
+export function fetchKeyring(token: string): Promise<KeyringWire> {
+  return request('/api/keyrings/self', {
+    method: 'GET',
+    headers: { [KEYRING_HEADER]: token },
+  });
+}
+
+export function renameKeyring(
+  token: string,
+  displayName: string,
+): Promise<{ display_name: string }> {
+  return request('/api/keyrings/self', {
+    method: 'PATCH',
+    headers: { [KEYRING_HEADER]: token },
+    body: JSON.stringify({ display_name: displayName }),
+  });
+}
+
+export function rotateKeyring(
+  token: string,
+): Promise<{ token: string; client_id: string; display_name: string }> {
+  return request('/api/keyrings/self/rotate', {
+    method: 'POST',
+    headers: { [KEYRING_HEADER]: token },
+  });
+}
+
+export function putKeyringDoc(
+  token: string,
+  uid: string,
+  payload: { invite_token: string; title?: string },
+): Promise<{ ok: true }> {
+  return request(`/api/keyrings/self/docs/${encodeURIComponent(uid)}`, {
+    method: 'PUT',
+    headers: { [KEYRING_HEADER]: token },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteKeyringDoc(token: string, uid: string): Promise<void> {
+  return request<void>(`/api/keyrings/self/docs/${encodeURIComponent(uid)}`, {
+    method: 'DELETE',
+    headers: { [KEYRING_HEADER]: token },
+  });
+}
+
+export function createKeyringPairing(token: string): Promise<{ code: string; expires_at: number }> {
+  return request('/api/keyrings/self/pairings', {
+    method: 'POST',
+    headers: { [KEYRING_HEADER]: token },
+  });
+}
+
+/** Exchange a pairing code for the keyring it names. No credential needed. */
+export function redeemKeyringPairing(code: string): Promise<KeyringWire & { token: string }> {
+  return request('/api/pairings/redeem', {
+    method: 'POST',
+    body: JSON.stringify({ code }),
+  });
+}
+
 // --- comments --------------------------------------------------------
 
 export interface CommentAnchor {

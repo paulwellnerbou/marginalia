@@ -212,6 +212,61 @@ CREATE TABLE IF NOT EXISTS document_assets (
 );
 
 CREATE INDEX IF NOT EXISTS idx_document_assets_asset ON document_assets(asset_id);
+
+-- A keyring is one person's set of document credentials, so the same
+-- person's several devices can share it. Deliberately NOT an
+-- authorization mechanism: authorize() never reads these tables, and a
+-- keyring token grants no access to any document on its own. It is a
+-- synchronised store of the invite tokens a device already holds — the
+-- same capability URLs, kept in one place instead of one browser's
+-- localStorage.
+--
+-- client_id is carried here too, which is the part that makes paired
+-- devices one *person* rather than one bookmark list: they upsert the
+-- same doc_users row, so comment ownership and @mentions line up. The
+-- keyring is authoritative for display_name; a device adopts it on pull
+-- rather than pushing its own, or two devices would fight through
+-- propagateRename.
+CREATE TABLE IF NOT EXISTS keyrings (
+  token         TEXT PRIMARY KEY,
+  client_id     TEXT NOT NULL,
+  display_name  TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL
+);
+
+-- One row per document a keyring knows about. invite_token is whatever
+-- capability that person holds for the doc — admin, editor, reader; the
+-- keyring neither inspects nor upgrades it. Rows can outlive the
+-- document (deletion doesn't cascade from here), so reads join
+-- documents and drop the misses instead of trusting this table alone.
+CREATE TABLE IF NOT EXISTS keyring_docs (
+  keyring_token TEXT NOT NULL,
+  doc_uid       TEXT NOT NULL,
+  invite_token  TEXT NOT NULL,
+  -- The pushing device's derived title, refreshed on each visit. Held
+  -- here because the server's own documents.name is often NULL and the
+  -- real title comes from frontmatter or the first heading — deriving it
+  -- server-side would mean reading and rendering every document in the
+  -- keyring on every pull.
+  title         TEXT,
+  added_at      INTEGER NOT NULL,
+  PRIMARY KEY (keyring_token, doc_uid)
+);
+
+-- Short-lived single-use handoff for adding a device. The keyring token
+-- itself is a standing credential for every document in it, so it is
+-- never the thing shown on screen or encoded in a QR code — a code that
+-- expires in minutes is. Redeeming deletes the row.
+CREATE TABLE IF NOT EXISTS keyring_pairings (
+  code          TEXT PRIMARY KEY,
+  keyring_token TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  expires_at    INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_keyring_pairings_token
+  ON keyring_pairings(keyring_token);
 `;
 
 /** Document source flavours persisted in `documents.format`. */
@@ -322,6 +377,29 @@ export interface SessionRow {
   invite_display_name: string | null;
   invite_role: string | null;
   invite_kind: string | null;
+}
+
+export interface KeyringRow {
+  token: string;
+  client_id: string;
+  display_name: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface KeyringDocRow {
+  keyring_token: string;
+  doc_uid: string;
+  invite_token: string;
+  title: string | null;
+  added_at: number;
+}
+
+export interface KeyringPairingRow {
+  code: string;
+  keyring_token: string;
+  created_at: number;
+  expires_at: number;
 }
 
 export type CommentLinkStatus = 'linked' | 'low-confidence' | 'conflict' | 'orphaned';

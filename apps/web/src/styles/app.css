@@ -1966,6 +1966,22 @@ button.primary:disabled {
   text-align: center;
 }
 
+/* The device-sync panel sits inside the already-tinted "Your documents"
+   band, so it needs its own surface to separate from — hence a solid
+   panel colour rather than another alpha tint over the same background. */
+.device-sync {
+  background: var(--color-panel-solid);
+  border: 1px solid var(--gray-a5);
+  border-radius: var(--radius-4);
+  padding: var(--space-4);
+}
+
+/* Lifted while syncing is on, so the connected state reads at a glance
+   from across the page rather than only from the badge. */
+.device-sync--connected {
+  border-color: var(--green-a6);
+}
+
 .landing-footer {
   border-top: 1px solid var(--gray-a5);
   background: var(--ui-footer-bg);

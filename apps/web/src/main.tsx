@@ -37,6 +37,11 @@ const EditPage = lazy(async () => {
   return { default: mod.EditPage };
 });
 
+const PairPage = lazy(async () => {
+  const mod = await import('./pages/PairPage.js');
+  return { default: mod.PairPage };
+});
+
 function RouteLoading() {
   return (
     <Container size="2" py="8">
@@ -64,6 +69,8 @@ function App() {
               <Route path="/d/:uid/:token" element={<ViewPage />} />
               <Route path="/d/:uid/:token/edit" element={<EditPage />} />
               <Route path="/d/:uid/edit" element={<EditPage />} />
+              <Route path="/k" element={<PairPage />} />
+              <Route path="/k/:code" element={<PairPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>

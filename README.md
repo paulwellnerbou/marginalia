@@ -68,6 +68,10 @@ each document card and in the per-document user menu — hands it back. It
 is deliberately an explicit action and names the role it grants, because
 that link is a bearer credential.
 
+That is the per-document path, and it is one paste per document. See
+[Keyrings](#keyrings-your-documents-on-more-than-one-device) for carrying
+the whole list at once.
+
 The icons are generated, not hand-drawn — the mark, the rounded tile, the
 full-bleed Apple variant, the Android maskable variants and the multi-size
 `favicon.ico` all come from one set of geometry in
@@ -77,6 +81,129 @@ and re-run:
 ```sh
 bun run icons
 ```
+
+## Keyrings: your documents on more than one device
+
+"Your documents" is a per-browser list, and access is a per-document
+bearer token. That combination is the right default — no accounts, no
+profile store — and it stops being convenient the moment one person owns
+a laptop and a phone. Every document mints its own admin invite, so
+nothing created on one device is visible from the other, and there is no
+"my documents" query to ask the server for: there is no *my*.
+
+A **keyring** is the smallest thing that fixes it. It is a synchronised
+copy of the invite tokens a person already holds, plus their `clientId`.
+
+**It authorizes nothing.** `authorize()` does not read the keyring
+tables, and presenting a keyring token where an invite is expected gets
+you exactly what a stranger gets. Document access is still the invite
+token in `X-Marginalia-Invite`; the keyring only spares you from
+carrying each one to each device by hand. That is what keeps the feature
+small — no grants, no per-document ACL, no migration of the links
+already in the wild — and it is the security boundary worth stating: a
+leaked keyring token is every access link inside it, leaked at once.
+
+Carrying the `clientId` is the part that makes paired devices one
+*person* rather than two users who happen to share a name. Without it
+each browser is its own `doc_users` row, so a comment written on the
+laptop cannot be edited from the phone, a 👍 from both devices counts
+twice, and `propagateRename` stops rewriting `@mentions` because the
+name is ambiguous between them. The keyring is authoritative for
+`display_name` too — devices adopt it on pull rather than pushing their
+own, or two devices would fight through the rename propagation.
+
+### Pairing
+
+Adding a device never shows the keyring token. It mints a **pairing
+code** instead — eight characters of the same unambiguous alphabet as
+the generated passwords, single-use, expiring in
+`keyringPairingTtlMs` (default 5 minutes). The home page's **Add a
+device** dialog shows it as a QR code (encoding `/k/<code>`) and as
+typable text, because the installed app on iOS opens in its own storage
+container and typing the code is the way in there. Minting a code drops
+the previous one, so the code on screen is always the only one that
+works.
+
+`POST /api/keyrings` seeds the ring from what the creating browser
+already holds — that device usually has the full list, and an empty
+first keyring would look like the feature had eaten it.
+
+### Endpoints
+
+All except the last take the keyring token in `X-Marginalia-Keyring`.
+
+- `POST   /api/keyrings` — mint a ring, adopting the caller's identity;
+  optional `docs[]` seeds it
+- `GET    /api/keyrings/self` — identity + documents, joined against
+  `documents` so a paired device gets titles, formats and covers in one
+  request (rows for deleted documents drop out here)
+- `PATCH  /api/keyrings/self` — set the shared `display_name`
+- `POST   /api/keyrings/self/rotate` — new token, same documents; for a
+  ring you believe leaked. Outstanding pairing codes die with it
+- `PUT    /api/keyrings/self/docs/:uid` — record `invite_token` (+
+  `title`); the token must really be an invite on that document
+- `DELETE /api/keyrings/self/docs/:uid` — forget one, ring-wide
+- `POST   /api/keyrings/self/pairings` — mint a pairing code
+- `POST   /api/pairings/redeem` — exchange a code for the ring.
+  Unauthenticated by design: the redeeming device has nothing yet, and
+  the code is the proof
+
+### Rate limiting
+
+`POST /api/pairings/redeem` is the only unauthenticated route where
+guessing wins anything, so it carries two fixed-window counters
+([rate-limit.ts](apps/server/src/rate-limit.ts)). Only *failures* count:
+a real pairing succeeds first try and spends nothing, which is what lets
+the limits sit low enough to matter without getting in anyone's way.
+
+- **Per client** — 10 failures / 10 min (`pairingRedeemPerClient`)
+- **Server-wide** — 200 failures / 10 min (`pairingRedeemGlobal`)
+- **Keyring creation** — 20 / hour per client (`keyringCreatePerClient`),
+  so one caller cannot fill the table
+
+The global counter is the one that actually bounds a brute force:
+per-client limits assume the client can be identified, and an attacker
+picks their own source addresses. At 200 failures per 10 minutes,
+guessing a 40-bit code inside its 5-minute life is around a 1-in-10¹⁰
+proposition per window. The cost is that a deliberate flood can make
+*pairing* unavailable for a few minutes — access links keep working
+throughout, so the degraded state is "can't add a device right now",
+not "locked out".
+
+> **Set `MARGINALIA_TRUST_PROXY=1` when deploying behind a reverse
+> proxy**, and add it to `.env.dev` / `.env.prod` —
+> [deploy-instance.sh](deploy-scripts/deploy-instance.sh) enumerates the
+> vars it forwards, so one that isn't on that list is silently dropped.
+>
+> The Docker deploy binds to `127.0.0.1` behind a proxy, so without this
+> every request carries the proxy's address and the entire instance
+> shares a single bucket. That direction fails *safe* but not
+> *available*: the per-client limit becomes a second, far tighter global
+> one, and ten mistyped codes from anybody block pairing for everybody
+> for ten minutes. It is nevertheless off by default, because trusting
+> `X-Forwarded-For` on a directly-exposed port is the failure that goes
+> the other way — any caller could forge a fresh identity per request and
+> skip the limit entirely. Marginalia reads the *rightmost* hop, the one
+> your proxy appended, so a forged header only pollutes entries to its
+> left.
+>
+> You don't have to remember: if requests arrive from a private address
+> carrying an `X-Forwarded-For` the server is ignoring, it logs the
+> mismatch once at startup-of-traffic and names the variable. Silence
+> means either the flag is set or nothing is proxying you.
+
+Counters are in memory and per-process. That is the whole fleet for a
+single-container deploy; under replicas the per-client limit dilutes by
+the replica count and the global limit becomes per-replica.
+
+Pushes happen on create, on every visit that carried a token, and after
+an admin rotation — that last one matters most, since rotating a leaked
+admin link otherwise leaves every other device holding a key that no
+longer turns.
+
+Syncing is opt-in and every push is best-effort and silent. The local
+list still works on its own, offline and unpaired; a failed sync must
+never become an error in front of someone who is just trying to read.
 
 ## AI review (MCP)
 
@@ -235,6 +362,9 @@ These are the main runtime env vars the container understands:
 - `APP_ENV_LABEL` — optional label appended to the browser title, e.g. `DEV`
 - `MARGINALIA_BLOB_STORAGE` — `fs` (default) or `s3`. See
   [Blob storage backend](#blob-storage-backend) for the S3 env vars.
+- `MARGINALIA_TRUST_PROXY` — set to `1` when a reverse proxy fronts the
+  app, so per-client rate limits see the real caller instead of the
+  proxy. See [Rate limiting](#rate-limiting). Default: off
 
 ### GitHub setup
 
@@ -278,7 +408,8 @@ All persistent server state lives in a single directory — the repo-root
 .data/
 ├── db.sqlite          SQLite DB: documents, invites, sessions, doc_users,
 │                       comments, comment_mentions, edit_proposals,
-│                       assets, document_assets
+│                       assets, document_assets, keyrings, keyring_docs,
+│                       keyring_pairings
 ├── db.sqlite-wal      WAL file (journal mode)
 ├── db.sqlite-shm      Shared-memory index for the WAL
 ├── repo/              Git repo holding every document as <uid>.md
@@ -319,3 +450,7 @@ assets.
 Everything the web app persists locally lives in `localStorage` under the
 `marginalia.*` prefix. Password-protected docs also use the
 `marginalia_session` cookie. Or just wipe the site in browser settings.
+
+Clearing `marginalia.keyring` only stops this browser syncing — it does
+not delete the ring, since other devices are still using it. Use
+**Replace keyring** to disconnect them all.
