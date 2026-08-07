@@ -1,7 +1,7 @@
 import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer/extract-title';
 import { DownloadIcon } from '@radix-ui/react-icons';
 import { Button, Callout, Dialog, DropdownMenu, Flex, IconButton, Text } from '@radix-ui/themes';
-import { useEffect, useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import type { Document, DocumentCover } from '../lib/api.js';
 import {
   ApiError,
@@ -82,7 +82,11 @@ export function DownloadMenu({
   /** Object URL for the picked file, so the dialog can show it before upload. */
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
 
-  useEffect(() => {
+  // Layout, not passive: a passive effect lands after paint, so clearing
+  // the pick (a save, a download, reopening the dialog) would paint one
+  // frame of the old preview under a caption that no longer describes
+  // it. Minting an object URL is cheap enough to do before paint.
+  useLayoutEffect(() => {
     if (!cover) {
       setCoverPreview(null);
       return;
