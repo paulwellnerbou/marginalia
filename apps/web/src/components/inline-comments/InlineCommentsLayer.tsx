@@ -27,7 +27,7 @@ import {
   threadLinks,
   threadsById,
 } from './inlineUtils.js';
-import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
+import { computeAnchoredThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
 interface Props {
@@ -196,7 +196,7 @@ export function InlineCommentsLayer({
    * set so a proposal whose answered thread is hidden (resolved +
    * hide-resolved) keeps its own card.
    */
-  const nesting = useMemo(() => computeThreadNesting(visibleThreads), [visibleThreads]);
+  const nesting = useMemo(() => computeAnchoredThreadNesting(visibleThreads), [visibleThreads]);
 
   /**
    * Auto-collapse defaults derived from the current thread list.
