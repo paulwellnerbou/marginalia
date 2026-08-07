@@ -149,9 +149,11 @@ function isCompactViewport(): boolean {
 const DOC_CHROME_INLINE_MIN_WIDTH = 900;
 
 /**
- * Doc-pane width at or below which app.css hides the margin comment
- * column outright (`@container (max-width: 700px)` on `.doc-scroll`).
- * Keep the two in step: below it, column mode shows no comments at all.
+ * `.doc-scroll` content-box width at or below which app.css hides the
+ * margin comment column outright (`@container (max-width: 700px)`).
+ * Compare against that element, not the pane around it, or a reserved
+ * scrollbar puts the two a few pixels out of step. Below it, column mode
+ * shows no comments at all.
  */
 const COMMENTS_COLUMN_MIN_WIDTH = 700;
 
@@ -1358,17 +1360,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   /**
    * Measured rather than derived from the viewport: both side panes are
-   * resizable, so only the doc pane's own width says what still fits in
-   * it. Every way that width can change is either a window resize or one
-   * of the two column widths in the deps. 0 means "not measured yet" —
-   * the layout effect fills it in before the first paint.
+   * resizable, so only the elements' own widths say what still fits. Two
+   * of them, because two different boxes answer the two questions — the
+   * toolbar row lays out across the pane, while the comment column's
+   * `@container` query reads `.doc-scroll`'s content box, which is
+   * narrower wherever the platform reserves room for a scrollbar. Every
+   * way either width can change is a window resize or one of the two
+   * side-column widths in the deps. 0 means "not measured yet" — the
+   * layout effect fills them in before the first paint.
    */
   const [docPaneWidth, setDocPaneWidth] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx are the intentional re-measure triggers — the body reads a pane width only they can have changed.
+  const [commentsHostWidth, setCommentsHostWidth] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx are the intentional re-measure triggers — the body reads widths only they can have changed.
   useLayoutEffect(() => {
     const measure = () => {
-      const width = docPaneRef.current?.clientWidth ?? 0;
-      if (width > 0) setDocPaneWidth(width);
+      const pane = docPaneRef.current?.clientWidth ?? 0;
+      if (pane <= 0) return;
+      setDocPaneWidth(pane);
+      setCommentsHostWidth(docScrollRef.current?.clientWidth ?? 0);
     };
     measure();
     window.addEventListener('resize', measure);
@@ -1379,7 +1388,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     docPaneWidth === 0 ? compactViewport : docPaneWidth < DOC_CHROME_INLINE_MIN_WIDTH;
   /** Offering the switch back to the column would be a dead action where
    *  the stylesheet hides the column outright. */
-  const columnModeAvailable = docPaneWidth === 0 || docPaneWidth > COMMENTS_COLUMN_MIN_WIDTH;
+  const columnModeAvailable =
+    commentsHostWidth === 0 || commentsHostWidth > COMMENTS_COLUMN_MIN_WIDTH;
 
   const title = documentTitle(doc);
 
