@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseTrustedProxyHops } from './rate-limit.js';
 
 export interface ServerConfig {
   port: number;
@@ -20,19 +21,18 @@ export interface ServerConfig {
    */
   keyringPairingTtlMs: number;
   /**
-   * Trust `X-Forwarded-For` when identifying a client for rate limiting.
-   * Turn on when a reverse proxy fronts the app (the Docker deploy binds
-   * to 127.0.0.1 behind Caddy, so it should be on there). Off by default
-   * — believing the header on a directly-exposed port would let any
-   * caller forge a new identity per request.
+   * How many reverse proxies we control sit in front, and therefore how
+   * far from the right of `X-Forwarded-For` the real client is. 0 means
+   * trust nothing and key on the connecting address. See
+   * `parseTrustedProxyHops`.
    */
-  trustProxy: boolean;
+  trustedProxyHops: number;
   /** Failed pairing redemptions tolerated per client per window. */
   pairingRedeemPerClient: number;
   /**
    * Failed pairing redemptions tolerated server-wide per window. The
    * backstop that survives a spoofed `X-Forwarded-For`, a misconfigured
-   * `trustProxy`, or a distributed attempt — none of which the per-client
+   * `trustedProxyHops`, or a distributed attempt — none of which the per-client
    * limit can see.
    */
   pairingRedeemGlobal: number;
@@ -84,7 +84,9 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     sessionTtlMs: overrides.sessionTtlMs ?? 24 * 60 * 60 * 1000, // 24h
     namedInviteSessionTtlMs: overrides.namedInviteSessionTtlMs ?? 90 * 24 * 60 * 60 * 1000, // 90d
     keyringPairingTtlMs: overrides.keyringPairingTtlMs ?? 5 * 60 * 1000, // 5min
-    trustProxy: overrides.trustProxy ?? process.env.MARGINALIA_TRUST_PROXY === '1',
+    trustedProxyHops:
+      overrides.trustedProxyHops ??
+      parseTrustedProxyHops(process.env.MARGINALIA_TRUSTED_PROXY_HOPS),
     // 10 wrong codes from one client per 10 minutes. A person mistyping
     // eight characters off a screen needs two or three; a search needs
     // billions.

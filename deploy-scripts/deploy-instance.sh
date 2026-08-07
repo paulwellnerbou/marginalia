@@ -65,29 +65,35 @@ if [[ "$INSTANCE" == "dev" ]]; then
 fi
 HOST_PORT_VALUE="${HOST_PORT:-$DEFAULT_HOST_PORT}"
 
-# Whether to believe X-Forwarded-For when identifying a client for rate
-# limiting. Derived from where we publish rather than asked for, because
-# the binding already answers the question: a loopback address means
-# nothing can reach this container except something already on the host
-# — the reverse proxy — so the header is ours to trust. Any routable
-# address means the container is directly reachable, and believing the
-# header there would let any caller forge a fresh rate-limit identity per
-# request.
+# How many reverse-proxy hops in front of us are ours — the count whose
+# X-Forwarded-For entry the app should believe, counting from the right.
+# Same knob as TRUSTED_PROXY_HOPS in noctua-mail, so both services on
+# this host describe their topology the same way.
 #
-# Note this is deliberately NOT baked into the Dockerfile: the image is
-# also run bare (see the README's `docker run -p 3434:3434`), where the
-# safe answer is the opposite one. Only the deploy knows the topology.
+# Derived from where we publish rather than asked for, because the
+# binding already answers it: a loopback address means nothing can reach
+# this container except something already on the host — the reverse proxy
+# — so exactly one hop is ours. Any routable address means the container
+# is directly reachable, where believing the header would let a caller
+# forge a fresh rate-limit identity per request.
 #
-# Set MARGINALIA_TRUST_PROXY in .env.$INSTANCE to override either way.
-if [[ -n "${MARGINALIA_TRUST_PROXY:-}" ]]; then
-  TRUST_PROXY_VALUE="$MARGINALIA_TRUST_PROXY"
-  TRUST_PROXY_ORIGIN="from .env.$INSTANCE"
+# Chained proxies (e.g. Cloudflare in front of Caddy) are the case the
+# derivation cannot see: it still says 1, and every visitor would bucket
+# under the same edge address. Set MARGINALIA_TRUSTED_PROXY_HOPS=2 in
+# .env.$INSTANCE if that ever becomes the topology.
+#
+# Deliberately NOT baked into the Dockerfile: the image is also run bare
+# (see the README's `docker run -p 3434:3434`), where the safe answer is
+# 0. Only the deploy knows the topology.
+if [[ -n "${MARGINALIA_TRUSTED_PROXY_HOPS:-}" ]]; then
+  TRUSTED_PROXY_HOPS_VALUE="$MARGINALIA_TRUSTED_PROXY_HOPS"
+  TRUSTED_PROXY_HOPS_ORIGIN="from .env.$INSTANCE"
 else
   case "$HOST_BIND_IP" in
-    127.*|::1|localhost) TRUST_PROXY_VALUE=1 ;;
-    *) TRUST_PROXY_VALUE=0 ;;
+    127.*|::1|localhost) TRUSTED_PROXY_HOPS_VALUE=1 ;;
+    *) TRUSTED_PROXY_HOPS_VALUE=0 ;;
   esac
-  TRUST_PROXY_ORIGIN="derived from HOST_BIND_IP=$HOST_BIND_IP"
+  TRUSTED_PROXY_HOPS_ORIGIN="derived from HOST_BIND_IP=$HOST_BIND_IP"
 fi
 
 DOCKER_ARGS=(
@@ -102,7 +108,7 @@ DOCKER_ARGS=(
   -e MARGINALIA_DATA_DIR="$DATA_DIR_VALUE"
   -e MARGINALIA_WEB_DIR="$WEB_DIR_VALUE"
   -e APP_ENV_LABEL="$APP_ENV_LABEL_VALUE"
-  -e MARGINALIA_TRUST_PROXY="$TRUST_PROXY_VALUE"
+  -e MARGINALIA_TRUSTED_PROXY_HOPS="$TRUSTED_PROXY_HOPS_VALUE"
 )
 
 # Blob storage: fs (default) keeps binaries in the mounted /app/.data
@@ -165,5 +171,5 @@ echo "✅ $INSTANCE deployment complete!"
 echo "Container: marginalia-$INSTANCE"
 echo "Image: $FULL_IMAGE"
 echo "Host port: $HOST_BIND_IP:$HOST_PORT_VALUE -> $PORT_VALUE"
-echo "Trust proxy: $TRUST_PROXY_VALUE ($TRUST_PROXY_ORIGIN)"
+echo "Trusted proxy hops: $TRUSTED_PROXY_HOPS_VALUE ($TRUSTED_PROXY_HOPS_ORIGIN)"
 echo "=========================================="

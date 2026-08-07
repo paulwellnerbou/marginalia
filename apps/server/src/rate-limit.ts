@@ -74,30 +74,65 @@ export class FixedWindowRateLimiter {
 }
 
 /**
+ * How many reverse-proxy hops in front of us are ours, and therefore how
+ * far from the right of `X-Forwarded-For` the real client sits.
+ *
+ * A count rather than a boolean so a chained topology can be expressed:
+ * with Cloudflare in front of Caddy the header reads `client, cf-edge`
+ * once Caddy appends, and reading only the rightmost would bucket every
+ * visitor under the same edge address. This mirrors `TRUSTED_PROXY_HOPS`
+ * in noctua-mail so the two services on the same host describe the same
+ * topology the same way.
+ *
+ * Unset means 0 — no proxy assumed. That deliberately differs from
+ * noctua-mail's default of 1: this image is also run bare (see the
+ * README's `docker run -p 3434:3434`), where believing the header would
+ * make the limit decorative. The bundled deploy script derives the right
+ * value from its binding and passes it explicitly, so the default is
+ * what protects the *un*bundled case rather than the normal one.
+ *
+ * Garbage fails closed to 0.
+ */
+export function parseTrustedProxyHops(raw: string | undefined | null): number {
+  if (raw == null) return 0;
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return 0;
+  if (normalized === 'false' || normalized === 'no') return 0;
+  if (normalized === 'true' || normalized === 'yes') return 1;
+  // Digits only. `parseInt` would take "1.5" as 1 and "2abc" as 2, which
+  // would quietly turn a typo into a trusted topology.
+  if (!/^\d+$/.test(normalized)) return 0;
+  const hops = Number.parseInt(normalized, 10);
+  return Number.isFinite(hops) && hops > 0 ? hops : 0;
+}
+
+/**
  * Best-effort client identity for rate limiting.
  *
- * `trustProxy` must be on when Marginalia sits behind a reverse proxy
- * (the Docker deploy binds to 127.0.0.1 behind Caddy, so it does) —
- * otherwise every request arrives from the proxy and the whole internet
- * shares one bucket. It is off by default because believing
- * `X-Forwarded-For` from a directly-exposed port lets any caller mint a
- * fresh identity per request and skip the limit entirely.
+ * Counting from the *right* is the whole trick: each proxy appends the
+ * peer it actually saw, so the Nth-from-last entry is the one our own
+ * Nth proxy vouched for. A client that forges a header only pollutes the
+ * entries to its left. Reading the leftmost — the usual "original
+ * client" convention — is precisely the spoofable choice.
  *
- * The *rightmost* entry is the one our own proxy appended, so a client
- * that sends a forged `X-Forwarded-For` only pollutes the entries to its
- * left. Reading the leftmost — the usual "original client" convention —
- * is exactly the spoofable choice here.
+ * Everything else falls back to the socket peer, which cannot be forged
+ * at all: no header, a chain shorter than the configured topology
+ * (so we can't tell a real hop from a spoof), or no trusted hops. Behind
+ * a proxy that resolves to the proxy — one shared bucket, which is the
+ * safe direction — and with no proxy it is the real client.
  */
-export function clientKey(c: Context, trustProxy: boolean): string {
+export function clientKey(c: Context, trustedHops: number): string {
   const forwarded = c.req.header('x-forwarded-for');
-  if (trustProxy) {
-    if (forwarded) {
-      const hops = forwarded
-        .split(',')
-        .map((hop) => hop.trim())
-        .filter(Boolean);
-      const nearest = hops[hops.length - 1];
-      if (nearest) return nearest;
+  if (trustedHops > 0 && forwarded) {
+    const hops = forwarded
+      .split(',')
+      .map((hop) => hop.trim())
+      .filter(Boolean);
+    if (hops.length >= trustedHops) {
+      const vouched = hops[hops.length - trustedHops];
+      if (vouched) return vouched;
+    } else {
+      warnAboutShortChain(hops.length, trustedHops);
     }
   }
   try {
@@ -105,7 +140,7 @@ export function clientKey(c: Context, trustProxy: boolean): string {
     // case for direct `app.hono.fetch(...)` calls in tests.
     const address = getConnInfo(c).remote.address;
     if (address) {
-      if (!trustProxy && forwarded) warnAboutUntrustedProxy(address);
+      if (trustedHops === 0 && forwarded) warnAboutUntrustedProxy(address);
       return address;
     }
   } catch {
@@ -117,10 +152,12 @@ export function clientKey(c: Context, trustProxy: boolean): string {
 }
 
 let warnedAboutProxy = false;
+let warnedAboutChain = false;
 
-/** Test seam: re-arm the once-per-process warning. */
+/** Test seam: re-arm the once-per-process warnings. */
 export function resetProxyWarning(): void {
   warnedAboutProxy = false;
+  warnedAboutChain = false;
 }
 
 /**
@@ -141,9 +178,26 @@ function warnAboutUntrustedProxy(peer: string): void {
   if (warnedAboutProxy || !isPrivateAddress(peer)) return;
   warnedAboutProxy = true;
   console.warn(
-    `[marginalia] requests are arriving from ${peer} with an X-Forwarded-For header, but MARGINALIA_TRUST_PROXY is not set. ` +
+    `[marginalia] requests are arriving from ${peer} with an X-Forwarded-For header, but MARGINALIA_TRUSTED_PROXY_HOPS is 0. ` +
       'Per-client rate limits are keying on the proxy, so every visitor shares one budget. ' +
-      'Set MARGINALIA_TRUST_PROXY=1 if a reverse proxy you control fronts this server.',
+      'Set MARGINALIA_TRUSTED_PROXY_HOPS to the number of reverse proxies you control in front of this server.',
+  );
+}
+
+/**
+ * The opposite misconfiguration: more hops configured than actually
+ * arrive. Worth its own line because it degrades silently — every
+ * request falls back to the shared socket-peer bucket, which looks
+ * exactly like working software until someone is throttled by a
+ * stranger's traffic.
+ */
+function warnAboutShortChain(actual: number, configured: number): void {
+  if (warnedAboutChain) return;
+  warnedAboutChain = true;
+  console.warn(
+    `[marginalia] MARGINALIA_TRUSTED_PROXY_HOPS is ${configured} but X-Forwarded-For arrived with ${actual} entr${actual === 1 ? 'y' : 'ies'}. ` +
+      'Falling back to the connecting address, so per-client rate limits are shared. ' +
+      'Set it to the number of proxies actually in front of this server.',
   );
 }
 

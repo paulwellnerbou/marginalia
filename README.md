@@ -178,27 +178,50 @@ request carry the proxy's address, so the whole instance shares one
 bucket — safe, but ten mistyped codes from anybody then block pairing for
 everybody for ten minutes.
 
-So `MARGINALIA_TRUST_PROXY` is off by default (the safe answer for the
-bare `docker run` above), and
-**[deploy-instance.sh](deploy-scripts/deploy-instance.sh) sets it for
-you** rather than making it something to remember. It derives the value
-from where it publishes: a loopback `HOST_BIND_IP` means nothing can
-reach the container except something already on the host — the proxy —
-so the header is trustworthy; any routable address means the container is
-directly reachable and it isn't. The deploy summary prints the value and
-where it came from. Set `MARGINALIA_TRUST_PROXY` in `.env.dev` /
-`.env.prod` to override either way.
+`MARGINALIA_TRUSTED_PROXY_HOPS` answers it: how many reverse proxies you
+control sit in front. Each proxy *appends* the peer it actually saw, so
+the Nth-from-last entry is the one your Nth proxy vouched for, and a
+client forging a header only pollutes the entries to its left. Reading
+the leftmost — the usual "original client" convention — is precisely the
+spoofable choice.
 
-This is deliberately not in the Dockerfile: the image is also run bare,
-where the safe answer is the opposite one. Only a deploy knows its
-topology.
+A count rather than a flag because topologies chain. With Cloudflare in
+front of Caddy the header reads `client, cf-edge` once Caddy appends;
+trusting one hop would file every visitor under the same edge address.
+Two hops gets the client. (This mirrors `TRUSTED_PROXY_HOPS` in
+noctua-mail, so both services on the same host describe their topology
+the same way.)
 
-If you wire up your own deployment and get it wrong in the ignoring
-direction, the server says so — a private peer sending an
-`X-Forwarded-For` it is discarding logs once, naming the variable.
+Everything that isn't a trusted hop falls back to the connecting address,
+which cannot be forged at all: no header, no trusted hops, or a chain
+shorter than configured — where a real hop can't be told from a spoof.
+Behind a proxy that resolves to the proxy, one shared bucket, which is
+the safe direction; with no proxy it is the real client.
 
-Marginalia reads the *rightmost* hop, the one your proxy appended, so a
-forged header only pollutes entries to its left.
+Unset means 0, the safe answer for the bare `docker run` above, and
+garbage fails closed to 0 rather than becoming a trusted topology. You
+shouldn't need to set it though:
+**[deploy-instance.sh](deploy-scripts/deploy-instance.sh) derives it**
+from where it publishes — a loopback `HOST_BIND_IP` means nothing reaches
+the container except something already on the host, so exactly one hop is
+yours; any routable address means it's directly reachable and none are.
+The deploy summary prints the value and where it came from:
+
+```
+Host port: 127.0.0.1:3435 -> 3434
+Trusted proxy hops: 1 (derived from HOST_BIND_IP=127.0.0.1)
+```
+
+Set `MARGINALIA_TRUSTED_PROXY_HOPS` in `.env.dev` / `.env.prod` to
+override — which is what you'd do for the Cloudflare case, since the
+binding can't reveal a second hop.
+
+Deliberately not in the Dockerfile: the image is also run bare, where the
+safe answer is 0. Only a deploy knows its topology.
+
+Both misconfigurations announce themselves once rather than degrading
+quietly — a private peer sending an `X-Forwarded-For` that is being
+discarded, and a chain shorter than the configured hop count.
 
 Counters are in memory and per-process. That is the whole fleet for a
 single-container deploy; under replicas the per-client limit dilutes by
@@ -370,11 +393,12 @@ These are the main runtime env vars the container understands:
 - `APP_ENV_LABEL` — optional label appended to the browser title, e.g. `DEV`
 - `MARGINALIA_BLOB_STORAGE` — `fs` (default) or `s3`. See
   [Blob storage backend](#blob-storage-backend) for the S3 env vars.
-- `MARGINALIA_TRUST_PROXY` — `1` when a reverse proxy fronts the app, so
-  per-client rate limits see the real caller instead of the proxy.
-  Default: off, but the bundled deploy script derives it from
+- `MARGINALIA_TRUSTED_PROXY_HOPS` — how many reverse proxies you control
+  sit in front, so per-client rate limits see the real caller instead of
+  the proxy. Default: `0`, but the bundled deploy script derives it from
   `HOST_BIND_IP` and passes it for you; set it in `.env.<instance>` only
-  to override. See [Rate limiting](#rate-limiting)
+  to override (e.g. `2` for Cloudflare → Caddy → app). See
+  [Rate limiting](#rate-limiting)
 
 ### GitHub setup
 
