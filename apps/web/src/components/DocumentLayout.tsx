@@ -117,6 +117,7 @@ const INLINE_COMMENTS_OPEN_KEY = 'marginalia.inlineCommentsOpen';
 const INLINE_COMMENTS_STACKING_KEY = 'marginalia.inlineCommentsStacking';
 const INLINE_COMMENTS_HIDE_RESOLVED_KEY = 'marginalia.inlineCommentsHideResolved';
 const COMMENTS_DISPLAY_MODE_KEY = 'marginalia.commentsDisplayMode';
+const RIGHT_TAB_KEY = 'marginalia.rightTab';
 const COLLAPSED_WIDTH = 36;
 const EMPTY_BLOCK_RANGES = new Map<string, BlockSourceRange>();
 /** Delay before scrolling to a specific reply after the parent thread has expanded (ms). */
@@ -138,6 +139,16 @@ interface ThreadFocusTarget {
 
 /** How comment threads render in the document pane: a margin column, or floating cards over the text. */
 type CommentsDisplayMode = 'column' | 'floating';
+
+type RightTab = 'comments' | 'history' | 'search' | 'activities' | 'mcp';
+
+/**
+ * 'search' is deliberately absent: it only exists while a document search
+ * has hits, so restoring it would land on a tab that isn't there.
+ */
+function isRememberedRightTab(value: string | null): value is Exclude<RightTab, 'search'> {
+  return value === 'comments' || value === 'history' || value === 'activities' || value === 'mcp';
+}
 
 type PendingDraft =
   | { mode: 'comment'; anchor: CommentAnchor }
@@ -180,9 +191,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     localStorage.getItem(COMMENTS_DISPLAY_MODE_KEY) === 'floating' ? 'floating' : 'column',
   );
   const floatingComments = commentsDisplayMode === 'floating';
-  const [rightTab, setRightTab] = useState<
-    'comments' | 'history' | 'search' | 'activities' | 'mcp'
-  >('activities');
+  const [rightTab, setRightTab] = useState<RightTab>(() => {
+    const saved = localStorage.getItem(RIGHT_TAB_KEY);
+    return isRememberedRightTab(saved) ? saved : 'comments';
+  });
   const [historyVersion, setHistoryVersion] = useState(0);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
   // Gates the deferred scrolls launched by `scrollToAnchor` (now
@@ -437,6 +449,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(COMMENTS_DISPLAY_MODE_KEY, commentsDisplayMode);
   }, [commentsDisplayMode]);
+  useEffect(() => {
+    if (isRememberedRightTab(rightTab)) localStorage.setItem(RIGHT_TAB_KEY, rightTab);
+  }, [rightTab]);
   useEffect(() => {
     void applyTheme(theme);
   }, [theme]);
@@ -1937,9 +1952,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           {commentsOpen ? (
             <Tabs.Root
               value={rightTab}
-              onValueChange={(v) =>
-                setRightTab(v as 'comments' | 'history' | 'search' | 'activities' | 'mcp')
-              }
+              onValueChange={(v) => setRightTab(v as RightTab)}
               className="right-tabs"
             >
               <Flex align="center" px="2" pt="2" className="pane-header">

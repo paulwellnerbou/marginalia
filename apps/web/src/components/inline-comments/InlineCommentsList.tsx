@@ -37,6 +37,15 @@ import {
   threadMatchesFilters,
   threadMatchesSearch,
 } from './threadFilters.js';
+import {
+  loadThreadFilters,
+  loadThreadFiltersOpen,
+  loadThreadSortMode,
+  saveThreadFilters,
+  saveThreadFiltersOpen,
+  saveThreadSortMode,
+  type ThreadSortMode,
+} from './threadListPrefs.js';
 import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
@@ -83,8 +92,6 @@ interface Props {
   onEditProposal?: ((thread: Thread) => void) | undefined;
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
 }
-
-type SortMode = 'document' | 'latest';
 
 interface ThreadListItem {
   id: string;
@@ -181,12 +188,23 @@ export function InlineCommentsList({
     };
   }, [threads, blockOrder]);
 
-  const [sortMode, setSortMode] = useState<SortMode>('document');
-  const [filters, setFilters] = useState<ThreadFilters>(ALL_THREAD_FILTERS);
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  // Remembered per browser, so the pane opens the way it was left.
+  const [sortMode, setSortMode] = useState<ThreadSortMode>(loadThreadSortMode);
+  const [filters, setFilters] = useState<ThreadFilters>(loadThreadFilters);
+  const [filtersOpen, setFiltersOpen] = useState(loadThreadFiltersOpen);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const searchNeedle = useMemo(() => normalizeThreadSearch(searchQuery), [searchQuery]);
+
+  useEffect(() => {
+    saveThreadSortMode(sortMode);
+  }, [sortMode]);
+  useEffect(() => {
+    saveThreadFilters(filters);
+  }, [filters]);
+  useEffect(() => {
+    saveThreadFiltersOpen(filtersOpen);
+  }, [filtersOpen]);
 
   const sortedActive = useMemo(() => sortItems(activeItems, sortMode), [activeItems, sortMode]);
   const sortedOrphans = useMemo(
@@ -450,8 +468,11 @@ export function InlineCommentsList({
         </div>
       )}
       {/* Stay mounted while a filter or search is on, or deletions dropping the
-          count to one would strand the reader with no way to clear it. */}
-      {(totalCards > 1 || isFilteringThreads(filters) || searchOpen) && (
+          count to one would strand the reader with no way to clear it. A
+          document with no threads at all has nothing to filter, and the
+          remembered filters would otherwise put a control row above an
+          empty pane. */}
+      {(totalCards > 1 || searchOpen || (totalCards > 0 && isFilteringThreads(filters))) && (
         <div className="ic-list-controls">
           {/* Wraps: one row on a wide pane, one row per control on a narrow one. */}
           <div className="ic-list-control-groups">
@@ -463,7 +484,7 @@ export function InlineCommentsList({
                 id="ic-list-sort"
                 size="1"
                 value={sortMode}
-                onValueChange={(v) => setSortMode(v as SortMode)}
+                onValueChange={(v) => setSortMode(v as ThreadSortMode)}
                 aria-label="Sort threads"
               >
                 <SegmentedControl.Item value="document" title="Appearance in document">
@@ -686,7 +707,7 @@ function latestActivityTs(t: Thread): number {
   return latest;
 }
 
-function sortItems(items: ThreadListItem[], mode: SortMode): ThreadListItem[] {
+function sortItems(items: ThreadListItem[], mode: ThreadSortMode): ThreadListItem[] {
   return [...items].sort((a, b) =>
     mode === 'latest' ? compareLatest(a, b) : compareDocument(a, b),
   );
