@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,6 +35,18 @@ function withInvite(h: Headers, token: string): Headers {
   const n = new Headers(h);
   n.set(INVITE_HEADER, token);
   return n;
+}
+
+/**
+ * EPUB content documents are parsed as XML, so a reader aborts on a
+ * chapter that isn't well-formed — a class of bug string assertions
+ * can't see. `xmllint` ships with macOS and the Ubuntu CI image; where
+ * it's absent the surrounding assertions still carry the test.
+ */
+function expectWellFormedXml(name: string, xml: string): void {
+  const probe = spawnSync('xmllint', ['--noout', '-'], { input: xml, encoding: 'utf8' });
+  if (probe.error) return;
+  expect(`${name}: ${probe.stderr.trim()}`).toBe(`${name}: `);
 }
 
 interface CreateResponse {
@@ -2891,6 +2904,217 @@ describe('documents API', () => {
     expect(buf.equals(buf2)).toBe(false);
   });
 
+  test('GET /:uid/export.chapters.zip returns numbered, lossless Markdown chapters', async () => {
+    const source =
+      '# The Salt Road\n\nIntroduction.\n\n## Departure\n\nFirst.\n\n## The Dunes\n\nSecond.\n';
+    const created = await upload(CLIENT_A, { markdown: source, name: 'Salt Road' });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.chapters.zip`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/zip');
+    expect(res.headers.get('content-disposition')).toContain('Salt_Road-chapters.zip');
+
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    const names = Object.keys(zip.files).sort();
+    expect(names).toEqual(['Salt_Road-chapter-001.md', 'Salt_Road-chapter-002.md']);
+    const chapterOne = await zip.file(names[0]!)!.async('string');
+    const chapterTwo = await zip.file(names[1]!)!.async('string');
+    expect(chapterOne).toContain('# The Salt Road');
+    expect(chapterOne).toContain('## Departure');
+    expect(chapterTwo).toStartWith('## The Dunes');
+    expect(chapterOne + chapterTwo).toBe(source);
+  });
+
+  test('POST /:uid/export.epub creates chapters and a title-generated cover', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown:
+        '# The Salt Road\n\n## Departure\n\nFirst.\n\n---\n\nA scene break.\n\n## The Dunes\n\nSecond.\n',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub?theme=beautiful`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/epub+zip');
+    expect(res.headers.get('content-disposition')).toContain('The_Salt_Road.epub');
+
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    expect(await zip.file('mimetype')!.async('string')).toBe('application/epub+zip');
+    expect(zip.file('META-INF/container.xml')).not.toBeNull();
+    expect(zip.file('EPUB/images/cover.svg')).not.toBeNull();
+    expect(zip.file('EPUB/chapter-001.xhtml')).not.toBeNull();
+    expect(zip.file('EPUB/chapter-002.xhtml')).not.toBeNull();
+    const packageXml = await zip.file('EPUB/package.opf')!.async('string');
+    expect(packageXml).toContain('properties="cover-image"');
+    expect(packageXml).toContain('<dc:title>The Salt Road</dc:title>');
+    const firstChapter = await zip.file('EPUB/chapter-001.xhtml')!.async('string');
+    expect(firstChapter).toContain('class="epub-hr-ornament"');
+    expect(firstChapter).toContain('360,20 374,36 360,52 346,36');
+    expect(firstChapter).not.toContain('<hr');
+  });
+
+  test('POST /:uid/export.epub embeds an uploaded raster cover', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Covered Book\n\nBody.\n' });
+    const png = Uint8Array.from(
+      atob(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
+      ),
+      (char) => char.charCodeAt(0),
+    );
+    const form = new FormData();
+    form.append('cover', new Blob([png], { type: 'image/png' }), 'cover.png');
+    const headers = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    headers.delete('content-type');
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+        method: 'POST',
+        headers,
+        body: form,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    const exported = await zip.file('EPUB/images/cover.png')!.async('uint8array');
+    expect(exported).toEqual(png);
+    expect(zip.file('EPUB/images/cover.svg')).toBeNull();
+  });
+
+  test('POST /:uid/export.epub emits well-formed XHTML without rewriting content', async () => {
+    // Regression guard for the HTML→XHTML step. Bare attributes and
+    // unclosed void elements are fatal to an EPUB reader, but so is
+    // "fixing" them with a document-wide pattern: prose that reads
+    // like an attribute, and attribute values containing `>`, both
+    // used to come out corrupted.
+    const prose =
+      'The legacy endpoint is disabled in production. Multiple readers may be selected at once; the field is readonly until checked.';
+    const created = await upload(CLIENT_A, {
+      markdown: `# Angles\n\n${prose}\n\n- [ ] open\n- [x] done\n\n![a > b](pic.png "t > u")\n\n![two checked boxes](pic2.png)\n`,
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    const chapter = await zip.file('EPUB/chapter-001.xhtml')!.async('string');
+
+    expect(chapter).toContain(prose);
+    // Void elements closed, attribute values untouched either side of
+    // the `>` that used to truncate the tag.
+    expect(chapter).toContain('<img src="pic.png" alt="a > b" title="t > u" />');
+    expect(chapter).toContain('<img src="pic2.png" alt="two checked boxes" />');
+    // Task-list booleans do get the XML treatment they need.
+    expect(chapter).toContain('<input type="checkbox" disabled="disabled" />');
+    expect(chapter).toContain('<input type="checkbox" checked="checked" disabled="disabled" />');
+
+    for (const name of [
+      'META-INF/container.xml',
+      'EPUB/package.opf',
+      'EPUB/toc.ncx',
+      'EPUB/nav.xhtml',
+      'EPUB/cover.xhtml',
+      'EPUB/chapter-001.xhtml',
+      'EPUB/images/cover.svg',
+    ]) {
+      expectWellFormedXml(name, await zip.file(name)!.async('string'));
+    }
+  });
+
+  test('POST /:uid/export.epub hides heading-anchor chrome and never ships mermaid source as prose', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Diagrams\n\n## One\n\n```mermaid\ngraph TD\n  A --> B\n```\n',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+
+    // The renderer puts an `#` permalink sigil in every heading; it's
+    // viewer chrome, and the book stylesheet has to drop it the same
+    // way the print stylesheet does.
+    expect(await zip.file('EPUB/styles.css')!.async('string')).toContain('.heading-anchor');
+
+    // Whether or not a mermaid engine is installed on this machine,
+    // no diagram may reach the reader as a bare div of source text:
+    // it's either a rasterized image or an explicit code listing.
+    const chapter = await zip.file('EPUB/chapter-001.xhtml')!.async('string');
+    expect(chapter).not.toContain('data-mermaid-index');
+    const rasterized = /<img src="images\/[^"]+\.png"/.test(chapter);
+    expect(rasterized || chapter.includes('<pre class="mermaid-source">')).toBe(true);
+    expectWellFormedXml('EPUB/chapter-001.xhtml', chapter);
+  });
+
+  test('POST /:uid/export.epub externalizes attached images and drops unusable ones', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Assets\n\n![logo](logo.png)\n\n![ledger](notes.txt)\n',
+    });
+    const assetHeaders = withInvite(
+      new Headers({ [CLIENT_HEADER]: CLIENT_A.id, [CLIENT_NAME_HEADER]: CLIENT_A.name }),
+      created.admin_invite.token,
+    );
+    const attach = async (refName: string, bytes: Uint8Array, type: string): Promise<number> => {
+      const form = new FormData();
+      form.append('file', new Blob([bytes as BlobPart], { type }), refName);
+      form.append('ref_name', refName);
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/assets`, {
+          method: 'POST',
+          headers: assetHeaders,
+          body: form,
+        }),
+      );
+      return res.status;
+    };
+    const png = Uint8Array.from(
+      atob(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=',
+      ),
+      (char) => char.charCodeAt(0),
+    );
+    expect(await attach('logo.png', png, 'image/png')).toBe(201);
+    // Server derives the mime from the ref_name, so this attachment is
+    // text/plain no matter what the markdown does with it.
+    expect(await attach('notes.txt', new TextEncoder().encode('not an image'), 'text/plain')).toBe(
+      201,
+    );
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    const chapter = await zip.file('EPUB/chapter-001.xhtml')!.async('string');
+    const packageXml = await zip.file('EPUB/package.opf')!.async('string');
+
+    // The PNG becomes a real container resource, declared in the manifest.
+    const embedded = /src="(images\/[0-9a-f]+\.png)"/.exec(chapter)?.[1];
+    expect(embedded).toBeDefined();
+    expect(zip.file(`EPUB/${embedded}`)).not.toBeNull();
+    expect(packageXml).toContain(`href="${embedded}"`);
+
+    // Nothing usable to point the second one at: `src=""` would re-request
+    // the chapter and a `data:` URL isn't a container resource, so the
+    // attribute goes away and the alt text stands in.
+    expect(chapter).not.toContain('src=""');
+    expect(chapter).not.toContain('data:');
+    expect(chapter).toContain('alt="ledger"');
+    expectWellFormedXml('EPUB/chapter-001.xhtml', chapter);
+  });
+
   test('GET /:uid/export.docx filename derives from the document title when name is unset', async () => {
     // No explicit `name` on upload → server should fall back to the
     // H1 as the filename (not the opaque uid).
@@ -3294,6 +3518,34 @@ describe('documents API', () => {
     const documentXml = await zip.file('word/document.xml')!.async('string');
     expect(documentXml).toContain('Alpha accepted.');
     expect(documentXml).toContain('Beta accepted.');
+
+    const chaptersRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.accepted.chapters.zip`, {
+        headers: adminHeaders,
+      }),
+    );
+    expect(chaptersRes.status).toBe(200);
+    expect(chaptersRes.headers.get('x-marginalia-proposals-applied')).toBe('2');
+    const chaptersZip = await JSZip.loadAsync(Buffer.from(await chaptersRes.arrayBuffer()));
+    const chapterSource = await chaptersZip.file('Proposal_Doc-chapter-001.md')!.async('string');
+    expect(chapterSource).toContain('Alpha accepted.');
+    expect(chapterSource).toContain('Beta accepted.');
+
+    const epubRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.accepted.epub`, {
+        method: 'POST',
+        headers: adminHeaders,
+      }),
+    );
+    expect(epubRes.status).toBe(200);
+    expect(epubRes.headers.get('x-marginalia-proposals-applied')).toBe('2');
+    expect(epubRes.headers.get('content-disposition')).toContain(
+      'Proposal_Doc-proposals-accepted.epub',
+    );
+    const epubZip = await JSZip.loadAsync(Buffer.from(await epubRes.arrayBuffer()));
+    const epubChapter = await epubZip.file('EPUB/chapter-001.xhtml')!.async('string');
+    expect(epubChapter).toContain('Alpha accepted.');
+    expect(epubChapter).toContain('Beta accepted.');
 
     const afterRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}`, { headers: adminHeaders }),

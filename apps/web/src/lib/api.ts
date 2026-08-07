@@ -501,6 +501,52 @@ export async function downloadDocumentDocxWithAcceptedProposals(
   return { blob, filename, skippedProposals: readSkippedProposalCount(res) };
 }
 
+export async function downloadDocumentMarkdownChapters(
+  uid: string,
+  acceptedProposals = false,
+): Promise<{ blob: Blob; filename: string; skippedProposals: number }> {
+  const route = acceptedProposals ? 'export.accepted.chapters.zip' : 'export.chapters.zip';
+  const res = await requestBinary(`/api/documents/${encodeURIComponent(uid)}/${route}`, {
+    method: 'GET',
+    docUid: uid,
+  });
+  return {
+    blob: await res.blob(),
+    filename: filenameFromResponse(res, `${uid}-chapters.zip`),
+    skippedProposals: readSkippedProposalCount(res),
+  };
+}
+
+export async function downloadDocumentEpub(
+  uid: string,
+  options: { acceptedProposals?: boolean; cover?: File | null; theme?: string } = {},
+): Promise<{ blob: Blob; filename: string; skippedProposals: number }> {
+  const route = options.acceptedProposals ? 'export.accepted.epub' : 'export.epub';
+  const params = new URLSearchParams();
+  if (options.theme) params.set('theme', options.theme);
+  const query = params.toString();
+  const form = new FormData();
+  if (options.cover) form.append('cover', options.cover, options.cover.name);
+  const res = await requestBinary(
+    `/api/documents/${encodeURIComponent(uid)}/${route}${query ? `?${query}` : ''}`,
+    {
+      method: 'POST',
+      body: form,
+      docUid: uid,
+    },
+  );
+  return {
+    blob: await res.blob(),
+    filename: filenameFromResponse(res, `${uid}.epub`),
+    skippedProposals: readSkippedProposalCount(res),
+  };
+}
+
+function filenameFromResponse(res: Response, fallback: string): string {
+  const cd = res.headers.get('Content-Disposition') ?? '';
+  return cd.match(/filename="([^"]+)"/)?.[1] ?? fallback;
+}
+
 function readSkippedProposalCount(res: Response): number {
   const raw = res.headers.get('X-Marginalia-Proposals-Skipped');
   const n = raw ? Number(raw) : 0;

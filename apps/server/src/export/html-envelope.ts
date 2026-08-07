@@ -302,6 +302,24 @@ export function countLiveMermaidBlocks(html: string): number {
   return (html.match(re) ?? []).length;
 }
 
+/**
+ * Rewrite mermaid blocks the pre-rasterizer left behind as a plain
+ * code listing. Targets are the same `data-mermaid-(index|mode)`
+ * divs `countLiveMermaidBlocks` counts — blocks that still expect a
+ * mermaid runtime to replace them.
+ *
+ * Only for exports that have no runtime to fall back on (EPUB): the
+ * PDF page loads the mermaid UMD and renders these for real, so it
+ * must not call this. Without it a failed diagram reaches the reader
+ * as its own source text set as prose.
+ */
+export function demoteLiveMermaidBlocks(html: string): string {
+  return html.replace(
+    /<div\b[^>]*\bclass="[^"]*\bmermaid\b[^"]*"(?=[^>]*\bdata-mermaid-(?:index|mode)=)[^>]*>([\s\S]*?)<\/div>/g,
+    (_match, source: string) => `<pre class="mermaid-source"><code>${source}</code></pre>`,
+  );
+}
+
 function renderImageMarkup(r: PrerasterizedMermaidBlock): string {
   if (r.mime === 'image/svg+xml') {
     // Decode only on this branch — the PNG path doesn't need the
