@@ -3043,8 +3043,7 @@ button.primary:disabled {
 }
 .ic-anchor-slot-lifted .ic-card-pending {
   background:
-    linear-gradient(rgba(59, 130, 246, 0.05), rgba(59, 130, 246, 0.05)),
-    var(--color-panel-solid);
+    linear-gradient(rgba(59, 130, 246, 0.05), rgba(59, 130, 246, 0.05)), var(--color-panel-solid);
   box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 30%, transparent);
 }
 .ic-sticky-card {
