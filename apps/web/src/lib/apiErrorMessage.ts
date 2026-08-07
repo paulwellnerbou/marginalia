@@ -41,6 +41,8 @@ const MESSAGES: Record<string, string> = {
   'forbidden-accepted': 'Accepted proposals can only be changed by an admin.',
   'identity-required': 'Please set your display name first.',
   'password-required': 'This document is password protected.',
+  'invite-required':
+    'This document is restricted to people with an access link. Ask the document’s owner for one.',
   'wrong-password': 'That password was not accepted.',
   'password-protected': 'This document is password protected.',
   'admin-token-required': 'This action needs an admin invite link.',

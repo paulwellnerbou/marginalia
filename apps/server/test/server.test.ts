@@ -469,6 +469,220 @@ describe('documents API', () => {
     expect(doc.role).toBe('reader');
   });
 
+  test('invite_only doc rejects a stranger with no invite', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Private', invite_only: true });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, { headers: headersFor(CLIENT_B) }),
+    );
+    expect(res.status).toBe(401);
+    expect((await res.json()) as { error: string }).toEqual({ error: 'invite-required' });
+  });
+
+  test('invite_only doc still opens for the admin and for invite holders', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Private', invite_only: true });
+
+    const asAdmin = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(asAdmin.status).toBe(200);
+    const adminDoc = (await asAdmin.json()) as { role: string; invite_only: boolean };
+    expect(adminDoc.role).toBe('admin');
+    expect(adminDoc.invite_only).toBe(true);
+
+    const mk = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ display_name: 'Bob', role: 'reader' }),
+      }),
+    );
+    const { invite } = (await mk.json()) as { invite: { token: string } };
+
+    const asGuest = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_B), invite.token),
+      }),
+    );
+    expect(asGuest.status).toBe(200);
+    expect(((await asGuest.json()) as { role: string }).role).toBe('reader');
+  });
+
+  test('invite_only doc opens for a claimed invite session (no token in the URL)', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Private', invite_only: true });
+    const mk = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ display_name: 'Bob', role: 'collaborator' }),
+      }),
+    );
+    const { invite } = (await mk.json()) as { invite: { token: string } };
+
+    // Claiming must work on an invite_only doc — it is how the token
+    // leaves the address bar.
+    const claimed = await claimInvite(created.uid, invite.token, CLIENT_B);
+    expect(claimed.status).toBe(201);
+    expect(claimed.cookie).toContain(INVITE_SESSION_COOKIE);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: headersFor(CLIENT_B, { cookie: claimed.cookie }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { role: string }).role).toBe('collaborator');
+  });
+
+  test('invite_only is toggleable by an admin and takes effect immediately', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Public for now' });
+
+    const before = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, { headers: headersFor(CLIENT_B) }),
+    );
+    expect(before.status).toBe(200);
+    expect(((await before.json()) as { invite_only: boolean }).invite_only).toBe(false);
+
+    const patch = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/settings`, {
+        method: 'PATCH',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ invite_only: true }),
+      }),
+    );
+    expect(patch.status).toBe(200);
+    expect(((await patch.json()) as { invite_only: boolean }).invite_only).toBe(true);
+
+    const after = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, { headers: headersFor(CLIENT_B) }),
+    );
+    expect(after.status).toBe(401);
+
+    const reopen = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/settings`, {
+        method: 'PATCH',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ invite_only: false }),
+      }),
+    );
+    expect(reopen.status).toBe(200);
+    const reopened = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, { headers: headersFor(CLIENT_B) }),
+    );
+    expect(reopened.status).toBe(200);
+  });
+
+  test('non-admin cannot turn invite_only off', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Private', invite_only: true });
+    const mk = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ display_name: 'Bob', role: 'editor' }),
+      }),
+    );
+    const { invite } = (await mk.json()) as { invite: { token: string } };
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/settings`, {
+        method: 'PATCH',
+        headers: withInvite(headersFor(CLIENT_B), invite.token),
+        body: JSON.stringify({ invite_only: false }),
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  test('invite_only gates every read surface, not just the document body', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Private', invite_only: true });
+    const stranger = headersFor(CLIENT_B);
+    for (const path of [
+      `/api/documents/${created.uid}/export`,
+      `/api/documents/${created.uid}/history`,
+      `/api/documents/${created.uid}/threads`,
+      `/api/documents/${created.uid}/assets`,
+    ]) {
+      const res = await app.hono.fetch(new Request(`http://test${path}`, { headers: stranger }));
+      expect(`${path}: ${res.status}`).toBe(`${path}: 401`);
+    }
+  });
+
+  test('invite_only and password are independent gates', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Both',
+      invite_only: true,
+      password_protected: true,
+    });
+    expect(created.password).toBeTruthy();
+
+    // Password first: without a session the password gate answers.
+    const noSession = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, { headers: headersFor(CLIENT_B) }),
+    );
+    expect(noSession.status).toBe(401);
+    expect(((await noSession.json()) as { error: string }).error).toBe('password-required');
+
+    // Knowing the password is not enough once the doc is invite-only.
+    const cookie = await authenticateForDoc(created.uid, created.password as string, CLIENT_B);
+    const withPassword = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: headersFor(CLIENT_B, { cookie }),
+      }),
+    );
+    expect(withPassword.status).toBe(401);
+    expect(((await withPassword.json()) as { error: string }).error).toBe('invite-required');
+
+    // Password session + invite clears both. The admin needs a password
+    // session of their own here — the password gate is unconditional, so
+    // the admin token alone does not reach the invites route.
+    const adminCookie = await authenticateForDoc(created.uid, created.password as string, CLIENT_A);
+    const mk = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: withInvite(
+          headersFor(CLIENT_A, { cookie: adminCookie }),
+          created.admin_invite.token,
+        ),
+        body: JSON.stringify({ display_name: 'Bob', role: 'reader' }),
+      }),
+    );
+    const { invite } = (await mk.json()) as { invite: { token: string } };
+    const both = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_B, { cookie }), invite.token),
+      }),
+    );
+    expect(both.status).toBe(200);
+  });
+
+  test('revoking an invite closes the door again on an invite_only doc', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Private', invite_only: true });
+    const mk = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ display_name: 'Bob', role: 'reader' }),
+      }),
+    );
+    const { invite } = (await mk.json()) as { invite: { token: string } };
+
+    const del = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites/${invite.token}`, {
+        method: 'DELETE',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(del.status).toBe(204);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_B), invite.token),
+      }),
+    );
+    expect(res.status).toBe(401);
+  });
+
   // ACCESS_CONTROL Step 2: the `editable_by_anyone` toggle is gone.
   // Editing rights now require an editor (or admin) invite — anonymous
   // visitors are always reader, never editor.

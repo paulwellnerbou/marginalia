@@ -151,7 +151,10 @@ export function parseCookie(header: string | null, name: string): string | null 
  *   3. Invite session — a session cookie minted by POST /invites/:token/claim;
  *                       uses the stored role + display_name from the session row.
  *   4. Non-admin invite header — named/generic invite token in the header.
- *   5. No invite      — reader, identity comes from headers if present.
+ *   5. No invite      — reader, identity comes from headers if present,
+ *                       unless the doc is invite_only, which removes that
+ *                       fallback entirely. Both gates are independent: a
+ *                       password-protected invite_only doc needs both.
  *
  * Returns one resolved identity so callers don't re-derive authorship.
  */
@@ -257,6 +260,14 @@ export function authorize(
     return recordAndReturn(db, doc.uid, { ok: true, role: invite.role, identity, invite });
   }
 
+  // Invite-only: the URL alone is not a credential, so there is no
+  // anonymous role to fall back to. Every path that could have granted
+  // one — admin/named/generic invite header, claimed invite session —
+  // has already returned above.
+  if (doc.invite_only === 1) {
+    return { ok: false, reason: 'invite-required' };
+  }
+
   // No invite → read-only. To get comment / propose / edit rights, an
   // admin must mint an invite for this visitor.
   return recordAndReturn(db, doc.uid, { ok: true, role: 'reader', identity: base, invite: null });
@@ -307,4 +318,4 @@ export type AuthDecision =
        */
       isInviteSession?: boolean;
     }
-  | { ok: false; reason: 'password-required' | 'forbidden' };
+  | { ok: false; reason: 'password-required' | 'invite-required' | 'forbidden' };

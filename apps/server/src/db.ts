@@ -16,6 +16,11 @@ CREATE TABLE IF NOT EXISTS documents (
   -- DEPRECATED. Unread by authorize(), unwritten by new requests; kept so
   -- old bundles round-trip. Drop in a later migration.
   editable_by_anyone   INTEGER NOT NULL DEFAULT 0,
+  -- 1 → drop the anonymous-reader fallback in authorize(): holding the
+  -- document URL grants nothing, an invite token (header or claimed
+  -- session) is required even to read. Independent of password_hash;
+  -- when both are set a visitor needs to clear both gates.
+  invite_only          INTEGER NOT NULL DEFAULT 0,
   default_theme        TEXT NOT NULL DEFAULT 'default',
   -- 'markdown' | 'asciidoc'. Legacy rows without a format are treated
   -- as markdown by the route layer (their path column already ends
@@ -227,6 +232,8 @@ export interface DocumentRow {
   password_recovery_ciphertext: string | null;
   password_recovery_iv: string | null;
   editable_by_anyone: number;
+  /** 1 → only invite holders may read; see the schema comment. */
+  invite_only: number;
   default_theme: string;
   format: DocumentFormat;
   /**
@@ -442,6 +449,9 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'documents', 'password_recovery_iv', 'TEXT');
   ensureColumn(db, 'documents', 'mermaid_renderer', 'TEXT');
   ensureColumn(db, 'documents', 'cover_ref', 'TEXT');
+  // Existing docs keep their current reach — defaulting to 1 would lock
+  // readers out of every document on upgrade.
+  ensureColumn(db, 'documents', 'invite_only', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'comments_edit_proposals', 'accepted_oid', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'branch_ref', 'TEXT');
   ensureColumn(db, 'comments_edit_proposals', 'base_oid', 'TEXT');

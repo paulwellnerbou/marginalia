@@ -58,6 +58,12 @@ export interface DocumentWire {
   format: DocumentFormat;
   default_theme: string;
   password_protected: boolean;
+  /**
+   * True → the document URL alone grants nothing; only invite-link
+   * holders can read it. Optional so a response from an older instance
+   * still parses.
+   */
+  invite_only?: boolean;
   role: Role;
   display_name: string | null;
   created_at: number;

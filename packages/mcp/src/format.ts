@@ -35,6 +35,12 @@ export function timestamp(ms: number | null | undefined): string {
 export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: DocumentBlockMap): string {
   const access = documentUrl(ref);
   const share = viewerUrl(ref);
+  // "Hand this to a person" is the wrong advice on an invite-only
+  // document — the token-free link opens nothing for anyone who hasn't
+  // been given an access link of their own.
+  const shareHint = doc.invite_only
+    ? 'token-free, but this document is invite-only — it opens only for someone who already has their own access link'
+    : 'token-free — use this when telling a person where something is';
   const lines = [
     `document: ${doc.name ?? '(untitled)'}`,
     `uid: ${doc.uid}`,
@@ -45,11 +51,16 @@ export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: Documen
       ? [`url: ${share}`]
       : [
           `url: ${access} (carries your invite token — pass to tools, never show to people)`,
-          `share url: ${share} (token-free — use this when telling a person where something is)`,
+          `share url: ${share} (${shareHint})`,
         ]),
     `format: ${doc.format}`,
     `your role: ${doc.role}${roleHint(doc.role)}`,
     `password protected: ${doc.password_protected ? 'yes' : 'no'}`,
+    // Stated as its own fact, next to the other access facts, so it can
+    // be read without inferring it from the url guidance above.
+    ...(doc.invite_only
+      ? ['access: invite-only — only people with their own access link can open this document']
+      : []),
     `updated: ${timestamp(doc.updated_at)}`,
     `whole document: ${size(doc.source)}`,
     `blocks: ${map.blocks.length}, sections: ${map.sections.length}`,

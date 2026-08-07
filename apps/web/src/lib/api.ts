@@ -152,6 +152,8 @@ export interface Document {
    */
   mermaid_renderer: MermaidRenderer | null;
   password_protected: boolean;
+  /** True → the document URL alone grants nothing; an invite link is required. */
+  invite_only: boolean;
   role: Role;
   /** Server-forced display name (from the invite), or null if no invite. */
   display_name: string | null;
@@ -217,6 +219,8 @@ export interface UploadOptions {
    *  falls back to deriving a title from the rendered content. */
   name?: string;
   password_protected?: boolean;
+  /** Restrict reads to invite-link holders from the moment the doc exists. */
+  invite_only?: boolean;
   default_theme?: string;
 }
 
@@ -228,6 +232,12 @@ export interface UploadResponse {
   /** New documents always start at `null` (= use server default). */
   mermaid_renderer: MermaidRenderer | null;
   format: DocumentFormat;
+  /**
+   * Echoes back what the upload asked for. Optional because a tab loaded
+   * from an older build can outlive a deploy and read a response that
+   * predates the field.
+   */
+  invite_only?: boolean;
   password?: string;
 }
 
@@ -858,12 +868,15 @@ export interface DocumentSettingsPatch {
    */
   mermaid_renderer?: MermaidRenderer | null;
   password?: null | 'rotate';
+  /** Restrict reads to invite-link holders. Independent of `password`. */
+  invite_only?: boolean;
 }
 export interface DocumentSettingsResponse {
   name: string | null;
   default_theme: string;
   mermaid_renderer: MermaidRenderer | null;
   password_protected: boolean;
+  invite_only: boolean;
   password?: string;
 }
 

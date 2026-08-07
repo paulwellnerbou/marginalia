@@ -228,6 +228,10 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
     passwordHash = await hashPassword(plaintextPassword);
   }
 
+  // Settable at creation so a doc that is meant to be invite-only is never
+  // briefly readable by URL between the upload and a follow-up PATCH.
+  const inviteOnly = body.invite_only === true;
+
   const theme = typeof body.default_theme === 'string' ? body.default_theme : 'default';
   const docName =
     typeof body.name === 'string' && body.name.trim().length > 0
@@ -239,9 +243,9 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
   // editable_by_anyone is deprecated; always 0 on new rows, unread by authorize().
   db.prepare(
     `INSERT INTO documents
-       (uid, repo_dir, name, password_hash, editable_by_anyone, default_theme, format, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)`,
-  ).run(uid, uid, docName, passwordHash, theme, format, now, now);
+       (uid, repo_dir, name, password_hash, editable_by_anyone, invite_only, default_theme, format, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`,
+  ).run(uid, uid, docName, passwordHash, inviteOnly ? 1 : 0, theme, format, now, now);
   upsertDocUser(db, uid, identity);
 
   // Every doc gets an admin invite for its creator. The returned URL is the
@@ -278,6 +282,7 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
     // extra round-trip.
     mermaid_renderer: null,
     format,
+    invite_only: inviteOnly,
   };
   if (plaintextPassword) {
     response.password = plaintextPassword;
@@ -325,6 +330,7 @@ async function getDocument(c: Context, deps: AppDeps) {
     default_theme: doc.default_theme,
     mermaid_renderer: doc.mermaid_renderer,
     password_protected: doc.password_hash !== null,
+    invite_only: doc.invite_only === 1,
     role: decision.role,
     display_name: forcedDisplayName,
     created_at: doc.created_at,
@@ -445,6 +451,9 @@ async function updateSettings(c: Context, deps: AppDeps) {
       return c.json({ error: 'invalid-mermaid-renderer' }, 400);
     }
   }
+  if (typeof body.invite_only === 'boolean') {
+    updates.push(['invite_only', body.invite_only ? 1 : 0]);
+  }
   if (body.name === null) {
     updates.push(['name', null]);
   } else if (typeof body.name === 'string') {
@@ -487,6 +496,7 @@ async function updateSettings(c: Context, deps: AppDeps) {
     default_theme: fresh.default_theme,
     mermaid_renderer: fresh.mermaid_renderer,
     password_protected: fresh.password_hash !== null,
+    invite_only: fresh.invite_only === 1,
   };
   if (plaintextPassword) {
     response.password = plaintextPassword;
