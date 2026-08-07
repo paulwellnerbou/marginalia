@@ -103,6 +103,97 @@ a {
 }
 
 /* ============================================================
+ * Dialog motion (every Dialog + AlertDialog, incl. the diff modals)
+ * ============================================================
+ *
+ * Radix ships its own enter/exit animation, but the exit runs for 100ms
+ * against a 200ms enter, so dismissing reads as a hard cut. These
+ * override the base classes for both flavours at once — `.rt-BaseDialog*`
+ * is shared by Dialog and AlertDialog, and Radix declares its rules
+ * inside `:where()`, so a plain class+attribute selector wins regardless
+ * of source order.
+ *
+ * Radix keeps the overlay mounted during the exit with a no-op animation
+ * on the overlay element (the content lives *inside* it), so that hold
+ * has to outlast the content's exit or the dialog gets yanked mid-flight.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  :root,
+  .radix-themes {
+    --dialog-enter-duration: 260ms;
+    --dialog-exit-duration: 180ms;
+    --dialog-enter-ease: cubic-bezier(0.16, 1, 0.3, 1);
+    --dialog-exit-ease: cubic-bezier(0.4, 0, 1, 1);
+  }
+
+  @keyframes marginalia-dialog-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px) scale(0.96);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  @keyframes marginalia-dialog-out {
+    from {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+    to {
+      opacity: 0;
+      transform: translateY(6px) scale(0.98);
+    }
+  }
+  @keyframes marginalia-dialog-backdrop-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes marginalia-dialog-backdrop-out {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
+    }
+  }
+  /* Presence-only: holds the overlay (and the content it wraps) in the
+     DOM until the exit animation below has finished. */
+  @keyframes marginalia-dialog-hold {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  .rt-BaseDialogContent[data-state="open"] {
+    animation: marginalia-dialog-in var(--dialog-enter-duration) var(--dialog-enter-ease);
+  }
+  .rt-BaseDialogContent[data-state="closed"] {
+    opacity: 0;
+    animation: marginalia-dialog-out var(--dialog-exit-duration) var(--dialog-exit-ease);
+  }
+
+  .rt-BaseDialogOverlay[data-state="open"]::before {
+    animation: marginalia-dialog-backdrop-in var(--dialog-enter-duration) ease-out;
+  }
+  .rt-BaseDialogOverlay[data-state="closed"]::before {
+    opacity: 0;
+    animation: marginalia-dialog-backdrop-out var(--dialog-exit-duration) ease-in;
+  }
+  .rt-BaseDialogOverlay[data-state="closed"] {
+    animation: marginalia-dialog-hold calc(var(--dialog-exit-duration) + 20ms) linear;
+  }
+}
+
+/* ============================================================
  * Page / panel (used for Home, PasswordPrompt, errors)
  * ============================================================ */
 
