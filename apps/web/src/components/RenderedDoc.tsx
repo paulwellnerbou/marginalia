@@ -6,6 +6,7 @@ import { spanElements } from '../lib/block-span.js';
 import { isInjectedChromeText } from '../lib/block-text.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
+import { revealElement } from '../lib/paged-reading.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
 
 export interface DocumentSearchResult {
@@ -144,7 +145,7 @@ export function RenderedDoc({
         const seq = ++scrollSeq.current;
         void expandAncestors(target).then(() => {
           if (seq !== scrollSeq.current) return;
-          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          revealElement(target, { behavior: 'smooth', block: 'start' });
         });
       }
     }
@@ -216,7 +217,7 @@ export function RenderedDoc({
     const seq = ++scrollSeq.current;
     void expandAncestors(activeMark).then(() => {
       if (cancelled || seq !== scrollSeq.current) return;
-      activeMark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      revealElement(activeMark, { behavior: 'smooth', block: 'center' });
     });
     return () => {
       cancelled = true;
@@ -244,7 +245,7 @@ export function RenderedDoc({
       const seq = ++scrollSeq.current;
       void expandAncestors(target).then(() => {
         if (seq !== scrollSeq.current) return;
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        revealElement(target, { behavior: 'smooth', block: 'start' });
       });
     };
     const onHashChange = () => revealHash(window.location.hash.slice(1));
@@ -360,7 +361,7 @@ export function RenderedDoc({
             const seq = ++scrollSeq.current;
             void expandAncestors(targetEl).then(() => {
               if (seq !== scrollSeq.current) return;
-              targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              revealElement(targetEl, { behavior: 'smooth', block: 'start' });
             });
             // Keep the URL in sync so copy-link / refresh / back-button
             // behaviour matches native anchor clicks. `pushState` rather

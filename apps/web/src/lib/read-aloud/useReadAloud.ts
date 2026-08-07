@@ -1,5 +1,6 @@
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { expandAncestors } from '../heading-collapse.js';
+import { PAGED_CLASS, revealElement } from '../paged-reading.js';
 import { clearHighlight, paintSegment } from './highlight.js';
 import { collectSegments, type ReadAloudSegment, resolveSegmentRange } from './segment.js';
 import { needsBetterVoice, selectVoices } from './voices.js';
@@ -317,19 +318,30 @@ export function findResumeIndex(
 /**
  * Scroll only when the block has drifted out of the comfortable middle
  * of the reading pane — following every sentence inside an already
- * visible paragraph would make the page twitch continuously.
+ * visible paragraph would make the page twitch continuously. Paged mode
+ * has an exact version of the same rule: stay put until the sentence
+ * being read is no longer on the page in front of the reader.
  */
 function scrollIntoViewIfNeeded(root: HTMLElement, block: HTMLElement): void {
   const scroller = root.closest<HTMLElement>('.doc-scroll');
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const behavior: ScrollBehavior = reduceMotion ? 'auto' : 'smooth';
+  const rect = block.getBoundingClientRect();
+
+  if (scroller?.classList.contains(PAGED_CLASS)) {
+    const bounds = scroller.getBoundingClientRect();
+    if (rect.left >= bounds.left - 1 && rect.left < bounds.right) return;
+    revealElement(block, { behavior });
+    return;
+  }
+
   const bounds = scroller?.getBoundingClientRect() ?? {
     top: 0,
     bottom: window.innerHeight,
     height: window.innerHeight,
   };
-  const rect = block.getBoundingClientRect();
   const margin = bounds.height * 0.15;
   if (rect.top >= bounds.top + margin && rect.bottom <= bounds.bottom - margin) return;
 
-  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  block.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' });
+  revealElement(block, { behavior, block: 'center' });
 }

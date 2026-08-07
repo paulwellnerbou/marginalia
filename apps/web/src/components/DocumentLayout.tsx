@@ -13,6 +13,7 @@ import {
   Flex,
   IconButton,
   Popover,
+  SegmentedControl,
   Select,
   Slider,
   Tabs,
@@ -72,6 +73,12 @@ import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js'
 import { reportError } from '../lib/log.js';
 import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
 import { ensureNotificationPermission, notify, showErrorToast } from '../lib/notifications.js';
+import {
+  PAGED_CLASS,
+  pageIndexAt,
+  pageIndexOfElement,
+  pageIndexOfOffset,
+} from '../lib/paged-reading.js';
 import { retryRequest } from '../lib/retry.js';
 import {
   anchorTouchesSections,
@@ -87,6 +94,7 @@ import {
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
+import { usePagedReading } from '../lib/usePagedReading.js';
 import { APP_ACCENT_COLOR } from '../styles/theme.js';
 import { AccessControlDialog } from './AccessControlDialog.js';
 import { ActivityList } from './ActivityList.js';
@@ -120,6 +128,7 @@ const INLINE_COMMENTS_OPEN_KEY = 'marginalia.inlineCommentsOpen';
 const INLINE_COMMENTS_STACKING_KEY = 'marginalia.inlineCommentsStacking';
 const INLINE_COMMENTS_HIDE_RESOLVED_KEY = 'marginalia.inlineCommentsHideResolved';
 const COMMENTS_DISPLAY_MODE_KEY = 'marginalia.commentsDisplayMode';
+const READING_MODE_KEY = 'marginalia.readingMode';
 const RIGHT_TAB_KEY = 'marginalia.rightTab';
 const COLLAPSED_WIDTH = 36;
 
@@ -178,6 +187,9 @@ interface ThreadFocusTarget {
 
 /** How comment threads render in the document pane: a margin column, or floating cards over the text. */
 type CommentsDisplayMode = 'column' | 'floating';
+
+/** How the document advances: continuous scrolling, or discrete pages like an e-reader. */
+type ReadingMode = 'scroll' | 'paged';
 
 type RightTab = 'comments' | 'history' | 'search' | 'activities' | 'mcp';
 
@@ -238,9 +250,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       return saved === 'floating' || saved === 'column' ? saved : null;
     },
   );
+  const [readingMode, setReadingMode] = useState<ReadingMode>(() =>
+    localStorage.getItem(READING_MODE_KEY) === 'paged' ? 'paged' : 'scroll',
+  );
+  const paged = readingMode === 'paged';
   const commentsDisplayMode: CommentsDisplayMode =
     storedCommentsDisplayMode ?? (compactViewport ? 'floating' : 'column');
-  const floatingComments = commentsDisplayMode === 'floating';
+  /**
+   * Paged mode leaves the margin column nothing to stack against — its
+   * cards are placed down a vertical axis the paginated document no
+   * longer has — so cards float over the page there regardless of the
+   * stored preference, which stays untouched for the way back.
+   */
+  const floatingComments = paged || commentsDisplayMode === 'floating';
   const [rightTab, setRightTab] = useState<RightTab>(() => {
     const saved = localStorage.getItem(RIGHT_TAB_KEY);
     return isRememberedRightTab(saved) ? saved : 'comments';
@@ -508,6 +530,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY, String(inlineCommentsHideResolved));
   }, [inlineCommentsHideResolved]);
+  useEffect(() => {
+    localStorage.setItem(READING_MODE_KEY, readingMode);
+  }, [readingMode]);
   // The key exists exactly when there is an explicit choice to remember,
   // so a value written by an older build — or by hand — is cleared rather
   // than left behind for every later read to step over.
@@ -685,8 +710,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     let frame = 0;
     const updateActiveHeading = () => {
       frame = 0;
-      const containerTop = container.getBoundingClientRect().top;
-      const threshold = containerTop + 96;
+      const containerRect = container.getBoundingClientRect();
       // Skip headings hidden inside a folded `.collapse-section` —
       // their `getBoundingClientRect()` still reports the wrapper's
       // collapsed position, so without this filter the TOC would
@@ -701,8 +725,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
       let current = visible[0]!.id;
 
+      // Paged mode has no "how far down the page" to threshold against:
+      // a heading counts as reached once its page is the one on screen.
+      // Metrics are hoisted out of the loop — reading clientWidth per
+      // heading would force a layout on every one of them.
+      const pitch = paged ? container.clientWidth : 0;
+      const currentPage = paged ? pageIndexAt(container.scrollLeft, pitch) : 0;
+      const threshold = containerRect.top + 96;
+
       for (const heading of visible) {
-        if (heading.getBoundingClientRect().top <= threshold) {
+        const rect = heading.getBoundingClientRect();
+        const reached = paged
+          ? pageIndexOfOffset(rect.left - containerRect.left + container.scrollLeft, pitch) <=
+            currentPage
+          : rect.top <= threshold;
+        if (reached) {
           current = heading.id;
           continue;
         }
@@ -731,7 +768,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       root.removeEventListener('marginalia:collapse-toggle', scheduleUpdate);
       if (frame) window.cancelAnimationFrame(frame);
     };
-  }, [headingIdsKey, liveRendered.html]);
+    // `paged` re-runs the scan: switching layout fires neither scroll
+    // nor resize, so the highlight would sit on a stale heading.
+  }, [headingIdsKey, liveRendered.html, paged]);
 
   /**
    * A section fragment in the URL goes stale the moment the reader moves
@@ -1435,6 +1474,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const columnModeAvailable =
     commentsHostWidth === 0 || commentsHostWidth > COMMENTS_COLUMN_MIN_WIDTH;
 
+  /**
+   * Everything that repaginates the document, in one key: new content,
+   * a different reading width or text size, a theme swap, and either
+   * side pane resizing. The hook re-measures and holds the reader's
+   * place whenever it changes.
+   */
+  const pageLayoutKey = `${liveRendered.html.length}|${maxWidth}|${textZoom}|${theme}|${tocPx}|${commentsPx}`;
+  const pages = usePagedReading(docScrollRef, paged, pageLayoutKey);
+
   const title = documentTitle(doc);
 
   /**
@@ -1702,6 +1750,20 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
    */
   const displayControls = (
     <>
+      <Flex align="center" gap="2">
+        <Text size="1" color="gray">
+          Layout
+        </Text>
+        <SegmentedControl.Root
+          size="1"
+          value={readingMode}
+          onValueChange={(next) => setReadingMode(next === 'paged' ? 'paged' : 'scroll')}
+          aria-label="Reading layout"
+        >
+          <SegmentedControl.Item value="scroll">Scroll</SegmentedControl.Item>
+          <SegmentedControl.Item value="paged">Pages</SegmentedControl.Item>
+        </SegmentedControl.Root>
+      </Flex>
       <Flex align="center" gap="2" className="width-slider">
         <Text size="1" color="gray">
           Reading width
@@ -1776,6 +1838,38 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       </Flex>
     </>
   );
+
+  /**
+   * Hoisted because paged mode hangs it somewhere else in the tree: its
+   * geometry is "host space", offsets from the positioning host, and in
+   * paged mode the host must be the still scrollport rather than the
+   * row, which slides sideways with the pages.
+   */
+  const floatingCommentsLayer = floatingComments ? (
+    <FloatingCommentsLayer
+      uid={doc.uid}
+      threads={sectionVisibleThreads}
+      docHtml={liveRendered.html}
+      docElementRef={docRef}
+      scrollContainerRef={docScrollRef}
+      canComment={canComment}
+      pendingAnchor={canComment ? pendingAnchor : null}
+      focusedThread={focusedThread}
+      displayName={effectiveDisplayName}
+      mentionCandidates={mentionCandidates}
+      onCancelPending={() => setPendingDraft(null)}
+      onCreate={onCreate}
+      onReply={onReply}
+      onEdit={onEdit}
+      onDeleteNode={onDeleteNode}
+      onDeleteThread={onDeleteThread}
+      onResolveThread={onResolveThread}
+      onRepairThread={onRepairThread}
+      onReact={onReact}
+      onEditProposal={onEditProposal}
+      onScrollToAnchor={scrollToAnchor}
+    />
+  ) : null;
 
   return (
     <div className="doc-page">
@@ -1997,115 +2091,147 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               hideResolved={inlineCommentsHideResolved}
               onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
               onSwitchToColumn={() => setCommentsDisplayMode('column')}
-              columnModeAvailable={columnModeAvailable}
+              columnModeAvailable={columnModeAvailable && !paged}
               docElementRef={docRef}
               scrollContainerRef={docScrollRef}
               currentThreadId={focusedThread?.threadId ?? null}
               onOpenThread={openCommentThread}
             />
           )}
-          {/* `marginalia-theme` is applied here (not just inside the
+          {/* The reading width is published here rather than on the row
+              so the edge tap zones — siblings of the scrollport, not
+              descendants — can size themselves to the gutter it leaves.
+              Everything that read it inside the row still inherits it. */}
+          <div className="doc-viewport" style={{ ['--md-max-width' as string]: `${maxWidth}ch` }}>
+            {/* `marginalia-theme` is applied here (not just inside the
               article) so the inline comments column inherits the
               document's themed background — otherwise it would sit on
               the surrounding pane-doc background and look like a
               different surface. */}
-          <div className="doc-scroll marginalia-theme" ref={docScrollRef}>
             <div
-              className={`doc-row${!floatingComments && inlineCommentsOpen ? ' doc-row-with-inline' : ''}${floatingComments ? ' doc-row-floating' : ''}`}
-              style={{ ['--md-max-width' as string]: `${maxWidth}ch` }}
+              className={`doc-scroll marginalia-theme${paged ? ` ${PAGED_CLASS}` : ''}`}
+              ref={docScrollRef}
             >
-              <div className="doc-body">
-                <RenderedDoc
-                  rendered={liveRendered}
-                  elRef={docRef}
-                  maxWidthCh={maxWidth}
-                  textZoom={textZoom / 100}
-                  highlights={commentHighlights}
-                  searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}
-                  searchOptions={docSearchOptions}
-                  activeSearchResultId={activeSearchTarget?.id ?? null}
-                  activeSearchVersion={activeSearchTarget?.nonce ?? 0}
-                  onSearchResultsChange={updateSearchResults}
-                  onHighlightClick={(threadId) =>
-                    openCommentThread(threadId, { scroll: false, jumpToAnchor: false })
-                  }
-                  onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
-                />
-                {canComment && blockRangesReady && (
-                  <SelectionToolbar
-                    rootRef={docRef}
-                    docFormat={doc.format}
-                    blockRanges={blockRanges}
-                    onAdd={startCommentDraft}
-                    onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+              <div
+                className={`doc-row${!floatingComments && inlineCommentsOpen ? ' doc-row-with-inline' : ''}${floatingComments && !paged ? ' doc-row-floating' : ''}`}
+              >
+                <div className="doc-body">
+                  <RenderedDoc
+                    rendered={liveRendered}
+                    elRef={docRef}
+                    maxWidthCh={maxWidth}
+                    textZoom={textZoom / 100}
+                    highlights={commentHighlights}
+                    searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}
+                    searchOptions={docSearchOptions}
+                    activeSearchResultId={activeSearchTarget?.id ?? null}
+                    activeSearchVersion={activeSearchTarget?.nonce ?? 0}
+                    onSearchResultsChange={updateSearchResults}
+                    onHighlightClick={(threadId) =>
+                      openCommentThread(threadId, { scroll: false, jumpToAnchor: false })
+                    }
+                    onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
                   />
-                )}
-                {canComment && blockRangesReady && (
-                  <BlockActions
-                    rootRef={docRef}
-                    onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+                  {canComment && blockRangesReady && (
+                    <SelectionToolbar
+                      rootRef={docRef}
+                      docFormat={doc.format}
+                      blockRanges={blockRanges}
+                      onAdd={startCommentDraft}
+                      onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+                    />
+                  )}
+                  {canComment && blockRangesReady && (
+                    <BlockActions
+                      rootRef={docRef}
+                      onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+                    />
+                  )}
+                </div>
+                {floatingComments ? (
+                  paged ? null : (
+                    floatingCommentsLayer
+                  )
+                ) : (
+                  <InlineCommentsLayer
+                    uid={doc.uid}
+                    threads={sectionVisibleThreads}
+                    docHtml={liveRendered.html}
+                    docElementRef={docRef}
+                    scrollContainerRef={docScrollRef}
+                    blockRanges={blockRanges}
+                    canComment={canComment}
+                    open={inlineCommentsOpen}
+                    onToggleOpen={() => setInlineCommentsOpen((v) => !v)}
+                    stackingEnabled={inlineCommentsStacking}
+                    onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
+                    hideResolved={inlineCommentsHideResolved}
+                    onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
+                    onSwitchToFloating={() => setCommentsDisplayMode('floating')}
+                    pendingAnchor={canComment ? pendingAnchor : null}
+                    focusedThread={focusedThread}
+                    displayName={effectiveDisplayName}
+                    mentionCandidates={mentionCandidates}
+                    onCancelPending={() => setPendingDraft(null)}
+                    onCreate={onCreate}
+                    onReply={onReply}
+                    onEdit={onEdit}
+                    onDeleteNode={onDeleteNode}
+                    onDeleteThread={onDeleteThread}
+                    onResolveThread={onResolveThread}
+                    onRepairThread={onRepairThread}
+                    onReact={onReact}
+                    onEditProposal={onEditProposal}
+                    onScrollToAnchor={scrollToAnchor}
                   />
                 )}
               </div>
-              {floatingComments ? (
-                <FloatingCommentsLayer
-                  uid={doc.uid}
-                  threads={sectionVisibleThreads}
-                  docHtml={liveRendered.html}
-                  docElementRef={docRef}
-                  scrollContainerRef={docScrollRef}
-                  canComment={canComment}
-                  pendingAnchor={canComment ? pendingAnchor : null}
-                  focusedThread={focusedThread}
-                  displayName={effectiveDisplayName}
-                  mentionCandidates={mentionCandidates}
-                  onCancelPending={() => setPendingDraft(null)}
-                  onCreate={onCreate}
-                  onReply={onReply}
-                  onEdit={onEdit}
-                  onDeleteNode={onDeleteNode}
-                  onDeleteThread={onDeleteThread}
-                  onResolveThread={onResolveThread}
-                  onRepairThread={onRepairThread}
-                  onReact={onReact}
-                  onEditProposal={onEditProposal}
-                  onScrollToAnchor={scrollToAnchor}
-                />
-              ) : (
-                <InlineCommentsLayer
-                  uid={doc.uid}
-                  threads={sectionVisibleThreads}
-                  docHtml={liveRendered.html}
-                  docElementRef={docRef}
-                  scrollContainerRef={docScrollRef}
-                  blockRanges={blockRanges}
-                  canComment={canComment}
-                  open={inlineCommentsOpen}
-                  onToggleOpen={() => setInlineCommentsOpen((v) => !v)}
-                  stackingEnabled={inlineCommentsStacking}
-                  onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
-                  hideResolved={inlineCommentsHideResolved}
-                  onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
-                  onSwitchToFloating={() => setCommentsDisplayMode('floating')}
-                  pendingAnchor={canComment ? pendingAnchor : null}
-                  focusedThread={focusedThread}
-                  displayName={effectiveDisplayName}
-                  mentionCandidates={mentionCandidates}
-                  onCancelPending={() => setPendingDraft(null)}
-                  onCreate={onCreate}
-                  onReply={onReply}
-                  onEdit={onEdit}
-                  onDeleteNode={onDeleteNode}
-                  onDeleteThread={onDeleteThread}
-                  onResolveThread={onResolveThread}
-                  onRepairThread={onRepairThread}
-                  onReact={onReact}
-                  onEditProposal={onEditProposal}
-                  onScrollToAnchor={scrollToAnchor}
-                />
-              )}
             </div>
+            {paged && (
+              <>
+                <button
+                  type="button"
+                  className="doc-page-zone doc-page-zone-prev"
+                  aria-label="Previous page"
+                  disabled={pages.page <= 0}
+                  onClick={() => pages.tap(-1)}
+                />
+                <button
+                  type="button"
+                  className="doc-page-zone doc-page-zone-next"
+                  aria-label="Next page"
+                  disabled={pages.page >= pages.pageCount - 1}
+                  onClick={() => pages.tap(1)}
+                />
+                {floatingCommentsLayer}
+              </>
+            )}
           </div>
+          {paged && (
+            <Flex className="doc-pager" align="center" gap="2">
+              <IconButton
+                variant="ghost"
+                size="1"
+                aria-label="Previous page"
+                disabled={pages.page <= 0}
+                onClick={() => pages.turn(-1)}
+              >
+                <ChevronLeftIcon />
+              </IconButton>
+              <Text size="1" color="gray" className="doc-pager-count" aria-live="polite">
+                Page {pages.page + 1} of {pages.pageCount}
+              </Text>
+              <IconButton
+                variant="ghost"
+                size="1"
+                aria-label="Next page"
+                disabled={pages.page >= pages.pageCount - 1}
+                onClick={() => pages.turn(1)}
+              >
+                <ChevronRightIcon />
+              </IconButton>
+            </Flex>
+          )}
         </main>
 
         <aside className={`pane pane-right ${commentsOpen ? 'open' : 'closed'}`}>
@@ -2283,12 +2409,17 @@ const SETTLE_TOLERANCE_PX = 2;
 const SETTLE_USER_EVENTS = ['wheel', 'touchstart', 'mousedown'] as const;
 
 /**
- * Smooth-scroll `target` to the container top (minus `offset`), then
- * keep verifying until the position sticks. Late layout shifts — webfont
- * and image loads, mermaid renders — move the target mid-flight, and
- * some environments drop smooth scrolling entirely; each idle check
+ * Bring `target` to the top of the container (minus `offset`) — or, in
+ * paged mode, to the start of the page holding it — then keep verifying
+ * until the position sticks. Late layout shifts — webfont and image
+ * loads, mermaid renders — move the target mid-flight, and some
+ * environments drop smooth scrolling entirely; each idle check
  * re-measures and corrects instantly until two consecutive checks agree,
  * the user takes over, or a newer navigation supersedes this one.
+ *
+ * Repagination makes that verification matter more, not less: a late
+ * image load doesn't just shift the target down the page, it can move
+ * it onto a different page entirely.
  */
 function scrollToTargetAndSettle(
   scroll: HTMLElement,
@@ -2296,8 +2427,16 @@ function scrollToTargetAndSettle(
   offset: number,
   isCurrent: () => boolean,
 ): void {
-  const intendedTop = (): number | null => {
+  const paged = scroll.classList.contains(PAGED_CLASS);
+  /** Where the reader should end up, on whichever axis is in play. */
+  const intended = (): number | null => {
     if (!target.isConnected) return null;
+    if (paged) {
+      const page = pageIndexOfElement(scroll, target);
+      // `offset` centres a card in the scroll flow; a page has no such
+      // freedom — the target's page starts where it starts.
+      return page === null ? null : page * scroll.clientWidth;
+    }
     const top =
       target.getBoundingClientRect().top -
       scroll.getBoundingClientRect().top +
@@ -2305,9 +2444,13 @@ function scrollToTargetAndSettle(
       offset;
     return Math.max(0, Math.min(Math.round(top), scroll.scrollHeight - scroll.clientHeight));
   };
-  const first = intendedTop();
+  const position = () => (paged ? scroll.scrollLeft : scroll.scrollTop);
+  const scrollTo = (value: number, behavior: ScrollBehavior) =>
+    scroll.scrollTo(paged ? { left: value, behavior } : { top: value, behavior });
+
+  const first = intended();
   if (first === null) return;
-  scroll.scrollTo({ top: first, behavior: 'smooth' });
+  scrollTo(first, 'smooth');
 
   let lastScrollAt = performance.now();
   let stableChecks = 0;
@@ -2324,15 +2467,15 @@ function scrollToTargetAndSettle(
   const timer = window.setInterval(() => {
     if (!isCurrent()) return stop();
     if (performance.now() - lastScrollAt < SETTLE_IDLE_MS) return; // still gliding
-    const want = intendedTop();
+    const want = intended();
     if (want === null) return stop();
-    if (Math.abs(scroll.scrollTop - want) <= SETTLE_TOLERANCE_PX) {
+    if (Math.abs(position() - want) <= SETTLE_TOLERANCE_PX) {
       if (++stableChecks >= 2) stop();
       return;
     }
     stableChecks = 0;
     if (++corrections > 4) return stop();
-    scroll.scrollTo({ top: want, behavior: 'auto' });
+    scrollTo(want, 'auto');
   }, SETTLE_TICK_MS);
   const deadline = window.setTimeout(stop, SETTLE_MAX_MS);
   scroll.addEventListener('scroll', onScroll, { passive: true });

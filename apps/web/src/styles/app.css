@@ -452,6 +452,214 @@ button.primary:disabled {
   flex: 1 1 auto;
   min-width: 0;
 }
+/* Wraps the scrollport so paged mode's overlays (comment cards, edge
+   tap zones) have a positioning context that does NOT scroll with the
+   document, and so `100cqw` keeps meaning "one page" for them. */
+.doc-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  container-type: inline-size;
+  /* Narrowest edge strip reserved for the tap-to-turn zones. Lives here
+     rather than on `.doc-scroll` because both the zones and the reading
+     column that has to clear them need to read it, and the zones are
+     siblings of the scrollport, not descendants. */
+  --page-edge-zone: 72px;
+}
+
+/* ============================================================
+ * Paged reading (e-reader mode)
+ *
+ * One CSS column per page, each exactly as wide as the scrollport,
+ * overflowing horizontally — so a page turn is a horizontal scroll by
+ * one pitch. `paged-reading.ts` computes that pitch as `.doc-scroll`'s
+ * clientWidth, which holds only while the container keeps no horizontal
+ * padding and the columns are laid out at exactly that width. Break
+ * either and every page creeps sideways by the difference.
+ * ============================================================ */
+
+.pane-doc .doc-scroll.doc-paged {
+  --page-margin-block: 2rem;
+  /* Scrolled programmatically only. Column boxes aren't elements, so
+     scroll-snap has nothing to snap to, and a free scroll would strand
+     the reader looking at halves of two pages. */
+  overflow: hidden;
+  padding-inline: 0;
+  /* Claim the horizontal axis for the swipe. Left at `auto` the browser
+     decides a sideways drag is a pan of its own, cancels the pointer
+     stream mid-gesture, and the swipe silently never arrives. `pan-y`
+     hands back the vertical so blocks that scroll internally still do. */
+  touch-action: pan-y;
+}
+.doc-paged .doc-row {
+  display: block;
+  height: 100%;
+  min-height: 0;
+}
+.doc-paged .doc-body {
+  height: 100%;
+  /* The page's top and bottom margins belong to the column container:
+     block padding on the article itself lands on its first and last
+     fragment only, leaving every page in between flush to the edge.
+     The top also has to clear the floating comment toolbar, which paged
+     mode always shows: it hovers at a fixed spot, so unlike in scroll
+     mode the reader can never move the text out from under it. */
+  padding-top: calc(var(--page-margin-block) + 0.5rem + var(--doc-floating-toolbar-height));
+  padding-bottom: var(--page-margin-block);
+  /* One column per page, exactly as wide as the scrollport. The gap has
+     to be zero: at a single column the used width grows to fill the
+     container regardless of `column-width`, so any gap lands on top of
+     a full-width column and pushes the pitch past the scrollport. The
+     white space between pages comes from the reading column's own
+     margins below instead. */
+  column-width: 100cqw;
+  column-gap: 0;
+  /* Fill each column before starting the next — the default balances
+     the remainder, which would reflow the whole last page. */
+  column-fill: auto;
+}
+.doc-paged .marginalia {
+  padding-block: 0;
+  /* Doubles as the gutter between facing pages and as clearance for the
+     tap zones, so turning a page is never mistaken for clicking a link. */
+  max-width: min(var(--md-max-width), calc(100cqw - 2 * var(--page-edge-zone)));
+}
+
+/* Fragmentation. `table` is deliberately absent: it splits across pages
+   cleanly, and a long one has to, since `break-inside: avoid` on a block
+   taller than the column pushes it out of the flow where the
+   scrollport's `overflow: hidden` clips it away for good. */
+.doc-paged .marginalia :is(h1, h2, h3, h4, h5, h6) {
+  break-after: avoid;
+}
+.doc-paged .marginalia :is(figure, blockquote, li, tr, .mermaid) {
+  break-inside: avoid;
+}
+.doc-paged .marginalia p {
+  orphans: 2;
+  widows: 2;
+}
+
+/* --- Blocks that cannot fragment -----------------------------------
+   Two kinds run off the page instead of continuing onto the next one,
+   and the page height is the only thing that reins them in.
+   `--doc-page-height` is the column box's height, published by the
+   paging hook — CSS can't reach it, being a percentage of an
+   auto-height ancestor. */
+
+/* Media has no reflow of its own — a tall image would simply be cut. */
+.doc-paged .marginalia :is(img, svg, video, canvas) {
+  max-height: var(--doc-page-height, 70vh);
+  object-fit: contain;
+}
+/* Code blocks scroll sideways, which makes them scroll containers, and
+   multicol treats a scroll container as monolithic — no `break-inside`
+   value can split one. Capping it at the page turns the excess into a
+   scroll *inside* the block rather than lines clipped outside it. */
+.doc-paged .marginalia pre {
+  max-height: var(--doc-page-height, 70vh);
+  overflow: auto;
+}
+/* A table can't be given the same treatment: making it scroll would
+   make it monolithic too, and long tables fragment across pages very
+   nicely as they are. Instead take away its min-content floor — an
+   auto-laid-out table would rather push its widest cell past the page
+   edge and into the next one than wrap — and let the cells wrap. */
+.doc-paged .marginalia table {
+  table-layout: fixed;
+  width: 100%;
+}
+.doc-paged .marginalia :is(th, td) {
+  overflow-wrap: break-word;
+}
+/* The margin column has no vertical axis left to stack against. */
+.doc-paged .ic-column {
+  display: none;
+}
+
+/* Turn a page by tapping the outer edge, the way a reader expects.
+   Transparent and unlabelled at rest; the pager below names the same
+   two actions for anyone who needs a visible control. */
+.doc-page-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* Exactly the empty margin beside the reading column, so the zone is
+     as large as it can be without ever covering text. Measured and
+     published by the paging hook rather than derived from
+     `--md-max-width`: that is authored in `ch`, which here would
+     resolve against the button's font instead of the article's and
+     leave the zone lying across the first inch of every line. */
+  width: max(var(--page-edge-zone), var(--doc-page-gutter, 0px));
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+  z-index: 1;
+  /* Same bargain as the scrollport: the gutter is where a thumb rests,
+     so it has to hand horizontal drags to the swipe handler. */
+  touch-action: pan-y;
+}
+.doc-page-zone:disabled {
+  cursor: default;
+}
+.doc-page-zone-prev {
+  left: 0;
+}
+.doc-page-zone-next {
+  right: 0;
+}
+.doc-page-zone:focus-visible {
+  outline: 2px solid var(--focus-8, var(--ui-border));
+  outline-offset: -4px;
+}
+/* An invisible click target is fine on a device you tap, but on a
+   pointer device nothing would ever hint the zone is there. Surface a
+   chevron on hover only — touch has the swipe instead. */
+.doc-page-zone::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-top: 2px solid var(--ui-fg-muted);
+  border-right: 2px solid var(--ui-fg-muted);
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+.doc-page-zone-next::after {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+.doc-page-zone-prev::after {
+  transform: translate(-50%, -50%) rotate(-135deg);
+}
+@media (hover: hover) {
+  .doc-page-zone:hover:not(:disabled)::after {
+    opacity: 0.5;
+  }
+}
+.doc-page-zone:focus-visible::after {
+  opacity: 0.5;
+}
+
+.doc-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+  padding: 0.25rem 0.75rem;
+  border-top: 1px solid var(--ui-border);
+  background: var(--ui-bg);
+}
+.doc-pager-count {
+  min-width: 12ch;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 
 .pane-header {
   display: flex;
