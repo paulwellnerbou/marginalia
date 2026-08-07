@@ -38,6 +38,16 @@ const COVER_EXTENSIONS: Record<CoverMime, string> = {
 };
 
 /**
+ * Narrow a stored mime string to a format the exporter can carry.
+ * `Object.hasOwn` rather than `in`: the latter walks the prototype
+ * chain, so `'toString'` would pass and reach the EPUB manifest as a
+ * media type.
+ */
+export function isCoverMime(value: string): value is CoverMime {
+  return Object.hasOwn(COVER_EXTENSIONS, value);
+}
+
+/**
  * Identify a cover image from its magic bytes. Deliberately ignores the
  * client-declared MIME type: the value ends up in the EPUB manifest and
  * in the asset proxy's Content-Type, so it has to describe the actual
@@ -102,8 +112,8 @@ export async function loadStoredCover(
 ): Promise<StoredCover | null> {
   const descriptor = loadCoverDescriptor(db, doc);
   if (!descriptor) return null;
-  const mime = descriptor.mime as CoverMime;
-  if (!(mime in COVER_EXTENSIONS)) return null;
+  if (!isCoverMime(descriptor.mime)) return null;
+  const mime = descriptor.mime;
   try {
     return { bytes: await blobs.get(descriptor.asset_id), mime };
   } catch {
