@@ -1475,12 +1475,20 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     commentsHostWidth === 0 || commentsHostWidth > COMMENTS_COLUMN_MIN_WIDTH;
 
   /**
-   * Everything that repaginates the document, in one key: new content,
-   * a different reading width or text size, a theme swap, and either
-   * side pane resizing. The hook re-measures and holds the reader's
-   * place whenever it changes.
+   * Everything that repaginates the document, as a single identity: new
+   * content, a different reading width or text size, a theme swap, either
+   * side pane resizing. The hook re-measures and holds the reader's place
+   * whenever it changes.
+   *
+   * A memoised tuple rather than a joined string, so the HTML travels by
+   * reference: its length alone would miss any edit that happens to keep
+   * the document the same size, and concatenating it would rebuild the
+   * whole document into a key on every render.
    */
-  const pageLayoutKey = `${liveRendered.html.length}|${maxWidth}|${textZoom}|${theme}|${tocPx}|${commentsPx}`;
+  const pageLayoutKey = useMemo(
+    () => [liveRendered.html, maxWidth, textZoom, theme, tocPx, commentsPx],
+    [liveRendered.html, maxWidth, textZoom, theme, tocPx, commentsPx],
+  );
   const pages = usePagedReading(docScrollRef, paged, pageLayoutKey);
 
   const title = documentTitle(doc);

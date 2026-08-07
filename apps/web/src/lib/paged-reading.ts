@@ -78,14 +78,25 @@ export function measurePages(scroll: HTMLElement): PageMetrics {
   };
 }
 
+/**
+ * Page holding a live viewport rect. Reach for this over
+ * `pageIndexOfElement` whenever the thing being located can fragment: a
+ * paragraph spanning pages reports the *union* of its fragments, whose
+ * left edge always names the first page it appears on, however far into
+ * it you actually are. A single rect from `getClientRects()` is one
+ * page's worth.
+ */
+export function pageIndexOfClientRect(scroll: HTMLElement, rect: { left: number }): number | null {
+  const pitch = scroll.clientWidth;
+  if (pitch <= 0) return null;
+  const offsetLeft = rect.left - scroll.getBoundingClientRect().left + scroll.scrollLeft;
+  return clampPage(pageIndexOfOffset(offsetLeft, pitch), pageCountOf(scroll.scrollWidth, pitch));
+}
+
 /** Which page `el` starts on, or null when it can't be measured. */
 export function pageIndexOfElement(scroll: HTMLElement, el: Element): number | null {
   if (!el.isConnected) return null;
-  const pitch = scroll.clientWidth;
-  if (pitch <= 0) return null;
-  const offsetLeft =
-    el.getBoundingClientRect().left - scroll.getBoundingClientRect().left + scroll.scrollLeft;
-  return clampPage(pageIndexOfOffset(offsetLeft, pitch), pageCountOf(scroll.scrollWidth, pitch));
+  return pageIndexOfClientRect(scroll, el.getBoundingClientRect());
 }
 
 export function goToPage(

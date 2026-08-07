@@ -52,6 +52,41 @@ const ARROW_KEY_WIDGETS =
   '[role="menubar"], [role="tablist"], [role="tab"], [role="radiogroup"], [role="radio"],' +
   '[role="textbox"], [role="grid"], [role="tree"]';
 
+/**
+ * True while some block between `target` and the gesture surface can
+ * still absorb this wheel gesture itself — a code block clamped to the
+ * page, a long comment card. Paged mode creates those scrollers on
+ * purpose; turning the page instead of scrolling them would put their
+ * overflow out of reach of the wheel entirely.
+ */
+function absorbsWheel(
+  target: EventTarget | null,
+  deltaX: number,
+  deltaY: number,
+  surface: HTMLElement,
+): boolean {
+  const vertical = Math.abs(deltaY) >= Math.abs(deltaX);
+  const delta = vertical ? deltaY : deltaX;
+  let el = target instanceof Element ? target : null;
+
+  while (el && el !== surface) {
+    if (el instanceof HTMLElement) {
+      const style = window.getComputedStyle(el);
+      const scrollable = /auto|scroll/.test(vertical ? style.overflowY : style.overflowX);
+      const position = vertical ? el.scrollTop : el.scrollLeft;
+      const extent = vertical ? el.scrollHeight - el.clientHeight : el.scrollWidth - el.clientWidth;
+      // Only while it has somewhere left to go in this direction —
+      // otherwise a code block scrolled to its last line would swallow
+      // every further flick and strand the reader on the page.
+      if (scrollable && extent > 1 && (delta < 0 ? position > 1 : position < extent - 1)) {
+        return true;
+      }
+    }
+    el = el.parentElement;
+  }
+  return false;
+}
+
 /** True while the event target is somewhere the keys already mean something. */
 function keysBelongToWidget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -284,6 +319,7 @@ export function usePagedReading(
       // swipe turn the page.
       const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
       if (delta === 0) return;
+      if (absorbsWheel(e.target, e.deltaX, e.deltaY, surface)) return;
       e.preventDefault();
       const now = performance.now();
       if (now - lastTurnAt < WHEEL_COOLDOWN_MS) return;
