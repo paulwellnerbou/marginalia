@@ -290,10 +290,13 @@ detaches the old one. The ref name is a normal one, so a document whose
 source already references `cover.png` shares that asset with its cover —
 uploading a cover replaces the image the source points at.
 
-Upload happens in the **Download → EPUB** dialog. Editors' uploads are
-saved on the document, so one upload serves every later export; readers
-and collaborators can still attach a one-off cover to a single export
-(multipart `cover` on the export request), which is never persisted.
+Upload happens in the **Download → EPUB** dialog, which previews the
+picked image before it's sent. Editors' uploads are saved on the
+document, so one upload serves every later export — **Save cover**
+stores it without building a book, and downloading the EPUB stores it on
+the way. Readers and collaborators can still attach a one-off cover to a
+single export (multipart `cover` on the export request), which is never
+persisted.
 Without any cover, the exporter generates a typographic SVG from the
 book title.
 
