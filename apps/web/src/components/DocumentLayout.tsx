@@ -132,6 +132,29 @@ const COMMENTS_DISPLAY_MODE_KEY = 'marginalia.commentsDisplayMode';
 const READING_MODE_KEY = 'marginalia.readingMode';
 const RIGHT_TAB_KEY = 'marginalia.rightTab';
 const COLLAPSED_WIDTH = 36;
+/** How long a pane takes to fold away. Published to the stylesheet, which
+ *  runs the animation, so the two can't drift apart. */
+const PANE_COLLAPSE_MS = 240;
+
+/**
+ * Whether a pane's body should still be rendered: `open` says yes at once,
+ * `closed` only once the pane has finished shrinking. Unmounting on the
+ * click instead would leave an empty box collapsing — and the tab panels
+ * on the right are live enough (activity feeds, history, MCP) that keeping
+ * them mounted through the closed state isn't an option either.
+ */
+function usePaneBody(open: boolean): boolean {
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setMounted(false), PANE_COLLAPSE_MS);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+  return mounted;
+}
 
 /**
  * Viewport width up to which the three-pane layout does more harm than
@@ -1438,9 +1461,27 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   const tocPx = tocOpen ? tocWidth : COLLAPSED_WIDTH;
   const commentsPx = commentsOpen ? commentsWidth : COLLAPSED_WIDTH;
-  const gridStyle: React.CSSProperties = {
+  const tocBody = usePaneBody(tocOpen);
+  const commentsBody = usePaneBody(commentsOpen);
+  const gridStyle = {
     gridTemplateColumns: `${tocPx}px 1fr ${commentsPx}px`,
-  };
+    '--pane-collapse-duration': `${PANE_COLLAPSE_MS}ms`,
+    // Where a collapsed pane's expand button parks, so it can hold still
+    // while the column travels past it.
+    '--pane-collapsed-width': `${COLLAPSED_WIDTH}px`,
+  } as React.CSSProperties;
+
+  /**
+   * Bumped when the columns have finished moving. Everything downstream
+   * measures the panes rather than reading their target widths, and until
+   * the transition lands those two disagree.
+   */
+  const [panesSettled, setPanesSettled] = useState(0);
+  const onPanesSettled = useCallback((e: React.TransitionEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget && e.propertyName === 'grid-template-columns') {
+      setPanesSettled((n) => n + 1);
+    }
+  }, []);
 
   /**
    * Measured rather than derived from the viewport: both side panes are
@@ -1455,7 +1496,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
    */
   const [docPaneWidth, setDocPaneWidth] = useState(0);
   const [commentsHostWidth, setCommentsHostWidth] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx are the intentional re-measure triggers — the body reads widths only they can have changed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx / panesSettled are the intentional re-measure triggers — the body reads widths only they can have changed.
   useLayoutEffect(() => {
     const measure = () => {
       const pane = docPaneRef.current?.clientWidth ?? 0;
@@ -1466,7 +1507,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [tocPx, commentsPx]);
+  }, [tocPx, commentsPx, panesSettled]);
 
   const chromeCompact =
     docPaneWidth === 0 ? compactViewport : docPaneWidth < DOC_CHROME_INLINE_MIN_WIDTH;
@@ -1485,10 +1526,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
    * reference: its length alone would miss any edit that happens to keep
    * the document the same size, and concatenating it would rebuild the
    * whole document into a key on every render.
+   *
+   * A collapsing pane counts twice: page geometry measured while the
+   * column is still in flight describes a width the document is about to
+   * leave, so `panesSettled` asks for the answer again at rest.
    */
   const pageLayoutKey = useMemo(
-    () => [liveRendered.html, maxWidth, textZoom, theme, tocPx, commentsPx],
-    [liveRendered.html, maxWidth, textZoom, theme, tocPx, commentsPx],
+    () => [liveRendered.html, maxWidth, textZoom, theme, tocPx, commentsPx, panesSettled],
+    [liveRendered.html, maxWidth, textZoom, theme, tocPx, commentsPx, panesSettled],
   );
   const pages = usePagedReading(docScrollRef, paged, pageLayoutKey);
 
@@ -1922,28 +1967,30 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         format={doc.format}
       />
 
-      <div className="doc-layout" style={gridStyle}>
+      <div className="doc-layout" style={gridStyle} onTransitionEnd={onPanesSettled}>
         <aside className={`pane pane-toc ${tocOpen ? 'open' : 'closed'}`}>
           <Flex align="center" gap="2" px="2" py="2" className="pane-header">
             <Tooltip content={tocOpen ? 'Collapse' : 'Expand contents'}>
               <IconButton variant="ghost" size="1" onClick={() => setTocOpen((v) => !v)}>
-                {tocOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
+                <ChevronLeftIcon className="pane-toggle-icon" />
               </IconButton>
             </Tooltip>
-            {tocOpen && (
-              <Text size="1" color="gray" weight="medium">
-                Contents
-              </Text>
-            )}
+            <Text size="1" color="gray" weight="medium" className="pane-header-label">
+              Contents
+            </Text>
           </Flex>
-          {tocOpen && (
-            <Toc
-              nodes={liveRendered.toc}
-              activeId={activeHeadingId}
-              filterIds={sectionFilter}
-              onToggleFilter={toggleSectionFilter}
-              onClearFilter={clearSectionFilter}
-            />
+          {tocBody && (
+            /* Held at the open width so the headings don't re-wrap their
+               way through the collapse; the pane clips what won't fit. */
+            <div className="pane-body" style={{ width: tocWidth }} inert={!tocOpen}>
+              <Toc
+                nodes={liveRendered.toc}
+                activeId={activeHeadingId}
+                filterIds={sectionFilter}
+                onToggleFilter={toggleSectionFilter}
+                onClearFilter={clearSectionFilter}
+              />
+            </div>
           )}
           {tocOpen && <ResizeHandle side="left" width={tocWidth} onResize={setTocWidth} />}
         </aside>
@@ -2280,108 +2327,111 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           {commentsOpen && (
             <ResizeHandle side="right" width={commentsWidth} onResize={setCommentsWidth} />
           )}
-          {commentsOpen ? (
-            <Tabs.Root
-              value={rightTab}
-              onValueChange={(v) => setRightTab(v as RightTab)}
-              className="right-tabs"
-            >
-              <Flex align="center" px="2" pt="2" className="pane-header">
-                <Tabs.List size="1">
-                  <Tabs.Trigger value="activities">Activities</Tabs.Trigger>
-                  <Tabs.Trigger value="comments">
-                    <Flex align="center" gap="2">
-                      Threads
-                      {threadCount > 0 && (
-                        <Badge size="1" variant="soft" color="gray" radius="full">
-                          {threadCount}
-                        </Badge>
-                      )}
-                    </Flex>
-                  </Tabs.Trigger>
-                  <Tabs.Trigger value="history">History</Tabs.Trigger>
-                  <Tabs.Trigger value="mcp">MCP</Tabs.Trigger>
-                  {hasSearchResults && (
-                    <Tabs.Trigger value="search">
+          {/* Out of flow, so it can cross-fade with a body that is still
+              on its way out. */}
+          <Flex align="center" justify="center" py="2" className="pane-expand" inert={commentsOpen}>
+            <Tooltip content="Expand comments / history">
+              <IconButton variant="ghost" size="1" onClick={() => setCommentsOpen(true)}>
+                <ChevronLeftIcon />
+              </IconButton>
+            </Tooltip>
+          </Flex>
+          {commentsBody && (
+            <div className="pane-body" style={{ width: commentsWidth }} inert={!commentsOpen}>
+              <Tabs.Root
+                value={rightTab}
+                onValueChange={(v) => setRightTab(v as RightTab)}
+                className="right-tabs"
+              >
+                <Flex align="center" px="2" pt="2" className="pane-header">
+                  <Tabs.List size="1">
+                    <Tabs.Trigger value="activities">Activities</Tabs.Trigger>
+                    <Tabs.Trigger value="comments">
                       <Flex align="center" gap="2">
-                        Search Results
-                        <Badge size="1" variant="soft" color="gray" radius="full">
-                          {searchResults.length}
-                        </Badge>
+                        Threads
+                        {threadCount > 0 && (
+                          <Badge size="1" variant="soft" color="gray" radius="full">
+                            {threadCount}
+                          </Badge>
+                        )}
                       </Flex>
                     </Tabs.Trigger>
-                  )}
-                </Tabs.List>
-                <span className="spacer" />
-                <Tooltip content="Collapse">
-                  <IconButton variant="ghost" size="1" onClick={() => setCommentsOpen(false)}>
-                    <ChevronRightIcon />
-                  </IconButton>
-                </Tooltip>
-              </Flex>
-              <Tabs.Content value="activities" className="right-tab-panel">
-                <ActivityList
-                  uid={doc.uid}
-                  version={historyVersion}
-                  threads={threads}
-                  onOpenThread={openCommentThread}
-                />
-              </Tabs.Content>
-              <Tabs.Content value="comments" className="right-tab-panel">
-                <InlineCommentsList
-                  uid={doc.uid}
-                  threads={sectionVisibleThreads}
-                  sectionFilterCount={sectionFilter.size}
-                  onClearSectionFilter={clearSectionFilter}
-                  blockRanges={blockRanges}
-                  canComment={canComment}
-                  focusedThread={focusedThread}
-                  displayName={effectiveDisplayName}
-                  mentionCandidates={mentionCandidates}
-                  onReply={onReply}
-                  onEdit={onEdit}
-                  onDeleteNode={onDeleteNode}
-                  onDeleteThread={onDeleteThread}
-                  onResolveThread={onResolveThread}
-                  onRepairThread={onRepairThread}
-                  onReact={onReact}
-                  onEditProposal={onEditProposal}
-                  onScrollToAnchor={scrollToAnchor}
-                />
-              </Tabs.Content>
-              <Tabs.Content value="mcp" className="right-tab-panel">
-                <McpPanel uid={doc.uid} canManageInvites={doc.role === 'admin'} />
-              </Tabs.Content>
-              <Tabs.Content value="history" className="right-tab-panel">
-                <HistoryList
-                  uid={doc.uid}
-                  version={historyVersion}
-                  canRestore={canEdit}
-                  onRestoreAsNewDocument={onRestoreAsNewDocument}
-                  onRevertLatest={onRevertLatestHistoryVersion}
-                  onOpenThread={openCommentThread}
-                  {...(canEdit ? { onRestoreVersion: onRestoreHistoryVersion } : {})}
-                />
-              </Tabs.Content>
-              {hasSearchResults && (
-                <Tabs.Content value="search" className="right-tab-panel">
-                  <DocumentSearchResultsPane
-                    query={deferredDocSearchQuery}
-                    results={searchResults}
-                    activeResultId={activeSearchTarget?.id ?? null}
-                    onSelectResult={focusSearchResult}
+                    <Tabs.Trigger value="history">History</Tabs.Trigger>
+                    <Tabs.Trigger value="mcp">MCP</Tabs.Trigger>
+                    {hasSearchResults && (
+                      <Tabs.Trigger value="search">
+                        <Flex align="center" gap="2">
+                          Search Results
+                          <Badge size="1" variant="soft" color="gray" radius="full">
+                            {searchResults.length}
+                          </Badge>
+                        </Flex>
+                      </Tabs.Trigger>
+                    )}
+                  </Tabs.List>
+                  <span className="spacer" />
+                  <Tooltip content="Collapse">
+                    <IconButton variant="ghost" size="1" onClick={() => setCommentsOpen(false)}>
+                      <ChevronRightIcon />
+                    </IconButton>
+                  </Tooltip>
+                </Flex>
+                <Tabs.Content value="activities" className="right-tab-panel">
+                  <ActivityList
+                    uid={doc.uid}
+                    version={historyVersion}
+                    threads={threads}
+                    onOpenThread={openCommentThread}
                   />
                 </Tabs.Content>
-              )}
-            </Tabs.Root>
-          ) : (
-            <Flex align="center" justify="center" py="2">
-              <Tooltip content="Expand comments / history">
-                <IconButton variant="ghost" size="1" onClick={() => setCommentsOpen(true)}>
-                  <ChevronLeftIcon />
-                </IconButton>
-              </Tooltip>
-            </Flex>
+                <Tabs.Content value="comments" className="right-tab-panel">
+                  <InlineCommentsList
+                    uid={doc.uid}
+                    threads={sectionVisibleThreads}
+                    sectionFilterCount={sectionFilter.size}
+                    onClearSectionFilter={clearSectionFilter}
+                    blockRanges={blockRanges}
+                    canComment={canComment}
+                    focusedThread={focusedThread}
+                    displayName={effectiveDisplayName}
+                    mentionCandidates={mentionCandidates}
+                    onReply={onReply}
+                    onEdit={onEdit}
+                    onDeleteNode={onDeleteNode}
+                    onDeleteThread={onDeleteThread}
+                    onResolveThread={onResolveThread}
+                    onRepairThread={onRepairThread}
+                    onReact={onReact}
+                    onEditProposal={onEditProposal}
+                    onScrollToAnchor={scrollToAnchor}
+                  />
+                </Tabs.Content>
+                <Tabs.Content value="mcp" className="right-tab-panel">
+                  <McpPanel uid={doc.uid} canManageInvites={doc.role === 'admin'} />
+                </Tabs.Content>
+                <Tabs.Content value="history" className="right-tab-panel">
+                  <HistoryList
+                    uid={doc.uid}
+                    version={historyVersion}
+                    canRestore={canEdit}
+                    onRestoreAsNewDocument={onRestoreAsNewDocument}
+                    onRevertLatest={onRevertLatestHistoryVersion}
+                    onOpenThread={openCommentThread}
+                    {...(canEdit ? { onRestoreVersion: onRestoreHistoryVersion } : {})}
+                  />
+                </Tabs.Content>
+                {hasSearchResults && (
+                  <Tabs.Content value="search" className="right-tab-panel">
+                    <DocumentSearchResultsPane
+                      query={deferredDocSearchQuery}
+                      results={searchResults}
+                      activeResultId={activeSearchTarget?.id ?? null}
+                      onSelectResult={focusSearchResult}
+                    />
+                  </Tabs.Content>
+                )}
+              </Tabs.Root>
+            </div>
           )}
         </aside>
       </div>
