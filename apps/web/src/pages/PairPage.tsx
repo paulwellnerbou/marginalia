@@ -3,9 +3,9 @@ import { Button, Callout, Container, Flex, Heading, Text, TextField } from '@rad
 import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
-import { ApiError } from '../lib/api.js';
 import { pairWithCode } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
+import { redeemErrorMessage } from '../lib/pairing-error.js';
 
 type State =
   | { phase: 'entering'; error: string | null }
@@ -13,25 +13,16 @@ type State =
   | { phase: 'done'; count: number };
 
 /**
- * A rate-limited attempt has to read differently from a wrong code —
- * otherwise someone who mistyped twice is told to go generate a fresh
- * code on the other device, does, and finds that one rejected too.
- */
-function redeemErrorMessage(err: unknown): string {
-  if (err instanceof ApiError && err.status === 429) {
-    return 'Too many attempts. Wait a few minutes, then create a fresh code on your other device and try again.';
-  }
-  return 'That code did not work. Codes expire after a few minutes and work only once — create a fresh one on your other device.';
-}
-
-/**
  * Lands a device on the other end of a pairing code — scanned from the
  * QR, or typed in by hand when a camera isn't the convenient path.
  *
- * Reachable at `/k/:code` and at bare `/k`. Both matter: the QR carries
- * the code in the URL, but an installed PWA on iOS opens in its own
- * storage container, and the way in there is to open the app and type
- * the eight characters.
+ * Reachable at `/k/:code` and at bare `/k`. The QR carries the code in
+ * the URL and redeems on arrival; `/k` is the landing spot for a code
+ * typed by hand, which an installed PWA on iOS needs because it opens in
+ * its own storage container and a scan lands in the browser's instead.
+ *
+ * Typing is also offered inline on the home page (`DeviceSyncPanel`), so
+ * nobody has to know this URL to get here.
  */
 export function PairPage() {
   const { code: codeFromUrl } = useParams<{ code?: string }>();
