@@ -28,8 +28,11 @@ CREATE TABLE IF NOT EXISTS documents (
   -- Does NOT affect the viewer — that always uses mermaid.js.
   mermaid_renderer     TEXT,
   -- ref_name of the document_assets row holding the book cover, or NULL.
-  -- A pointer rather than a reserved ref name so the cover keeps its own
-  -- extension and can never be shadowed by a same-named source image.
+  -- A pointer rather than a hard-coded name so the cover keeps whatever
+  -- extension its format needs (the served Content-Type is derived from
+  -- it) and stays findable when a replacement changes that extension.
+  -- The ref is an ordinary name, so a source image called cover.png and
+  -- the cover are the same asset — uploading one replaces the other.
   cover_ref            TEXT,
   created_at           INTEGER NOT NULL,
   updated_at           INTEGER NOT NULL

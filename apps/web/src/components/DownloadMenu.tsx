@@ -251,7 +251,15 @@ export function DownloadMenu({
       return true;
     } catch (err) {
       reportError('DownloadMenu.storeCover', err, { uid: doc.uid });
-      setEpubError(coverErrorMessage(err) ?? 'Could not save the cover. Try again in a moment.');
+      // `forbidden` is only about edit rights on this route — the cover
+      // store is the one call here gated on them.
+      const forbidden = err instanceof ApiError && err.code === 'forbidden';
+      setEpubError(
+        coverErrorMessage(err) ??
+          (forbidden
+            ? 'You need edit rights to save a cover on this document.'
+            : 'Could not save the cover. Try again in a moment.'),
+      );
       return false;
     }
   }
@@ -484,13 +492,16 @@ const COVER_MIME_TYPES: ReadonlySet<string> = new Set([
   'image/webp',
 ]);
 
-/** Cover rejections the server reports the same way on both the store
- *  and the export routes. Null when the error isn't cover-related. */
+/**
+ * Rejections of the cover image itself. Only codes that *no other part*
+ * of these two requests can produce belong here — the export route
+ * reuses this mapper, and a generic auth failure there has nothing to
+ * do with the cover.
+ */
 function coverErrorMessage(err: unknown): string | null {
   if (!(err instanceof ApiError)) return null;
   if (err.code === 'cover-too-large') return 'The cover image must be 10 MB or smaller.';
   if (err.code === 'unsupported-cover-image') return 'Use a PNG, JPEG, GIF, or WebP cover image.';
-  if (err.code === 'forbidden') return 'You need edit rights to save a cover on this document.';
   return null;
 }
 
