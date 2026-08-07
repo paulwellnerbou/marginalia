@@ -1676,7 +1676,7 @@ button.primary:disabled {
    anchor overlay (.recent-card-link) is what the browser sees as the link,
    so the URL appears in the status bar on hover and native open-in-tab
    shortcuts work. Children that need to receive their own clicks (the
-   remove IconButton) lift above the overlay via z-index. */
+   copy-link and remove IconButtons) lift above the overlay via z-index. */
 .recent-card {
   position: relative;
   cursor: pointer;
@@ -1705,7 +1705,7 @@ button.primary:disabled {
   outline: 2px solid var(--accent-9);
   outline-offset: 2px;
 }
-.recent-card-remove {
+.recent-card-action {
   position: relative;
   z-index: 2;
 }

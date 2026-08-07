@@ -32,8 +32,10 @@ import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Link, useNavigate } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
+import { CopyAccessLinkButton } from '../components/CopyAccessLinkButton.js';
 import { Copyable } from '../components/Copyable.js';
 import { FormatBadge } from '../components/FormatBadge.js';
+import { OpenByLink } from '../components/OpenByLink.js';
 import { PasswordDisclosureCard } from '../components/PasswordDisclosureCard.js';
 import {
   ApiError,
@@ -190,6 +192,10 @@ export function HomePage() {
                 </Button>
               )}
             </Flex>
+
+            <Box mb="5" className="open-by-link">
+              <OpenByLink />
+            </Box>
 
             {recent.length === 0 ? (
               <EmptyState onCreate={openFreshUploadDialog} />
@@ -392,8 +398,9 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
       <Flex direction="column" align="center" gap="3" py="5">
         <FileTextIcon width="28" height="28" />
         <Heading size="4">No documents yet</Heading>
-        <Text size="2" color="gray" align="center" style={{ maxWidth: '40ch' }}>
+        <Text size="2" color="gray" align="center" style={{ maxWidth: '44ch' }}>
           Paste some Markdown and you'll get a shareable URL with beautiful typography in one click.
+          Already been invited to one? Open it with its link above.
         </Text>
         <Button size="3" onClick={onCreate} mt="2">
           <PlusIcon />
@@ -420,22 +427,32 @@ function RecentCard({ doc, onRemove }: { doc: RecentDoc; onRemove: () => void })
         <Heading size="3" weight="medium" truncate className="recent-card-title">
           {doc.title}
         </Heading>
-        <Tooltip content="Remove from recent">
-          <IconButton
-            variant="ghost"
-            size="1"
-            color="gray"
-            aria-label="Remove from recent"
-            className="recent-card-remove"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onRemove();
-            }}
-          >
-            <Cross2Icon />
-          </IconButton>
-        </Tooltip>
+        <Flex align="center" gap="1">
+          {doc.invite_token && (
+            <CopyAccessLinkButton
+              uid={doc.uid}
+              token={doc.invite_token}
+              role={doc.role}
+              className="recent-card-action"
+            />
+          )}
+          <Tooltip content="Remove from recent">
+            <IconButton
+              variant="ghost"
+              size="1"
+              color="gray"
+              aria-label="Remove from recent"
+              className="recent-card-action"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onRemove();
+              }}
+            >
+              <Cross2Icon />
+            </IconButton>
+          </Tooltip>
+        </Flex>
       </Flex>
       <Flex gap="2" mt="2" wrap="wrap" align="center">
         <FormatBadge format={doc.format} />
