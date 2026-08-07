@@ -3300,13 +3300,17 @@ button.primary:disabled {
 }
 
 /* ============================================================
- * Floating comments mode: one thread at a time opens as a popover
- * card anchored to its highlight, in content space so it scrolls
- * with the document. Reuses all .ic-card internals unchanged.
+ * Popover cards: anchored to a highlight, in content space so they
+ * scroll with the document. Reuses all .ic-card internals unchanged.
+ * Floating mode opens one thread at a time this way; the new-comment
+ * composer uses the same surface in either display mode whenever the
+ * margin column can't show it.
  * ============================================================ */
 
-/* Positioning context for the floating host — only added in floating
-   mode so column mode's layout is untouched. */
+/* Positioning context for a host mounted inside the row — added only
+   for the passes that mount one, so a layout with no popover is
+   untouched. Paged mode never gets it: the row slides sideways with
+   the pages, so its hosts hang off the still `.doc-viewport` instead. */
 .doc-row-floating {
   position: relative;
 }
