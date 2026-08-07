@@ -43,12 +43,16 @@ export function PairPage() {
   // A code is single-use, so a re-render (or React 19 StrictMode's double
   // effect in development) must not spend it twice — the second attempt
   // would 404 and report a working code as invalid.
-  const attempted = useRef(false);
+  //
+  // Keyed by the code rather than a bare "have we tried" flag: React
+  // Router reuses this component across /k/:code navigations, so a
+  // boolean would make every code after the first a silent no-op.
+  const attempted = useRef<string | null>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: redeem is redeclared each render, so listing it would re-fire the effect and spend a second code. The `attempted` guard is what makes redemption once-only; codeFromUrl is the real trigger.
   useEffect(() => {
-    if (!codeFromUrl || attempted.current) return;
-    attempted.current = true;
+    if (!codeFromUrl || attempted.current === codeFromUrl) return;
+    attempted.current = codeFromUrl;
     void redeem(codeFromUrl);
   }, [codeFromUrl]);
 

@@ -109,6 +109,15 @@ test('covers come from the server, so one added elsewhere shows up before the ne
   expect(merged[0]?.cover?.ref_name).toBe('cover.png');
 });
 
+test('a cover removed elsewhere disappears here too', () => {
+  // The other half of "the server wins on cover": null means the
+  // document has none, not that the ring forgot to say. Keeping the
+  // local value would leave the card pointing at a detached asset.
+  recordVisit(local({ cover: { ref_name: 'cover.png', asset_id: 'sha', mime: 'image/png' } }));
+  const merged = mergeKeyringDocs([entry({ cover: null })]);
+  expect(merged[0]?.cover).toBeUndefined();
+});
+
 test('documents held only locally survive a sync', () => {
   recordVisit(local({ uid: 'only-here', visited_at: 20_000 }));
   const merged = mergeKeyringDocs([entry({ doc_uid: 'from-ring' })]);

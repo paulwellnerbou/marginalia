@@ -105,7 +105,11 @@ export function mergeKeyringDocs(incoming: KeyringDocEntry[]): RecentDoc[] {
 
   for (const entry of incoming) {
     const local = byUid.get(entry.doc_uid);
-    const cover = entry.cover ?? local?.cover;
+    // No local fallback: the server reports cover state authoritatively,
+    // so null means the document *has* no cover — not that the ring
+    // failed to mention one. Falling back would keep a cover removed on
+    // another device on this card, pointing at a detached asset.
+    const cover = entry.cover;
     const merged: RecentDoc = {
       uid: entry.doc_uid,
       title: entry.title ?? local?.title ?? entry.doc_uid.slice(0, 8),
