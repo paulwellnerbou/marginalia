@@ -22,6 +22,9 @@ interface Props {
   onToggleHideResolved: () => void;
   /** Leave floating mode, back to the margin column. */
   onSwitchToColumn: () => void;
+  /** False once the doc pane is too narrow for the column to render — the
+   *  switch is left out rather than offered as a no-op. */
+  columnModeAvailable: boolean;
   docElementRef: RefObject<HTMLElement | null>;
   scrollContainerRef: RefObject<HTMLDivElement | null>;
   /** Thread whose card is currently open, or null. Prev/next step from
@@ -75,6 +78,7 @@ export function FloatingCommentsToolbar({
   hideResolved,
   onToggleHideResolved,
   onSwitchToColumn,
+  columnModeAvailable,
   docElementRef,
   scrollContainerRef,
   currentThreadId,
@@ -185,9 +189,11 @@ export function FloatingCommentsToolbar({
             {/* One-shot mode switch, not a checkbox: this pill only
                 exists in floating mode, so an unchecked state could
                 never render. */}
-            <DropdownMenu.Item onSelect={onSwitchToColumn}>
-              Show comments in a column
-            </DropdownMenu.Item>
+            {columnModeAvailable && (
+              <DropdownMenu.Item onSelect={onSwitchToColumn}>
+                Show comments in a column
+              </DropdownMenu.Item>
+            )}
           </DropdownMenu.Content>
         </DropdownMenu.Root>
       </div>
