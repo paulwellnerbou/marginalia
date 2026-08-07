@@ -8,7 +8,11 @@
  * this with only one job: work out where the user meant to go.
  */
 
-/** UIDs and invite tokens are both 22-char base64url. */
+/**
+ * The alphabet document uids and invite tokens are drawn from (base64url).
+ * Deliberately not length-checked: `edit` is a legal segment too, and
+ * pinning today's 22 characters would break if id generation changes.
+ */
 const SEGMENT = /^[A-Za-z0-9_-]+$/;
 
 /**
@@ -31,8 +35,13 @@ export function parseDocumentLink(input: string, currentHost: string): ParsedDoc
   const trimmed = input.trim();
   if (!trimmed) return { ok: false, reason: 'empty' };
 
+  // A pasted path is resolved against the current host so it goes through
+  // exactly the same URL parsing as a pasted absolute link — query and
+  // hash dropped alike. Only for input already shaped like a path, so a
+  // bare uid still reaches its own branch below.
+  const url = trimmed.startsWith('/') ? asUrl(trimmed, `http://${currentHost}`) : asUrl(trimmed);
+
   let pathname: string;
-  const url = asUrl(trimmed);
   if (url) {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
       return { ok: false, reason: 'unrecognized' };
@@ -41,8 +50,6 @@ export function parseDocumentLink(input: string, currentHost: string): ParsedDoc
     // https:// deployment is still this deployment.
     if (url.host !== currentHost) return { ok: false, reason: 'other-site', host: url.host };
     pathname = url.pathname;
-  } else if (trimmed.startsWith('/')) {
-    pathname = trimmed;
   } else if (SEGMENT.test(trimmed) && trimmed.length >= MIN_BARE_UID) {
     pathname = `/d/${trimmed}`;
   } else {
@@ -59,9 +66,9 @@ export function accessLinkFor(uid: string, token: string | null | undefined): st
   return new URL(path, window.location.origin).href;
 }
 
-function asUrl(value: string): URL | null {
+function asUrl(value: string, base?: string): URL | null {
   try {
-    return new URL(value);
+    return base === undefined ? new URL(value) : new URL(value, base);
   } catch {
     return null;
   }

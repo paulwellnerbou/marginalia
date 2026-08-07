@@ -41,6 +41,18 @@ test('accepts a bare path and a bare uid', () => {
   expect(parseDocumentLink(UID, HOST)).toEqual({ ok: true, path: `/d/${UID}` });
 });
 
+test('a bare path drops query, hash and trailing slash like a full URL does', () => {
+  expect(parseDocumentLink(`/d/${UID}/${TOKEN}/?utm=mail#heading`, HOST)).toEqual({
+    ok: true,
+    path: `/d/${UID}/${TOKEN}`,
+  });
+  expect(parseDocumentLink(`/d/${UID}#heading`, HOST)).toEqual({ ok: true, path: `/d/${UID}` });
+  expect(parseDocumentLink(`/d/${UID}/edit?from=mail`, HOST)).toEqual({
+    ok: true,
+    path: `/d/${UID}/edit`,
+  });
+});
+
 test('ignores surrounding whitespace from a copied line', () => {
   const result = parseDocumentLink(`  https://${HOST}/d/${UID}/${TOKEN}  \n`, HOST);
   expect(result).toEqual({ ok: true, path: `/d/${UID}/${TOKEN}` });
