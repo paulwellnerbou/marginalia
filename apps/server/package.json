@@ -8,6 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@marginalia/diff": "workspace:*",
     "@marginalia/mcp": "workspace:*",
     "@marginalia/renderer": "workspace:*",
     "@marginalia/themes": "workspace:*",

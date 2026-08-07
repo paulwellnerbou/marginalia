@@ -15,6 +15,7 @@
       "name": "@marginalia/server",
       "version": "0.0.0",
       "dependencies": {
+        "@marginalia/diff": "workspace:*",
         "@marginalia/mcp": "workspace:*",
         "@marginalia/renderer": "workspace:*",
         "@marginalia/themes": "workspace:*",
@@ -65,6 +66,13 @@
       },
       "dependencies": {
         "@marginalia/renderer": "workspace:*",
+      },
+    },
+    "packages/diff": {
+      "name": "@marginalia/diff",
+      "version": "0.0.0",
+      "dependencies": {
+        "diff": "^9.0.0",
       },
     },
     "packages/element": {
@@ -234,6 +242,8 @@
     "@lezer/markdown": ["@lezer/markdown@1.6.3", "", { "dependencies": { "@lezer/common": "^1.5.0", "@lezer/highlight": "^1.0.0" } }, "sha512-jpGm5Ps+XErS+xA4urw7ogEGkeZOahVQF21Z6oECF0sj+2liwZopd2+I8uH5I/vZsRuuze3OxBREIANLf6KKUw=="],
 
     "@marginalia/cli": ["@marginalia/cli@workspace:packages/cli"],
+
+    "@marginalia/diff": ["@marginalia/diff@workspace:packages/diff"],
 
     "@marginalia/element": ["@marginalia/element@workspace:packages/element"],
 

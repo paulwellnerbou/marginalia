@@ -1934,6 +1934,18 @@ async function getHistoryDiff(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
+  // `shape=lines` returns the diff already matched into render-ready lines
+  // instead of both full sources. Spike: opt-in per request so existing
+  // clients keep getting {before, after}.
+  if (c.req.query('shape') === 'lines') {
+    const raw = c.req.query('context');
+    const parsed = raw === undefined ? null : Number.parseInt(raw, 10);
+    const contextLines = parsed !== null && Number.isFinite(parsed) ? parsed : null;
+    const lines = await store.diffLinesAt(doc, oid, { contextLines });
+    if (!lines) return c.json({ error: 'not-found' }, 404);
+    return c.json({ lines });
+  }
+
   const diff = await store.diffAt(doc, oid);
   if (!diff) return c.json({ error: 'not-found' }, 404);
   return c.json(diff);

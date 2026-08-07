@@ -1,0 +1,18 @@
+{
+  "name": "@marginalia/diff",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./line-diff": "./src/line-diff.ts",
+    "./context": "./src/context.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "diff": "^9.0.0"
+  }
+}

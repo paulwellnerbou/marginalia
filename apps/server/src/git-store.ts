@@ -13,6 +13,7 @@ import fs, {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { diffLines, sliceToContext, type WireDiffLine } from '@marginalia/diff';
 import * as git from 'isomorphic-git';
 import type { DocumentFormat } from './db.js';
 
@@ -206,6 +207,26 @@ export class GitStore {
 
     const before = parentOid ? ((await this.tryReadAt(doc, parentOid)) ?? '') : '';
     return { before, after };
+  }
+
+  /**
+   * The same revision diff as `diffAt`, already reduced to render-ready lines.
+   *
+   * Git contributes only the two blobs here — isomorphic-git has no diff of
+   * its own — so the line matching is the same jsdiff pass the browser would
+   * otherwise run, moved to where both sides already live. `contextLines`
+   * elides unchanged runs further than that from any change.
+   */
+  async diffLinesAt(
+    doc: DocLocator,
+    oid: string,
+    options: { contextLines?: number | null } = {},
+  ): Promise<WireDiffLine[] | null> {
+    const sides = await this.diffAt(doc, oid);
+    if (!sides) return null;
+    const lines = diffLines(sides.before, sides.after);
+    const context = options.contextLines;
+    return context === null || context === undefined ? lines : sliceToContext(lines, context);
   }
 
   /** Main's current tip oid for this doc. Throws if the repo isn't initialized. */
