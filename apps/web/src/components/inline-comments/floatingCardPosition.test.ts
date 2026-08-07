@@ -82,7 +82,10 @@ describe('clampCardLeft', () => {
 
 // Tops are signed distances from where a jump lands the anchor, so the
 // reader always sits at 0: negative is scrolled past, positive is still
-// ahead. REF is the small "already read" pad the toolbars pass.
+// ahead. REF stands in for the "already read" pad, which each toolbar
+// sizes for itself — 4px in the column, 20px floating. Every entry below
+// sits far enough from that boundary to step the same way under either,
+// so these cases are about the rules, not about one toolbar's pad.
 const REF = 4;
 
 describe('adjacentThreadTarget', () => {
