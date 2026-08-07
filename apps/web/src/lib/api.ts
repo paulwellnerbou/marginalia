@@ -232,6 +232,12 @@ export interface UploadResponse {
   /** New documents always start at `null` (= use server default). */
   mermaid_renderer: MermaidRenderer | null;
   format: DocumentFormat;
+  /**
+   * Echoes back what the upload asked for. Optional because a tab loaded
+   * from an older build can outlive a deploy and read a response that
+   * predates the field.
+   */
+  invite_only?: boolean;
   password?: string;
 }
 

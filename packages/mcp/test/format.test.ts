@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { renderDocument } from '@marginalia/renderer';
 import type { DocumentWire, ThreadWire } from '../src/api-types.js';
 import { buildBlockMap, type DocumentBlock, type DocumentBlockMap } from '../src/blocks.js';
-import { threadDetail } from '../src/format.js';
+import { documentHeader, threadDetail } from '../src/format.js';
 
 const SOURCE = `# Guide
 
@@ -10,9 +10,12 @@ const SOURCE = `# Guide
 - beta item
 `;
 
-async function blockMap(source = SOURCE): Promise<DocumentBlockMap> {
+async function documentWire(
+  overrides: Partial<DocumentWire> = {},
+  source = SOURCE,
+): Promise<DocumentWire> {
   const rendered = await renderDocument(source, 'markdown');
-  const doc: DocumentWire = {
+  return {
     uid: 'test-uid',
     name: 'Guide',
     source,
@@ -32,8 +35,12 @@ async function blockMap(source = SOURCE): Promise<DocumentBlockMap> {
     display_name: null,
     created_at: 0,
     updated_at: 0,
+    ...overrides,
   };
-  return buildBlockMap(doc);
+}
+
+async function blockMap(source = SOURCE): Promise<DocumentBlockMap> {
+  return buildBlockMap(await documentWire({}, source));
 }
 
 /** The wire shape of a comment thread, with only the anchor varying. */
@@ -166,5 +173,32 @@ describe('threadDetail links', () => {
     // so a link with the agent's token would hijack whoever clicks it.
     expect(out).toContain('url: https://marginalia.test/d/test-uid#comment-thread-1');
     expect(out).not.toContain('secret-invite-token-1');
+  });
+});
+
+describe('documentHeader access guidance', () => {
+  const ref = {
+    baseUrl: 'https://marginalia.test',
+    uid: 'test-uid',
+    token: 'secret-invite-token-1',
+  };
+
+  test('offers the share url as something to hand a person on an open document', async () => {
+    const doc = await documentWire();
+    const out = documentHeader(doc, ref, await blockMap());
+    expect(out).toContain('use this when telling a person where something is');
+    expect(out).not.toContain('access: invite-only');
+  });
+
+  test('withdraws that advice on an invite-only document', async () => {
+    const doc = await documentWire({ invite_only: true });
+    const out = documentHeader(doc, ref, await blockMap());
+    // The share url still exists — it's the correct link to name the
+    // document — but handing it to someone is no longer a way to give
+    // them access, and saying so is the whole point of the flag.
+    expect(out).toContain('share url: https://marginalia.test/d/test-uid');
+    expect(out).not.toContain('use this when telling a person where something is');
+    expect(out).toContain('this document is invite-only');
+    expect(out).toContain('access: invite-only');
   });
 });
