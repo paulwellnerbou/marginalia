@@ -581,21 +581,6 @@ export class GitStore {
   }
 
   /**
-   * Materialize the result of merging a proposal branch into current main
-   * without mutating refs or the working tree. Used by repair flows that
-   * need git's real 3-way placement to discover where an orphaned proposal
-   * applies in the current source.
-   */
-  async previewProposalMerge(
-    doc: DocLocator,
-    proposalId: string,
-  ): Promise<PreviewProposalMergeResult> {
-    return this.withLock(doc.uid, async () =>
-      this.previewProposalMergeWithGitUnlocked(doc, proposalId),
-    );
-  }
-
-  /**
    * Run repair's merge preview and optional branch rewrite under the same
    * per-document lock as document writes. The callback runs before the
    * lock is released, so callers can commit DB anchor updates against the
