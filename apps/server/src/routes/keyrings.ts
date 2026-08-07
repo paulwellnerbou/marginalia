@@ -131,7 +131,7 @@ async function createKeyring(c: Context, { db, config }: KeyringDeps, limits: Li
   // Unauthenticated and it writes rows, so it gets a ceiling too — not
   // for secrecy (there is nothing to guess) but so one client cannot
   // fill the table.
-  const who = clientKey(c, config.trustProxy);
+  const who = clientKey(c, config.trustedProxyHops);
   const quota = limits.createPerClient.check(who);
   if (!quota.allowed) return tooManyRequests(c, quota.retryAfterSec, 'too-many-keyrings');
 
@@ -365,7 +365,7 @@ async function createPairing(c: Context, { db, config }: KeyringDeps) {
  * "locked out".
  */
 async function redeemPairing(c: Context, { db, config }: KeyringDeps, limits: Limiters) {
-  const who = clientKey(c, config.trustProxy);
+  const who = clientKey(c, config.trustedProxyHops);
   const perClient = limits.redeemPerClient.check(who);
   if (!perClient.allowed) return tooManyRequests(c, perClient.retryAfterSec, 'too-many-attempts');
   const global = limits.redeemGlobal.check(GLOBAL_BUCKET);

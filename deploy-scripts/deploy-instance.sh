@@ -65,6 +65,53 @@ if [[ "$INSTANCE" == "dev" ]]; then
 fi
 HOST_PORT_VALUE="${HOST_PORT:-$DEFAULT_HOST_PORT}"
 
+# How many reverse-proxy hops in front of us are ours — the count whose
+# X-Forwarded-For entry the app should believe, counting from the right.
+# Same knob as TRUSTED_PROXY_HOPS in noctua-mail, so both services on
+# this host describe their topology the same way.
+#
+# Derived from where we publish rather than asked for, because the
+# binding already answers it: a loopback address means nothing can reach
+# this container except something already on the host — the reverse proxy
+# — so exactly one hop is ours. Any routable address means the container
+# is directly reachable, where believing the header would let a caller
+# forge a fresh rate-limit identity per request.
+#
+# Chained proxies (e.g. Cloudflare in front of Caddy) are the case the
+# derivation cannot see: it still says 1, and every visitor would bucket
+# under the same edge address. Set MARGINALIA_TRUSTED_PROXY_HOPS=2 in
+# .env.$INSTANCE if that ever becomes the topology.
+#
+# Deliberately NOT baked into the Dockerfile: the image is also run bare
+# (see the README's `docker run -p 3434:3434`), where the safe answer is
+# 0. Only the deploy knows the topology.
+if [[ -n "${MARGINALIA_TRUSTED_PROXY_HOPS:-}" ]]; then
+  TRUSTED_PROXY_HOPS_VALUE="$MARGINALIA_TRUSTED_PROXY_HOPS"
+  # Not necessarily the env file: `set -a; source` merges that into the
+  # same environment CI may already have set the variable in, and the two
+  # are indistinguishable by here. Say "explicit" rather than naming a
+  # source we can't actually confirm.
+  TRUSTED_PROXY_HOPS_ORIGIN="set explicitly"
+else
+  # Bracketed and bare IPv6 are the same address; matching only one would
+  # make the spelling of the binding decide whether the proxy is trusted.
+  case "$HOST_BIND_IP" in
+    127.*|::1|\[::1\]|localhost) TRUSTED_PROXY_HOPS_VALUE=1 ;;
+    *) TRUSTED_PROXY_HOPS_VALUE=0 ;;
+  esac
+  TRUSTED_PROXY_HOPS_ORIGIN="derived from HOST_BIND_IP=$HOST_BIND_IP"
+fi
+
+# Docker wants an IPv6 host address bracketed in -p; a bare `::1` would
+# be split as host:port:port and rejected. Only relevant because the hop
+# derivation above accepts `::1` as loopback — treating it as a supported
+# binding while the publish spec choked on it would be a trap.
+if [[ "$HOST_BIND_IP" == *:* && "$HOST_BIND_IP" != \[* ]]; then
+  PUBLISH_HOST="[$HOST_BIND_IP]"
+else
+  PUBLISH_HOST="$HOST_BIND_IP"
+fi
+
 DOCKER_ARGS=(
   -d
   --name "marginalia-$INSTANCE"
@@ -72,20 +119,14 @@ DOCKER_ARGS=(
   --memory=512m
   --memory-reservation=256m
   -v "$DEPLOY_PATH/data-$INSTANCE:/app/.data"
-  -p "$HOST_BIND_IP:$HOST_PORT_VALUE:$PORT_VALUE"
+  -p "$PUBLISH_HOST:$HOST_PORT_VALUE:$PORT_VALUE"
   -e PORT="$PORT_VALUE"
   -e MARGINALIA_DATA_DIR="$DATA_DIR_VALUE"
   -e MARGINALIA_WEB_DIR="$WEB_DIR_VALUE"
   -e APP_ENV_LABEL="$APP_ENV_LABEL_VALUE"
+  -e MARGINALIA_TRUSTED_PROXY_HOPS="$TRUSTED_PROXY_HOPS_VALUE"
 )
 
-# Optional passthrough vars, set in .env.$INSTANCE.
-#
-# MARGINALIA_TRUST_PROXY=1 makes per-client rate limits read
-# X-Forwarded-For. Needed here because the container publishes to
-# HOST_BIND_IP (127.0.0.1 by default) behind a reverse proxy, so without
-# it every request looks like it came from the proxy.
-#
 # Blob storage: fs (default) keeps binaries in the mounted /app/.data
 # volume at .data/blobs. Setting MARGINALIA_BLOB_STORAGE=s3 in the
 # .env.$INSTANCE file switches to an S3-compatible bucket; credentials
@@ -100,8 +141,7 @@ DOCKER_ARGS=(
 # (and often in CI logs that echo commands). Docker reads the value
 # from the parent shell's environment; the earlier `set -a; source
 # $ENV_FILE` already exported these.
-for var in MARGINALIA_TRUST_PROXY \
-           MARGINALIA_BLOB_STORAGE \
+for var in MARGINALIA_BLOB_STORAGE \
            MARGINALIA_S3_BUCKET \
            MARGINALIA_S3_ACCESS_KEY_ID \
            MARGINALIA_S3_SECRET_ACCESS_KEY \
@@ -146,5 +186,6 @@ echo "=========================================="
 echo "✅ $INSTANCE deployment complete!"
 echo "Container: marginalia-$INSTANCE"
 echo "Image: $FULL_IMAGE"
-echo "Host port: $HOST_BIND_IP:$HOST_PORT_VALUE -> $PORT_VALUE"
+echo "Host port: $PUBLISH_HOST:$HOST_PORT_VALUE -> $PORT_VALUE"
+echo "Trusted proxy hops: $TRUSTED_PROXY_HOPS_VALUE ($TRUSTED_PROXY_HOPS_ORIGIN)"
 echo "=========================================="

@@ -439,7 +439,7 @@ describe('keyrings API', () => {
           dataDir: mkdtempSync(join(tmpdir(), 'mdn-keyring-rl-')),
           port: 0,
           webDir,
-          trustProxy: true,
+          trustedProxyHops: 1,
           pairingRedeemPerClient: 3,
           pairingRedeemGlobal: 100,
           pairingRedeemWindowMs: 60_000,
