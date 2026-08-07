@@ -56,7 +56,13 @@ test('word-diffs a reworded paragraph against itself, not against one inserted a
 // between equally minimal edit scripts, so the pairing has to work either way.
 test('word-diffs a rewrite that the diff separated from its original by a blank line', () => {
   const before = ['Head', 'The cold wakes him before the alarm does.', '', 'Tail'];
-  const after = ['Head', 'A new opening paragraph.', '', 'The cold wakes him before dawn does.', 'Tail'];
+  const after = [
+    'Head',
+    'A new opening paragraph.',
+    '',
+    'The cold wakes him before dawn does.',
+    'Tail',
+  ];
 
   const lines = diffLines(before.join('\n'), after.join('\n'));
   const removed = lines.find((line) => line.op === 'remove');
