@@ -3032,6 +3032,21 @@ button.primary:disabled {
      slots from intercepting clicks/hover meant for earlier cards. */
   pointer-events: none;
 }
+/* The composer, on the passes where the layer had to pull it out of
+   the stack to keep it on screen. Every card in this column is a 5%
+   tint that reads as a panel only against the page behind it, so one
+   sitting over another would show straight through — this is the one
+   place cards overlap, and the draft has to read as a single surface
+   floating above the pile. Stays under `.ic-toolbar` (z-index 5). */
+.ic-anchor-slot-lifted {
+  z-index: 4;
+}
+.ic-anchor-slot-lifted .ic-card-pending {
+  background:
+    linear-gradient(rgba(59, 130, 246, 0.05), rgba(59, 130, 246, 0.05)),
+    var(--color-panel-solid);
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--gray-a8) 30%, transparent);
+}
 .ic-sticky-card {
   /* `position` and `top` set inline per phase (sticky | static). */
   width: 100%;
