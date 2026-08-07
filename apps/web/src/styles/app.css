@@ -517,12 +517,6 @@ button.primary:disabled {
 .doc-chrome-right {
   display: contents;
 }
-/* The action cluster is what must survive a narrow pane — the display
-   controls have already moved into the View popover by then, so the
-   buttons keep their size and the trigger gives up space instead. */
-.doc-chrome .doc-view-trigger {
-  flex-shrink: 0;
-}
 /* Stacked in the popover, the sliders are the only thing worth widening:
    space is vertical there, and these are touch targets on the small
    screens that get the popover in the first place. */

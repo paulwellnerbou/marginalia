@@ -494,9 +494,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY, String(inlineCommentsHideResolved));
   }, [inlineCommentsHideResolved]);
+  // The key exists exactly when there is an explicit choice to remember,
+  // so a value written by an older build — or by hand — is cleared rather
+  // than left behind for every later read to step over.
   useEffect(() => {
     if (storedCommentsDisplayMode) {
       localStorage.setItem(COMMENTS_DISPLAY_MODE_KEY, storedCommentsDisplayMode);
+    } else {
+      localStorage.removeItem(COMMENTS_DISPLAY_MODE_KEY);
     }
   }, [storedCommentsDisplayMode]);
   useEffect(() => {
