@@ -25,9 +25,23 @@ export interface EventSubscription {
   close(): void;
 }
 
+export interface SubscribeOptions {
+  /**
+   * Fired when a connection opens after an earlier attempt failed or an
+   * established one dropped — never on a clean first connect.
+   *
+   * Two things are true at that moment and at no other: events emitted
+   * while the socket was down are gone for good, and the server is
+   * reachable again. It is therefore the one reliable cue to re-read
+   * whatever those events would have kept current.
+   */
+  onReconnect?: () => void;
+}
+
 export function subscribeToDocumentEvents(
   uid: string,
   onEvent: (event: RealtimeEvent) => void,
+  options: SubscribeOptions = {},
 ): EventSubscription {
   let ws: WebSocket | null = null;
   let closed = false;
@@ -54,8 +68,10 @@ export function subscribeToDocumentEvents(
     }
 
     ws.addEventListener('open', () => {
+      const recovered = retries > 0;
       retries = 0;
       console.log('[marginalia:events] connected', uid);
+      if (recovered) options.onReconnect?.();
     });
 
     ws.addEventListener('message', (e) => {

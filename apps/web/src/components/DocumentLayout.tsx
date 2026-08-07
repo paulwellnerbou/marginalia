@@ -70,6 +70,7 @@ import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js'
 import { reportError } from '../lib/log.js';
 import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
 import { ensureNotificationPermission, notify, showErrorToast } from '../lib/notifications.js';
+import { retryRequest } from '../lib/retry.js';
 import {
   anchorTouchesSections,
   applySectionFilterToDocument,
@@ -282,6 +283,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
    */
   const pendingDeepLinkCommentId = useRef<string | null>(null);
 
+  /**
+   * Whether a thread list has ever been applied for this document.
+   *
+   * An empty column is indistinguishable from a document with no
+   * comments, so a load that never succeeded has to be remembered
+   * rather than inferred: it is what tells the realtime reconnect
+   * handler to fetch instead of skip.
+   */
+  const threadsLoaded = useRef(false);
+
   // Capture the URL hash once on mount so deep links survive async thread load.
   // Re-runs on doc.uid change to handle SPA navigation to a deep-linked document.
   // biome-ignore lint/correctness/useExhaustiveDependencies: doc.uid is the intentional re-run trigger; the body only writes to a ref.
@@ -370,9 +381,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   const refreshThreads = useCallback(async () => {
     try {
-      const res = await listThreads(doc.uid, { consumeMentions: false });
+      const res = await retryRequest(() => listThreads(doc.uid, { consumeMentions: false }));
       setThreads(res.threads);
       setMentionCandidates(res.mention_candidates);
+      threadsLoaded.current = true;
     } catch (err) {
       reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
     }
@@ -781,14 +793,26 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    listThreads(doc.uid).then(
+    threadsLoaded.current = false;
+    retryRequest(() => listThreads(doc.uid)).then(
       (r) => {
         if (cancelled) return;
         setThreads(r.threads);
         setMentionCandidates(r.mention_candidates);
+        threadsLoaded.current = true;
         notifyPendingMentions(r.threads, r.pending_mentions);
       },
-      (err) => reportError('DocumentLayout.listThreads', err, { uid: doc.uid }),
+      (err) => {
+        reportError('DocumentLayout.listThreads', err, { uid: doc.uid });
+        if (cancelled) return;
+        // Silence here reads as "this document has no comments" — the
+        // column, the highlights and the thread count all agree on it.
+        // Say so instead; the realtime reconnect below is what actually
+        // recovers, and this explains the gap until it does.
+        reportFailure(
+          apiErrorMessage(err, 'Could not load comments. They will reappear once you reconnect.'),
+        );
+      },
     );
     return () => {
       cancelled = true;
@@ -882,45 +906,65 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }, 300);
     }
     void ensureNotificationPermission();
-    const sub = subscribeToDocumentEvents(doc.uid, (event) => {
-      switch (event.type) {
-        case 'comment.created':
-        case 'comment.updated':
-        case 'comment.deleted':
-        case 'edit_proposal.updated':
-        case 'edit_proposal.deleted': {
-          scheduleRefresh();
-          break;
+    const sub = subscribeToDocumentEvents(
+      doc.uid,
+      (event) => {
+        switch (event.type) {
+          case 'comment.created':
+          case 'comment.updated':
+          case 'comment.deleted':
+          case 'edit_proposal.updated':
+          case 'edit_proposal.deleted': {
+            scheduleRefresh();
+            break;
+          }
+          case 'mention.created': {
+            void listThreads(doc.uid)
+              .then((res) => {
+                if (cancelled) return;
+                setThreads(res.threads);
+                setMentionCandidates(res.mention_candidates);
+                notifyPendingMentions(res.threads, res.pending_mentions);
+              })
+              .catch((err) => reportError('DocumentLayout.mention.created', err, { uid: doc.uid }));
+            break;
+          }
+          case 'edit_proposal.created': {
+            void refreshThreads();
+            const raw = event.edit_proposal as Record<string, unknown>;
+            const comment = raw.comment as Record<string, unknown> | undefined;
+            const author = comment?.author as { display_name?: string } | undefined;
+            notify('New edit proposal', `${author?.display_name ?? 'Someone'} proposed a change.`);
+            break;
+          }
+          case 'document.updated': {
+            setHistoryVersion((v) => v + 1);
+            notify('Document updated', `${event.author} saved a new version.`, {
+              label: 'Reload',
+              onClick: () => window.location.reload(),
+            });
+            break;
+          }
         }
-        case 'mention.created': {
-          void listThreads(doc.uid)
-            .then((res) => {
-              if (cancelled) return;
-              setThreads(res.threads);
-              setMentionCandidates(res.mention_candidates);
-              notifyPendingMentions(res.threads, res.pending_mentions);
-            })
-            .catch((err) => reportError('DocumentLayout.mention.created', err, { uid: doc.uid }));
-          break;
-        }
-        case 'edit_proposal.created': {
-          void refreshThreads();
-          const raw = event.edit_proposal as Record<string, unknown>;
-          const comment = raw.comment as Record<string, unknown> | undefined;
-          const author = comment?.author as { display_name?: string } | undefined;
-          notify('New edit proposal', `${author?.display_name ?? 'Someone'} proposed a change.`);
-          break;
-        }
-        case 'document.updated': {
-          setHistoryVersion((v) => v + 1);
-          notify('Document updated', `${event.author} saved a new version.`, {
-            label: 'Reload',
-            onClick: () => window.location.reload(),
-          });
-          break;
-        }
-      }
-    });
+      },
+      {
+        /*
+         * Whatever took the socket down took the thread reads with it —
+         * a server restart mid-navigation (a redeploy landing between
+         * the document GET and the thread GET) leaves the column empty
+         * for the rest of the session, and a drop later on silently
+         * swallows every comment posted while it was gone. Reconcile on
+         * the way back up. The threadsLoaded guard is what separates
+         * "recover a load that never happened" (fetch now) from "catch
+         * up on missed events" (coalesce with any pending refresh).
+         */
+        onReconnect: () => {
+          if (cancelled) return;
+          if (threadsLoaded.current) scheduleRefresh();
+          else void refreshThreads();
+        },
+      },
+    );
     return () => {
       cancelled = true;
       if (refreshTimer) clearTimeout(refreshTimer);
