@@ -184,11 +184,17 @@ function JoinByCode({ onPaired }: { onPaired: () => void }) {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // `busy` disables the button, but only once React has re-rendered — two
+  // submits in one tick both read it as false. That spends a single-use
+  // code twice and reports the working one as invalid, which is the worst
+  // failure this form has. The ref closes the window synchronously.
+  const inFlight = useRef(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     const entered = code.trim();
-    if (!entered || busy) return;
+    if (!entered || inFlight.current) return;
+    inFlight.current = true;
     setError(null);
     setBusy(true);
     try {
@@ -199,6 +205,7 @@ function JoinByCode({ onPaired }: { onPaired: () => void }) {
       reportError('DeviceSyncPanel.pairWithCode', err);
       setError(redeemErrorMessage(err));
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   }

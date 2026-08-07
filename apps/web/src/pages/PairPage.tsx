@@ -39,6 +39,10 @@ export function PairPage() {
   // Router reuses this component across /k/:code navigations, so a
   // boolean would make every code after the first a silent no-op.
   const attempted = useRef<string | null>(null);
+  // `attempted` covers the effect; this covers the button. The redeeming
+  // phase disables it, but only from the next render, so two submits in
+  // one tick would both get through and spend the code twice.
+  const inFlight = useRef(false);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: redeem is redeclared each render, so listing it would re-fire the effect and spend a second code. The `attempted` guard is what makes redemption once-only; codeFromUrl is the real trigger.
   useEffect(() => {
@@ -48,6 +52,8 @@ export function PairPage() {
   }, [codeFromUrl]);
 
   async function redeem(raw: string) {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setState({ phase: 'redeeming' });
     try {
       const docs = await pairWithCode(raw.trim());
@@ -59,6 +65,8 @@ export function PairPage() {
     } catch (err) {
       reportError('PairPage.redeem', err);
       setState({ phase: 'entering', error: redeemErrorMessage(err) });
+    } finally {
+      inFlight.current = false;
     }
   }
 
