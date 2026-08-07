@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { diffLines } from '@marginalia/diff';
+import { type DiffSkip, diffLines } from '@marginalia/diff';
 import { type DocLocator, GitStore } from '../src/git-store.js';
 
 /**
@@ -62,7 +62,7 @@ describe('GitStore.diffLinesAt', () => {
       full.filter((l) => l.op === 'add' || l.op === 'remove'),
     );
     const skipped = trimmed
-      .filter((l): l is { op: 'skip'; skipped: number } => l.op === 'skip')
+      .filter((l): l is DiffSkip => l.op === 'skip')
       .reduce((n, l) => n + l.skipped, 0);
     expect(trimmed.filter((l) => l.op !== 'skip').length + skipped).toBe(full.length);
   });

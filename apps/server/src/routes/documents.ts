@@ -1939,9 +1939,10 @@ async function getHistoryDiff(c: Context, deps: AppDeps) {
   // clients keep getting {before, after}.
   if (c.req.query('shape') === 'lines') {
     const raw = c.req.query('context');
-    const parsed = raw === undefined ? null : Number.parseInt(raw, 10);
-    const contextLines = parsed !== null && Number.isFinite(parsed) ? parsed : null;
-    const lines = await store.diffLinesAt(doc, oid, { contextLines });
+    const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
+    const lines = Number.isFinite(parsed)
+      ? await store.diffLinesAt(doc, oid, { contextLines: parsed })
+      : await store.diffLinesAt(doc, oid);
     if (!lines) return c.json({ error: 'not-found' }, 404);
     return c.json({ lines });
   }

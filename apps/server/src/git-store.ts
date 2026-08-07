@@ -13,7 +13,7 @@ import fs, {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { diffLines, sliceToContext, type WireDiffLine } from '@marginalia/diff';
+import { type DiffLine, diffLines, sliceToContext, type WireDiffLine } from '@marginalia/diff';
 import * as git from 'isomorphic-git';
 import type { DocumentFormat } from './db.js';
 
@@ -217,6 +217,15 @@ export class GitStore {
    * otherwise run, moved to where both sides already live. `contextLines`
    * elides unchanged runs further than that from any change.
    */
+  // Overloaded so the `skip` op only appears in the return type when trimming
+  // was actually asked for — an untrimmed caller never has to narrow for a
+  // gap that cannot occur.
+  async diffLinesAt(doc: DocLocator, oid: string): Promise<DiffLine[] | null>;
+  async diffLinesAt(
+    doc: DocLocator,
+    oid: string,
+    options: { contextLines: number },
+  ): Promise<WireDiffLine[] | null>;
   async diffLinesAt(
     doc: DocLocator,
     oid: string,
