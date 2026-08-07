@@ -50,6 +50,13 @@ export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: Documen
     `format: ${doc.format}`,
     `your role: ${doc.role}${roleHint(doc.role)}`,
     `password protected: ${doc.password_protected ? 'yes' : 'no'}`,
+    // Only worth a line when it's on: it makes the token-free share url
+    // above useless to anyone who hasn't been given their own invite.
+    ...(doc.invite_only
+      ? [
+          'access: invite-only — the share url alone opens nothing; each person needs their own invite',
+        ]
+      : []),
     `updated: ${timestamp(doc.updated_at)}`,
     `whole document: ${size(doc.source)}`,
     `blocks: ${map.blocks.length}, sections: ${map.sections.length}`,

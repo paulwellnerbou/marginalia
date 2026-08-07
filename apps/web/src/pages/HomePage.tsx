@@ -530,6 +530,7 @@ function UploadDialog({
    */
   const [docName, setDocName] = useState('');
   const [passwordProtected, setPasswordProtected] = useState(false);
+  const [inviteOnly, setInviteOnly] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
@@ -643,6 +644,7 @@ function UploadDialog({
         source,
         format,
         password_protected: passwordProtected,
+        invite_only: inviteOnly,
       };
       if (docName.trim()) uploadOpts.name = docName.trim();
       const res = await uploadDocument(uploadOpts, identity);
@@ -848,6 +850,15 @@ function UploadDialog({
                       onCheckedChange={(c) => setPasswordProtected(c === true)}
                     />
                     Password-protect (server generates a password, shown once)
+                  </Flex>
+                </Text>
+                <Text as="label" size="2">
+                  <Flex align="center" gap="2">
+                    <Checkbox
+                      checked={inviteOnly}
+                      onCheckedChange={(c) => setInviteOnly(c === true)}
+                    />
+                    Restrict to access links (the URL alone opens nothing)
                   </Flex>
                 </Text>
                 {/* Editing rights are granted via invite links in Access

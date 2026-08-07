@@ -1,4 +1,9 @@
-import { ExclamationTriangleIcon, LockClosedIcon, Share2Icon } from '@radix-ui/react-icons';
+import {
+  ExclamationTriangleIcon,
+  EyeClosedIcon,
+  LockClosedIcon,
+  Share2Icon,
+} from '@radix-ui/react-icons';
 import {
   AlertDialog,
   Button,
@@ -39,6 +44,7 @@ export function AccessControlDialog({
 }) {
   const [open, setOpen] = useState(false);
   const [passwordProtected, setPasswordProtected] = useState(doc.password_protected);
+  const [inviteOnly, setInviteOnly] = useState(doc.invite_only);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [disclosedPassword, setDisclosedPassword] = useState<{
@@ -59,6 +65,41 @@ export function AccessControlDialog({
   useEffect(() => {
     setPasswordProtected(doc.password_protected);
   }, [doc.password_protected]);
+
+  useEffect(() => {
+    setInviteOnly(doc.invite_only);
+  }, [doc.invite_only]);
+
+  async function setInviteOnlyAccess(next: boolean) {
+    if (next === doc.invite_only) {
+      setInviteOnly(next);
+      return;
+    }
+
+    const name = getDisplayName();
+    if (!name) {
+      setError('Please set your display name first.');
+      setInviteOnly(doc.invite_only);
+      return;
+    }
+
+    const identity = { clientId: getClientId(), displayName: name };
+    const previous = inviteOnly;
+    setInviteOnly(next);
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await updateDocumentSettings(doc.uid, { invite_only: next }, identity);
+      onChange(result);
+      setInviteOnly(result.invite_only);
+    } catch (err) {
+      setInviteOnly(previous);
+      reportError('AccessControl.setInviteOnlyAccess', err);
+      setError(messageForError(err, 'Update failed'));
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function setPasswordProtection(next: boolean) {
     if (next === doc.password_protected) {
@@ -147,6 +188,7 @@ export function AccessControlDialog({
           setDisclosedPassword(null);
           setError(null);
           setPasswordProtected(doc.password_protected);
+          setInviteOnly(doc.invite_only);
         }
       }}
     >
@@ -165,6 +207,27 @@ export function AccessControlDialog({
         <Flex direction="column" gap="4">
           {/* No anyone-can-edit toggle: non-reader rights come only from
               invite links below. */}
+          <Flex direction="column" gap="2">
+            <Text as="label" size="2">
+              <Flex align="center" gap="2">
+                <Checkbox
+                  checked={inviteOnly}
+                  disabled={saving}
+                  onCheckedChange={(c) => void setInviteOnlyAccess(c === true)}
+                />
+                <EyeClosedIcon />
+                Restrict this document to access links
+              </Flex>
+            </Text>
+            <Flex pl="6">
+              <Text size="1" color="gray">
+                {inviteOnly
+                  ? 'Only the access links below open this document. Anyone else holding the URL is turned away.'
+                  : 'Anyone with the document URL can read it. Access links additionally grant comment or edit rights.'}
+              </Text>
+            </Flex>
+          </Flex>
+
           <Flex direction="column" gap="2">
             <Text as="label" size="2">
               <Flex align="center" gap="2">

@@ -11,6 +11,7 @@ import {
   type DocumentSettingsResponse,
   getDocument,
 } from '../lib/api.js';
+import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getDisplayName, setDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
@@ -59,6 +60,10 @@ export function ViewPage() {
         reportError('ViewPage.load', err, { uid });
         if (err instanceof ApiError && err.status === 404) {
           setError('Document not found');
+        } else if (err instanceof ApiError && err.code === 'invite-required') {
+          // No prompt to offer — the invite link is the only way in, and
+          // it isn't something the visitor can type.
+          setError(apiErrorMessage(err, 'This document is not open to the public'));
         } else if (err instanceof ApiError && err.status === 401) {
           // Only reaches here if the user dismissed the password dialog.
           setError('Password required to open this document');
@@ -116,6 +121,7 @@ export function ViewPage() {
       default_theme: s.default_theme,
       mermaid_renderer: s.mermaid_renderer,
       password_protected: s.password_protected,
+      invite_only: s.invite_only,
     });
   }
 
