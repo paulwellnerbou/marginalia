@@ -15,8 +15,6 @@ export type {
 } from './export-docx.js';
 export { exportDocx } from './export-docx.js';
 export { extractDocumentTitle, sanitizeDocumentFilename } from './extract-title.js';
-export type { MarkdownChapter } from './split-markdown-chapters.js';
-export { splitMarkdownChapters } from './split-markdown-chapters.js';
 export type { BlockSourceRange } from './locate-block.js';
 export {
   canMergeMultiBlock,
@@ -28,6 +26,8 @@ export { locateAllBlocksAsciidoc, locateBlockRangeAsciidoc } from './locate-bloc
 export type { DocumentFormat } from './render.js';
 export { isDocumentFormat, render, renderDocument } from './render.js';
 export { renderAsciidoc } from './render-asciidoc.js';
+export type { MarkdownChapter } from './split-markdown-chapters.js';
+export { splitMarkdownChapters } from './split-markdown-chapters.js';
 export type {
   Anchor,
   AssetRef,
