@@ -182,11 +182,11 @@ a {
   }
 
   .rt-BaseDialogOverlay[data-state="open"]::before {
-    animation: marginalia-dialog-backdrop-in var(--dialog-enter-duration) ease-out;
+    animation: marginalia-dialog-backdrop-in var(--dialog-enter-duration) var(--dialog-enter-ease);
   }
   .rt-BaseDialogOverlay[data-state="closed"]::before {
     opacity: 0;
-    animation: marginalia-dialog-backdrop-out var(--dialog-exit-duration) ease-in;
+    animation: marginalia-dialog-backdrop-out var(--dialog-exit-duration) var(--dialog-exit-ease);
   }
   .rt-BaseDialogOverlay[data-state="closed"] {
     animation: marginalia-dialog-hold calc(var(--dialog-exit-duration) + 20ms) linear;
