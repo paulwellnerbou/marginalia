@@ -689,6 +689,12 @@ button.primary:disabled {
 }
 .marginalia .collapse-section > .collapse-section-inner {
   min-height: 0;
+  /* A grid item's `min-width` defaults to `auto`, which floors at the
+     min-content width of its contents — for a `pre`, its longest line.
+     The section would rather grow past the reading column than let a
+     code block scroll, and `overflow-x: auto` on the `pre` never got a
+     chance. Both axes have to be released, not just the animated one. */
+  min-width: 0;
   /* `clip-path` instead of `overflow: hidden`: vertical clip drives
      the collapse animation, horizontal slack keeps the `#`
      heading-anchors (positioned at `left: -0.9em`) from being
