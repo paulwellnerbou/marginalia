@@ -259,6 +259,11 @@ export function InlineCommentsLayer({
     return items;
   }, [nesting, blockOrder]);
 
+  /** Stable identity, so the toolbar's measured landing positions
+   *  survive renders that leave the thread list alone — it re-measures
+   *  whenever this array changes. */
+  const sortedThreads = useMemo(() => sorted.map((s) => s.thread), [sorted]);
+
   /** O(1) lookup of thread by id — avoids `sorted.find(...)` per render in renderCardById. */
   const sortedById = useMemo<Map<string, OrderItem>>(() => {
     const map = new Map<string, OrderItem>();
@@ -920,11 +925,12 @@ export function InlineCommentsLayer({
     >
       <InlineCommentsToolbar
         rootRef={toolbarRef}
-        sortedThreads={sorted.map((s) => s.thread)}
+        sortedThreads={sortedThreads}
         scrollContainerRef={scrollContainerRef}
         docElementRef={docElementRef}
         lastNavThreadRef={lastNavThreadRef}
         stickyTopPad={stickyTopPad}
+        layoutVersion={layoutVersion}
         open={open}
         onToggleOpen={onToggleOpen}
         stackingEnabled={stackingEnabled}

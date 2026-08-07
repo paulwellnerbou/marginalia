@@ -53,3 +53,17 @@ export function threadLinks(
 export function threadsById(threads: Thread[]): Map<string, Thread> {
   return new Map(threads.map((t) => [t.id, t]));
 }
+
+/**
+ * Readout for the comment toolbars: how many threads there are, and —
+ * once the reader has reached one — which of them they are standing on.
+ *
+ * `currentIndex` is zero-based, negative above the first thread. A lone
+ * thread stays a plain count: "1 of 1" carries no information the
+ * arrows don't already show by being dead.
+ */
+export function threadCountLabel(count: number, currentIndex = -1): string {
+  const plain = `${count} ${count === 1 ? 'thread' : 'threads'}`;
+  if (count < 2 || currentIndex < 0 || currentIndex >= count) return plain;
+  return `${currentIndex + 1} of ${plain}`;
+}
