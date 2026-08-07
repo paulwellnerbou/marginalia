@@ -1,5 +1,6 @@
 import { getClientId, getDisplayName, type Identity } from './identity.js';
 import { loadInviteToken } from './invite.js';
+import { markTransportFailure } from './retry.js';
 
 export interface Anchor {
   level: number;
@@ -305,6 +306,24 @@ function waitForAuth(docUid: string): Promise<void> {
   return gate;
 }
 
+/**
+ * A timeout signal, or null where the runtime has no `AbortSignal.timeout`.
+ *
+ * Degrading to "no ceiling" is deliberate. The alternative — an
+ * `AbortController` and a timer that every exit path has to clear — is a
+ * second timeout implementation living in the one function every API
+ * call goes through, and it would only ever run on browsers older than
+ * the container queries the document layout already depends on. Losing
+ * the ceiling there restores the behaviour those browsers had anyway;
+ * calling a missing method would instead throw synchronously and turn
+ * every read into a hard failure.
+ */
+function timeoutSignal(timeoutMs: number | undefined): AbortSignal | null {
+  if (timeoutMs === undefined) return null;
+  if (typeof AbortSignal?.timeout !== 'function') return null;
+  return AbortSignal.timeout(timeoutMs);
+}
+
 async function request<T>(
   path: string,
   init: RequestInit & {
@@ -316,10 +335,12 @@ async function request<T>(
      * outlasts this. Opt-in: uploads and exports are legitimately slow,
      * and a ceiling that fits a JSON read would cut them off.
      *
-     * The signal is minted per call rather than taken from the caller so
-     * the password-prompt retry below gets a fresh budget — it can sit
-     * on a dialog for a minute, and an already-expired signal would
-     * abort the retry the instant it started.
+     * A caller's own `signal` still wins where one is given. Where it
+     * isn't, the signal is minted fresh on each pass through this
+     * function rather than once per logical call, so the retry after a
+     * password prompt starts a new budget — the prompt can sit on a
+     * dialog for a minute, and a signal carried over from the first
+     * attempt would abort the second the instant it began.
      */
     timeoutMs?: number;
   } = {},
@@ -345,14 +366,20 @@ async function request<T>(
     if (token) headers.set('x-marginalia-invite', token);
   }
 
-  const signal =
-    init.signal ?? (init.timeoutMs === undefined ? null : AbortSignal.timeout(init.timeoutMs));
-  const res = await fetch(path, {
-    ...init,
-    headers,
-    credentials: 'include',
-    ...(signal ? { signal } : {}),
-  });
+  const signal = init.signal ?? timeoutSignal(init.timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      ...init,
+      headers,
+      credentials: 'include',
+      ...(signal ? { signal } : {}),
+    });
+  } catch (err) {
+    // Only here is a `TypeError` known to be a dead connection rather
+    // than a bug one line further down. Say so while we can.
+    throw markTransportFailure(err);
+  }
   if (!res.ok) {
     let code = 'unknown';
     try {
@@ -395,7 +422,14 @@ async function requestBinary(
     if (token) headers.set('x-marginalia-invite', token);
   }
 
-  const res = await fetch(path, { ...init, headers, credentials: 'include' });
+  // Tagged like its sibling above, so the invariant holds for the whole
+  // module: every rejection that came off the wire says so.
+  let res: Response;
+  try {
+    res = await fetch(path, { ...init, headers, credentials: 'include' });
+  } catch (err) {
+    throw markTransportFailure(err);
+  }
   if (!res.ok) {
     let code = 'unknown';
     try {

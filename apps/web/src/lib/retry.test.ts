@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { isTransientError, retryRequest } from './retry.js';
+import { isTransientError, markTransportFailure, retryRequest } from './retry.js';
 
 function failing(times: number, error: unknown, value = 'ok') {
   let calls = 0;
@@ -18,16 +18,27 @@ function failing(times: number, error: unknown, value = 'ok') {
 const noSleep = async () => {};
 
 describe('isTransientError', () => {
-  test('treats the TypeError of a dead connection as transient', () => {
-    expect(isTransientError(new TypeError('Failed to fetch'))).toBe(true);
+  test('treats a marked fetch rejection as transient', () => {
+    expect(isTransientError(markTransportFailure(new TypeError('Failed to fetch')))).toBe(true);
+    expect(isTransientError(markTransportFailure(new TypeError('Load failed')))).toBe(true);
+    expect(
+      isTransientError(markTransportFailure(new DOMException('timed out', 'TimeoutError'))),
+    ).toBe(true);
   });
 
-  test('treats an expired request timeout as transient', () => {
-    expect(isTransientError(new DOMException('signal timed out', 'TimeoutError'))).toBe(true);
+  test('treats a deliberate abort as final even though it came off the wire', () => {
+    expect(isTransientError(markTransportFailure(new DOMException('stopped', 'AbortError')))).toBe(
+      false,
+    );
   });
 
-  test('treats a deliberate abort as final', () => {
-    expect(isTransientError(new DOMException('aborted', 'AbortError'))).toBe(false);
+  /*
+   * The one the marker exists for: `fetch` rejects a dead connection
+   * with a bare TypeError, and so does `undefined.threads` one line
+   * later. Only the first is worth asking again about.
+   */
+  test('treats an unmarked TypeError from our own code as final', () => {
+    expect(isTransientError(new TypeError('Cannot read properties of undefined'))).toBe(false);
   });
 
   test('treats our own bugs as final rather than retrying them three times', () => {
@@ -36,6 +47,30 @@ describe('isTransientError', () => {
     expect(isTransientError(new RangeError('nope'))).toBe(false);
     expect(isTransientError(null)).toBe(false);
     expect(isTransientError(undefined)).toBe(false);
+  });
+
+  test('marking leaves the error otherwise untouched, so logs keep the detail', () => {
+    const err = new TypeError('Failed to fetch');
+    expect(markTransportFailure(err)).toBe(err);
+    expect(err.name).toBe('TypeError');
+    expect(err.message).toBe('Failed to fetch');
+  });
+
+  test('marking a non-object rejection is a no-op rather than a throw', () => {
+    expect(markTransportFailure('offline')).toBe('offline');
+    expect(isTransientError('offline')).toBe(false);
+  });
+
+  test('a marked error still retries through retryRequest', async () => {
+    const target = failing(2, markTransportFailure(new TypeError('Failed to fetch')));
+    await expect(retryRequest(target.fn, { sleep: noSleep })).resolves.toBe('ok');
+    expect(target.calls).toBe(3);
+  });
+
+  test('an unmarked TypeError fails on the first attempt', async () => {
+    const target = failing(9, new TypeError('x is not a function'));
+    await expect(retryRequest(target.fn, { sleep: noSleep })).rejects.toBeInstanceOf(TypeError);
+    expect(target.calls).toBe(1);
   });
 
   test('treats 5xx as transient and plain 4xx as final', () => {

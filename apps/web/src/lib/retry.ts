@@ -25,19 +25,44 @@ const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Marker set on an error that came out of a `fetch` call rather than out
+ * of our own code, so `isTransientError` can tell them apart.
+ *
+ * It has to be applied at the throw site: `fetch` rejects a dead
+ * connection with a bare `TypeError`, which is the same shape as the
+ * `TypeError` a "cannot read properties of undefined" bug produces one
+ * line later. Downstream the two are indistinguishable — sniffing the
+ * message would mean matching "Failed to fetch" / "Load failed" /
+ * "NetworkError when attempting to fetch resource." per engine, and
+ * being wrong on the next one.
+ */
+const TRANSPORT_FAILURE = Symbol.for('marginalia.transportFailure');
+
+/**
+ * Tag a rejection as transport-level and hand it back for rethrowing.
+ * The original error is passed through untouched otherwise, so its
+ * name, message and stack still reach the logs.
+ */
+export function markTransportFailure<E>(err: E): E {
+  if (err !== null && typeof err === 'object') {
+    (err as Record<symbol, unknown>)[TRANSPORT_FAILURE] = true;
+  }
+  return err;
+}
+
+/**
  * Whether retrying `err` could plausibly produce a different answer.
  *
  * Transient means the transport failed, not the request: a numeric
- * `status` outside 4xx (an `ApiError`), the bare `TypeError` fetch
- * rejects with when the connection dies, or the `TimeoutError` an
- * expired `AbortSignal.timeout` raises. 4xx other than 408/429 is a
- * verdict, not a hiccup.
+ * `status` outside 4xx (an `ApiError`), or a rejection `fetch` itself
+ * produced — a dead connection, an expired timeout. 4xx other than
+ * 408/429 is a verdict, not a hiccup.
  *
- * Everything else — a caller's deliberate `AbortError`, a `SyntaxError`
- * from an unparseable body, any Error a bug in our own code threw — is
- * final. Retrying those only delays the caller's error path three times
- * over, and a defect that surfaces late is harder to place than one
- * that surfaces at once.
+ * Everything else is final: a caller's deliberate `AbortError` (they
+ * got what they asked for), a `SyntaxError` from an unparseable body,
+ * and any error a bug in our own code threw. Retrying those only delays
+ * the caller's error path three times over, and a defect that surfaces
+ * late is harder to place than one that surfaces at once.
  */
 export function isTransientError(err: unknown): boolean {
   const status = (err as { status?: unknown } | null)?.status;
@@ -45,8 +70,8 @@ export function isTransientError(err: unknown): boolean {
     if (status === 408 || status === 429) return true;
     return status < 400 || status >= 500;
   }
-  if (err instanceof TypeError) return true;
-  return (err as { name?: unknown } | null)?.name === 'TimeoutError';
+  if ((err as { name?: unknown } | null)?.name === 'AbortError') return false;
+  return (err as Record<symbol, unknown> | null)?.[TRANSPORT_FAILURE] === true;
 }
 
 export async function retryRequest<T>(
