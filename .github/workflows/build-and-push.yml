@@ -111,7 +111,11 @@ jobs:
           build-args: |
             IMPRINT_MD=${{ vars.IMPRINT_MD }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # The layer cache is an optimisation, so a wobble in the Actions
+          # cache backend should cost a slower build, not a red pipeline —
+          # it has already failed a green build here with a 504 while
+          # writing a blob.
+          cache-to: type=gha,mode=max,ignore-error=true
 
       - name: Image digest
         if: ${{ steps.push-policy.outputs.should_push == 'true' }}
