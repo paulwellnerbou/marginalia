@@ -1,7 +1,7 @@
 import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer/extract-title';
 import { DownloadIcon } from '@radix-ui/react-icons';
 import { Button, Callout, Dialog, DropdownMenu, Flex, IconButton, Text } from '@radix-ui/themes';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Document, DocumentCover } from '../lib/api.js';
 import {
   ApiError,
@@ -76,10 +76,32 @@ export function DownloadMenu({
    */
   const [storedCover, setStoredCover] = useState<DocumentCover | null>(doc.cover);
   const [removingCover, setRemovingCover] = useState(false);
+  const [savingCover, setSavingCover] = useState(false);
+  const [coverNotice, setCoverNotice] = useState<string | null>(null);
   const [epubError, setEpubError] = useState<string | null>(null);
+  /** Object URL for the picked file, so the dialog can show it before upload. */
+  const [coverPreview, setCoverPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!cover) {
+      setCoverPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(cover);
+    setCoverPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [cover]);
 
   /** Only editors can write the cover into the document's asset store. */
   const canStoreCover = doc.role === 'admin' || doc.role === 'editor';
+
+  /** A pending pick wins the thumbnail slot: it's what the export would use. */
+  const thumbSrc = coverPreview ?? (storedCover ? coverProxyUrl(doc.uid, storedCover) : null);
+  const thumbCaption = !coverPreview
+    ? 'Saved cover'
+    : canStoreCover
+      ? 'Not saved yet'
+      : 'This download only';
 
   const sourceExt = doc.format === 'asciidoc' ? 'adoc' : 'md';
   const sourceLabel = doc.format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source';
@@ -196,15 +218,17 @@ export function DownloadMenu({
   function openEpubDialog(mode: 'current' | 'accepted'): void {
     setCover(null);
     setEpubError(null);
+    setCoverNotice(null);
     setStoredCover(doc.cover);
     setEpubMode(mode);
   }
 
   function closeEpubDialog(): void {
-    if (busy === 'epub') return;
+    if (busy === 'epub' || savingCover) return;
     setEpubMode(null);
     setCover(null);
     setEpubError(null);
+    setCoverNotice(null);
   }
 
   async function removeStoredCover(): Promise<void> {
@@ -215,6 +239,7 @@ export function DownloadMenu({
     }
     setRemovingCover(true);
     setEpubError(null);
+    setCoverNotice(null);
     try {
       await deleteDocumentCover(doc.uid, { clientId: getClientId(), displayName });
       setStoredCover(null);
@@ -261,6 +286,22 @@ export function DownloadMenu({
             : 'Could not save the cover. Try again in a moment.'),
       );
       return false;
+    }
+  }
+
+  /**
+   * Save the picked cover on its own — the same upload the EPUB export
+   * runs first, for people who came here only to change the cover.
+   */
+  async function saveCoverOnly(): Promise<void> {
+    if (!cover) return;
+    setSavingCover(true);
+    setEpubError(null);
+    setCoverNotice(null);
+    try {
+      if (await storeCover(cover)) setCoverNotice('Cover saved with the document.');
+    } finally {
+      setSavingCover(false);
     }
   }
 
@@ -403,12 +444,17 @@ export function DownloadMenu({
           </Dialog.Description>
           <Flex direction="column" gap="3">
             <Flex gap="3" align="start">
-              {storedCover && (
-                <img
-                  className="cover-thumb cover-thumb--dialog"
-                  src={coverProxyUrl(doc.uid, storedCover)}
-                  alt="Current cover"
-                />
+              {thumbSrc && (
+                <Flex direction="column" gap="1" align="center" flexShrink="0">
+                  <img
+                    className="cover-thumb cover-thumb--dialog"
+                    src={thumbSrc}
+                    alt={coverPreview ? 'Selected cover' : 'Current cover'}
+                  />
+                  <Text size="1" color="gray" align="center">
+                    {thumbCaption}
+                  </Text>
+                </Flex>
               )}
               <Flex direction="column" gap="2" flexGrow="1">
                 <Text size="2" weight="medium">
@@ -426,26 +472,46 @@ export function DownloadMenu({
                 <FileDropZone
                   accept="image/png,image/jpeg,image/gif,image/webp"
                   acceptFile={isCoverImageFile}
-                  onFile={(file) => setCover(file)}
-                  disabled={busy === 'epub'}
+                  onFile={(file) => {
+                    setCover(file);
+                    setCoverNotice(null);
+                  }}
+                  disabled={busy === 'epub' || savingCover}
                   label={
                     cover ? `Selected: ${cover.name}` : 'Drop a cover image — or click to browse'
                   }
                 />
-                {storedCover && canStoreCover && (
-                  <Flex>
-                    <Button
-                      type="button"
-                      size="1"
-                      variant="soft"
-                      color="gray"
-                      mt="1"
-                      onClick={() => void removeStoredCover()}
-                      disabled={removingCover || busy === 'epub'}
-                    >
-                      {removingCover ? 'Removing…' : 'Remove saved cover'}
-                    </Button>
+                {canStoreCover && (cover || storedCover) && (
+                  <Flex gap="2" mt="1" wrap="wrap">
+                    {cover && (
+                      <Button
+                        type="button"
+                        size="1"
+                        variant="soft"
+                        onClick={() => void saveCoverOnly()}
+                        disabled={savingCover || removingCover || busy === 'epub'}
+                      >
+                        {savingCover ? 'Saving…' : 'Save cover'}
+                      </Button>
+                    )}
+                    {storedCover && (
+                      <Button
+                        type="button"
+                        size="1"
+                        variant="soft"
+                        color="gray"
+                        onClick={() => void removeStoredCover()}
+                        disabled={removingCover || savingCover || busy === 'epub'}
+                      >
+                        {removingCover ? 'Removing…' : 'Remove saved cover'}
+                      </Button>
+                    )}
                   </Flex>
+                )}
+                {coverNotice && (
+                  <Text size="1" color="green">
+                    {coverNotice}
+                  </Text>
                 )}
               </Flex>
             </Flex>
@@ -460,11 +526,15 @@ export function DownloadMenu({
                 variant="soft"
                 color="gray"
                 onClick={closeEpubDialog}
-                disabled={busy === 'epub'}
+                disabled={busy === 'epub' || savingCover}
               >
                 Cancel
               </Button>
-              <Button type="button" onClick={() => void downloadEpub()} disabled={busy === 'epub'}>
+              <Button
+                type="button"
+                onClick={() => void downloadEpub()}
+                disabled={busy === 'epub' || savingCover}
+              >
                 {busy === 'epub' ? 'Creating EPUB…' : 'Download EPUB'}
               </Button>
             </Flex>
