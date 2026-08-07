@@ -79,12 +79,20 @@ DOCKER_ARGS=(
   -e APP_ENV_LABEL="$APP_ENV_LABEL_VALUE"
 )
 
+# Optional passthrough vars, set in .env.$INSTANCE.
+#
+# MARGINALIA_TRUST_PROXY=1 makes per-client rate limits read
+# X-Forwarded-For. Needed here because the container publishes to
+# HOST_BIND_IP (127.0.0.1 by default) behind a reverse proxy, so without
+# it every request looks like it came from the proxy.
+#
 # Blob storage: fs (default) keeps binaries in the mounted /app/.data
 # volume at .data/blobs. Setting MARGINALIA_BLOB_STORAGE=s3 in the
 # .env.$INSTANCE file switches to an S3-compatible bucket; credentials
 # come from the companion MARGINALIA_S3_* vars in the same file.
 # Forwarded explicitly here (rather than --env-file) so the script
-# still enumerates every knob it passes through.
+# still enumerates every knob it passes through — a var added to
+# .env.$INSTANCE but not to this list is silently ignored.
 #
 # IMPORTANT: use `-e NAME` (no value) rather than `-e NAME=VALUE` so
 # credentials aren't embedded in the docker argv — otherwise the
@@ -92,7 +100,8 @@ DOCKER_ARGS=(
 # (and often in CI logs that echo commands). Docker reads the value
 # from the parent shell's environment; the earlier `set -a; source
 # $ENV_FILE` already exported these.
-for var in MARGINALIA_BLOB_STORAGE \
+for var in MARGINALIA_TRUST_PROXY \
+           MARGINALIA_BLOB_STORAGE \
            MARGINALIA_S3_BUCKET \
            MARGINALIA_S3_ACCESS_KEY_ID \
            MARGINALIA_S3_SECRET_ACCESS_KEY \

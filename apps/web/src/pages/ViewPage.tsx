@@ -14,6 +14,7 @@ import {
 import { documentTitle } from '../lib/doc-title.js';
 import { getDisplayName, setDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
+import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { recordVisit } from '../lib/recent-docs.js';
 
@@ -75,6 +76,10 @@ export function ViewPage() {
   useEffect(() => {
     if (!doc) return;
     const stored = loadInviteToken(doc.uid);
+    // Opening a document from a link is also how it joins the keyring, so
+    // a link someone sends you reaches your other devices by being used
+    // once — no separate "add to my documents" step.
+    if (stored) keyringPushDoc(doc.uid, stored, documentTitle(doc));
     recordVisit({
       uid: doc.uid,
       title: documentTitle(doc),

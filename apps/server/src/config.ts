@@ -12,6 +12,34 @@ export interface ServerConfig {
   sessionTtlMs: number;
   /** TTL for invite sessions created by POST /invites/:token/claim. Default 90 days. */
   namedInviteSessionTtlMs: number;
+  /**
+   * How long a device-pairing code stays redeemable. Short on purpose:
+   * the code is displayed on screen and hands over a keyring, so its
+   * window is the window in which a shoulder-surfed glance is worth
+   * anything. Default 5 minutes.
+   */
+  keyringPairingTtlMs: number;
+  /**
+   * Trust `X-Forwarded-For` when identifying a client for rate limiting.
+   * Turn on when a reverse proxy fronts the app (the Docker deploy binds
+   * to 127.0.0.1 behind Caddy, so it should be on there). Off by default
+   * — believing the header on a directly-exposed port would let any
+   * caller forge a new identity per request.
+   */
+  trustProxy: boolean;
+  /** Failed pairing redemptions tolerated per client per window. */
+  pairingRedeemPerClient: number;
+  /**
+   * Failed pairing redemptions tolerated server-wide per window. The
+   * backstop that survives a spoofed `X-Forwarded-For`, a misconfigured
+   * `trustProxy`, or a distributed attempt — none of which the per-client
+   * limit can see.
+   */
+  pairingRedeemGlobal: number;
+  pairingRedeemWindowMs: number;
+  /** Keyring creations tolerated per client per window. */
+  keyringCreatePerClient: number;
+  keyringCreateWindowMs: number;
   /** Upload size ceiling for asset binaries. Defaults to 16 MiB. */
   maxAssetBytes: number;
   /**
@@ -55,6 +83,19 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     webDir,
     sessionTtlMs: overrides.sessionTtlMs ?? 24 * 60 * 60 * 1000, // 24h
     namedInviteSessionTtlMs: overrides.namedInviteSessionTtlMs ?? 90 * 24 * 60 * 60 * 1000, // 90d
+    keyringPairingTtlMs: overrides.keyringPairingTtlMs ?? 5 * 60 * 1000, // 5min
+    trustProxy: overrides.trustProxy ?? process.env.MARGINALIA_TRUST_PROXY === '1',
+    // 10 wrong codes from one client per 10 minutes. A person mistyping
+    // eight characters off a screen needs two or three; a search needs
+    // billions.
+    pairingRedeemPerClient: overrides.pairingRedeemPerClient ?? 10,
+    // Generous enough that a real user is never blocked by other
+    // people's failures, and still ~5 orders of magnitude below what
+    // guessing a 40-bit code inside its 5-minute life would take.
+    pairingRedeemGlobal: overrides.pairingRedeemGlobal ?? 200,
+    pairingRedeemWindowMs: overrides.pairingRedeemWindowMs ?? 10 * 60 * 1000, // 10min
+    keyringCreatePerClient: overrides.keyringCreatePerClient ?? 20,
+    keyringCreateWindowMs: overrides.keyringCreateWindowMs ?? 60 * 60 * 1000, // 1h
     maxAssetBytes: overrides.maxAssetBytes ?? 16 * 1024 * 1024,
     blobStorage,
     ...(s3 ? { s3 } : {}),

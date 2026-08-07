@@ -6,7 +6,7 @@
  * "new since X" indicators later.
  */
 
-import type { DocumentCover, DocumentFormat } from './api.js';
+import type { DocumentCover, DocumentFormat, KeyringDocEntry } from './api.js';
 
 const KEY = 'marginalia.recentDocs';
 const MAX = 50;
@@ -84,6 +84,52 @@ export function updateRecentDocCover(uid: string, cover: DocumentCover | null): 
 export function removeFromRecent(uid: string): void {
   const list = loadRecentDocs().filter((d) => d.uid !== uid);
   localStorage.setItem(KEY, JSON.stringify(list));
+}
+
+/**
+ * Fold a keyring's documents into this browser's list.
+ *
+ * Which side wins is decided per field by which one is actually better
+ * informed. The server holds the synced credential and the document's
+ * own state, so `invite_token`, `role`, `cover` and `updated_at` come
+ * from there — that is how a token rotated on the laptop reaches the
+ * phone. `visited_at` is a fact about *this* browser and is never
+ * overwritten, so syncing doesn't reshuffle the list into the order some
+ * other device happens to use.
+ *
+ * Documents in the ring but never opened here sort by when they were
+ * added, which lands them below anything actually read on this device.
+ */
+export function mergeKeyringDocs(incoming: KeyringDocEntry[]): RecentDoc[] {
+  const byUid = new Map(loadRecentDocs().map((d) => [d.uid, d]));
+
+  for (const entry of incoming) {
+    const local = byUid.get(entry.doc_uid);
+    const cover = entry.cover ?? local?.cover;
+    const merged: RecentDoc = {
+      uid: entry.doc_uid,
+      title: entry.title ?? local?.title ?? entry.doc_uid.slice(0, 8),
+      // A null role means the invite was revoked or rotated elsewhere.
+      // Keep showing what this browser last knew rather than silently
+      // demoting the card to reader — opening it is what settles it.
+      role: entry.role ?? local?.role ?? 'reader',
+      password_protected: entry.password_protected,
+      format: entry.format,
+      visited_at: local?.visited_at ?? entry.added_at,
+      updated_at: Math.max(entry.updated_at, local?.updated_at ?? 0),
+      invite_token: entry.invite_token,
+      ...(cover ? { cover } : {}),
+    };
+    byUid.set(entry.doc_uid, merged);
+  }
+
+  const merged = [...byUid.values()].sort((a, b) => b.visited_at - a.visited_at).slice(0, MAX);
+  try {
+    localStorage.setItem(KEY, JSON.stringify(merged));
+  } catch {
+    /* quota exceeded — best-effort */
+  }
+  return merged;
 }
 
 const VALID_ROLES = new Set<RecentDoc['role']>(['admin', 'editor', 'collaborator', 'reader']);

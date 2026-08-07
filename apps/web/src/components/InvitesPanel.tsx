@@ -24,6 +24,7 @@ import {
 } from '../lib/api.js';
 import { getClientId, getDisplayName, useDisplayName } from '../lib/identity.js';
 import { saveInviteToken } from '../lib/invite.js';
+import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { appInviteKindColor, appRoleColor } from '../styles/theme.js';
 import { ConfirmButton } from './ConfirmButton.js';
@@ -224,6 +225,11 @@ export function InvitesPanel({ uid }: { uid: string }) {
       // this tab) keeps sending the just-revoked token and the tab locks
       // itself out of admin until the admin manually re-opens the new URL.
       saveInviteToken(uid, admin_invite.token);
+      // Every other paired device is now holding a revoked token. Push
+      // the replacement before anything else can fail — a rotation that
+      // syncs only to this browser locks the rest out of their own
+      // document, which is a worse outcome than the leak being rotated.
+      keyringPushDoc(uid, admin_invite.token);
       await refresh();
     } catch (err) {
       reportError('InvitesPanel.rotateAdmin', err);

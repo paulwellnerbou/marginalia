@@ -118,6 +118,22 @@ export function getClientId(): string {
   return id;
 }
 
+/**
+ * Overwrite the browser's clientId. Only pairing does this: adopting the
+ * keyring's clientId is what makes several devices one author rather
+ * than several people who happen to share a name — same doc_users row,
+ * so a comment written on one is editable on the other.
+ *
+ * Comments already written on this device under the old id stay behind;
+ * they keep their author name but stop being editable here. Pairing a
+ * device that has its own history is the rare case, and silently
+ * rewriting authorship server-side would be worse.
+ */
+export function setClientId(clientId: string): void {
+  if (!clientId) return;
+  localStorage.setItem(CLIENT_ID_KEY, clientId);
+}
+
 export function getDisplayName(): string {
   const existing = normalizeDisplayName(localStorage.getItem(DISPLAY_NAME_KEY) ?? '');
   if (existing && !isLegacyDefaultDisplayName(existing)) {

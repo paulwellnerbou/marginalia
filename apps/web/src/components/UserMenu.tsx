@@ -16,6 +16,7 @@ import { logoutPasswordSession, type Role } from '../lib/api.js';
 import { accessLinkFor } from '../lib/document-link.js';
 import { getClientId, setDisplayName as persistName, useDisplayName } from '../lib/identity.js';
 import { loadInviteToken } from '../lib/invite.js';
+import { pushDisplayName as pushKeyringDisplayName } from '../lib/keyring.js';
 import { clearSavedPassword, useSavedPassword } from '../lib/passwords.js';
 import { appRoleColor } from '../styles/theme.js';
 import { Copyable } from './Copyable.js';
@@ -63,6 +64,11 @@ export function UserMenu({
     const trimmed = next.trim().slice(0, 80);
     if (!trimmed) return;
     persistName(trimmed); // fires the DISPLAY_NAME_EVENT → useDisplayName updates
+    // Only a rename typed here reaches the keyring. The other writers of
+    // this value are syncing *from* the server (a named invite seeding a
+    // name on arrival); pushing those back would let opening someone
+    // else's invite link rename you on all your devices.
+    pushKeyringDisplayName(trimmed);
     setDraft(trimmed);
     onChange?.(trimmed);
     setDialogOpen(false);

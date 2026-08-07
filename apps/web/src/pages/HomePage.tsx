@@ -34,6 +34,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { CopyAccessLinkButton } from '../components/CopyAccessLinkButton.js';
 import { Copyable } from '../components/Copyable.js';
+import { DeviceSyncPanel } from '../components/DeviceSyncPanel.js';
 import { FileDropZone } from '../components/FileDropZone.js';
 import { FormatBadge } from '../components/FormatBadge.js';
 import { OpenByLink } from '../components/OpenByLink.js';
@@ -50,6 +51,11 @@ import {
 import { formatTimestampLong } from '../lib/format-time.js';
 import { deriveDisplayName, getClientId, getDisplayName, setDisplayName } from '../lib/identity.js';
 import { saveInviteToken } from '../lib/invite.js';
+import {
+  pushDoc as keyringPushDoc,
+  removeDoc as keyringRemoveDoc,
+  pullKeyring,
+} from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import {
   consumePendingNewDocumentDraft,
@@ -96,6 +102,19 @@ export function HomePage() {
     if (!pendingDraft) return;
     setUploadDraft(pendingDraft);
     setUploadOpen(true);
+  }, []);
+
+  // Render the local list first, then reconcile. The cards are readable
+  // straight from localStorage, so waiting on the network before showing
+  // anything would trade a working offline list for a spinner.
+  useEffect(() => {
+    let cancelled = false;
+    void pullKeyring().then((merged) => {
+      if (!cancelled && merged) setRecent(merged);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   function openFreshUploadDialog() {
@@ -195,6 +214,16 @@ export function HomePage() {
               )}
             </Flex>
 
+            <Box mb="4">
+              <DeviceSyncPanel
+                onSynced={() => {
+                  void pullKeyring().then((merged) => {
+                    if (merged) setRecent(merged);
+                  });
+                }}
+              />
+            </Box>
+
             <Box mb="5" className="open-by-link">
               <OpenByLink />
             </Box>
@@ -209,6 +238,7 @@ export function HomePage() {
                     doc={r}
                     onRemove={() => {
                       removeFromRecent(r.uid);
+                      keyringRemoveDoc(r.uid);
                       refreshRecent();
                     }}
                   />
@@ -228,6 +258,7 @@ export function HomePage() {
         onUploaded={(d) => {
           const { token, ...recent } = d;
           recordVisit(recent);
+          if (token) keyringPushDoc(d.uid, token, recent.title);
           refreshRecent();
           navigate(token ? `/d/${d.uid}/${token}` : `/d/${d.uid}`);
         }}
