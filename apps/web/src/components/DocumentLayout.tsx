@@ -150,6 +150,14 @@ function usePaneBody(open: boolean): boolean {
       setMounted(true);
       return;
     }
+    // Nothing to wait for where the fade the hold exists to cover has
+    // been turned off: it would only park an invisible pane's tabs in
+    // the tree a fifth of a second longer. Read per collapse, so a
+    // preference changed mid-session takes effect at once.
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setMounted(false);
+      return;
+    }
     const timer = window.setTimeout(() => setMounted(false), PANE_COLLAPSE_MS);
     return () => window.clearTimeout(timer);
   }, [open]);
