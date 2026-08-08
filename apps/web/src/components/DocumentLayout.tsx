@@ -98,6 +98,7 @@ import {
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
+import { readUiScale, setUiScale, UI_SCALE_MAX, UI_SCALE_MIN } from '../lib/ui-scale.js';
 import { useMediaQuery } from '../lib/useMediaQuery.js';
 import { usePagedReading } from '../lib/usePagedReading.js';
 import { APP_ACCENT_COLOR } from '../styles/theme.js';
@@ -358,6 +359,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     const saved = Number(localStorage.getItem(MAX_WIDTH_KEY));
     return Number.isFinite(saved) && saved > 0 ? saved : 72;
   });
+  /** Mirrors the stored interface size so the slider has something to show. */
+  const [uiScale, setUiScaleState] = useState<number>(readUiScale);
   const [textZoom, setTextZoom] = useState<number>(() => {
     const saved = Number(localStorage.getItem(TEXT_ZOOM_KEY));
     return Number.isFinite(saved) && saved >= TEXT_ZOOM_MIN && saved <= TEXT_ZOOM_MAX ? saved : 100;
@@ -1509,8 +1512,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
    * rail whatever they are doing — that is what keeps the document (and,
    * in paged mode, the pagination) still while a pane opens over it.
    */
-  const tocPx = tocOpen && !overlayPanes ? tocWidth : COLLAPSED_WIDTH;
-  const commentsPx = commentsOpen && !overlayPanes ? commentsWidth : COLLAPSED_WIDTH;
+  /** The collapsed rail holds one icon button, which scales with the chrome. */
+  const railPx = Math.round(COLLAPSED_WIDTH * (uiScale / 100));
+  const tocPx = tocOpen && !overlayPanes ? tocWidth : railPx;
+  const commentsPx = commentsOpen && !overlayPanes ? commentsWidth : railPx;
   const gridStyle: React.CSSProperties = {
     gridTemplateColumns: `${tocPx}px 1fr ${commentsPx}px`,
     ...(overlayPanes
@@ -1548,7 +1553,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [tocPx, commentsPx, overlayPanes]);
 
   const chromeCompact =
-    docPaneWidth === 0 ? compactViewport : docPaneWidth < DOC_CHROME_INLINE_MIN_WIDTH;
+    docPaneWidth === 0
+      ? compactViewport
+      : docPaneWidth < DOC_CHROME_INLINE_MIN_WIDTH * (uiScale / 100);
   /** Offering the switch back to the column would be a dead action where
    *  the stylesheet hides the column outright. */
   const columnModeAvailable =
@@ -1566,8 +1573,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
    * whole document into a key on every render.
    */
   const pageLayoutKey = useMemo(
-    () => [liveRendered.html, maxWidth, textZoom, theme, tocPx, commentsPx],
-    [liveRendered.html, maxWidth, textZoom, theme, tocPx, commentsPx],
+    () => [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx],
+    [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx],
   );
   const pages = usePagedReading(docScrollRef, paged, pageLayoutKey);
 
@@ -1921,6 +1928,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         >
           Reset
         </Button>
+      </Flex>
+      <Flex align="center" gap="2" className="width-slider">
+        <Text size="1" color="gray">
+          Interface size
+        </Text>
+        <DisplaySlider
+          className="doc-display-slider doc-display-slider-zoom"
+          ariaLabel="Interface size"
+          min={UI_SCALE_MIN}
+          max={UI_SCALE_MAX}
+          step={5}
+          value={uiScale}
+          format={(v) => `${v}%`}
+          onCommit={(next) => {
+            setUiScale(next);
+            setUiScaleState(next);
+          }}
+        />
       </Flex>
       <Flex align="center" gap="2">
         <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">

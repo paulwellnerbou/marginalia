@@ -1,3 +1,15 @@
+/* Interface size. Radix sizes every space, font-size and line-height
+   token off `--scaling`, but its `scaling` prop only reaches 110% — not
+   enough on a tablet, where CSS pixels land at about 1.5x a desktop
+   monitor's density. Re-point the multiplier at our own variable, which
+   `ui-scale.ts` sets on the document root so portalled surfaces inherit
+   it too. Radix declares `--scaling` at the same specificity inside
+   `:where()`, so this wins on source order — app.css and this file are
+   imported after the Radix stylesheet. */
+.radix-themes {
+  --scaling: var(--ui-scale, 1);
+}
+
 :root,
 .radix-themes {
   --ui-bg: var(--color-background);
