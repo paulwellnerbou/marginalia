@@ -14,10 +14,14 @@ import './styles/theme.css';
 import './styles/app.css';
 import { installGlobalErrorLogging } from './lib/log.js';
 import { registerServiceWorker } from './lib/pwa.js';
+import { applyUiScale, readUiScale } from './lib/ui-scale.js';
 import { APP_THEME } from './styles/theme.js';
 
 installGlobalErrorLogging();
 registerServiceWorker();
+// Before first paint, so the chrome never renders at one size and
+// resizes to another.
+applyUiScale(readUiScale());
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('#root not found');

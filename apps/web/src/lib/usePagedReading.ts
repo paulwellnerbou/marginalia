@@ -1,5 +1,5 @@
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
-import { clampPage, goToPage, measurePages } from './paged-reading.js';
+import { clampPage, goToPage, measurePages, pageIndexOfClientRect } from './paged-reading.js';
 
 /** Horizontal travel that counts as a page-turning swipe, in px. */
 const SWIPE_MIN_PX = 48;
@@ -13,6 +13,8 @@ const WHEEL_COOLDOWN_MS = 350;
 const WHEEL_MIN_DELTA = 24;
 /** Debounce on reflow-triggered re-measurement (ms). */
 const REMEASURE_DEBOUNCE_MS = 120;
+/** Quiet time after the last scroll before noting where the reader is (ms). */
+const HELD_PLACE_SETTLE_MS = 200;
 /**
  * How long after a swipe a tap on an edge zone is treated as that same
  * gesture's tail. A swipe that starts and ends inside one zone would
@@ -28,6 +30,40 @@ export interface PagedReading {
   turn: (delta: number) => void;
   /** Turn from a tap on an edge zone, unless a swipe just handled it. */
   tap: (delta: number) => void;
+  /**
+   * True once the pagination is wider than this engine will paint, so
+   * every page past the first would come up blank. Nothing here acts on
+   * it — the caller decides what to offer the reader instead.
+   */
+  tooWideToPaint: boolean;
+}
+
+/**
+ * Paginated extent past which WebKit stops painting the columns: they are
+ * laid out and measurable, `getBoundingClientRect` places them correctly,
+ * and the screen stays empty. Observed on iPadOS 26 from roughly a
+ * 180-page document upwards; Blink has no such limit, so it only ever
+ * shows on a tablet.
+ *
+ * What triggers it is *not* the size of the multicol box, however much
+ * the symptom looks like it. Rebuilding the article as five boxes of well
+ * under this figure each left the deep pages just as blank, and plain
+ * multicol under the same CSS paints past 340k px in a page of its own —
+ * so splitting the document into chunks is a dead end, and whatever the
+ * app does to lower the ceiling is still unidentified. Treat this number
+ * as where paged mode is known to be safe here, not as a property of the
+ * engine.
+ */
+const PAGED_MAX_PAINTABLE_PX = 60000;
+
+/**
+ * True on engines with the painting limit above. Engine-sniffed on
+ * purpose: the failure is a silent paint bug with nothing to feature-
+ * detect, and capping every engine to WebKit's limit would take paged
+ * mode away from readers whose browser handles it fine.
+ */
+function limitsMulticolPaint(): boolean {
+  return /^Apple/.test(navigator.vendor ?? '');
 }
 
 /**
@@ -87,6 +123,79 @@ function absorbsWheel(
   return false;
 }
 
+/**
+ * Where the reader is, as a position in the text: the words the page in
+ * front of them opens with.
+ *
+ * Nothing about the *layout* survives a reflow usefully. A page number
+ * is meaningless once the count changes. So is which column fragment of
+ * a block the reader was on, since wider pages hold more text and the
+ * same fragment index lands somewhere else entirely — that is a page
+ * number wearing a different hat. And a block alone is too coarse:
+ * `getBoundingClientRect()` reports the union of a block's fragments,
+ * whose left edge names the first page it appears on however far into a
+ * long paragraph the reader actually is. Only the text itself holds
+ * still, so that is what gets remembered.
+ */
+interface HeldPlace {
+  node: Node;
+  offset: number;
+}
+
+/** Text position under a viewport point, across both spellings of the API. */
+function caretAt(x: number, y: number): HeldPlace | null {
+  const doc = document as Document & {
+    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+    caretRangeFromPoint?: (x: number, y: number) => Range | null;
+  };
+  const position = doc.caretPositionFromPoint?.(x, y);
+  if (position) return { node: position.offsetNode, offset: position.offset };
+  const range = doc.caretRangeFromPoint?.(x, y);
+  return range ? { node: range.startContainer, offset: range.startOffset } : null;
+}
+
+function nodeLength(node: Node): number {
+  return node.nodeType === Node.TEXT_NODE ? (node as Text).data.length : node.childNodes.length;
+}
+
+/** The text the current page opens with, or null where it can't be read. */
+function heldPlaceOf(scroll: HTMLElement): HeldPlace | null {
+  const box = scroll.getBoundingClientRect();
+  const x = box.left + box.width / 2;
+  // Down the middle of the column, from the first line inwards: the top
+  // of a page can be page margin, the clearance above a heading, or the
+  // tail of a floated figure, none of which sit on any text.
+  for (const fraction of [0.04, 0.12, 0.25, 0.45, 0.7]) {
+    const place = caretAt(x, box.top + box.height * fraction);
+    // Overlays share the viewport with the scrollport — the floating
+    // comment toolbar sits over the top of every page — so only a hit
+    // inside the document itself counts.
+    if (place?.node.parentElement?.closest('[data-block]') && scroll.contains(place.node)) {
+      return place;
+    }
+  }
+  return null;
+}
+
+/** The page a remembered position has landed on after a reflow. */
+function pageOfHeldPlace(scroll: HTMLElement, held: HeldPlace): number | null {
+  if (!held.node.isConnected) return null;
+  const length = nodeLength(held.node);
+  const start = Math.min(held.offset, length);
+  const range = document.createRange();
+  try {
+    range.setStart(held.node, start);
+    // One character wide where there is one: a collapsed range can
+    // report an empty rect at a line boundary, which locates nothing.
+    range.setEnd(held.node, Math.min(start + 1, length));
+  } catch {
+    return null;
+  }
+  const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0 && rect.left === 0) return null;
+  return pageIndexOfClientRect(scroll, rect);
+}
+
 /** True while the event target is somewhere the keys already mean something. */
 function keysBelongToWidget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -109,6 +218,7 @@ export function usePagedReading(
 ): PagedReading {
   const [page, setPage] = useState(0);
   const [pageCount, setPageCount] = useState(1);
+  const [tooWideToPaint, setTooWideToPaint] = useState(false);
 
   const syncFromScroller = useCallback(() => {
     const scroll = scrollRef.current;
@@ -148,6 +258,17 @@ export function usePagedReading(
   );
 
   /**
+   * The block the reader was last looking at, noted while the layout was
+   * still theirs. Re-measurement runs *after* the reflow that provoked
+   * it, when the old geometry is already gone — asking then which block
+   * is at the left edge answers with wherever the text happened to land,
+   * which is exactly the drift this is meant to undo.
+   */
+  const heldPlace = useRef<HeldPlace | null>(null);
+  /** Scrollport size and content extent as of the last re-measure. */
+  const geometry = useRef<{ width: number; extent: number } | null>(null);
+
+  /**
    * Publish the page box in px for the CSS that can't derive it: the
    * height clamps oversized media, the gutter sizes the edge tap zones.
    * Both have to be measured — `100%` of an auto-height ancestor is
@@ -165,8 +286,19 @@ export function usePagedReading(
       scroll.scrollLeft = 0;
       setPage(0);
       setPageCount(1);
+      // Both describe a pagination that no longer exists; carrying them
+      // into the next paged session would re-anchor against it.
+      heldPlace.current = null;
+      geometry.current = null;
+      setTooWideToPaint(false);
       return;
     }
+    // Writing an inline custom property invalidates style for the whole
+    // subtree, and re-fragmenting a book-length multicol document is the
+    // most expensive thing on this page — so only write on a real change.
+    const set = (el: HTMLElement, name: string, value: string) => {
+      if (el.style.getPropertyValue(name) !== value) el.style.setProperty(name, value);
+    };
     const publish = () => {
       // The column box's own height: the page margins are padding on
       // `.doc-body` and they aren't symmetric, and `clientHeight`
@@ -176,9 +308,9 @@ export function usePagedReading(
         const style = window.getComputedStyle(column);
         const height =
           column.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom);
-        scroll.style.setProperty('--doc-page-height', `${Math.max(0, Math.round(height))}px`);
+        set(scroll, '--doc-page-height', `${Math.max(0, Math.round(height))}px`);
       } else {
-        scroll.style.setProperty('--doc-page-height', `${scroll.clientHeight}px`);
+        set(scroll, '--doc-page-height', `${scroll.clientHeight}px`);
       }
 
       // The article spans every page, so its bounding rect is the union
@@ -186,7 +318,7 @@ export function usePagedReading(
       const article = scroll.querySelector<HTMLElement>('article.marginalia');
       const fragment = article?.getClientRects()[0];
       const gutter = fragment ? (scroll.clientWidth - fragment.width) / 2 : 0;
-      viewport.style.setProperty('--doc-page-gutter', `${Math.max(0, Math.round(gutter))}px`);
+      set(viewport, '--doc-page-gutter', `${Math.max(0, Math.round(gutter))}px`);
     };
     publish();
     window.addEventListener('resize', publish);
@@ -209,25 +341,33 @@ export function usePagedReading(
     if (!enabled || !scroll) return;
 
     let timer = 0;
+
     const remeasure = () => {
-      const scrollRect = scroll.getBoundingClientRect();
-      // The first block still starting at or after the left edge is what
-      // the reader has in front of them.
-      let held: Element | null = null;
-      for (const block of scroll.querySelectorAll('[data-block]')) {
-        if (block.getBoundingClientRect().left >= scrollRect.left - 1) {
-          held = block;
-          break;
-        }
-      }
       const metrics = measurePages(scroll);
       setPageCount(metrics.pageCount);
-      if (!held) {
+
+      // Outlives this effect on purpose: a pane opening re-runs it, and a
+      // baseline re-read afterwards would be the post-reflow geometry —
+      // i.e. it would report that nothing had changed.
+      const previous = geometry.current;
+      const width = scroll.clientWidth;
+      const extent = scroll.scrollWidth;
+      geometry.current = { width, extent };
+      setTooWideToPaint(limitsMulticolPaint() && extent > PAGED_MAX_PAINTABLE_PX);
+      // Nothing moved — a highlight repaint, a mermaid swap. Re-snapping
+      // would only risk nudging a reader mid-gesture.
+      if (previous && previous.width === width && previous.extent === extent) {
         setPage(metrics.currentPage);
         return;
       }
-      const offsetLeft = held.getBoundingClientRect().left - scrollRect.left + scroll.scrollLeft;
-      const target = clampPage(Math.floor(offsetLeft / metrics.pitch), metrics.pageCount);
+
+      const held = heldPlace.current;
+      const heldPage = held ? pageOfHeldPlace(scroll, held) : null;
+      const target = clampPage(heldPage ?? metrics.currentPage, metrics.pageCount);
+      // Unconditionally, even when the page index is unchanged: fewer
+      // pages than before leaves `scrollLeft` pointing past the last one,
+      // and nothing else brings it back — the reader is left swiping
+      // through blank pages with the pager insisting they are at the end.
       goToPage(scroll, target, 'auto');
       setPage(target);
     };
@@ -237,6 +377,10 @@ export function usePagedReading(
     };
 
     syncFromScroller();
+    // `remeasureKey` is the one repagination trigger that fires no
+    // observer of its own on some engines — a pane opening changes the
+    // scrollport's width without touching anything inside it.
+    schedule();
     const observers: (ResizeObserver | MutationObserver)[] = [];
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(schedule);
@@ -255,6 +399,27 @@ export function usePagedReading(
       for (const o of observers) o.disconnect();
     };
   }, [enabled, scrollRef, syncFromScroller, remeasureKey]);
+
+  // Note where the reader is once they have stopped moving, so the value
+  // re-measurement reads was taken under the layout they were reading in.
+  useEffect(() => {
+    const scroll = scrollRef.current;
+    if (!enabled || !scroll) return;
+    let timer = 0;
+    const note = () => {
+      heldPlace.current = heldPlaceOf(scroll);
+    };
+    const schedule = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(note, HELD_PLACE_SETTLE_MS);
+    };
+    schedule();
+    scroll.addEventListener('scroll', schedule, { passive: true });
+    return () => {
+      window.clearTimeout(timer);
+      scroll.removeEventListener('scroll', schedule);
+    };
+  }, [enabled, scrollRef]);
 
   // Follow scrolls we didn't originate: browser find-in-page, focus
   // moving into an off-page element, an anchor jump.
@@ -398,5 +563,5 @@ export function usePagedReading(
     };
   }, [enabled, scrollRef, turn]);
 
-  return { page, pageCount, goTo, turn, tap };
+  return { page, pageCount, goTo, turn, tap, tooWideToPaint };
 }

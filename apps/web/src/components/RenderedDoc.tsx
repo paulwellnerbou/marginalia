@@ -163,16 +163,25 @@ export function RenderedDoc({
     refreshMissingAssetPlaceholders(el, canUploadMissing, uploadCbRef);
   }, [canUploadMissing, ref]);
 
+  /**
+   * What each block's highlights currently look like in the DOM, so a
+   * threads refresh only re-wraps the blocks that actually changed.
+   * Rebuilding the whole layer instead costs a teardown and a re-wrap of
+   * every highlight in the document — on a long, heavily commented one
+   * that is hundreds of milliseconds of DOM surgery and a full relayout
+   * every time anyone posts a comment, which reads as the highlights
+   * blinking out and the reader losing their place.
+   *
+   * Keyed by element, so an innerHTML rewrite invalidates it for free:
+   * the new blocks are different objects and match nothing.
+   */
+  const highlightedBlocks = useRef<BlockHighlightState>(new Map());
+
   // biome-ignore lint/correctness/useExhaustiveDependencies: rendered.html is the re-attach trigger — when innerHTML is rewritten the previous text nodes are gone and highlights must be re-applied to the fresh DOM.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-
-    clearCommentHighlights(el);
-    if (highlights.length === 0) return;
-
-    applyCommentHighlights(el, highlights);
-    return () => clearCommentHighlights(el);
+    highlightedBlocks.current = syncCommentHighlights(el, highlights, highlightedBlocks.current);
   }, [highlights, rendered.html, ref]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: rendered.html re-runs after innerHTML rewrites; highlights re-runs so search highlights are re-applied after comment highlights swap mark elements in/out.
@@ -574,7 +583,66 @@ function svgToDataUrl(svg: SVGElement): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`;
 }
 
-function applyCommentHighlights(
+/** How one block's highlights are painted, and the signature that says so. */
+interface BlockHighlightPlan {
+  ranges: HighlightRange[];
+  /** Block-scope marking (whole-block comment), or null for range scope. */
+  blockScope: { threadId: string | null; interactive: boolean } | null;
+  signature: string;
+}
+
+/** Signature of every block currently carrying highlights, keyed by element. */
+type BlockHighlightState = Map<HTMLElement, string>;
+
+/**
+ * Bring the painted highlights in line with `highlights`, touching only
+ * the blocks whose result actually changed. Returns the new state to
+ * hand back on the next pass.
+ */
+function syncCommentHighlights(
+  root: HTMLElement,
+  highlights: Parameters<typeof planCommentHighlights>[1],
+  previous: BlockHighlightState,
+): BlockHighlightState {
+  const plans = planCommentHighlights(root, highlights);
+
+  for (const block of previous.keys()) {
+    if (!plans.has(block)) clearBlockHighlights(block);
+  }
+
+  const next: BlockHighlightState = new Map();
+  for (const [block, plan] of plans) {
+    next.set(block, plan.signature);
+    if (previous.get(block) === plan.signature) continue;
+    clearBlockHighlights(block);
+    paintBlockHighlights(block, plan);
+  }
+  return next;
+}
+
+function paintBlockHighlights(block: HTMLElement, plan: BlockHighlightPlan): void {
+  if (plan.blockScope) {
+    block.dataset.commentHighlightBlock = 'true';
+    if (plan.blockScope.interactive) block.classList.add('comment-highlight-block');
+    if (plan.blockScope.threadId) {
+      block.dataset.commentThreadId = plan.blockScope.threadId;
+      if (plan.blockScope.interactive) {
+        block.tabIndex = 0;
+        block.setAttribute('role', 'button');
+        block.setAttribute('aria-label', 'Open comment thread');
+      }
+    }
+  }
+  if (plan.ranges.length === 0) return;
+  // Same filter as buildBlockTextMap — the merged ranges index this list.
+  const textNodes = collectTextNodes(block, isInjectedChromeText);
+  for (let i = plan.ranges.length - 1; i >= 0; i--) {
+    const range = plan.ranges[i]!;
+    wrapRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.threads);
+  }
+}
+
+function planCommentHighlights(
   root: HTMLElement,
   highlights: ReadonlyArray<{
     scope?: 'range' | 'block';
@@ -588,8 +656,12 @@ function applyCommentHighlights(
     endOffset: number;
     state?: ThreadState;
   }>,
-): void {
+): Map<HTMLElement, BlockHighlightPlan> {
   const rangesByBlock = new Map<HTMLElement, HighlightRange[]>();
+  const blockScopeByBlock = new Map<
+    HTMLElement,
+    { threadId: string | null; interactive: boolean }
+  >();
 
   for (const highlight of highlights) {
     // A span quote holds one fragment per covered block. Only the first
@@ -622,19 +694,14 @@ function applyCommentHighlights(
 
       if (highlight.scope === 'block') {
         if (map.rawLength <= 0) continue;
-        block.dataset.commentHighlightBlock = 'true';
         const hasOpen = highlight.state === 'open';
-        if (hasOpen) {
-          block.classList.add('comment-highlight-block');
-        }
-        if (highlight.threadId) {
-          block.dataset.commentThreadId = highlight.threadId;
-          if (hasOpen) {
-            block.tabIndex = 0;
-            block.setAttribute('role', 'button');
-            block.setAttribute('aria-label', 'Open comment thread');
-          }
-        }
+        // Several threads can mark the same block; the last one names it,
+        // but one open thread is enough to keep the block clickable.
+        const previous = blockScopeByBlock.get(block);
+        blockScopeByBlock.set(block, {
+          threadId: highlight.threadId ?? previous?.threadId ?? null,
+          interactive: hasOpen || previous?.interactive === true,
+        });
         // Resolved block-scope highlights only need the block-level
         // dataset for click/scroll targeting — wrapping the entire
         // block's text in transparent <mark>s adds DOM bloat with no
@@ -677,21 +744,30 @@ function applyCommentHighlights(
     }
   }
 
-  for (const [block, ranges] of rangesByBlock) {
-    const merged = mergeRanges(ranges);
-    if (merged.length === 0) continue;
-
-    // Same filter as buildBlockTextMap — the merged ranges index this list.
-    const textNodes = collectTextNodes(block, isInjectedChromeText);
-    for (let i = merged.length - 1; i >= 0; i--) {
-      const range = merged[i]!;
-      wrapRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.threads);
-    }
+  const plans = new Map<HTMLElement, BlockHighlightPlan>();
+  for (const block of new Set([...rangesByBlock.keys(), ...blockScopeByBlock.keys()])) {
+    const ranges = mergeRanges(rangesByBlock.get(block) ?? []);
+    const blockScope = blockScopeByBlock.get(block) ?? null;
+    if (ranges.length === 0 && !blockScope) continue;
+    plans.set(block, { ranges, blockScope, signature: planSignature(ranges, blockScope) });
   }
+  return plans;
 }
 
-function clearCommentHighlights(root: HTMLElement): void {
-  const marks = root.querySelectorAll<HTMLElement>('mark[data-comment-highlight="true"]');
+function planSignature(
+  ranges: HighlightRange[],
+  blockScope: { threadId: string | null; interactive: boolean } | null,
+): string {
+  const parts = ranges.map(
+    (r) => `${r.rawStart}-${r.rawEnd}:${r.threads.map((t) => `${t.id}/${t.state}`).join(',')}`,
+  );
+  if (blockScope) parts.push(`block:${blockScope.threadId ?? ''}/${blockScope.interactive}`);
+  return parts.join('|');
+}
+
+/** Undo every comment highlight painted inside (or onto) one block. */
+function clearBlockHighlights(block: HTMLElement): void {
+  const marks = block.querySelectorAll<HTMLElement>('mark[data-comment-highlight="true"]');
   for (const mark of marks) {
     const parent = mark.parentNode;
     if (!parent) continue;
@@ -700,17 +776,13 @@ function clearCommentHighlights(root: HTMLElement): void {
     parent.normalize();
   }
 
-  const blockHighlights = root.querySelectorAll<HTMLElement>(
-    '[data-comment-highlight-block="true"]',
-  );
-  for (const block of blockHighlights) {
-    block.classList.remove('comment-highlight-block');
-    delete block.dataset.commentHighlightBlock;
-    delete block.dataset.commentThreadId;
-    block.removeAttribute('tabindex');
-    block.removeAttribute('role');
-    block.removeAttribute('aria-label');
-  }
+  if (block.dataset.commentHighlightBlock !== 'true') return;
+  block.classList.remove('comment-highlight-block');
+  delete block.dataset.commentHighlightBlock;
+  delete block.dataset.commentThreadId;
+  block.removeAttribute('tabindex');
+  block.removeAttribute('role');
+  block.removeAttribute('aria-label');
 }
 
 function applyDocumentSearchHighlights(
