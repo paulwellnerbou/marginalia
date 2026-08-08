@@ -2048,6 +2048,20 @@ button.primary:disabled {
   border-top: 1px solid var(--gray-a4);
 }
 
+/* Documents between the hero and the feature strip. The band needs to read as
+   its own thing from both neighbours: the hero's own rule closes it off above,
+   so it draws only the lower edge, and the strip drops the overlap it uses to
+   straddle the hero seam — that overlap would cut into the band instead. */
+.landing--docs-after-hero .landing-recent {
+  border-top: 0;
+  border-bottom: 1px solid var(--gray-a4);
+}
+
+.landing--docs-after-hero .landing-features {
+  margin-top: 0;
+  padding-top: var(--space-7);
+}
+
 .landing-empty {
   text-align: center;
 }

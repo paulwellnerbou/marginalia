@@ -28,7 +28,7 @@ import {
   TextField,
   Tooltip,
 } from '@radix-ui/themes';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Link, useNavigate } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
@@ -135,131 +135,144 @@ export function HomePage() {
     if (!nextOpen) setUploadDraft(null);
   }
 
+  const hasDocs = recent.length > 0;
+
+  const hero = (
+    <section className="landing-hero" key="hero">
+      <Container size="3" px="4" className="landing-hero-shell">
+        <a href={GITHUB_REPO_URL} target="_blank" rel="noreferrer" className="landing-github-link">
+          <GitHubMark />
+          <span>View on GitHub</span>
+        </a>
+        <Flex direction="column" align="center" gap="5" py="9" className="landing-hero-inner">
+          <Badge variant="soft" size="2" className="landing-eyebrow">
+            <MagicWandIcon /> Markdown, set in type
+          </Badge>
+          <Heading size="9" align="center" className="landing-title">
+            Collaborate beautifully.
+            <br />
+            <span className="landing-title-sub">Full-featured Markdown documents.</span>
+          </Heading>
+          <Text size="5" color="gray" align="center" style={{ maxWidth: '52ch' }}>
+            Marginalia renders your Markdown or AsciiDoc with book-quality typography, tracks every
+            save in git, and lets collaborators leave comments and change proposals on any
+            paragraph.
+          </Text>
+          <Flex gap="3" mt="2" wrap="wrap" justify="center">
+            <Button size="4" onClick={openFreshUploadDialog}>
+              <PlusIcon />
+              New document
+            </Button>
+          </Flex>
+        </Flex>
+      </Container>
+    </section>
+  );
+
+  const features = (
+    <section className="landing-features" key="features">
+      <Container size="4" px="4" pb="7">
+        {/* Two up from `xs`: `sm` is 768px, which an iPad mini in portrait
+            (744px) misses by a hair — one column there wastes half the width. */}
+        <Grid columns={{ initial: '1', xs: '2', sm: '3' }} gap="4">
+          <FeatureCard
+            icon={<FileTextIcon width="20" height="20" />}
+            title="Properly typeset"
+            body="Built-in themes — Book, Document, Article, Technical, and more — all reading the same semantic HTML. Switch with one click."
+          />
+          <FeatureCard
+            icon={<ChatBubbleIcon width="20" height="20" />}
+            iconVariant="ruby"
+            title="Conversations that stick"
+            body="Highlight a paragraph, comment and reply in a thread. Propose changes. Document history is tracked."
+          />
+          <FeatureCard
+            icon={<PaperPlaneIcon width="20" height="20" />}
+            iconVariant="gray"
+            title="Browser-held auth"
+            body="Invite tokens, password-session cookies, and display names live in this browser. Documents, comments, and history live on the server. No online accounts or external profile store."
+          />
+        </Grid>
+      </Container>
+    </section>
+  );
+
+  // Ways *into* a document: they open the section for someone with an empty
+  // list, and step aside for the cards once there is a list to read.
+  const docTools = (
+    <Fragment key="tools">
+      <Box mb="4">
+        <DeviceSyncPanel
+          dropped={keyringDropped}
+          onDismissDropped={() => setKeyringDropped(false)}
+          idleTtlMs={keyringIdleTtlMs}
+          onSynced={() => {
+            setKeyringDropped(false);
+            void pullKeyring().then((pull) => {
+              if (pull.docs) setRecent(pull.docs);
+              if (pull.idleTtlMs !== null) setKeyringIdleTtlMs(pull.idleTtlMs);
+            });
+          }}
+        />
+      </Box>
+
+      <Box mb={hasDocs ? '0' : '5'} className="open-by-link">
+        <OpenByLink />
+      </Box>
+    </Fragment>
+  );
+
+  const docList = hasDocs ? (
+    <Grid key="list" columns={{ initial: '1', xs: '2', md: '3' }} gap="3" mb="5">
+      {recent.map((r) => (
+        <RecentCard
+          key={r.uid}
+          doc={r}
+          onRemove={() => {
+            removeFromRecent(r.uid);
+            keyringRemoveDoc(r.uid);
+            refreshRecent();
+          }}
+        />
+      ))}
+    </Grid>
+  ) : (
+    <EmptyState key="list" onCreate={openFreshUploadDialog} />
+  );
+
+  const documents = (
+    <section className="landing-recent" id="recent" key="documents">
+      <Container size="4" px="4" py="7">
+        <Flex justify="between" align="end" mb="4" wrap="wrap" gap="3">
+          <Box>
+            <Heading size="6">Your documents</Heading>
+            <Text size="2" color="gray" as="p" mt="1">
+              Everything you've opened on this browser. Click to re-open with the same role.
+            </Text>
+          </Box>
+          {hasDocs && (
+            <Button variant="soft" onClick={openFreshUploadDialog}>
+              <PlusIcon /> New document
+            </Button>
+          )}
+        </Flex>
+
+        {hasDocs ? [docList, docTools] : [docTools, docList]}
+      </Container>
+    </section>
+  );
+
   return (
     <>
       <AppBar />
 
-      <div className="landing">
-        {/* HERO */}
-        <section className="landing-hero">
-          <Container size="3" px="4" className="landing-hero-shell">
-            <a
-              href={GITHUB_REPO_URL}
-              target="_blank"
-              rel="noreferrer"
-              className="landing-github-link"
-            >
-              <GitHubMark />
-              <span>View on GitHub</span>
-            </a>
-            <Flex direction="column" align="center" gap="5" py="9" className="landing-hero-inner">
-              <Badge variant="soft" size="2" className="landing-eyebrow">
-                <MagicWandIcon /> Markdown, set in type
-              </Badge>
-              <Heading size="9" align="center" className="landing-title">
-                Collaborate beautifully.
-                <br />
-                <span className="landing-title-sub">Full-featured Markdown documents.</span>
-              </Heading>
-              <Text size="5" color="gray" align="center" style={{ maxWidth: '52ch' }}>
-                Marginalia renders your Markdown or AsciiDoc with book-quality typography, tracks
-                every save in git, and lets collaborators leave comments and change proposals on any
-                paragraph.
-              </Text>
-              <Flex gap="3" mt="2" wrap="wrap" justify="center">
-                <Button size="4" onClick={openFreshUploadDialog}>
-                  <PlusIcon />
-                  New document
-                </Button>
-                {recent.length > 0 && (
-                  <Button size="4" variant="soft" asChild>
-                    <a href="#recent">Your documents</a>
-                  </Button>
-                )}
-              </Flex>
-            </Flex>
-          </Container>
-        </section>
-
-        {/* FEATURE STRIP */}
-        <section className="landing-features">
-          <Container size="4" px="4" pb="7">
-            <Grid columns={{ initial: '1', sm: '3' }} gap="4">
-              <FeatureCard
-                icon={<FileTextIcon width="20" height="20" />}
-                title="Properly typeset"
-                body="Built-in themes — Book, Document, Article, Technical, and more — all reading the same semantic HTML. Switch with one click."
-              />
-              <FeatureCard
-                icon={<ChatBubbleIcon width="20" height="20" />}
-                iconVariant="ruby"
-                title="Conversations that stick"
-                body="Highlight a paragraph, comment and reply in a thread. Propose changes. Document history is tracked."
-              />
-              <FeatureCard
-                icon={<PaperPlaneIcon width="20" height="20" />}
-                iconVariant="gray"
-                title="Browser-held auth"
-                body="Invite tokens, password-session cookies, and display names live in this browser. Documents, comments, and history live on the server. No online accounts or external profile store."
-              />
-            </Grid>
-          </Container>
-        </section>
-        {/* RECENT DOCS */}
-        <section className="landing-recent" id="recent">
-          <Container size="4" px="4" py="7">
-            <Flex justify="between" align="end" mb="4" wrap="wrap" gap="3">
-              <Box>
-                <Heading size="6">Your documents</Heading>
-                <Text size="2" color="gray" as="p" mt="1">
-                  Everything you've opened on this browser. Click to re-open with the same role.
-                </Text>
-              </Box>
-              {recent.length > 0 && (
-                <Button variant="soft" onClick={openFreshUploadDialog}>
-                  <PlusIcon /> New document
-                </Button>
-              )}
-            </Flex>
-
-            <Box mb="4">
-              <DeviceSyncPanel
-                dropped={keyringDropped}
-                onDismissDropped={() => setKeyringDropped(false)}
-                idleTtlMs={keyringIdleTtlMs}
-                onSynced={() => {
-                  setKeyringDropped(false);
-                  void pullKeyring().then((pull) => {
-                    if (pull.docs) setRecent(pull.docs);
-                    if (pull.idleTtlMs !== null) setKeyringIdleTtlMs(pull.idleTtlMs);
-                  });
-                }}
-              />
-            </Box>
-
-            <Box mb="5" className="open-by-link">
-              <OpenByLink />
-            </Box>
-
-            {recent.length === 0 ? (
-              <EmptyState onCreate={openFreshUploadDialog} />
-            ) : (
-              <Grid columns={{ initial: '1', sm: '2', md: '3' }} gap="3">
-                {recent.map((r) => (
-                  <RecentCard
-                    key={r.uid}
-                    doc={r}
-                    onRemove={() => {
-                      removeFromRecent(r.uid);
-                      keyringRemoveDoc(r.uid);
-                      refreshRecent();
-                    }}
-                  />
-                ))}
-              </Grid>
-            )}
-          </Container>
-        </section>
+      <div className={`landing${hasDocs ? ' landing--docs-after-hero' : ''}`}>
+        {/* Someone who already has documents gets them right under the hero,
+            ahead of the pitch. Swapping in the DOM rather than with CSS `order`
+            keeps focus and screen-reader order matching the screen; the stable
+            keys let React move the sections instead of remounting a live
+            pairing session when a keyring pull populates an empty list. */}
+        {hasDocs ? [hero, documents, features] : [hero, features, documents]}
 
         <LandingFooter />
       </div>
