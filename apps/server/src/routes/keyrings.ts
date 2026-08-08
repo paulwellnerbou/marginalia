@@ -183,7 +183,7 @@ async function createKeyring(c: Context, { db, config }: KeyringDeps, limits: Li
 
 // --- GET /api/keyrings/self ------------------------------------------
 
-async function readKeyring(c: Context, { db }: KeyringDeps) {
+async function readKeyring(c: Context, { db, config }: KeyringDeps) {
   const ring = readKeyringRow(db, c);
   if (!ring) return c.json({ error: 'not-found' }, 404);
   if (Date.now() - ring.updated_at > KEYRING_TOUCH_INTERVAL_MS) touch(db, ring.token);
@@ -192,6 +192,9 @@ async function readKeyring(c: Context, { db }: KeyringDeps) {
     client_id: ring.client_id,
     display_name: ring.display_name,
     updated_at: ring.updated_at,
+    // So the client can say how long an unused ring lasts without
+    // hardcoding a number that a deployment is free to change.
+    idle_ttl_ms: config.keyringIdleTtlMs,
     docs: listKeyringDocs(db, ring.token),
   });
 }

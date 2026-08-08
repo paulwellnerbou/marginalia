@@ -568,6 +568,22 @@ describe('keyrings API', () => {
       }
     });
 
+    test('a pull reports the window, so the client need not hardcode it', async () => {
+      const aging = await agingApp();
+      try {
+        const token = await ringOn(aging, LAPTOP);
+        const res = await aging.hono.fetch(
+          new Request('http://test/api/keyrings/self', {
+            headers: headersFor(LAPTOP, { [KEYRING_HEADER]: token }),
+          }),
+        );
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as { idle_ttl_ms: number }).idle_ttl_ms).toBe(30 * DAY);
+      } finally {
+        await aging.close();
+      }
+    });
+
     test('pulling the ring is enough to keep it', async () => {
       const aging = await agingApp();
       try {

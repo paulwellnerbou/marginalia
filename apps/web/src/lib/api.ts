@@ -992,6 +992,8 @@ export interface KeyringWire {
   client_id: string;
   display_name: string;
   updated_at?: number;
+  /** How long an unused ring lasts before the server sweeps it. */
+  idle_ttl_ms?: number;
   docs: KeyringDocEntry[];
 }
 

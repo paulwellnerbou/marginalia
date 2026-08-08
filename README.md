@@ -160,6 +160,15 @@ bargain the pairing sweep strikes. Losing a ring costs a re-pair, never
 access: the next pull 404s, the device drops the dead token and offers
 to sync again.
 
+Both ends of that are said out loud. While connected, the panel quotes
+the window (from `idle_ttl_ms` on the pull, so the copy cannot drift
+from a deployment's config); when a pull comes back 404 the panel says
+syncing has stopped and why, with the pairing field right underneath.
+The notice is deliberately vague about the cause — a 404 means the token
+names no ring, and *swept*, *rotated away from another device* and *the
+server's data was reset* are indistinguishable once the row is gone, so
+claiming "expired" would be a guess dressed as a fact.
+
 ### Endpoints
 
 All except the last take the keyring token in `X-Marginalia-Keyring`.
@@ -168,7 +177,9 @@ All except the last take the keyring token in `X-Marginalia-Keyring`.
   optional `docs[]` seeds it
 - `GET    /api/keyrings/self` — identity + documents, joined against
   `documents` so a paired device gets titles, formats and covers in one
-  request (rows for deleted documents drop out here)
+  request (rows for deleted documents drop out here). Also returns
+  `idle_ttl_ms`, so the client can name the expiry window without
+  hardcoding it
 - `PATCH  /api/keyrings/self` — set the shared `display_name`
 - `POST   /api/keyrings/self/rotate` — new token, same documents; for a
   ring you believe leaked. Outstanding pairing codes die with it

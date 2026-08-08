@@ -38,7 +38,19 @@ import { PairingQr } from './PairingQr.js';
  * the app that should never be on screen to be photographed, pasted into
  * a chat, or read over someone's shoulder.
  */
-export function DeviceSyncPanel({ onSynced }: { onSynced: () => void }) {
+export function DeviceSyncPanel({
+  onSynced,
+  dropped = false,
+  onDismissDropped,
+  idleTtlMs = null,
+}: {
+  onSynced: () => void;
+  /** The last pull found the ring gone, so syncing switched itself off. */
+  dropped?: boolean;
+  onDismissDropped?: () => void;
+  /** Server's idle-expiry window, so the copy below can name it. */
+  idleTtlMs?: number | null;
+}) {
   const [connected, setConnected] = useState(() => hasKeyring());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -134,6 +146,23 @@ export function DeviceSyncPanel({ onSynced }: { onSynced: () => void }) {
         </Flex>
       </Flex>
 
+      {!connected && dropped && (
+        <Callout.Root color="amber" size="1" mt="3">
+          <Callout.Text>
+            Syncing stopped here: the keyring this browser was using no longer exists. It was either
+            replaced from another device, or removed after going unused. Nothing you can open has
+            changed — every document on this device still works. Pair again below to resume.
+          </Callout.Text>
+          {onDismissDropped && (
+            <Flex justify="end" mt="2">
+              <Button size="1" variant="soft" color="gray" onClick={onDismissDropped}>
+                Dismiss
+              </Button>
+            </Flex>
+          )}
+        </Callout.Root>
+      )}
+
       {!connected && (
         <>
           <Separator size="4" my="3" />
@@ -187,6 +216,13 @@ export function DeviceSyncPanel({ onSynced }: { onSynced: () => void }) {
               disabled={busy}
             />
           </Flex>
+
+          {idleTtlMs !== null && (
+            <Text size="1" color="gray" as="p" mt="3">
+              Left unused on every device for {formatIdleWindow(idleTtlMs)}, a keyring is removed on
+              its own. The documents on each device stay where they are.
+            </Text>
+          )}
         </>
       )}
 
@@ -413,6 +449,20 @@ function useCountdown(expiresAt: number | null): number {
   }, [expiresAt]);
 
   return remaining;
+}
+
+/**
+ * The idle window in words. Rounded hard on purpose — this is a "you have
+ * ages" reassurance, and a precise "180 days" invites the reading that
+ * something is being counted down.
+ */
+function formatIdleWindow(ms: number): string {
+  const days = Math.max(1, Math.round(ms / 86_400_000));
+  if (days < 60) return days === 1 ? 'a day' : `${days} days`;
+  const months = Math.round(days / 30);
+  return months >= 12 && months % 12 === 0
+    ? `${months / 12 === 1 ? 'a year' : `${months / 12} years`}`
+    : `${months} months`;
 }
 
 function secondsUntil(at: number | null): number {

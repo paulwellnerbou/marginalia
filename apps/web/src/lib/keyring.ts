@@ -113,24 +113,41 @@ export async function deleteKeyring(): Promise<void> {
   storeKeyringToken(null);
 }
 
-/** Pull the ring and fold it into the local list. Null if not connected. */
-export async function pullKeyring(): Promise<RecentDoc[] | null> {
+export interface KeyringPull {
+  /** Merged local list, or null when there was nothing to merge. */
+  docs: RecentDoc[] | null;
+  /**
+   * The stored token named no ring, so it has been dropped here. Why is
+   * genuinely unknowable from this side: swept for going unused,
+   * rotated away from another device, or the server's data was reset —
+   * once the row is gone the server cannot tell them apart either. The
+   * notice this drives has to stay honest about that.
+   */
+  dropped: boolean;
+  /** The server's idle-expiry window. Null until a pull has succeeded. */
+  idleTtlMs: number | null;
+}
+
+/** Pull the ring and fold it into the local list. */
+export async function pullKeyring(): Promise<KeyringPull> {
   const token = loadKeyringToken();
-  if (!token) return null;
+  if (!token) return { docs: null, dropped: false, idleTtlMs: null };
   try {
     const ring = await fetchKeyring(token);
     adoptIdentity(ring);
-    return mergeKeyringDocs(ring.docs);
+    return {
+      docs: mergeKeyringDocs(ring.docs),
+      dropped: false,
+      idleTtlMs: ring.idle_ttl_ms ?? null,
+    };
   } catch (err) {
-    // A 404 means this token no longer names a ring — rotated from
-    // another device, or the server's data was reset. Drop it rather
-    // than retrying a dead token on every page load.
+    // Drop a dead token rather than retrying it on every page load.
     if (isNotFound(err)) {
       storeKeyringToken(null);
-      return null;
+      return { docs: null, dropped: true, idleTtlMs: null };
     }
     reportError('keyring.pull', err);
-    return null;
+    return { docs: null, dropped: false, idleTtlMs: null };
   }
 }
 
