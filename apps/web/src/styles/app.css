@@ -480,6 +480,92 @@ button.primary:disabled {
   flex-direction: column;
   overflow: hidden;
 }
+.pane-right {
+  display: flex;
+  flex-direction: column;
+  /* Clip rather than scroll. The body inside is pinned to the pane's open
+     width, so any other overflow value hands a collapsed pane a horizontal
+     scrollbar instead of hiding the content behind its edge. */
+  overflow: hidden;
+}
+
+/* Collapse / expand ------------------------------------------------
+ *
+ * The grid column carries the motion; the panes just get narrower. Each
+ * pane's body stays laid out at the pane's *open* width and is clipped,
+ * so it slides out of sight instead of reflowing through every width in
+ * between — a TOC re-wrapping its way down to 36px reads as a glitch,
+ * not as a transition. DocumentLayout keeps the body mounted for the
+ * duration of the collapse so there is something left to fade.
+ */
+.doc-layout {
+  transition: grid-template-columns var(--pane-collapse-duration) cubic-bezier(0.4, 0, 0.2, 1);
+}
+/* A drag is direct manipulation: eased, the pane would trail the cursor
+   and keep moving for another frame-set after the mouse stopped. */
+.pane-resizing .doc-layout {
+  transition: none;
+}
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  opacity: 1;
+  /* Cross-fades staggered behind the width, so neither endpoint snaps. */
+  transition: opacity 200ms ease-out 60ms;
+}
+.pane.closed .pane-body {
+  opacity: 0;
+  transition: opacity 140ms ease-in;
+}
+/* Parked where the collapsed pane will come to rest, so it can fade in
+   while the column is still travelling towards it. */
+.pane-expand {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  width: var(--pane-collapsed-width);
+  opacity: 1;
+  transition: opacity 200ms ease-out 60ms;
+}
+.pane.open .pane-expand {
+  opacity: 0;
+  transition: opacity 140ms ease-in;
+}
+.pane-header-label {
+  /* Clipped by the pane rather than squeezed by the flex row, which
+     would re-wrap the word on the way out. */
+  flex: none;
+  white-space: nowrap;
+  opacity: 1;
+  transition: opacity 200ms ease-out 60ms;
+}
+.pane.closed .pane-header-label {
+  opacity: 0;
+  transition: opacity 140ms ease-in;
+}
+/* One chevron for both directions — turning it says "same control, other
+   way" where a swapped glyph just blinks. */
+.pane-toggle-icon {
+  transition: transform var(--pane-collapse-duration) cubic-bezier(0.4, 0, 0.2, 1);
+}
+.pane.closed .pane-toggle-icon {
+  transform: rotate(180deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .doc-layout,
+  .pane-body,
+  .pane.closed .pane-body,
+  .pane-expand,
+  .pane.open .pane-expand,
+  .pane-header-label,
+  .pane.closed .pane-header-label,
+  .pane-toggle-icon {
+    transition: none;
+  }
+}
+
 .pane-doc {
   background: var(--ui-bg);
   display: flex;
@@ -2027,6 +2113,20 @@ button.primary:disabled {
 .landing-recent {
   background: var(--gray-a2);
   border-top: 1px solid var(--gray-a4);
+}
+
+/* Documents between the hero and the feature strip. The band needs to read as
+   its own thing from both neighbours: the hero's own rule closes it off above,
+   so it draws only the lower edge, and the strip drops the overlap it uses to
+   straddle the hero seam — that overlap would cut into the band instead. */
+.landing--docs-after-hero .landing-recent {
+  border-top: 0;
+  border-bottom: 1px solid var(--gray-a4);
+}
+
+.landing--docs-after-hero .landing-features {
+  margin-top: 0;
+  padding-top: var(--space-7);
 }
 
 .landing-empty {

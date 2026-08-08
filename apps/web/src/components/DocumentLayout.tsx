@@ -58,13 +58,13 @@ import {
   getDocument,
   getHistoryDiff,
   type HistoryEntry,
-  isProposal,
+  isResolved,
   listThreads,
   uploadAsset,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { loadBlockRanges } from '../lib/block-range-loader.js';
-import { highlightRange } from '../lib/block-span.js';
+import { buildCommentHighlights } from '../lib/comment-highlights.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { expandAncestors } from '../lib/heading-collapse.js';
@@ -147,6 +147,37 @@ const COLLAPSED_WIDTH = 36;
  */
 const TEXT_ZOOM_MIN = 80;
 const TEXT_ZOOM_MAX = 220;
+/** How long a pane takes to fold away. Published to the stylesheet, which
+ *  runs the animation, so the two can't drift apart. */
+const PANE_COLLAPSE_MS = 240;
+
+/**
+ * Whether a pane's body should still be rendered: `open` says yes at once,
+ * `closed` only once the pane has finished shrinking. Unmounting on the
+ * click instead would leave an empty box collapsing — and the tab panels
+ * on the right are live enough (activity feeds, history, MCP) that keeping
+ * them mounted through the closed state isn't an option either.
+ */
+function usePaneBody(open: boolean): boolean {
+  const [mounted, setMounted] = useState(open);
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      return;
+    }
+    // Nothing to wait for where the fade the hold exists to cover has
+    // been turned off: it would only park an invisible pane's tabs in
+    // the tree a fifth of a second longer. Read per collapse, so a
+    // preference changed mid-session takes effect at once.
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setMounted(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setMounted(false), PANE_COLLAPSE_MS);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+  return mounted;
+}
 
 /**
  * Viewport width up to which the three-pane layout does more harm than
@@ -305,10 +336,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     const saved = localStorage.getItem(INLINE_COMMENTS_STACKING_KEY);
     return saved === null ? true : saved === 'true';
   });
-  const [inlineCommentsHideResolved, setInlineCommentsHideResolved] = useState<boolean>(() => {
-    const saved = localStorage.getItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
-    return saved === 'true';
-  });
+  /**
+   * Settled threads stay out of the document until asked for, and every
+   * visit asks again: a resolved highlight is invisible in the text, so
+   * a remembered "show resolved" would leave the reader clicking words
+   * that carry no marker and getting a card they closed sessions ago.
+   * Opening a resolved thread from elsewhere flips it back on for as
+   * long as that reading lasts.
+   */
+  const [inlineCommentsHideResolved, setInlineCommentsHideResolved] = useState(true);
   /**
    * Only an explicit choice is stored, so an untouched preference stays
    * free to follow the device: the margin column on a desktop, floating
@@ -599,9 +635,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(INLINE_COMMENTS_STACKING_KEY, String(inlineCommentsStacking));
   }, [inlineCommentsStacking]);
+  // Deliberately not persisted — see the state declaration. Drop what
+  // earlier builds stored so a remembered "show resolved" can't outlive
+  // them.
   useEffect(() => {
-    localStorage.setItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY, String(inlineCommentsHideResolved));
-  }, [inlineCommentsHideResolved]);
+    localStorage.removeItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
+  }, []);
   useEffect(() => {
     localStorage.setItem(READING_MODE_KEY, readingMode);
   }, [readingMode]);
@@ -1002,6 +1041,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     // there is no column, and forcing the flag would clobber the
     // user's persisted column preference.
     if (!floatingComments) setInlineCommentsOpen(true);
+    // A link to a settled thread is still a request to read it.
+    if (isResolved(thread)) setInlineCommentsHideResolved(false);
 
     // The fragment is consumed now — drop it from the address bar so it
     // doesn't outlive the navigation it described.
@@ -1508,23 +1549,44 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   );
 
   /**
-   * The grid tracks. Overlaid panes leave their track at the collapsed
-   * rail whatever they are doing — that is what keeps the document (and,
-   * in paged mode, the pagination) still while a pane opens over it.
+   * The grid tracks, and the variables the collapse animation runs on.
+   * Overlaid panes leave their track at the collapsed rail whatever they
+   * are doing — that is what keeps the document (and, in paged mode, the
+   * pagination) still while a pane opens over it. The rail itself holds
+   * one icon button, so it scales with the chrome.
    */
-  /** The collapsed rail holds one icon button, which scales with the chrome. */
   const railPx = Math.round(COLLAPSED_WIDTH * (uiScale / 100));
   const tocPx = tocOpen && !overlayPanes ? tocWidth : railPx;
   const commentsPx = commentsOpen && !overlayPanes ? commentsWidth : railPx;
-  const gridStyle: React.CSSProperties = {
+  const tocBody = usePaneBody(tocOpen);
+  const commentsBody = usePaneBody(commentsOpen);
+  const gridStyle = {
     gridTemplateColumns: `${tocPx}px 1fr ${commentsPx}px`,
+    '--pane-collapse-duration': `${PANE_COLLAPSE_MS}ms`,
+    // Where a collapsed pane's expand button parks, so it can hold still
+    // while the column travels past it.
+    '--pane-collapsed-width': `${railPx}px`,
+    // Overlaid, the column never travels, so the pane slides over the
+    // document under its own transform at these widths instead.
     ...(overlayPanes
-      ? ({
+      ? {
           '--pane-overlay-toc-width': `${tocWidth}px`,
           '--pane-overlay-comments-width': `${commentsWidth}px`,
-        } as React.CSSProperties)
+        }
       : {}),
-  };
+  } as React.CSSProperties;
+
+  /**
+   * Bumped when the columns have finished moving. Everything downstream
+   * measures the panes rather than reading their target widths, and until
+   * the transition lands those two disagree.
+   */
+  const [panesSettled, setPanesSettled] = useState(0);
+  const onPanesSettled = useCallback((e: React.TransitionEvent<HTMLDivElement>) => {
+    if (e.target === e.currentTarget && e.propertyName === 'grid-template-columns') {
+      setPanesSettled((n) => n + 1);
+    }
+  }, []);
 
   /**
    * Measured rather than derived from the viewport: both side panes are
@@ -1539,7 +1601,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
    */
   const [docPaneWidth, setDocPaneWidth] = useState(0);
   const [commentsHostWidth, setCommentsHostWidth] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx / overlayPanes are the intentional re-measure triggers — the body reads widths only they can have changed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx / overlayPanes / panesSettled are the intentional re-measure triggers — the body reads widths only they can have changed.
   useLayoutEffect(() => {
     const measure = () => {
       const pane = docPaneRef.current?.clientWidth ?? 0;
@@ -1550,7 +1612,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [tocPx, commentsPx, overlayPanes]);
+  }, [tocPx, commentsPx, overlayPanes, panesSettled]);
 
   const chromeCompact =
     docPaneWidth === 0
@@ -1571,10 +1633,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
    * reference: its length alone would miss any edit that happens to keep
    * the document the same size, and concatenating it would rebuild the
    * whole document into a key on every render.
+   *
+   * A collapsing pane counts twice: page geometry measured while the
+   * column is still in flight describes a width the document is about to
+   * leave, so `panesSettled` asks for the answer again at rest.
    */
   const pageLayoutKey = useMemo(
-    () => [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx],
-    [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx],
+    () => [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx, panesSettled],
+    [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx, panesSettled],
   );
   const pages = usePagedReading(docScrollRef, paged, pageLayoutKey);
 
@@ -1608,73 +1674,35 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [threads, sectionFilterActive, blockSectionIds, sectionFilter]);
   const threadCount = sectionVisibleThreads.length;
 
-  const commentHighlights = useMemo(() => {
-    const highlights: Array<{
-      scope: 'range' | 'block';
-      threadId?: string;
-      blockId: string;
-      endBlockId?: string | null;
-      quote: string;
-      startOffset: number;
-      endOffset: number;
-      state?: Thread['state'];
-    }> = [];
+  /**
+   * Threads that get a card: the section filter, then the
+   * show/hide-resolved switch. Applied once here so the column, the
+   * floating cards and their toolbars can never disagree about which
+   * cards exist — each used to filter its own copy, and the floating
+   * toolbar counted threads the layer never showed.
+   */
+  const commentSurfaceThreads = useMemo(
+    () =>
+      inlineCommentsHideResolved
+        ? sectionVisibleThreads.filter((t) => !isResolved(t))
+        : sectionVisibleThreads,
+    [sectionVisibleThreads, inlineCommentsHideResolved],
+  );
 
-    for (const thread of threads) {
-      // Orphaned threads have no anchor at all; skip them. Linked and
-      // low-confidence threads both still carry a block_id + quote and
-      // can drive a highlight — the renderer's `findHighlightBlock`
-      // narrowing pass recovers the right element regardless of which
-      // confidence band the server assigned.
-      if (thread.link_status === 'orphaned') continue;
-      if (!thread.anchor.block_id || !thread.anchor.quote) continue;
-
-      if (!isProposal(thread)) {
-        const range = highlightRange(thread.anchor);
-        if (range) {
-          highlights.push({
-            scope: 'range',
-            threadId: thread.id,
-            blockId: thread.anchor.block_id,
-            endBlockId: thread.anchor.end_block_id ?? null,
-            quote: thread.anchor.quote,
-            ...range,
-            state: thread.state,
-          });
-        }
-      } else if (thread.state === 'open') {
-        // Block-scope highlights are visual + interactive on the *whole*
-        // anchored block. For resolved proposals that would silently turn
-        // the whole paragraph into a click target (and intercept clicks on
-        // links inside it), so only emit them while the proposal is open.
-        // Activities-tab navigation falls back to [data-block]/[data-subblock]
-        // via blockId, so scroll-to-anchor still works for resolved ones.
-        highlights.push({
-          scope: 'block',
-          threadId: thread.id,
-          blockId: thread.anchor.block_id,
-          endBlockId: thread.anchor.end_block_id ?? null,
-          quote: thread.anchor.quote,
-          startOffset: 0,
-          endOffset: thread.anchor.quote.length,
-          state: thread.state,
-        });
-      }
-    }
-
-    const pendingRange = canComment && pendingAnchor ? highlightRange(pendingAnchor) : null;
-    if (pendingAnchor && pendingRange) {
-      highlights.push({
-        scope: 'range',
-        blockId: pendingAnchor.block_id,
-        endBlockId: pendingAnchor.end_block_id ?? null,
-        quote: pendingAnchor.quote,
-        ...pendingRange,
-      });
-    }
-
-    return highlights;
-  }, [canComment, threads, pendingAnchor]);
+  /**
+   * Highlights share only the resolved half of that filter. A section
+   * the filter excludes is held collapsed in the document, so its marks
+   * are unreachable either way, and rebuilding them on every funnel
+   * toggle would unwrap and re-wrap ranges nobody can see.
+   */
+  const commentHighlights = useMemo(
+    () =>
+      buildCommentHighlights(threads, {
+        hideResolved: inlineCommentsHideResolved,
+        pendingAnchor: canComment ? pendingAnchor : null,
+      }),
+    [canComment, threads, pendingAnchor, inlineCommentsHideResolved],
+  );
 
   /**
    * Where a new comment gets composed. It is always over the document —
@@ -1757,6 +1785,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       // thread card can actually appear.
       if (sectionFilterActive && !sectionVisibleThreads.some((t) => t.id === threadId)) {
         clearSectionFilter();
+      }
+      // Same for a resolved thread while resolved ones are hidden: the
+      // reader asked for this one by name, from a surface that lists
+      // them (Activities, History, the Threads tab).
+      if (threads.some((t) => t.id === threadId && isResolved(t))) {
+        setInlineCommentsHideResolved(false);
       }
       // Prefer the inline column when it's actually visible; otherwise
       // fall back to the right pane (and open it if it's collapsed).
@@ -1981,7 +2015,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const floatingCommentsLayer = floatingComments ? (
     <FloatingCommentsLayer
       uid={doc.uid}
-      threads={sectionVisibleThreads}
+      threads={commentSurfaceThreads}
       docHtml={liveRendered.html}
       docElementRef={docRef}
       scrollContainerRef={docScrollRef}
@@ -2032,7 +2066,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         format={doc.format}
       />
 
-      <div className={`doc-layout${overlayPanes ? ' doc-layout-overlay' : ''}`} style={gridStyle}>
+      <div
+        className={`doc-layout${overlayPanes ? ' doc-layout-overlay' : ''}`}
+        style={gridStyle}
+        onTransitionEnd={onPanesSettled}
+      >
         {overlayPaneOpen && (
           <button
             type="button"
@@ -2045,23 +2083,25 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           <Flex align="center" gap="2" px="2" py="2" className="pane-header">
             <Tooltip content={tocOpen ? 'Collapse' : 'Expand contents'}>
               <IconButton variant="ghost" size="1" onClick={() => openToc(!tocOpen)}>
-                {tocOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
+                <ChevronLeftIcon className="pane-toggle-icon" />
               </IconButton>
             </Tooltip>
-            {tocOpen && (
-              <Text size="1" color="gray" weight="medium">
-                Contents
-              </Text>
-            )}
+            <Text size="1" color="gray" weight="medium" className="pane-header-label">
+              Contents
+            </Text>
           </Flex>
-          {tocOpen && (
-            <Toc
-              nodes={liveRendered.toc}
-              activeId={activeHeadingId}
-              filterIds={sectionFilter}
-              onToggleFilter={toggleSectionFilter}
-              onClearFilter={clearSectionFilter}
-            />
+          {tocBody && (
+            /* Held at the open width so the headings don't re-wrap their
+               way through the collapse; the pane clips what won't fit. */
+            <div className="pane-body" style={{ width: tocWidth }} inert={!tocOpen}>
+              <Toc
+                nodes={liveRendered.toc}
+                activeId={activeHeadingId}
+                filterIds={sectionFilter}
+                onToggleFilter={toggleSectionFilter}
+                onClearFilter={clearSectionFilter}
+              />
+            </div>
           )}
           {tocOpen && <ResizeHandle side="left" width={tocWidth} onResize={setTocWidth} />}
         </aside>
@@ -2245,7 +2285,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           )}
           {floatingComments && (
             <FloatingCommentsToolbar
-              threads={threads}
+              threads={commentSurfaceThreads}
               hideResolved={inlineCommentsHideResolved}
               onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
               onSwitchToColumn={() => setCommentsDisplayMode('column')}
@@ -2313,7 +2353,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 ) : (
                   <InlineCommentsLayer
                     uid={doc.uid}
-                    threads={sectionVisibleThreads}
+                    threads={commentSurfaceThreads}
                     docHtml={liveRendered.html}
                     docElementRef={docRef}
                     scrollContainerRef={docScrollRef}
@@ -2398,108 +2438,111 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           {commentsOpen && (
             <ResizeHandle side="right" width={commentsWidth} onResize={setCommentsWidth} />
           )}
-          {commentsOpen ? (
-            <Tabs.Root
-              value={rightTab}
-              onValueChange={(v) => setRightTab(v as RightTab)}
-              className="right-tabs"
-            >
-              <Flex align="center" px="2" pt="2" className="pane-header">
-                <Tabs.List size="1">
-                  <Tabs.Trigger value="activities">Activities</Tabs.Trigger>
-                  <Tabs.Trigger value="comments">
-                    <Flex align="center" gap="2">
-                      Threads
-                      {threadCount > 0 && (
-                        <Badge size="1" variant="soft" color="gray" radius="full">
-                          {threadCount}
-                        </Badge>
-                      )}
-                    </Flex>
-                  </Tabs.Trigger>
-                  <Tabs.Trigger value="history">History</Tabs.Trigger>
-                  <Tabs.Trigger value="mcp">MCP</Tabs.Trigger>
-                  {hasSearchResults && (
-                    <Tabs.Trigger value="search">
+          {/* Out of flow, so it can cross-fade with a body that is still
+              on its way out. */}
+          <Flex align="center" justify="center" py="2" className="pane-expand" inert={commentsOpen}>
+            <Tooltip content="Expand comments / history">
+              <IconButton variant="ghost" size="1" onClick={() => openComments(true)}>
+                <ChevronLeftIcon />
+              </IconButton>
+            </Tooltip>
+          </Flex>
+          {commentsBody && (
+            <div className="pane-body" style={{ width: commentsWidth }} inert={!commentsOpen}>
+              <Tabs.Root
+                value={rightTab}
+                onValueChange={(v) => setRightTab(v as RightTab)}
+                className="right-tabs"
+              >
+                <Flex align="center" px="2" pt="2" className="pane-header">
+                  <Tabs.List size="1">
+                    <Tabs.Trigger value="activities">Activities</Tabs.Trigger>
+                    <Tabs.Trigger value="comments">
                       <Flex align="center" gap="2">
-                        Search Results
-                        <Badge size="1" variant="soft" color="gray" radius="full">
-                          {searchResults.length}
-                        </Badge>
+                        Threads
+                        {threadCount > 0 && (
+                          <Badge size="1" variant="soft" color="gray" radius="full">
+                            {threadCount}
+                          </Badge>
+                        )}
                       </Flex>
                     </Tabs.Trigger>
-                  )}
-                </Tabs.List>
-                <span className="spacer" />
-                <Tooltip content="Collapse">
-                  <IconButton variant="ghost" size="1" onClick={() => openComments(false)}>
-                    <ChevronRightIcon />
-                  </IconButton>
-                </Tooltip>
-              </Flex>
-              <Tabs.Content value="activities" className="right-tab-panel">
-                <ActivityList
-                  uid={doc.uid}
-                  version={historyVersion}
-                  threads={threads}
-                  onOpenThread={openCommentThread}
-                />
-              </Tabs.Content>
-              <Tabs.Content value="comments" className="right-tab-panel">
-                <InlineCommentsList
-                  uid={doc.uid}
-                  threads={sectionVisibleThreads}
-                  sectionFilterCount={sectionFilter.size}
-                  onClearSectionFilter={clearSectionFilter}
-                  blockRanges={blockRanges}
-                  canComment={canComment}
-                  focusedThread={focusedThread}
-                  displayName={effectiveDisplayName}
-                  mentionCandidates={mentionCandidates}
-                  onReply={onReply}
-                  onEdit={onEdit}
-                  onDeleteNode={onDeleteNode}
-                  onDeleteThread={onDeleteThread}
-                  onResolveThread={onResolveThread}
-                  onRepairThread={onRepairThread}
-                  onReact={onReact}
-                  onEditProposal={onEditProposal}
-                  onScrollToAnchor={scrollToAnchor}
-                />
-              </Tabs.Content>
-              <Tabs.Content value="mcp" className="right-tab-panel">
-                <McpPanel uid={doc.uid} canManageInvites={doc.role === 'admin'} />
-              </Tabs.Content>
-              <Tabs.Content value="history" className="right-tab-panel">
-                <HistoryList
-                  uid={doc.uid}
-                  version={historyVersion}
-                  canRestore={canEdit}
-                  onRestoreAsNewDocument={onRestoreAsNewDocument}
-                  onRevertLatest={onRevertLatestHistoryVersion}
-                  onOpenThread={openCommentThread}
-                  {...(canEdit ? { onRestoreVersion: onRestoreHistoryVersion } : {})}
-                />
-              </Tabs.Content>
-              {hasSearchResults && (
-                <Tabs.Content value="search" className="right-tab-panel">
-                  <DocumentSearchResultsPane
-                    query={deferredDocSearchQuery}
-                    results={searchResults}
-                    activeResultId={activeSearchTarget?.id ?? null}
-                    onSelectResult={focusSearchResult}
+                    <Tabs.Trigger value="history">History</Tabs.Trigger>
+                    <Tabs.Trigger value="mcp">MCP</Tabs.Trigger>
+                    {hasSearchResults && (
+                      <Tabs.Trigger value="search">
+                        <Flex align="center" gap="2">
+                          Search Results
+                          <Badge size="1" variant="soft" color="gray" radius="full">
+                            {searchResults.length}
+                          </Badge>
+                        </Flex>
+                      </Tabs.Trigger>
+                    )}
+                  </Tabs.List>
+                  <span className="spacer" />
+                  <Tooltip content="Collapse">
+                    <IconButton variant="ghost" size="1" onClick={() => openComments(false)}>
+                      <ChevronRightIcon />
+                    </IconButton>
+                  </Tooltip>
+                </Flex>
+                <Tabs.Content value="activities" className="right-tab-panel">
+                  <ActivityList
+                    uid={doc.uid}
+                    version={historyVersion}
+                    threads={threads}
+                    onOpenThread={openCommentThread}
                   />
                 </Tabs.Content>
-              )}
-            </Tabs.Root>
-          ) : (
-            <Flex align="center" justify="center" py="2">
-              <Tooltip content="Expand comments / history">
-                <IconButton variant="ghost" size="1" onClick={() => openComments(true)}>
-                  <ChevronLeftIcon />
-                </IconButton>
-              </Tooltip>
-            </Flex>
+                <Tabs.Content value="comments" className="right-tab-panel">
+                  <InlineCommentsList
+                    uid={doc.uid}
+                    threads={sectionVisibleThreads}
+                    sectionFilterCount={sectionFilter.size}
+                    onClearSectionFilter={clearSectionFilter}
+                    blockRanges={blockRanges}
+                    canComment={canComment}
+                    focusedThread={focusedThread}
+                    displayName={effectiveDisplayName}
+                    mentionCandidates={mentionCandidates}
+                    onReply={onReply}
+                    onEdit={onEdit}
+                    onDeleteNode={onDeleteNode}
+                    onDeleteThread={onDeleteThread}
+                    onResolveThread={onResolveThread}
+                    onRepairThread={onRepairThread}
+                    onReact={onReact}
+                    onEditProposal={onEditProposal}
+                    onScrollToAnchor={scrollToAnchor}
+                  />
+                </Tabs.Content>
+                <Tabs.Content value="mcp" className="right-tab-panel">
+                  <McpPanel uid={doc.uid} canManageInvites={doc.role === 'admin'} />
+                </Tabs.Content>
+                <Tabs.Content value="history" className="right-tab-panel">
+                  <HistoryList
+                    uid={doc.uid}
+                    version={historyVersion}
+                    canRestore={canEdit}
+                    onRestoreAsNewDocument={onRestoreAsNewDocument}
+                    onRevertLatest={onRevertLatestHistoryVersion}
+                    onOpenThread={openCommentThread}
+                    {...(canEdit ? { onRestoreVersion: onRestoreHistoryVersion } : {})}
+                  />
+                </Tabs.Content>
+                {hasSearchResults && (
+                  <Tabs.Content value="search" className="right-tab-panel">
+                    <DocumentSearchResultsPane
+                      query={deferredDocSearchQuery}
+                      results={searchResults}
+                      activeResultId={activeSearchTarget?.id ?? null}
+                      onSelectResult={focusSearchResult}
+                    />
+                  </Tabs.Content>
+                )}
+              </Tabs.Root>
+            </div>
           )}
         </aside>
       </div>

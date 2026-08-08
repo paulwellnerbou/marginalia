@@ -21,6 +21,14 @@ export interface ServerConfig {
    */
   keyringPairingTtlMs: number;
   /**
+   * How long a keyring survives with no device pulling or changing it
+   * before it is swept along with its copies of that person's invite
+   * tokens. Long by design — this is a "nobody came back" signal, not a
+   * session timeout, and the cost of guessing wrong is a re-pair rather
+   * than lost access. Default 180 days.
+   */
+  keyringIdleTtlMs: number;
+  /**
    * How many reverse proxies we control sit in front, and therefore how
    * far from the right of `X-Forwarded-For` the real client is. 0 means
    * trust nothing and key on the connecting address. See
@@ -84,6 +92,7 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     sessionTtlMs: overrides.sessionTtlMs ?? 24 * 60 * 60 * 1000, // 24h
     namedInviteSessionTtlMs: overrides.namedInviteSessionTtlMs ?? 90 * 24 * 60 * 60 * 1000, // 90d
     keyringPairingTtlMs: overrides.keyringPairingTtlMs ?? 5 * 60 * 1000, // 5min
+    keyringIdleTtlMs: overrides.keyringIdleTtlMs ?? 180 * 24 * 60 * 60 * 1000, // 180d
     trustedProxyHops:
       overrides.trustedProxyHops ??
       parseTrustedProxyHops(process.env.MARGINALIA_TRUSTED_PROXY_HOPS),
