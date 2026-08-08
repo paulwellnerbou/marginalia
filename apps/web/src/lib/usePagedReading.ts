@@ -39,13 +39,20 @@ export interface PagedReading {
 }
 
 /**
- * Inline extent past which WebKit stops painting a multi-column box: the
- * columns are laid out and measurable, `getBoundingClientRect` places
- * them correctly, and the screen stays empty. Observed on iPadOS 26 at
- * around 64k CSS px — a ~180-page document at a large text size, or a
- * book-length one at any size. Blink has no such limit.
+ * Paginated extent past which WebKit stops painting the columns: they are
+ * laid out and measurable, `getBoundingClientRect` places them correctly,
+ * and the screen stays empty. Observed on iPadOS 26 from roughly a
+ * 180-page document upwards; Blink has no such limit, so it only ever
+ * shows on a tablet.
  *
- * Kept a little under 2^16 for the sub-page slack in the last column.
+ * What triggers it is *not* the size of the multicol box, however much
+ * the symptom looks like it. Rebuilding the article as five boxes of well
+ * under this figure each left the deep pages just as blank, and plain
+ * multicol under the same CSS paints past 340k px in a page of its own —
+ * so splitting the document into chunks is a dead end, and whatever the
+ * app does to lower the ceiling is still unidentified. Treat this number
+ * as where paged mode is known to be safe here, not as a property of the
+ * engine.
  */
 const PAGED_MAX_PAINTABLE_PX = 60000;
 
