@@ -29,6 +29,15 @@ export const KEYRING_HEADER = 'x-marginalia-keyring';
 /** Ceiling on documents in one keyring. Guards the unbounded PUT loop. */
 const MAX_KEYRING_DOCS = 500;
 
+/**
+ * How stale `updated_at` is allowed to get before a pull refreshes it.
+ * A pull is the only sign of life a ring gets from a device that just
+ * reads, and idle rings are swept (`sweepIdleKeyrings`) — but writing on
+ * every page load would be a write per pull for a timestamp nobody reads
+ * to the day. A coarse heartbeat is enough to tell alive from abandoned.
+ */
+const KEYRING_TOUCH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
 /** Single key for the server-wide redeem counter. */
 const GLOBAL_BUCKET = '*';
 
@@ -83,6 +92,7 @@ export function keyringsRouter(deps: KeyringDeps): Hono {
   r.post('/keyrings', async (c) => createKeyring(c, deps, limits));
   r.get('/keyrings/self', async (c) => readKeyring(c, deps));
   r.patch('/keyrings/self', async (c) => renameKeyring(c, deps));
+  r.delete('/keyrings/self', async (c) => deleteKeyring(c, deps));
   r.post('/keyrings/self/rotate', async (c) => rotateKeyring(c, deps));
   r.put('/keyrings/self/docs/:uid', async (c) => putKeyringDoc(c, deps));
   r.delete('/keyrings/self/docs/:uid', async (c) => deleteKeyringDoc(c, deps));
@@ -138,6 +148,7 @@ async function createKeyring(c: Context, { db, config }: KeyringDeps, limits: Li
   const identity = readIdentity(c.req.raw.headers);
   if (!identity) return c.json({ error: 'identity-required' }, 400);
   limits.createPerClient.record(who);
+  sweepIdleKeyrings(db, config.keyringIdleTtlMs);
 
   const body = (await safeJson(c)) ?? {};
   const seeds = parseDocSeeds(body.docs);
@@ -172,14 +183,18 @@ async function createKeyring(c: Context, { db, config }: KeyringDeps, limits: Li
 
 // --- GET /api/keyrings/self ------------------------------------------
 
-async function readKeyring(c: Context, { db }: KeyringDeps) {
+async function readKeyring(c: Context, { db, config }: KeyringDeps) {
   const ring = readKeyringRow(db, c);
   if (!ring) return c.json({ error: 'not-found' }, 404);
+  if (Date.now() - ring.updated_at > KEYRING_TOUCH_INTERVAL_MS) touch(db, ring.token);
   c.header('Cache-Control', 'no-store');
   return c.json({
     client_id: ring.client_id,
     display_name: ring.display_name,
     updated_at: ring.updated_at,
+    // So the client can say how long an unused ring lasts without
+    // hardcoding a number that a deployment is free to change.
+    idle_ttl_ms: config.keyringIdleTtlMs,
     docs: listKeyringDocs(db, ring.token),
   });
 }
@@ -207,6 +222,29 @@ async function renameKeyring(c: Context, { db }: KeyringDeps) {
     ring.token,
   );
   return c.json({ display_name: name });
+}
+
+// --- DELETE /api/keyrings/self ---------------------------------------
+
+/**
+ * Destroy the ring: its document rows, its outstanding pairing code, and
+ * the token itself.
+ *
+ * Distinct from a device disconnecting, which is local-only on purpose —
+ * the other devices are still using the ring. This is the action for
+ * when nobody is: the server holds a copy of every invite token in the
+ * ring, and without a way to say "done with this" those copies outlive
+ * the last device that cared about them.
+ *
+ * Revokes nothing. Each device keeps the invite tokens in its own
+ * localStorage and its documents open exactly as before; what ends is
+ * the syncing between them.
+ */
+async function deleteKeyring(c: Context, { db }: KeyringDeps) {
+  const ring = readKeyringRow(db, c);
+  if (!ring) return c.json({ error: 'not-found' }, 404);
+  purgeKeyring(db, ring.token);
+  return c.body(null, 204);
 }
 
 // --- POST /api/keyrings/self/rotate ----------------------------------
@@ -409,6 +447,41 @@ async function redeemPairing(c: Context, { db, config }: KeyringDeps, limits: Li
 }
 
 // --- helpers ---------------------------------------------------------
+
+/** Erase one ring and everything hanging off it. */
+function purgeKeyring(db: Database, token: string): void {
+  db.transaction(() => {
+    db.prepare('DELETE FROM keyring_docs WHERE keyring_token = ?').run(token);
+    db.prepare('DELETE FROM keyring_pairings WHERE keyring_token = ?').run(token);
+    db.prepare('DELETE FROM keyrings WHERE token = ?').run(token);
+  })();
+}
+
+/**
+ * Drop rings nobody has pulled or changed in `keyringIdleTtlMs`.
+ *
+ * Explicit deletion only helps the people who remember to ask for it,
+ * and the rings that most need clearing are exactly the ones nobody is
+ * thinking about — a browser wiped, a phone replaced, a laptop that
+ * never came back. Losing one costs a re-pair, never access: the invite
+ * tokens that open the documents live in each device's localStorage, and
+ * a 404 on the next pull makes that device forget the dead token and
+ * offer to sync again.
+ *
+ * Runs here because there is no scheduler in this server and this is the
+ * endpoint whose traffic is proportional to the table's growth — a new
+ * ring pays for the expired ones it makes room for, the same bargain
+ * `createPairing` strikes for codes.
+ */
+function sweepIdleKeyrings(db: Database, idleTtlMs: number): void {
+  const cutoff = Date.now() - idleTtlMs;
+  const stale = 'SELECT token FROM keyrings WHERE updated_at < ?';
+  db.transaction(() => {
+    db.prepare(`DELETE FROM keyring_docs WHERE keyring_token IN (${stale})`).run(cutoff);
+    db.prepare(`DELETE FROM keyring_pairings WHERE keyring_token IN (${stale})`).run(cutoff);
+    db.prepare('DELETE FROM keyrings WHERE updated_at < ?').run(cutoff);
+  })();
+}
 
 /**
  * Join through to `documents` so a paired device gets titles, formats

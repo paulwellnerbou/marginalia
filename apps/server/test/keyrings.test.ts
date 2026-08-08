@@ -120,6 +120,18 @@ describe('keyrings API', () => {
     return (await res.json()) as { code: string; expires_at: number };
   }
 
+  /** Rows a ring still owns, for assertions the HTTP surface can't make. */
+  function countFor(
+    target: App,
+    table: 'keyring_docs' | 'keyring_pairings',
+    token: string,
+  ): number {
+    const { n } = target.db
+      .prepare(`SELECT count(*) AS n FROM ${table} WHERE keyring_token = ?`)
+      .get(token) as { n: number };
+    return n;
+  }
+
   async function redeem(code: string): Promise<Response> {
     return app.hono.fetch(
       new Request('http://test/api/pairings/redeem', {
@@ -390,6 +402,67 @@ describe('keyrings API', () => {
     expect(((await pulled.json()) as KeyringWire).docs).toHaveLength(1);
   });
 
+  test('deleting the keyring takes its documents and its codes with it', async () => {
+    const doc = await upload(LAPTOP);
+    const ring = await createKeyring(LAPTOP, [
+      { doc_uid: doc.uid, invite_token: doc.admin_invite.token },
+    ]);
+    const { code } = await mintPairing(ring.token);
+
+    const res = await app.hono.fetch(
+      new Request('http://test/api/keyrings/self', {
+        method: 'DELETE',
+        headers: ringHeaders(LAPTOP, ring.token),
+      }),
+    );
+    expect(res.status).toBe(204);
+
+    const pulled = await app.hono.fetch(
+      new Request('http://test/api/keyrings/self', {
+        headers: headersFor(PHONE, { [KEYRING_HEADER]: ring.token }),
+      }),
+    );
+    expect(pulled.status).toBe(404);
+    expect(await redeem(code).then((r) => r.status)).toBe(404);
+
+    // The point of the endpoint: the copies of the invite tokens are
+    // gone, not merely unreachable.
+    expect(countFor(app, 'keyring_docs', ring.token)).toBe(0);
+    expect(countFor(app, 'keyring_pairings', ring.token)).toBe(0);
+  });
+
+  test('deleting the keyring revokes nothing — the documents still open', async () => {
+    const doc = await upload(LAPTOP);
+    const ring = await createKeyring(LAPTOP, [
+      { doc_uid: doc.uid, invite_token: doc.admin_invite.token },
+    ]);
+
+    await app.hono.fetch(
+      new Request('http://test/api/keyrings/self', {
+        method: 'DELETE',
+        headers: ringHeaders(LAPTOP, ring.token),
+      }),
+    );
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}`, {
+        headers: headersFor(LAPTOP, { [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { role: string }).role).toBe('admin');
+  });
+
+  test('deleting an unknown keyring is a 404', async () => {
+    const res = await app.hono.fetch(
+      new Request('http://test/api/keyrings/self', {
+        method: 'DELETE',
+        headers: headersFor(LAPTOP, { [KEYRING_HEADER]: 'nope' }),
+      }),
+    );
+    expect(res.status).toBe(404);
+  });
+
   test('renaming through the keyring is what reaches the other devices', async () => {
     const ring = await createKeyring(LAPTOP);
     const res = await app.hono.fetch(
@@ -425,6 +498,107 @@ describe('keyrings API', () => {
         /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}-[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$/,
       );
     }
+  });
+
+  describe('idle expiry', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+
+    /** A server that considers a ring abandoned after 30 days. */
+    async function agingApp(): Promise<App> {
+      return createApp(
+        loadConfig({
+          dataDir: mkdtempSync(join(tmpdir(), 'mdn-keyring-age-')),
+          port: 0,
+          webDir,
+          keyringIdleTtlMs: 30 * DAY,
+        }),
+      );
+    }
+
+    function ageBy(target: App, token: string, ms: number): void {
+      target.db
+        .prepare('UPDATE keyrings SET updated_at = ? WHERE token = ?')
+        .run(Date.now() - ms, token);
+    }
+
+    /** Mint a ring on `target`, which is also what runs the sweep. */
+    async function ringOn(target: App, client: typeof LAPTOP): Promise<string> {
+      const res = await target.hono.fetch(
+        new Request('http://test/api/keyrings', {
+          method: 'POST',
+          headers: headersFor(client),
+          body: JSON.stringify({}),
+        }),
+      );
+      expect(res.status).toBe(201);
+      return ((await res.json()) as KeyringWire).token;
+    }
+
+    async function pull(target: App, token: string): Promise<number> {
+      const res = await target.hono.fetch(
+        new Request('http://test/api/keyrings/self', {
+          headers: headersFor(LAPTOP, { [KEYRING_HEADER]: token }),
+        }),
+      );
+      return res.status;
+    }
+
+    test('a ring nobody has touched in months goes when the next one is created', async () => {
+      const aging = await agingApp();
+      try {
+        const abandoned = await ringOn(aging, LAPTOP);
+        const mint = await aging.hono.fetch(
+          new Request('http://test/api/keyrings/self/pairings', {
+            method: 'POST',
+            headers: headersFor(LAPTOP, { [KEYRING_HEADER]: abandoned }),
+          }),
+        );
+        expect(mint.status).toBe(201);
+        ageBy(aging, abandoned, 40 * DAY);
+
+        const fresh = await ringOn(aging, PHONE);
+
+        expect(await pull(aging, abandoned)).toBe(404);
+        expect(countFor(aging, 'keyring_pairings', abandoned)).toBe(0);
+        // Only the idle one — a sweep that took the live ring with it
+        // would be the failure mode that matters.
+        expect(await pull(aging, fresh)).toBe(200);
+      } finally {
+        await aging.close();
+      }
+    });
+
+    test('a pull reports the window, so the client need not hardcode it', async () => {
+      const aging = await agingApp();
+      try {
+        const token = await ringOn(aging, LAPTOP);
+        const res = await aging.hono.fetch(
+          new Request('http://test/api/keyrings/self', {
+            headers: headersFor(LAPTOP, { [KEYRING_HEADER]: token }),
+          }),
+        );
+        expect(res.status).toBe(200);
+        expect(((await res.json()) as { idle_ttl_ms: number }).idle_ttl_ms).toBe(30 * DAY);
+      } finally {
+        await aging.close();
+      }
+    });
+
+    test('pulling the ring is enough to keep it', async () => {
+      const aging = await agingApp();
+      try {
+        const ring = await ringOn(aging, LAPTOP);
+        ageBy(aging, ring, 40 * DAY);
+
+        // A device that only reads still counts as a device.
+        expect(await pull(aging, ring)).toBe(200);
+        await ringOn(aging, PHONE);
+
+        expect(await pull(aging, ring)).toBe(200);
+      } finally {
+        await aging.close();
+      }
+    });
   });
 
   describe('rate limiting', () => {

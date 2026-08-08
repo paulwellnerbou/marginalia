@@ -18,6 +18,7 @@
 import {
   createKeyring as createKeyringRequest,
   deleteKeyringDoc,
+  deleteKeyring as deleteKeyringRequest,
   fetchKeyring,
   type KeyringSeed,
   type KeyringWire,
@@ -91,24 +92,63 @@ export function disconnectKeyring(): void {
   storeKeyringToken(null);
 }
 
-/** Pull the ring and fold it into the local list. Null if not connected. */
-export async function pullKeyring(): Promise<RecentDoc[] | null> {
+/**
+ * Destroy the ring for every device, and stop syncing here. The opposite
+ * end of `disconnectKeyring`: that one leaves the server holding a copy
+ * of every invite token in the ring, which is right while another device
+ * is still using it and wrong once nobody is.
+ *
+ * Not best-effort like the pushes above — someone asking for their
+ * tokens to be deleted has to be told if it didn't happen. A 404 is the
+ * exception: the ring is already gone, which is the outcome asked for.
+ */
+export async function deleteKeyring(): Promise<void> {
   const token = loadKeyringToken();
-  if (!token) return null;
+  if (!token) return;
+  try {
+    await deleteKeyringRequest(token);
+  } catch (err) {
+    if (!isNotFound(err)) throw err;
+  }
+  storeKeyringToken(null);
+}
+
+export interface KeyringPull {
+  /** Merged local list, or null when there was nothing to merge. */
+  docs: RecentDoc[] | null;
+  /**
+   * The stored token named no ring, so it has been dropped here. Why is
+   * genuinely unknowable from this side: deleted or rotated away from
+   * another device, swept for going unused, or the server's data was
+   * reset — once the row is gone the server cannot tell them apart
+   * either. The notice this drives names causes as possibilities, never
+   * as a closed list.
+   */
+  dropped: boolean;
+  /** The server's idle-expiry window. Null until a pull has succeeded. */
+  idleTtlMs: number | null;
+}
+
+/** Pull the ring and fold it into the local list. */
+export async function pullKeyring(): Promise<KeyringPull> {
+  const token = loadKeyringToken();
+  if (!token) return { docs: null, dropped: false, idleTtlMs: null };
   try {
     const ring = await fetchKeyring(token);
     adoptIdentity(ring);
-    return mergeKeyringDocs(ring.docs);
+    return {
+      docs: mergeKeyringDocs(ring.docs),
+      dropped: false,
+      idleTtlMs: ring.idle_ttl_ms ?? null,
+    };
   } catch (err) {
-    // A 404 means this token no longer names a ring — rotated from
-    // another device, or the server's data was reset. Drop it rather
-    // than retrying a dead token on every page load.
+    // Drop a dead token rather than retrying it on every page load.
     if (isNotFound(err)) {
       storeKeyringToken(null);
-      return null;
+      return { docs: null, dropped: true, idleTtlMs: null };
     }
     reportError('keyring.pull', err);
-    return null;
+    return { docs: null, dropped: false, idleTtlMs: null };
   }
 }
 

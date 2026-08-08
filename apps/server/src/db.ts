@@ -227,6 +227,11 @@ CREATE INDEX IF NOT EXISTS idx_document_assets_asset ON document_assets(asset_id
 -- keyring is authoritative for display_name; a device adopts it on pull
 -- rather than pushing its own, or two devices would fight through
 -- propagateRename.
+--
+-- updated_at doubles as the liveness signal: a pull refreshes it (at
+-- most daily), and rings idle past keyringIdleTtlMs are swept from the
+-- create path, so a ring's copies of someone's invite tokens don't
+-- outlive the last device that wanted them.
 CREATE TABLE IF NOT EXISTS keyrings (
   token         TEXT PRIMARY KEY,
   client_id     TEXT NOT NULL,
@@ -234,6 +239,10 @@ CREATE TABLE IF NOT EXISTS keyrings (
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );
+
+-- The sweep's only predicate, and this table grows until swept — unlike
+-- keyring_pairings, which createPairing bounds at one row per ring.
+CREATE INDEX IF NOT EXISTS idx_keyrings_updated_at ON keyrings(updated_at);
 
 -- One row per document a keyring knows about. invite_token is whatever
 -- capability that person holds for the doc — admin, editor, reader; the
