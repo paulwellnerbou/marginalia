@@ -60,9 +60,15 @@ export function ResizeHandle({
     }
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+    // Releasing the button after switching away never reaches the page, so
+    // without this the drag outlives the gesture: the pane would follow a
+    // mouse nobody is holding, over a layout still stripped of its easing.
+    // Ending it here leaves the pane at the width it had when focus went.
+    window.addEventListener('blur', onUp);
     return () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onUp);
     };
   }, [side, onResize, min, max]);
 
