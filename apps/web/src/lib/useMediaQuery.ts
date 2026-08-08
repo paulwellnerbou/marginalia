@@ -17,7 +17,16 @@ export function useMediaQuery(query: string): boolean {
     const update = () => setMatches(mq.matches);
     update();
     mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
+    // Belt and braces: `change` is the right signal, but a viewport that
+    // moves without one (an embedded or remote-controlled browser) would
+    // otherwise leave the layout describing a window that is gone.
+    window.addEventListener('resize', update);
+    window.addEventListener('orientationchange', update);
+    return () => {
+      mq.removeEventListener('change', update);
+      window.removeEventListener('resize', update);
+      window.removeEventListener('orientationchange', update);
+    };
   }, [query]);
 
   return matches;
