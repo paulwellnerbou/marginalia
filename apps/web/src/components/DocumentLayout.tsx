@@ -1518,10 +1518,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const threadCount = sectionVisibleThreads.length;
 
   /**
-   * Threads the document pane shows: the section filter, then the
+   * Threads that get a card: the section filter, then the
    * show/hide-resolved switch. Applied once here so the column, the
-   * floating cards, their toolbars and the in-text highlights can never
-   * disagree about which threads exist.
+   * floating cards and their toolbars can never disagree about which
+   * cards exist — each used to filter its own copy, and the floating
+   * toolbar counted threads the layer never showed.
    */
   const commentSurfaceThreads = useMemo(
     () =>
@@ -1531,6 +1532,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [sectionVisibleThreads, inlineCommentsHideResolved],
   );
 
+  /**
+   * Highlights share only the resolved half of that filter. A section
+   * the filter excludes is held collapsed in the document, so its marks
+   * are unreachable either way, and rebuilding them on every funnel
+   * toggle would unwrap and re-wrap ranges nobody can see.
+   */
   const commentHighlights = useMemo(
     () =>
       buildCommentHighlights(threads, {
