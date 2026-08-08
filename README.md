@@ -136,6 +136,42 @@ any case, with or without the separator, is accepted.
 already holds — that device usually has the full list, and an empty
 first keyring would look like the feature had eaten it.
 
+### How a ring ends
+
+Three doors, and they are not the same door:
+
+- **Stop syncing here** clears `marginalia.keyring` and nothing else.
+  Local, on purpose — the other devices are still using the ring.
+- **Replace keyring** rotates the token: this device keeps the ring, the
+  others fall off it. For a code shared by mistake or a lost device.
+- **Delete keyring** destroys it for everyone, including the server's
+  copies of the invite tokens. Documents keep opening on each device
+  from its own `localStorage`; only the syncing ends.
+
+Left alone, a ring is swept once nothing has pulled or changed it for
+`keyringIdleTtlMs` (default 180 days). Explicit deletion only
+reaches the people who ask for it, and the rings most worth clearing —
+a wiped browser, a replaced phone — belong to nobody who is still
+thinking about them. `updated_at` is the liveness signal: a pull
+refreshes it, at most once a day so a page load isn't a write. The sweep
+runs from `POST /api/keyrings`, since there is no scheduler here and
+that is the endpoint whose traffic tracks the table's growth — the same
+bargain the pairing sweep strikes. Losing a ring costs a re-pair, never
+access: the next pull 404s, the device drops the dead token and offers
+to sync again.
+
+Both ends of that are said out loud. While connected, the panel quotes
+the window (from `idle_ttl_ms` on the pull, so the copy cannot drift
+from a deployment's config); when a pull comes back 404 the panel says
+syncing has stopped and why, with the pairing field right underneath.
+The notice offers causes as possibilities, never as a closed list — a
+404 means only that the token names no ring, and *deleted from another
+device*, *rotated away*, *swept for going unused* and *the server's data
+was reset* are indistinguishable once the row is gone. The server cannot
+tell them apart either. Naming one would be a guess dressed as a fact,
+and an exhaustive "either/or" would be wrong the first time someone
+pressed **Delete keyring** on their other device.
+
 ### Endpoints
 
 All except the last take the keyring token in `X-Marginalia-Keyring`.
@@ -144,10 +180,15 @@ All except the last take the keyring token in `X-Marginalia-Keyring`.
   optional `docs[]` seeds it
 - `GET    /api/keyrings/self` — identity + documents, joined against
   `documents` so a paired device gets titles, formats and covers in one
-  request (rows for deleted documents drop out here)
+  request (rows for deleted documents drop out here). Also returns
+  `idle_ttl_ms`, so the client can name the expiry window without
+  hardcoding it
 - `PATCH  /api/keyrings/self` — set the shared `display_name`
 - `POST   /api/keyrings/self/rotate` — new token, same documents; for a
   ring you believe leaked. Outstanding pairing codes die with it
+- `DELETE /api/keyrings/self` — destroy the ring, its documents and its
+  outstanding code. Revokes nothing: every device keeps the invite
+  tokens in its own `localStorage`
 - `PUT    /api/keyrings/self/docs/:uid` — record `invite_token` (+
   `title`); the token must really be an invite on that document
 - `DELETE /api/keyrings/self/docs/:uid` — forget one, ring-wide
@@ -498,4 +539,5 @@ Everything the web app persists locally lives in `localStorage` under the
 
 Clearing `marginalia.keyring` only stops this browser syncing — it does
 not delete the ring, since other devices are still using it. Use
-**Replace keyring** to disconnect them all.
+**Replace keyring** to disconnect them all, or **Delete keyring** to
+remove it and the server's copies of your access links outright.

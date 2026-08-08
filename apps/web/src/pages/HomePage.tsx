@@ -92,6 +92,11 @@ export function HomePage() {
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadDraft, setUploadDraft] = useState<PendingNewDocumentDraft | null>(null);
   const [recent, setRecent] = useState<RecentDoc[]>(() => loadRecentDocs());
+  // Syncing switched itself off because the ring behind it is gone. Held
+  // here rather than in the panel because only the pull knows it, and the
+  // panel has already flipped to its disconnected face by then.
+  const [keyringDropped, setKeyringDropped] = useState(false);
+  const [keyringIdleTtlMs, setKeyringIdleTtlMs] = useState<number | null>(null);
 
   function refreshRecent() {
     setRecent(loadRecentDocs());
@@ -109,8 +114,11 @@ export function HomePage() {
   // anything would trade a working offline list for a spinner.
   useEffect(() => {
     let cancelled = false;
-    void pullKeyring().then((merged) => {
-      if (!cancelled && merged) setRecent(merged);
+    void pullKeyring().then((pull) => {
+      if (cancelled) return;
+      if (pull.docs) setRecent(pull.docs);
+      if (pull.dropped) setKeyringDropped(true);
+      if (pull.idleTtlMs !== null) setKeyringIdleTtlMs(pull.idleTtlMs);
     });
     return () => {
       cancelled = true;
@@ -195,9 +203,14 @@ export function HomePage() {
     <Fragment key="tools">
       <Box mb="4">
         <DeviceSyncPanel
+          dropped={keyringDropped}
+          onDismissDropped={() => setKeyringDropped(false)}
+          idleTtlMs={keyringIdleTtlMs}
           onSynced={() => {
-            void pullKeyring().then((merged) => {
-              if (merged) setRecent(merged);
+            setKeyringDropped(false);
+            void pullKeyring().then((pull) => {
+              if (pull.docs) setRecent(pull.docs);
+              if (pull.idleTtlMs !== null) setKeyringIdleTtlMs(pull.idleTtlMs);
             });
           }}
         />

@@ -992,6 +992,8 @@ export interface KeyringWire {
   client_id: string;
   display_name: string;
   updated_at?: number;
+  /** How long an unused ring lasts before the server sweeps it. */
+  idle_ttl_ms?: number;
   docs: KeyringDocEntry[];
 }
 
@@ -1042,6 +1044,14 @@ export function renameKeyring(
     method: 'PATCH',
     headers: { [KEYRING_HEADER]: token },
     body: JSON.stringify({ display_name: displayName }),
+  });
+}
+
+/** Destroy the ring server-side, with its copies of the invite tokens. */
+export function deleteKeyring(token: string): Promise<void> {
+  return request<void>('/api/keyrings/self', {
+    method: 'DELETE',
+    headers: { [KEYRING_HEADER]: token },
   });
 }
 

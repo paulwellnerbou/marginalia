@@ -8,6 +8,9 @@ import { beforeEach, expect, test } from 'bun:test';
  * behind when it unmounts. Callers wire the returned function up as a
  * React effect cleanup, so a leak here would accumulate a listener per
  * mount for the life of the tab.
+ *
+ * Plus what a pull reports back, which is what the home page turns into
+ * the "syncing stopped" notice.
  */
 
 interface Listener {
@@ -54,6 +57,17 @@ function installDom(): void {
   };
 }
 
+/** Answer the next fetch with this status and body, whatever the URL. */
+function stubFetch(status: number, body: unknown): void {
+  (globalThis as { fetch?: unknown }).fetch = () =>
+    Promise.resolve(
+      new Response(body === undefined ? null : JSON.stringify(body), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+}
+
 beforeEach(() => {
   installDom();
 });
@@ -76,6 +90,50 @@ test('repeated subscribe/unsubscribe cycles do not accumulate listeners', async 
   const before = listeners.length;
   for (let i = 0; i < 5; i++) onKeyringChange(() => {})();
   expect(listeners.length).toBe(before);
+});
+
+test('a pull that finds no ring drops the token and says so', async () => {
+  const { pullKeyring } = await import('./keyring.js');
+
+  localStorage.setItem('marginalia.keyring', 'tok');
+  stubFetch(404, { error: 'not-found' });
+
+  const pull = await pullKeyring();
+  // The pair the home page needs: something to say, and a reason to say
+  // it. Without `dropped` the panel just silently flips to disconnected.
+  expect(pull.dropped).toBe(true);
+  expect(pull.docs).toBeNull();
+  expect(localStorage.getItem('marginalia.keyring')).toBeNull();
+});
+
+test('a pull carries the idle window back for the panel to quote', async () => {
+  const { pullKeyring } = await import('./keyring.js');
+
+  localStorage.setItem('marginalia.keyring', 'tok');
+  stubFetch(200, {
+    client_id: 'aaaaaaaaaaaaaaaaaaaa',
+    display_name: 'Paul',
+    idle_ttl_ms: 180 * 24 * 60 * 60 * 1000,
+    docs: [],
+  });
+
+  const pull = await pullKeyring();
+  expect(pull.dropped).toBe(false);
+  expect(pull.idleTtlMs).toBe(180 * 24 * 60 * 60 * 1000);
+  expect(localStorage.getItem('marginalia.keyring')).toBe('tok');
+});
+
+test('a pull that fails for any other reason keeps the token', async () => {
+  const { pullKeyring } = await import('./keyring.js');
+
+  localStorage.setItem('marginalia.keyring', 'tok');
+  stubFetch(500, { error: 'boom' });
+
+  const pull = await pullKeyring();
+  // A server having a bad minute must not read as "your ring is gone" —
+  // that would drop a live credential and show the wrong notice.
+  expect(pull.dropped).toBe(false);
+  expect(localStorage.getItem('marginalia.keyring')).toBe('tok');
 });
 
 test('an unsubscribed listener stops hearing changes', async () => {
