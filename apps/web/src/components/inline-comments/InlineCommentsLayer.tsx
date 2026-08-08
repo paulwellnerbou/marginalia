@@ -32,6 +32,7 @@ import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 
 interface Props {
   uid: string;
+  /** Already filtered for visibility by the layout — every thread here gets a card. */
   threads: Thread[];
   docHtml: string;
   docElementRef: RefObject<HTMLElement | null>;
@@ -52,10 +53,8 @@ interface Props {
    */
   stackingEnabled: boolean;
   onToggleStacking: () => void;
-  /** When true, threads with `state === 'resolved'` (resolved comments,
-   *  accepted proposals, rejected proposals) are filtered out of the
-   *  column entirely — they don't appear, don't take space, and don't
-   *  participate in the sticky-stacking calculations. */
+  /** State of the "Show resolved" switch in the column's toolbar; the
+   *  filtering itself happens upstream, in the layout. */
   hideResolved: boolean;
   onToggleHideResolved: () => void;
   /** Switch the comment presentation from the margin column to floating cards. */
@@ -177,26 +176,16 @@ export function InlineCommentsLayer({
   const [openColumnWidth, setOpenColumnWidth] = useState(DEFAULT_OPEN_COLUMN_WIDTH_PX);
   const stickyTopPad = TOOLBAR_BASE_TOP_PAD_PX + toolbarHeight;
 
-  /**
-   * Apply the show/hide-resolved filter once, upstream of every
-   * derivation that follows. `state === 'resolved'` covers resolved
-   * comments, accepted proposals, and rejected proposals — they all
-   * share that state, only `resolution.kind` differs.
-   */
-  const visibleThreads = useMemo(
-    () => (hideResolved ? threads.filter((t) => t.state !== 'resolved') : threads),
-    [threads, hideResolved],
-  );
-  const byId = useMemo(() => threadsById(visibleThreads), [visibleThreads]);
+  const byId = useMemo(() => threadsById(threads), [threads]);
 
   /**
    * Merge each proposal into the card of the thread it answers. Only
    * top-level threads get their own anchored card; nested proposals
-   * render inside the parent's card. Computed over the post-filter
-   * set so a proposal whose answered thread is hidden (resolved +
-   * hide-resolved) keeps its own card.
+   * render inside the parent's card. Computed over the threads the
+   * layout already filtered, so a proposal whose answered thread is
+   * hidden (resolved + hide-resolved) keeps its own card.
    */
-  const nesting = useMemo(() => computeAnchoredThreadNesting(visibleThreads), [visibleThreads]);
+  const nesting = useMemo(() => computeAnchoredThreadNesting(threads), [threads]);
 
   /**
    * Auto-collapse defaults derived from the current thread list.
@@ -207,11 +196,11 @@ export function InlineCommentsLayer({
    */
   const collapseDefaults = useMemo(
     () =>
-      visibleThreads.map((t) => ({
+      threads.map((t) => ({
         id: t.id,
         autoCollapse: shouldAutoCollapse(t),
       })),
-    [visibleThreads],
+    [threads],
   );
   const [collapseState, setCollapseState] = useState<ThreadCollapseState>(() =>
     buildThreadCollapseState(collapseDefaults),
@@ -337,9 +326,9 @@ export function InlineCommentsLayer({
   );
 
   const threadRefs = useMemo<ThreadRefApi>(() => {
-    const index = threadRefIndex(visibleThreads);
+    const index = threadRefIndex(threads);
     return { resolve: (id) => index.get(id) ?? null, focus: focusLinked };
-  }, [visibleThreads, focusLinked]);
+  }, [threads, focusLinked]);
 
   const cardEls = useRef<Map<string, HTMLDivElement>>(new Map());
   const cardHeights = useRef<Map<string, number>>(new Map());

@@ -59,13 +59,13 @@ import {
   getDocument,
   getHistoryDiff,
   type HistoryEntry,
-  isProposal,
+  isResolved,
   listThreads,
   uploadAsset,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { loadBlockRanges } from '../lib/block-range-loader.js';
-import { highlightRange } from '../lib/block-span.js';
+import { buildCommentHighlights } from '../lib/comment-highlights.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { expandAncestors } from '../lib/heading-collapse.js';
@@ -236,10 +236,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     const saved = localStorage.getItem(INLINE_COMMENTS_STACKING_KEY);
     return saved === null ? true : saved === 'true';
   });
-  const [inlineCommentsHideResolved, setInlineCommentsHideResolved] = useState<boolean>(() => {
-    const saved = localStorage.getItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
-    return saved === 'true';
-  });
+  /**
+   * Settled threads stay out of the document until asked for, and every
+   * visit asks again: a resolved highlight is invisible in the text, so
+   * a remembered "show resolved" would leave the reader clicking words
+   * that carry no marker and getting a card they closed sessions ago.
+   * Opening a resolved thread from elsewhere flips it back on for as
+   * long as that reading lasts.
+   */
+  const [inlineCommentsHideResolved, setInlineCommentsHideResolved] = useState(true);
   /**
    * Only an explicit choice is stored, so an untouched preference stays
    * free to follow the device: the margin column on a desktop, floating
@@ -528,9 +533,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     localStorage.setItem(INLINE_COMMENTS_STACKING_KEY, String(inlineCommentsStacking));
   }, [inlineCommentsStacking]);
+  // Deliberately not persisted — see the state declaration. Drop what
+  // earlier builds stored so a remembered "show resolved" can't outlive
+  // them.
   useEffect(() => {
-    localStorage.setItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY, String(inlineCommentsHideResolved));
-  }, [inlineCommentsHideResolved]);
+    localStorage.removeItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
+  }, []);
   useEffect(() => {
     localStorage.setItem(READING_MODE_KEY, readingMode);
   }, [readingMode]);
@@ -931,6 +939,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     // there is no column, and forcing the flag would clobber the
     // user's persisted column preference.
     if (!floatingComments) setInlineCommentsOpen(true);
+    // A link to a settled thread is still a request to read it.
+    if (isResolved(thread)) setInlineCommentsHideResolved(false);
 
     // The fragment is consumed now — drop it from the address bar so it
     // doesn't outlive the navigation it described.
@@ -1507,73 +1517,28 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [threads, sectionFilterActive, blockSectionIds, sectionFilter]);
   const threadCount = sectionVisibleThreads.length;
 
-  const commentHighlights = useMemo(() => {
-    const highlights: Array<{
-      scope: 'range' | 'block';
-      threadId?: string;
-      blockId: string;
-      endBlockId?: string | null;
-      quote: string;
-      startOffset: number;
-      endOffset: number;
-      state?: Thread['state'];
-    }> = [];
+  /**
+   * Threads the document pane shows: the section filter, then the
+   * show/hide-resolved switch. Applied once here so the column, the
+   * floating cards, their toolbars and the in-text highlights can never
+   * disagree about which threads exist.
+   */
+  const commentSurfaceThreads = useMemo(
+    () =>
+      inlineCommentsHideResolved
+        ? sectionVisibleThreads.filter((t) => !isResolved(t))
+        : sectionVisibleThreads,
+    [sectionVisibleThreads, inlineCommentsHideResolved],
+  );
 
-    for (const thread of threads) {
-      // Orphaned threads have no anchor at all; skip them. Linked and
-      // low-confidence threads both still carry a block_id + quote and
-      // can drive a highlight — the renderer's `findHighlightBlock`
-      // narrowing pass recovers the right element regardless of which
-      // confidence band the server assigned.
-      if (thread.link_status === 'orphaned') continue;
-      if (!thread.anchor.block_id || !thread.anchor.quote) continue;
-
-      if (!isProposal(thread)) {
-        const range = highlightRange(thread.anchor);
-        if (range) {
-          highlights.push({
-            scope: 'range',
-            threadId: thread.id,
-            blockId: thread.anchor.block_id,
-            endBlockId: thread.anchor.end_block_id ?? null,
-            quote: thread.anchor.quote,
-            ...range,
-            state: thread.state,
-          });
-        }
-      } else if (thread.state === 'open') {
-        // Block-scope highlights are visual + interactive on the *whole*
-        // anchored block. For resolved proposals that would silently turn
-        // the whole paragraph into a click target (and intercept clicks on
-        // links inside it), so only emit them while the proposal is open.
-        // Activities-tab navigation falls back to [data-block]/[data-subblock]
-        // via blockId, so scroll-to-anchor still works for resolved ones.
-        highlights.push({
-          scope: 'block',
-          threadId: thread.id,
-          blockId: thread.anchor.block_id,
-          endBlockId: thread.anchor.end_block_id ?? null,
-          quote: thread.anchor.quote,
-          startOffset: 0,
-          endOffset: thread.anchor.quote.length,
-          state: thread.state,
-        });
-      }
-    }
-
-    const pendingRange = canComment && pendingAnchor ? highlightRange(pendingAnchor) : null;
-    if (pendingAnchor && pendingRange) {
-      highlights.push({
-        scope: 'range',
-        blockId: pendingAnchor.block_id,
-        endBlockId: pendingAnchor.end_block_id ?? null,
-        quote: pendingAnchor.quote,
-        ...pendingRange,
-      });
-    }
-
-    return highlights;
-  }, [canComment, threads, pendingAnchor]);
+  const commentHighlights = useMemo(
+    () =>
+      buildCommentHighlights(threads, {
+        hideResolved: inlineCommentsHideResolved,
+        pendingAnchor: canComment ? pendingAnchor : null,
+      }),
+    [canComment, threads, pendingAnchor, inlineCommentsHideResolved],
+  );
 
   /**
    * Where a new comment gets composed. It is always over the document —
@@ -1656,6 +1621,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       // thread card can actually appear.
       if (sectionFilterActive && !sectionVisibleThreads.some((t) => t.id === threadId)) {
         clearSectionFilter();
+      }
+      // Same for a resolved thread while resolved ones are hidden: the
+      // reader asked for this one by name, from a surface that lists
+      // them (Activities, History, the Threads tab).
+      if (threads.some((t) => t.id === threadId && isResolved(t))) {
+        setInlineCommentsHideResolved(false);
       }
       // Prefer the inline column when it's actually visible; otherwise
       // fall back to the right pane (and open it if it's collapsed).
@@ -1871,7 +1842,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const floatingCommentsLayer = floatingComments ? (
     <FloatingCommentsLayer
       uid={doc.uid}
-      threads={sectionVisibleThreads}
+      threads={commentSurfaceThreads}
       docHtml={liveRendered.html}
       docElementRef={docRef}
       scrollContainerRef={docScrollRef}
@@ -2127,7 +2098,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           )}
           {floatingComments && (
             <FloatingCommentsToolbar
-              threads={threads}
+              threads={commentSurfaceThreads}
               hideResolved={inlineCommentsHideResolved}
               onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
               onSwitchToColumn={() => setCommentsDisplayMode('column')}
@@ -2195,7 +2166,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 ) : (
                   <InlineCommentsLayer
                     uid={doc.uid}
-                    threads={sectionVisibleThreads}
+                    threads={commentSurfaceThreads}
                     docHtml={liveRendered.html}
                     docElementRef={docRef}
                     scrollContainerRef={docScrollRef}

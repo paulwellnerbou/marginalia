@@ -17,7 +17,10 @@ import {
 import { computeAnchoredThreadNesting } from './threadNesting.js';
 
 interface Props {
+  /** Already filtered for visibility by the layout — the cards these navigate to. */
   threads: Thread[];
+  /** State of the "Show resolved" switch this toolbar offers; the
+   *  filtering itself happens upstream, in the layout. */
   hideResolved: boolean;
   onToggleHideResolved: () => void;
   /** Leave floating mode, back to the margin column. */
@@ -92,10 +95,7 @@ export function FloatingCommentsToolbar({
    * `FloatingCommentsLayer` nests, or the count and the arrows would
    * disagree with the cards the popover actually opens.
    */
-  const visibleThreads = useMemo(() => {
-    const shown = hideResolved ? threads.filter((t) => t.state !== 'resolved') : threads;
-    return computeAnchoredThreadNesting(shown).topLevel;
-  }, [threads, hideResolved]);
+  const visibleThreads = useMemo(() => computeAnchoredThreadNesting(threads).topLevel, [threads]);
 
   const jump = useCallback(
     (direction: -1 | 1) => {
