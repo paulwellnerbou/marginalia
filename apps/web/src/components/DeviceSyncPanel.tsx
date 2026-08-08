@@ -149,9 +149,10 @@ export function DeviceSyncPanel({
       {!connected && dropped && (
         <Callout.Root color="amber" size="1" mt="3">
           <Callout.Text>
-            Syncing stopped here: the keyring this browser was using no longer exists. It was either
-            replaced from another device, or removed after going unused. Nothing you can open has
-            changed — every document on this device still works. Pair again below to resume.
+            Syncing stopped here: the keyring this browser was using no longer exists. It may have
+            been deleted or replaced from another device, or removed after going unused. Nothing you
+            can open has changed — every document on this device still works. Pair again below to
+            resume.
           </Callout.Text>
           {onDismissDropped && (
             <Flex justify="end" mt="2">

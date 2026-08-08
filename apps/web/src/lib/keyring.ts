@@ -118,10 +118,11 @@ export interface KeyringPull {
   docs: RecentDoc[] | null;
   /**
    * The stored token named no ring, so it has been dropped here. Why is
-   * genuinely unknowable from this side: swept for going unused,
-   * rotated away from another device, or the server's data was reset —
-   * once the row is gone the server cannot tell them apart either. The
-   * notice this drives has to stay honest about that.
+   * genuinely unknowable from this side: deleted or rotated away from
+   * another device, swept for going unused, or the server's data was
+   * reset — once the row is gone the server cannot tell them apart
+   * either. The notice this drives names causes as possibilities, never
+   * as a closed list.
    */
   dropped: boolean;
   /** The server's idle-expiry window. Null until a pull has succeeded. */

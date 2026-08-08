@@ -164,10 +164,13 @@ Both ends of that are said out loud. While connected, the panel quotes
 the window (from `idle_ttl_ms` on the pull, so the copy cannot drift
 from a deployment's config); when a pull comes back 404 the panel says
 syncing has stopped and why, with the pairing field right underneath.
-The notice is deliberately vague about the cause — a 404 means the token
-names no ring, and *swept*, *rotated away from another device* and *the
-server's data was reset* are indistinguishable once the row is gone, so
-claiming "expired" would be a guess dressed as a fact.
+The notice offers causes as possibilities, never as a closed list — a
+404 means only that the token names no ring, and *deleted from another
+device*, *rotated away*, *swept for going unused* and *the server's data
+was reset* are indistinguishable once the row is gone. The server cannot
+tell them apart either. Naming one would be a guess dressed as a fact,
+and an exhaustive "either/or" would be wrong the first time someone
+pressed **Delete keyring** on their other device.
 
 ### Endpoints
 
