@@ -713,8 +713,8 @@ export function InlineCommentsLayer({
     if (!open) return;
     const doc = docElementRef.current;
     if (!doc || typeof MutationObserver === 'undefined') return;
-    // Coalesce bursts of mutations (e.g. when applyCommentHighlights
-    // wraps many text nodes in a single pass) into one remeasure per
+    // Coalesce bursts of mutations (e.g. when the highlight sync wraps
+    // many text nodes in a single pass) into one remeasure per
     // animation frame so we don't trigger a render + layout pass per
     // mutation record.
     let raf = 0;

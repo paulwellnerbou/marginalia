@@ -15,7 +15,6 @@ import {
   Popover,
   SegmentedControl,
   Select,
-  Slider,
   Tabs,
   Text,
   TextField,
@@ -72,7 +71,12 @@ import { expandAncestors } from '../lib/heading-collapse.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { savePendingNewDocumentDraft } from '../lib/new-document-draft.js';
-import { ensureNotificationPermission, notify, showErrorToast } from '../lib/notifications.js';
+import {
+  ensureNotificationPermission,
+  notify,
+  showErrorToast,
+  showToast,
+} from '../lib/notifications.js';
 import {
   PAGED_CLASS,
   pageIndexAt,
@@ -94,12 +98,14 @@ import {
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
+import { useMediaQuery } from '../lib/useMediaQuery.js';
 import { usePagedReading } from '../lib/usePagedReading.js';
 import { APP_ACCENT_COLOR } from '../styles/theme.js';
 import { AccessControlDialog } from './AccessControlDialog.js';
 import { ActivityList } from './ActivityList.js';
 import { AppBar } from './AppBar.js';
 import { BlockActions } from './BlockActions.js';
+import { DisplaySlider } from './DisplaySlider.js';
 import {
   type DocumentSearchResult,
   DocumentSearchResultsPane,
@@ -132,6 +138,14 @@ const COMMENTS_DISPLAY_MODE_KEY = 'marginalia.commentsDisplayMode';
 const READING_MODE_KEY = 'marginalia.readingMode';
 const RIGHT_TAB_KEY = 'marginalia.rightTab';
 const COLLAPSED_WIDTH = 36;
+/**
+ * Text-size range, as a percentage of the theme's own size. The ceiling
+ * is generous because the small, dense screens that need it most are the
+ * ones where a theme's 19px reads as roughly 13 — a tablet renders CSS
+ * pixels at about 1.5x the density a desktop monitor does.
+ */
+const TEXT_ZOOM_MIN = 80;
+const TEXT_ZOOM_MAX = 220;
 
 /**
  * Viewport width up to which the three-pane layout does more harm than
@@ -146,8 +160,10 @@ const COLLAPSED_WIDTH = 36;
  */
 const COMPACT_LAYOUT_MAX_WIDTH = 1024;
 
+const COMPACT_LAYOUT_QUERY = `(max-width: ${COMPACT_LAYOUT_MAX_WIDTH}px)`;
+
 function isCompactViewport(): boolean {
-  return window.matchMedia(`(max-width: ${COMPACT_LAYOUT_MAX_WIDTH}px)`).matches;
+  return window.matchMedia(COMPACT_LAYOUT_QUERY).matches;
 }
 
 /**
@@ -226,8 +242,60 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const navigate = useNavigate();
   const canComment = doc.role !== 'reader';
   const [compactViewport] = useState(isCompactViewport);
+  /**
+   * Where the side panes cost more width than the document can spare,
+   * they slide *over* it instead of squeezing it: on a tablet in
+   * portrait a 260px pane out of 744 leaves a column too narrow to read,
+   * and in paged mode every open/close would repaginate the whole book
+   * under the reader. Live, not sampled at mount — rotating the device
+   * has to switch modes, and the pane widths are what decide it.
+   */
+  const overlayPanes = useMediaQuery(COMPACT_LAYOUT_QUERY);
   const [tocOpen, setTocOpen] = useState(!compactViewport);
   const [commentsOpen, setCommentsOpen] = useState(!compactViewport);
+  /**
+   * Overlaid, the two panes would stack on top of each other and bury
+   * the document between them, so opening one puts the other away.
+   */
+  const openToc = useCallback(
+    (next: boolean) => {
+      setTocOpen(next);
+      if (next && overlayPanes) setCommentsOpen(false);
+    },
+    [overlayPanes],
+  );
+  const openComments = useCallback(
+    (next: boolean) => {
+      setCommentsOpen(next);
+      if (next && overlayPanes) setTocOpen(false);
+    },
+    [overlayPanes],
+  );
+  const closeOverlayPanes = useCallback(() => {
+    setTocOpen(false);
+    setCommentsOpen(false);
+  }, []);
+  const overlayPaneOpen = overlayPanes && (tocOpen || commentsOpen);
+
+  // A pane that sat beside the document before a rotation would cover it
+  // afterwards. Fold both away as the layout flips rather than dropping a
+  // panel over whatever the reader was in the middle of.
+  const wasOverlay = useRef(overlayPanes);
+  useEffect(() => {
+    if (wasOverlay.current === overlayPanes) return;
+    wasOverlay.current = overlayPanes;
+    if (overlayPanes) closeOverlayPanes();
+  }, [overlayPanes, closeOverlayPanes]);
+
+  useEffect(() => {
+    if (!overlayPaneOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      closeOverlayPanes();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [overlayPaneOpen, closeOverlayPanes]);
   const [inlineCommentsOpen, setInlineCommentsOpen] = useState<boolean>(() => {
     const saved = localStorage.getItem(INLINE_COMMENTS_OPEN_KEY);
     return saved === null ? true : saved === 'true';
@@ -292,7 +360,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   });
   const [textZoom, setTextZoom] = useState<number>(() => {
     const saved = Number(localStorage.getItem(TEXT_ZOOM_KEY));
-    return Number.isFinite(saved) && saved >= 80 && saved <= 140 ? saved : 100;
+    return Number.isFinite(saved) && saved >= TEXT_ZOOM_MIN && saved <= TEXT_ZOOM_MAX ? saved : 100;
   });
   const [tocWidth, setTocWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(TOC_WIDTH_KEY));
@@ -867,8 +935,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   useEffect(() => {
     if (!docSearchOpen) return;
-    setCommentsOpen(true);
-  }, [docSearchOpen]);
+    openComments(true);
+  }, [docSearchOpen, openComments]);
 
   useEffect(() => {
     if (!docSearchOpen || deferredDocSearchQuery.trim()) return;
@@ -1436,10 +1504,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [doc.format, doc.uid, navigate],
   );
 
-  const tocPx = tocOpen ? tocWidth : COLLAPSED_WIDTH;
-  const commentsPx = commentsOpen ? commentsWidth : COLLAPSED_WIDTH;
+  /**
+   * The grid tracks. Overlaid panes leave their track at the collapsed
+   * rail whatever they are doing — that is what keeps the document (and,
+   * in paged mode, the pagination) still while a pane opens over it.
+   */
+  const tocPx = tocOpen && !overlayPanes ? tocWidth : COLLAPSED_WIDTH;
+  const commentsPx = commentsOpen && !overlayPanes ? commentsWidth : COLLAPSED_WIDTH;
   const gridStyle: React.CSSProperties = {
     gridTemplateColumns: `${tocPx}px 1fr ${commentsPx}px`,
+    ...(overlayPanes
+      ? ({
+          '--pane-overlay-toc-width': `${tocWidth}px`,
+          '--pane-overlay-comments-width': `${commentsWidth}px`,
+        } as React.CSSProperties)
+      : {}),
   };
 
   /**
@@ -1455,7 +1534,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
    */
   const [docPaneWidth, setDocPaneWidth] = useState(0);
   const [commentsHostWidth, setCommentsHostWidth] = useState(0);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx are the intentional re-measure triggers — the body reads widths only they can have changed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx / overlayPanes are the intentional re-measure triggers — the body reads widths only they can have changed.
   useLayoutEffect(() => {
     const measure = () => {
       const pane = docPaneRef.current?.clientWidth ?? 0;
@@ -1466,7 +1545,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, [tocPx, commentsPx]);
+  }, [tocPx, commentsPx, overlayPanes]);
 
   const chromeCompact =
     docPaneWidth === 0 ? compactViewport : docPaneWidth < DOC_CHROME_INLINE_MIN_WIDTH;
@@ -1491,6 +1570,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [liveRendered.html, maxWidth, textZoom, theme, tocPx, commentsPx],
   );
   const pages = usePagedReading(docScrollRef, paged, pageLayoutKey);
+
+  /**
+   * Past a certain length WebKit stops painting the paginated columns
+   * altogether — every page but the first comes up blank, with the pager
+   * still counting them off. There is nothing to render around, so hand
+   * the reader back the mode that works rather than a blank book.
+   */
+  useEffect(() => {
+    if (!pages.tooWideToPaint) return;
+    setReadingMode('scroll');
+    showToast({
+      title: 'Switched to scrolling',
+      body: 'This document is too long for your browser to lay out as pages. Smaller text or a wider reading column will fit more on each page if you want to try Pages again.',
+    });
+  }, [pages.tooWideToPaint]);
 
   const title = documentTitle(doc);
 
@@ -1668,7 +1762,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       // dropping this would leave a highlight click with nowhere to
       // land whenever the column is hidden or collapsed.
       if (!floatingComments && !inlineCommentsVisible()) {
-        setCommentsOpen(true);
+        openComments(true);
         setRightTab('comments');
       }
 
@@ -1685,6 +1779,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [
       floatingComments,
       inlineCommentsVisible,
+      openComments,
       scrollToAnchor,
       threads,
       sectionFilterActive,
@@ -1723,11 +1818,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     setSearchResults(results);
   }, []);
 
-  const focusSearchResult = useCallback((id: string) => {
-    setCommentsOpen(true);
-    setRightTab('search');
-    setActiveSearchTarget((prev) => ({ id, nonce: (prev?.nonce ?? 0) + 1 }));
-  }, []);
+  const focusSearchResult = useCallback(
+    (id: string) => {
+      openComments(true);
+      setRightTab('search');
+      setActiveSearchTarget((prev) => ({ id, nonce: (prev?.nonce ?? 0) + 1 }));
+    },
+    [openComments],
+  );
 
   const navigateSearchResult = useCallback(
     (direction: -1 | 1) => {
@@ -1791,43 +1889,30 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         <Text size="1" color="gray">
           Reading width
         </Text>
-        <Slider
-          size="1"
+        <DisplaySlider
           className="doc-display-slider doc-display-slider-width"
+          ariaLabel="Reading width"
           min={40}
           max={120}
-          step={1}
-          value={[maxWidth]}
-          onValueChange={(v) => setMaxWidth(v[0] ?? maxWidth)}
+          value={maxWidth}
+          format={(v) => `${v}ch`}
+          onCommit={setMaxWidth}
         />
-        <Text
-          size="1"
-          color="gray"
-          style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}
-        >
-          {maxWidth}ch
-        </Text>
       </Flex>
       <Flex align="center" gap="2" className="width-slider">
         <Text size="1" color="gray">
           Text size
         </Text>
-        <Slider
-          size="1"
+        <DisplaySlider
           className="doc-display-slider doc-display-slider-zoom"
-          min={80}
-          max={140}
-          step={1}
-          value={[textZoom]}
-          onValueChange={(v) => setTextZoom(v[0] ?? textZoom)}
+          ariaLabel="Text size"
+          min={TEXT_ZOOM_MIN}
+          max={TEXT_ZOOM_MAX}
+          step={5}
+          value={textZoom}
+          format={(v) => `${v}%`}
+          onCommit={setTextZoom}
         />
-        <Text
-          size="1"
-          color="gray"
-          style={{ minWidth: '4ch', whiteSpace: 'nowrap', flexShrink: 0 }}
-        >
-          {textZoom}%
-        </Text>
         <Button
           size="1"
           variant="ghost"
@@ -1922,11 +2007,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         format={doc.format}
       />
 
-      <div className="doc-layout" style={gridStyle}>
+      <div className={`doc-layout${overlayPanes ? ' doc-layout-overlay' : ''}`} style={gridStyle}>
+        {overlayPaneOpen && (
+          <button
+            type="button"
+            className="pane-scrim"
+            aria-label="Close panel"
+            onClick={closeOverlayPanes}
+          />
+        )}
         <aside className={`pane pane-toc ${tocOpen ? 'open' : 'closed'}`}>
           <Flex align="center" gap="2" px="2" py="2" className="pane-header">
             <Tooltip content={tocOpen ? 'Collapse' : 'Expand contents'}>
-              <IconButton variant="ghost" size="1" onClick={() => setTocOpen((v) => !v)}>
+              <IconButton variant="ghost" size="1" onClick={() => openToc(!tocOpen)}>
                 {tocOpen ? <ChevronLeftIcon /> : <ChevronRightIcon />}
               </IconButton>
             </Tooltip>
@@ -2314,7 +2407,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                 </Tabs.List>
                 <span className="spacer" />
                 <Tooltip content="Collapse">
-                  <IconButton variant="ghost" size="1" onClick={() => setCommentsOpen(false)}>
+                  <IconButton variant="ghost" size="1" onClick={() => openComments(false)}>
                     <ChevronRightIcon />
                   </IconButton>
                 </Tooltip>
@@ -2377,7 +2470,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           ) : (
             <Flex align="center" justify="center" py="2">
               <Tooltip content="Expand comments / history">
-                <IconButton variant="ghost" size="1" onClick={() => setCommentsOpen(true)}>
+                <IconButton variant="ghost" size="1" onClick={() => openComments(true)}>
                   <ChevronLeftIcon />
                 </IconButton>
               </Tooltip>

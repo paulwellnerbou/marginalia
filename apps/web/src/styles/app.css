@@ -409,11 +409,67 @@ button.primary:disabled {
   min-height: 0;
 }
 
+/* --- Overlaid side panes (narrow viewports) -------------------------
+   A tablet in portrait has no width to lend a side pane: 260px out of
+   744 leaves a reading column narrower than the comment column it was
+   meant to make room for, and in paged mode every open and close
+   repaginates the whole book underneath the reader. So there the panes
+   float over the document instead. The grid keeps both tracks at the
+   collapsed rail, which is what holds `.doc-scroll` — and the
+   pagination — perfectly still while a pane slides in.
+   `DocumentLayout` sets the two width variables. */
+.doc-layout-overlay {
+  position: relative;
+}
+.doc-layout-overlay .pane-toc.open,
+.doc-layout-overlay .pane-right.open {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 20;
+  /* Never wider than the screen it is covering — the stored pane width
+     comes from a desktop session and can exceed the whole viewport. */
+  max-width: 85vw;
+  box-shadow: var(--shadow-5);
+}
+.doc-layout-overlay .pane-toc.open {
+  left: 0;
+  width: var(--pane-overlay-toc-width, 260px);
+}
+.doc-layout-overlay .pane-right.open {
+  right: 0;
+  width: var(--pane-overlay-comments-width, 320px);
+}
+.pane-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  border: 0;
+  padding: 0;
+  cursor: default;
+  background: var(--black-a6);
+  /* Radix's button reset is not in play here; keep taps from selecting
+     the document underneath while a pane is being dismissed. */
+  -webkit-tap-highlight-color: transparent;
+}
+
 .pane {
   position: relative;
   overflow-y: auto;
   border-right: 1px solid var(--ui-border);
   background: var(--ui-surface);
+}
+/* Placed by name rather than by source order: an overlaid pane is taken
+   out of flow, and auto-placement would then slide the document into the
+   collapsed rail's track. */
+.doc-layout > .pane-toc {
+  grid-column: 1;
+}
+.doc-layout > .pane-doc {
+  grid-column: 2;
+}
+.doc-layout > .pane-right {
+  grid-column: 3;
 }
 .pane-comments {
   border-right: 0;
@@ -654,6 +710,17 @@ button.primary:disabled {
   padding: 0.25rem 0.75rem;
   border-top: 1px solid var(--ui-border);
   background: var(--ui-bg);
+}
+/* Clear the home indicator. Flush to the bottom edge, the pager's arrows
+   sit exactly where the swipe-up gesture lives, so reaching for the next
+   page dismisses the app instead. `env()` is 0 wherever there is no
+   indicator, and the extra room on touch keeps the arrows a comfortable
+   target besides. */
+@media (pointer: coarse) {
+  .doc-pager {
+    padding-block: 0.4rem;
+    padding-bottom: calc(0.4rem + env(safe-area-inset-bottom, 0px) + 1.25rem);
+  }
 }
 .doc-pager-count {
   min-width: 12ch;
