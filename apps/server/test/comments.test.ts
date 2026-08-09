@@ -3007,8 +3007,35 @@ describe('threads API', () => {
 
       const threads = await threadsOf(uid);
       const comment = threads.find((t) => t.id === commentId)!;
+      const acceptedProposal = threads.find((t) => t.id === proposal.id)!;
       expect(comment.state).toBe('resolved');
       expect(comment.resolution?.kind).toBe('resolve');
+      expect(comment.link_status).toBe('linked');
+      expect(comment.anchor.quote).toBe('Fixed');
+      expect(comment.anchor.block_id).toBe(acceptedProposal.anchor.block_id);
+      expect(acceptedProposal.link_status).toBe('linked');
+      expect(acceptedProposal.anchor.quote).toBe('Fixed');
+
+      // An unrelated later save used to re-run both anchors against their
+      // pre-accept quote ("Title") and orphan them immediately. Their new
+      // snapshot describes the paragraph produced by the proposal, so it
+      // remains stable like any other anchor.
+      const save = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}`, {
+          method: 'PUT',
+          headers: asAdmin(),
+          body: JSON.stringify({ markdown: '# Fixed\n\nUnrelated paragraph.\n' }),
+        }),
+      );
+      expect(save.status).toBe(200);
+
+      const afterSave = await threadsOf(uid);
+      const savedComment = afterSave.find((t) => t.id === commentId)!;
+      const savedProposal = afterSave.find((t) => t.id === proposal.id)!;
+      expect(savedComment.link_status).toBe('linked');
+      expect(savedComment.anchor.quote).toBe('Fixed');
+      expect(savedProposal.link_status).toBe('linked');
+      expect(savedProposal.anchor.quote).toBe('Fixed');
     });
 
     test('rejecting the proposal leaves the comment open', async () => {

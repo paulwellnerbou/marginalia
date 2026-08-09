@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import type { BlockSourceRange } from '@marginalia/renderer';
+import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
 import { canMergeMultiBlock, locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
 import type { DocumentRow, EditProposalThreadRow } from '../db.js';
 import type { GitStore } from '../git-store.js';
@@ -225,6 +225,86 @@ export function findBlockBySourceSpan(
   if (container) return { ...container, confidence: 'linked' };
   if (overlap) return { id: overlap.id, range: overlap.range, confidence: 'low-confidence' };
   return null;
+}
+
+/**
+ * Recover proposal endpoints from a known source span. This is shared by
+ * manual repair and by acceptance rollback: once an accepted proposal's
+ * anchor describes the resulting paragraph, restoring the pre-accept source
+ * must deliberately put the open proposal back on its original span.
+ */
+export function locateProposalAnchorBySourceSpan(
+  blocks: Map<string, BlockSourceRange>,
+  renderedBlocks: BlockInfo[],
+  source: string,
+  start: number,
+  end: number,
+  format: DocumentRow['format'],
+): {
+  block: BlockInfo;
+  endBlock: BlockInfo | null;
+  quote: string;
+  linkStatus: 'linked' | 'low-confidence';
+} | null {
+  const renderedById = new Map(renderedBlocks.map((block) => [block.id, block]));
+  const sorted = Array.from(blocks.entries()).sort((a, b) => a[1].start - b[1].start);
+
+  for (const [id, range] of sorted) {
+    if (range.start !== start || range.end !== end) continue;
+    const block = renderedById.get(id);
+    if (!block) return null;
+    return {
+      block,
+      endBlock: null,
+      quote: block.text,
+      linkStatus: 'linked',
+    };
+  }
+
+  let best: {
+    startId: string;
+    startRange: BlockSourceRange;
+    endId: string;
+    endRange: BlockSourceRange;
+    span: number;
+  } | null = null;
+  for (const [startId, startRange] of sorted) {
+    if (startRange.start !== start) continue;
+    for (const [endId, endRange] of sorted) {
+      if (endRange.end !== end) continue;
+      if (!canMergeMultiBlock(startRange, endRange, format)) continue;
+      const span =
+        Math.max(startRange.end, endRange.end) - Math.min(startRange.start, endRange.start);
+      if (!best || span < best.span) {
+        best = { startId, startRange, endId, endRange, span };
+      }
+    }
+  }
+  if (best) {
+    const block = renderedById.get(best.startId);
+    const endBlock = renderedById.get(best.endId);
+    if (!block || !endBlock) return null;
+    return {
+      block,
+      endBlock: best.endId === best.startId ? null : endBlock,
+      quote: source.slice(
+        Math.min(best.startRange.start, best.endRange.start),
+        Math.max(best.startRange.end, best.endRange.end),
+      ),
+      linkStatus: 'linked',
+    };
+  }
+
+  const located = findBlockBySourceSpan(blocks, start, end);
+  if (!located) return null;
+  const block = renderedById.get(located.id);
+  if (!block) return null;
+  return {
+    block,
+    endBlock: null,
+    quote: block.text,
+    linkStatus: located.confidence,
+  };
 }
 
 export function toWire(row: EditProposalThreadRow): Record<string, unknown> {
