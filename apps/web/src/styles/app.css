@@ -117,6 +117,28 @@ a {
  * on the overlay element (the content lives *inside* it), so that hold
  * has to outlast the content's exit or the dialog gets yanked mid-flight.
  */
+
+/* Keep every dialog inside the currently visible viewport. `dvh` matters
+   on iPadOS, where the browser chrome can make `vh` taller than the area
+   the user can actually see. Radix's outer scroll wrapper remains as a
+   fallback, while the content itself scrolls when it has to. */
+.rt-BaseDialogScrollPadding {
+  --dialog-viewport-gutter: var(--space-4);
+  padding-top: max(var(--dialog-viewport-gutter), env(safe-area-inset-top, 0px));
+  padding-bottom: max(var(--dialog-viewport-gutter), env(safe-area-inset-bottom, 0px));
+}
+
+.rt-BaseDialogContent {
+  max-height: calc(100vh - var(--dialog-viewport-gutter) - var(--dialog-viewport-gutter));
+  /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
+  max-height: calc(
+    100dvh -
+    max(var(--dialog-viewport-gutter), env(safe-area-inset-top, 0px)) -
+    max(var(--dialog-viewport-gutter), env(safe-area-inset-bottom, 0px))
+  );
+  overscroll-behavior: contain;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   :root,
   .radix-themes {
@@ -3106,6 +3128,15 @@ button.primary:disabled {
   display: flex !important;
   flex-direction: column !important;
   max-height: 90vh !important;
+  /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
+  max-height: min(
+    90dvh,
+    calc(
+      100dvh -
+      max(var(--dialog-viewport-gutter), env(safe-area-inset-top, 0px)) -
+      max(var(--dialog-viewport-gutter), env(safe-area-inset-bottom, 0px))
+    )
+  ) !important;
   overflow: hidden !important;
 }
 
@@ -3171,6 +3202,24 @@ button.primary:disabled {
 /* ============================================================
  * Diff view (inside DiffDialog)
  * ============================================================ */
+
+/* The footer is deliberately outside the scrolling body so Accept,
+   Reject, and Close remain reachable even on short screens. */
+.diff-dialog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.diff-dialog-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.diff-dialog-footer {
+  flex: none;
+}
 
 .diff-view {
   display: grid;
