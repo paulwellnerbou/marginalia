@@ -76,34 +76,36 @@ export function EditToolbar({
                       : 'Read-only'}
               </Button>
             </Dialog.Trigger>
-            <Dialog.Content size="3" maxWidth="900px">
-              <Dialog.Title>
-                {canSave && canPropose
-                  ? 'Save or propose change'
-                  : canSave
-                    ? 'Save change'
-                    : 'Propose change'}
-              </Dialog.Title>
+            <Dialog.Content size="3" maxWidth="900px" className="dialog-content--fixed-footer">
+              <div className="dialog-scroll-body">
+                <Dialog.Title>
+                  {canSave && canPropose
+                    ? 'Save or propose change'
+                    : canSave
+                      ? 'Save change'
+                      : 'Propose change'}
+                </Dialog.Title>
 
-              <DiffView before={originalSource} after={currentSource} active={open} />
+                <DiffView before={originalSource} after={currentSource} active={open} />
 
-              <Dialog.Description size="2" mt="3" mb="3" color="gray">
-                {canSave && canPropose
-                  ? 'Add an optional commit message, then save directly or propose the edit for review.'
-                  : canSave
-                    ? 'Add an optional commit message describing this change.'
-                    : 'Add a rationale describing why this change should be made.'}
-              </Dialog.Description>
-              <TextArea
-                placeholder={
-                  canSave ? 'e.g. Fix typo in introduction (optional)' : 'Why this change?'
-                }
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                rows={3}
-                autoFocus
-              />
-              <Flex gap="3" mt="4" justify="end" wrap="wrap">
+                <Dialog.Description size="2" mt="3" mb="3" color="gray">
+                  {canSave && canPropose
+                    ? 'Add an optional commit message, then save directly or propose the edit for review.'
+                    : canSave
+                      ? 'Add an optional commit message describing this change.'
+                      : 'Add a rationale describing why this change should be made.'}
+                </Dialog.Description>
+                <TextArea
+                  placeholder={
+                    canSave ? 'e.g. Fix typo in introduction (optional)' : 'Why this change?'
+                  }
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                  rows={3}
+                  autoFocus
+                />
+              </div>
+              <Flex className="dialog-footer" gap="3" mt="4" justify="end" wrap="wrap">
                 <Dialog.Close>
                   <Button variant="soft" color="gray">
                     Cancel

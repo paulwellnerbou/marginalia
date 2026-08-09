@@ -391,23 +391,25 @@ export function HistoryList({
           setRestoreError(null);
         }}
       >
-        <AlertDialog.Content maxWidth="520px">
-          <AlertDialog.Title>Restore this version?</AlertDialog.Title>
-          <AlertDialog.Description size="2" mb="3">
-            Choose what to do with version{' '}
-            <Code size="1">{restoreTarget ? shortOid(restoreTarget.oid) : ''}</Code>.
-          </AlertDialog.Description>
-          <Flex direction="column" gap="2" mb="4">
-            <Text size="2" as="p">
-              <b>Restore version</b> replaces the current document source, creates a new history
-              entry, and re-anchors comments and proposals where possible.
-            </Text>
-            <Text size="2" as="p">
-              <b>Restore as new document</b> opens the New document modal with this version's source
-              prefilled, leaving the current document untouched.
-            </Text>
-          </Flex>
-          <Flex gap="2" justify="end">
+        <AlertDialog.Content maxWidth="520px" className="dialog-content--fixed-footer">
+          <div className="dialog-scroll-body">
+            <AlertDialog.Title>Restore this version?</AlertDialog.Title>
+            <AlertDialog.Description size="2" mb="3">
+              Choose what to do with version{' '}
+              <Code size="1">{restoreTarget ? shortOid(restoreTarget.oid) : ''}</Code>.
+            </AlertDialog.Description>
+            <Flex direction="column" gap="2">
+              <Text size="2" as="p">
+                <b>Restore version</b> replaces the current document source, creates a new history
+                entry, and re-anchors comments and proposals where possible.
+              </Text>
+              <Text size="2" as="p">
+                <b>Restore as new document</b> opens the New document modal with this version's
+                source prefilled, leaving the current document untouched.
+              </Text>
+            </Flex>
+          </div>
+          <Flex className="dialog-footer" gap="2" justify="end" mt="4">
             <AlertDialog.Cancel>
               <Button
                 variant="soft"

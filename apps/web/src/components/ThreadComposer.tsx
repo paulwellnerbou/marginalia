@@ -461,7 +461,7 @@ function ProposalDialogShell({
       <Dialog.Content
         size="3"
         maxWidth={expanded ? '95vw' : '720px'}
-        className={expanded ? 'proposal-dialog--expanded' : undefined}
+        className={`dialog-content--fixed-footer proposal-dialog${expanded ? ' proposal-dialog--expanded' : ''}`}
         style={Object.keys(contentStyle).length > 0 ? contentStyle : undefined}
       >
         {children({
