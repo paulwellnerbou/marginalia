@@ -221,8 +221,9 @@ export interface UploadOptions {
   password_protected?: boolean;
   /**
    * Restrict reads to invite-link holders from the moment the doc exists.
-   * Omitted → the server's default, which is `true`. Pass `false` to put
-   * the document on the open web.
+   * Omitted → the server's default, which is `true`. Pass `false` to drop
+   * that restriction — which leaves the URL enough on its own only when
+   * `password_protected` is off too, the two being independent gates.
    */
   invite_only?: boolean;
   default_theme?: string;

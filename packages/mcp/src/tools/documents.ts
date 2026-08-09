@@ -102,7 +102,8 @@ export function registerDocumentTools(
           .optional()
           .describe(
             'Defaults to true: the document opens only for access-link holders. Pass false to ' +
-              'make the plain document URL readable by anyone who has it.',
+              'lift that, which leaves the plain URL readable by whoever holds it — unless ' +
+              'password_protected is also set, since that gate applies either way.',
           ),
         base_url: z
           .string()

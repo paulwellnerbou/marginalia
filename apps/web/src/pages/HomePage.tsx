@@ -923,9 +923,13 @@ function UploadDialog({
                 </Text>
                 <Flex pl="6">
                   <Text size="1" color="gray">
+                    {/* The password is a gate of its own, so what the URL
+                        alone is worth depends on both boxes. */}
                     {inviteOnly
                       ? 'Only people you hand an access link to can open it. The URL alone opens nothing.'
-                      : 'Anyone with the document URL can read it.'}
+                      : passwordProtected
+                        ? 'Anyone with the document URL can read it, once they enter the password.'
+                        : 'Anyone with the document URL can read it.'}
                   </Text>
                 </Flex>
                 {/* Editing rights are granted via invite links in Access
