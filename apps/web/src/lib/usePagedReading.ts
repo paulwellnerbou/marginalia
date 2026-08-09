@@ -273,6 +273,12 @@ export function usePagedReading(
    * that nothing had changed and the reader would never be re-anchored.
    */
   const geometry = useRef<{ pitch: number; extent: number } | null>(null);
+  /**
+   * The disabled branch also reruns when `remeasureKey` changes. Remember the
+   * previous mode so changing document HTML in ordinary scroll reading does
+   * not look like another request to leave pagination and jump to the top.
+   */
+  const wasEnabled = useRef(enabled);
 
   /**
    * Publish the page box in px for the CSS that can't derive it: the
@@ -283,6 +289,20 @@ export function usePagedReading(
    */
   // biome-ignore lint/correctness/useExhaustiveDependencies: remeasureKey is a pure trigger — reading width, zoom, theme and pane widths all move the page box.
   useEffect(() => {
+    const leavingPagedMode = wasEnabled.current && !enabled;
+    wasEnabled.current = enabled;
+
+    // Clear pagination state on the mode transition even if the document is
+    // temporarily unmounted. Otherwise this effect can miss the transition
+    // and carry stale page geometry into the next paged session.
+    if (leavingPagedMode) {
+      setPage(0);
+      setPageCount(1);
+      heldPlace.current = null;
+      geometry.current = null;
+      setTooWideToPaint(false);
+    }
+
     const scroll = scrollRef.current;
     const viewport = gestureSurfaceOf(scroll);
     if (!scroll || !viewport) return;
@@ -290,15 +310,10 @@ export function usePagedReading(
       scroll.style.removeProperty('--doc-page-height');
       scroll.style.removeProperty('--doc-page-block');
       viewport.style.removeProperty('--doc-page-gutter');
-      scroll.scrollLeft = 0;
-      scroll.scrollTop = 0;
-      setPage(0);
-      setPageCount(1);
-      // Both describe a pagination that no longer exists; carrying them
-      // into the next paged session would re-anchor against it.
-      heldPlace.current = null;
-      geometry.current = null;
-      setTooWideToPaint(false);
+      if (leavingPagedMode) {
+        scroll.scrollLeft = 0;
+        scroll.scrollTop = 0;
+      }
       return;
     }
     // Writing an inline custom property invalidates style for the whole
@@ -408,7 +423,13 @@ export function usePagedReading(
 
       const held = heldPlace.current;
       const heldPage = held ? pageOfHeldPlace(scroll, held) : null;
-      const target = clampPage(heldPage ?? metrics.currentPage, metrics.pageCount);
+      // A rendered-document refresh replaces every text node, so the held
+      // range is deliberately disconnected and cannot name its new page.
+      // Keep the page the reader was on in that case. `metrics.currentPage`
+      // is derived from the old pixel offset divided by the *new* pitch; a
+      // width change during the same refresh can otherwise turn page 225
+      // into page 228 even though nobody asked to turn a page.
+      const target = clampPage(heldPage ?? pageRef.current, metrics.pageCount);
       // Unconditionally, even when the page index is unchanged: fewer
       // pages than before leaves `scrollLeft` pointing past the last one,
       // and nothing else brings it back — the reader is left swiping
