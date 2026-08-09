@@ -78,7 +78,9 @@ import {
   showToast,
 } from '../lib/notifications.js';
 import {
+  measurePages,
   PAGED_CLASS,
+  PAGED_VERTICAL_CLASS,
   pageIndexAt,
   pageIndexOfElement,
   pageIndexOfOffset,
@@ -359,7 +361,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [readingMode, setReadingMode] = useState<ReadingMode>(() =>
     localStorage.getItem(READING_MODE_KEY) === 'paged' ? 'paged' : 'scroll',
   );
+  /**
+   * Set when this engine turns out not to paint the sideways pagination
+   * (see the effect below), which switches the reader to vertical pages.
+   * Kept apart from `readingMode` because it is a property of this
+   * document at this text size, not a choice they made.
+   */
+  const [tooWideForPages, setTooWideForPages] = useState(false);
   const paged = readingMode === 'paged';
+  /** Pages run down the screen rather than across — same mode, other axis. */
+  const pagedVertical = paged && tooWideForPages;
   const commentsDisplayMode: CommentsDisplayMode =
     storedCommentsDisplayMode ?? (compactViewport ? 'floating' : 'column');
   /**
@@ -850,15 +861,18 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       // a heading counts as reached once its page is the one on screen.
       // Metrics are hoisted out of the loop — reading clientWidth per
       // heading would force a layout on every one of them.
-      const pitch = paged ? container.clientWidth : 0;
-      const currentPage = paged ? pageIndexAt(container.scrollLeft, pitch) : 0;
+      const pitch = paged ? measurePages(container).pitch : 0;
+      const scrolled = pagedVertical ? container.scrollTop : container.scrollLeft;
+      const currentPage = paged ? pageIndexAt(scrolled, pitch) : 0;
       const threshold = containerRect.top + 96;
 
       for (const heading of visible) {
         const rect = heading.getBoundingClientRect();
+        const start = pagedVertical
+          ? rect.top - containerRect.top + scrolled
+          : rect.left - containerRect.left + scrolled;
         const reached = paged
-          ? pageIndexOfOffset(rect.left - containerRect.left + container.scrollLeft, pitch) <=
-            currentPage
+          ? pageIndexOfOffset(start, pitch) <= currentPage
           : rect.top <= threshold;
         if (reached) {
           current = heading.id;
@@ -891,7 +905,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     };
     // `paged` re-runs the scan: switching layout fires neither scroll
     // nor resize, so the highlight would sit on a stale heading.
-  }, [headingIdsKey, liveRendered.html, paged]);
+  }, [headingIdsKey, liveRendered.html, paged, pagedVertical]);
 
   /**
    * A section fragment in the URL goes stale the moment the reader moves
@@ -1663,22 +1677,34 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     () => [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx, panesSettled],
     [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx, panesSettled],
   );
-  const pages = usePagedReading(docScrollRef, paged, pageLayoutKey);
+  const pages = usePagedReading(docScrollRef, paged, pageLayoutKey, pagedVertical);
 
   /**
-   * Past a certain length WebKit stops painting the paginated columns
-   * altogether — every page but the first comes up blank, with the pager
-   * still counting them off. There is nothing to render around, so hand
-   * the reader back the mode that works rather than a blank book.
+   * Keep the reader in pages even where the sideways ones stop painting.
+   * On WebKit a long enough column run goes blank partway through — the
+   * page counter and the TOC keep working, the pages are just empty — so
+   * a book-length document turns its pages downwards instead. That gives
+   * up the browser's column fragmentation, which is why it is a fallback
+   * and not the default.
    */
   useEffect(() => {
     if (!pages.tooWideToPaint) return;
-    setReadingMode('scroll');
+    setTooWideForPages(true);
     showToast({
-      title: 'Switched to scrolling',
-      body: 'This document is too long for your browser to lay out as pages. Smaller text or a wider reading column will fit more on each page if you want to try Pages again.',
+      title: 'Pages now turn downwards',
+      body: 'This document is too long for this browser to paginate sideways. A smaller text size brings the usual pages back.',
     });
   }, [pages.tooWideToPaint]);
+
+  /**
+   * Anything that repaginates deserves a fresh verdict — dropping the
+   * text size or widening the reading column can bring the pagination
+   * back under the limit, and sideways pages are the better ones.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pageLayoutKey is a pure trigger for re-deciding, not a value read here.
+  useEffect(() => {
+    setTooWideForPages(false);
+  }, [pageLayoutKey]);
 
   const title = documentTitle(doc);
 
@@ -1939,8 +1965,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         </Text>
         <SegmentedControl.Root
           size="1"
-          value={readingMode}
-          onValueChange={(next) => setReadingMode(next === 'paged' ? 'paged' : 'scroll')}
+          // The effective mode, not the stored one: while the fallback is
+          // in force the reader is looking at a scrolling document, and a
+          // control insisting otherwise just reads as broken.
+          value={paged ? 'paged' : 'scroll'}
+          onValueChange={(next) => {
+            // Choosing "Pages" again re-measures, so a reader who has
+            // since shrunk the text gets them back — and one who hasn't
+            // gets the toast saying why, rather than a dead control.
+            setTooWideForPages(false);
+            setReadingMode(next === 'paged' ? 'paged' : 'scroll');
+          }}
           aria-label="Reading layout"
         >
           <SegmentedControl.Item value="scroll">Scroll</SegmentedControl.Item>
@@ -2328,7 +2363,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               the surrounding pane-doc background and look like a
               different surface. */}
             <div
-              className={`doc-scroll marginalia-theme${paged ? ` ${PAGED_CLASS}` : ''}`}
+              className={`doc-scroll marginalia-theme${
+                paged ? ` ${pagedVertical ? PAGED_VERTICAL_CLASS : PAGED_CLASS}` : ''
+              }`}
               ref={docScrollRef}
             >
               <div
@@ -2648,7 +2685,8 @@ function scrollToTargetAndSettle(
   offset: number,
   isCurrent: () => boolean,
 ): void {
-  const paged = scroll.classList.contains(PAGED_CLASS);
+  const vertical = scroll.classList.contains(PAGED_VERTICAL_CLASS);
+  const paged = scroll.classList.contains(PAGED_CLASS) || vertical;
   /** Where the reader should end up, on whichever axis is in play. */
   const intended = (): number | null => {
     if (!target.isConnected) return null;
@@ -2656,7 +2694,11 @@ function scrollToTargetAndSettle(
       const page = pageIndexOfElement(scroll, target);
       // `offset` centres a card in the scroll flow; a page has no such
       // freedom — the target's page starts where it starts.
-      return page === null ? null : page * scroll.clientWidth;
+      if (page === null) return null;
+      // Not `clientHeight`: vertical pages are sized to a whole number
+      // of lines and carry a fraction of a pixel, which `measurePages`
+      // keeps and the rounded box does not.
+      return page * measurePages(scroll).pitch;
     }
     const top =
       target.getBoundingClientRect().top -
@@ -2665,9 +2707,14 @@ function scrollToTargetAndSettle(
       offset;
     return Math.max(0, Math.min(Math.round(top), scroll.scrollHeight - scroll.clientHeight));
   };
-  const position = () => (paged ? scroll.scrollLeft : scroll.scrollTop);
+  // Vertical pages scroll down the block axis like the unpaged document,
+  // so only horizontal paging moves along `scrollLeft`. Getting this
+  // wrong doesn't just land in the wrong place — the settle loop reads a
+  // position that never moves and corrects until it gives up.
+  const alongX = paged && !vertical;
+  const position = () => (alongX ? scroll.scrollLeft : scroll.scrollTop);
   const scrollTo = (value: number, behavior: ScrollBehavior) =>
-    scroll.scrollTo(paged ? { left: value, behavior } : { top: value, behavior });
+    scroll.scrollTo(alongX ? { left: value, behavior } : { top: value, behavior });
 
   const first = intended();
   if (first === null) return;
