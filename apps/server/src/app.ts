@@ -3,6 +3,7 @@ import { extname, isAbsolute, join, normalize, relative } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import { Hono } from 'hono';
 import { createBunWebSocket } from 'hono/bun';
+import { HTTPException } from 'hono/http-exception';
 import { createBlobStore } from './blob-store.js';
 import type { ServerConfig } from './config.js';
 import { dropLegacyProposalColumns, openDatabase } from './db.js';
@@ -60,6 +61,17 @@ export async function createApp(config: ServerConfig): Promise<App> {
   const { upgradeWebSocket, websocket } = createBunWebSocket<ServerWebSocket>();
 
   const hono = new Hono();
+  // Hono's default answer to an unhandled throw is plain-text "Internal
+  // Server Error". Every other failure here is `{ error: <code> }`, and
+  // the web client only knows how to read that shape — a text body
+  // leaves it with no code at all, which surfaces to the reader as the
+  // word "unknown". Keep the envelope even when we have nothing better
+  // to say than "internal".
+  hono.onError((err, c) => {
+    if (err instanceof HTTPException) return err.getResponse();
+    console.error(`[marginalia] unhandled error on ${c.req.method} ${c.req.path}`, err);
+    return c.json({ error: 'internal' }, 500);
+  });
   hono.get('/health', (c) => c.json({ ok: true }));
   const deps = { db, store, blobs, config, realtime };
   hono.route('/api/documents', documentsRouter(deps));

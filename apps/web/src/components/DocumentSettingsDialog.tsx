@@ -17,6 +17,7 @@ import {
   exportDocumentBundle,
   updateDocumentSettings,
 } from '../lib/api.js';
+import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { BUILT_IN_THEMES } from '../lib/themes.js';
@@ -72,7 +73,7 @@ export function DocumentSettingsDialog({
       setOpen(false);
     } catch (err) {
       reportError('DocumentSettings.save', err);
-      setError(err instanceof Error ? err.message : 'Save failed');
+      setError(apiErrorMessage(err, 'Could not save these settings'));
     } finally {
       setSaving(false);
     }
@@ -97,7 +98,7 @@ export function DocumentSettingsDialog({
       setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (err) {
       reportError('DocumentSettings.exportJson', err, { uid: doc.uid });
-      setError(err instanceof Error ? err.message : 'Export failed');
+      setError(apiErrorMessage(err, 'Could not export the JSON bundle'));
     } finally {
       setExporting(false);
     }

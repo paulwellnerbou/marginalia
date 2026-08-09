@@ -1,4 +1,5 @@
-import { ApiError } from './api.js';
+import { ApiError, UNKNOWN_ERROR_CODE } from './api.js';
+import { isTransientError } from './retry.js';
 
 /**
  * Turns a thrown request failure into something a reader can act on.
@@ -57,10 +58,36 @@ const MESSAGES: Record<string, string> = {
   'not-found': 'That is gone — someone may have deleted it. Reload and try again.',
 };
 
+/**
+ * Statuses the reverse proxy invents when it has no working server to
+ * relay: the process died mid-request, is restarting, or refused the
+ * connection. There is no error code to map because there is no body —
+ * `request()` fills in `UNKNOWN_ERROR_CODE`. The observed trigger is a
+ * large export (a JSON bundle carries the whole packed git history)
+ * allocating past the container's memory limit and getting killed, so
+ * the wording points at document size and at retrying.
+ */
+const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
+
 export function apiErrorMessage(err: unknown, fallback: string): string {
-  if (!(err instanceof ApiError)) return fallback;
+  if (!(err instanceof ApiError)) {
+    // Only a rejection tagged at the `fetch` call site — never a bug in
+    // our own code that happens to throw the same `TypeError` shape.
+    if (isTransientError(err)) {
+      return `${fallback} — the connection to the server dropped. Check your network and try again.`;
+    }
+    return fallback;
+  }
   const known = MESSAGES[err.code];
   if (known) return known;
+  if (GATEWAY_STATUSES.has(err.status)) {
+    return `${fallback} — the server stopped responding partway through. It may have restarted or run out of memory; large exports are the usual trigger. Try again in a moment, and tell the operator if it keeps failing.`;
+  }
+  // No code means no JSON body to take one from, so the status number is
+  // the only detail left that's worth anything in a bug report. Printing
+  // the placeholder itself would just show the reader the word "unknown".
+  if (err.code === UNKNOWN_ERROR_CODE)
+    return `${fallback} — the server returned HTTP ${err.status}.`;
   // 5xx without a mapped code is the server's fault, not the user's.
   if (err.status >= 500) return `${fallback} — the server reported an error (${err.code}).`;
   return `${fallback} (${err.status}: ${err.code})`;
