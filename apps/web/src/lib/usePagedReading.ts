@@ -1,5 +1,6 @@
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { clampPage, goToPage, measurePages, pageIndexOfClientRect } from './paged-reading.js';
+import { isAppleWebKit } from './webkit.js';
 
 /** Horizontal travel that counts as a page-turning swipe, in px. */
 const SWIPE_MIN_PX = 48;
@@ -55,16 +56,6 @@ export interface PagedReading {
  * engine.
  */
 const PAGED_MAX_PAINTABLE_PX = 60000;
-
-/**
- * True on engines with the painting limit above. Engine-sniffed on
- * purpose: the failure is a silent paint bug with nothing to feature-
- * detect, and capping every engine to WebKit's limit would take paged
- * mode away from readers whose browser handles it fine.
- */
-function limitsMulticolPaint(): boolean {
-  return /^Apple/.test(navigator.vendor ?? '');
-}
 
 /**
  * Where wheel and swipe gestures are listened for: the viewport around
@@ -353,7 +344,7 @@ export function usePagedReading(
       const width = scroll.clientWidth;
       const extent = scroll.scrollWidth;
       geometry.current = { width, extent };
-      setTooWideToPaint(limitsMulticolPaint() && extent > PAGED_MAX_PAINTABLE_PX);
+      setTooWideToPaint(isAppleWebKit() && extent > PAGED_MAX_PAINTABLE_PX);
       // Nothing moved — a highlight repaint, a mermaid swap. Re-snapping
       // would only risk nudging a reader mid-gesture.
       if (previous && previous.width === width && previous.extent === extent) {

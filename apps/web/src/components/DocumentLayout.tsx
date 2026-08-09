@@ -558,6 +558,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     }
   }, [doc.uid]);
 
+  /** Merge one thread into the list, in the order the server would return it. */
+  const landThread = useCallback((thread: Thread) => {
+    setThreads((prev) => {
+      const index = prev.findIndex((t) => t.id === thread.id);
+      const next = index >= 0 ? prev.map((t, i) => (i === index ? thread : t)) : [...prev, thread];
+      next.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
+      return next;
+    });
+  }, []);
+
   const refreshThreads = useCallback(async () => {
     try {
       const res = await retryRequest(() => listThreads(doc.uid, { consumeMentions: false }));
@@ -1209,7 +1219,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         return;
       }
       try {
-        await apiCreate(doc.uid, { anchor: payload.anchor, body: payload.body }, identity);
+        const created = await apiCreate(
+          doc.uid,
+          { anchor: payload.anchor, body: payload.body },
+          identity,
+        );
+        // Land the new thread before dropping the draft, in one commit.
+        // Waiting for the refresh instead leaves a gap with neither the
+        // draft's highlight nor the thread's — on a heavily commented
+        // document that re-read takes about a second, and the reader
+        // watches their own highlight blink out and come back.
+        landThread(created);
         setPendingDraft(null);
         // A comment on a spot the section filter hides (preamble, an
         // ancestor heading) would vanish the moment it posts — lift
@@ -1230,6 +1250,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [
       canComment,
       doc.uid,
+      landThread,
       resolveIdentity,
       refreshThreads,
       sectionFilterActive,
