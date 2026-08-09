@@ -79,7 +79,7 @@ function gestureSurfaceOf(scroll: HTMLElement | null): HTMLElement | null {
 
 /**
  * Widgets that steer themselves with the arrow keys. The reading-width
- * and text-size sliders and the layout toggle all sit a tab-stop away
+ * and text-size steppers and the layout toggle all sit a tab-stop away
  * from the document, and a page turn on every arrow press would leave
  * them keyboard-inoperable.
  */

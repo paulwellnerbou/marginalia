@@ -22,8 +22,14 @@ export const UI_SCALE_MAX = 150;
  * one — small enough to be hard to read and hard to hit. Nudge it up
  * where the pointer says we are on a touch screen.
  */
-function deviceDefault(): number {
-  return window.matchMedia?.('(pointer: coarse)').matches ? 115 : 100;
+export const COARSE_POINTER = '(pointer: coarse)';
+export const UI_SCALE_TOUCH_DEFAULT = 115;
+export const UI_SCALE_POINTER_DEFAULT = 100;
+
+export function defaultUiScale(): number {
+  return window.matchMedia?.(COARSE_POINTER).matches
+    ? UI_SCALE_TOUCH_DEFAULT
+    : UI_SCALE_POINTER_DEFAULT;
 }
 
 /**
@@ -33,7 +39,7 @@ function deviceDefault(): number {
 export function readUiScale(): number {
   const saved = Number(localStorage.getItem(UI_SCALE_KEY));
   const stored = Number.isFinite(saved) && saved >= UI_SCALE_MIN && saved <= UI_SCALE_MAX;
-  return stored ? saved : deviceDefault();
+  return stored ? saved : defaultUiScale();
 }
 
 export function applyUiScale(percent: number): void {
@@ -43,4 +49,13 @@ export function applyUiScale(percent: number): void {
 export function setUiScale(percent: number): void {
   localStorage.setItem(UI_SCALE_KEY, String(percent));
   applyUiScale(percent);
+}
+
+/** Drops the choice rather than storing the default, so a reset goes back
+ *  to following the device instead of pinning today's answer. */
+export function resetUiScale(): number {
+  localStorage.removeItem(UI_SCALE_KEY);
+  const next = defaultUiScale();
+  applyUiScale(next);
+  return next;
 }
