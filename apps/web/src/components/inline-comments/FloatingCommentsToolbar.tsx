@@ -61,14 +61,16 @@ function parkedThreadId(
   entries: ThreadTopEntry[],
   openId: string | null,
   scroll: HTMLElement,
+  readerTop = 0,
 ): string | null {
   if (!openId) return null;
   const entry = entries.find((e) => e.id === openId);
   if (!entry) return null;
-  if (Math.abs(entry.top) <= AT_THREAD_TOLERANCE_PX) return openId;
+  const offset = entry.top - readerTop;
+  if (Math.abs(offset) <= AT_THREAD_TOLERANCE_PX) return openId;
   const maxScroll = scroll.scrollHeight - scroll.clientHeight;
-  if (entry.top > 0 && scroll.scrollTop >= maxScroll - AT_THREAD_TOLERANCE_PX) return openId;
-  if (entry.top < 0 && scroll.scrollTop <= AT_THREAD_TOLERANCE_PX) return openId;
+  if (offset > 0 && scroll.scrollTop >= maxScroll - AT_THREAD_TOLERANCE_PX) return openId;
+  if (offset < 0 && scroll.scrollTop <= AT_THREAD_TOLERANCE_PX) return openId;
   return null;
 }
 
@@ -99,17 +101,27 @@ export function FloatingCommentsToolbar({
    */
   const visibleThreads = useMemo(() => computeAnchoredThreadNesting(threads).topLevel, [threads]);
 
-  const [currentIndex, setCurrentIndex] = useState(-1);
+  /** Threads the DOM can actually navigate to, in navigation order.
+   *  Seed from the visible cards so the first paint retains the old
+   *  count; the first measurement removes any unresolvable anchors. */
+  const [navigableIds, setNavigableIds] = useState<string[]>(() =>
+    visibleThreads.map((thread) => thread.id),
+  );
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const [layoutVersion, setLayoutVersion] = useState(0);
 
   /**
-   * Measure the card-owning threads in the exact order the arrows use.
-   * Keeping this in one callback makes the position readout and a jump
-   * agree even for comments on the same text.
+   * Measure each navigable thread's anchor in document space. These
+   * positions stay fixed during scrolling, so the hot path only has to
+   * subtract scrollTop rather than resolve and measure every anchor on
+   * every frame.
    */
-  const measureEntries = useCallback((): ThreadTopEntry[] => {
+  // biome-ignore lint/correctness/useExhaustiveDependencies: layoutVersion is the explicit invalidation trigger for the DOM measurements read by this callback.
+  const measureLandings = useCallback((): ThreadTopEntry[] => {
     const doc = docElementRef.current;
     const scroll = scrollContainerRef.current;
     if (!doc || !scroll) return [];
+    const pos = scroll.scrollTop;
     const containerTop = scroll.getBoundingClientRect().top;
 
     const entries: ThreadTopEntry[] = [];
@@ -120,26 +132,44 @@ export function FloatingCommentsToolbar({
       if (!el) continue;
       entries.push({
         id: thread.id,
-        top: el.getBoundingClientRect().top - containerTop,
+        top: el.getBoundingClientRect().top - containerTop + pos,
         startOffset: isProposal(thread) ? 0 : (thread.anchor.start_offset ?? 0),
         createdAt: thread.comments[0].created_at,
       });
     }
     return sortThreadTopEntries(entries);
-  }, [visibleThreads, docElementRef, scrollContainerRef]);
+  }, [visibleThreads, docElementRef, scrollContainerRef, layoutVersion]);
+
+  /** Cache the DOM sweep until threads or observed layout change. */
+  const cachedLandings = useMemo(() => {
+    let cache: ThreadTopEntry[] | null = null;
+    return () => {
+      cache ??= measureLandings();
+      return cache;
+    };
+  }, [measureLandings]);
+
+  /** Rebase the cached document positions onto the current viewport. */
+  const threadOffsets = useCallback((): ThreadTopEntry[] => {
+    const pos = scrollContainerRef.current?.scrollTop ?? 0;
+    return cachedLandings().map((entry) => ({ ...entry, top: entry.top - pos }));
+  }, [cachedLandings, scrollContainerRef]);
 
   /** Keep the counter in step with plain scrolling, not only arrow presses. */
   const updatePosition = useCallback(() => {
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
-    const entries = measureEntries();
-    const parked = parkedThreadId(entries, currentThreadId, scroll);
-    setCurrentIndex(currentThreadIndex(entries, NAV_REF_TOP_PX, parked));
-  }, [measureEntries, scrollContainerRef, currentThreadId]);
+    const entries = cachedLandings();
+    const pos = scroll.scrollTop;
+    const parked = parkedThreadId(entries, currentThreadId, scroll, pos);
+    const index = currentThreadIndex(entries, pos + NAV_REF_TOP_PX, parked);
+    setCurrentId(entries[index]?.id ?? null);
+  }, [cachedLandings, scrollContainerRef, currentThreadId]);
 
   useEffect(() => {
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
+    setNavigableIds(cachedLandings().map((entry) => entry.id));
     updatePosition();
 
     let raf = 0;
@@ -152,21 +182,30 @@ export function FloatingCommentsToolbar({
     };
 
     scroll.addEventListener('scroll', requestUpdate, { passive: true });
-    const resizeObserver = new ResizeObserver(requestUpdate);
-    if (docElementRef.current) resizeObserver.observe(docElementRef.current);
-    resizeObserver.observe(scroll);
     return () => {
       if (raf) window.cancelAnimationFrame(raf);
       scroll.removeEventListener('scroll', requestUpdate);
-      resizeObserver.disconnect();
     };
-  }, [scrollContainerRef, docElementRef, updatePosition]);
+  }, [scrollContainerRef, cachedLandings, updatePosition]);
+
+  /** Any document or viewport resize can move anchors. Invalidate the
+   *  cached sweep; the effect above then measures once and refreshes
+   *  both the navigation set and the readout. */
+  useEffect(() => {
+    const scroll = scrollContainerRef.current;
+    const doc = docElementRef.current;
+    if (!scroll) return;
+    const resizeObserver = new ResizeObserver(() => setLayoutVersion((version) => version + 1));
+    if (doc) resizeObserver.observe(doc);
+    resizeObserver.observe(scroll);
+    return () => resizeObserver.disconnect();
+  }, [scrollContainerRef, docElementRef]);
 
   const jump = useCallback(
     (direction: -1 | 1) => {
       const scroll = scrollContainerRef.current;
       if (!scroll) return;
-      const entries = measureEntries();
+      const entries = threadOffsets();
 
       const targetId = adjacentThreadTarget(
         entries,
@@ -177,14 +216,15 @@ export function FloatingCommentsToolbar({
       if (targetId) {
         // Name the destination immediately while its smooth scroll is
         // still in flight, matching the column toolbar's behaviour.
-        setCurrentIndex(entries.findIndex((entry) => entry.id === targetId));
+        setCurrentId(targetId);
         onOpenThread(targetId);
       }
     },
-    [measureEntries, scrollContainerRef, currentThreadId, onOpenThread],
+    [threadOffsets, scrollContainerRef, currentThreadId, onOpenThread],
   );
 
-  const count = visibleThreads.length;
+  const count = navigableIds.length;
+  const currentIndex = currentId ? navigableIds.indexOf(currentId) : -1;
   const countLabel = threadCountLabel(count, currentIndex);
 
   return (
