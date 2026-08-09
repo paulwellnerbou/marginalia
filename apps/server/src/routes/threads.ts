@@ -64,6 +64,7 @@ interface ThreadRow extends CommentRow {
 }
 
 type ThreadState = 'open' | 'resolved';
+type ThreadStateFilter = ThreadState | 'all';
 type ResolutionKind = 'resolve' | 'accept' | 'reject';
 type RespondAction = 'resolve' | 'accept' | 'reject' | 'reopen';
 
@@ -92,6 +93,15 @@ const THREAD_SELECT = `
 `;
 
 /**
+ * `threadState(row) === 'open'`, in SQL, against the `THREAD_SELECT`
+ * aliases. `cep.status IS 'open'` rather than `=`: for a plain comment
+ * the column is NULL, and `=` would yield NULL there, which `NOT (…)`
+ * would not turn back into a match — leaving resolved comments in
+ * neither half.
+ */
+const OPEN_THREAD_SQL = `((cep.status IS NULL AND c.resolved_at IS NULL) OR cep.status IS 'open')`;
+
+/**
  * Unified thread endpoints.
  *
  * Root threads are the public API surface for comments and edit proposals.
@@ -118,8 +128,20 @@ export function threadsRouter(deps: AppDeps): Hono {
 /**
  * `GET /:uid/threads`
  *
- * Returns every root thread with its replies, optional proposal payload, and
+ * Returns root threads with their replies, optional proposal payload, and
  * server-computed capabilities.
+ *
+ * Open threads only, unless asked otherwise: a resolved thread is settled
+ * business, and on a long-reviewed document the archive dwarfs the live
+ * queue. Every resolved proposal returned costs a git read here and a
+ * chunk of the reading agent's context there. `state=resolved`/`all` ask
+ * for the rest; `thread_id` fetches one thread whatever its state, which
+ * is the cheap way back to something already closed.
+ *
+ * `thread_id` decides which threads come back, but it does not excuse a
+ * malformed `state` — a value the caller misspelled is still a 400,
+ * whatever else the request carries. Answering it anyway would hide the
+ * typo for exactly as long as `thread_id` stayed in the query.
  */
 async function listThreads(c: Context, deps: AppDeps) {
   const { db, store } = deps;
@@ -129,17 +151,48 @@ async function listThreads(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
+  const state = parseThreadStateFilter(c.req.query('state'));
+  if (!state) return c.json({ error: 'invalid-state' }, 400);
+  const threadId = c.req.query('thread_id') ?? null;
+
+  const conditions = [
+    'c.doc_uid = ?',
+    'c.parent_id IS NULL',
+    'c.parent_proposal_id IS NULL',
+    'c.deleted_at IS NULL',
+  ];
+  const params: string[] = [doc.uid];
+  if (threadId) {
+    // Naming a thread outranks the state filter — asking by id is how a
+    // caller reaches one resolved thread without pulling the archive.
+    // Any live message in it names it: the viewer's copy-link button
+    // sits on replies too, so a `#comment-<id>` link often points at one.
+    conditions.push(`(c.id = ?
+       OR EXISTS (SELECT 1
+                    FROM comments r
+                   WHERE r.doc_uid = c.doc_uid
+                     AND r.deleted_at IS NULL
+                     AND r.id = ?
+                     AND (r.parent_id = c.id OR r.parent_proposal_id = c.id)))`);
+    params.push(threadId, threadId);
+  } else if (state === 'open') {
+    conditions.push(OPEN_THREAD_SQL);
+  } else if (state === 'resolved') {
+    conditions.push(`NOT ${OPEN_THREAD_SQL}`);
+  }
+
   const roots = db
     .prepare(
       `${THREAD_SELECT}
-       WHERE c.doc_uid = ?
-         AND c.parent_id IS NULL
-         AND c.parent_proposal_id IS NULL
-         AND c.deleted_at IS NULL
+       WHERE ${conditions.join('\n         AND ')}
        ORDER BY c.created_at ASC`,
     )
-    .all(doc.uid) as ThreadRow[];
-  const replies = loadReplies(db, doc.uid, null);
+    .all(...params) as ThreadRow[];
+  const replies = loadRepliesForThreads(
+    db,
+    doc.uid,
+    roots.map((row) => row.id),
+  );
   const repliesByThread = groupRepliesByThread(replies);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, roots);
 
@@ -176,12 +229,42 @@ async function listThreads(c: Context, deps: AppDeps) {
   );
   return c.json({
     threads,
+    // Always for the whole document, however the list was filtered: a
+    // caller shown eight open threads still needs to know whether it is
+    // looking at all of them, and a hidden thread should read as
+    // "resolved" rather than as "gone".
+    counts: countThreadsByState(db, doc.uid),
     mention_candidates: listMentionCandidates(db, doc.uid),
     pending_mentions:
       c.req.query('consume_mentions') === 'false'
         ? []
         : consumePendingMentions(db, doc.uid, decision.identity?.displayName ?? null),
   });
+}
+
+function parseThreadStateFilter(raw: string | undefined): ThreadStateFilter | null {
+  if (raw === undefined || raw === '') return 'open';
+  return raw === 'open' || raw === 'resolved' || raw === 'all' ? raw : null;
+}
+
+function countThreadsByState(
+  db: Database,
+  docUid: string,
+): { total: number; open: number; resolved: number } {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN ${OPEN_THREAD_SQL} THEN 1 ELSE 0 END) AS open
+         FROM comments c
+         LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.doc_uid = ?
+          AND c.parent_id IS NULL
+          AND c.parent_proposal_id IS NULL
+          AND c.deleted_at IS NULL`,
+    )
+    .get(docUid) as { total: number; open: number | null };
+  const open = row.open ?? 0;
+  return { total: row.total, open, resolved: row.total - open };
 }
 
 /**
@@ -1751,29 +1834,45 @@ function loadReplyRow(
     .get(commentId, docUid, threadId, threadId) as CommentRow | undefined;
 }
 
-function loadReplies(db: Database, docUid: string, threadId: string | null): CommentRow[] {
-  if (threadId) {
-    return db
-      .prepare(
-        `SELECT *
-           FROM comments
-          WHERE doc_uid = ?
-            AND deleted_at IS NULL
-            AND (parent_id = ? OR parent_proposal_id = ?)
-          ORDER BY created_at ASC`,
-      )
-      .all(docUid, threadId, threadId) as CommentRow[];
-  }
+function loadReplies(db: Database, docUid: string, threadId: string): CommentRow[] {
   return db
     .prepare(
       `SELECT *
          FROM comments
         WHERE doc_uid = ?
           AND deleted_at IS NULL
-          AND (parent_id IS NOT NULL OR parent_proposal_id IS NOT NULL)
+          AND (parent_id = ? OR parent_proposal_id = ?)
         ORDER BY created_at ASC`,
     )
-    .all(docUid) as CommentRow[];
+    .all(docUid, threadId, threadId) as CommentRow[];
+}
+
+/**
+ * Replies for the roots being returned, rather than every reply in the
+ * document — with the list filtered down to open threads, the discussion
+ * under the resolved ones is dead weight.
+ *
+ * Batches share no thread, so per-thread order survives the concatenation
+ * even though the batches themselves are not merged.
+ */
+function loadRepliesForThreads(db: Database, docUid: string, threadIds: string[]): CommentRow[] {
+  const replies: CommentRow[] = [];
+  for (let i = 0; i < threadIds.length; i += ID_QUERY_BATCH) {
+    const batch = threadIds.slice(i, i + ID_QUERY_BATCH);
+    const placeholders = batch.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT *
+           FROM comments
+          WHERE doc_uid = ?
+            AND deleted_at IS NULL
+            AND (parent_id IN (${placeholders}) OR parent_proposal_id IN (${placeholders}))
+          ORDER BY created_at ASC`,
+      )
+      .all(docUid, ...batch, ...batch) as CommentRow[];
+    replies.push(...rows);
+  }
+  return replies;
 }
 
 function groupRepliesByThread(replies: CommentRow[]): Map<string, CommentRow[]> {

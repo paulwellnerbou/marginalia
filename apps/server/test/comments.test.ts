@@ -1545,7 +1545,9 @@ describe('threads API', () => {
     // server clears `anchor_end_block_id` so a future reopen / read
     // doesn't carry stale endpoints.
     const listRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/threads`, { headers: headersFor(ALICE) }),
+      new Request(`http://test/api/documents/${uid}/threads?thread_id=${proposed.thread.id}`, {
+        headers: headersFor(ALICE),
+      }),
     );
     const listJson = (await listRes.json()) as {
       threads: Array<ThreadShape & { anchor: ThreadAnchorShape & { end_block_id: string | null } }>;
@@ -1699,7 +1701,7 @@ describe('threads API', () => {
     expect(acceptRes.status).toBe(200);
 
     const bobList = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/threads`, {
+      new Request(`http://test/api/documents/${uid}/threads?thread_id=${proposed.thread.id}`, {
         headers: headersFor(BOB),
       }),
     );
@@ -1712,7 +1714,7 @@ describe('threads API', () => {
     ).toBe(false);
 
     const adminList = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/threads`, {
+      new Request(`http://test/api/documents/${uid}/threads?thread_id=${proposed.thread.id}`, {
         headers: asAdmin(),
       }),
     );
@@ -2681,6 +2683,163 @@ describe('threads API', () => {
       }
     });
   });
+  describe('listing filters resolved threads out', () => {
+    interface ListShape {
+      threads: ThreadShape[];
+      counts: { total: number; open: number; resolved: number };
+    }
+
+    async function list(uid: string, query = ''): Promise<ListShape> {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads${query}`, {
+          headers: headersFor(ALICE),
+        }),
+      );
+      expect(res.status).toBe(200);
+      return (await res.json()) as ListShape;
+    }
+
+    async function resolve(uid: string, threadId: string): Promise<void> {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${threadId}/respond`, {
+          method: 'POST',
+          headers: asAdmin(),
+          body: JSON.stringify({ action: 'resolve' }),
+        }),
+      );
+      expect(res.status).toBe(200);
+    }
+
+    async function comment(uid: string, blockId: string, body: string): Promise<string> {
+      const res = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, body);
+      return (res.body as { comment: { id: string } }).comment.id;
+    }
+
+    /** A document with one resolved thread and one still open. */
+    async function seedOneOfEach(): Promise<{ uid: string; closed: string; open: string }> {
+      const uid = await newDoc('# Title\n\nA paragraph.\n');
+      const blockId = await firstBlockId(uid);
+      const closed = await comment(uid, blockId, 'settled');
+      const open = await comment(uid, blockId, 'live');
+      await resolve(uid, closed);
+      return { uid, closed, open };
+    }
+
+    test('the default list is open threads only, and says how many it withheld', async () => {
+      const { uid, open } = await seedOneOfEach();
+
+      const listed = await list(uid);
+      expect(listed.threads.map((t) => t.id)).toEqual([open]);
+      expect(listed.counts).toEqual({ total: 2, open: 1, resolved: 1 });
+    });
+
+    test('state=resolved and state=all reach the archive', async () => {
+      const { uid, closed, open } = await seedOneOfEach();
+
+      expect((await list(uid, '?state=resolved')).threads.map((t) => t.id)).toEqual([closed]);
+      expect((await list(uid, '?state=all')).threads.map((t) => t.id).sort()).toEqual(
+        [closed, open].sort(),
+      );
+    });
+
+    test('an accepted proposal counts as resolved', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const created = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: headersFor(ALICE),
+          body: JSON.stringify({
+            anchor: { block_id: blockId, quote: 'Title' },
+            body: 'rationale',
+            proposal: { proposed_text: '# Fixed' },
+          }),
+        }),
+      );
+      const proposalId = ((await created.json()) as { thread: ThreadShape }).thread.id;
+      expect((await list(uid)).threads.map((t) => t.id)).toEqual([proposalId]);
+
+      const accepted = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${proposalId}/respond`, {
+          method: 'POST',
+          headers: asAdmin(),
+          body: JSON.stringify({ action: 'accept' }),
+        }),
+      );
+      expect(accepted.status).toBe(200);
+
+      const after = await list(uid);
+      expect(after.threads).toHaveLength(0);
+      expect(after.counts).toEqual({ total: 1, open: 0, resolved: 1 });
+      expect((await list(uid, '?state=resolved')).threads.map((t) => t.id)).toEqual([proposalId]);
+    });
+
+    test('thread_id fetches a resolved thread, and outranks the state filter', async () => {
+      const { uid, closed } = await seedOneOfEach();
+
+      const byId = await list(uid, `?thread_id=${closed}`);
+      expect(byId.threads.map((t) => t.id)).toEqual([closed]);
+      expect(byId.threads[0]!.state).toBe('resolved');
+      // Counts stay document-wide so a by-id caller can still see there
+      // is more where that came from.
+      expect(byId.counts).toEqual({ total: 2, open: 1, resolved: 1 });
+
+      const contradicted = await list(uid, `?thread_id=${closed}&state=open`);
+      expect(contradicted.threads.map((t) => t.id)).toEqual([closed]);
+    });
+
+    test('thread_id accepts the id of a reply, not just the opener', async () => {
+      const { uid, closed } = await seedOneOfEach();
+      const reply = await addReply(uid, ALICE, closed, 'one last word');
+      const replyId = (reply.body as { comment: { id: string } }).comment.id;
+
+      const byReply = await list(uid, `?thread_id=${replyId}`);
+      expect(byReply.threads.map((t) => t.id)).toEqual([closed]);
+      expect(byReply.threads[0]!.comments.map((c) => c.id)).toContain(replyId);
+    });
+
+    test('an unknown thread_id lists nothing rather than everything', async () => {
+      const { uid } = await seedOneOfEach();
+
+      expect((await list(uid, '?thread_id=nope')).threads).toHaveLength(0);
+    });
+
+    test('an unrecognised state is rejected instead of silently ignored', async () => {
+      const { uid, closed } = await seedOneOfEach();
+
+      async function statusOf(query: string): Promise<number> {
+        const res = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/threads${query}`, {
+            headers: headersFor(ALICE),
+          }),
+        );
+        if (res.status === 400) {
+          expect((await res.json()) as { error: string }).toEqual({ error: 'invalid-state' });
+        }
+        return res.status;
+      }
+
+      expect(await statusOf('?state=everything')).toBe(400);
+      // Deliberately still a 400 alongside thread_id, which decides the
+      // selection but does not make a misspelt state worth answering:
+      // ignoring it would hide the typo until thread_id left the query.
+      expect(await statusOf(`?thread_id=${closed}&state=everything`)).toBe(400);
+    });
+
+    test('replies come back with the thread they belong to, filtered or not', async () => {
+      const { uid, open } = await seedOneOfEach();
+      await addReply(uid, ALICE, open, 'first');
+      await addReply(uid, BOB, open, 'second');
+
+      const listed = await list(uid);
+      expect(listed.threads[0]!.comments.map((comment) => comment.body)).toEqual([
+        'live',
+        'first',
+        'second',
+      ]);
+    });
+  });
+
   describe('proposals answering a comment', () => {
     /** Create a proposal thread, optionally linked to the comment it answers. */
     async function propose(
@@ -2719,9 +2878,13 @@ describe('threads API', () => {
       return { status: res.status, body: (await res.json()) as Record<string, unknown> };
     }
 
+    // `state=all`: these cases follow a comment and the proposal
+    // answering it through acceptance, which resolves both.
     async function threadsOf(uid: string): Promise<ThreadShape[]> {
       const res = await app.hono.fetch(
-        new Request(`http://test/api/documents/${uid}/threads`, { headers: headersFor(ALICE) }),
+        new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+          headers: headersFor(ALICE),
+        }),
       );
       return ((await res.json()) as { threads: ThreadShape[] }).threads;
     }
