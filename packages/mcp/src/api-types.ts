@@ -121,6 +121,12 @@ export interface ThreadWire {
 
 export interface ListThreadsWire {
   threads: ThreadWire[];
+  /**
+   * Whole-document totals, whatever the request asked for — the only way
+   * to tell that threads were filtered out rather than absent. Optional:
+   * an older server omits it.
+   */
+  counts?: { total: number; open: number; resolved: number };
   mention_candidates: string[];
   pending_mentions: string[];
 }

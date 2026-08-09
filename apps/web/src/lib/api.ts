@@ -1226,6 +1226,8 @@ export interface Thread {
 
 export interface ListThreadsResponse {
   threads: Thread[];
+  /** Whole-document totals, unaffected by any filter on the request. */
+  counts?: { total: number; open: number; resolved: number };
   mention_candidates: string[];
   pending_mentions: string[];
 }
@@ -1317,9 +1319,13 @@ export function listThreads(
   const existing = listThreadsInflight.get(cacheKey);
   if (existing) return existing;
 
-  const suffix = consumeMentions ? '' : '?consume_mentions=false';
+  // `state=all` explicitly: the endpoint serves open threads by default,
+  // but the viewer renders resolved ones too — collapsed, filterable, and
+  // reopenable — so it wants the archive as well.
+  const query = new URLSearchParams({ state: 'all' });
+  if (!consumeMentions) query.set('consume_mentions', 'false');
   const promise = request<ListThreadsResponse>(
-    `/api/documents/${encodeURIComponent(uid)}/threads${suffix}`,
+    `/api/documents/${encodeURIComponent(uid)}/threads?${query}`,
     {
       method: 'GET',
       docUid: uid,
