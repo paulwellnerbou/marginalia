@@ -2805,15 +2805,25 @@ describe('threads API', () => {
     });
 
     test('an unrecognised state is rejected instead of silently ignored', async () => {
-      const { uid } = await seedOneOfEach();
+      const { uid, closed } = await seedOneOfEach();
 
-      const res = await app.hono.fetch(
-        new Request(`http://test/api/documents/${uid}/threads?state=everything`, {
-          headers: headersFor(ALICE),
-        }),
-      );
-      expect(res.status).toBe(400);
-      expect((await res.json()) as { error: string }).toEqual({ error: 'invalid-state' });
+      async function statusOf(query: string): Promise<number> {
+        const res = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/threads${query}`, {
+            headers: headersFor(ALICE),
+          }),
+        );
+        if (res.status === 400) {
+          expect((await res.json()) as { error: string }).toEqual({ error: 'invalid-state' });
+        }
+        return res.status;
+      }
+
+      expect(await statusOf('?state=everything')).toBe(400);
+      // Deliberately still a 400 alongside thread_id, which decides the
+      // selection but does not make a misspelt state worth answering:
+      // ignoring it would hide the typo until thread_id left the query.
+      expect(await statusOf(`?thread_id=${closed}&state=everything`)).toBe(400);
     });
 
     test('replies come back with the thread they belong to, filtered or not', async () => {

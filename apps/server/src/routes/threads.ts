@@ -137,6 +137,11 @@ export function threadsRouter(deps: AppDeps): Hono {
  * chunk of the reading agent's context there. `state=resolved`/`all` ask
  * for the rest; `thread_id` fetches one thread whatever its state, which
  * is the cheap way back to something already closed.
+ *
+ * `thread_id` decides which threads come back, but it does not excuse a
+ * malformed `state` — a value the caller misspelled is still a 400,
+ * whatever else the request carries. Answering it anyway would hide the
+ * typo for exactly as long as `thread_id` stayed in the query.
  */
 async function listThreads(c: Context, deps: AppDeps) {
   const { db, store } = deps;
