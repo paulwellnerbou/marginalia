@@ -211,14 +211,14 @@ export function UserMenu({
       </DropdownMenu.Root>
 
       <Dialog.Root open={dialogOpen} onOpenChange={setDialogOpen}>
-        <Dialog.Content size="2" maxWidth="520px">
-          <Dialog.Title>Display name</Dialog.Title>
-          <Dialog.Description size="2" color="gray" mb="3">
-            Shown on your edits and comments. Your persistent user ID (
-            <Code size="1">{shortId}…</Code>) stays the same, so your right to edit or delete your
-            own comments is preserved.
-          </Dialog.Description>
-          <Flex direction="column" gap="3">
+        <Dialog.Content size="2" maxWidth="520px" className="dialog-content--fixed-footer">
+          <div className="dialog-scroll-body">
+            <Dialog.Title>Display name</Dialog.Title>
+            <Dialog.Description size="2" color="gray" mb="3">
+              Shown on your edits and comments. Your persistent user ID (
+              <Code size="1">{shortId}…</Code>) stays the same, so your right to edit or delete your
+              own comments is preserved.
+            </Dialog.Description>
             <TextField.Root
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -232,16 +232,16 @@ export function UserMenu({
                 }
               }}
             />
-            <Flex gap="2" justify="end">
-              <Dialog.Close>
-                <Button variant="soft" color="gray">
-                  Cancel
-                </Button>
-              </Dialog.Close>
-              <Button onClick={() => save(draft)} disabled={!draft.trim()}>
-                Save
+          </div>
+          <Flex className="dialog-footer" gap="2" justify="end" mt="3">
+            <Dialog.Close>
+              <Button variant="soft" color="gray">
+                Cancel
               </Button>
-            </Flex>
+            </Dialog.Close>
+            <Button onClick={() => save(draft)} disabled={!draft.trim()}>
+              Save
+            </Button>
           </Flex>
         </Dialog.Content>
       </Dialog.Root>

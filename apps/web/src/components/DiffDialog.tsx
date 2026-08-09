@@ -40,8 +40,12 @@ export function DiffDialog({
 }: Props) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Content size="3" maxWidth="900px" className="diff-dialog">
-        <div className="diff-dialog-body">
+      <Dialog.Content
+        size="3"
+        maxWidth="900px"
+        className="dialog-content--fixed-footer diff-dialog"
+      >
+        <div className="dialog-scroll-body diff-dialog-body">
           <Dialog.Title>{title ?? 'Proposed change'}</Dialog.Title>
           <Dialog.Description size="2" color="gray" mb="3">
             Original on the left of each line (−), proposed on the right (+). Unchanged lines are
@@ -67,14 +71,7 @@ export function DiffDialog({
           )}
         </div>
 
-        <Flex
-          className="diff-dialog-footer"
-          gap="2"
-          justify="end"
-          mt="4"
-          align="center"
-          wrap="wrap"
-        >
+        <Flex className="dialog-footer" gap="2" justify="end" mt="4" align="center" wrap="wrap">
           {/* Announced by the accompanying error toast, not here — two
               assertive regions would read the same failure out twice. */}
           {actionError && (

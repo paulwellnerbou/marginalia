@@ -139,6 +139,33 @@ a {
   overscroll-behavior: contain;
 }
 
+/* Dialogs with action bars use a two-part layout: only the body scrolls,
+   while the footer remains inside the viewport at all times. Components
+   opt in explicitly because informational dialogs and the image lightbox
+   do not have footer chrome. */
+.dialog-content--fixed-footer {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dialog-scroll-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.dialog-form-layout {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dialog-footer {
+  flex: none;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   :root,
   .radix-themes {
@@ -3058,8 +3085,22 @@ button.primary:disabled {
    composer-field chrome rules above. */
 .proposal-composer-layout {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 0.75rem;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* In compact mode the editor region gives up height first. The rationale
+   and action row stay visible together as the dialog footer. */
+.proposal-composer-layout:not(.proposal-composer-layout--expanded) .proposal-composer-split {
+  min-height: 0;
+  overflow: auto;
+}
+
+.proposal-composer-footer {
+  flex: none;
 }
 
 /* Title + expand/collapse toggle: title takes the row, button hugs the end.
@@ -3203,21 +3244,27 @@ button.primary:disabled {
  * Diff view (inside DiffDialog)
  * ============================================================ */
 
-/* The footer is deliberately outside the scrolling body so Accept,
-   Reject, and Close remain reachable even on short screens. */
-.diff-dialog {
+/* A diff already has its own purpose-built scroll pane and overview rail.
+   Let that pane absorb the dialog's remaining height so the generic modal
+   body does not add a second scrollbar. */
+.diff-dialog-body {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
 }
 
-.diff-dialog-body {
+.diff-dialog-body > .diff-view {
+  flex: 1 1 auto;
   min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
 }
 
-.diff-dialog-footer {
+.diff-dialog .diff-scroll {
+  max-height: none;
+  min-height: 0;
+}
+
+.diff-dialog-reply {
   flex: none;
 }
 

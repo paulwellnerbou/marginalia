@@ -399,32 +399,34 @@ function PairingDialog({
 
   return (
     <Dialog.Root open={pairing !== null} onOpenChange={onOpenChange}>
-      <Dialog.Content maxWidth="26rem">
-        <Dialog.Title>Add a device</Dialog.Title>
-        <Dialog.Description size="2" color="gray" mb="4">
-          Scan this on the other device, or open Marginalia there and enter the code.
-        </Dialog.Description>
+      <Dialog.Content maxWidth="26rem" className="dialog-content--fixed-footer">
+        <div className="dialog-scroll-body">
+          <Dialog.Title>Add a device</Dialog.Title>
+          <Dialog.Description size="2" color="gray" mb="4">
+            Scan this on the other device, or open Marginalia there and enter the code.
+          </Dialog.Description>
 
-        {pairing && (
-          <Flex direction="column" align="center" gap="3">
-            <PairingQr value={pairUrl} />
-            <Copyable text={pairing.code} size="3" ariaLabel="Copy pairing code" />
-            <Text size="1" color={remaining === 0 ? 'red' : 'gray'}>
-              {remaining === 0
-                ? 'This code has expired — close and create a new one.'
-                : `Expires in ${formatRemaining(remaining)}. It works once.`}
-            </Text>
-          </Flex>
-        )}
+          {pairing && (
+            <Flex direction="column" align="center" gap="3">
+              <PairingQr value={pairUrl} />
+              <Copyable text={pairing.code} size="3" ariaLabel="Copy pairing code" />
+              <Text size="1" color={remaining === 0 ? 'red' : 'gray'}>
+                {remaining === 0
+                  ? 'This code has expired — close and create a new one.'
+                  : `Expires in ${formatRemaining(remaining)}. It works once.`}
+              </Text>
+            </Flex>
+          )}
 
-        <Callout.Root color="amber" size="1" mt="4">
-          <Callout.Text>
-            Anyone who uses this code gets your whole document list, including the ones you
-            administer. Only scan it on a device you own.
-          </Callout.Text>
-        </Callout.Root>
+          <Callout.Root color="amber" size="1" mt="4">
+            <Callout.Text>
+              Anyone who uses this code gets your whole document list, including the ones you
+              administer. Only scan it on a device you own.
+            </Callout.Text>
+          </Callout.Root>
+        </div>
 
-        <Flex justify="end" mt="4">
+        <Flex className="dialog-footer" justify="end" mt="4">
           <Dialog.Close>
             <Button variant="soft">Done</Button>
           </Dialog.Close>
