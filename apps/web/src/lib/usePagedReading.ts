@@ -289,11 +289,23 @@ export function usePagedReading(
    */
   // biome-ignore lint/correctness/useExhaustiveDependencies: remeasureKey is a pure trigger — reading width, zoom, theme and pane widths all move the page box.
   useEffect(() => {
+    const leavingPagedMode = wasEnabled.current && !enabled;
+    wasEnabled.current = enabled;
+
+    // Clear pagination state on the mode transition even if the document is
+    // temporarily unmounted. Otherwise this effect can miss the transition
+    // and carry stale page geometry into the next paged session.
+    if (leavingPagedMode) {
+      setPage(0);
+      setPageCount(1);
+      heldPlace.current = null;
+      geometry.current = null;
+      setTooWideToPaint(false);
+    }
+
     const scroll = scrollRef.current;
     const viewport = gestureSurfaceOf(scroll);
     if (!scroll || !viewport) return;
-    const leavingPagedMode = wasEnabled.current && !enabled;
-    wasEnabled.current = enabled;
     if (!enabled) {
       scroll.style.removeProperty('--doc-page-height');
       scroll.style.removeProperty('--doc-page-block');
@@ -301,13 +313,6 @@ export function usePagedReading(
       if (leavingPagedMode) {
         scroll.scrollLeft = 0;
         scroll.scrollTop = 0;
-        setPage(0);
-        setPageCount(1);
-        // Both describe a pagination that no longer exists; carrying them
-        // into the next paged session would re-anchor against it.
-        heldPlace.current = null;
-        geometry.current = null;
-        setTooWideToPaint(false);
       }
       return;
     }
