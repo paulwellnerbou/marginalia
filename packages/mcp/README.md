@@ -98,7 +98,10 @@ link for the agent alongside it.
 To point an agent at one comment, hand it the link the viewer's "copy link to this comment"
 button produces. The `#comment-<id>` fragment selects that thread — the id may belong to a
 reply, which resolves to the thread containing it. `list_threads` also takes any message's
-id as `thread_id`.
+id as `thread_id`. Either way the thread comes back whether or not it is resolved, which is
+the way to revisit a closed discussion: the plain listing leaves resolved threads out, so
+that an agent reading a much-reviewed document spends its context on the live queue rather
+than on settled business. It reports how many it withheld, and `state="all"` asks for them.
 
 The same works in reverse: every thread, comment, or proposal a tool reports comes with a
 `url:` line carrying that `#comment-<id>` link, so the agent can point you at what it did
@@ -187,6 +190,15 @@ decide nothing. `editor` additionally lets it accept proposals and write
 to the document directly — useful, but then "suggest" and "apply" are one
 approval apart.
 
+A document `create_document` makes is **invite-only**: the token-free
+`/d/<uid>` URL opens nothing, so everyone who is to read it needs a link
+of their own — including you. Pass `invite_only: false` to lift that.
+
+It is the only one of the two gates that lifts: `password_protected` is
+independent, so a document with both set turns away a visitor who clears
+just one, and lifting invite-only leaves the URL enough on its own only
+when no password is set.
+
 ## The tools
 
 **Reading**
@@ -203,7 +215,7 @@ approval apart.
 
 | Tool | |
 | --- | --- |
-| `list_threads` | Comments and edit proposals with their discussion and anchored text. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter; `context_blocks` widens each one to the paragraphs around it. |
+| `list_threads` | Comments and edit proposals with their discussion and anchored text. Open threads only, unless `thread_id` names one or `state` asks for more. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter; `context_blocks` widens each one to the paragraphs around it. |
 | `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet). |
 | `create_proposal` | A suggested replacement. `answers_thread_id` links it to the comment it answers. |
 | `update_proposal` | Revise an open proposal you authored, or any open proposal as document admin — new text, same thread, discussion intact. Rebuilds it against the current source, so it also refreshes a stale or conflicted proposal. `comment` posts a revision note in the discussion alongside the change. |

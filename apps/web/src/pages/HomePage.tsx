@@ -587,7 +587,9 @@ function UploadDialog({
    */
   const [docName, setDocName] = useState('');
   const [passwordProtected, setPasswordProtected] = useState(false);
-  const [inviteOnly, setInviteOnly] = useState(false);
+  // Matches the server default. Unticking it is the deliberate act of
+  // putting the document on the open web.
+  const [inviteOnly, setInviteOnly] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
@@ -734,6 +736,7 @@ function UploadDialog({
     setFormat(nextDraft?.format ?? 'markdown');
     setDocName(nextDraft?.docName ?? '');
     setPasswordProtected(false);
+    setInviteOnly(true);
     setSubmitting(false);
     setError(null);
     setCreatedPassword(null);
@@ -915,9 +918,20 @@ function UploadDialog({
                       checked={inviteOnly}
                       onCheckedChange={(c) => setInviteOnly(c === true)}
                     />
-                    Restrict to access links (the URL alone opens nothing)
+                    Restrict to access links
                   </Flex>
                 </Text>
+                <Flex pl="6">
+                  <Text size="1" color="gray">
+                    {/* The password is a gate of its own, so what the URL
+                        alone is worth depends on both boxes. */}
+                    {inviteOnly
+                      ? 'Only people you hand an access link to can open it. The URL alone opens nothing.'
+                      : passwordProtected
+                        ? 'Anyone with the document URL can read it, once they enter the password.'
+                        : 'Anyone with the document URL can read it.'}
+                  </Text>
+                </Flex>
                 {/* Editing rights are granted via invite links in Access
                     control; no upload-time toggle. */}
               </Flex>

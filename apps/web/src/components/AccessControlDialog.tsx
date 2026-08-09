@@ -221,9 +221,13 @@ export function AccessControlDialog({
             </Text>
             <Flex pl="6">
               <Text size="1" color="gray">
+                {/* The password below is a gate of its own, so what the URL
+                    alone is worth depends on both settings. */}
                 {inviteOnly
                   ? 'Only the access links below open this document. Anyone else holding the URL is turned away.'
-                  : 'Anyone with the document URL can read it. Access links additionally grant comment or edit rights.'}
+                  : passwordProtected
+                    ? 'Anyone with the document URL can read it, once they enter the password. Access links additionally grant comment or edit rights.'
+                    : 'Anyone with the document URL can read it. Access links additionally grant comment or edit rights.'}
               </Text>
             </Flex>
           </Flex>

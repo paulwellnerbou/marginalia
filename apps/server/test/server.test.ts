@@ -85,7 +85,10 @@ describe('documents API', () => {
       new Request('http://test/api/documents', {
         method: 'POST',
         headers: headersFor(client),
-        body: JSON.stringify(body),
+        // Documents are invite-only unless asked otherwise. Most cases here
+        // are about roles, passwords or content and want an ordinary
+        // readable document, so opt out unless the case says otherwise.
+        body: JSON.stringify({ invite_only: false, ...body }),
       }),
     );
     expect(res.status).toBe(201);
@@ -467,6 +470,51 @@ describe('documents API', () => {
     expect(res.status).toBe(200);
     const doc = (await res.json()) as { role: string };
     expect(doc.role).toBe('reader');
+  });
+
+  test('a document is invite_only unless the upload opts out', async () => {
+    // Deliberately not via `upload()`, which opts out: the point is what an
+    // upload that never mentions invite_only gets. Old clients are that case.
+    const res = await app.hono.fetch(
+      new Request('http://test/api/documents', {
+        method: 'POST',
+        headers: headersFor(CLIENT_A),
+        body: JSON.stringify({ markdown: '# Fresh' }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as CreateResponse & { invite_only: boolean };
+    expect(created.invite_only).toBe(true);
+
+    const stranger = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, { headers: headersFor(CLIENT_B) }),
+    );
+    expect(stranger.status).toBe(401);
+    expect((await stranger.json()) as { error: string }).toEqual({ error: 'invite-required' });
+
+    // The creator's own admin link still opens it — the default closes the
+    // document to strangers, not to its author.
+    const asAdmin = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(asAdmin.status).toBe(200);
+    expect(((await asAdmin.json()) as { invite_only: boolean }).invite_only).toBe(true);
+  });
+
+  test('invite_only: false opts a document back onto the open web', async () => {
+    const created = (await upload(CLIENT_A, {
+      markdown: '# Public',
+      invite_only: false,
+    })) as CreateResponse & { invite_only: boolean };
+    expect(created.invite_only).toBe(false);
+
+    const stranger = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, { headers: headersFor(CLIENT_B) }),
+    );
+    expect(stranger.status).toBe(200);
+    expect(((await stranger.json()) as { role: string }).role).toBe('reader');
   });
 
   test('invite_only doc rejects a stranger with no invite', async () => {
@@ -2813,8 +2861,10 @@ describe('documents API', () => {
     expect(dupe.source).toContain('Original.');
     expect(dupe.name).toBe('Original Name');
 
+    // `state=all`: the roundtrip is supposed to preserve resolution, so
+    // the resolved thread is exactly the one worth looking at.
     const threadsRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${imported.uid}/threads`, {
+      new Request(`http://test/api/documents/${imported.uid}/threads?state=all`, {
         headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
       }),
     );
@@ -3838,6 +3888,45 @@ describe('documents API', () => {
     const partial = await res.text();
     expect(partial).toContain('First accepted.');
     expect(partial).not.toContain('Second accepted.');
+  });
+
+  test('an imported bundle lands invite_only, whatever the source doc was', async () => {
+    // Round-tripping an open document through export/import must not be a
+    // way past the default — the import is a new document like any other.
+    const source = await upload(CLIENT_A, { markdown: '# Open', invite_only: false });
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${source.uid}/export`, {
+        headers: withInvite(headersFor(CLIENT_A), source.admin_invite.token),
+      }),
+    );
+    expect(exportRes.status).toBe(200);
+
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: headersFor(CLIENT_C),
+        body: JSON.stringify(await exportRes.json()),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as {
+      uid: string;
+      invite_only: boolean;
+      admin_invite: { token: string };
+    };
+    expect(imported.invite_only).toBe(true);
+
+    const stranger = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}`, { headers: headersFor(CLIENT_B) }),
+    );
+    expect(stranger.status).toBe(401);
+    expect((await stranger.json()) as { error: string }).toEqual({ error: 'invite-required' });
+
+    // ...and the source document is untouched by its own export.
+    const original = await app.hono.fetch(
+      new Request(`http://test/api/documents/${source.uid}`, { headers: headersFor(CLIENT_B) }),
+    );
+    expect(original.status).toBe(200);
   });
 
   test('import accepts legacy v1 bundles without representation', async () => {

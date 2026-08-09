@@ -97,6 +97,14 @@ export function registerDocumentTools(
           .boolean()
           .optional()
           .describe('Generate a password gate. The generated password is returned once.'),
+        invite_only: z
+          .boolean()
+          .optional()
+          .describe(
+            'Defaults to true: the document opens only for access-link holders. Pass false to ' +
+              'lift that, which leaves the plain URL readable by whoever holds it — unless ' +
+              'password_protected is also set, since that gate applies either way.',
+          ),
         base_url: z
           .string()
           .optional()
@@ -139,17 +147,25 @@ export function registerDocumentTools(
             format,
             ...(args.name ? { name: args.name } : {}),
             ...(args.password_protected ? { password_protected: true } : {}),
+            ...(args.invite_only === false ? { invite_only: false } : {}),
           },
         });
 
         const ref = { baseUrl: base.baseUrl, uid: created.uid, token: created.admin_invite.token };
         ctx.client.rememberDocument(ref);
+        // Only an explicit `true` closes the document — an instance that
+        // predates the flag omits the field and serves the bare URL to
+        // anyone, so saying otherwise would be a promise it cannot keep.
+        const inviteOnly = created.invite_only === true;
         return text(
           [
             `Created "${created.name ?? '(untitled)'}" (${created.format}).`,
             `uid: ${created.uid}`,
             `admin link (full control — keep private): ${base.baseUrl}${created.admin_invite.url}`,
-            `read-only link: ${base.baseUrl}/d/${created.uid}`,
+            inviteOnly
+              ? `token-free link: ${base.baseUrl}/d/${created.uid} — invite-only, so it opens ` +
+                'nothing until you mint that person their own access link'
+              : `read-only link: ${base.baseUrl}/d/${created.uid}`,
             created.password
               ? `password (shown once, store it now): ${created.password}`
               : 'no password gate',

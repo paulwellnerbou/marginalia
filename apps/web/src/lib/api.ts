@@ -219,7 +219,12 @@ export interface UploadOptions {
    *  falls back to deriving a title from the rendered content. */
   name?: string;
   password_protected?: boolean;
-  /** Restrict reads to invite-link holders from the moment the doc exists. */
+  /**
+   * Restrict reads to invite-link holders from the moment the doc exists.
+   * Omitted → the server's default, which is `true`. Pass `false` to drop
+   * that restriction — which leaves the URL enough on its own only when
+   * `password_protected` is off too, the two being independent gates.
+   */
   invite_only?: boolean;
   default_theme?: string;
 }
@@ -233,9 +238,9 @@ export interface UploadResponse {
   mermaid_renderer: MermaidRenderer | null;
   format: DocumentFormat;
   /**
-   * Echoes back what the upload asked for. Optional because a tab loaded
-   * from an older build can outlive a deploy and read a response that
-   * predates the field.
+   * What the server applied — `true` for an upload that said nothing, since
+   * that is the default. Optional because a tab loaded from an older build
+   * can outlive a deploy and read a response that predates the field.
    */
   invite_only?: boolean;
   password?: string;
@@ -1226,6 +1231,8 @@ export interface Thread {
 
 export interface ListThreadsResponse {
   threads: Thread[];
+  /** Whole-document totals, unaffected by any filter on the request. */
+  counts?: { total: number; open: number; resolved: number };
   mention_candidates: string[];
   pending_mentions: string[];
 }
@@ -1317,9 +1324,13 @@ export function listThreads(
   const existing = listThreadsInflight.get(cacheKey);
   if (existing) return existing;
 
-  const suffix = consumeMentions ? '' : '?consume_mentions=false';
+  // `state=all` explicitly: the endpoint serves open threads by default,
+  // but the viewer renders resolved ones too — collapsed, filterable, and
+  // reopenable — so it wants the archive as well.
+  const query = new URLSearchParams({ state: 'all' });
+  if (!consumeMentions) query.set('consume_mentions', 'false');
   const promise = request<ListThreadsResponse>(
-    `/api/documents/${encodeURIComponent(uid)}/threads${suffix}`,
+    `/api/documents/${encodeURIComponent(uid)}/threads?${query}`,
     {
       method: 'GET',
       docUid: uid,
@@ -1409,7 +1420,7 @@ export function createComment(
     body: string;
   },
   identity: Identity,
-): Promise<void> {
+): Promise<Thread> {
   if (payload.parent_id) {
     return request<ThreadMutationResponse>(
       `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(payload.parent_id)}/respond`,
@@ -1421,6 +1432,7 @@ export function createComment(
       },
     ).then((res) => {
       rememberThread(uid, res.thread);
+      return res.thread;
     });
   }
 
@@ -1434,6 +1446,7 @@ export function createComment(
     docUid: uid,
   }).then((res) => {
     rememberThread(uid, res.thread);
+    return res.thread;
   });
 }
 

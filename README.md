@@ -425,6 +425,11 @@ The bundle includes:
 That makes the export readable by external tools while still round-tripping
 back into Marginalia.
 
+Access control does not ride along. Tokens are tied to the deployment that
+minted them, so the import drops the password and lands invite-only like
+any other new document — the importer gets a fresh admin link, and anyone
+else needs one minted for them.
+
 ## Deployment
 
 This repo includes Docker-based deployment automation:
