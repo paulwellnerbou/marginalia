@@ -1,7 +1,14 @@
 import type { Database } from 'bun:sqlite';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
-import { authorize, canEdit, INVITE_SESSION_COOKIE, parseCookie, SESSION_COOKIE } from '../auth.js';
+import {
+  authorize,
+  canEdit,
+  headersWithInviteCookie,
+  INVITE_SESSION_COOKIE,
+  parseCookie,
+  SESSION_COOKIE,
+} from '../auth.js';
 import type { BlobStore } from '../blob-store.js';
 import type { ServerConfig } from '../config.js';
 import { COVER_MAX_BYTES, coverRefName, loadCoverDescriptor, sniffCoverMime } from '../cover.js';
@@ -463,7 +470,10 @@ function authorizeDoc(c: Context, db: Database, doc: DocumentRow) {
   const cookie = c.req.raw.headers.get('cookie');
   const sessionToken = parseCookie(cookie, SESSION_COOKIE);
   const inviteSessionToken = parseCookie(cookie, INVITE_SESSION_COOKIE);
-  return authorize(db, doc, c.req.raw.headers, sessionToken, inviteSessionToken);
+  // `<img src>` is most of this router's traffic and can set no headers,
+  // so the invite-token cookie is how those requests present a credential.
+  const headers = headersWithInviteCookie(c.req.raw);
+  return authorize(db, doc, headers, sessionToken, inviteSessionToken);
 }
 
 function normalizeRefName(raw: string): string | null {

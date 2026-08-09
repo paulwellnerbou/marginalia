@@ -126,6 +126,195 @@ describe('assets API', () => {
     expect(missing.status).toBe(404);
   });
 
+  describe('invite-only documents: the image cookie', () => {
+    /** An invite-only doc with one attached image, plus its admin token. */
+    async function privateDocWithImage() {
+      const res = await app.hono.fetch(
+        new Request('http://test/api/documents', {
+          method: 'POST',
+          headers: headers(ALICE, { 'content-type': 'application/json' }),
+          body: JSON.stringify({ source: '# Private\n\n![](cat.png)\n' }),
+        }),
+      );
+      const doc = (await res.json()) as { uid: string; admin_invite: { token: string } };
+      const put = await putAsset(
+        doc.uid,
+        doc.admin_invite.token,
+        'cat.png',
+        new Uint8Array([137, 80, 78, 71]),
+      );
+      expect(put.status).toBe(201);
+      return doc;
+    }
+
+    /** The `Set-Cookie` this request got back, as a `Cookie` header value. */
+    function cookieFrom(res: Response): string {
+      const raw = res.headers.get('set-cookie') ?? '';
+      return raw.split(';')[0] ?? '';
+    }
+
+    test('reading the document hands back a cookie scoped to that document', async () => {
+      const doc = await privateDocWithImage();
+      const read = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}`, {
+          headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+        }),
+      );
+      expect(read.status).toBe(200);
+      const setCookie = read.headers.get('set-cookie') ?? '';
+      expect(setCookie).toContain('marginalia_invite_token=');
+      // Path-scoped, so a person holding many documents does not send a
+      // cookie per document on every request.
+      expect(setCookie).toContain(`Path=/api/documents/${doc.uid}`);
+      expect(setCookie).toContain('HttpOnly');
+      expect(setCookie).toContain('SameSite=Lax');
+    });
+
+    test('an image loads with only that cookie — what an <img> can actually send', async () => {
+      const doc = await privateDocWithImage();
+      const read = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}`, {
+          headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+        }),
+      );
+      const cookie = cookieFrom(read);
+
+      // No invite header, no identity — an <img> sends neither.
+      const img = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+          headers: new Headers({ cookie }),
+        }),
+      );
+      expect(img.status).toBe(200);
+      expect(img.headers.get('content-type')).toBe('image/png');
+
+      // And without it the document is as closed as before.
+      const bare = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`),
+      );
+      expect(bare.status).toBe(401);
+    });
+
+    test('the cookie opens that document only, not another one', async () => {
+      const mine = await privateDocWithImage();
+      const theirs = await privateDocWithImage();
+      const read = await app.hono.fetch(
+        new Request(`http://test/api/documents/${mine.uid}`, {
+          headers: headers(ALICE, { [INVITE_HEADER]: mine.admin_invite.token }),
+        }),
+      );
+      const cookie = cookieFrom(read);
+
+      // Path scoping keeps a real browser from ever sending it here; the
+      // server must refuse it anyway, because a hand-made request can.
+      const crossed = await app.hono.fetch(
+        new Request(`http://test/api/documents/${theirs.uid}/assets/cat.png`, {
+          headers: new Headers({ cookie }),
+        }),
+      );
+      expect(crossed.status).toBe(401);
+    });
+
+    test('revoking the invite stops the cookie working', async () => {
+      const doc = await privateDocWithImage();
+      const mk = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}/invites`, {
+          method: 'POST',
+          headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+          body: JSON.stringify({ display_name: 'Bob', role: 'reader' }),
+        }),
+      );
+      const { invite } = (await mk.json()) as { invite: { token: string } };
+
+      const read = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}`, {
+          headers: headers(BOB, { [INVITE_HEADER]: invite.token }),
+        }),
+      );
+      const cookie = cookieFrom(read);
+      const before = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+          headers: new Headers({ cookie }),
+        }),
+      );
+      expect(before.status).toBe(200);
+
+      const revoke = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}/invites/${invite.token}`, {
+          method: 'DELETE',
+          headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+        }),
+      );
+      expect(revoke.status).toBe(204);
+
+      // The cookie is only ever a token: revoking the row it names closes
+      // the door, no cookie expiry needed.
+      const after = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+          headers: new Headers({ cookie }),
+        }),
+      );
+      expect(after.status).toBe(401);
+    });
+
+    test('the cookie fetches bytes but cannot write them', async () => {
+      const doc = await privateDocWithImage();
+      const read = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}`, {
+          headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+        }),
+      );
+      const cookie = cookieFrom(read);
+
+      const form = new FormData();
+      form.append('file', new Blob([new Uint8Array([1, 2])], { type: 'image/png' }), 'evil.png');
+      form.append('ref_name', 'evil.png');
+      const upload = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}/assets`, {
+          method: 'POST',
+          headers: new Headers({ cookie }),
+          body: form,
+        }),
+      );
+      expect(upload.status).toBe(401);
+
+      const remove = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+          method: 'DELETE',
+          headers: new Headers({ cookie }),
+        }),
+      );
+      expect(remove.status).toBe(401);
+    });
+
+    test('the cookie does not open the document itself', async () => {
+      const doc = await privateDocWithImage();
+      const read = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}`, {
+          headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+        }),
+      );
+      const cookie = cookieFrom(read);
+
+      const body = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}`, {
+          headers: new Headers({ cookie }),
+        }),
+      );
+      expect(body.status).toBe(401);
+      expect((await body.json()) as { error: string }).toEqual({ error: 'invite-required' });
+    });
+
+    test('an open document sets no such cookie for an anonymous reader', async () => {
+      const doc = await upload();
+      const read = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}`, { headers: headers(BOB) }),
+      );
+      expect(read.status).toBe(200);
+      expect(read.headers.get('set-cookie') ?? '').not.toContain('marginalia_invite_token');
+    });
+  });
+
   test('upload requires editor role — plain reader is forbidden', async () => {
     const doc = await upload();
     const bytes = new Uint8Array([1, 2, 3]);

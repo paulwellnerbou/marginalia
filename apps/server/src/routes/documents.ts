@@ -28,7 +28,9 @@ import {
   createSession,
   deleteSession,
   hashPassword,
+  INVITE_HEADER,
   INVITE_SESSION_COOKIE,
+  inviteTokenCookie,
   parseCookie,
   readIdentity,
   readInvite,
@@ -302,6 +304,18 @@ async function getDocument(c: Context, deps: AppDeps) {
 
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
+
+  // The rendered HTML below points every image at the asset proxy, and the
+  // browser fetches those with no header of its own. Hand the token back as
+  // a document-scoped cookie so those requests carry the same credential
+  // this one did. See INVITE_TOKEN_COOKIE.
+  const presented = c.req.raw.headers.get(INVITE_HEADER);
+  if (presented && decision.invite) {
+    c.header(
+      'Set-Cookie',
+      inviteTokenCookie(doc.uid, presented, deps.config.namedInviteSessionTtlMs),
+    );
+  }
 
   const source = store.read(doc);
   const rendered = await renderDocument(source, doc.format);
@@ -2604,6 +2618,9 @@ function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
   const cookie = c.req.raw.headers.get('cookie');
   const sessionToken = parseCookie(cookie, SESSION_COOKIE);
   const inviteSessionToken = parseCookie(cookie, INVITE_SESSION_COOKIE);
+  // Deliberately not reading the invite-token cookie: it exists so `<img>`
+  // can load bytes, and the assets router is the only place that honours
+  // it. The document itself always costs a header or a claimed session.
   return authorize(deps.db, doc, c.req.raw.headers, sessionToken, inviteSessionToken);
 }
 
