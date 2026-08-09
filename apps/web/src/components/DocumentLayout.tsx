@@ -100,7 +100,16 @@ import {
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
-import { readUiScale, setUiScale, UI_SCALE_MAX, UI_SCALE_MIN } from '../lib/ui-scale.js';
+import {
+  COARSE_POINTER,
+  readUiScale,
+  resetUiScale,
+  setUiScale,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
+  UI_SCALE_POINTER_DEFAULT,
+  UI_SCALE_TOUCH_DEFAULT,
+} from '../lib/ui-scale.js';
 import { useMediaQuery } from '../lib/useMediaQuery.js';
 import { usePagedReading } from '../lib/usePagedReading.js';
 import { APP_ACCENT_COLOR } from '../styles/theme.js';
@@ -108,7 +117,7 @@ import { AccessControlDialog } from './AccessControlDialog.js';
 import { ActivityList } from './ActivityList.js';
 import { AppBar } from './AppBar.js';
 import { BlockActions } from './BlockActions.js';
-import { DisplaySlider } from './DisplaySlider.js';
+import { DisplayStepper } from './DisplayStepper.js';
 import {
   type DocumentSearchResult,
   DocumentSearchResultsPane,
@@ -149,6 +158,7 @@ const COLLAPSED_WIDTH = 36;
  */
 const TEXT_ZOOM_MIN = 80;
 const TEXT_ZOOM_MAX = 220;
+const DEFAULT_MAX_WIDTH = 72;
 /** How long a pane takes to fold away. Published to the stylesheet, which
  *  runs the animation, so the two can't drift apart. */
 const PANE_COLLAPSE_MS = 240;
@@ -199,15 +209,6 @@ const COMPACT_LAYOUT_QUERY = `(max-width: ${COMPACT_LAYOUT_MAX_WIDTH}px)`;
 function isCompactViewport(): boolean {
   return window.matchMedia(COMPACT_LAYOUT_QUERY).matches;
 }
-
-/**
- * Doc-pane width below which the toolbar's display controls (reading
- * width, text size, theme) collapse into a single "View" menu. Laid out
- * inline they need ~880px; the row hides its scrollbar, so past that
- * point everything to their right — download, settings, read aloud,
- * search — silently scrolls out of reach.
- */
-const DOC_CHROME_INLINE_MIN_WIDTH = 900;
 
 /**
  * `.doc-scroll` content-box width at or below which app.css hides the
@@ -404,10 +405,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   const [maxWidth, setMaxWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(MAX_WIDTH_KEY));
-    return Number.isFinite(saved) && saved > 0 ? saved : 72;
+    return Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_MAX_WIDTH;
   });
-  /** Mirrors the stored interface size so the slider has something to show. */
+  /** Mirrors the stored interface size so the stepper has something to show. */
   const [uiScale, setUiScaleState] = useState<number>(readUiScale);
+  /* Live rather than read once, so what the reset advertises and what it
+     lands on stay the same answer on a convertible that gains a keyboard
+     mid-session. */
+  const uiScaleDefault = useMediaQuery(COARSE_POINTER)
+    ? UI_SCALE_TOUCH_DEFAULT
+    : UI_SCALE_POINTER_DEFAULT;
   const [textZoom, setTextZoom] = useState<number>(() => {
     const saved = Number(localStorage.getItem(TEXT_ZOOM_KEY));
     return Number.isFinite(saved) && saved >= TEXT_ZOOM_MIN && saved <= TEXT_ZOOM_MAX ? saved : 100;
@@ -1625,23 +1632,18 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   /**
    * Measured rather than derived from the viewport: both side panes are
-   * resizable, so only the elements' own widths say what still fits. Two
-   * of them, because two different boxes answer the two questions — the
-   * toolbar row lays out across the pane, while the comment column's
-   * `@container` query reads `.doc-scroll`'s content box, which is
-   * narrower wherever the platform reserves room for a scrollbar. Every
-   * way either width can change is a window resize or one of the two
-   * side-column widths in the deps. 0 means "not measured yet" — the
-   * layout effect fills them in before the first paint.
+   * resizable, so only the element's own width says what still fits. The
+   * comment column's `@container` query reads `.doc-scroll`'s content box,
+   * which is narrower wherever the platform reserves room for a scrollbar,
+   * so that is the box to measure. Every way it can change is a window
+   * resize or one of the two side-column widths in the deps. 0 means "not
+   * measured yet" — the layout effect fills it in before the first paint.
    */
-  const [docPaneWidth, setDocPaneWidth] = useState(0);
   const [commentsHostWidth, setCommentsHostWidth] = useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx / overlayPanes / panesSettled are the intentional re-measure triggers — the body reads widths only they can have changed.
   useLayoutEffect(() => {
     const measure = () => {
-      const pane = docPaneRef.current?.clientWidth ?? 0;
-      if (pane <= 0) return;
-      setDocPaneWidth(pane);
+      if ((docPaneRef.current?.clientWidth ?? 0) <= 0) return;
       setCommentsHostWidth(docScrollRef.current?.clientWidth ?? 0);
     };
     measure();
@@ -1649,10 +1651,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return () => window.removeEventListener('resize', measure);
   }, [tocPx, commentsPx, overlayPanes, panesSettled]);
 
-  const chromeCompact =
-    docPaneWidth === 0
-      ? compactViewport
-      : docPaneWidth < DOC_CHROME_INLINE_MIN_WIDTH * (uiScale / 100);
   /** Offering the switch back to the column would be a dead action where
    *  the stylesheet hides the column outright. */
   const columnModeAvailable =
@@ -1952,114 +1950,103 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [hasSearchResults, rightTab]);
 
   /**
-   * How the document reads — width, zoom, theme. Rendered inline in the
-   * toolbar when there is room and stacked inside the "View" popover when
-   * there isn't, so the same controls carry their own labels either way.
-   * One instance only: the theme label points at the select by id.
+   * How the document reads — layout, width, zoom, theme. A two-column grid
+   * of label and control: read down the first column to find a setting,
+   * across to change it. Labels are plain text rather than `<label>`
+   * because most of these controls are composites with no single field to
+   * point at; the theme select is the one that can be, and is.
    */
   const displayControls = (
-    <>
-      <Flex align="center" gap="2">
-        <Text size="1" color="gray">
-          Layout
-        </Text>
-        <SegmentedControl.Root
-          size="1"
-          // The effective mode, not the stored one: while the fallback is
-          // in force the reader is looking at a scrolling document, and a
-          // control insisting otherwise just reads as broken.
-          value={paged ? 'paged' : 'scroll'}
-          onValueChange={(next) => {
-            // Choosing "Pages" again re-measures, so a reader who has
-            // since shrunk the text gets them back — and one who hasn't
-            // gets the toast saying why, rather than a dead control.
-            setTooWideForPages(false);
-            setReadingMode(next === 'paged' ? 'paged' : 'scroll');
-          }}
-          aria-label="Reading layout"
-        >
-          <SegmentedControl.Item value="scroll">Scroll</SegmentedControl.Item>
-          <SegmentedControl.Item value="paged">Pages</SegmentedControl.Item>
-        </SegmentedControl.Root>
-      </Flex>
-      <Flex align="center" gap="2" className="width-slider">
-        <Text size="1" color="gray">
-          Reading width
-        </Text>
-        <DisplaySlider
-          className="doc-display-slider doc-display-slider-width"
-          ariaLabel="Reading width"
-          min={40}
-          max={120}
-          value={maxWidth}
-          format={(v) => `${v}ch`}
-          onCommit={setMaxWidth}
-        />
-      </Flex>
-      <Flex align="center" gap="2" className="width-slider">
-        <Text size="1" color="gray">
-          Text size
-        </Text>
-        <DisplaySlider
-          className="doc-display-slider doc-display-slider-zoom"
-          ariaLabel="Text size"
-          min={TEXT_ZOOM_MIN}
-          max={TEXT_ZOOM_MAX}
-          step={5}
-          value={textZoom}
-          format={(v) => `${v}%`}
-          onCommit={setTextZoom}
-        />
-        <Button
-          size="1"
-          variant="ghost"
-          onClick={() => setTextZoom(100)}
-          disabled={textZoom === 100}
-        >
-          Reset
-        </Button>
-      </Flex>
-      <Flex align="center" gap="2" className="width-slider">
-        <Text size="1" color="gray">
-          Interface size
-        </Text>
-        <DisplaySlider
-          className="doc-display-slider doc-display-slider-zoom"
-          ariaLabel="Interface size"
-          min={UI_SCALE_MIN}
-          max={UI_SCALE_MAX}
-          step={5}
-          value={uiScale}
-          format={(v) => `${v}%`}
-          onCommit={(next) => {
-            setUiScale(next);
-            setUiScaleState(next);
-          }}
-        />
-      </Flex>
-      <Flex align="center" gap="2">
-        <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
-          Theme
-        </Text>
-        <Select.Root
-          value={theme}
-          size="1"
-          onValueChange={(next) => {
-            setTheme(next);
-            setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
-          }}
-        >
-          <Select.Trigger id="doc-theme-select" variant="soft" />
-          <Select.Content position="popper" style={{ maxHeight: 360 }}>
-            {BUILT_IN_THEMES.map((t) => (
-              <Select.Item key={t.id} value={t.id}>
-                {t.label}
-              </Select.Item>
-            ))}
-          </Select.Content>
-        </Select.Root>
-      </Flex>
-    </>
+    <div className="doc-view-grid">
+      <Text size="1" color="gray">
+        Layout
+      </Text>
+      <SegmentedControl.Root
+        size="1"
+        // The effective mode, not the stored one: while the fallback is
+        // in force the reader is looking at a scrolling document, and a
+        // control insisting otherwise just reads as broken.
+        value={paged ? 'paged' : 'scroll'}
+        onValueChange={(next) => {
+          // Choosing "Pages" again re-measures, so a reader who has
+          // since shrunk the text gets them back — and one who hasn't
+          // gets the toast saying why, rather than a dead control.
+          setTooWideForPages(false);
+          setReadingMode(next === 'paged' ? 'paged' : 'scroll');
+        }}
+        aria-label="Reading layout"
+      >
+        <SegmentedControl.Item value="scroll">Scroll</SegmentedControl.Item>
+        <SegmentedControl.Item value="paged">Pages</SegmentedControl.Item>
+      </SegmentedControl.Root>
+
+      <Text size="1" color="gray">
+        Reading width
+      </Text>
+      <DisplayStepper
+        ariaLabel="Reading width"
+        min={40}
+        max={120}
+        step={4}
+        defaultValue={DEFAULT_MAX_WIDTH}
+        value={maxWidth}
+        format={(v) => `${v}ch`}
+        onCommit={setMaxWidth}
+      />
+
+      <Text size="1" color="gray">
+        Text size
+      </Text>
+      <DisplayStepper
+        ariaLabel="Text size"
+        min={TEXT_ZOOM_MIN}
+        max={TEXT_ZOOM_MAX}
+        step={5}
+        defaultValue={100}
+        value={textZoom}
+        format={(v) => `${v}%`}
+        onCommit={setTextZoom}
+      />
+
+      <Text size="1" color="gray">
+        Interface size
+      </Text>
+      <DisplayStepper
+        ariaLabel="Interface size"
+        min={UI_SCALE_MIN}
+        max={UI_SCALE_MAX}
+        step={5}
+        defaultValue={uiScaleDefault}
+        value={uiScale}
+        format={(v) => `${v}%`}
+        onCommit={(next) => {
+          setUiScale(next);
+          setUiScaleState(next);
+        }}
+        onReset={() => setUiScaleState(resetUiScale())}
+      />
+
+      <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
+        Theme
+      </Text>
+      <Select.Root
+        value={theme}
+        size="1"
+        onValueChange={(next) => {
+          setTheme(next);
+          setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
+        }}
+      >
+        <Select.Trigger id="doc-theme-select" variant="soft" />
+        <Select.Content position="popper" style={{ maxHeight: 360 }}>
+          {BUILT_IN_THEMES.map((t) => (
+            <Select.Item key={t.id} value={t.id}>
+              {t.label}
+            </Select.Item>
+          ))}
+        </Select.Content>
+      </Select.Root>
+    </div>
   );
 
   /**
@@ -2166,23 +2153,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           {/* Document-specific toolbar lives inside the doc pane so it sits
               only over the document column, not above the side panes. */}
           <Flex align="center" gap="3" px="3" py="2" className="doc-chrome">
-            {chromeCompact ? (
-              <Popover.Root>
-                <Popover.Trigger>
-                  <Button size="1" variant="soft" color="gray" className="doc-view-trigger">
-                    <MixerHorizontalIcon />
-                    View
-                  </Button>
-                </Popover.Trigger>
-                <Popover.Content size="1" align="start" className="doc-view-popover">
-                  <Flex direction="column" gap="3" align="start">
-                    {displayControls}
-                  </Flex>
-                </Popover.Content>
-              </Popover.Root>
-            ) : (
-              displayControls
-            )}
+            {/* Always a menu, however much room the toolbar has: these are
+                set-and-forget reading preferences, and spreading five of
+                them across the bar pushed the per-document actions off the
+                end of it on anything but a wide screen. */}
+            <Popover.Root>
+              <Popover.Trigger>
+                <Button variant="soft" size="2" className="doc-view-trigger">
+                  <MixerHorizontalIcon />
+                  View
+                </Button>
+              </Popover.Trigger>
+              <Popover.Content size="1" align="start" className="doc-view-popover">
+                {displayControls}
+              </Popover.Content>
+            </Popover.Root>
             <span className="spacer" />
             {/* Download is available to any reader — unlike settings /
                 access control which are admin-only. Sits next to the

@@ -939,17 +939,44 @@ button.primary:disabled {
 .doc-chrome-right {
   display: contents;
 }
-/* Stacked in the popover, the sliders are the only thing worth widening:
-   space is vertical there, and these are touch targets on the small
-   screens that get the popover in the first place. */
-.doc-view-popover .doc-display-slider {
-  width: 180px;
+/* Label column, control column. Both size to their content so the
+   controls share one left edge and the menu is no wider than the longest
+   of them. */
+.doc-view-grid {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
 }
-.doc-display-slider-width {
-  width: 116px;
+/* `[-] 100% [+] [reset]`. The value column is sized for the widest reading
+   any of the three settings produces, so the buttons don't shuffle
+   sideways as the number changes under them. */
+.doc-stepper-value {
+  min-width: 4.5ch;
+  text-align: center;
+  font-size: var(--font-size-1);
+  line-height: var(--line-height-1);
+  color: var(--gray-12);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
 }
-.doc-display-slider-zoom {
-  width: 92px;
+.doc-stepper-value:focus-visible {
+  outline: 2px solid var(--focus-8);
+  outline-offset: 1px;
+  border-radius: var(--radius-1);
+}
+/* Ghost buttons size themselves around their icon and carry a negative
+   margin to align it with neighbouring text. Pin the box instead, so the
+   reset lines up with the +/- pair and with the segmented control and
+   select in the rows above and below. */
+.doc-stepper-reset {
+  box-sizing: border-box;
+  width: var(--space-5);
+  height: var(--space-5);
+  margin: 0;
+  margin-inline-start: var(--space-1);
 }
 
 .right-tabs {
@@ -1328,15 +1355,6 @@ button.primary:disabled {
       --md-color-search-highlight-active-ring,
       color-mix(in srgb, var(--green-9) 34%, transparent)
     );
-}
-
-.width-slider {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-.width-slider input[type="range"] {
-  width: 120px;
 }
 
 .doc-body {
