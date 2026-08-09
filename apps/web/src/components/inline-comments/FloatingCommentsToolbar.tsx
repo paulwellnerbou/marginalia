@@ -5,15 +5,17 @@ import {
   DotsHorizontalIcon,
 } from '@radix-ui/react-icons';
 import { DropdownMenu, IconButton } from '@radix-ui/themes';
-import { type RefObject, useCallback, useMemo } from 'react';
+import { type RefObject, useCallback, useEffect, useMemo, useState } from 'react';
 import { resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import { isProposal, type Thread } from '../../lib/api.js';
 import {
   AT_THREAD_TOLERANCE_PX,
   adjacentThreadTarget,
+  currentThreadIndex,
   sortThreadTopEntries,
   type ThreadTopEntry,
 } from './floatingCardPosition.js';
+import { threadCountLabel } from './inlineUtils.js';
 import { computeAnchoredThreadNesting } from './threadNesting.js';
 
 interface Props {
@@ -97,31 +99,74 @@ export function FloatingCommentsToolbar({
    */
   const visibleThreads = useMemo(() => computeAnchoredThreadNesting(threads).topLevel, [threads]);
 
+  const [currentIndex, setCurrentIndex] = useState(-1);
+
+  /**
+   * Measure the card-owning threads in the exact order the arrows use.
+   * Keeping this in one callback makes the position readout and a jump
+   * agree even for comments on the same text.
+   */
+  const measureEntries = useCallback((): ThreadTopEntry[] => {
+    const doc = docElementRef.current;
+    const scroll = scrollContainerRef.current;
+    if (!doc || !scroll) return [];
+    const containerTop = scroll.getBoundingClientRect().top;
+
+    const entries: ThreadTopEntry[] = [];
+    for (const thread of visibleThreads) {
+      const blockId = thread.anchor.block_id;
+      if (!blockId) continue;
+      const el = resolveThreadScrollTarget(doc, blockId, thread.anchor.quote, thread.id);
+      if (!el) continue;
+      entries.push({
+        id: thread.id,
+        top: el.getBoundingClientRect().top - containerTop,
+        startOffset: isProposal(thread) ? 0 : (thread.anchor.start_offset ?? 0),
+        createdAt: thread.comments[0].created_at,
+      });
+    }
+    return sortThreadTopEntries(entries);
+  }, [visibleThreads, docElementRef, scrollContainerRef]);
+
+  /** Keep the counter in step with plain scrolling, not only arrow presses. */
+  const updatePosition = useCallback(() => {
+    const scroll = scrollContainerRef.current;
+    if (!scroll) return;
+    const entries = measureEntries();
+    const parked = parkedThreadId(entries, currentThreadId, scroll);
+    setCurrentIndex(currentThreadIndex(entries, NAV_REF_TOP_PX, parked));
+  }, [measureEntries, scrollContainerRef, currentThreadId]);
+
+  useEffect(() => {
+    const scroll = scrollContainerRef.current;
+    if (!scroll) return;
+    updatePosition();
+
+    let raf = 0;
+    const requestUpdate = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        updatePosition();
+      });
+    };
+
+    scroll.addEventListener('scroll', requestUpdate, { passive: true });
+    const resizeObserver = new ResizeObserver(requestUpdate);
+    if (docElementRef.current) resizeObserver.observe(docElementRef.current);
+    resizeObserver.observe(scroll);
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf);
+      scroll.removeEventListener('scroll', requestUpdate);
+      resizeObserver.disconnect();
+    };
+  }, [scrollContainerRef, docElementRef, updatePosition]);
+
   const jump = useCallback(
     (direction: -1 | 1) => {
-      const doc = docElementRef.current;
       const scroll = scrollContainerRef.current;
-      if (!doc || !scroll) return;
-      const containerTop = scroll.getBoundingClientRect().top;
-
-      // Measured on demand — no continuous anchor tracking in floating
-      // mode, so build the document-order list at click time. Resolved
-      // the same way the jump itself resolves its target, so these tops
-      // are exactly where a jump would land.
-      const entries: ThreadTopEntry[] = [];
-      for (const thread of visibleThreads) {
-        const blockId = thread.anchor.block_id;
-        if (!blockId) continue;
-        const el = resolveThreadScrollTarget(doc, blockId, thread.anchor.quote, thread.id);
-        if (!el) continue;
-        entries.push({
-          id: thread.id,
-          top: el.getBoundingClientRect().top - containerTop,
-          startOffset: isProposal(thread) ? 0 : (thread.anchor.start_offset ?? 0),
-          createdAt: thread.comments[0].created_at,
-        });
-      }
-      sortThreadTopEntries(entries);
+      if (!scroll) return;
+      const entries = measureEntries();
 
       const targetId = adjacentThreadTarget(
         entries,
@@ -129,13 +174,18 @@ export function FloatingCommentsToolbar({
         direction,
         parkedThreadId(entries, currentThreadId, scroll),
       );
-      if (targetId) onOpenThread(targetId);
+      if (targetId) {
+        // Name the destination immediately while its smooth scroll is
+        // still in flight, matching the column toolbar's behaviour.
+        setCurrentIndex(entries.findIndex((entry) => entry.id === targetId));
+        onOpenThread(targetId);
+      }
     },
-    [visibleThreads, docElementRef, scrollContainerRef, currentThreadId, onOpenThread],
+    [measureEntries, scrollContainerRef, currentThreadId, onOpenThread],
   );
 
   const count = visibleThreads.length;
-  const countLabel = count === 1 ? '1 thread' : `${count} threads`;
+  const countLabel = threadCountLabel(count, currentIndex);
 
   return (
     <div className="ic-float-toolbar-popover">
