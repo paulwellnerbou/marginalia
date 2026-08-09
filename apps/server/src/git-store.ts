@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { type ChildProcessWithoutNullStreams, execFile, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs, {
   existsSync,
@@ -251,6 +251,66 @@ export class GitStore {
     const { packfile } = await git.packObjects({ fs, dir, oids: [...oids], write: false });
     if (!packfile) return null;
     return { pack: packfile, headOid, commits: commits.length };
+  }
+
+  /**
+   * Same pack as `exportHistoryPack`, delivered as a stream from native
+   * `git pack-objects` instead of a buffer.
+   *
+   * Worth the second implementation because the buffered one is not
+   * merely slower: `isomorphic-git` inflates every object, deflates it
+   * again, and holds all of them plus the concatenated result in memory.
+   * Measured on a 309-commit document that costs ~136 MB to produce a
+   * 12.7 MB pack, which is most of the way to the deploy's 512 MB
+   * container limit before the bundle around it is even serialized.
+   * Native git streams the pack out as it builds it, and deltifies it,
+   * so the export's memory stops scaling with document history.
+   *
+   * Returns null when there's no repo, no main ref, or no usable native
+   * git — callers fall back to `exportHistoryPack`. Deliberately no
+   * warning on that path: unlike a failed merge it costs the caller
+   * nothing but memory, and `mergeTextWithNativeGit` already says the
+   * one useful thing about a runtime with no git in it.
+   */
+  async openHistoryPackStream(doc: DocLocator): Promise<HistoryPackStream | null> {
+    const dir = this.repoDir(doc.uid);
+    if (!existsSync(join(dir, '.git'))) return null;
+    let headOid: string;
+    try {
+      headOid = await git.resolveRef({ fs, dir, ref: 'main' });
+    } catch {
+      return null;
+    }
+
+    let commits: number;
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-list', '--count', 'main'], { cwd: dir });
+      commits = Number.parseInt(stdout.trim(), 10);
+      if (!Number.isInteger(commits)) return null;
+    } catch {
+      return null;
+    }
+
+    // `--revs` takes the rev to pack from stdin; `--stdout` writes the
+    // pack to ours. Reachability is git's own walk, which is what makes
+    // this cheap — no oid enumeration on our side.
+    const child = spawn('git', ['pack-objects', '--stdout', '--revs'], {
+      cwd: dir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    // Committed to a streamed response from here on, so a failure that
+    // surfaces later can only tear the stream down. Wait for the pack
+    // header before returning: a missing binary or a rejected rev shows
+    // up in that window, while the caller can still choose the buffered
+    // path instead of emitting a truncated bundle.
+    try {
+      const chunks = await stdoutAfterFirstChunk(child, 'main\n');
+      return { headOid, commits, chunks };
+    } catch {
+      child.kill();
+      return null;
+    }
   }
 
   /** Add a tree and everything under it to `oids`, skipping already-seen subtrees. */
@@ -889,6 +949,109 @@ async function mergeTextWithNativeGit(
 
 function hasConflictMarkers(source: string): boolean {
   return /^(<<<<<<<|=======|>>>>>>>)(?: .*)?$/m.test(source);
+}
+
+/** A packfile being produced by a subprocess, plus what describes it. */
+export interface HistoryPackStream {
+  headOid: string;
+  commits: number;
+  /**
+   * Pack bytes in arrival order. Throws if git fails partway, rather
+   * than ending early — a short pack is indistinguishable from a
+   * complete one to anything downstream, and silently exporting a
+   * truncated history is worse than failing the download.
+   */
+  chunks: AsyncIterable<Uint8Array>;
+}
+
+/**
+ * Turn a spawned process into an async iterable of its stdout, but only
+ * after the first bytes have arrived.
+ *
+ * That wait is the point. Spawn failures (no git on the runtime) and
+ * argument failures (an unresolvable rev) both surface before any
+ * output, and the caller can still fall back to a buffered path while
+ * nothing has been written to the response. Once bytes are flowing the
+ * status line is long gone, so every later failure can do nothing but
+ * tear the stream down.
+ *
+ * stdout is left in paused mode throughout — a `data` listener would
+ * put it in flowing mode and drop everything arriving between here and
+ * the consumer's first `next()`.
+ */
+async function stdoutAfterFirstChunk(
+  child: ChildProcessWithoutNullStreams,
+  stdinPayload: string,
+): Promise<AsyncIterable<Uint8Array>> {
+  const { stdout } = child;
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (text: string) => {
+    // Diagnostics only, and this process outlives the read — bound it.
+    if (stderr.length < 4096) stderr += text;
+  });
+  // A child that exits before draining stdin makes this write EPIPE,
+  // which is a diagnosis we already get from the exit code.
+  child.stdin.on('error', () => {});
+  child.stdin.end(stdinPayload);
+
+  const failure = (detail: string) =>
+    new Error(`git ${child.spawnargs[1] ?? ''} ${detail}: ${stderr.trim()}`.replace(/\s+/g, ' '));
+
+  const first = await new Promise<Buffer>((resolve, reject) => {
+    const detach = () => {
+      stdout.off('readable', onReadable);
+      stdout.off('end', onEnd);
+      child.off('error', onError);
+      child.off('close', onClose);
+    };
+    const onReadable = () => {
+      const chunk = stdout.read() as Buffer | null;
+      if (chunk && chunk.length > 0) {
+        detach();
+        resolve(chunk);
+      }
+    };
+    const onEnd = () => {
+      detach();
+      reject(failure('produced no output'));
+    };
+    const onError = (err: Error) => {
+      detach();
+      reject(err);
+    };
+    const onClose = (code: number | null) => {
+      // Exit 0 can beat the first read: the pipe closes at EOF, not when
+      // we get around to draining what git already buffered there.
+      if (code !== 0) {
+        detach();
+        reject(failure(`exited ${code}`));
+      }
+    };
+    stdout.on('readable', onReadable);
+    stdout.on('end', onEnd);
+    child.on('error', onError);
+    child.on('close', onClose);
+  });
+
+  return (async function* () {
+    try {
+      yield first;
+      for await (const chunk of stdout) yield chunk as Uint8Array;
+      const code = await exitCode(child);
+      if (code !== 0) throw failure(`exited ${code}`);
+    } finally {
+      // Reached on the consumer's early `return()` too — a client that
+      // hangs up mid-download must not leave git packing into a pipe
+      // nobody is reading.
+      if (child.exitCode === null) child.kill();
+    }
+  })();
+}
+
+function exitCode(child: ChildProcessWithoutNullStreams): Promise<number | null> {
+  if (child.exitCode !== null) return Promise.resolve(child.exitCode);
+  return new Promise((resolve) => child.once('close', (code) => resolve(code)));
 }
 
 /**
