@@ -45,6 +45,7 @@ function thread(
       reject: false,
       update: false,
       repair: false,
+    resolve_conflict: false,
       reopen: false,
     },
     comments,

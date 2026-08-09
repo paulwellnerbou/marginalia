@@ -3666,6 +3666,191 @@ button.primary:disabled {
   border-color: rgba(245, 158, 11, 0.42);
 }
 
+/* ---------- Conflict resolver ---------- */
+
+.cf-hunks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 58vh;
+  overflow: auto;
+}
+
+.cf-hunk {
+  border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.12));
+  border-radius: 6px;
+  padding: 0.55rem 0.6rem;
+}
+/* Undecided hunks carry the same amber as the card badge that led here,
+   so "what still needs me" is one colour throughout the flow. */
+.cf-hunk-open {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.05);
+}
+
+.cf-hunk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.45rem;
+}
+
+.cf-sides {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+@media (max-width: 640px) {
+  .cf-sides {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.cf-side {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+  text-align: left;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.12));
+  border-radius: 5px;
+  background: var(--ui-bg, #fff);
+  color: inherit;
+  cursor: pointer;
+}
+.cf-side:hover {
+  border-color: var(--ui-accent, rgba(59, 130, 246, 0.6));
+}
+.cf-side-selected {
+  border-color: var(--ui-accent, #3b82f6);
+  box-shadow: inset 0 0 0 1px var(--ui-accent, #3b82f6);
+  background: rgba(59, 130, 246, 0.07);
+}
+
+.cf-side-label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--ui-fg-muted, rgba(15, 23, 42, 0.65));
+}
+.cf-side-selected .cf-side-label {
+  color: var(--ui-accent-strong, var(--ui-accent, #1d4ed8));
+}
+
+.cf-side-text {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Long paragraphs scroll inside their own side rather than making one
+     column tower over the other. */
+  max-height: 11rem;
+  overflow: auto;
+}
+
+.cf-hunk-editor {
+  width: 100%;
+}
+
+.cf-base {
+  margin-top: 0.45rem;
+}
+.cf-preview {
+  margin-top: 0.25rem;
+}
+
+.cf-note {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.75rem;
+}
+
+/* ---------- Disclosure ---------- */
+
+/* Same height + opacity choreography as the document-view section
+   collapse and the TOC subtree, with `overflow: hidden` rather than the
+   heading-anchor `clip-path` — nothing here hangs outside the box. */
+.disclosure-summary {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.1rem 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--ui-fg-muted, rgba(15, 23, 42, 0.65));
+  cursor: pointer;
+}
+.disclosure-summary:hover {
+  color: var(--ui-fg);
+}
+.disclosure-summary:focus-visible {
+  outline: 2px solid var(--ui-accent, currentColor);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.disclosure-chevron {
+  flex-shrink: 0;
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.disclosure-summary[aria-expanded="false"] .disclosure-chevron {
+  transform: rotate(-90deg);
+}
+
+.disclosure-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  /* Material-style ease-out: decelerates into rest. */
+  transition: grid-template-rows 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.disclosure-body.is-collapsed {
+  grid-template-rows: 0fr;
+}
+.disclosure-body > .disclosure-body-inner {
+  min-height: 0;
+  /* A grid item floors at its contents' min-content width; a `pre` of
+     unbroken text would otherwise widen the whole dialog rather than
+     scroll. Both axes have to be released, not just the animated one. */
+  min-width: 0;
+  overflow: hidden;
+  /* Cross-fade staggered behind the height: hides the visual snap at
+     the endpoints. */
+  opacity: 1;
+  transition: opacity 220ms ease-out 80ms;
+}
+.disclosure-body.is-collapsed > .disclosure-body-inner {
+  opacity: 0;
+  transition: opacity 180ms ease-in;
+}
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-body,
+  .disclosure-body > .disclosure-body-inner,
+  .disclosure-body.is-collapsed > .disclosure-body-inner,
+  .disclosure-chevron {
+    transition: none;
+  }
+}
+
+/* The result preview is the dialog's own section rather than a footnote
+   to one hunk, so its summary carries more weight. */
+.cf-preview .disclosure-summary {
+  font-weight: 500;
+}
+
 /* ---------- Header ---------- */
 
 .ic-card-header {
