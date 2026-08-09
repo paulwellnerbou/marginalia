@@ -78,6 +78,7 @@ import {
   showToast,
 } from '../lib/notifications.js';
 import {
+  measurePages,
   PAGED_CLASS,
   PAGED_VERTICAL_CLASS,
   pageIndexAt,
@@ -850,7 +851,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       // a heading counts as reached once its page is the one on screen.
       // Metrics are hoisted out of the loop — reading clientWidth per
       // heading would force a layout on every one of them.
-      const pitch = paged ? (pagedVertical ? container.clientHeight : container.clientWidth) : 0;
+      const pitch = paged ? measurePages(container).pitch : 0;
       const scrolled = pagedVertical ? container.scrollTop : container.scrollLeft;
       const currentPage = paged ? pageIndexAt(scrolled, pitch) : 0;
       const threshold = containerRect.top + 96;
@@ -2673,7 +2674,10 @@ function scrollToTargetAndSettle(
       // `offset` centres a card in the scroll flow; a page has no such
       // freedom — the target's page starts where it starts.
       if (page === null) return null;
-      return page * (vertical ? scroll.clientHeight : scroll.clientWidth);
+      // Not `clientHeight`: vertical pages are sized to a whole number
+      // of lines and carry a fraction of a pixel, which `measurePages`
+      // keeps and the rounded box does not.
+      return page * measurePages(scroll).pitch;
     }
     const top =
       target.getBoundingClientRect().top -

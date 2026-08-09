@@ -274,8 +274,14 @@ export function usePagedReading(
    * which is exactly the drift this is meant to undo.
    */
   const heldPlace = useRef<HeldPlace | null>(null);
-  /** Scrollport size and content extent as of the last re-measure. */
-  const geometry = useRef<{ width: number; extent: number } | null>(null);
+  /**
+   * Page pitch and content extent as of the last re-measure, both along
+   * the paging axis. Watching the *width* would be silently useless
+   * where the pages run downwards: neither it nor `scrollWidth` moves
+   * when that document repaginates, so every re-measure would report
+   * that nothing had changed and the reader would never be re-anchored.
+   */
+  const geometry = useRef<{ pitch: number; extent: number } | null>(null);
 
   /**
    * Publish the page box in px for the CSS that can't derive it: the
@@ -320,9 +326,13 @@ export function usePagedReading(
         const article = scroll.querySelector<HTMLElement>('article.marginalia');
         const sample = article?.querySelector<HTMLElement>('p') ?? article;
         const lineHeight = sample ? parseFloat(window.getComputedStyle(sample).lineHeight) : NaN;
-        const margin =
-          parseFloat(window.getComputedStyle(scroll).getPropertyValue('font-size')) * 2;
-        const available = viewport.clientHeight - (Number.isFinite(margin) ? margin * 2 : 0);
+        // Reserve `--page-margin-block` above and below. It is authored
+        // in `rem`, so it resolves against the root font size — reading
+        // the scrollport's own would track the reader's text zoom and
+        // quietly shrink the page every time they enlarged the text.
+        const rootFontSize = parseFloat(window.getComputedStyle(document.documentElement).fontSize);
+        const margin = Number.isFinite(rootFontSize) ? rootFontSize * 2 : 0;
+        const available = viewport.clientHeight - margin * 2;
         const block =
           Number.isFinite(lineHeight) && lineHeight > 0
             ? Math.max(lineHeight, Math.floor(available / lineHeight) * lineHeight)
@@ -389,13 +399,18 @@ export function usePagedReading(
       // baseline re-read afterwards would be the post-reflow geometry —
       // i.e. it would report that nothing had changed.
       const previous = geometry.current;
-      const width = scroll.clientWidth;
-      const extent = scroll.scrollWidth;
-      geometry.current = { width, extent };
-      setTooWideToPaint(!vertical && limitsMulticolPaint() && extent > PAGED_MAX_PAINTABLE_PX);
+      // `metrics.pitch` is already the scrollport along whichever axis
+      // the pages run on, fractional part and all.
+      const extent = vertical ? scroll.scrollHeight : scroll.scrollWidth;
+      geometry.current = { pitch: metrics.pitch, extent };
+      // The paint limit is about sideways travel specifically, so it
+      // reads `scrollWidth` whatever the pages are doing.
+      setTooWideToPaint(
+        !vertical && limitsMulticolPaint() && scroll.scrollWidth > PAGED_MAX_PAINTABLE_PX,
+      );
       // Nothing moved — a highlight repaint, a mermaid swap. Re-snapping
       // would only risk nudging a reader mid-gesture.
-      if (previous && previous.width === width && previous.extent === extent) {
+      if (previous && previous.pitch === metrics.pitch && previous.extent === extent) {
         setPage(metrics.currentPage);
         return;
       }
