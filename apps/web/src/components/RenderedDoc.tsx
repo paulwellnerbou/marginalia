@@ -7,6 +7,7 @@ import { isInjectedChromeText } from '../lib/block-text.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { revealElement } from '../lib/paged-reading.js';
+import { isAppleWebKit } from '../lib/webkit.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
 
 export interface DocumentSearchResult {
@@ -641,8 +642,15 @@ function syncCommentHighlights(
  * against the first line again. Batched deliberately: one flush covers
  * however many blocks the pass touched, so the initial application over a
  * heavily annotated document stays two layouts rather than two per block.
+ *
+ * Detached blocks are dropped first. A pass that follows an innerHTML
+ * rewrite carries the whole previous document in its list — every one of
+ * those elements is orphaned, and flushing against an orphan measures
+ * nothing and leaves the live blocks uncorrected.
  */
-function relayoutIndent(blocks: readonly HTMLElement[]): void {
+function relayoutIndent(candidates: readonly HTMLElement[]): void {
+  if (!isAppleWebKit()) return;
+  const blocks = candidates.filter((block) => block.isConnected);
   const first = blocks[0];
   if (!first) return;
   const overrides = blocks.map((block) => block.style.textIndent);
