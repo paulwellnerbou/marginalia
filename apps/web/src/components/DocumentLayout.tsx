@@ -49,6 +49,7 @@ import {
   rejectEditProposal as apiRejectProposal,
   repairEditProposalAnchor as apiRepairProposalAnchor,
   resolveThread as apiResolve,
+  resolveEditProposalConflict as apiResolveConflict,
   restoreHistoryVersion as apiRestoreHistoryVersion,
   revertHistoryVersion as apiRevertHistoryVersion,
   toggleCommentReaction as apiToggleReaction,
@@ -1329,6 +1330,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         reportError('DocumentLayout.resolveThread', err, { id, kind });
         const message = apiErrorMessage(err, `Could not ${kind} this thread`);
         reportFailure(message);
+        // A refused accept is the moment the server records *why* — a
+        // conflict or a dead anchor — so the card can offer the way out.
+        // Without this the badge and its button appear only on the next
+        // unrelated refresh.
+        if (kind === 'accept') await refreshThreads().catch(() => undefined);
         // Signal failure so callers (composer / diff dialog) don't clear
         // drafts or close on a failed accept/reject. Don't re-throw —
         // `void runWorkflow(...)` callsites would surface the rejection
@@ -1337,6 +1343,37 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     },
     [doc.uid, resolveIdentity, refreshThreads, refreshDoc],
+  );
+
+  const onResolveConflict = useCallback(
+    async (
+      id: string,
+      payload: { resolvedText?: string; comment?: string },
+    ): Promise<ThreadActionResult> => {
+      const identity = resolveIdentity();
+      if (!identity) {
+        const message = 'Please set your display name first.';
+        reportFailure(message);
+        return { ok: false, message };
+      }
+      try {
+        const body: Parameters<typeof apiResolveConflict>[2] = {};
+        if (payload.resolvedText !== undefined) body.resolved_text = payload.resolvedText;
+        if (payload.comment) body.comment = payload.comment;
+        await apiResolveConflict(doc.uid, id, body, identity);
+        // The proposal was rebuilt on current main, which re-anchors it
+        // and can settle other proposals' mergeability too — refresh the
+        // whole set rather than patching this one thread in.
+        await refreshThreads();
+        return { ok: true };
+      } catch (err) {
+        reportError('DocumentLayout.resolveConflict', err, { id });
+        const message = apiErrorMessage(err, 'Could not resolve this conflict');
+        reportFailure(message);
+        return { ok: false, message };
+      }
+    },
+    [doc.uid, resolveIdentity, refreshThreads],
   );
 
   const onRepairThread = useCallback(
@@ -2073,6 +2110,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       onDeleteThread={onDeleteThread}
       onResolveThread={onResolveThread}
       onRepairThread={onRepairThread}
+      onResolveConflict={onResolveConflict}
       onReact={onReact}
       onEditProposal={onEditProposal}
       onScrollToAnchor={scrollToAnchor}
@@ -2421,6 +2459,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     onDeleteThread={onDeleteThread}
                     onResolveThread={onResolveThread}
                     onRepairThread={onRepairThread}
+                    onResolveConflict={onResolveConflict}
                     onReact={onReact}
                     onEditProposal={onEditProposal}
                     onScrollToAnchor={scrollToAnchor}
@@ -2555,6 +2594,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     onDeleteThread={onDeleteThread}
                     onResolveThread={onResolveThread}
                     onRepairThread={onRepairThread}
+                    onResolveConflict={onResolveConflict}
                     onReact={onReact}
                     onEditProposal={onEditProposal}
                     onScrollToAnchor={scrollToAnchor}

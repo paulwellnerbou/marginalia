@@ -1,22 +1,17 @@
-import { execFile } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs, {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   renameSync,
   rmSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import * as git from 'isomorphic-git';
+import { mergeThreeWay } from './conflict.js';
 import type { DocumentFormat } from './db.js';
-
-const execFileAsync = promisify(execFile);
 
 /**
  * Per-document git storage. Each document lives in its own repo at
@@ -744,7 +739,7 @@ export class GitStore {
 
       const base = await this.readAt(doc, baseOid);
       const proposed = await this.readAt(doc, tipOid);
-      const merged = await mergeTextWithNativeGit(source, base, proposed);
+      const merged = await mergeThreeWay({ current: source, base, proposed });
       return merged.ok ? { ok: true, after: merged.text } : { ok: false, reason: merged.reason };
     });
   }
@@ -778,7 +773,7 @@ export class GitStore {
     const before = await this.readAt(doc, mainOid);
     const base = await this.readAt(doc, baseOid);
     const proposed = await this.readAt(doc, tipOid);
-    const merged = await mergeTextWithNativeGit(before, base, proposed);
+    const merged = await mergeThreeWay({ current: before, base, proposed });
     return merged.ok
       ? { ok: true, before, after: merged.text, mainOid }
       : { ok: false, reason: merged.reason };
@@ -818,77 +813,6 @@ export type RewriteProposalBranchResult =
 export interface ProposalRepairBranchResult {
   preview: PreviewProposalMergeResult;
   rewrite: RewriteProposalBranchResult | null;
-}
-
-export type NativeMergeResult =
-  | { ok: true; text: string }
-  | { ok: false; reason: 'conflict' | 'unavailable' };
-
-/**
- * Only warn once per process. A missing `git` makes every proposal in
- * every document take this path, and one line per accept attempt would
- * bury the signal it exists to give.
- */
-let warnedMergeToolUnavailable = false;
-
-/**
- * Three-way merge via `git merge-file`, the fallback for everything
- * iso-git's merge can't do.
- *
- * `unavailable` (the binary is missing, unrunnable, or its output blew
- * the buffer) is kept apart from `conflict` because the two mean
- * opposite things to a user: a conflict is theirs to resolve, an
- * unavailable merge tool is the deployment's. Collapsing them makes a
- * server without git report every non-trivial proposal as unresolvable.
- */
-async function mergeTextWithNativeGit(
-  ours: string,
-  base: string,
-  theirs: string,
-): Promise<NativeMergeResult> {
-  const dir = mkdtempSync(join(tmpdir(), 'marginalia-merge-'));
-  try {
-    const oursPath = join(dir, 'ours');
-    const basePath = join(dir, 'base');
-    const theirsPath = join(dir, 'theirs');
-    writeFileSync(oursPath, ours);
-    writeFileSync(basePath, base);
-    writeFileSync(theirsPath, theirs);
-    const { stdout } = await execFileAsync(
-      'git',
-      ['merge-file', '-p', oursPath, basePath, theirsPath],
-      {
-        encoding: 'utf8',
-        maxBuffer: 50 * 1024 * 1024,
-      },
-    );
-    if (hasConflictMarkers(stdout)) return { ok: false, reason: 'conflict' };
-    return { ok: true, text: stdout };
-  } catch (err) {
-    // merge-file exits with the number of conflicts, capped at 127; a
-    // negative status (255 here) or a non-numeric code means it failed
-    // to run at all rather than finding conflicting hunks.
-    const code = (err as { code?: string | number }).code;
-    if (typeof code === 'number' && code >= 1 && code <= 127) {
-      return { ok: false, reason: 'conflict' };
-    }
-    if (!warnedMergeToolUnavailable) {
-      warnedMergeToolUnavailable = true;
-      // Message only — a spawn failure's stack points at node internals
-      // and buries the one line that says what to fix.
-      console.error(
-        '[marginalia] `git merge-file` is unavailable, so proposals needing a three-way merge cannot be accepted. Install git in the runtime image. Cause:',
-        err instanceof Error ? err.message : err,
-      );
-    }
-    return { ok: false, reason: 'unavailable' };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-function hasConflictMarkers(source: string): boolean {
-  return /^(<<<<<<<|=======|>>>>>>>)(?: .*)?$/m.test(source);
 }
 
 /**

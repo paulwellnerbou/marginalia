@@ -8,9 +8,16 @@ import {
 } from '@radix-ui/react-icons';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
-import type { Comment, ProposalDiff, Thread } from '../../lib/api.js';
-import { getEditProposalDiff, isProposal, proposalStatus } from '../../lib/api.js';
+import type { Comment, ProposalConflict, ProposalDiff, Thread } from '../../lib/api.js';
+import {
+  getEditProposalConflict,
+  getEditProposalDiff,
+  isProposal,
+  proposalStatus,
+} from '../../lib/api.js';
+import { apiErrorMessage } from '../../lib/apiErrorMessage.js';
 import { reportError } from '../../lib/log.js';
+import { ConflictDialog } from '../ConflictDialog.js';
 import { DiffDialog } from '../DiffDialog.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
 import { InlineComposer, type InlineComposerHandle } from './InlineComposer.js';
@@ -67,6 +74,14 @@ interface Props {
     name?: string,
   ) => Promise<ThreadActionResult>;
   onRepairThread: (id: string) => Promise<ThreadActionResult>;
+  /**
+   * Settle a conflicted proposal against the current document. Omitting
+   * `resolvedText` asks the server for the merge it can make unaided.
+   */
+  onResolveConflict: (
+    id: string,
+    payload: { resolvedText?: string; comment?: string },
+  ) => Promise<ThreadActionResult>;
   onReact: (commentId: string, emoji: string) => Promise<void>;
   /** Open the edit-proposal dialog for this thread; absent hides the button. */
   onEditProposal?: ((thread: Thread) => void) | undefined;
@@ -128,6 +143,7 @@ export function InlineThreadCard({
   onDeleteThread,
   onResolveThread,
   onRepairThread,
+  onResolveConflict,
   onReact,
   onEditProposal,
 }: Props) {
@@ -162,6 +178,13 @@ export function InlineThreadCard({
   const [resolvedDiff, setResolvedDiff] = useState<ProposalDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [loadingDiff, setLoadingDiff] = useState(false);
+
+  const [conflictOpen, setConflictOpen] = useState(false);
+  const [conflict, setConflict] = useState<ProposalConflict | null>(null);
+  const [conflictError, setConflictError] = useState<string | null>(null);
+  const [loadingConflict, setLoadingConflict] = useState(false);
+  const [conflictActionError, setConflictActionError] = useState<string | null>(null);
+  const [applyingResolution, setApplyingResolution] = useState(false);
 
   // An in-place content update (ours via the edit dialog, or another
   // client's arriving through a thread refresh) makes any cached diff
@@ -213,6 +236,14 @@ export function InlineThreadCard({
   const canAccept = proposal && thread.capabilities.accept;
   const canReject = proposal && thread.capabilities.reject;
   const canRepair = proposal && thread.capabilities.repair;
+  // Offer the resolver where a conflict is known to exist: pinned on the
+  // thread by a failed accept, or reported by a diff the viewer opened.
+  // Showing it on every proposal would put a repair control on the
+  // overwhelming majority that need none.
+  const canResolveConflict =
+    proposal &&
+    thread.capabilities.resolve_conflict &&
+    (isConflict || resolvedDiff?.mergeable === 'conflict');
   const canResolve = !proposal && !isResolved && thread.capabilities.resolve;
   const canReopen = !proposal && isResolved && thread.capabilities.reopen;
   // proposed_text is null when the branch tip is unreadable — nothing
@@ -303,6 +334,59 @@ export function InlineThreadCard({
       cancelled = true;
     };
   }, [diffOpen, proposal, resolvedDiff, uid, threadId]);
+
+  // Same shape as the diff fetch above, and refilled the same way: the
+  // opener drops the cached conflict, so every open re-reads where the
+  // proposal stands rather than resolving against a stale three-way.
+  useEffect(() => {
+    if (!conflictOpen || !proposal || conflict !== null) return;
+    let cancelled = false;
+    setLoadingConflict(true);
+    setConflictError(null);
+    getEditProposalConflict(uid, threadId)
+      .then((next) => {
+        if (!cancelled) setConflict(next);
+      })
+      .catch((err) => {
+        reportError('InlineThreadCard.getEditProposalConflict', err, { uid, threadId });
+        if (!cancelled) setConflictError(apiErrorMessage(err, 'Could not load the conflict'));
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingConflict(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conflictOpen, proposal, conflict, uid, threadId]);
+
+  function openConflict() {
+    setConflict(null);
+    setConflictError(null);
+    setConflictActionError(null);
+    setConflictOpen(true);
+  }
+
+  async function applyResolution(payload: {
+    resolvedText?: string;
+    comment?: string;
+  }): Promise<boolean> {
+    if (applyingResolution) return false;
+    setApplyingResolution(true);
+    try {
+      const result = await onResolveConflict(thread.id, payload);
+      setConflictActionError(result.ok ? null : result.message);
+      if (result.ok) {
+        // The proposal now sits on current main, so the cached diff and
+        // three-way both describe a state that no longer exists.
+        setResolvedDiff(null);
+        setConflict(null);
+        setActionError(null);
+      }
+      return result.ok;
+    } finally {
+      setApplyingResolution(false);
+    }
+  }
 
   async function runWorkflow(
     kind: ThreadWorkflowKind,
@@ -420,6 +504,16 @@ export function InlineThreadCard({
               >
                 Show diff
               </button>
+              {canResolveConflict && (
+                <button
+                  type="button"
+                  className="ic-btn ic-btn-ghost ic-btn-resolve-conflict"
+                  onClick={openConflict}
+                  title="Settle this proposal against the current text"
+                >
+                  Resolve conflict
+                </button>
+              )}
               {canRepair && (
                 <button
                   type="button"
@@ -719,8 +813,21 @@ export function InlineThreadCard({
             ) : undefined
           }
           actions={
-            status === 'open' && (canAccept || canReject || canUpdate) ? (
+            status === 'open' && (canAccept || canReject || canUpdate || canResolveConflict) ? (
               <>
+                {canResolveConflict && (
+                  <button
+                    type="button"
+                    className="ic-btn ic-btn-ghost ic-btn-resolve-conflict"
+                    onClick={() => {
+                      setDiffOpen(false);
+                      openConflict();
+                    }}
+                    title="Settle this proposal against the current text"
+                  >
+                    Resolve conflict
+                  </button>
+                )}
                 {canUpdate && (
                   <button
                     type="button"
@@ -767,6 +874,19 @@ export function InlineThreadCard({
               </>
             ) : null
           }
+        />
+      )}
+
+      {proposal && (
+        <ConflictDialog
+          open={conflictOpen}
+          onOpenChange={setConflictOpen}
+          conflict={conflict}
+          loading={loadingConflict}
+          error={conflictError}
+          actionError={conflictActionError}
+          applying={applyingResolution}
+          onApply={applyResolution}
         />
       )}
     </article>

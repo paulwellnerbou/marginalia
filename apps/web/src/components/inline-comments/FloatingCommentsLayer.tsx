@@ -48,6 +48,10 @@ interface Props {
     name?: string,
   ) => Promise<ThreadActionResult>;
   onRepairThread: (id: string) => Promise<ThreadActionResult>;
+  onResolveConflict: (
+    id: string,
+    payload: { resolvedText?: string; comment?: string },
+  ) => Promise<ThreadActionResult>;
   onReact: (commentId: string, emoji: string) => Promise<void>;
   onEditProposal?: ((thread: Thread) => void) | undefined;
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
@@ -79,6 +83,7 @@ export function FloatingCommentsLayer({
   onDeleteThread,
   onResolveThread,
   onRepairThread,
+  onResolveConflict,
   onReact,
   onEditProposal,
   onScrollToAnchor,
@@ -374,6 +379,7 @@ export function FloatingCommentsLayer({
         onDeleteThread={onDeleteThread}
         onResolveThread={onResolveThread}
         onRepairThread={onRepairThread}
+        onResolveConflict={onResolveConflict}
         onReact={onReact}
         onEditProposal={onEditProposal}
       />
