@@ -8,6 +8,24 @@ export const CLIENT_NAME_HEADER = 'x-marginalia-client-name';
 export const INVITE_HEADER = 'x-marginalia-invite';
 export const SESSION_COOKIE = 'marginalia_session';
 export const INVITE_SESSION_COOKIE = 'marginalia_invite_session';
+/**
+ * Mirror of the invite token the browser already holds, for the requests
+ * it makes without JavaScript. An `<img>` cannot set the invite header, so
+ * on an invite-only document every image — body illustrations, the assets
+ * panel, cover thumbnails — would 401 for anyone whose access is the
+ * header rather than a claimed session. Chiefly the document's own admin,
+ * whose token is never claimable.
+ *
+ * Path-scoped to one document, so holding a hundred documents does not put
+ * a hundred cookies on every request: the browser sends only the one whose
+ * document is being fetched. That scoping is also why the name can be
+ * constant — a cookie's identity is (name, domain, path).
+ *
+ * Only the assets router honours it. Reading the document itself still
+ * costs an invite header or a claimed session, which keeps this strictly a
+ * credential for loading bytes an authorized page already referenced.
+ */
+export const INVITE_TOKEN_COOKIE = 'marginalia_invite_token';
 
 export interface Identity {
   clientId: string;
@@ -137,6 +155,52 @@ export function parseCookie(header: string | null, name: string): string | null 
     if (k === name) return rest.join('=');
   }
   return null;
+}
+
+/** Every route of one document, and nothing else. See INVITE_TOKEN_COOKIE. */
+function inviteCookiePath(docUid: string): string {
+  return `/api/documents/${encodeURIComponent(docUid)}`;
+}
+
+/**
+ * `Set-Cookie` value handing this document's invite token back to the
+ * browser. SameSite=Lax means another site embedding the image URL does
+ * not get the cookie with it, so the document stays as unreachable from
+ * elsewhere as the invite-only flag promises.
+ */
+export function inviteTokenCookie(docUid: string, token: string, ttlMs: number): string {
+  const maxAge = Math.floor(ttlMs / 1000);
+  return [
+    `${INVITE_TOKEN_COOKIE}=${token}`,
+    `Path=${inviteCookiePath(docUid)}`,
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${maxAge}`,
+  ].join('; ');
+}
+
+/**
+ * The request's headers, with an invite-token cookie promoted to the
+ * invite header when the request carried no header of its own. Requests
+ * the browser makes without JavaScript present the token this way and no
+ * other; an explicit header always wins.
+ *
+ * Reads only. `<img>` issues GET and nothing else, so accepting the cookie
+ * on a write would widen it past the job it exists for — uploading or
+ * deleting still costs a header, which no third-party page can set.
+ *
+ * The cookie is not trusted beyond being a token: `readInvite` still looks
+ * it up against this document, so one that belongs elsewhere — or to a
+ * revoked invite — resolves to nothing and the caller is a stranger again.
+ */
+export function headersWithInviteCookie(req: Request): Headers {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return req.headers;
+  if (req.headers.get(INVITE_HEADER)) return req.headers;
+  const token = parseCookie(req.headers.get('cookie'), INVITE_TOKEN_COOKIE);
+  if (!token) return req.headers;
+  const headers = new Headers(req.headers);
+  headers.set(INVITE_HEADER, token);
+  return headers;
 }
 
 /**

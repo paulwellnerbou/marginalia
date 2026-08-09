@@ -190,6 +190,15 @@ decide nothing. `editor` additionally lets it accept proposals and write
 to the document directly — useful, but then "suggest" and "apply" are one
 approval apart.
 
+A document `create_document` makes is **invite-only**: the token-free
+`/d/<uid>` URL opens nothing, so everyone who is to read it needs a link
+of their own — including you. Pass `invite_only: false` to lift that.
+
+It is the only one of the two gates that lifts: `password_protected` is
+independent, so a document with both set turns away a visitor who clears
+just one, and lifting invite-only leaves the URL enough on its own only
+when no password is set.
+
 ## The tools
 
 **Reading**

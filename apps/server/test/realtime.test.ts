@@ -52,7 +52,9 @@ describe('realtime events', () => {
     const res = await fetch(url('/api/documents'), {
       method: 'POST',
       headers: headersFor(ALICE),
-      body: JSON.stringify({ markdown }),
+      // Anonymous subscribers are part of what these cases check, so keep
+      // the document out of the invite-only default.
+      body: JSON.stringify({ markdown, invite_only: false }),
     });
     const j = (await res.json()) as { uid: string; admin_invite: { token: string } };
     adminToken = j.admin_invite.token;

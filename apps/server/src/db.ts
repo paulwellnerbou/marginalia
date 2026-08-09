@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS documents (
   -- document URL grants nothing, an invite token (header or claimed
   -- session) is required even to read. Independent of password_hash;
   -- when both are set a visitor needs to clear both gates.
+  -- New documents are created with 1; the column default stays 0 so it
+  -- matches the migration below, which must not close existing docs.
   invite_only          INTEGER NOT NULL DEFAULT 0,
   default_theme        TEXT NOT NULL DEFAULT 'default',
   -- 'markdown' | 'asciidoc'. Legacy rows without a format are treated

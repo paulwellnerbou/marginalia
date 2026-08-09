@@ -77,6 +77,28 @@ describe('hosted MCP endpoint', () => {
     await client.close();
   });
 
+  test('a document it creates is invite-only, and it says so about the bare link', async () => {
+    const client = await connect();
+    const created = await callText(client, 'create_document', { source: '# Hosted\n\nBody.\n' });
+    // The bare link is still worth printing — the agent needs the uid, and
+    // it is the URL a recipient ends up with — but handing it to a person
+    // does nothing, and the tool has to say that rather than call it a
+    // "read-only link".
+    expect(created).toContain('invite-only');
+    expect(created).not.toContain('read-only link');
+
+    const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+    const stranger = await connect('?name=Nobody');
+    const res = (await stranger.callTool({
+      name: 'get_document',
+      arguments: { document: `${baseUrl}/d/${uid}`, include_source: false },
+    })) as { content: Array<{ text?: string }>; isError?: boolean };
+    expect(res.isError).toBe(true);
+    expect(res.content.map((c) => c.text).join('')).toContain('invite-required');
+    await stranger.close();
+    await client.close();
+  });
+
   test('signs its work with the name given in the URL', async () => {
     const client = await connect('?name=Codex');
     const created = await callText(client, 'create_document', { source: '# Doc\n\nBody.\n' });
@@ -281,7 +303,12 @@ describe('hosted MCP endpoint', () => {
 
   test('a token on the connection covers references that carry none', async () => {
     const admin = await connect('?name=Paul');
-    const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    // Not invite-only: this is about what a token adds on top of the
+    // anonymous reader role, which an invite-only doc would not grant.
+    const created = await callText(admin, 'create_document', {
+      source: '# Doc\n\nAlpha.\n',
+      invite_only: false,
+    });
     const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
     const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
     const invite = await callText(admin, 'create_invite', {
@@ -363,7 +390,10 @@ describe('hosted MCP endpoint', () => {
 
   test('remembers a document’s link for the rest of the session', async () => {
     const admin = await connect('?name=Paul');
-    const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    const created = await callText(admin, 'create_document', {
+      source: '# Doc\n\nAlpha.\n',
+      invite_only: false,
+    });
     const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
     const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
     const invite = await callText(admin, 'create_invite', {
@@ -404,7 +434,10 @@ describe('hosted MCP endpoint', () => {
 
   test('one session’s tokens are invisible to another', async () => {
     const admin = await connect('?name=Paul');
-    const created = await callText(admin, 'create_document', { source: '# Doc\n\nAlpha.\n' });
+    const created = await callText(admin, 'create_document', {
+      source: '# Doc\n\nAlpha.\n',
+      invite_only: false,
+    });
     const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
     const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
     const invite = await callText(admin, 'create_invite', {

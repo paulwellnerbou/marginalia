@@ -28,7 +28,9 @@ import {
   createSession,
   deleteSession,
   hashPassword,
+  INVITE_HEADER,
   INVITE_SESSION_COOKIE,
+  inviteTokenCookie,
   parseCookie,
   readIdentity,
   readInvite,
@@ -228,9 +230,11 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
     passwordHash = await hashPassword(plaintextPassword);
   }
 
-  // Settable at creation so a doc that is meant to be invite-only is never
-  // briefly readable by URL between the upload and a follow-up PATCH.
-  const inviteOnly = body.invite_only === true;
+  // Invite-only is the default: a new document's URL is not a credential,
+  // and there is no window between the upload and a follow-up PATCH in which
+  // it is. Opening one up is an explicit `invite_only: false` — which also
+  // keeps old clients that never send the field on the safe side.
+  const inviteOnly = body.invite_only !== false;
 
   const theme = typeof body.default_theme === 'string' ? body.default_theme : 'default';
   const docName =
@@ -300,6 +304,18 @@ async function getDocument(c: Context, deps: AppDeps) {
 
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
+
+  // The rendered HTML below points every image at the asset proxy, and the
+  // browser fetches those with no header of its own. Hand the token back as
+  // a document-scoped cookie so those requests carry the same credential
+  // this one did. See INVITE_TOKEN_COOKIE.
+  const presented = c.req.raw.headers.get(INVITE_HEADER);
+  if (presented && decision.invite) {
+    c.header(
+      'Set-Cookie',
+      inviteTokenCookie(doc.uid, presented, deps.config.namedInviteSessionTtlMs),
+    );
+  }
 
   const source = store.read(doc);
   const rendered = await renderDocument(source, doc.format);
@@ -1420,6 +1436,9 @@ async function importDocument(c: Context, deps: AppDeps) {
     ? docSpec.mermaid_renderer
     : null;
   // Bundle's editable_by_anyone is ignored; the column is deprecated.
+  // Access control is not carried across deployments — the password is
+  // dropped, and the import lands invite-only like any other new document
+  // rather than inheriting the reach the source document happened to have.
 
   // Restore the original git history when the bundle carries it, so the
   // imported document keeps its real timeline — original authors,
@@ -1440,8 +1459,8 @@ async function importDocument(c: Context, deps: AppDeps) {
   }
   db.prepare(
     `INSERT INTO documents
-       (uid, repo_dir, name, password_hash, editable_by_anyone, default_theme, format, mermaid_renderer, created_at, updated_at)
-     VALUES (?, ?, ?, NULL, 0, ?, ?, ?, ?, ?)`,
+       (uid, repo_dir, name, password_hash, editable_by_anyone, invite_only, default_theme, format, mermaid_renderer, created_at, updated_at)
+     VALUES (?, ?, ?, NULL, 0, 1, ?, ?, ?, ?, ?)`,
   ).run(uid, uid, name, theme, format, mermaidRenderer, now, now);
   // Seed the roster before the importer's own upsert so their current
   // display name still wins for their own client id.
@@ -1660,6 +1679,7 @@ async function importDocument(c: Context, deps: AppDeps) {
         url: `/d/${uid}/${adminInvite.token}`,
         display_name: adminInvite.display_name,
       },
+      invite_only: true,
       imported_comments: importedComments,
       imported_edit_proposals: importedEditProposals,
     },
@@ -2598,6 +2618,9 @@ function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
   const cookie = c.req.raw.headers.get('cookie');
   const sessionToken = parseCookie(cookie, SESSION_COOKIE);
   const inviteSessionToken = parseCookie(cookie, INVITE_SESSION_COOKIE);
+  // Deliberately not reading the invite-token cookie: it exists so `<img>`
+  // can load bytes, and the assets router is the only place that honours
+  // it. The document itself always costs a header or a claimed session.
   return authorize(deps.db, doc, c.req.raw.headers, sessionToken, inviteSessionToken);
 }
 
