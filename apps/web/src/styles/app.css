@@ -721,6 +721,56 @@ button.primary:disabled {
   display: none;
 }
 
+/* ============================================================
+ * Vertical paged reading
+ *
+ * No multicol here: the document stays in ordinary block flow and a
+ * page is a scrollport-height slice of it, so a page turn is a vertical
+ * scroll by one `clientHeight`. That keeps the pitch arithmetic in
+ * `paged-reading.ts` identical to the horizontal case.
+ *
+ * The height is set from JS to a whole number of text lines (see
+ * `--doc-page-block`), so a page boundary falls between lines instead
+ * of slicing one in half. The slack that leaves inside `.doc-viewport`
+ * becomes the top and bottom page margin, which is why the scrollport
+ * is centred rather than stretched.
+ * ============================================================ */
+.pane-doc .doc-scroll.doc-paged-y {
+  --page-margin-block: 2rem;
+  /* Scrolled programmatically only, as in the horizontal mode: a free
+     scroll would strand the reader looking at halves of two pages. */
+  overflow: hidden;
+  padding-inline: 0;
+  /* clientHeight is the pitch, so nothing may pad the block axis. */
+  padding-block: 0;
+  /* Opt out of the flex stretch — the height *is* the page. */
+  flex: 0 0 auto;
+  height: var(--doc-page-block, 100%);
+  margin-block: auto;
+  /* Claim the vertical axis for the swipe; the horizontal mode claims
+     the other one. Left at `auto` the browser takes a drag as a pan of
+     its own and cancels the pointer stream mid-gesture. */
+  touch-action: pan-x;
+}
+.doc-paged-y .doc-row {
+  display: block;
+  min-height: 0;
+}
+/* Nothing to stack cards against once the document is sliced by page. */
+.doc-paged-y .ic-column {
+  display: none;
+}
+/* Same reasoning as the horizontal mode: a block taller than the page
+   would otherwise run off it with no way to reach the rest. */
+.doc-paged-y .marginalia :is(img, svg, video, canvas) {
+  max-height: var(--doc-page-height, 70vh);
+  object-fit: contain;
+}
+.doc-paged-y .marginalia pre {
+  max-height: var(--doc-page-height, 70vh);
+  overflow: auto;
+}
+
 /* Turn a page by tapping the outer edge, the way a reader expects.
    Transparent and unlabelled at rest; the pager below names the same
    two actions for anyone who needs a visible control. */

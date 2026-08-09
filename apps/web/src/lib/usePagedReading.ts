@@ -1,9 +1,9 @@
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { clampPage, goToPage, measurePages, pageIndexOfClientRect } from './paged-reading.js';
 
-/** Horizontal travel that counts as a page-turning swipe, in px. */
+/** Travel along the paging axis that counts as a page-turning swipe, in px. */
 const SWIPE_MIN_PX = 48;
-/** How much a swipe must favour the horizontal to not be a scroll attempt. */
+/** How much a swipe must favour the paging axis to not read as a scroll. */
 const SWIPE_AXIS_RATIO = 1.5;
 /** Longest a gesture may take and still read as a swipe (ms). */
 const SWIPE_MAX_MS = 800;
@@ -31,39 +31,46 @@ export interface PagedReading {
   /** Turn from a tap on an edge zone, unless a swipe just handled it. */
   tap: (delta: number) => void;
   /**
-   * True once the pagination is wider than this engine will paint, so
-   * every page past the first would come up blank. Nothing here acts on
+   * True once the pagination runs further than this engine will paint,
+   * so pages past a certain point come up blank. Nothing here acts on
    * it — the caller decides what to offer the reader instead.
    */
   tooWideToPaint: boolean;
 }
 
 /**
- * Paginated extent past which WebKit stops painting the columns: they are
- * laid out and measurable, `getBoundingClientRect` places them correctly,
- * and the screen stays empty. Observed on iPadOS 26 from roughly a
- * 180-page document upwards; Blink has no such limit, so it only ever
- * shows on a tablet.
+ * How far a page turn may scroll before WebKit stops painting the
+ * columns. Past this the text is still laid out and measurable —
+ * `getBoundingClientRect` places it correctly and the page counter is
+ * right — and the screen is simply empty.
  *
- * What triggers it is *not* the size of the multicol box, however much
- * the symptom looks like it. Rebuilding the article as five boxes of well
- * under this figure each left the deep pages just as blank, and plain
- * multicol under the same CSS paints past 340k px in a page of its own —
- * so splitting the document into chunks is a dead end, and whatever the
- * app does to lower the ceiling is still unidentified. Treat this number
- * as where paged mode is known to be safe here, not as a property of the
- * engine.
+ * Measured on iPadOS 26 (iPad Air, DPR 2) against a 222-page document
+ * at a 747 px pitch: x=98,604 paints in full, x=114,291 and beyond are
+ * blank. 90,000 sits under that with room to spare.
+ *
+ * Two things this is NOT, both established by experiment, so nobody
+ * re-derives them: it is not a limit on the size of a single multicol
+ * box (splitting the article into five boxes of under 40k px each did
+ * not help), and it is not measured from the end of the document
+ * (padding the scroller out to 236k px did not move the blank band).
+ * Bare multicol markup with the same CSS paints past 349k px, so the
+ * ceiling comes from something in this app that is still unidentified.
+ *
+ * How it scales beyond this one device is unknown — a higher-DPR phone
+ * may well have a lower ceiling in CSS px. Erring low only costs a
+ * reader paged mode on a very long document; erring high hands them a
+ * blank page.
  */
-const PAGED_MAX_PAINTABLE_PX = 60000;
+const PAGED_MAX_PAINTABLE_PX = 90000;
 
 /**
  * True on engines with the painting limit above. Engine-sniffed on
- * purpose: the failure is a silent paint bug with nothing to feature-
- * detect, and capping every engine to WebKit's limit would take paged
- * mode away from readers whose browser handles it fine.
+ * purpose: the failure is a silent paint bug with nothing to
+ * feature-detect, and capping every engine to WebKit's limit would take
+ * paged mode away from readers whose browser handles it fine.
  */
 function limitsMulticolPaint(): boolean {
-  return /^Apple/.test(navigator.vendor ?? '');
+  return typeof navigator !== 'undefined' && /^Apple/.test(navigator.vendor ?? '');
 }
 
 /**
@@ -215,6 +222,8 @@ export function usePagedReading(
   enabled: boolean,
   /** Changes whenever the rendered document or the panes around it move. */
   remeasureKey: unknown,
+  /** Page down the block axis instead of across — see `PAGED_VERTICAL_CLASS`. */
+  vertical = false,
 ): PagedReading {
   const [page, setPage] = useState(0);
   const [pageCount, setPageCount] = useState(1);
@@ -282,8 +291,10 @@ export function usePagedReading(
     if (!scroll || !viewport) return;
     if (!enabled) {
       scroll.style.removeProperty('--doc-page-height');
+      scroll.style.removeProperty('--doc-page-block');
       viewport.style.removeProperty('--doc-page-gutter');
       scroll.scrollLeft = 0;
+      scroll.scrollTop = 0;
       setPage(0);
       setPageCount(1);
       // Both describe a pagination that no longer exists; carrying them
@@ -300,10 +311,31 @@ export function usePagedReading(
       if (el.style.getPropertyValue(name) !== value) el.style.setProperty(name, value);
     };
     const publish = () => {
+      // Vertical pages are slices of ordinary flow, so nothing stops a
+      // slice landing through the middle of a line. Trim the scrollport
+      // to a whole number of lines and the break lands between them.
+      // The remainder is left over inside the viewport, which centres
+      // the scrollport and so becomes the page's top and bottom margin.
+      if (vertical) {
+        const article = scroll.querySelector<HTMLElement>('article.marginalia');
+        const sample = article?.querySelector<HTMLElement>('p') ?? article;
+        const lineHeight = sample ? parseFloat(window.getComputedStyle(sample).lineHeight) : NaN;
+        const margin =
+          parseFloat(window.getComputedStyle(scroll).getPropertyValue('font-size')) * 2;
+        const available = viewport.clientHeight - (Number.isFinite(margin) ? margin * 2 : 0);
+        const block =
+          Number.isFinite(lineHeight) && lineHeight > 0
+            ? Math.max(lineHeight, Math.floor(available / lineHeight) * lineHeight)
+            : available;
+        scroll.style.setProperty('--doc-page-block', `${Math.max(0, Math.round(block))}px`);
+      } else {
+        scroll.style.removeProperty('--doc-page-block');
+      }
+
       // The column box's own height: the page margins are padding on
       // `.doc-body` and they aren't symmetric, and `clientHeight`
       // measures the padding box, so both have to come off.
-      const column = scroll.querySelector<HTMLElement>('.doc-body');
+      const column = vertical ? null : scroll.querySelector<HTMLElement>('.doc-body');
       if (column) {
         const style = window.getComputedStyle(column);
         const height =
@@ -325,9 +357,10 @@ export function usePagedReading(
     return () => {
       window.removeEventListener('resize', publish);
       scroll.style.removeProperty('--doc-page-height');
+      scroll.style.removeProperty('--doc-page-block');
       viewport.style.removeProperty('--doc-page-gutter');
     };
-  }, [enabled, scrollRef, remeasureKey]);
+  }, [enabled, vertical, scrollRef, remeasureKey]);
 
   /**
    * Re-measure after anything that repaginates — a pane drag, a font or
@@ -353,7 +386,7 @@ export function usePagedReading(
       const width = scroll.clientWidth;
       const extent = scroll.scrollWidth;
       geometry.current = { width, extent };
-      setTooWideToPaint(limitsMulticolPaint() && extent > PAGED_MAX_PAINTABLE_PX);
+      setTooWideToPaint(!vertical && limitsMulticolPaint() && extent > PAGED_MAX_PAINTABLE_PX);
       // Nothing moved — a highlight repaint, a mermaid swap. Re-snapping
       // would only risk nudging a reader mid-gesture.
       if (previous && previous.width === width && previous.extent === extent) {
@@ -398,7 +431,7 @@ export function usePagedReading(
       window.removeEventListener('resize', schedule);
       for (const o of observers) o.disconnect();
     };
-  }, [enabled, scrollRef, syncFromScroller, remeasureKey]);
+  }, [enabled, vertical, scrollRef, syncFromScroller, remeasureKey]);
 
   // Note where the reader is once they have stopped moving, so the value
   // re-measurement reads was taken under the layout they were reading in.
@@ -517,11 +550,15 @@ export function usePagedReading(
       // otherwise keep swiping dead until the reader thought to tap it
       // away, with nothing on screen to explain why.
       if (!from.hadSelection && window.getSelection()?.isCollapsed === false) return;
-      const dx = x - from.x;
-      const dy = y - from.y;
-      if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) < Math.abs(dy) * SWIPE_AXIS_RATIO) return;
+      // A swipe turns the page along whichever axis the pages run on,
+      // and has to clearly favour it over the other one to count.
+      const along = vertical ? y - from.y : x - from.x;
+      const across = vertical ? x - from.x : y - from.y;
+      if (Math.abs(along) < SWIPE_MIN_PX || Math.abs(along) < Math.abs(across) * SWIPE_AXIS_RATIO) {
+        return;
+      }
       lastSwipeAt.current = performance.now();
-      turn(dx < 0 ? 1 : -1);
+      turn(along < 0 ? 1 : -1);
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -561,7 +598,7 @@ export function usePagedReading(
       surface.removeEventListener('pointerup', onPointerUp);
       surface.removeEventListener('pointercancel', onPointerCancel);
     };
-  }, [enabled, scrollRef, turn]);
+  }, [enabled, vertical, scrollRef, turn]);
 
   return { page, pageCount, goTo, turn, tap, tooWideToPaint };
 }
