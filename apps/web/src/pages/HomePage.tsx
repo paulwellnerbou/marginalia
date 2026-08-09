@@ -774,36 +774,34 @@ function UploadDialog({
     >
       <Dialog.Content maxWidth="860px" className="dialog-content--fixed-footer">
         {createdAdminUrl && createdUid && createdToken ? (
-          <div className="dialog-scroll-body">
-            <Dialog.Title>Document ready</Dialog.Title>
-            <Dialog.Description size="2" color="gray" mb="4">
-              Bookmark the admin link below — it's the only way back into this document with full
-              control.
-            </Dialog.Description>
-            <Flex direction="column" gap="3" mb="4">
-              <Flex
-                direction={{ initial: 'column', sm: 'row' }}
-                align={{ initial: 'stretch', sm: 'end' }}
-                gap="3"
-              >
+          <>
+            <div className="dialog-scroll-body">
+              <Dialog.Title>Document ready</Dialog.Title>
+              <Dialog.Description size="2" color="gray" mb="4">
+                Bookmark the admin link below — it's the only way back into this document with full
+                control.
+              </Dialog.Description>
+              <Flex direction="column" gap="3">
                 <Box className="created-admin-link">
                   <Text as="div" size="1" color="gray" mb="1">
                     Admin link
                   </Text>
                   <Copyable text={createdAdminUrl} multiline ariaLabel="Copy admin link" />
                 </Box>
-                <Button onClick={openCreated}>Open the document</Button>
+                {createdPassword && (
+                  <PasswordDisclosureCard
+                    docUid={createdUid}
+                    password={createdPassword}
+                    label="Password"
+                    docName={createdDocName}
+                  />
+                )}
               </Flex>
-              {createdPassword && (
-                <PasswordDisclosureCard
-                  docUid={createdUid}
-                  password={createdPassword}
-                  label="Password"
-                  docName={createdDocName}
-                />
-              )}
+            </div>
+            <Flex className="dialog-footer" justify="end" mt="4">
+              <Button onClick={openCreated}>Open the document</Button>
             </Flex>
-          </div>
+          </>
         ) : (
           <form className="dialog-form-layout" onSubmit={submit}>
             <div className="dialog-scroll-body">
