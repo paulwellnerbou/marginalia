@@ -488,6 +488,52 @@ describe('marginalia MCP server', () => {
     ).toContain(myThread);
   });
 
+  test('resolved threads stay out of the list but remain reachable by id', async () => {
+    const { adminUrl } = await seedBook();
+
+    const settled = await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      body: 'Should this open on the camels instead?',
+    });
+    const settledId = /^thread_id: (\S+)/m.exec(settled)?.[1] as string;
+    const live = await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'They reached the well',
+      body: 'Is this ending intentional?',
+    });
+    const liveId = /^thread_id: (\S+)/m.exec(live)?.[1] as string;
+
+    await call('respond_to_thread', {
+      document: adminUrl,
+      thread_id: settledId,
+      action: 'resolve',
+      body: 'Leaving the opening as it is.',
+    });
+
+    // The default list is the live queue, and it says what it withheld
+    // rather than leaving the resolved thread looking deleted.
+    const listed = await call('list_threads', { document: adminUrl });
+    expect(listed).toContain(liveId);
+    expect(listed).not.toContain(settledId);
+    expect(listed).toContain('1 resolved thread(s) not shown');
+
+    // Naming it brings it back, in full, without the archive behind it.
+    const byId = await call('list_threads', { document: adminUrl, thread_id: settledId });
+    expect(byId).toContain(settledId);
+    expect(byId).toContain('Should this open on the camels instead?');
+    expect(byId).not.toContain(liveId);
+
+    // A viewer link to a resolved thread resolves the same way.
+    const byLink = await call('list_threads', { document: `${adminUrl}#comment-${settledId}` });
+    expect(byLink).toContain(settledId);
+    expect(byLink).not.toContain(liveId);
+
+    const all = await call('list_threads', { document: adminUrl, state: 'all' });
+    expect(all).toContain(settledId);
+    expect(all).toContain(liveId);
+  });
+
   test('works through a reviewer comment into an accepted proposal', async () => {
     const { adminUrl, uid } = await seedBook();
     const invite = await call('create_invite', {

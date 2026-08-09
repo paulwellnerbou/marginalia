@@ -2813,8 +2813,10 @@ describe('documents API', () => {
     expect(dupe.source).toContain('Original.');
     expect(dupe.name).toBe('Original Name');
 
+    // `state=all`: the roundtrip is supposed to preserve resolution, so
+    // the resolved thread is exactly the one worth looking at.
     const threadsRes = await app.hono.fetch(
-      new Request(`http://test/api/documents/${imported.uid}/threads`, {
+      new Request(`http://test/api/documents/${imported.uid}/threads?state=all`, {
         headers: withInvite(headersFor(CLIENT_C), imported.admin_invite.token),
       }),
     );

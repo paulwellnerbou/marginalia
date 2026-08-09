@@ -21,6 +21,8 @@ import {
   text,
 } from './context.js';
 
+type ThreadStateFilter = 'open' | 'resolved' | 'all';
+
 interface ThreadMutationWire {
   thread: ThreadWire;
   created_reply_id?: string | null;
@@ -49,8 +51,11 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
       description:
         'Every review thread on the document — plain comment threads and edit proposals alike ' +
         '— with the full discussion, the text each is anchored to, and what you are allowed to ' +
-        'do with it. This is the starting point for working through a reviewer’s comments. ' +
-        'Defaults to open threads; pass state="all" to include resolved ones.\n\n' +
+        'do with it. This is the starting point for working through a reviewer’s comments.\n\n' +
+        'Resolved threads are left out: they are settled business, and on a long-reviewed ' +
+        'document they outnumber the live ones. The header says how many were withheld. To ' +
+        'read one, pass its thread_id — that fetches it whatever its state. Reach for ' +
+        'state="all" only when the question really is about the whole history.\n\n' +
         'Comments and the proposals written to answer them are shown linked in both ' +
         'directions. `needs_proposal: true` lists the comments still waiting for one.',
       inputSchema: {
@@ -59,14 +64,16 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .enum(['open', 'resolved', 'all'])
           .optional()
           .describe(
-            'Default "open". "resolved" covers resolved comments and accepted/rejected proposals.',
+            'Default "open". "resolved" covers resolved comments and accepted/rejected ' +
+              'proposals. Ignored when thread_id names a thread.',
           ),
         kind: z.enum(['all', 'comments', 'proposals']).optional().describe('Default "all".'),
         thread_id: z
           .string()
           .optional()
           .describe(
-            'Show just this one thread, in full. Accepts the id of any message in it, not only ' +
+            'Show just this one thread, in full, resolved or not — the way back to a closed ' +
+              'thread without listing them all. Accepts the id of any message in it, not only ' +
               'the opener — a `#comment-<id>` link from the viewer often names a reply. A ' +
               'document URL carrying such a fragment selects the thread on its own.',
           ),
@@ -123,17 +130,18 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
     async (args) =>
       guard(async () => {
         const loaded = await loadDocument(ctx, args.document);
-        const listed = await fetchThreads(ctx, loaded);
+        // A `#comment-<id>` fragment in the document URL means "this
+        // thread", so honour it when no id was passed outright.
+        const targetId = args.thread_id ?? loaded.ref.commentId ?? null;
+        const state = args.state ?? 'open';
+        const listed = await fetchThreads(ctx, loaded, { state, threadId: targetId });
 
         const section = args.section ? resolveSection(loaded.blocks, args.section) : null;
 
         let threads = listed.threads;
-        // A `#comment-<id>` fragment in the document URL means "this
-        // thread", so honour it when no id was passed outright. Match on
-        // any message in the thread: the viewer's copy-link button sits
-        // on replies too, and matching only openers made those links
-        // silently return nothing.
-        const targetId = args.thread_id ?? loaded.ref.commentId ?? null;
+        // Match on any message in the thread: the viewer's copy-link
+        // button sits on replies too, and matching only openers made
+        // those links silently return nothing.
         if (targetId) {
           threads = threads.filter(
             (t) => t.id === targetId || t.comments.some((c) => c.id === targetId),
@@ -154,9 +162,14 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         }
         if (args.kind === 'comments') threads = threads.filter((t) => t.proposal === null);
         if (args.kind === 'proposals') threads = threads.filter((t) => t.proposal !== null);
-        const state = args.state ?? 'open';
-        if (state === 'open') threads = threads.filter((t) => t.state === 'open');
-        else if (state === 'resolved') threads = threads.filter((t) => t.state !== 'open');
+        // The server already filtered by state — repeated here only so an
+        // older instance, which ignores the query param, still honours
+        // the default. A named thread is exempt: asking for one by id
+        // means "resolved or not".
+        if (targetId === null) {
+          if (state === 'open') threads = threads.filter((t) => t.state === 'open');
+          else if (state === 'resolved') threads = threads.filter((t) => t.state !== 'open');
+        }
         if (args.author) {
           const needle = args.author.toLowerCase();
           threads = threads.filter((t) =>
@@ -187,6 +200,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         const counts = summarize(listed.threads);
         const header = [
           `document ${loaded.doc.uid} — ${counts}`,
+          hiddenThreadsNote(listed.counts, state, targetId),
           section ? `section: ${section.path.join(' › ')}` : null,
           !args.thread_id && loaded.ref.commentId
             ? `filtered to the thread named by the link's #comment-${loaded.ref.commentId}`
@@ -744,14 +758,46 @@ function spanSource(source: string, block: DocumentBlock, endBlock: DocumentBloc
   return source.slice(Math.min(block.start, endBlock.start), Math.max(block.end, endBlock.end));
 }
 
-async function fetchThreads(ctx: ToolContext, loaded: LoadedDocument): Promise<ListThreadsWire> {
+async function fetchThreads(
+  ctx: ToolContext,
+  loaded: LoadedDocument,
+  params: { state: ThreadStateFilter; threadId: string | null },
+): Promise<ListThreadsWire> {
   // `consume_mentions=false` keeps the server's pending-mention queue
   // intact: listing threads is a read, and a repeat call should still
   // surface "you were mentioned here".
+  //
+  // The state filter goes to the server rather than being applied here,
+  // so a document with a long-settled archive costs neither the git read
+  // per resolved proposal nor the payload. A named thread is fetched on
+  // its own and comes back whatever its state.
   return ctx.client.json<ListThreadsWire>(
     loaded.ref,
     `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads`,
-    { query: { consume_mentions: 'false' } },
+    {
+      query: {
+        consume_mentions: 'false',
+        ...(params.threadId ? { thread_id: params.threadId } : { state: params.state }),
+      },
+    },
+  );
+}
+
+/**
+ * What the default filter left behind, and how to reach it — an agent
+ * reading an open-only list otherwise has no way to tell that a thread
+ * it half-remembers was resolved rather than deleted.
+ */
+function hiddenThreadsNote(
+  counts: ListThreadsWire['counts'],
+  state: ThreadStateFilter,
+  targetId: string | null,
+): string | null {
+  const resolved = counts?.resolved ?? 0;
+  if (targetId !== null || state !== 'open' || resolved === 0) return null;
+  return (
+    `${resolved} resolved thread(s) not shown — pass thread_id to read one of them in full, ` +
+    'or state="all" for the lot.'
   );
 }
 
