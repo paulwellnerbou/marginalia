@@ -13,6 +13,8 @@ RUN bun install --frozen-lockfile
 # VITE_* vars are baked into the frontend bundle by Vite at build time.
 ARG IMPRINT_MD
 ENV VITE_IMPRINT_MD=$IMPRINT_MD
+ARG MARGINALIA_RELEASE_VERSION
+ENV VITE_RELEASE_VERSION=$MARGINALIA_RELEASE_VERSION
 RUN bun run build
 
 # ---------------------------------------------------------------------
@@ -46,6 +48,8 @@ FROM oven/bun:1.3.13-debian AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
+ARG MARGINALIA_RELEASE_VERSION
+ENV MARGINALIA_RELEASE_VERSION=$MARGINALIA_RELEASE_VERSION
 
 # Fixed UID/GID keeps the deploy script's host volume ownership predictable.
 RUN groupadd -g 999 marginalia && useradd -u 999 -g marginalia -s /bin/bash marginalia

@@ -3,6 +3,7 @@ import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { RouteErrorBoundary } from './components/RouteErrorBoundary.js';
+import { ReleaseUpdateDialog } from './components/ReleaseUpdateDialog.js';
 import { ToastContainer } from './components/ToastContainer.js';
 import { AppearanceProvider, useAppearance } from './lib/appearance.js';
 
@@ -79,6 +80,7 @@ function App() {
             </Routes>
           </Suspense>
         </RouteErrorBoundary>
+        <ReleaseUpdateDialog />
         <ToastContainer />
       </BrowserRouter>
     </Theme>
