@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
-import { canMergeMultiBlock, renderDocument } from '@marginalia/renderer';
+import { renderDocument } from '@marginalia/renderer';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import {
@@ -44,6 +44,7 @@ import {
   loadProposalRow,
   locateAnchorRange,
   locateDocumentBlocks,
+  locateProposalAnchorBySourceSpan,
   readProposalContent,
   readProposalFullContent,
   reanchorProposals,
@@ -576,7 +577,7 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
 
       const rendered = await renderDocument(preview.before, doc.format);
       const blocks = locateDocumentBlocks(doc, preview.before);
-      anchor = locateRepairAnchor(
+      anchor = locateProposalAnchorBySourceSpan(
         blocks,
         rendered.blocks,
         preview.before,
@@ -2005,6 +2006,29 @@ async function prepareAcceptProposalThread(
     spliceStart,
     spliceStart + proposedText.length,
   );
+  const postAcceptAnchor = acceptedAnchor ? snapshotPostAcceptAnchor(acceptedAnchor) : null;
+
+  // A proposal can be the answer to a comment whose entire quoted text it
+  // replaces. Ordinary quote re-anchoring has no evidence left in that
+  // case, even though the proposal gives us an exact old-span -> new-span
+  // mapping. Carry the resolved comment onto the resulting paragraph. If
+  // its quote survived and re-anchored normally, leave the more precise
+  // selection alone.
+  const answeredCommentUpdate = row.answers_comment_id
+    ? commentAnchorUpdates.find((upd) => upd.commentId === row.answers_comment_id)
+    : undefined;
+  const relocateAnsweredComment =
+    postAcceptAnchor && answeredCommentUpdate?.linkStatus === 'orphaned'
+      ? row.answers_comment_id
+      : null;
+  if (relocateAnsweredComment && answeredCommentUpdate && postAcceptAnchor) {
+    answeredCommentUpdate.linkStatus = postAcceptAnchor.linkStatus;
+    answeredCommentUpdate.blockId = postAcceptAnchor.blockId;
+    answeredCommentUpdate.endBlockId = null;
+    answeredCommentUpdate.startOffset = postAcceptAnchor.startOffset;
+    answeredCommentUpdate.endOffset = postAcceptAnchor.endOffset;
+    answeredCommentUpdate.quote = postAcceptAnchor.quote;
+  }
 
   return {
     oid,
@@ -2015,6 +2039,25 @@ async function prepareAcceptProposalThread(
       const updateCommentStmt = deps.db.prepare(REANCHOR_COMMENT_SQL);
       for (const upd of commentAnchorUpdates) {
         updateCommentStmt.run(...reanchorParams(upd, now, upd.commentId));
+      }
+
+      if (relocateAnsweredComment && postAcceptAnchor) {
+        deps.db
+          .prepare(
+            `UPDATE comments
+                SET anchor_prefix = '',
+                    anchor_suffix = '',
+                    anchor_heading_path = ?,
+                    anchor_section_index = ?,
+                    anchor_section_index_path = ?
+              WHERE id = ?`,
+          )
+          .run(
+            postAcceptAnchor.headingPath,
+            postAcceptAnchor.sectionIndex,
+            postAcceptAnchor.sectionIndexPath,
+            relocateAnsweredComment,
+          );
       }
 
       deps.db
@@ -2029,6 +2072,9 @@ async function prepareAcceptProposalThread(
           `UPDATE comments
             SET anchor_block_id = ?,
                 anchor_end_block_id = NULL,
+                anchor_quote = ?,
+                anchor_prefix = ?,
+                anchor_suffix = ?,
                 anchor_start_offset = ?,
                 anchor_end_offset = ?,
                 anchor_heading_path = ?,
@@ -2041,17 +2087,16 @@ async function prepareAcceptProposalThread(
           WHERE id = ?`,
         )
         .run(
-          acceptedAnchor?.block.id ?? row.anchor_block_id,
-          null,
-          null,
-          acceptedAnchor
-            ? JSON.stringify(acceptedAnchor.block.headingPath)
-            : row.anchor_heading_path,
-          acceptedAnchor?.block.sectionIndex ?? row.anchor_section_index,
-          acceptedAnchor
-            ? JSON.stringify(acceptedAnchor.block.sectionIndexPath)
-            : row.anchor_section_index_path,
-          acceptedAnchor?.linkStatus ?? row.link_status,
+          postAcceptAnchor?.blockId ?? row.anchor_block_id,
+          postAcceptAnchor?.quote ?? row.anchor_quote,
+          postAcceptAnchor ? '' : row.anchor_prefix,
+          postAcceptAnchor ? '' : row.anchor_suffix,
+          postAcceptAnchor?.startOffset ?? row.anchor_start_offset,
+          postAcceptAnchor?.endOffset ?? row.anchor_end_offset,
+          postAcceptAnchor?.headingPath ?? row.anchor_heading_path,
+          postAcceptAnchor?.sectionIndex ?? row.anchor_section_index,
+          postAcceptAnchor?.sectionIndexPath ?? row.anchor_section_index_path,
+          postAcceptAnchor?.linkStatus ?? row.link_status,
           now,
           identity.displayName,
           now,
@@ -2095,6 +2140,17 @@ async function prepareReopenAcceptedProposalThread(
   });
 
   const knownBlocks = locateDocumentBlocks(doc, diff.before);
+  const restoredProposalAnchor =
+    row.base_block_start !== null && row.base_block_end !== null
+      ? locateProposalAnchorBySourceSpan(
+          knownBlocks,
+          rendered.blocks,
+          diff.before,
+          row.base_block_start,
+          row.base_block_end,
+          doc.format,
+        )
+      : null;
   return {
     oid,
     applyDb: () => {
@@ -2104,6 +2160,37 @@ async function prepareReopenAcceptedProposalThread(
       const updateStmt = deps.db.prepare(REANCHOR_COMMENT_SQL);
       for (const upd of commentAnchorUpdates) {
         updateStmt.run(...reanchorParams(upd, now, upd.commentId));
+      }
+
+      if (restoredProposalAnchor) {
+        deps.db
+          .prepare(
+            `UPDATE comments
+                SET anchor_block_id = ?,
+                    anchor_end_block_id = ?,
+                    anchor_quote = ?,
+                    anchor_prefix = '',
+                    anchor_suffix = '',
+                    anchor_start_offset = NULL,
+                    anchor_end_offset = NULL,
+                    anchor_heading_path = ?,
+                    anchor_section_index = ?,
+                    anchor_section_index_path = ?,
+                    link_status = ?,
+                    updated_at = ?
+              WHERE id = ?`,
+          )
+          .run(
+            restoredProposalAnchor.block.id,
+            restoredProposalAnchor.endBlock?.id ?? null,
+            restoredProposalAnchor.quote,
+            JSON.stringify(restoredProposalAnchor.block.headingPath),
+            restoredProposalAnchor.block.sectionIndex,
+            JSON.stringify(restoredProposalAnchor.block.sectionIndexPath),
+            restoredProposalAnchor.linkStatus,
+            now,
+            row.id,
+          );
       }
 
       const reopened = reopenAcceptedProposal(deps.db, doc.uid, row.id, now);
@@ -2603,6 +2690,43 @@ function locateAcceptedProposalAnchor(
   return { block: rendered, linkStatus: located.confidence };
 }
 
+interface PostAcceptAnchorSnapshot {
+  blockId: string;
+  quote: string;
+  startOffset: number;
+  endOffset: number;
+  headingPath: string;
+  sectionIndex: number;
+  sectionIndexPath: string;
+  linkStatus: 'linked' | 'low-confidence';
+}
+
+/**
+ * Turn the paragraph produced by an accepted proposal into a complete new
+ * anchor. Keeping the old quote with the new content-hash block id makes the
+ * very next document save treat that id as stale and orphan the proposal.
+ * Accepted history is recovered from git, so the anchor can (and should)
+ * describe the current paragraph instead of doubling as the old snapshot.
+ */
+function snapshotPostAcceptAnchor({
+  block,
+  linkStatus,
+}: {
+  block: BlockInfo;
+  linkStatus: 'linked' | 'low-confidence';
+}): PostAcceptAnchorSnapshot {
+  return {
+    blockId: block.id,
+    quote: block.text,
+    startOffset: 0,
+    endOffset: block.text.length,
+    headingPath: JSON.stringify(block.headingPath),
+    sectionIndex: block.sectionIndex,
+    sectionIndexPath: JSON.stringify(block.sectionIndexPath),
+    linkStatus,
+  };
+}
+
 function changedSpan(
   before: string,
   after: string,
@@ -2624,81 +2748,7 @@ function changedSpan(
   };
 }
 
-function locateRepairAnchor(
-  blocks: Map<string, BlockSourceRange>,
-  renderedBlocks: BlockInfo[],
-  source: string,
-  start: number,
-  end: number,
-  format: DocumentRow['format'],
-): {
-  block: BlockInfo;
-  endBlock: BlockInfo | null;
-  quote: string;
-  linkStatus: 'linked' | 'low-confidence';
-} | null {
-  const renderedById = new Map(renderedBlocks.map((block) => [block.id, block]));
-  const sorted = Array.from(blocks.entries()).sort((a, b) => a[1].start - b[1].start);
-
-  for (const [id, range] of sorted) {
-    if (range.start !== start || range.end !== end) continue;
-    const block = renderedById.get(id);
-    if (!block) return null;
-    return {
-      block,
-      endBlock: null,
-      quote: source.slice(range.start, range.end),
-      linkStatus: 'linked',
-    };
-  }
-
-  let best: {
-    startId: string;
-    startRange: BlockSourceRange;
-    endId: string;
-    endRange: BlockSourceRange;
-    span: number;
-  } | null = null;
-  for (const [startId, startRange] of sorted) {
-    if (startRange.start !== start) continue;
-    for (const [endId, endRange] of sorted) {
-      if (endRange.end !== end) continue;
-      if (!canMergeMultiBlock(startRange, endRange, format)) continue;
-      const span =
-        Math.max(startRange.end, endRange.end) - Math.min(startRange.start, endRange.start);
-      if (!best || span < best.span) {
-        best = { startId, startRange, endId, endRange, span };
-      }
-    }
-  }
-  if (best) {
-    const block = renderedById.get(best.startId);
-    const endBlock = renderedById.get(best.endId);
-    if (!block || !endBlock) return null;
-    return {
-      block,
-      endBlock: best.endId === best.startId ? null : endBlock,
-      quote: source.slice(
-        Math.min(best.startRange.start, best.endRange.start),
-        Math.max(best.startRange.end, best.endRange.end),
-      ),
-      linkStatus: 'linked',
-    };
-  }
-
-  const located = findBlockBySourceSpan(blocks, start, end);
-  if (!located) return null;
-  const block = renderedById.get(located.id);
-  if (!block) return null;
-  return {
-    block,
-    endBlock: null,
-    quote: source.slice(start, end) || located.range.text,
-    linkStatus: located.confidence,
-  };
-}
-
-type RepairAnchor = NonNullable<ReturnType<typeof locateRepairAnchor>>;
+type RepairAnchor = NonNullable<ReturnType<typeof locateProposalAnchorBySourceSpan>>;
 
 async function locateConflictRepairAnchor(
   doc: DocumentRow,
@@ -2717,7 +2767,7 @@ async function locateConflictRepairAnchor(
 
   const rendered = await renderDocument(currentSource, doc.format);
   const blocks = locateDocumentBlocks(doc, currentSource);
-  return locateRepairAnchor(
+  return locateProposalAnchorBySourceSpan(
     blocks,
     rendered.blocks,
     currentSource,

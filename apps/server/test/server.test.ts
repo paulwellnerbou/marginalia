@@ -1243,7 +1243,7 @@ describe('documents API', () => {
     expect(accepted.thread.link_status).toBe('linked');
     expect(accepted.thread.anchor?.block_id).toBe(expectedAcceptedBlockId);
     expect(accepted.thread.anchor?.block_id).not.toBe(blockId);
-    expect(accepted.thread.anchor?.quote).toBe(block.text);
+    expect(accepted.thread.anchor?.quote).toBe('2. Loesungskonzept & App-Architektur (Q1 - 30%)');
 
     const stored = app.db
       .prepare(
@@ -1526,6 +1526,22 @@ describe('documents API', () => {
     expect(proposalRow).toEqual({
       status: 'open',
       accepted_oid: null,
+    });
+    const restoredAnchor = app.db
+      .prepare(
+        `SELECT anchor_block_id, anchor_quote, link_status
+           FROM comments
+          WHERE id = ?`,
+      )
+      .get(proposal.thread.id) as {
+      anchor_block_id: string | null;
+      anchor_quote: string | null;
+      link_status: string;
+    };
+    expect(restoredAnchor).toEqual({
+      anchor_block_id: blockId!,
+      anchor_quote: 'alpha',
+      link_status: 'linked',
     });
 
     const historyAfterRes = await app.hono.fetch(

@@ -82,6 +82,7 @@ import { listDocUserNameMap, upsertDocUser } from '../users.js';
 import { gcAssetIfOrphan, listAttached } from './assets.js';
 import {
   loadProposalRow,
+  locateProposalAnchorBySourceSpan,
   readProposalContent,
   reanchorProposals,
   reopenAcceptedProposal,
@@ -2059,13 +2060,55 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
     updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
   }
 
-  const reopenedProposalId =
-    meta.action === 'accept-proposal' && meta.proposalId
-      ? (reopenAcceptedProposal(db, doc.uid, meta.proposalId, now)?.id ?? null)
-      : null;
-
   const knownBlocks =
     doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(diff.before) : locateAllBlocks(diff.before);
+  const reopenedProposal =
+    meta.action === 'accept-proposal' && meta.proposalId
+      ? reopenAcceptedProposal(db, doc.uid, meta.proposalId, now)
+      : null;
+  const reopenedProposalId = reopenedProposal?.id ?? null;
+  if (
+    reopenedProposal &&
+    reopenedProposal.base_block_start !== null &&
+    reopenedProposal.base_block_end !== null
+  ) {
+    const restoredAnchor = locateProposalAnchorBySourceSpan(
+      knownBlocks,
+      rendered.blocks,
+      diff.before,
+      reopenedProposal.base_block_start,
+      reopenedProposal.base_block_end,
+      doc.format,
+    );
+    if (restoredAnchor) {
+      db.prepare(
+        `UPDATE comments
+            SET anchor_block_id = ?,
+                anchor_end_block_id = ?,
+                anchor_quote = ?,
+                anchor_prefix = '',
+                anchor_suffix = '',
+                anchor_start_offset = NULL,
+                anchor_end_offset = NULL,
+                anchor_heading_path = ?,
+                anchor_section_index = ?,
+                anchor_section_index_path = ?,
+                link_status = ?,
+                updated_at = ?
+          WHERE id = ?`,
+      ).run(
+        restoredAnchor.block.id,
+        restoredAnchor.endBlock?.id ?? null,
+        restoredAnchor.quote,
+        JSON.stringify(restoredAnchor.block.headingPath),
+        restoredAnchor.block.sectionIndex,
+        JSON.stringify(restoredAnchor.block.sectionIndexPath),
+        restoredAnchor.linkStatus,
+        now,
+        reopenedProposal.id,
+      );
+    }
+  }
   reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (reopenedProposalId) {
