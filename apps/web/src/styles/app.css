@@ -2450,7 +2450,7 @@ button.primary:disabled {
   flex-direction: column;
   gap: 0.6rem;
   padding: 0.8rem 0.9rem 3rem;
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--ui-scale, 1));
 }
 
 /* One-line note that the TOC's section filter is narrowing this list. */
@@ -3672,7 +3672,7 @@ button.primary:disabled {
      card is content and scrolls under the chrome. */
   z-index: 2;
   width: min(400px, calc(100cqw - 24px));
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--ui-scale, 1));
   color: var(--ui-fg);
 }
 .ic-float-card > .ic-card {
@@ -3782,6 +3782,11 @@ button.primary:disabled {
 }
 
 /* ---------- Card ---------- */
+
+/* Comment cards are custom UI rather than Radix components, so their
+   fixed rem typography does not pick up Radix's scaled font tokens.
+   Opt each card text size into the same root multiplier used by the
+   Interface size control. */
 
 .ic-card {
   /* A very subtle tint over the document's themed background — a 5%
@@ -4082,7 +4087,7 @@ button.primary:disabled {
   align-items: center;
   padding: 0.05rem 0.45rem;
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--ui-scale, 1));
   font-weight: 500;
   line-height: 1.4;
   background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
@@ -4134,7 +4139,7 @@ button.primary:disabled {
   /* Long quotes wrap inside the row instead of pushing the copy button out. */
   min-width: 0;
   text-align: left;
-  font-size: 0.74rem;
+  font-size: calc(0.74rem * var(--ui-scale, 1));
   color: var(--ui-fg-muted);
   font-style: italic;
   cursor: pointer;
@@ -4158,7 +4163,7 @@ button.primary:disabled {
   border: 0;
   padding: 0;
   text-align: left;
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
   color: var(--ui-accent-strong);
   cursor: pointer;
   line-height: 1.4;
@@ -4187,7 +4192,7 @@ button.primary:disabled {
 
 .ic-card-collapse {
   align-self: flex-start;
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
 }
 
 /* ---------- Nested proposal cards ---------- */
@@ -4249,11 +4254,11 @@ button.primary:disabled {
 
 .ic-row-author {
   font-weight: 600;
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--ui-scale, 1));
 }
 
 .ic-row-ts {
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--ui-scale, 1));
   color: var(--ui-fg-muted);
 }
 
@@ -4334,7 +4339,7 @@ button.primary:disabled {
   border: 1px solid var(--ui-border, rgba(15, 23, 42, 0.15));
   background: var(--ui-bg-muted, rgba(15, 23, 42, 0.04));
   color: var(--ui-fg, inherit);
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--ui-scale, 1));
   line-height: 1.4;
   cursor: pointer;
   transition:
@@ -4387,7 +4392,7 @@ button.primary:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.15rem;
+  font-size: calc(1.15rem * var(--ui-scale, 1));
   line-height: 1;
   cursor: pointer;
 }
@@ -4412,7 +4417,7 @@ button.primary:disabled {
   border-bottom: 1px solid var(--ui-border, rgba(15, 23, 42, 0.12));
   background: transparent;
   color: var(--ui-fg);
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--ui-scale, 1));
   outline: none;
   flex-shrink: 0;
 }
@@ -4434,7 +4439,7 @@ button.primary:disabled {
   padding: 1rem;
   text-align: center;
   color: var(--ui-fg-muted);
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--ui-scale, 1));
   pointer-events: none;
 }
 .ic-emoji-picker [frimousse-list] {
@@ -4444,7 +4449,7 @@ button.primary:disabled {
 .ic-emoji-picker [frimousse-category-header] {
   background: var(--ui-bg, #fff);
   padding: 0.4rem 0.4rem 0.25rem;
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -4464,7 +4469,7 @@ button.primary:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.15rem;
+  font-size: calc(1.15rem * var(--ui-scale, 1));
   line-height: 1;
   cursor: pointer;
 }
@@ -4473,7 +4478,7 @@ button.primary:disabled {
 }
 
 .ic-row-body {
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--ui-scale, 1));
   line-height: 1.45;
   word-wrap: break-word;
   overflow-wrap: anywhere;
@@ -4509,7 +4514,7 @@ button.primary:disabled {
   display: flex;
   width: fit-content;
   margin-top: 0.15rem;
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
 }
 
 @media print {
@@ -4530,7 +4535,7 @@ button.primary:disabled {
   margin: 0;
 }
 .ic-row-body code {
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--ui-scale, 1));
   padding: 0 0.25rem;
   border-radius: 3px;
   background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
@@ -4560,13 +4565,13 @@ button.primary:disabled {
 }
 
 .ic-confirm-prompt {
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
   color: var(--ui-fg-muted);
   align-self: center;
 }
 
 .ic-error {
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
   /* Radix red-11 holds its contrast in both appearances; the old fixed
      hex went near-invisible on the dark panel. */
   color: var(--red-11);
@@ -4584,7 +4589,7 @@ button.primary:disabled {
   justify-content: center;
   border-radius: 999px;
   color: white;
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--ui-scale, 1));
   font-weight: 600;
   letter-spacing: 0.02em;
   user-select: none;
@@ -4596,7 +4601,7 @@ button.primary:disabled {
 .ic-avatar-sm {
   width: 22px;
   height: 22px;
-  font-size: 0.6rem;
+  font-size: calc(0.6rem * var(--ui-scale, 1));
 }
 
 /* ---------- Buttons ---------- */
@@ -4637,7 +4642,7 @@ button.primary:disabled {
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: 0.74rem;
+  font-size: calc(0.74rem * var(--ui-scale, 1));
   padding: 0.18rem 0.55rem;
   border-radius: 6px;
   color: var(--ui-fg);
@@ -4755,7 +4760,7 @@ button.primary:disabled {
 .ic-composer-body {
   width: 100%;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--ui-scale, 1));
   padding: 0.35rem 0.45rem;
   background: var(--ui-bg);
   color: var(--ui-fg);
@@ -4794,7 +4799,7 @@ button.primary:disabled {
   padding: 0.35rem 0.45rem;
   text-align: left;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--ui-scale, 1));
   color: inherit;
   cursor: pointer;
 }
@@ -4821,7 +4826,7 @@ button.primary:disabled {
 }
 .ic-composer-hint {
   margin-right: auto;
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--ui-scale, 1));
   color: var(--ui-fg-muted);
 }
 .ic-composer-left-actions {
@@ -4842,7 +4847,7 @@ button.primary:disabled {
   border-color: rgba(59, 130, 246, 0.4);
 }
 .ic-pending-quote {
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--ui-scale, 1));
   font-style: italic;
   color: var(--ui-fg-muted);
   margin-bottom: 0.4rem;
