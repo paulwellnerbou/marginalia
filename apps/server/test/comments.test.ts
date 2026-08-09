@@ -1089,7 +1089,12 @@ describe('threads API', () => {
         method: 'POST',
         headers: headersFor(BOB),
         body: JSON.stringify({
-          anchor: { block_id: blockId, quote: 'Title' },
+          anchor: {
+            block_id: blockId,
+            quote: 'Title',
+            start_offset: 0,
+            end_offset: 5,
+          },
           proposal: {
             anchor_kind: 'heading',
             proposed_text: '',
@@ -1108,6 +1113,26 @@ describe('threads API', () => {
     );
     expect(diffRes.status).toBe(200);
     expect(((await diffRes.json()) as { after: string }).after).toBe('');
+
+    const acceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${created.thread.id}/respond`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(acceptRes.status).toBe(200);
+    const stored = app.db
+      .prepare(
+        `SELECT anchor_start_offset, anchor_end_offset
+           FROM comments
+          WHERE id = ?`,
+      )
+      .get(created.thread.id) as {
+      anchor_start_offset: number | null;
+      anchor_end_offset: number | null;
+    };
+    expect(stored).toEqual({ anchor_start_offset: 0, anchor_end_offset: 5 });
   });
 
   test('invalid proposal rationale is rejected instead of silently dropped', async () => {
@@ -1180,7 +1205,7 @@ describe('threads API', () => {
   });
 
   test('orphaned proposal repair uses git merge placement to restore its anchor', async () => {
-    const uid = await newDoc('alpha\n\nbeta\n');
+    const uid = await newDoc('**alpha**\n\nbeta\n');
     const docRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
     );
@@ -1208,7 +1233,7 @@ describe('threads API', () => {
       new Request(`http://test/api/documents/${uid}`, {
         method: 'PUT',
         headers: asAdmin(),
-        body: JSON.stringify({ markdown: 'alpha\n\nbeta\n\noutro\n' }),
+        body: JSON.stringify({ markdown: '**alpha**\n\nbeta\n\noutro\n' }),
       }),
     );
     expect(updateRes.status).toBe(200);
@@ -1233,14 +1258,14 @@ describe('threads API', () => {
     const repaired = (await repairRes.json()) as { thread: ThreadShape };
     expect(repaired.thread.link_status).toBe('linked');
     expect(repaired.thread.anchor.block_id).toBeString();
-    expect(repaired.thread.anchor.quote).toBe('alpha');
+    expect(repaired.thread.anchor.quote).toBe('**alpha**');
     expect(repaired.thread.capabilities.repair).toBe(false);
 
     const beforeAcceptRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}`, { headers: asAdmin() }),
     );
     const beforeAccept = (await beforeAcceptRes.json()) as { source: string };
-    expect(beforeAccept.source).toBe('alpha\n\nbeta\n\noutro\n');
+    expect(beforeAccept.source).toBe('**alpha**\n\nbeta\n\noutro\n');
 
     const acceptRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {

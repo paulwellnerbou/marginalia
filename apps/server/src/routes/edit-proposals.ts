@@ -256,7 +256,7 @@ export function locateProposalAnchorBySourceSpan(
     return {
       block,
       endBlock: null,
-      quote: block.text,
+      quote: source.slice(range.start, range.end),
       linkStatus: 'linked',
     };
   }
@@ -302,7 +302,7 @@ export function locateProposalAnchorBySourceSpan(
   return {
     block,
     endBlock: null,
-    quote: block.text,
+    quote: source.slice(start, end) || located.range.text,
     linkStatus: located.confidence,
   };
 }
