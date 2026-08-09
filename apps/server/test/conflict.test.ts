@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  type ConflictSegment,
   autoResolution,
+  type ConflictSegment,
   mergeThreeWay,
   parseConflictSegments,
   resolveSegments,

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type App, createApp } from '../src/app.js';
 import { CLIENT_HEADER, CLIENT_NAME_HEADER, INVITE_HEADER } from '../src/auth.js';
-import type { ConflictSegment } from '../src/conflict.js';
 import { loadConfig } from '../src/config.js';
+import type { ConflictSegment } from '../src/conflict.js';
 
 const ALICE = { id: 'aaaaaaaaaaaaaaaaaaaa', name: 'Alice' };
 const BOB = { id: 'bbbbbbbbbbbbbbbbbbbb', name: 'Bob' };
