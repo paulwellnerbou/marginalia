@@ -1409,7 +1409,7 @@ export function createComment(
     body: string;
   },
   identity: Identity,
-): Promise<void> {
+): Promise<Thread> {
   if (payload.parent_id) {
     return request<ThreadMutationResponse>(
       `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(payload.parent_id)}/respond`,
@@ -1421,6 +1421,7 @@ export function createComment(
       },
     ).then((res) => {
       rememberThread(uid, res.thread);
+      return res.thread;
     });
   }
 
@@ -1434,6 +1435,7 @@ export function createComment(
     docUid: uid,
   }).then((res) => {
     rememberThread(uid, res.thread);
+    return res.thread;
   });
 }
 

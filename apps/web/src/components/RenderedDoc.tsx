@@ -605,9 +605,13 @@ function syncCommentHighlights(
   previous: BlockHighlightState,
 ): BlockHighlightState {
   const plans = planCommentHighlights(root, highlights);
+  const touched: HTMLElement[] = [];
 
   for (const block of previous.keys()) {
-    if (!plans.has(block)) clearBlockHighlights(block);
+    if (!plans.has(block)) {
+      clearBlockHighlights(block);
+      touched.push(block);
+    }
   }
 
   const next: BlockHighlightState = new Map();
@@ -616,8 +620,38 @@ function syncCommentHighlights(
     if (previous.get(block) === plan.signature) continue;
     clearBlockHighlights(block);
     paintBlockHighlights(block, plan);
+    touched.push(block);
   }
+  relayoutIndent(touched);
   return next;
+}
+
+/**
+ * Lay the touched blocks out again from the top.
+ *
+ * WebKit puts `text-indent` on the wrong line after inline content is
+ * spliced into a paragraph it has already laid out: the indent moves to
+ * whichever line the new inline box landed on, so highlighting a phrase
+ * on a paragraph's second line shunts that whole line across by the
+ * indent. It survives until something invalidates the block, which in a
+ * long document may be never — the reader is left with a paragraph that
+ * looks mis-set until they scroll far enough away and back.
+ *
+ * Changing the property and flushing is enough to make WebKit resolve it
+ * against the first line again. Batched deliberately: one flush covers
+ * however many blocks the pass touched, so the initial application over a
+ * heavily annotated document stays two layouts rather than two per block.
+ */
+function relayoutIndent(blocks: readonly HTMLElement[]): void {
+  const first = blocks[0];
+  if (!first) return;
+  const overrides = blocks.map((block) => block.style.textIndent);
+  for (const block of blocks) block.style.textIndent = '0px';
+  void first.offsetHeight;
+  blocks.forEach((block, i) => {
+    block.style.textIndent = overrides[i] ?? '';
+  });
+  void first.offsetHeight;
 }
 
 function paintBlockHighlights(block: HTMLElement, plan: BlockHighlightPlan): void {
