@@ -32,4 +32,10 @@ describe('loadConfig', () => {
 
     expect(loadConfig().releaseVersion).toBe('abcdef0');
   });
+
+  test('normalizes an overridden release hash through the same path', () => {
+    process.env.MARGINALIA_RELEASE_VERSION = '1111111111111111';
+
+    expect(loadConfig({ releaseVersion: ' FEDCBA9876543210 ' }).releaseVersion).toBe('fedcba9');
+  });
 });

@@ -86,8 +86,9 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
   const s3 = overrides.s3 ?? (blobStorage === 's3' ? loadS3ConfigFromEnv() : undefined);
   return {
     port: overrides.port ?? Number(process.env.PORT ?? 3434),
-    releaseVersion:
-      overrides.releaseVersion ?? normalizeReleaseVersion(process.env.MARGINALIA_RELEASE_VERSION),
+    releaseVersion: normalizeReleaseVersion(
+      overrides.releaseVersion ?? process.env.MARGINALIA_RELEASE_VERSION,
+    ),
     dataDir,
     reposDir: overrides.reposDir ?? join(dataDir, 'repos'),
     blobDir: overrides.blobDir ?? join(dataDir, 'blobs'),
