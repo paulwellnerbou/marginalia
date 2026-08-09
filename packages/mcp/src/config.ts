@@ -1,11 +1,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import {
-  MAX_CLIENT_ID_LENGTH,
-  MAX_DISPLAY_NAME_LENGTH,
-  normalizeAgentName,
-  sanitizeIdentityValue,
-} from './identity.js';
+import { MAX_CLIENT_ID_LENGTH, normalizeAgentName, sanitizeIdentityValue } from './identity.js';
 
 /**
  * Runtime configuration, entirely from the environment — an MCP server
