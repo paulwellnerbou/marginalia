@@ -1,6 +1,7 @@
 import { MinusIcon, PlusIcon, ResetIcon } from '@radix-ui/react-icons';
 import { Flex, IconButton, Tooltip } from '@radix-ui/themes';
 import type { KeyboardEvent } from 'react';
+import { stepForKey, stepValue } from './displayStepperValue.js';
 
 interface Props {
   value: number;
@@ -40,39 +41,18 @@ export function DisplayStepper({
   onCommit,
   onReset,
 }: Props) {
-  const clamp = (n: number) => Math.min(max, Math.max(min, n));
+  const range = { min, max, step };
   const noun = ariaLabel.toLowerCase();
-
-  /**
-   * Snapping in the direction of travel keeps a value left over from the
-   * old finer-grained control (61ch) from dragging its offset along
-   * forever, while still always moving the way the user pressed.
-   */
-  const stepped = (dir: 1 | -1) => {
-    const units = (value - min) / step;
-    const grid = dir > 0 ? Math.floor(units) + 1 : Math.ceil(units) - 1;
-    return clamp(min + grid * step);
-  };
 
   const commit = (next: number) => {
     if (next !== value) onCommit(next);
   };
 
   const handleKeyDown = (event: KeyboardEvent) => {
-    const leap = step * 5;
-    const next = {
-      ArrowUp: () => stepped(1),
-      ArrowRight: () => stepped(1),
-      ArrowDown: () => stepped(-1),
-      ArrowLeft: () => stepped(-1),
-      PageUp: () => clamp(value + leap),
-      PageDown: () => clamp(value - leap),
-      Home: () => min,
-      End: () => max,
-    }[event.key];
-    if (!next) return;
+    const next = stepForKey(event.key, value, range);
+    if (next === null) return;
     event.preventDefault();
-    commit(next());
+    commit(next);
   };
 
   return (
@@ -88,7 +68,7 @@ export function DisplayStepper({
         tabIndex={-1}
         aria-label={`Decrease ${noun}`}
         disabled={value <= min}
-        onClick={() => commit(stepped(-1))}
+        onClick={() => commit(stepValue(value, -1, range))}
       >
         <MinusIcon />
       </IconButton>
@@ -112,7 +92,7 @@ export function DisplayStepper({
         tabIndex={-1}
         aria-label={`Increase ${noun}`}
         disabled={value >= max}
-        onClick={() => commit(stepped(1))}
+        onClick={() => commit(stepValue(value, 1, range))}
       >
         <PlusIcon />
       </IconButton>
