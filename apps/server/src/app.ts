@@ -61,6 +61,12 @@ export async function createApp(config: ServerConfig): Promise<App> {
 
   const hono = new Hono();
   hono.get('/health', (c) => c.json({ ok: true }));
+  hono.get('/api/version', (c) => {
+    // This endpoint is polled specifically to discover a newly deployed
+    // server, so every intermediary must revalidate it.
+    c.header('Cache-Control', 'no-store, max-age=0');
+    return c.json({ releaseVersion: config.releaseVersion });
+  });
   const deps = { db, store, blobs, config, realtime };
   hono.route('/api/documents', documentsRouter(deps));
   hono.route('/api/documents', assetsRouter({ db, blobs, config }));

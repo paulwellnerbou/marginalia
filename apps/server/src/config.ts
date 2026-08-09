@@ -4,6 +4,8 @@ import { parseTrustedProxyHops } from './rate-limit.js';
 
 export interface ServerConfig {
   port: number;
+  /** Short git hash identifying the deployed application build. */
+  releaseVersion: string;
   dataDir: string;
   /** Base directory for per-document git repos. Each doc lives at `<reposDir>/<uid>/`. */
   reposDir: string;
@@ -84,6 +86,9 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
   const s3 = overrides.s3 ?? (blobStorage === 's3' ? loadS3ConfigFromEnv() : undefined);
   return {
     port: overrides.port ?? Number(process.env.PORT ?? 3434),
+    releaseVersion: normalizeReleaseVersion(
+      overrides.releaseVersion ?? process.env.MARGINALIA_RELEASE_VERSION,
+    ),
     dataDir,
     reposDir: overrides.reposDir ?? join(dataDir, 'repos'),
     blobDir: overrides.blobDir ?? join(dataDir, 'blobs'),
@@ -111,6 +116,15 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     blobStorage,
     ...(s3 ? { s3 } : {}),
   };
+}
+
+/**
+ * Release builds pass the full or short commit SHA. Keep the public value
+ * compact so it is useful in the API and update dialog without exposing a
+ * build-system-specific label.
+ */
+function normalizeReleaseVersion(value: string | undefined): string {
+  return value?.trim().slice(0, 7).toLowerCase() ?? '';
 }
 
 /**

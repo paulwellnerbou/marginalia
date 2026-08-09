@@ -68,7 +68,7 @@ describe('documents API', () => {
       '<!doctype html><title>Marginalia</title><div id="root"></div>',
     );
     writeFileSync(join(webDir, 'app.js'), 'console.log("ok");');
-    app = await createApp(loadConfig({ dataDir: dir, port: 0, webDir }));
+    app = await createApp(loadConfig({ dataDir: dir, port: 0, webDir, releaseVersion: '1a2b3c4' }));
   });
 
   afterEach(async () => {
@@ -2287,6 +2287,14 @@ describe('documents API', () => {
     const res = await app.hono.fetch(new Request('http://test/health'));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
+  });
+
+  test('version endpoint returns the release without allowing a cached response', async () => {
+    const res = await app.hono.fetch(new Request('http://test/api/version'));
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store, max-age=0');
+    expect(await res.json()).toEqual({ releaseVersion: '1a2b3c4' });
   });
 
   test('PATCH settings: admin-only, updates theme + rotates password', async () => {
