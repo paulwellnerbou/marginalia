@@ -175,7 +175,7 @@ export function HomePage() {
       <Container size="4" px="4" pb="7">
         {/* Two up from `xs`: `sm` is 768px, which an iPad mini in portrait
             (744px) misses by a hair — one column there wastes half the width. */}
-        <Grid columns={{ initial: '1', xs: '2' }} gap="4">
+        <Grid columns={{ initial: '1', xs: '2', md: '4' }} gap="4">
           <FeatureCard
             icon={<FileTextIcon width="20" height="20" />}
             title="Properly typeset"
@@ -195,8 +195,8 @@ export function HomePage() {
           />
           <FeatureCard
             icon={<DownloadIcon width="20" height="20" />}
-            title="Export without lock-in"
-            body="Download your work as source, styled PDF, Word, or EPUB. Comments and proposed changes can travel with the Word document."
+            title="One document, many formats"
+            body="Download as source, styled PDF, Word, or EPUB. Comments and proposed changes can travel with the Word document."
           />
         </Grid>
       </Container>
