@@ -149,7 +149,9 @@ describe('threads API', () => {
       new Request('http://test/api/documents', {
         method: 'POST',
         headers: rawHeadersFor(ALICE),
-        body: JSON.stringify({ markdown }),
+        // Not invite-only: the anonymous-visitor cases below need a
+        // document a stranger can still read.
+        body: JSON.stringify({ markdown, invite_only: false }),
       }),
     );
     const j = (await res.json()) as { uid: string; admin_invite: { token: string } };

@@ -187,6 +187,11 @@ decide nothing. `editor` additionally lets it accept proposals and write
 to the document directly — useful, but then "suggest" and "apply" are one
 approval apart.
 
+A document `create_document` makes is **invite-only**: the token-free
+`/d/<uid>` URL opens nothing, so everyone who is to read it needs a link
+of their own — including you. Pass `invite_only: false` when the document
+is genuinely meant to be readable by anyone holding its URL.
+
 ## The tools
 
 **Reading**

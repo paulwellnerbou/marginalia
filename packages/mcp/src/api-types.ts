@@ -150,6 +150,12 @@ export interface UploadResponseWire {
   admin_invite: { token: string; url: string; display_name: string };
   default_theme: string;
   format: DocumentFormat;
+  /**
+   * What the server actually applied. Absent from instances that predate
+   * the flag, where a document is always readable by URL — so only an
+   * explicit `true` means the token-free link opens nothing.
+   */
+  invite_only?: boolean;
   password?: string;
 }
 

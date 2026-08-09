@@ -46,7 +46,9 @@ describe('assets API', () => {
       new Request('http://test/api/documents', {
         method: 'POST',
         headers: headers(ALICE, { 'content-type': 'application/json' }),
-        body: JSON.stringify({ source: '# Hi\n\n![](cat.png)\n' }),
+        // Opt out of the invite-only default: these cases are about asset
+        // permissions, and want a document a plain reader can reach.
+        body: JSON.stringify({ source: '# Hi\n\n![](cat.png)\n', invite_only: false }),
       }),
     );
     return (await res.json()) as {
@@ -137,7 +139,7 @@ describe('assets API', () => {
       new Request('http://test/api/documents', {
         method: 'POST',
         headers: headers(ALICE, { 'content-type': 'application/json' }),
-        body: JSON.stringify({ source: '# secret', password_protected: true }),
+        body: JSON.stringify({ source: '# secret', password_protected: true, invite_only: false }),
       }),
     );
     const info = (await created.json()) as { uid: string; admin_invite: { token: string } };

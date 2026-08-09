@@ -219,7 +219,11 @@ export interface UploadOptions {
    *  falls back to deriving a title from the rendered content. */
   name?: string;
   password_protected?: boolean;
-  /** Restrict reads to invite-link holders from the moment the doc exists. */
+  /**
+   * Restrict reads to invite-link holders from the moment the doc exists.
+   * Omitted → the server's default, which is `true`. Pass `false` to put
+   * the document on the open web.
+   */
   invite_only?: boolean;
   default_theme?: string;
 }
@@ -233,9 +237,9 @@ export interface UploadResponse {
   mermaid_renderer: MermaidRenderer | null;
   format: DocumentFormat;
   /**
-   * Echoes back what the upload asked for. Optional because a tab loaded
-   * from an older build can outlive a deploy and read a response that
-   * predates the field.
+   * What the server applied — `true` for an upload that said nothing, since
+   * that is the default. Optional because a tab loaded from an older build
+   * can outlive a deploy and read a response that predates the field.
    */
   invite_only?: boolean;
   password?: string;
