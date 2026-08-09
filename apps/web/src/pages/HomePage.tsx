@@ -1,6 +1,7 @@
 import {
   ChatBubbleIcon,
   Cross2Icon,
+  DownloadIcon,
   FileTextIcon,
   LockClosedIcon,
   MagicWandIcon,
@@ -174,7 +175,7 @@ export function HomePage() {
       <Container size="4" px="4" pb="7">
         {/* Two up from `xs`: `sm` is 768px, which an iPad mini in portrait
             (744px) misses by a hair — one column there wastes half the width. */}
-        <Grid columns={{ initial: '1', xs: '2', sm: '3' }} gap="4">
+        <Grid columns={{ initial: '1', xs: '2', md: '4' }} gap="4">
           <FeatureCard
             icon={<FileTextIcon width="20" height="20" />}
             title="Properly typeset"
@@ -189,8 +190,13 @@ export function HomePage() {
           <FeatureCard
             icon={<PaperPlaneIcon width="20" height="20" />}
             iconVariant="gray"
-            title="Browser-held auth"
-            body="Invite tokens, password-session cookies, and display names live in this browser. Documents, comments, and history live on the server. No online accounts or external profile store."
+            title="No account required"
+            body="Open an invite link, choose a display name, and start collaborating. Access stays in your browser—no sign-up or external profile store."
+          />
+          <FeatureCard
+            icon={<DownloadIcon width="20" height="20" />}
+            title="One document, many formats"
+            body="Download as source, styled PDF, Word, or EPUB. Comments and proposed changes can travel with the Word document."
           />
         </Grid>
       </Container>

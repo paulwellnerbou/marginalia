@@ -2161,10 +2161,13 @@ button.primary:disabled {
   transition:
     transform 120ms ease,
     box-shadow 120ms ease;
+  box-shadow: 0 12px 36px -26px color-mix(in srgb, var(--accent-9) 70%, transparent);
 }
 .feature-card:hover {
   transform: translateY(-1px);
-  box-shadow: var(--shadow-4);
+  box-shadow:
+    var(--shadow-4),
+    0 16px 44px -24px color-mix(in srgb, var(--accent-9) 80%, transparent);
 }
 .feature-icon {
   width: 40px;
