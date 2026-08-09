@@ -68,9 +68,7 @@ describe('documents API', () => {
       '<!doctype html><title>Marginalia</title><div id="root"></div>',
     );
     writeFileSync(join(webDir, 'app.js'), 'console.log("ok");');
-    app = await createApp(
-      loadConfig({ dataDir: dir, port: 0, webDir, releaseVersion: '1a2b3c4' }),
-    );
+    app = await createApp(loadConfig({ dataDir: dir, port: 0, webDir, releaseVersion: '1a2b3c4' }));
   });
 
   afterEach(async () => {
