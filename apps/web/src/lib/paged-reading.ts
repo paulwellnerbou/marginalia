@@ -43,9 +43,19 @@ function isVertical(scroll: HTMLElement): boolean {
   return scroll.classList.contains(PAGED_VERTICAL_CLASS);
 }
 
-/** Scrollport size along the paging axis — one page's worth. */
+/**
+ * Scrollport size along the paging axis — one page's worth.
+ *
+ * Vertically that is measured from the border box rather than
+ * `clientHeight`, which is rounded to whole pixels: the page is sized to
+ * a whole number of lines and line heights are routinely fractional, so
+ * rounding here would lose a fraction of a line per page, always in the
+ * same direction. `.doc-paged-y` keeps the block axis free of padding
+ * and borders so the two boxes are the same height.
+ */
 function pitchOf(scroll: HTMLElement): number {
-  return isVertical(scroll) ? scroll.clientHeight : scroll.clientWidth;
+  if (!isVertical(scroll)) return scroll.clientWidth;
+  return scroll.getBoundingClientRect().height || scroll.clientHeight;
 }
 
 /** Total paginated length along the paging axis. */

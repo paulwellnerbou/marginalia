@@ -741,8 +741,10 @@ button.primary:disabled {
      scroll would strand the reader looking at halves of two pages. */
   overflow: hidden;
   padding-inline: 0;
-  /* clientHeight is the pitch, so nothing may pad the block axis. */
+  /* The border box's height is the pitch, so nothing may pad or border
+     the block axis — `pitchOf` reads it back at sub-pixel precision. */
   padding-block: 0;
+  border-block: 0;
   /* Opt out of the flex stretch — the height *is* the page. */
   flex: 0 0 auto;
   height: var(--doc-page-block, 100%);
@@ -793,6 +795,15 @@ button.primary:disabled {
   /* Same bargain as the scrollport: the gutter is where a thumb rests,
      so it has to hand horizontal drags to the swipe handler. */
   touch-action: pan-y;
+}
+/* ...and where the pages run downwards, it is the vertical drag that
+   belongs to the swipe. Left at `pan-y` the browser takes the gesture as
+   a pan of its own and cancels the pointer stream, so page swipes die
+   precisely where a thumb is most likely to start them. The zones are
+   siblings of the scrollport, so the mode has to be read off the
+   scrollport they sit beside. */
+.doc-viewport:has(.doc-scroll.doc-paged-y) .doc-page-zone {
+  touch-action: pan-x;
 }
 .doc-page-zone:disabled {
   cursor: default;

@@ -327,8 +327,14 @@ export function usePagedReading(
           Number.isFinite(lineHeight) && lineHeight > 0
             ? Math.max(lineHeight, Math.floor(available / lineHeight) * lineHeight)
             : available;
-        scroll.style.setProperty('--doc-page-block', `${Math.max(0, Math.round(block))}px`);
-      } else {
+        // Deliberately not rounded: line heights are routinely fractional
+        // (19px at 1.6 is 30.4), and a page rounded to whole pixels is no
+        // longer a whole number of lines. The error is under a pixel per
+        // page but it is one-directional, so a hundred pages in it is a
+        // whole line and the reader is looking at the top half of one.
+        // `pitchOf` reads the same fractional height back.
+        set(scroll, '--doc-page-block', `${Math.max(0, block)}px`);
+      } else if (scroll.style.getPropertyValue('--doc-page-block')) {
         scroll.style.removeProperty('--doc-page-block');
       }
 

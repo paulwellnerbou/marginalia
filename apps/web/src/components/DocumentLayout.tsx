@@ -2663,8 +2663,8 @@ function scrollToTargetAndSettle(
   offset: number,
   isCurrent: () => boolean,
 ): void {
-  const paged =
-    scroll.classList.contains(PAGED_CLASS) || scroll.classList.contains(PAGED_VERTICAL_CLASS);
+  const vertical = scroll.classList.contains(PAGED_VERTICAL_CLASS);
+  const paged = scroll.classList.contains(PAGED_CLASS) || vertical;
   /** Where the reader should end up, on whichever axis is in play. */
   const intended = (): number | null => {
     if (!target.isConnected) return null;
@@ -2672,7 +2672,8 @@ function scrollToTargetAndSettle(
       const page = pageIndexOfElement(scroll, target);
       // `offset` centres a card in the scroll flow; a page has no such
       // freedom — the target's page starts where it starts.
-      return page === null ? null : page * scroll.clientWidth;
+      if (page === null) return null;
+      return page * (vertical ? scroll.clientHeight : scroll.clientWidth);
     }
     const top =
       target.getBoundingClientRect().top -
@@ -2681,9 +2682,14 @@ function scrollToTargetAndSettle(
       offset;
     return Math.max(0, Math.min(Math.round(top), scroll.scrollHeight - scroll.clientHeight));
   };
-  const position = () => (paged ? scroll.scrollLeft : scroll.scrollTop);
+  // Vertical pages scroll down the block axis like the unpaged document,
+  // so only horizontal paging moves along `scrollLeft`. Getting this
+  // wrong doesn't just land in the wrong place — the settle loop reads a
+  // position that never moves and corrects until it gives up.
+  const alongX = paged && !vertical;
+  const position = () => (alongX ? scroll.scrollLeft : scroll.scrollTop);
   const scrollTo = (value: number, behavior: ScrollBehavior) =>
-    scroll.scrollTo(paged ? { left: value, behavior } : { top: value, behavior });
+    scroll.scrollTo(alongX ? { left: value, behavior } : { top: value, behavior });
 
   const first = intended();
   if (first === null) return;
