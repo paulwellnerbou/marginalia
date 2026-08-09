@@ -1,6 +1,6 @@
 import { CheckIcon, Pencil1Icon } from '@radix-ui/react-icons';
 import { Button, Callout, Dialog, Flex, Text, TextArea } from '@radix-ui/themes';
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import type { ProposalConflict } from '../lib/api.js';
 import {
   allDecided,
@@ -63,9 +63,19 @@ export function ConflictDialog({
   // someone else's save, or a second proposal opened from the same
   // list). Keyed on identity of the segments array: the fetch replaces
   // it wholesale, and nothing else can change it.
-  const seededFor = useRef<ConflictSegmentsKey>(null);
-  if (seededFor.current !== segments) {
-    seededFor.current = segments;
+  //
+  // The reset-state-from-props pattern, same as ThreadComposer's target
+  // reset — during render, so `choices` is already seeded in the pass
+  // that first sees the hunks. An effect would commit one frame with
+  // the previous conflict's answers, or none at all.
+  //
+  // The tracker is state rather than a ref for the sake of that render
+  // being discardable: a ref written during render survives a render
+  // React throws away, but the `setChoices` beside it does not, which
+  // would leave the next pass believing it had already seeded.
+  const [seededFor, setSeededFor] = useState<ConflictSegmentsKey>(null);
+  if (seededFor !== segments) {
+    setSeededFor(segments);
     setChoices(segments ? initialChoices(segments) : []);
   }
 
@@ -74,8 +84,13 @@ export function ConflictDialog({
   }, [open]);
 
   const clean = conflict?.status === 'clean';
-  const decided = allDecided(choices);
-  const pending = undecidedCount(choices);
+  // `choices` is seeded above in the same pass that first sees `hunks`,
+  // so the two agree by construction. Check anyway: `[].every()` is
+  // true, so a mismatch would read as "everything decided" and arm
+  // Apply with nothing answered — the one direction this must not fail.
+  const seeded = choices.length === hunks.length;
+  const decided = seeded && allDecided(choices);
+  const pending = seeded ? undecidedCount(choices) : hunks.length;
   const preview = segments ? resolvedText(segments, choices) : (conflict?.merged ?? '');
   // Only a finished resolution can be "nothing to accept". While hunks
   // are open the preview stands in undecided ones with the document's
