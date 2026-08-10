@@ -116,6 +116,24 @@ describe('createCoverThumbnail', () => {
     expect(metadata.exif).toBeUndefined();
   });
 
+  test('upscales small covers to the fixed thumbnail dimensions', async () => {
+    const source = await sharp({
+      create: {
+        width: 12,
+        height: 18,
+        channels: 3,
+        background: { r: 160, g: 96, b: 32 },
+      },
+    })
+      .png()
+      .toBuffer();
+
+    const metadata = await sharp(await createCoverThumbnail(new Uint8Array(source))).metadata();
+
+    expect(metadata.width).toBe(COVER_THUMBNAIL_WIDTH);
+    expect(metadata.height).toBe(COVER_THUMBNAIL_HEIGHT);
+  });
+
   test('rejects a forged image header whose payload cannot be decoded', async () => {
     await expect(createCoverThumbnail(PNG)).rejects.toThrow();
   });

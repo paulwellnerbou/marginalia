@@ -118,20 +118,37 @@ export function loadCoverDescriptor(db: Database, doc: DocumentRow): CoverDescri
   if (!doc.cover_ref) return null;
   const row = db
     .prepare(
-      `SELECT da.ref_name, da.asset_id, da.mime
-         FROM document_assets da
-         WHERE da.doc_uid = ? AND da.ref_name = ?`,
+      `SELECT cover.ref_name, cover.asset_id, cover.mime,
+              thumbnail.ref_name AS thumbnail_ref_name,
+              thumbnail.asset_id AS thumbnail_asset_id,
+              thumbnail.mime AS thumbnail_mime
+         FROM document_assets cover
+         LEFT JOIN document_assets thumbnail
+                ON thumbnail.doc_uid = cover.doc_uid
+               AND thumbnail.ref_name = ?
+         WHERE cover.doc_uid = ? AND cover.ref_name = ?`,
     )
-    .get(doc.uid, doc.cover_ref) as CoverImageDescriptor | undefined;
+    .get(COVER_THUMBNAIL_REF, doc.uid, doc.cover_ref) as
+    | (CoverImageDescriptor & {
+        thumbnail_ref_name: string | null;
+        thumbnail_asset_id: string | null;
+        thumbnail_mime: string | null;
+      })
+    | undefined;
   if (!row) return null;
-  const thumbnail = db
-    .prepare(
-      `SELECT da.ref_name, da.asset_id, da.mime
-         FROM document_assets da
-         WHERE da.doc_uid = ? AND da.ref_name = ?`,
-    )
-    .get(doc.uid, COVER_THUMBNAIL_REF) as CoverImageDescriptor | undefined;
-  return { ...row, thumbnail: thumbnail ?? null };
+  return {
+    ref_name: row.ref_name,
+    asset_id: row.asset_id,
+    mime: row.mime,
+    thumbnail:
+      row.thumbnail_ref_name && row.thumbnail_asset_id && row.thumbnail_mime
+        ? {
+            ref_name: row.thumbnail_ref_name,
+            asset_id: row.thumbnail_asset_id,
+            mime: row.thumbnail_mime,
+          }
+        : null,
+  };
 }
 
 /**
@@ -146,7 +163,6 @@ export async function createCoverThumbnail(bytes: Uint8Array): Promise<Uint8Arra
     .resize(COVER_THUMBNAIL_WIDTH, COVER_THUMBNAIL_HEIGHT, {
       fit: 'cover',
       position: 'centre',
-      withoutEnlargement: true,
     })
     .webp({ quality: 78, effort: 4 })
     .toBuffer();

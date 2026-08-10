@@ -462,8 +462,8 @@ describe('assets API', () => {
     expect(Number(thumbnail.headers.get('content-length'))).toBeGreaterThan(0);
     expect(await sharp(await thumbnail.arrayBuffer()).metadata()).toMatchObject({
       format: 'webp',
-      width: 120,
-      height: 180,
+      width: 192,
+      height: 288,
     });
   });
 
