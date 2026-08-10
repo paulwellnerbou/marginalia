@@ -6,7 +6,7 @@
  * "new since X" indicators later.
  */
 
-import type { DocumentCover, DocumentFormat, KeyringDocEntry } from './api.js';
+import type { DocumentCover, DocumentCoverImage, DocumentFormat, KeyringDocEntry } from './api.js';
 
 const KEY = 'marginalia.recentDocs';
 const MAX = 50;
@@ -185,5 +185,17 @@ function coerceCover(v: unknown): DocumentCover | null {
     ref_name: c.ref_name,
     asset_id: c.asset_id,
     mime: typeof c.mime === 'string' ? c.mime : 'application/octet-stream',
+    thumbnail: coerceCoverImage(c.thumbnail),
+  };
+}
+
+function coerceCoverImage(v: unknown): DocumentCoverImage | null {
+  if (!v || typeof v !== 'object') return null;
+  const image = v as Record<string, unknown>;
+  if (typeof image.ref_name !== 'string' || typeof image.asset_id !== 'string') return null;
+  return {
+    ref_name: image.ref_name,
+    asset_id: image.asset_id,
+    mime: typeof image.mime === 'string' ? image.mime : 'application/octet-stream',
   };
 }

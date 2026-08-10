@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { coverRefName, isCoverMime, sniffCoverMime } from '../src/cover.js';
+import sharp from 'sharp';
+import {
+  COVER_THUMBNAIL_HEIGHT,
+  COVER_THUMBNAIL_WIDTH,
+  coverRefName,
+  createCoverThumbnail,
+  isCoverMime,
+  sniffCoverMime,
+} from '../src/cover.js';
 
 /**
  * Both functions decide what a cover *is* from untrusted input — the
@@ -81,5 +89,34 @@ describe('coverRefName', () => {
     expect(coverRefName('image/jpeg')).toBe('cover.jpg');
     expect(coverRefName('image/gif')).toBe('cover.gif');
     expect(coverRefName('image/webp')).toBe('cover.webp');
+  });
+});
+
+describe('createCoverThumbnail', () => {
+  test('creates a small, metadata-free WebP derivative', async () => {
+    const source = await sharp({
+      create: {
+        width: 600,
+        height: 900,
+        channels: 3,
+        background: { r: 32, g: 96, b: 160 },
+      },
+    })
+      .png()
+      .withMetadata({ orientation: 1 })
+      .toBuffer();
+
+    const thumbnail = await createCoverThumbnail(new Uint8Array(source));
+    const metadata = await sharp(thumbnail).metadata();
+
+    expect(thumbnail.byteLength).toBeLessThan(source.byteLength);
+    expect(metadata.format).toBe('webp');
+    expect(metadata.width).toBe(COVER_THUMBNAIL_WIDTH);
+    expect(metadata.height).toBe(COVER_THUMBNAIL_HEIGHT);
+    expect(metadata.exif).toBeUndefined();
+  });
+
+  test('rejects a forged image header whose payload cannot be decoded', async () => {
+    await expect(createCoverThumbnail(PNG)).rejects.toThrow();
   });
 });
