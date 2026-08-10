@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import sharp from 'sharp';
 import type { BlobStore } from './blob-store.js';
 import type { DocumentRow } from './db.js';
 
@@ -23,6 +24,20 @@ export type CoverMime = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
  * EPUB built from the document.
  */
 export const COVER_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Internal document-asset ref used for the small image shown in cover
+ * pickers and on the landing page. It deliberately does not depend on
+ * the source format: every upload is flattened to WebP, so clients can
+ * keep one stable URL shape while the original remains untouched for
+ * EPUB export.
+ */
+export const COVER_THUMBNAIL_REF = '__marginalia-cover-thumbnail.webp';
+export const COVER_THUMBNAIL_MIME = 'image/webp';
+
+/** 192 CSS px covers the 72 px dialog preview even on dense displays. */
+export const COVER_THUMBNAIL_WIDTH = 192;
+export const COVER_THUMBNAIL_HEIGHT = 288;
 
 /** Reserved ref name for the cover, keyed by format so the served
  *  Content-Type (derived from the extension) matches the bytes. */
@@ -84,6 +99,13 @@ export interface CoverDescriptor {
   ref_name: string;
   asset_id: string;
   mime: string;
+  thumbnail: CoverImageDescriptor | null;
+}
+
+export interface CoverImageDescriptor {
+  ref_name: string;
+  asset_id: string;
+  mime: string;
 }
 
 /**
@@ -96,12 +118,55 @@ export function loadCoverDescriptor(db: Database, doc: DocumentRow): CoverDescri
   if (!doc.cover_ref) return null;
   const row = db
     .prepare(
-      `SELECT da.ref_name, da.asset_id, da.mime
-         FROM document_assets da
-         WHERE da.doc_uid = ? AND da.ref_name = ?`,
+      `SELECT cover.ref_name, cover.asset_id, cover.mime,
+              thumbnail.ref_name AS thumbnail_ref_name,
+              thumbnail.asset_id AS thumbnail_asset_id,
+              thumbnail.mime AS thumbnail_mime
+         FROM document_assets cover
+         LEFT JOIN document_assets thumbnail
+                ON thumbnail.doc_uid = cover.doc_uid
+               AND thumbnail.ref_name = ?
+         WHERE cover.doc_uid = ? AND cover.ref_name = ?`,
     )
-    .get(doc.uid, doc.cover_ref) as CoverDescriptor | undefined;
-  return row ?? null;
+    .get(COVER_THUMBNAIL_REF, doc.uid, doc.cover_ref) as
+    | (CoverImageDescriptor & {
+        thumbnail_ref_name: string | null;
+        thumbnail_asset_id: string | null;
+        thumbnail_mime: string | null;
+      })
+    | undefined;
+  if (!row) return null;
+  return {
+    ref_name: row.ref_name,
+    asset_id: row.asset_id,
+    mime: row.mime,
+    thumbnail:
+      row.thumbnail_ref_name && row.thumbnail_asset_id && row.thumbnail_mime
+        ? {
+            ref_name: row.thumbnail_ref_name,
+            asset_id: row.thumbnail_asset_id,
+            mime: row.thumbnail_mime,
+          }
+        : null,
+  };
+}
+
+/**
+ * Decode, orient, crop and compress an uploaded cover for small UI slots.
+ * Running this before either blob is attached also makes the image decoder
+ * the final validity check: a file with a plausible magic header but broken
+ * image data never becomes the document's cover.
+ */
+export async function createCoverThumbnail(bytes: Uint8Array): Promise<Uint8Array> {
+  const output = await sharp(bytes, { failOn: 'error', animated: false })
+    .rotate()
+    .resize(COVER_THUMBNAIL_WIDTH, COVER_THUMBNAIL_HEIGHT, {
+      fit: 'cover',
+      position: 'centre',
+    })
+    .webp({ quality: 78, effort: 4 })
+    .toBuffer();
+  return new Uint8Array(output);
 }
 
 /** Read the stored cover's bytes for embedding into an export. */

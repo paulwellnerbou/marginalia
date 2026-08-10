@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import sharp from 'sharp';
 import { type App, createApp } from '../src/app.js';
 import { CLIENT_HEADER, CLIENT_NAME_HEADER, INVITE_HEADER } from '../src/auth.js';
 import { loadConfig } from '../src/config.js';
@@ -365,9 +366,19 @@ describe('assets API', () => {
 
   // --- book cover ----------------------------------------------------
 
-  /** Smallest byte sequences that satisfy the cover magic-byte sniffer. */
-  const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
-  const JPEG_BYTES = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 7, 7]);
+  /** Small decodable images: upload now validates and thumbnails the payload. */
+  const PNG_BYTES = new Uint8Array(
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAHgAAAC0CAIAAADQLH9KAAAACXBIWXMAAAPoAAAD6AG1e1JrAAACUElEQVR4nO3UUY0DARTDwIJYYAVm0CXQ316eTiMFgeX49byz5/cQXig/f6Ia0AHdf3obowO6uYaMbg5OOro5jQ7o5hoyujk46ejmNDqgm2vI6ObgpKOb0+iAbq4ho5uDk45uTqMDurmGjG4OTjq6OY0O6OYaMro5OOno5jQ6oJtryOjm4KSjm9PogG6uIaObg5OObk6jA7q5hoxuDk46ujmNDujmGjK6OTjp6OY0OqCba8jo5uCko5vT6IBuriGjm4OTjm5OowO6uYaMbg5OOro5jQ7o5hoyujk46ejmNDqgm2vI6ObgpKOb0+iAbq4ho5uDk45uTqMDurmGjG4OTjq6OY0O6OYaMro5OOno5jQ6oJtryOjm4KSjm9PogG6uIaObg5OObk6jA7q5hoxuDk46ujmNDujmGjK6OTjp6OY0OqCba8jo5uCko5vT6IBuriGjm4OTjm5OowO6uYaMbg5OOro5jQ7o5hoyujk46ejmNDqgm2vI6ObgpKOb0+iAbq4ho5uDk45uTqMDurmGjG4OTjq6OY0O6OYaMro5OOno5jQ6oJtryOjm4KSjm9PogG6uIaObg5OObk6jA7q5hoxuDk46ujmNDujmGjK6OTjp6OY0OqCba8jo5uCko5vT6IBuriGjm4OTjm5OowO6uYaMbg5OOro5jQ7o5hoyujk46ejmNDqgm2vI6ObgpKOb0+iAbq4ho5uDk45uTqMDurmGjG4OTjq6OY0O6OYaMro5OOno5jQ6oJtryOjm4KSjm9PogG6uIaObg5OO5ky/7gOPhR6i3oADUwAAAABJRU5ErkJggg==',
+      'base64',
+    ),
+  );
+  const WEBP_BYTES = new Uint8Array(
+    Buffer.from(
+      'UklGRngAAABXRUJQVlA4IGwAAACwCACdASp4ALQAPm02mUmkIyKhIGgAgA2JaW7hdflwH4AAAO6HVUmyYh1VJsmIdVSbJiHVUmyYh1VJsmIdVSbJiHVUmyYh1VJsmIdVNgAA/v8Kvf//izkYjs83//wPy6cKKWwmWIQAAAAAAAA=',
+      'base64',
+    ),
+  );
 
   async function putCover(
     uid: string,
@@ -400,19 +411,34 @@ describe('assets API', () => {
     const doc = await upload();
     const put = await putCover(doc.uid, doc.admin_invite.token, PNG_BYTES);
     expect(put.status).toBe(201);
-    const stored = (await put.json()) as { cover: { ref_name: string; mime: string } };
+    const stored = (await put.json()) as {
+      cover: {
+        ref_name: string;
+        mime: string;
+        thumbnail: { ref_name: string; asset_id: string; mime: string } | null;
+      };
+    };
     // Reserved ref name derived from the sniffed format, not the
     // uploaded filename — the served Content-Type comes from the
     // extension, so the two must agree.
     expect(stored.cover.ref_name).toBe('cover.png');
     expect(stored.cover.mime).toBe('image/png');
+    expect(stored.cover.thumbnail?.ref_name).toBe('__marginalia-cover-thumbnail.webp');
+    expect(stored.cover.thumbnail?.mime).toBe('image/webp');
 
     const payload = (await (await getDoc(doc.uid, doc.admin_invite.token)).json()) as {
-      cover: { ref_name: string; asset_id: string } | null;
+      cover: {
+        ref_name: string;
+        asset_id: string;
+        thumbnail: { ref_name: string; asset_id: string } | null;
+      } | null;
       attached_assets: Array<{ ref_name: string }>;
     };
     expect(payload.cover?.ref_name).toBe('cover.png');
     expect(payload.attached_assets.map((a) => a.ref_name)).toContain('cover.png');
+    expect(payload.attached_assets.map((a) => a.ref_name)).not.toContain(
+      '__marginalia-cover-thumbnail.webp',
+    );
 
     // Fetchable through the ordinary asset proxy.
     const get = await app.hono.fetch(
@@ -424,19 +450,34 @@ describe('assets API', () => {
     expect(get.status).toBe(200);
     expect(get.headers.get('content-type')).toBe('image/png');
     expect(new Uint8Array(await get.arrayBuffer())).toEqual(PNG_BYTES);
+
+    const thumbnail = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/__marginalia-cover-thumbnail.webp`, {
+        method: 'GET',
+        headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    expect(thumbnail.status).toBe(200);
+    expect(thumbnail.headers.get('content-type')).toBe('image/webp');
+    expect(Number(thumbnail.headers.get('content-length'))).toBeGreaterThan(0);
+    expect(await sharp(await thumbnail.arrayBuffer()).metadata()).toMatchObject({
+      format: 'webp',
+      width: 192,
+      height: 288,
+    });
   });
 
   test('replacing a cover with another format detaches the old ref', async () => {
     const doc = await upload();
     await putCover(doc.uid, doc.admin_invite.token, PNG_BYTES);
-    const put = await putCover(doc.uid, doc.admin_invite.token, JPEG_BYTES, 'other.jpeg');
+    const put = await putCover(doc.uid, doc.admin_invite.token, WEBP_BYTES, 'other.webp');
     expect(put.status).toBe(201);
 
     const payload = (await (await getDoc(doc.uid, doc.admin_invite.token)).json()) as {
       cover: { ref_name: string } | null;
       attached_assets: Array<{ ref_name: string }>;
     };
-    expect(payload.cover?.ref_name).toBe('cover.jpg');
+    expect(payload.cover?.ref_name).toBe('cover.webp');
     expect(payload.attached_assets.map((a) => a.ref_name)).not.toContain('cover.png');
   });
 
@@ -457,6 +498,13 @@ describe('assets API', () => {
     };
     expect(payload.cover).toBeNull();
     expect(payload.attached_assets.map((a) => a.ref_name)).not.toContain('cover.png');
+    expect(
+      (
+        app.db
+          .prepare('SELECT count(*) AS count FROM document_assets WHERE doc_uid = ?')
+          .get(doc.uid) as { count: number }
+      ).count,
+    ).toBe(0);
   });
 
   test('deleting the cover asset through the generic route clears cover_ref', async () => {
@@ -474,6 +522,13 @@ describe('assets API', () => {
       cover: unknown;
     };
     expect(payload.cover).toBeNull();
+    expect(
+      (
+        app.db
+          .prepare('SELECT count(*) AS count FROM document_assets WHERE doc_uid = ?')
+          .get(doc.uid) as { count: number }
+      ).count,
+    ).toBe(0);
   });
 
   test('cover upload rejects non-image bytes and requires editor role', async () => {

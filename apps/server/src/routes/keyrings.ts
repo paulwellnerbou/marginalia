@@ -3,6 +3,7 @@ import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { readIdentity } from '../auth.js';
 import type { ServerConfig } from '../config.js';
+import { COVER_THUMBNAIL_REF } from '../cover.js';
 import type { DocumentFormat, InviteRole, KeyringRow } from '../db.js';
 import { newKeyringToken, newPairingCode } from '../ids.js';
 import { clientKey, FixedWindowRateLimiter } from '../rate-limit.js';
@@ -67,7 +68,12 @@ interface KeyringDocWire {
   password_protected: boolean;
   updated_at: number;
   added_at: number;
-  cover: { ref_name: string; asset_id: string; mime: string } | null;
+  cover: {
+    ref_name: string;
+    asset_id: string;
+    mime: string;
+    thumbnail: { ref_name: string; asset_id: string; mime: string } | null;
+  } | null;
 }
 
 export function keyringsRouter(deps: KeyringDeps): Hono {
@@ -498,16 +504,21 @@ function listKeyringDocs(db: Database, keyringToken: string): KeyringDocWire[] {
               d.format, d.updated_at, d.password_hash, d.cover_ref,
               i.role AS role,
               da.ref_name AS cover_ref_name, da.asset_id AS cover_asset_id,
-              da.mime AS cover_mime
+              da.mime AS cover_mime,
+              thumb.ref_name AS thumbnail_ref_name,
+              thumb.asset_id AS thumbnail_asset_id,
+              thumb.mime AS thumbnail_mime
          FROM keyring_docs kd
          JOIN documents d ON d.uid = kd.doc_uid
          LEFT JOIN invites i ON i.token = kd.invite_token AND i.doc_uid = kd.doc_uid
          LEFT JOIN document_assets da
                 ON da.doc_uid = d.uid AND da.ref_name = d.cover_ref
+         LEFT JOIN document_assets thumb
+                ON thumb.doc_uid = d.uid AND thumb.ref_name = ?
         WHERE kd.keyring_token = ?
         ORDER BY d.updated_at DESC`,
     )
-    .all(keyringToken) as Array<{
+    .all(COVER_THUMBNAIL_REF, keyringToken) as Array<{
     doc_uid: string;
     invite_token: string;
     title: string | null;
@@ -520,6 +531,9 @@ function listKeyringDocs(db: Database, keyringToken: string): KeyringDocWire[] {
     cover_ref_name: string | null;
     cover_asset_id: string | null;
     cover_mime: string | null;
+    thumbnail_ref_name: string | null;
+    thumbnail_asset_id: string | null;
+    thumbnail_mime: string | null;
   }>;
 
   return rows.map((row) => ({
@@ -540,6 +554,14 @@ function listKeyringDocs(db: Database, keyringToken: string): KeyringDocWire[] {
             ref_name: row.cover_ref_name,
             asset_id: row.cover_asset_id,
             mime: row.cover_mime ?? 'application/octet-stream',
+            thumbnail:
+              row.thumbnail_ref_name && row.thumbnail_asset_id
+                ? {
+                    ref_name: row.thumbnail_ref_name,
+                    asset_id: row.thumbnail_asset_id,
+                    mime: row.thumbnail_mime ?? 'application/octet-stream',
+                  }
+                : null,
           }
         : null,
   }));
