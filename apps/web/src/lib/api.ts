@@ -210,6 +210,45 @@ export interface ProposalDiff extends HistoryDiff {
   original: HistoryDiff | null;
 }
 
+/** A run of text the merge agreed on, or one it left for a person. */
+export type ConflictSegment =
+  | { kind: 'stable'; text: string }
+  | {
+      kind: 'conflict';
+      current: string;
+      base: string;
+      proposed: string;
+      /** A side that can be taken without deciding anything, if there is one. */
+      auto: ConflictChoice | null;
+    };
+
+export type ConflictChoice = 'current' | 'proposed' | 'both';
+
+/**
+ * Where an open proposal stands against the document right now.
+ *
+ * The three sides are scoped the way the proposal is — one block for a
+ * block proposal, the whole file for a whole-document one — so
+ * `merged`, or the segments reassembled under one choice per hunk, is
+ * directly what `resolveEditProposalConflict` takes as `resolved_text`.
+ */
+export interface ProposalConflict {
+  scope: 'block' | 'document';
+  status: 'clean' | 'conflict';
+  /** The document as it stands. */
+  current: string;
+  /** The source the proposal was written against. */
+  base: string;
+  /** What the proposal asks for. */
+  proposed: string;
+  /** The merge git could make unaided; null when it could not. */
+  merged: string | null;
+  /** The hunks a person has to settle; null when the merge was clean. */
+  segments: ConflictSegment[] | null;
+  /** The merge changes nothing — the document already says this. */
+  empty: boolean;
+}
+
 export interface UploadOptions {
   /** Raw source text. */
   source: string;
@@ -219,7 +258,12 @@ export interface UploadOptions {
    *  falls back to deriving a title from the rendered content. */
   name?: string;
   password_protected?: boolean;
-  /** Restrict reads to invite-link holders from the moment the doc exists. */
+  /**
+   * Restrict reads to invite-link holders from the moment the doc exists.
+   * Omitted → the server's default, which is `true`. Pass `false` to drop
+   * that restriction — which leaves the URL enough on its own only when
+   * `password_protected` is off too, the two being independent gates.
+   */
   invite_only?: boolean;
   default_theme?: string;
 }
@@ -233,9 +277,9 @@ export interface UploadResponse {
   mermaid_renderer: MermaidRenderer | null;
   format: DocumentFormat;
   /**
-   * Echoes back what the upload asked for. Optional because a tab loaded
-   * from an older build can outlive a deploy and read a response that
-   * predates the field.
+   * What the server applied — `true` for an upload that said nothing, since
+   * that is the default. Optional because a tab loaded from an older build
+   * can outlive a deploy and read a response that predates the field.
    */
   invite_only?: boolean;
   password?: string;
@@ -1155,6 +1199,12 @@ export interface ThreadCapabilities {
   /** Whether the viewer may replace this proposal's proposed text in place. */
   update: boolean;
   repair: boolean;
+  /**
+   * Whether the viewer may settle this proposal against current main.
+   * Wider than `update`: anyone who could accept the proposal may
+   * resolve what stands in the way of accepting it, not only its author.
+   */
+  resolve_conflict: boolean;
   reopen: boolean;
 }
 
@@ -1235,6 +1285,8 @@ export interface Thread {
 
 export interface ListThreadsResponse {
   threads: Thread[];
+  /** Whole-document totals, unaffected by any filter on the request. */
+  counts?: { total: number; open: number; resolved: number };
   mention_candidates: string[];
   pending_mentions: string[];
 }
@@ -1326,9 +1378,13 @@ export function listThreads(
   const existing = listThreadsInflight.get(cacheKey);
   if (existing) return existing;
 
-  const suffix = consumeMentions ? '' : '?consume_mentions=false';
+  // `state=all` explicitly: the endpoint serves open threads by default,
+  // but the viewer renders resolved ones too — collapsed, filterable, and
+  // reopenable — so it wants the archive as well.
+  const query = new URLSearchParams({ state: 'all' });
+  if (!consumeMentions) query.set('consume_mentions', 'false');
   const promise = request<ListThreadsResponse>(
-    `/api/documents/${encodeURIComponent(uid)}/threads${suffix}`,
+    `/api/documents/${encodeURIComponent(uid)}/threads?${query}`,
     {
       method: 'GET',
       docUid: uid,
@@ -1418,7 +1474,7 @@ export function createComment(
     body: string;
   },
   identity: Identity,
-): Promise<void> {
+): Promise<Thread> {
   if (payload.parent_id) {
     return request<ThreadMutationResponse>(
       `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(payload.parent_id)}/respond`,
@@ -1430,6 +1486,7 @@ export function createComment(
       },
     ).then((res) => {
       rememberThread(uid, res.thread);
+      return res.thread;
     });
   }
 
@@ -1443,6 +1500,7 @@ export function createComment(
     docUid: uid,
   }).then((res) => {
     rememberThread(uid, res.thread);
+    return res.thread;
   });
 }
 
@@ -1683,6 +1741,47 @@ export function getEditProposalDiff(
   const path = `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/diff`;
   const url = opts.mergeable ? `${path}?mergeable=1` : path;
   return request<ProposalDiff>(url, { method: 'GET', docUid: uid });
+}
+
+/**
+ * The three-way state of an open proposal against the document as it
+ * stands now. A read — nothing is written until `resolveEditProposal`.
+ */
+export function getEditProposalConflict(uid: string, pid: string): Promise<ProposalConflict> {
+  return request<ProposalConflict>(
+    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/conflict`,
+    { method: 'GET', docUid: uid },
+  );
+}
+
+/**
+ * Settle a proposal against current main. Omit `resolved_text` to take
+ * the merge the server can make unaided — it answers 409
+ * `proposal-conflict` when there isn't one. Either way the branch is
+ * rebuilt on current main, so a later accept is a plain fast-forward.
+ */
+export function resolveEditProposalConflict(
+  uid: string,
+  pid: string,
+  payload: { resolved_text?: string; comment?: string },
+  identity: Identity,
+): Promise<Thread> {
+  const comment = payload.comment?.trim();
+  return request<ThreadMutationResponse>(
+    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/resolve`,
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        ...(payload.resolved_text !== undefined ? { resolved_text: payload.resolved_text } : {}),
+        ...(comment ? { comment } : {}),
+      }),
+      identity,
+      docUid: uid,
+    },
+  ).then((res) => {
+    rememberThread(uid, res.thread);
+    return res.thread;
+  });
 }
 
 export function repairEditProposalAnchor(

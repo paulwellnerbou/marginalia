@@ -2,6 +2,7 @@ import { Container, Text, Theme } from '@radix-ui/themes';
 import { lazy, StrictMode, Suspense } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { ReleaseUpdateDialog } from './components/ReleaseUpdateDialog.js';
 import { RouteErrorBoundary } from './components/RouteErrorBoundary.js';
 import { ToastContainer } from './components/ToastContainer.js';
 import { AppearanceProvider, useAppearance } from './lib/appearance.js';
@@ -79,6 +80,7 @@ function App() {
             </Routes>
           </Suspense>
         </RouteErrorBoundary>
+        <ReleaseUpdateDialog />
         <ToastContainer />
       </BrowserRouter>
     </Theme>

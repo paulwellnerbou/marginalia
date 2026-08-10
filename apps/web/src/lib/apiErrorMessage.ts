@@ -13,7 +13,9 @@ import { isTransientError } from './retry.js';
 const MESSAGES: Record<string, string> = {
   // Proposal workflow
   'proposal-conflict':
-    'This proposal no longer applies: the document changed where it edits. Update the proposal against the current text, or reject it.',
+    'This proposal no longer applies: the document changed where it edits. Use “Resolve conflict” to settle it against the current text, or reject it.',
+  'proposal-resolution-empty':
+    'That resolution leaves the document exactly as it is, so there would be nothing to accept. Change it, or reject the proposal instead.',
   'proposal-orphaned':
     'The text this proposal was anchored to is gone. Try “Repair anchor”, or re-create the proposal against the current text.',
   'proposal-merge-unavailable':

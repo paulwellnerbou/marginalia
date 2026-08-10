@@ -170,77 +170,79 @@ export function PasswordPromptDialog({
 
   return (
     <Dialog.Root open={open} onOpenChange={handleOpenChange}>
-      <Dialog.Content maxWidth="460px">
-        <Dialog.Title>Password required</Dialog.Title>
-        <Dialog.Description size="2" color="gray" mb="4">
-          This document is password-protected. Enter the password to continue.
-        </Dialog.Description>
-        <form onSubmit={handleSubmit}>
-          <Flex direction="column" gap="3">
-            <input
-              className="sr-only"
-              tabIndex={-1}
-              aria-hidden="true"
-              autoComplete="username"
-              name="username"
-              readOnly
-              value={browserPasswordManagerUsername(docUid, docName)}
-            />
-            <PasswordField
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password"
-              autoFocus
-              autoComplete="current-password"
-              name="document-password"
-            />
-            <Text as="label" size="2">
-              <Flex align="center" gap="2">
-                <Checkbox
-                  checked={rememberPassword}
-                  onCheckedChange={(checked) => setRememberPassword(checked === true)}
-                />
-                Remember password on this device
-              </Flex>
-            </Text>
-            <Text as="label" size="2">
-              <Flex align="center" gap="2">
-                <Checkbox
-                  checked={rememberLogin}
-                  onCheckedChange={(checked) => setRememberLogin(checked === true)}
-                />
-                Remember login on this browser
-              </Flex>
-            </Text>
-            {error && (
-              <Callout.Root color="red" size="1">
-                <Callout.Text>{error}</Callout.Text>
-              </Callout.Root>
-            )}
-            <Flex gap="2" justify="end" wrap="wrap">
-              {canTryAdminRecovery && (
-                <Button
-                  type="button"
-                  variant="soft"
-                  disabled={submitting}
-                  onClick={() => void handleRecoverWithAdminLink()}
-                >
-                  Reveal with admin link
-                </Button>
+      <Dialog.Content maxWidth="460px" className="dialog-content--fixed-footer">
+        <form className="dialog-form-layout" onSubmit={handleSubmit}>
+          <div className="dialog-scroll-body">
+            <Dialog.Title>Password required</Dialog.Title>
+            <Dialog.Description size="2" color="gray" mb="4">
+              This document is password-protected. Enter the password to continue.
+            </Dialog.Description>
+            <Flex direction="column" gap="3">
+              <input
+                className="sr-only"
+                tabIndex={-1}
+                aria-hidden="true"
+                autoComplete="username"
+                name="username"
+                readOnly
+                value={browserPasswordManagerUsername(docUid, docName)}
+              />
+              <PasswordField
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password"
+                autoFocus
+                autoComplete="current-password"
+                name="document-password"
+              />
+              <Text as="label" size="2">
+                <Flex align="center" gap="2">
+                  <Checkbox
+                    checked={rememberPassword}
+                    onCheckedChange={(checked) => setRememberPassword(checked === true)}
+                  />
+                  Remember password on this device
+                </Flex>
+              </Text>
+              <Text as="label" size="2">
+                <Flex align="center" gap="2">
+                  <Checkbox
+                    checked={rememberLogin}
+                    onCheckedChange={(checked) => setRememberLogin(checked === true)}
+                  />
+                  Remember login on this browser
+                </Flex>
+              </Text>
+              {error && (
+                <Callout.Root color="red" size="1">
+                  <Callout.Text>{error}</Callout.Text>
+                </Callout.Root>
               )}
-              <Dialog.Close>
-                <Button type="button" variant="soft" color="gray" disabled={submitting}>
-                  Cancel
-                </Button>
-              </Dialog.Close>
-              <Button type="submit" disabled={submitting || !password}>
-                {submitting ? 'Checking…' : 'Unlock'}
-              </Button>
+              <Text size="1" color="gray">
+                Ask the document admin if you don&apos;t have the password. Admin browsers that
+                still have the admin link can reveal the current password without rotating it.
+              </Text>
             </Flex>
-            <Text size="1" color="gray">
-              Ask the document admin if you don&apos;t have the password. Admin browsers that still
-              have the admin link can reveal the current password without rotating it.
-            </Text>
+          </div>
+          <Flex className="dialog-footer" gap="2" justify="end" wrap="wrap" mt="4">
+            {canTryAdminRecovery && (
+              <Button
+                type="button"
+                variant="soft"
+                disabled={submitting}
+                onClick={() => void handleRecoverWithAdminLink()}
+              >
+                Reveal with admin link
+              </Button>
+            )}
+            <Dialog.Close>
+              <Button type="button" variant="soft" color="gray" disabled={submitting}>
+                Cancel
+              </Button>
+            </Dialog.Close>
+            <Button type="submit" disabled={submitting || !password}>
+              {submitting ? 'Checking…' : 'Unlock'}
+            </Button>
           </Flex>
         </form>
       </Dialog.Content>

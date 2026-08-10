@@ -110,6 +110,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             IMPRINT_MD=${{ vars.IMPRINT_MD }}
+            MARGINALIA_RELEASE_VERSION=${{ env.SHORT_SHA }}
           cache-from: type=gha
           # The layer cache is an optimisation, so a wobble in the Actions
           # cache backend should cost a slower build, not a red pipeline —

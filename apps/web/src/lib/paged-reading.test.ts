@@ -72,3 +72,32 @@ describe('clampPage', () => {
     expect(clampPage(Number.NaN, 5)).toBe(0);
   });
 });
+
+describe('a fractional pitch', () => {
+  // Vertical pages are sized to a whole number of text lines, and line
+  // heights are routinely fractional — 19px at 1.6 is 30.4. The pitch
+  // has to carry that fraction: rounding it loses a sliver of a line on
+  // every page, always in the same direction.
+  const LINE = 30.4;
+  const PITCH = 27 * LINE; // 820.8 — a 27-line page
+
+  test('round-trips every page boundary, however deep', () => {
+    for (const page of [0, 1, 37, 199]) {
+      expect(pageIndexAt(page * PITCH, PITCH)).toBe(page);
+      expect(pageIndexOfOffset(page * PITCH, PITCH)).toBe(page);
+    }
+  });
+
+  test('keeps content just short of a boundary on its own page', () => {
+    expect(pageIndexOfOffset(200 * PITCH - 0.5, PITCH)).toBe(199);
+  });
+
+  test('a pitch rounded to whole pixels drifts a page out by 200', () => {
+    // Why `pitchOf` measures the border box instead of the rounded
+    // `clientHeight`: 0.2px per page is a whole line by page 130 and a
+    // whole page not long after, so the reader is handed the end of the
+    // previous page and half a line of this one.
+    const rounded = Math.round(PITCH); // 821
+    expect(pageIndexOfOffset(199 * PITCH, rounded)).toBe(198);
+  });
+});

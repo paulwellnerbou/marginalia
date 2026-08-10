@@ -49,6 +49,7 @@ import {
   rejectEditProposal as apiRejectProposal,
   repairEditProposalAnchor as apiRepairProposalAnchor,
   resolveThread as apiResolve,
+  resolveEditProposalConflict as apiResolveConflict,
   restoreHistoryVersion as apiRestoreHistoryVersion,
   revertHistoryVersion as apiRevertHistoryVersion,
   toggleCommentReaction as apiToggleReaction,
@@ -78,7 +79,9 @@ import {
   showToast,
 } from '../lib/notifications.js';
 import {
+  measurePages,
   PAGED_CLASS,
+  PAGED_VERTICAL_CLASS,
   pageIndexAt,
   pageIndexOfElement,
   pageIndexOfOffset,
@@ -98,7 +101,16 @@ import {
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
-import { readUiScale, setUiScale, UI_SCALE_MAX, UI_SCALE_MIN } from '../lib/ui-scale.js';
+import {
+  COARSE_POINTER,
+  readUiScale,
+  resetUiScale,
+  setUiScale,
+  UI_SCALE_MAX,
+  UI_SCALE_MIN,
+  UI_SCALE_POINTER_DEFAULT,
+  UI_SCALE_TOUCH_DEFAULT,
+} from '../lib/ui-scale.js';
 import { useMediaQuery } from '../lib/useMediaQuery.js';
 import { usePagedReading } from '../lib/usePagedReading.js';
 import { APP_ACCENT_COLOR } from '../styles/theme.js';
@@ -106,7 +118,7 @@ import { AccessControlDialog } from './AccessControlDialog.js';
 import { ActivityList } from './ActivityList.js';
 import { AppBar } from './AppBar.js';
 import { BlockActions } from './BlockActions.js';
-import { DisplaySlider } from './DisplaySlider.js';
+import { DisplayStepper } from './DisplayStepper.js';
 import {
   type DocumentSearchResult,
   DocumentSearchResultsPane,
@@ -147,6 +159,7 @@ const COLLAPSED_WIDTH = 36;
  */
 const TEXT_ZOOM_MIN = 80;
 const TEXT_ZOOM_MAX = 220;
+const DEFAULT_MAX_WIDTH = 72;
 /** How long a pane takes to fold away. Published to the stylesheet, which
  *  runs the animation, so the two can't drift apart. */
 const PANE_COLLAPSE_MS = 240;
@@ -197,15 +210,6 @@ const COMPACT_LAYOUT_QUERY = `(max-width: ${COMPACT_LAYOUT_MAX_WIDTH}px)`;
 function isCompactViewport(): boolean {
   return window.matchMedia(COMPACT_LAYOUT_QUERY).matches;
 }
-
-/**
- * Doc-pane width below which the toolbar's display controls (reading
- * width, text size, theme) collapse into a single "View" menu. Laid out
- * inline they need ~880px; the row hides its scrollbar, so past that
- * point everything to their right — download, settings, read aloud,
- * search — silently scrolls out of reach.
- */
-const DOC_CHROME_INLINE_MIN_WIDTH = 900;
 
 /**
  * `.doc-scroll` content-box width at or below which app.css hides the
@@ -359,7 +363,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [readingMode, setReadingMode] = useState<ReadingMode>(() =>
     localStorage.getItem(READING_MODE_KEY) === 'paged' ? 'paged' : 'scroll',
   );
+  /**
+   * Set when this engine turns out not to paint the sideways pagination
+   * (see the effect below), which switches the reader to vertical pages.
+   * Kept apart from `readingMode` because it is a property of this
+   * document at this text size, not a choice they made.
+   */
+  const [tooWideForPages, setTooWideForPages] = useState(false);
   const paged = readingMode === 'paged';
+  /** Pages run down the screen rather than across — same mode, other axis. */
+  const pagedVertical = paged && tooWideForPages;
   const commentsDisplayMode: CommentsDisplayMode =
     storedCommentsDisplayMode ?? (compactViewport ? 'floating' : 'column');
   /**
@@ -393,10 +406,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   const [maxWidth, setMaxWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(MAX_WIDTH_KEY));
-    return Number.isFinite(saved) && saved > 0 ? saved : 72;
+    return Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_MAX_WIDTH;
   });
-  /** Mirrors the stored interface size so the slider has something to show. */
+  /** Mirrors the stored interface size so the stepper has something to show. */
   const [uiScale, setUiScaleState] = useState<number>(readUiScale);
+  /* Live rather than read once, so what the reset advertises and what it
+     lands on stay the same answer on a convertible that gains a keyboard
+     mid-session. */
+  const uiScaleDefault = useMediaQuery(COARSE_POINTER)
+    ? UI_SCALE_TOUCH_DEFAULT
+    : UI_SCALE_POINTER_DEFAULT;
   const [textZoom, setTextZoom] = useState<number>(() => {
     const saved = Number(localStorage.getItem(TEXT_ZOOM_KEY));
     return Number.isFinite(saved) && saved >= TEXT_ZOOM_MIN && saved <= TEXT_ZOOM_MAX ? saved : 100;
@@ -557,6 +576,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       reportError('DocumentLayout.refreshDoc', err, { uid: doc.uid });
     }
   }, [doc.uid]);
+
+  /** Merge one thread into the list, in the order the server would return it. */
+  const landThread = useCallback((thread: Thread) => {
+    setThreads((prev) => {
+      const index = prev.findIndex((t) => t.id === thread.id);
+      const next = index >= 0 ? prev.map((t, i) => (i === index ? thread : t)) : [...prev, thread];
+      next.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
+      return next;
+    });
+  }, []);
 
   const refreshThreads = useCallback(async () => {
     try {
@@ -840,15 +869,18 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       // a heading counts as reached once its page is the one on screen.
       // Metrics are hoisted out of the loop — reading clientWidth per
       // heading would force a layout on every one of them.
-      const pitch = paged ? container.clientWidth : 0;
-      const currentPage = paged ? pageIndexAt(container.scrollLeft, pitch) : 0;
+      const pitch = paged ? measurePages(container).pitch : 0;
+      const scrolled = pagedVertical ? container.scrollTop : container.scrollLeft;
+      const currentPage = paged ? pageIndexAt(scrolled, pitch) : 0;
       const threshold = containerRect.top + 96;
 
       for (const heading of visible) {
         const rect = heading.getBoundingClientRect();
+        const start = pagedVertical
+          ? rect.top - containerRect.top + scrolled
+          : rect.left - containerRect.left + scrolled;
         const reached = paged
-          ? pageIndexOfOffset(rect.left - containerRect.left + container.scrollLeft, pitch) <=
-            currentPage
+          ? pageIndexOfOffset(start, pitch) <= currentPage
           : rect.top <= threshold;
         if (reached) {
           current = heading.id;
@@ -881,7 +913,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     };
     // `paged` re-runs the scan: switching layout fires neither scroll
     // nor resize, so the highlight would sit on a stale heading.
-  }, [headingIdsKey, liveRendered.html, paged]);
+  }, [headingIdsKey, liveRendered.html, paged, pagedVertical]);
 
   /**
    * A section fragment in the URL goes stale the moment the reader moves
@@ -1209,7 +1241,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         return;
       }
       try {
-        await apiCreate(doc.uid, { anchor: payload.anchor, body: payload.body }, identity);
+        const created = await apiCreate(
+          doc.uid,
+          { anchor: payload.anchor, body: payload.body },
+          identity,
+        );
+        // Land the new thread before dropping the draft, in one commit.
+        // Waiting for the refresh instead leaves a gap with neither the
+        // draft's highlight nor the thread's — on a heavily commented
+        // document that re-read takes about a second, and the reader
+        // watches their own highlight blink out and come back.
+        landThread(created);
         setPendingDraft(null);
         // A comment on a spot the section filter hides (preamble, an
         // ancestor heading) would vanish the moment it posts — lift
@@ -1230,6 +1272,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [
       canComment,
       doc.uid,
+      landThread,
       resolveIdentity,
       refreshThreads,
       sectionFilterActive,
@@ -1287,6 +1330,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         reportError('DocumentLayout.resolveThread', err, { id, kind });
         const message = apiErrorMessage(err, `Could not ${kind} this thread`);
         reportFailure(message);
+        // A refused accept is the moment the server records *why* — a
+        // conflict or a dead anchor — so the card can offer the way out.
+        // Without this the badge and its button appear only on the next
+        // unrelated refresh.
+        if (kind === 'accept') await refreshThreads().catch(() => undefined);
         // Signal failure so callers (composer / diff dialog) don't clear
         // drafts or close on a failed accept/reject. Don't re-throw —
         // `void runWorkflow(...)` callsites would surface the rejection
@@ -1295,6 +1343,37 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
     },
     [doc.uid, resolveIdentity, refreshThreads, refreshDoc],
+  );
+
+  const onResolveConflict = useCallback(
+    async (
+      id: string,
+      payload: { resolvedText?: string; comment?: string },
+    ): Promise<ThreadActionResult> => {
+      const identity = resolveIdentity();
+      if (!identity) {
+        const message = 'Please set your display name first.';
+        reportFailure(message);
+        return { ok: false, message };
+      }
+      try {
+        const body: Parameters<typeof apiResolveConflict>[2] = {};
+        if (payload.resolvedText !== undefined) body.resolved_text = payload.resolvedText;
+        if (payload.comment) body.comment = payload.comment;
+        await apiResolveConflict(doc.uid, id, body, identity);
+        // The proposal was rebuilt on current main, which re-anchors it
+        // and can settle other proposals' mergeability too — refresh the
+        // whole set rather than patching this one thread in.
+        await refreshThreads();
+        return { ok: true };
+      } catch (err) {
+        reportError('DocumentLayout.resolveConflict', err, { id });
+        const message = apiErrorMessage(err, 'Could not resolve this conflict');
+        reportFailure(message);
+        return { ok: false, message };
+      }
+    },
+    [doc.uid, resolveIdentity, refreshThreads],
   );
 
   const onRepairThread = useCallback(
@@ -1590,23 +1669,18 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   /**
    * Measured rather than derived from the viewport: both side panes are
-   * resizable, so only the elements' own widths say what still fits. Two
-   * of them, because two different boxes answer the two questions — the
-   * toolbar row lays out across the pane, while the comment column's
-   * `@container` query reads `.doc-scroll`'s content box, which is
-   * narrower wherever the platform reserves room for a scrollbar. Every
-   * way either width can change is a window resize or one of the two
-   * side-column widths in the deps. 0 means "not measured yet" — the
-   * layout effect fills them in before the first paint.
+   * resizable, so only the element's own width says what still fits. The
+   * comment column's `@container` query reads `.doc-scroll`'s content box,
+   * which is narrower wherever the platform reserves room for a scrollbar,
+   * so that is the box to measure. Every way it can change is a window
+   * resize or one of the two side-column widths in the deps. 0 means "not
+   * measured yet" — the layout effect fills it in before the first paint.
    */
-  const [docPaneWidth, setDocPaneWidth] = useState(0);
   const [commentsHostWidth, setCommentsHostWidth] = useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx / overlayPanes / panesSettled are the intentional re-measure triggers — the body reads widths only they can have changed.
   useLayoutEffect(() => {
     const measure = () => {
-      const pane = docPaneRef.current?.clientWidth ?? 0;
-      if (pane <= 0) return;
-      setDocPaneWidth(pane);
+      if ((docPaneRef.current?.clientWidth ?? 0) <= 0) return;
       setCommentsHostWidth(docScrollRef.current?.clientWidth ?? 0);
     };
     measure();
@@ -1614,10 +1688,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return () => window.removeEventListener('resize', measure);
   }, [tocPx, commentsPx, overlayPanes, panesSettled]);
 
-  const chromeCompact =
-    docPaneWidth === 0
-      ? compactViewport
-      : docPaneWidth < DOC_CHROME_INLINE_MIN_WIDTH * (uiScale / 100);
   /** Offering the switch back to the column would be a dead action where
    *  the stylesheet hides the column outright. */
   const columnModeAvailable =
@@ -1642,22 +1712,34 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     () => [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx, panesSettled],
     [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx, panesSettled],
   );
-  const pages = usePagedReading(docScrollRef, paged, pageLayoutKey);
+  const pages = usePagedReading(docScrollRef, paged, pageLayoutKey, pagedVertical);
 
   /**
-   * Past a certain length WebKit stops painting the paginated columns
-   * altogether — every page but the first comes up blank, with the pager
-   * still counting them off. There is nothing to render around, so hand
-   * the reader back the mode that works rather than a blank book.
+   * Keep the reader in pages even where the sideways ones stop painting.
+   * On WebKit a long enough column run goes blank partway through — the
+   * page counter and the TOC keep working, the pages are just empty — so
+   * a book-length document turns its pages downwards instead. That gives
+   * up the browser's column fragmentation, which is why it is a fallback
+   * and not the default.
    */
   useEffect(() => {
     if (!pages.tooWideToPaint) return;
-    setReadingMode('scroll');
+    setTooWideForPages(true);
     showToast({
-      title: 'Switched to scrolling',
-      body: 'This document is too long for your browser to lay out as pages. Smaller text or a wider reading column will fit more on each page if you want to try Pages again.',
+      title: 'Pages now turn downwards',
+      body: 'This document is too long for this browser to paginate sideways. A smaller text size brings the usual pages back.',
     });
   }, [pages.tooWideToPaint]);
+
+  /**
+   * Anything that repaginates deserves a fresh verdict — dropping the
+   * text size or widening the reading column can bring the pagination
+   * back under the limit, and sideways pages are the better ones.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pageLayoutKey is a pure trigger for re-deciding, not a value read here.
+  useEffect(() => {
+    setTooWideForPages(false);
+  }, [pageLayoutKey]);
 
   const title = documentTitle(doc);
 
@@ -1905,105 +1987,103 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, [hasSearchResults, rightTab]);
 
   /**
-   * How the document reads — width, zoom, theme. Rendered inline in the
-   * toolbar when there is room and stacked inside the "View" popover when
-   * there isn't, so the same controls carry their own labels either way.
-   * One instance only: the theme label points at the select by id.
+   * How the document reads — layout, width, zoom, theme. A two-column grid
+   * of label and control: read down the first column to find a setting,
+   * across to change it. Labels are plain text rather than `<label>`
+   * because most of these controls are composites with no single field to
+   * point at; the theme select is the one that can be, and is.
    */
   const displayControls = (
-    <>
-      <Flex align="center" gap="2">
-        <Text size="1" color="gray">
-          Layout
-        </Text>
-        <SegmentedControl.Root
-          size="1"
-          value={readingMode}
-          onValueChange={(next) => setReadingMode(next === 'paged' ? 'paged' : 'scroll')}
-          aria-label="Reading layout"
-        >
-          <SegmentedControl.Item value="scroll">Scroll</SegmentedControl.Item>
-          <SegmentedControl.Item value="paged">Pages</SegmentedControl.Item>
-        </SegmentedControl.Root>
-      </Flex>
-      <Flex align="center" gap="2" className="width-slider">
-        <Text size="1" color="gray">
-          Reading width
-        </Text>
-        <DisplaySlider
-          className="doc-display-slider doc-display-slider-width"
-          ariaLabel="Reading width"
-          min={40}
-          max={120}
-          value={maxWidth}
-          format={(v) => `${v}ch`}
-          onCommit={setMaxWidth}
-        />
-      </Flex>
-      <Flex align="center" gap="2" className="width-slider">
-        <Text size="1" color="gray">
-          Text size
-        </Text>
-        <DisplaySlider
-          className="doc-display-slider doc-display-slider-zoom"
-          ariaLabel="Text size"
-          min={TEXT_ZOOM_MIN}
-          max={TEXT_ZOOM_MAX}
-          step={5}
-          value={textZoom}
-          format={(v) => `${v}%`}
-          onCommit={setTextZoom}
-        />
-        <Button
-          size="1"
-          variant="ghost"
-          onClick={() => setTextZoom(100)}
-          disabled={textZoom === 100}
-        >
-          Reset
-        </Button>
-      </Flex>
-      <Flex align="center" gap="2" className="width-slider">
-        <Text size="1" color="gray">
-          Interface size
-        </Text>
-        <DisplaySlider
-          className="doc-display-slider doc-display-slider-zoom"
-          ariaLabel="Interface size"
-          min={UI_SCALE_MIN}
-          max={UI_SCALE_MAX}
-          step={5}
-          value={uiScale}
-          format={(v) => `${v}%`}
-          onCommit={(next) => {
-            setUiScale(next);
-            setUiScaleState(next);
-          }}
-        />
-      </Flex>
-      <Flex align="center" gap="2">
-        <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
-          Theme
-        </Text>
-        <Select.Root
-          value={theme}
-          size="1"
-          onValueChange={(next) => {
-            setTheme(next);
-            setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
-          }}
-        >
-          <Select.Trigger id="doc-theme-select" variant="soft" />
-          <Select.Content position="popper" style={{ maxHeight: 360 }}>
-            {BUILT_IN_THEMES.map((t) => (
-              <Select.Item key={t.id} value={t.id}>
-                {t.label}
-              </Select.Item>
-            ))}
-          </Select.Content>
-        </Select.Root>
-      </Flex>
-    </>
+    <div className="doc-view-grid">
+      <Text size="1" color="gray">
+        Layout
+      </Text>
+      <SegmentedControl.Root
+        size="1"
+        // The effective mode, not the stored one: while the fallback is
+        // in force the reader is looking at a scrolling document, and a
+        // control insisting otherwise just reads as broken.
+        value={paged ? 'paged' : 'scroll'}
+        onValueChange={(next) => {
+          // Choosing "Pages" again re-measures, so a reader who has
+          // since shrunk the text gets them back — and one who hasn't
+          // gets the toast saying why, rather than a dead control.
+          setTooWideForPages(false);
+          setReadingMode(next === 'paged' ? 'paged' : 'scroll');
+        }}
+        aria-label="Reading layout"
+      >
+        <SegmentedControl.Item value="scroll">Scroll</SegmentedControl.Item>
+        <SegmentedControl.Item value="paged">Pages</SegmentedControl.Item>
+      </SegmentedControl.Root>
+
+      <Text size="1" color="gray">
+        Reading width
+      </Text>
+      <DisplayStepper
+        ariaLabel="Reading width"
+        min={40}
+        max={120}
+        step={4}
+        defaultValue={DEFAULT_MAX_WIDTH}
+        value={maxWidth}
+        format={(v) => `${v}ch`}
+        onCommit={setMaxWidth}
+      />
+
+      <Text size="1" color="gray">
+        Text size
+      </Text>
+      <DisplayStepper
+        ariaLabel="Text size"
+        min={TEXT_ZOOM_MIN}
+        max={TEXT_ZOOM_MAX}
+        step={5}
+        defaultValue={100}
+        value={textZoom}
+        format={(v) => `${v}%`}
+        onCommit={setTextZoom}
+      />
+
+      <Text size="1" color="gray">
+        Interface size
+      </Text>
+      <DisplayStepper
+        ariaLabel="Interface size"
+        min={UI_SCALE_MIN}
+        max={UI_SCALE_MAX}
+        step={5}
+        defaultValue={uiScaleDefault}
+        value={uiScale}
+        format={(v) => `${v}%`}
+        onCommit={(next) => {
+          setUiScale(next);
+          setUiScaleState(next);
+        }}
+        onReset={() => setUiScaleState(resetUiScale())}
+      />
+
+      <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
+        Theme
+      </Text>
+      <Select.Root
+        value={theme}
+        size="1"
+        onValueChange={(next) => {
+          setTheme(next);
+          setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
+        }}
+      >
+        <Select.Trigger id="doc-theme-select" variant="soft" />
+        <Select.Content position="popper" style={{ maxHeight: 360 }}>
+          {BUILT_IN_THEMES.map((t) => (
+            <Select.Item key={t.id} value={t.id}>
+              {t.label}
+            </Select.Item>
+          ))}
+        </Select.Content>
+      </Select.Root>
+    </div>
   );
 
   /**
@@ -2030,6 +2110,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       onDeleteThread={onDeleteThread}
       onResolveThread={onResolveThread}
       onRepairThread={onRepairThread}
+      onResolveConflict={onResolveConflict}
       onReact={onReact}
       onEditProposal={onEditProposal}
       onScrollToAnchor={scrollToAnchor}
@@ -2110,23 +2191,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           {/* Document-specific toolbar lives inside the doc pane so it sits
               only over the document column, not above the side panes. */}
           <Flex align="center" gap="3" px="3" py="2" className="doc-chrome">
-            {chromeCompact ? (
-              <Popover.Root>
-                <Popover.Trigger>
-                  <Button size="1" variant="soft" color="gray" className="doc-view-trigger">
-                    <MixerHorizontalIcon />
-                    View
-                  </Button>
-                </Popover.Trigger>
-                <Popover.Content size="1" align="start" className="doc-view-popover">
-                  <Flex direction="column" gap="3" align="start">
-                    {displayControls}
-                  </Flex>
-                </Popover.Content>
-              </Popover.Root>
-            ) : (
-              displayControls
-            )}
+            {/* Always a menu, however much room the toolbar has: these are
+                set-and-forget reading preferences, and spreading five of
+                them across the bar pushed the per-document actions off the
+                end of it on anything but a wide screen. */}
+            <Popover.Root>
+              <Popover.Trigger>
+                <Button variant="soft" size="2" className="doc-view-trigger">
+                  <MixerHorizontalIcon />
+                  View
+                </Button>
+              </Popover.Trigger>
+              <Popover.Content size="1" align="start" className="doc-view-popover">
+                {displayControls}
+              </Popover.Content>
+            </Popover.Root>
             <span className="spacer" />
             {/* Download is available to any reader — unlike settings /
                 access control which are admin-only. Sits next to the
@@ -2307,7 +2386,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
               the surrounding pane-doc background and look like a
               different surface. */}
             <div
-              className={`doc-scroll marginalia-theme${paged ? ` ${PAGED_CLASS}` : ''}`}
+              className={`doc-scroll marginalia-theme${
+                paged ? ` ${pagedVertical ? PAGED_VERTICAL_CLASS : PAGED_CLASS}` : ''
+              }`}
               ref={docScrollRef}
             >
               <div
@@ -2378,6 +2459,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     onDeleteThread={onDeleteThread}
                     onResolveThread={onResolveThread}
                     onRepairThread={onRepairThread}
+                    onResolveConflict={onResolveConflict}
                     onReact={onReact}
                     onEditProposal={onEditProposal}
                     onScrollToAnchor={scrollToAnchor}
@@ -2512,6 +2594,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     onDeleteThread={onDeleteThread}
                     onResolveThread={onResolveThread}
                     onRepairThread={onRepairThread}
+                    onResolveConflict={onResolveConflict}
                     onReact={onReact}
                     onEditProposal={onEditProposal}
                     onScrollToAnchor={scrollToAnchor}
@@ -2627,7 +2710,8 @@ function scrollToTargetAndSettle(
   offset: number,
   isCurrent: () => boolean,
 ): void {
-  const paged = scroll.classList.contains(PAGED_CLASS);
+  const vertical = scroll.classList.contains(PAGED_VERTICAL_CLASS);
+  const paged = scroll.classList.contains(PAGED_CLASS) || vertical;
   /** Where the reader should end up, on whichever axis is in play. */
   const intended = (): number | null => {
     if (!target.isConnected) return null;
@@ -2635,7 +2719,11 @@ function scrollToTargetAndSettle(
       const page = pageIndexOfElement(scroll, target);
       // `offset` centres a card in the scroll flow; a page has no such
       // freedom — the target's page starts where it starts.
-      return page === null ? null : page * scroll.clientWidth;
+      if (page === null) return null;
+      // Not `clientHeight`: vertical pages are sized to a whole number
+      // of lines and carry a fraction of a pixel, which `measurePages`
+      // keeps and the rounded box does not.
+      return page * measurePages(scroll).pitch;
     }
     const top =
       target.getBoundingClientRect().top -
@@ -2644,9 +2732,14 @@ function scrollToTargetAndSettle(
       offset;
     return Math.max(0, Math.min(Math.round(top), scroll.scrollHeight - scroll.clientHeight));
   };
-  const position = () => (paged ? scroll.scrollLeft : scroll.scrollTop);
+  // Vertical pages scroll down the block axis like the unpaged document,
+  // so only horizontal paging moves along `scrollLeft`. Getting this
+  // wrong doesn't just land in the wrong place — the settle loop reads a
+  // position that never moves and corrects until it gives up.
+  const alongX = paged && !vertical;
+  const position = () => (alongX ? scroll.scrollLeft : scroll.scrollTop);
   const scrollTo = (value: number, behavior: ScrollBehavior) =>
-    scroll.scrollTo(paged ? { left: value, behavior } : { top: value, behavior });
+    scroll.scrollTo(alongX ? { left: value, behavior } : { top: value, behavior });
 
   const first = intended();
   if (first === null) return;

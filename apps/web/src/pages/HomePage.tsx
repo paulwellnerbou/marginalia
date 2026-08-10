@@ -1,6 +1,7 @@
 import {
   ChatBubbleIcon,
   Cross2Icon,
+  DownloadIcon,
   FileTextIcon,
   LockClosedIcon,
   MagicWandIcon,
@@ -174,7 +175,7 @@ export function HomePage() {
       <Container size="4" px="4" pb="7">
         {/* Two up from `xs`: `sm` is 768px, which an iPad mini in portrait
             (744px) misses by a hair — one column there wastes half the width. */}
-        <Grid columns={{ initial: '1', xs: '2', sm: '3' }} gap="4">
+        <Grid columns={{ initial: '1', xs: '2', md: '4' }} gap="4">
           <FeatureCard
             icon={<FileTextIcon width="20" height="20" />}
             title="Properly typeset"
@@ -189,8 +190,13 @@ export function HomePage() {
           <FeatureCard
             icon={<PaperPlaneIcon width="20" height="20" />}
             iconVariant="gray"
-            title="Browser-held auth"
-            body="Invite tokens, password-session cookies, and display names live in this browser. Documents, comments, and history live on the server. No online accounts or external profile store."
+            title="No account required"
+            body="Open an invite link, choose a display name, and start collaborating. Access stays in your browser—no sign-up or external profile store."
+          />
+          <FeatureCard
+            icon={<DownloadIcon width="20" height="20" />}
+            title="One document, many formats"
+            body="Download as source, styled PDF, Word, or EPUB. Comments and proposed changes can travel with the Word document."
           />
         </Grid>
       </Container>
@@ -587,7 +593,9 @@ function UploadDialog({
    */
   const [docName, setDocName] = useState('');
   const [passwordProtected, setPasswordProtected] = useState(false);
-  const [inviteOnly, setInviteOnly] = useState(false);
+  // Matches the server default. Unticking it is the deliberate act of
+  // putting the document on the open web.
+  const [inviteOnly, setInviteOnly] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [createdPassword, setCreatedPassword] = useState<string | null>(null);
@@ -734,6 +742,7 @@ function UploadDialog({
     setFormat(nextDraft?.format ?? 'markdown');
     setDocName(nextDraft?.docName ?? '');
     setPasswordProtected(false);
+    setInviteOnly(true);
     setSubmitting(false);
     setError(null);
     setCreatedPassword(null);
@@ -769,175 +778,185 @@ function UploadDialog({
         if (!v) reset();
       }}
     >
-      <Dialog.Content maxWidth="860px">
+      <Dialog.Content maxWidth="860px" className="dialog-content--fixed-footer">
         {createdAdminUrl && createdUid && createdToken ? (
           <>
-            <Dialog.Title>Document ready</Dialog.Title>
-            <Dialog.Description size="2" color="gray" mb="4">
-              Bookmark the admin link below — it's the only way back into this document with full
-              control.
-            </Dialog.Description>
-            <Flex direction="column" gap="3" mb="4">
-              <Flex
-                direction={{ initial: 'column', sm: 'row' }}
-                align={{ initial: 'stretch', sm: 'end' }}
-                gap="3"
-              >
+            <div className="dialog-scroll-body">
+              <Dialog.Title>Document ready</Dialog.Title>
+              <Dialog.Description size="2" color="gray" mb="4">
+                Bookmark the admin link below — it's the only way back into this document with full
+                control.
+              </Dialog.Description>
+              <Flex direction="column" gap="3">
                 <Box className="created-admin-link">
                   <Text as="div" size="1" color="gray" mb="1">
                     Admin link
                   </Text>
                   <Copyable text={createdAdminUrl} multiline ariaLabel="Copy admin link" />
                 </Box>
-                <Button onClick={openCreated}>Open the document</Button>
+                {createdPassword && (
+                  <PasswordDisclosureCard
+                    docUid={createdUid}
+                    password={createdPassword}
+                    label="Password"
+                    docName={createdDocName}
+                  />
+                )}
               </Flex>
-              {createdPassword && (
-                <PasswordDisclosureCard
-                  docUid={createdUid}
-                  password={createdPassword}
-                  label="Password"
-                  docName={createdDocName}
-                />
-              )}
+            </div>
+            <Flex className="dialog-footer" justify="end" mt="4">
+              <Button onClick={openCreated}>Open the document</Button>
             </Flex>
           </>
         ) : (
-          <form onSubmit={submit}>
-            <Dialog.Title>New document</Dialog.Title>
-            <Dialog.Description size="2" color="gray" mb="4">
-              Paste Markdown, upload a <Code>.md</Code> file, or import a previously exported
-              <Code>.json</Code> bundle. It gets its own URL.
-            </Dialog.Description>
+          <form className="dialog-form-layout" onSubmit={submit}>
+            <div className="dialog-scroll-body">
+              <Dialog.Title>New document</Dialog.Title>
+              <Dialog.Description size="2" color="gray" mb="4">
+                Paste Markdown, upload a <Code>.md</Code> file, or import a previously exported
+                <Code>.json</Code> bundle. It gets its own URL.
+              </Dialog.Description>
 
-            <Flex direction="column" gap="3">
-              {!getDisplayName() && (
-                <Box className="callout-soft">
-                  <Text size="2" color="gray" as="p" mb="2">
-                    Please set your display name first. It is the name shown on your edits and
-                    comments.
+              <Flex direction="column" gap="3">
+                {!getDisplayName() && (
+                  <Box className="callout-soft">
+                    <Text size="2" color="gray" as="p" mb="2">
+                      Please set your display name first. It is the name shown on your edits and
+                      comments.
+                    </Text>
+                    <TextField.Root
+                      size="2"
+                      value={userDisplayName ?? ''}
+                      onChange={(e) => setUserDisplayNameState(e.target.value)}
+                      placeholder="Your display name (e.g. Alex Cho)"
+                      maxLength={80}
+                      autoFocus
+                    />
+                  </Box>
+                )}
+
+                <Box>
+                  <Text as="label" size="2" htmlFor="doc-name">
+                    Document name
+                    <Text as="span" size="1" color="gray">
+                      {' '}
+                      (optional
+                      {docName.trim() ? '' : derivedTitle ? ` — will use “${derivedTitle}”` : ''})
+                    </Text>
                   </Text>
                   <TextField.Root
-                    size="2"
-                    value={userDisplayName ?? ''}
-                    onChange={(e) => setUserDisplayNameState(e.target.value)}
-                    placeholder="Your display name (e.g. Alex Cho)"
-                    maxLength={80}
-                    autoFocus
+                    id="doc-name"
+                    value={docName}
+                    onChange={(e) => setDocName(e.target.value)}
+                    placeholder="Leave blank to use the document's title"
+                    maxLength={200}
+                    mt="1"
+                    autoFocus={!!getDisplayName()}
                   />
                 </Box>
-              )}
 
-              <Box>
-                <Text as="label" size="2" htmlFor="doc-name">
-                  Document name
-                  <Text as="span" size="1" color="gray">
-                    {' '}
-                    (optional
-                    {docName.trim() ? '' : derivedTitle ? ` — will use “${derivedTitle}”` : ''})
+                <Box>
+                  <Text as="label" size="2" htmlFor="markdown-source">
+                    {format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source'}
                   </Text>
-                </Text>
-                <TextField.Root
-                  id="doc-name"
-                  value={docName}
-                  onChange={(e) => setDocName(e.target.value)}
-                  placeholder="Leave blank to use the document's title"
-                  maxLength={200}
-                  mt="1"
-                  autoFocus={!!getDisplayName()}
-                />
-              </Box>
+                  <MarkdownDropZone onFile={handleFile}>
+                    <TextArea
+                      id="markdown-source"
+                      value={source}
+                      onChange={(e) => setSource(e.target.value)}
+                      rows={14}
+                      spellCheck={false}
+                      className="markdown-textarea"
+                      mt="1"
+                    />
+                  </MarkdownDropZone>
+                </Box>
 
-              <Box>
-                <Text as="label" size="2" htmlFor="markdown-source">
-                  {format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source'}
-                </Text>
-                <MarkdownDropZone onFile={handleFile}>
-                  <TextArea
-                    id="markdown-source"
-                    value={source}
-                    onChange={(e) => setSource(e.target.value)}
-                    rows={14}
-                    spellCheck={false}
-                    className="markdown-textarea"
-                    mt="1"
+                <FileDropZone
+                  accept=".md,.markdown,.mdx,.adoc,.asciidoc,.json,text/markdown,application/json"
+                  acceptFile={isAcceptedUploadFile}
+                  onFile={handleFile}
+                  label="Drop a Markdown, AsciiDoc, or JSON bundle file — or click to browse"
+                />
+
+                <Flex align="center" gap="2">
+                  <input
+                    ref={jsonInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void importBundleFile(f);
+                      e.currentTarget.value = '';
+                    }}
                   />
-                </MarkdownDropZone>
-              </Box>
-
-              <FileDropZone
-                accept=".md,.markdown,.mdx,.adoc,.asciidoc,.json,text/markdown,application/json"
-                acceptFile={isAcceptedUploadFile}
-                onFile={handleFile}
-                label="Drop a Markdown, AsciiDoc, or JSON bundle file — or click to browse"
-              />
-
-              <Flex align="center" gap="2">
-                <input
-                  ref={jsonInputRef}
-                  type="file"
-                  accept=".json,application/json"
-                  style={{ display: 'none' }}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void importBundleFile(f);
-                    e.currentTarget.value = '';
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant="soft"
-                  onClick={() => jsonInputRef.current?.click()}
-                  disabled={submitting || !userDisplayName}
-                >
-                  <UploadIcon />
-                  Import JSON bundle
-                </Button>
-                <Text size="2" color="gray">
-                  Restores source, comments, and renderer metadata from an exported bundle.
-                </Text>
-              </Flex>
-
-              <Separator size="4" />
-
-              <Flex direction="column" gap="2">
-                <Text as="label" size="2">
-                  <Flex align="center" gap="2">
-                    <Checkbox
-                      checked={passwordProtected}
-                      onCheckedChange={(c) => setPasswordProtected(c === true)}
-                    />
-                    Password-protect (server generates a password, shown once)
-                  </Flex>
-                </Text>
-                <Text as="label" size="2">
-                  <Flex align="center" gap="2">
-                    <Checkbox
-                      checked={inviteOnly}
-                      onCheckedChange={(c) => setInviteOnly(c === true)}
-                    />
-                    Restrict to access links (the URL alone opens nothing)
-                  </Flex>
-                </Text>
-                {/* Editing rights are granted via invite links in Access
-                    control; no upload-time toggle. */}
-              </Flex>
-
-              {error && (
-                <Callout.Root color="red" size="1">
-                  <Callout.Text>{error}</Callout.Text>
-                </Callout.Root>
-              )}
-
-              <Flex justify="end" gap="2">
-                <Dialog.Close>
-                  <Button variant="soft" color="gray">
-                    Cancel
+                  <Button
+                    type="button"
+                    variant="soft"
+                    onClick={() => jsonInputRef.current?.click()}
+                    disabled={submitting || !userDisplayName}
+                  >
+                    <UploadIcon />
+                    Import JSON bundle
                   </Button>
-                </Dialog.Close>
-                <Button type="submit" disabled={submitting || !source || !userDisplayName}>
-                  {submitting ? 'Uploading…' : 'Create document'}
-                </Button>
+                  <Text size="2" color="gray">
+                    Restores source, comments, and renderer metadata from an exported bundle.
+                  </Text>
+                </Flex>
+
+                <Separator size="4" />
+
+                <Flex direction="column" gap="2">
+                  <Text as="label" size="2">
+                    <Flex align="center" gap="2">
+                      <Checkbox
+                        checked={passwordProtected}
+                        onCheckedChange={(c) => setPasswordProtected(c === true)}
+                      />
+                      Password-protect (server generates a password, shown once)
+                    </Flex>
+                  </Text>
+                  <Text as="label" size="2">
+                    <Flex align="center" gap="2">
+                      <Checkbox
+                        checked={inviteOnly}
+                        onCheckedChange={(c) => setInviteOnly(c === true)}
+                      />
+                      Restrict to access links
+                    </Flex>
+                  </Text>
+                  <Flex pl="6">
+                    <Text size="1" color="gray">
+                      {/* The password is a gate of its own, so what the URL
+                        alone is worth depends on both boxes. */}
+                      {inviteOnly
+                        ? 'Only people you hand an access link to can open it. The URL alone opens nothing.'
+                        : passwordProtected
+                          ? 'Anyone with the document URL can read it, once they enter the password.'
+                          : 'Anyone with the document URL can read it.'}
+                    </Text>
+                  </Flex>
+                  {/* Editing rights are granted via invite links in Access
+                    control; no upload-time toggle. */}
+                </Flex>
+
+                {error && (
+                  <Callout.Root color="red" size="1">
+                    <Callout.Text>{error}</Callout.Text>
+                  </Callout.Root>
+                )}
               </Flex>
+            </div>
+            <Flex className="dialog-footer" justify="end" gap="2" mt="4">
+              <Dialog.Close>
+                <Button variant="soft" color="gray">
+                  Cancel
+                </Button>
+              </Dialog.Close>
+              <Button type="submit" disabled={submitting || !source || !userDisplayName}>
+                {submitting ? 'Uploading…' : 'Create document'}
+              </Button>
             </Flex>
           </form>
         )}

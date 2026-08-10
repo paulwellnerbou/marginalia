@@ -69,7 +69,9 @@ describe('keyrings API', () => {
       new Request('http://test/api/documents', {
         method: 'POST',
         headers: headersFor(client),
-        body: JSON.stringify(body),
+        // Keyrings carry invite tokens; the invite-only default is not what
+        // these cases are about, so create ordinary readable documents.
+        body: JSON.stringify({ invite_only: false, ...body }),
       }),
     );
     expect(res.status).toBe(201);

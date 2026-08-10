@@ -45,6 +45,7 @@ function thread(id: string, overrides: Partial<Thread> = {}): Thread {
       reject: false,
       update: false,
       repair: false,
+      resolve_conflict: false,
       reopen: false,
     },
     comments: [comment(id, `body of ${id}`)],

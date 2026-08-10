@@ -117,6 +117,55 @@ a {
  * on the overlay element (the content lives *inside* it), so that hold
  * has to outlast the content's exit or the dialog gets yanked mid-flight.
  */
+
+/* Keep every dialog inside the currently visible viewport. `dvh` matters
+   on iPadOS, where the browser chrome can make `vh` taller than the area
+   the user can actually see. Radix's outer scroll wrapper remains as a
+   fallback, while the content itself scrolls when it has to. */
+.rt-BaseDialogScrollPadding {
+  --dialog-viewport-gutter: var(--space-4);
+  padding-top: max(var(--dialog-viewport-gutter), env(safe-area-inset-top, 0px));
+  padding-bottom: max(var(--dialog-viewport-gutter), env(safe-area-inset-bottom, 0px));
+}
+
+.rt-BaseDialogContent {
+  max-height: calc(100vh - var(--dialog-viewport-gutter) - var(--dialog-viewport-gutter));
+  /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
+  max-height: calc(
+    100dvh -
+    max(var(--dialog-viewport-gutter), env(safe-area-inset-top, 0px)) -
+    max(var(--dialog-viewport-gutter), env(safe-area-inset-bottom, 0px))
+  );
+  overscroll-behavior: contain;
+}
+
+/* Dialogs with action bars use a two-part layout: only the body scrolls,
+   while the footer remains inside the viewport at all times. Components
+   opt in explicitly because informational dialogs and the image lightbox
+   do not have footer chrome. */
+.dialog-content--fixed-footer {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dialog-scroll-body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.dialog-form-layout {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.dialog-footer {
+  flex: none;
+}
+
 @media (prefers-reduced-motion: no-preference) {
   :root,
   .radix-themes {
@@ -721,6 +770,58 @@ button.primary:disabled {
   display: none;
 }
 
+/* ============================================================
+ * Vertical paged reading
+ *
+ * No multicol here: the document stays in ordinary block flow and a
+ * page is a scrollport-height slice of it, so a page turn is a vertical
+ * scroll by one `clientHeight`. That keeps the pitch arithmetic in
+ * `paged-reading.ts` identical to the horizontal case.
+ *
+ * The height is set from JS to a whole number of text lines (see
+ * `--doc-page-block`), so a page boundary falls between lines instead
+ * of slicing one in half. The slack that leaves inside `.doc-viewport`
+ * becomes the top and bottom page margin, which is why the scrollport
+ * is centred rather than stretched.
+ * ============================================================ */
+.pane-doc .doc-scroll.doc-paged-y {
+  --page-margin-block: 2rem;
+  /* Scrolled programmatically only, as in the horizontal mode: a free
+     scroll would strand the reader looking at halves of two pages. */
+  overflow: hidden;
+  padding-inline: 0;
+  /* The border box's height is the pitch, so nothing may pad or border
+     the block axis — `pitchOf` reads it back at sub-pixel precision. */
+  padding-block: 0;
+  border-block: 0;
+  /* Opt out of the flex stretch — the height *is* the page. */
+  flex: 0 0 auto;
+  height: var(--doc-page-block, 100%);
+  margin-block: auto;
+  /* Claim the vertical axis for the swipe; the horizontal mode claims
+     the other one. Left at `auto` the browser takes a drag as a pan of
+     its own and cancels the pointer stream mid-gesture. */
+  touch-action: pan-x;
+}
+.doc-paged-y .doc-row {
+  display: block;
+  min-height: 0;
+}
+/* Nothing to stack cards against once the document is sliced by page. */
+.doc-paged-y .ic-column {
+  display: none;
+}
+/* Same reasoning as the horizontal mode: a block taller than the page
+   would otherwise run off it with no way to reach the rest. */
+.doc-paged-y .marginalia :is(img, svg, video, canvas) {
+  max-height: var(--doc-page-height, 70vh);
+  object-fit: contain;
+}
+.doc-paged-y .marginalia pre {
+  max-height: var(--doc-page-height, 70vh);
+  overflow: auto;
+}
+
 /* Turn a page by tapping the outer edge, the way a reader expects.
    Transparent and unlabelled at rest; the pager below names the same
    two actions for anyone who needs a visible control. */
@@ -743,6 +844,15 @@ button.primary:disabled {
   /* Same bargain as the scrollport: the gutter is where a thumb rests,
      so it has to hand horizontal drags to the swipe handler. */
   touch-action: pan-y;
+}
+/* ...and where the pages run downwards, it is the vertical drag that
+   belongs to the swipe. Left at `pan-y` the browser takes the gesture as
+   a pan of its own and cancels the pointer stream, so page swipes die
+   precisely where a thumb is most likely to start them. The zones are
+   siblings of the scrollport, so the mode has to be read off the
+   scrollport they sit beside. */
+.doc-viewport:has(.doc-scroll.doc-paged-y) .doc-page-zone {
+  touch-action: pan-x;
 }
 .doc-page-zone:disabled {
   cursor: default;
@@ -878,17 +988,44 @@ button.primary:disabled {
 .doc-chrome-right {
   display: contents;
 }
-/* Stacked in the popover, the sliders are the only thing worth widening:
-   space is vertical there, and these are touch targets on the small
-   screens that get the popover in the first place. */
-.doc-view-popover .doc-display-slider {
-  width: 180px;
+/* Label column, control column. Both size to their content so the
+   controls share one left edge and the menu is no wider than the longest
+   of them. */
+.doc-view-grid {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
 }
-.doc-display-slider-width {
-  width: 116px;
+/* `[-] 100% [+] [reset]`. The value column is sized for the widest reading
+   any of the three settings produces, so the buttons don't shuffle
+   sideways as the number changes under them. */
+.doc-stepper-value {
+  min-width: 4.5ch;
+  text-align: center;
+  font-size: var(--font-size-1);
+  line-height: var(--line-height-1);
+  color: var(--gray-12);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
 }
-.doc-display-slider-zoom {
-  width: 92px;
+.doc-stepper-value:focus-visible {
+  outline: 2px solid var(--focus-8);
+  outline-offset: 1px;
+  border-radius: var(--radius-1);
+}
+/* Ghost buttons size themselves around their icon and carry a negative
+   margin to align it with neighbouring text. Pin the box instead, so the
+   reset lines up with the +/- pair and with the segmented control and
+   select in the rows above and below. */
+.doc-stepper-reset {
+  box-sizing: border-box;
+  width: var(--space-5);
+  height: var(--space-5);
+  margin: 0;
+  margin-inline-start: var(--space-1);
 }
 
 .right-tabs {
@@ -1267,15 +1404,6 @@ button.primary:disabled {
       --md-color-search-highlight-active-ring,
       color-mix(in srgb, var(--green-9) 34%, transparent)
     );
-}
-
-.width-slider {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-.width-slider input[type="range"] {
-  width: 120px;
 }
 
 .doc-body {
@@ -2082,10 +2210,13 @@ button.primary:disabled {
   transition:
     transform 120ms ease,
     box-shadow 120ms ease;
+  box-shadow: 0 12px 36px -26px color-mix(in srgb, var(--accent-9) 70%, transparent);
 }
 .feature-card:hover {
   transform: translateY(-1px);
-  box-shadow: var(--shadow-4);
+  box-shadow:
+    var(--shadow-4),
+    0 16px 44px -24px color-mix(in srgb, var(--accent-9) 80%, transparent);
 }
 .feature-icon {
   width: 40px;
@@ -2319,7 +2450,7 @@ button.primary:disabled {
   flex-direction: column;
   gap: 0.6rem;
   padding: 0.8rem 0.9rem 3rem;
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--ui-scale, 1));
 }
 
 /* One-line note that the TOC's section filter is narrowing this list. */
@@ -2975,8 +3106,22 @@ button.primary:disabled {
    composer-field chrome rules above. */
 .proposal-composer-layout {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 0.75rem;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* In compact mode the editor region gives up height first. The rationale
+   and action row stay visible together as the dialog footer. */
+.proposal-composer-layout:not(.proposal-composer-layout--expanded) .proposal-composer-split {
+  min-height: 0;
+  overflow: auto;
+}
+
+.proposal-composer-footer {
+  flex: none;
 }
 
 /* Title + expand/collapse toggle: title takes the row, button hugs the end.
@@ -3045,6 +3190,15 @@ button.primary:disabled {
   display: flex !important;
   flex-direction: column !important;
   max-height: 90vh !important;
+  /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
+  max-height: min(
+    90dvh,
+    calc(
+      100dvh -
+      max(var(--dialog-viewport-gutter), env(safe-area-inset-top, 0px)) -
+      max(var(--dialog-viewport-gutter), env(safe-area-inset-bottom, 0px))
+    )
+  ) !important;
   overflow: hidden !important;
 }
 
@@ -3111,6 +3265,30 @@ button.primary:disabled {
  * Diff view (inside DiffDialog)
  * ============================================================ */
 
+/* A diff already has its own purpose-built scroll pane and overview rail.
+   Let that pane absorb the dialog's remaining height so the generic modal
+   body does not add a second scrollbar. */
+.diff-dialog-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.diff-dialog-body > .diff-view {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.diff-dialog .diff-scroll {
+  max-height: none;
+  min-height: 0;
+}
+
+.diff-dialog-reply {
+  flex: none;
+}
+
 .diff-view {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3173,7 +3351,6 @@ button.primary:disabled {
 }
 .diff-line.diff-add .diff-inline-change {
   background: rgba(22, 163, 74, 0.28);
-  box-shadow: inset 0 0 0 1px rgba(22, 163, 74, 0.2);
 }
 .diff-line.diff-add .diff-marker {
   color: #16a34a;
@@ -3184,7 +3361,6 @@ button.primary:disabled {
 }
 .diff-line.diff-remove .diff-inline-change {
   background: rgba(220, 38, 38, 0.2);
-  box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.18);
 }
 .diff-line.diff-remove .diff-marker {
   color: #dc2626;
@@ -3494,7 +3670,7 @@ button.primary:disabled {
      card is content and scrolls under the chrome. */
   z-index: 2;
   width: min(400px, calc(100cqw - 24px));
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--ui-scale, 1));
   color: var(--ui-fg);
 }
 .ic-float-card > .ic-card {
@@ -3605,6 +3781,11 @@ button.primary:disabled {
 
 /* ---------- Card ---------- */
 
+/* Comment cards are custom UI rather than Radix components, so their
+   fixed rem typography does not pick up Radix's scaled font tokens.
+   Opt each card text size into the same root multiplier used by the
+   Interface size control. */
+
 .ic-card {
   /* A very subtle tint over the document's themed background — a 5%
      mix of the theme's foreground into its background. In light
@@ -3666,6 +3847,191 @@ button.primary:disabled {
   border-color: rgba(245, 158, 11, 0.42);
 }
 
+/* ---------- Conflict resolver ---------- */
+
+.cf-hunks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: 58vh;
+  overflow: auto;
+}
+
+.cf-hunk {
+  border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.12));
+  border-radius: 6px;
+  padding: 0.55rem 0.6rem;
+}
+/* Undecided hunks carry the same amber as the card badge that led here,
+   so "what still needs me" is one colour throughout the flow. */
+.cf-hunk-open {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.05);
+}
+
+.cf-hunk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.45rem;
+}
+
+.cf-sides {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+@media (max-width: 640px) {
+  .cf-sides {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.cf-side {
+  appearance: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+  text-align: left;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid var(--ui-border, rgba(0, 0, 0, 0.12));
+  border-radius: 5px;
+  background: var(--ui-bg, #fff);
+  color: inherit;
+  cursor: pointer;
+}
+.cf-side:hover {
+  border-color: var(--ui-accent, rgba(59, 130, 246, 0.6));
+}
+.cf-side-selected {
+  border-color: var(--ui-accent, #3b82f6);
+  box-shadow: inset 0 0 0 1px var(--ui-accent, #3b82f6);
+  background: rgba(59, 130, 246, 0.07);
+}
+
+.cf-side-label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--ui-fg-muted, rgba(15, 23, 42, 0.65));
+}
+.cf-side-selected .cf-side-label {
+  color: var(--ui-accent-strong, var(--ui-accent, #1d4ed8));
+}
+
+.cf-side-text {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  /* Long paragraphs scroll inside their own side rather than making one
+     column tower over the other. */
+  max-height: 11rem;
+  overflow: auto;
+}
+
+.cf-hunk-editor {
+  width: 100%;
+}
+
+.cf-base {
+  margin-top: 0.45rem;
+}
+.cf-preview {
+  margin-top: 0.25rem;
+}
+
+.cf-note {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.75rem;
+}
+
+/* ---------- Disclosure ---------- */
+
+/* Same height + opacity choreography as the document-view section
+   collapse and the TOC subtree, with `overflow: hidden` rather than the
+   heading-anchor `clip-path` — nothing here hangs outside the box. */
+.disclosure-summary {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  width: 100%;
+  padding: 0.1rem 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--ui-fg-muted, rgba(15, 23, 42, 0.65));
+  cursor: pointer;
+}
+.disclosure-summary:hover {
+  color: var(--ui-fg);
+}
+.disclosure-summary:focus-visible {
+  outline: 2px solid var(--ui-accent, currentColor);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.disclosure-chevron {
+  flex-shrink: 0;
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.disclosure-summary[aria-expanded="false"] .disclosure-chevron {
+  transform: rotate(-90deg);
+}
+
+.disclosure-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  /* Material-style ease-out: decelerates into rest. */
+  transition: grid-template-rows 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.disclosure-body.is-collapsed {
+  grid-template-rows: 0fr;
+}
+.disclosure-body > .disclosure-body-inner {
+  min-height: 0;
+  /* A grid item floors at its contents' min-content width; a `pre` of
+     unbroken text would otherwise widen the whole dialog rather than
+     scroll. Both axes have to be released, not just the animated one. */
+  min-width: 0;
+  overflow: hidden;
+  /* Cross-fade staggered behind the height: hides the visual snap at
+     the endpoints. */
+  opacity: 1;
+  transition: opacity 220ms ease-out 80ms;
+}
+.disclosure-body.is-collapsed > .disclosure-body-inner {
+  opacity: 0;
+  transition: opacity 180ms ease-in;
+}
+@media (prefers-reduced-motion: reduce) {
+  .disclosure-body,
+  .disclosure-body > .disclosure-body-inner,
+  .disclosure-body.is-collapsed > .disclosure-body-inner,
+  .disclosure-chevron {
+    transition: none;
+  }
+}
+
+/* The result preview is the dialog's own section rather than a footnote
+   to one hunk, so its summary carries more weight. */
+.cf-preview .disclosure-summary {
+  font-weight: 500;
+}
+
 /* ---------- Header ---------- */
 
 .ic-card-header {
@@ -3719,7 +4085,7 @@ button.primary:disabled {
   align-items: center;
   padding: 0.05rem 0.45rem;
   border-radius: 999px;
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--ui-scale, 1));
   font-weight: 500;
   line-height: 1.4;
   background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
@@ -3771,7 +4137,7 @@ button.primary:disabled {
   /* Long quotes wrap inside the row instead of pushing the copy button out. */
   min-width: 0;
   text-align: left;
-  font-size: 0.74rem;
+  font-size: calc(0.74rem * var(--ui-scale, 1));
   color: var(--ui-fg-muted);
   font-style: italic;
   cursor: pointer;
@@ -3795,7 +4161,7 @@ button.primary:disabled {
   border: 0;
   padding: 0;
   text-align: left;
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
   color: var(--ui-accent-strong);
   cursor: pointer;
   line-height: 1.4;
@@ -3824,7 +4190,7 @@ button.primary:disabled {
 
 .ic-card-collapse {
   align-self: flex-start;
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
 }
 
 /* ---------- Nested proposal cards ---------- */
@@ -3886,11 +4252,11 @@ button.primary:disabled {
 
 .ic-row-author {
   font-weight: 600;
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--ui-scale, 1));
 }
 
 .ic-row-ts {
-  font-size: 0.7rem;
+  font-size: calc(0.7rem * var(--ui-scale, 1));
   color: var(--ui-fg-muted);
 }
 
@@ -3971,7 +4337,7 @@ button.primary:disabled {
   border: 1px solid var(--ui-border, rgba(15, 23, 42, 0.15));
   background: var(--ui-bg-muted, rgba(15, 23, 42, 0.04));
   color: var(--ui-fg, inherit);
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--ui-scale, 1));
   line-height: 1.4;
   cursor: pointer;
   transition:
@@ -4024,7 +4390,7 @@ button.primary:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.15rem;
+  font-size: calc(1.15rem * var(--ui-scale, 1));
   line-height: 1;
   cursor: pointer;
 }
@@ -4049,7 +4415,7 @@ button.primary:disabled {
   border-bottom: 1px solid var(--ui-border, rgba(15, 23, 42, 0.12));
   background: transparent;
   color: var(--ui-fg);
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--ui-scale, 1));
   outline: none;
   flex-shrink: 0;
 }
@@ -4071,7 +4437,7 @@ button.primary:disabled {
   padding: 1rem;
   text-align: center;
   color: var(--ui-fg-muted);
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--ui-scale, 1));
   pointer-events: none;
 }
 .ic-emoji-picker [frimousse-list] {
@@ -4081,7 +4447,7 @@ button.primary:disabled {
 .ic-emoji-picker [frimousse-category-header] {
   background: var(--ui-bg, #fff);
   padding: 0.4rem 0.4rem 0.25rem;
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -4101,7 +4467,7 @@ button.primary:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 1.15rem;
+  font-size: calc(1.15rem * var(--ui-scale, 1));
   line-height: 1;
   cursor: pointer;
 }
@@ -4110,7 +4476,7 @@ button.primary:disabled {
 }
 
 .ic-row-body {
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--ui-scale, 1));
   line-height: 1.45;
   word-wrap: break-word;
   overflow-wrap: anywhere;
@@ -4121,7 +4487,7 @@ button.primary:disabled {
    sliced through. `overflow: hidden` also makes this a block formatting
    context, keeping the children's margins inside the clamp. */
 .ic-body-clip {
-  --ic-body-clamp-lines: 3;
+  --ic-body-clamp-lines: 4;
   max-height: calc(var(--ic-body-clamp-lines) * 1lh);
   overflow: hidden;
 }
@@ -4146,7 +4512,7 @@ button.primary:disabled {
   display: flex;
   width: fit-content;
   margin-top: 0.15rem;
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
 }
 
 @media print {
@@ -4167,7 +4533,7 @@ button.primary:disabled {
   margin: 0;
 }
 .ic-row-body code {
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--ui-scale, 1));
   padding: 0 0.25rem;
   border-radius: 3px;
   background: var(--ui-bg-muted, rgba(15, 23, 42, 0.06));
@@ -4197,13 +4563,13 @@ button.primary:disabled {
 }
 
 .ic-confirm-prompt {
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
   color: var(--ui-fg-muted);
   align-self: center;
 }
 
 .ic-error {
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--ui-scale, 1));
   /* Radix red-11 holds its contrast in both appearances; the old fixed
      hex went near-invisible on the dark panel. */
   color: var(--red-11);
@@ -4221,7 +4587,7 @@ button.primary:disabled {
   justify-content: center;
   border-radius: 999px;
   color: white;
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--ui-scale, 1));
   font-weight: 600;
   letter-spacing: 0.02em;
   user-select: none;
@@ -4233,7 +4599,7 @@ button.primary:disabled {
 .ic-avatar-sm {
   width: 22px;
   height: 22px;
-  font-size: 0.6rem;
+  font-size: calc(0.6rem * var(--ui-scale, 1));
 }
 
 /* ---------- Buttons ---------- */
@@ -4274,7 +4640,7 @@ button.primary:disabled {
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: 0.74rem;
+  font-size: calc(0.74rem * var(--ui-scale, 1));
   padding: 0.18rem 0.55rem;
   border-radius: 6px;
   color: var(--ui-fg);
@@ -4392,7 +4758,7 @@ button.primary:disabled {
 .ic-composer-body {
   width: 100%;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--ui-scale, 1));
   padding: 0.35rem 0.45rem;
   background: var(--ui-bg);
   color: var(--ui-fg);
@@ -4431,7 +4797,7 @@ button.primary:disabled {
   padding: 0.35rem 0.45rem;
   text-align: left;
   font: inherit;
-  font-size: 0.82rem;
+  font-size: calc(0.82rem * var(--ui-scale, 1));
   color: inherit;
   cursor: pointer;
 }
@@ -4458,7 +4824,7 @@ button.primary:disabled {
 }
 .ic-composer-hint {
   margin-right: auto;
-  font-size: 0.68rem;
+  font-size: calc(0.68rem * var(--ui-scale, 1));
   color: var(--ui-fg-muted);
 }
 .ic-composer-left-actions {
@@ -4479,7 +4845,7 @@ button.primary:disabled {
   border-color: rgba(59, 130, 246, 0.4);
 }
 .ic-pending-quote {
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--ui-scale, 1));
   font-style: italic;
   color: var(--ui-fg-muted);
   margin-bottom: 0.4rem;

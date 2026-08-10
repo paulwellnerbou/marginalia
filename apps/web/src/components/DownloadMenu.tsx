@@ -439,109 +439,111 @@ export function DownloadMenu({
       </DropdownMenu.Root>
 
       <Dialog.Root open={epubMode !== null} onOpenChange={(open) => !open && closeEpubDialog()}>
-        <Dialog.Content size="2" maxWidth="520px">
-          <Dialog.Title>Download EPUB</Dialog.Title>
-          <Dialog.Description size="2" color="gray" mb="4">
-            {epubMode === 'accepted'
-              ? 'Open edit proposals will be applied to a temporary export copy.'
-              : 'The EPUB will use the current document text.'}
-          </Dialog.Description>
-          <Flex direction="column" gap="3">
-            <Flex gap="3" align="start">
-              {thumbSrc && (
-                <Flex direction="column" gap="1" align="center" flexShrink="0">
-                  <img
-                    className="cover-thumb cover-thumb--dialog"
-                    src={thumbSrc}
-                    alt={coverPreview ? 'Selected cover' : 'Current cover'}
-                  />
-                  <Text size="1" color="gray" align="center">
-                    {thumbCaption}
-                  </Text>
-                </Flex>
-              )}
-              <Flex direction="column" gap="2" flexGrow="1">
-                <Text size="2" weight="medium">
-                  Cover image (optional)
-                </Text>
-                <Text size="1" color="gray">
-                  PNG, JPEG, GIF, or WebP, up to 10 MB.{' '}
-                  {canStoreCover
-                    ? 'Saved with the document, so every later export and the document list use it.'
-                    : 'Used for this download only — saving a cover on the document needs edit rights.'}{' '}
-                  {storedCover
-                    ? 'Pick a file to replace the current cover.'
-                    : 'Without one, a cover is generated from the document title.'}
-                </Text>
-                <FileDropZone
-                  accept="image/png,image/jpeg,image/gif,image/webp"
-                  acceptFile={isCoverImageFile}
-                  onFile={(file) => {
-                    setCover(file);
-                    setCoverNotice(null);
-                  }}
-                  disabled={busy === 'epub' || savingCover}
-                  label={
-                    cover ? `Selected: ${cover.name}` : 'Drop a cover image — or click to browse'
-                  }
-                />
-                {canStoreCover && (cover || storedCover) && (
-                  <Flex gap="2" mt="1" wrap="wrap">
-                    {cover && (
-                      <Button
-                        type="button"
-                        size="1"
-                        variant="soft"
-                        onClick={() => void saveCoverOnly()}
-                        disabled={savingCover || removingCover || busy === 'epub'}
-                      >
-                        {savingCover ? 'Saving…' : 'Save cover'}
-                      </Button>
-                    )}
-                    {storedCover && (
-                      <Button
-                        type="button"
-                        size="1"
-                        variant="soft"
-                        color="gray"
-                        onClick={() => void removeStoredCover()}
-                        disabled={removingCover || savingCover || busy === 'epub'}
-                      >
-                        {removingCover ? 'Removing…' : 'Remove saved cover'}
-                      </Button>
-                    )}
+        <Dialog.Content size="2" maxWidth="520px" className="dialog-content--fixed-footer">
+          <div className="dialog-scroll-body">
+            <Dialog.Title>Download EPUB</Dialog.Title>
+            <Dialog.Description size="2" color="gray" mb="4">
+              {epubMode === 'accepted'
+                ? 'Open edit proposals will be applied to a temporary export copy.'
+                : 'The EPUB will use the current document text.'}
+            </Dialog.Description>
+            <Flex direction="column" gap="3">
+              <Flex gap="3" align="start">
+                {thumbSrc && (
+                  <Flex direction="column" gap="1" align="center" flexShrink="0">
+                    <img
+                      className="cover-thumb cover-thumb--dialog"
+                      src={thumbSrc}
+                      alt={coverPreview ? 'Selected cover' : 'Current cover'}
+                    />
+                    <Text size="1" color="gray" align="center">
+                      {thumbCaption}
+                    </Text>
                   </Flex>
                 )}
-                {coverNotice && (
-                  <Text size="1" color="green">
-                    {coverNotice}
+                <Flex direction="column" gap="2" flexGrow="1">
+                  <Text size="2" weight="medium">
+                    Cover image (optional)
                   </Text>
-                )}
+                  <Text size="1" color="gray">
+                    PNG, JPEG, GIF, or WebP, up to 10 MB.{' '}
+                    {canStoreCover
+                      ? 'Saved with the document, so every later export and the document list use it.'
+                      : 'Used for this download only — saving a cover on the document needs edit rights.'}{' '}
+                    {storedCover
+                      ? 'Pick a file to replace the current cover.'
+                      : 'Without one, a cover is generated from the document title.'}
+                  </Text>
+                  <FileDropZone
+                    accept="image/png,image/jpeg,image/gif,image/webp"
+                    acceptFile={isCoverImageFile}
+                    onFile={(file) => {
+                      setCover(file);
+                      setCoverNotice(null);
+                    }}
+                    disabled={busy === 'epub' || savingCover}
+                    label={
+                      cover ? `Selected: ${cover.name}` : 'Drop a cover image — or click to browse'
+                    }
+                  />
+                  {canStoreCover && (cover || storedCover) && (
+                    <Flex gap="2" mt="1" wrap="wrap">
+                      {cover && (
+                        <Button
+                          type="button"
+                          size="1"
+                          variant="soft"
+                          onClick={() => void saveCoverOnly()}
+                          disabled={savingCover || removingCover || busy === 'epub'}
+                        >
+                          {savingCover ? 'Saving…' : 'Save cover'}
+                        </Button>
+                      )}
+                      {storedCover && (
+                        <Button
+                          type="button"
+                          size="1"
+                          variant="soft"
+                          color="gray"
+                          onClick={() => void removeStoredCover()}
+                          disabled={removingCover || savingCover || busy === 'epub'}
+                        >
+                          {removingCover ? 'Removing…' : 'Remove saved cover'}
+                        </Button>
+                      )}
+                    </Flex>
+                  )}
+                  {coverNotice && (
+                    <Text size="1" color="green">
+                      {coverNotice}
+                    </Text>
+                  )}
+                </Flex>
               </Flex>
+              {epubError && (
+                <Callout.Root color="red" size="1">
+                  <Callout.Text>{epubError}</Callout.Text>
+                </Callout.Root>
+              )}
             </Flex>
-            {epubError && (
-              <Callout.Root color="red" size="1">
-                <Callout.Text>{epubError}</Callout.Text>
-              </Callout.Root>
-            )}
-            <Flex justify="end" gap="2">
-              <Button
-                type="button"
-                variant="soft"
-                color="gray"
-                onClick={closeEpubDialog}
-                disabled={busy === 'epub' || savingCover}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                onClick={() => void downloadEpub()}
-                disabled={busy === 'epub' || savingCover}
-              >
-                {busy === 'epub' ? 'Creating EPUB…' : 'Download EPUB'}
-              </Button>
-            </Flex>
+          </div>
+          <Flex className="dialog-footer" justify="end" gap="2" mt="3">
+            <Button
+              type="button"
+              variant="soft"
+              color="gray"
+              onClick={closeEpubDialog}
+              disabled={busy === 'epub' || savingCover}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void downloadEpub()}
+              disabled={busy === 'epub' || savingCover}
+            >
+              {busy === 'epub' ? 'Creating EPUB…' : 'Download EPUB'}
+            </Button>
           </Flex>
         </Dialog.Content>
       </Dialog.Root>

@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
-import { canMergeMultiBlock, renderDocument } from '@marginalia/renderer';
+import { renderDocument } from '@marginalia/renderer';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import {
@@ -22,6 +22,7 @@ import {
   SESSION_COOKIE,
 } from '../auth.js';
 import { mapWithConcurrency } from '../concurrency.js';
+import { mergeThreeWay, type ThreeWaySides } from '../conflict.js';
 import type {
   CommentLinkStatus,
   CommentReactionRow,
@@ -43,6 +44,7 @@ import {
   loadProposalRow,
   locateAnchorRange,
   locateDocumentBlocks,
+  locateProposalAnchorBySourceSpan,
   readProposalContent,
   readProposalFullContent,
   reanchorProposals,
@@ -64,6 +66,7 @@ interface ThreadRow extends CommentRow {
 }
 
 type ThreadState = 'open' | 'resolved';
+type ThreadStateFilter = ThreadState | 'all';
 type ResolutionKind = 'resolve' | 'accept' | 'reject';
 type RespondAction = 'resolve' | 'accept' | 'reject' | 'reopen';
 
@@ -92,6 +95,15 @@ const THREAD_SELECT = `
 `;
 
 /**
+ * `threadState(row) === 'open'`, in SQL, against the `THREAD_SELECT`
+ * aliases. `cep.status IS 'open'` rather than `=`: for a plain comment
+ * the column is NULL, and `=` would yield NULL there, which `NOT (…)`
+ * would not turn back into a match — leaving resolved comments in
+ * neither half.
+ */
+const OPEN_THREAD_SQL = `((cep.status IS NULL AND c.resolved_at IS NULL) OR cep.status IS 'open')`;
+
+/**
  * Unified thread endpoints.
  *
  * Root threads are the public API surface for comments and edit proposals.
@@ -104,6 +116,8 @@ export function threadsRouter(deps: AppDeps): Hono {
   r.get('/:uid/threads', async (c) => listThreads(c, deps));
   r.post('/:uid/threads', async (c) => createThread(c, deps));
   r.get('/:uid/threads/:tid/diff', async (c) => getThreadDiff(c, deps));
+  r.get('/:uid/threads/:tid/conflict', async (c) => getThreadConflict(c, deps));
+  r.post('/:uid/threads/:tid/resolve', async (c) => resolveThreadConflict(c, deps));
   r.post('/:uid/threads/:tid/repair', async (c) => repairThreadAnchor(c, deps));
   r.patch('/:uid/threads/:tid', async (c) => editThreadRoot(c, deps));
   r.delete('/:uid/threads/:tid', async (c) => deleteThread(c, deps));
@@ -118,8 +132,20 @@ export function threadsRouter(deps: AppDeps): Hono {
 /**
  * `GET /:uid/threads`
  *
- * Returns every root thread with its replies, optional proposal payload, and
+ * Returns root threads with their replies, optional proposal payload, and
  * server-computed capabilities.
+ *
+ * Open threads only, unless asked otherwise: a resolved thread is settled
+ * business, and on a long-reviewed document the archive dwarfs the live
+ * queue. Every resolved proposal returned costs a git read here and a
+ * chunk of the reading agent's context there. `state=resolved`/`all` ask
+ * for the rest; `thread_id` fetches one thread whatever its state, which
+ * is the cheap way back to something already closed.
+ *
+ * `thread_id` decides which threads come back, but it does not excuse a
+ * malformed `state` — a value the caller misspelled is still a 400,
+ * whatever else the request carries. Answering it anyway would hide the
+ * typo for exactly as long as `thread_id` stayed in the query.
  */
 async function listThreads(c: Context, deps: AppDeps) {
   const { db, store } = deps;
@@ -129,17 +155,48 @@ async function listThreads(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
+  const state = parseThreadStateFilter(c.req.query('state'));
+  if (!state) return c.json({ error: 'invalid-state' }, 400);
+  const threadId = c.req.query('thread_id') ?? null;
+
+  const conditions = [
+    'c.doc_uid = ?',
+    'c.parent_id IS NULL',
+    'c.parent_proposal_id IS NULL',
+    'c.deleted_at IS NULL',
+  ];
+  const params: string[] = [doc.uid];
+  if (threadId) {
+    // Naming a thread outranks the state filter — asking by id is how a
+    // caller reaches one resolved thread without pulling the archive.
+    // Any live message in it names it: the viewer's copy-link button
+    // sits on replies too, so a `#comment-<id>` link often points at one.
+    conditions.push(`(c.id = ?
+       OR EXISTS (SELECT 1
+                    FROM comments r
+                   WHERE r.doc_uid = c.doc_uid
+                     AND r.deleted_at IS NULL
+                     AND r.id = ?
+                     AND (r.parent_id = c.id OR r.parent_proposal_id = c.id)))`);
+    params.push(threadId, threadId);
+  } else if (state === 'open') {
+    conditions.push(OPEN_THREAD_SQL);
+  } else if (state === 'resolved') {
+    conditions.push(`NOT ${OPEN_THREAD_SQL}`);
+  }
+
   const roots = db
     .prepare(
       `${THREAD_SELECT}
-       WHERE c.doc_uid = ?
-         AND c.parent_id IS NULL
-         AND c.parent_proposal_id IS NULL
-         AND c.deleted_at IS NULL
+       WHERE ${conditions.join('\n         AND ')}
        ORDER BY c.created_at ASC`,
     )
-    .all(doc.uid) as ThreadRow[];
-  const replies = loadReplies(db, doc.uid, null);
+    .all(...params) as ThreadRow[];
+  const replies = loadRepliesForThreads(
+    db,
+    doc.uid,
+    roots.map((row) => row.id),
+  );
   const repliesByThread = groupRepliesByThread(replies);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, roots);
 
@@ -176,12 +233,42 @@ async function listThreads(c: Context, deps: AppDeps) {
   );
   return c.json({
     threads,
+    // Always for the whole document, however the list was filtered: a
+    // caller shown eight open threads still needs to know whether it is
+    // looking at all of them, and a hidden thread should read as
+    // "resolved" rather than as "gone".
+    counts: countThreadsByState(db, doc.uid),
     mention_candidates: listMentionCandidates(db, doc.uid),
     pending_mentions:
       c.req.query('consume_mentions') === 'false'
         ? []
         : consumePendingMentions(db, doc.uid, decision.identity?.displayName ?? null),
   });
+}
+
+function parseThreadStateFilter(raw: string | undefined): ThreadStateFilter | null {
+  if (raw === undefined || raw === '') return 'open';
+  return raw === 'open' || raw === 'resolved' || raw === 'all' ? raw : null;
+}
+
+function countThreadsByState(
+  db: Database,
+  docUid: string,
+): { total: number; open: number; resolved: number } {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN ${OPEN_THREAD_SQL} THEN 1 ELSE 0 END) AS open
+         FROM comments c
+         LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE c.doc_uid = ?
+          AND c.parent_id IS NULL
+          AND c.parent_proposal_id IS NULL
+          AND c.deleted_at IS NULL`,
+    )
+    .get(docUid) as { total: number; open: number | null };
+  const open = row.open ?? 0;
+  return { total: row.total, open, resolved: row.total - open };
 }
 
 /**
@@ -490,7 +577,7 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
 
       const rendered = await renderDocument(preview.before, doc.format);
       const blocks = locateDocumentBlocks(doc, preview.before);
-      anchor = locateRepairAnchor(
+      anchor = locateProposalAnchorBySourceSpan(
         blocks,
         rendered.blocks,
         preview.before,
@@ -653,53 +740,11 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
     if (row.branch_ref !== `refs/proposals/${row.id}` || !row.base_oid) {
       return c.json({ error: 'proposal-update-unavailable' }, 409);
     }
-    const anchorBlockId = row.anchor_block_id;
-    if (row.is_whole_document !== 1 && (row.link_status === 'orphaned' || !anchorBlockId)) {
-      return c.json({ error: 'proposal-orphaned' }, 409);
-    }
 
-    // Same shape as createThread: base is current main, source read at
-    // that one oid so a concurrent accept can't slip between the reads.
-    let baseOid: string;
-    let currentSource: string;
-    try {
-      baseOid = await store.mainOid(doc);
-      currentSource = await store.readAt(doc, baseOid);
-      previousTipSource = await store.readProposalTip(doc, row.id);
-    } catch (err) {
-      console.warn(
-        `[marginalia] reading base for proposal update ${tid} (${doc.uid}) failed:`,
-        err,
-      );
-      return c.json({ error: 'proposal-storage-unavailable' }, 503);
-    }
-
-    let blockRange: BlockSourceRange | null;
-    if (row.is_whole_document === 1 || !anchorBlockId) {
-      blockRange = { start: 0, end: currentSource.length, kind: 'multi', text: '' };
-    } else {
-      blockRange = locateAnchorRange(doc, currentSource, anchorBlockId, row.anchor_end_block_id);
-    }
-    if (!blockRange) {
-      // The anchor died since the last orphan sweep; record that (as the
-      // accept path does) rather than fail with a state clients can't see.
-      const now = Date.now();
-      db.prepare(
-        `UPDATE comments
-            SET link_status = 'orphaned', anchor_block_id = NULL, anchor_end_block_id = NULL,
-                updated_at = ?
-          WHERE id = ?`,
-      ).run(now, tid);
-      const orphaned = loadProposalRow(db, tid, doc.uid);
-      if (orphaned) {
-        realtime.broadcast(
-          doc.uid,
-          { type: 'edit_proposal.updated', edit_proposal: toProposalWire(orphaned) },
-          identity.clientId,
-        );
-      }
-      return c.json({ error: 'proposal-orphaned' }, 409);
-    }
+    const target = await readProposalRebaseTarget(deps, doc, row, identity);
+    if (!target.ok) return c.json({ error: target.error }, target.status);
+    const { baseOid, currentSource, blockRange } = target;
+    previousTipSource = target.previousTipSource;
 
     if (next.body === undefined && baseOid === row.base_oid) {
       const current = await readProposalContent(store, doc, row);
@@ -833,6 +878,367 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
     thread: await toThreadWire(db, store, doc, updated, replies, decision, reopenableAccepted),
     created_reply_id: createdReply?.reply.id ?? null,
   });
+}
+
+/**
+ * Pin a proposal as conflicted so every viewer sees the badge and the
+ * resolver, rather than only the person whose accept just bounced.
+ * Leaves the anchor alone — the text conflicts, the anchor is fine.
+ */
+function markProposalConflicted(
+  deps: AppDeps,
+  doc: DocumentRow,
+  row: ThreadRow,
+  identity: Identity,
+): void {
+  if (row.link_status === 'conflict') return;
+  const now = Date.now();
+  deps.db
+    .prepare(`UPDATE comments SET link_status = 'conflict', updated_at = ? WHERE id = ?`)
+    .run(now, row.id);
+  const updated = loadProposalRow(deps.db, row.id, doc.uid);
+  if (!updated) return;
+  deps.realtime.broadcast(
+    doc.uid,
+    { type: 'edit_proposal.updated', edit_proposal: toProposalWire(updated) },
+    identity.clientId,
+  );
+}
+
+type RebaseTargetResult =
+  | {
+      ok: true;
+      /** Current main — what the rebuilt branch will be parented at. */
+      baseOid: string;
+      currentSource: string;
+      /** Where in `currentSource` the proposal's text belongs. */
+      blockRange: BlockSourceRange;
+      /** The old tip, so a failed DB write can put the branch back. */
+      previousTipSource: string | null;
+    }
+  | { ok: false; status: 409 | 503; error: string };
+
+/**
+ * Locate where a proposal's text would land in the source as it stands
+ * now. Rebuilding the branch on top of that is what rebases a proposal:
+ * both the in-place update and conflict resolution mean "this is what
+ * the proposal should say against current main", and neither can splice
+ * without this range.
+ *
+ * Reads main's oid and its source in that order so a concurrent accept
+ * can't land between them and leave the range addressing a source the
+ * commit doesn't contain.
+ */
+async function readProposalRebaseTarget(
+  deps: AppDeps,
+  doc: DocumentRow,
+  row: ThreadRow,
+  identity: Identity,
+): Promise<RebaseTargetResult> {
+  const { db, realtime, store } = deps;
+  const anchorBlockId = row.anchor_block_id;
+  if (row.is_whole_document !== 1 && (row.link_status === 'orphaned' || !anchorBlockId)) {
+    return { ok: false, status: 409, error: 'proposal-orphaned' };
+  }
+
+  let baseOid: string;
+  let currentSource: string;
+  let previousTipSource: string | null;
+  try {
+    baseOid = await store.mainOid(doc);
+    currentSource = await store.readAt(doc, baseOid);
+    previousTipSource = await store.readProposalTip(doc, row.id);
+  } catch (err) {
+    console.warn(`[marginalia] reading base for proposal ${row.id} (${doc.uid}) failed:`, err);
+    return { ok: false, status: 503, error: 'proposal-storage-unavailable' };
+  }
+
+  let blockRange: BlockSourceRange | null;
+  if (row.is_whole_document === 1 || !anchorBlockId) {
+    blockRange = { start: 0, end: currentSource.length, kind: 'multi', text: '' };
+  } else {
+    blockRange = locateAnchorRange(doc, currentSource, anchorBlockId, row.anchor_end_block_id);
+  }
+  if (!blockRange) {
+    // The anchor died since the last orphan sweep; record that (as the
+    // accept path does) rather than fail with a state clients can't see.
+    const now = Date.now();
+    db.prepare(
+      `UPDATE comments
+          SET link_status = 'orphaned', anchor_block_id = NULL, anchor_end_block_id = NULL,
+              updated_at = ?
+        WHERE id = ?`,
+    ).run(now, row.id);
+    const orphaned = loadProposalRow(db, row.id, doc.uid);
+    if (orphaned) {
+      realtime.broadcast(
+        doc.uid,
+        { type: 'edit_proposal.updated', edit_proposal: toProposalWire(orphaned) },
+        identity.clientId,
+      );
+    }
+    return { ok: false, status: 409, error: 'proposal-orphaned' };
+  }
+
+  return { ok: true, baseOid, currentSource, blockRange, previousTipSource };
+}
+
+/**
+ * The three sides of a proposal's merge, scoped the way the proposal
+ * is: one block for a block proposal, the whole file for a
+ * whole-document one.
+ *
+ * Scoping matters for more than display. A block proposal only ever
+ * rewrites its own block, so merging the whole file would drag in
+ * unrelated edits elsewhere as context and report conflicts the
+ * proposal has no part in. It also makes the resolved text directly
+ * usable: it is exactly what the branch rebuild splices back.
+ */
+async function readProposalConflictSides(
+  deps: AppDeps,
+  doc: DocumentRow,
+  row: ThreadRow,
+): Promise<
+  | { ok: true; sides: ThreeWaySides; scope: 'block' | 'document' }
+  | { ok: false; status: 409 | 503; error: string }
+> {
+  const content = await readProposalContent(deps.store, doc, row);
+  if (!content) return { ok: false, status: 409, error: 'proposal-diff-unavailable' };
+
+  const wholeDocument = row.is_whole_document === 1;
+  let currentSource: string;
+  try {
+    currentSource = deps.store.read(doc);
+  } catch (err) {
+    console.warn(`[marginalia] reading source for proposal ${row.id} (${doc.uid}) failed:`, err);
+    return { ok: false, status: 503, error: 'proposal-storage-unavailable' };
+  }
+
+  let current: string;
+  if (wholeDocument) {
+    current = currentSource;
+  } else {
+    const anchorBlockId = row.anchor_block_id;
+    if (row.link_status === 'orphaned' || !anchorBlockId) {
+      return { ok: false, status: 409, error: 'proposal-orphaned' };
+    }
+    const range = locateAnchorRange(doc, currentSource, anchorBlockId, row.anchor_end_block_id);
+    if (!range) return { ok: false, status: 409, error: 'proposal-orphaned' };
+    current = currentSource.slice(range.start, range.end);
+  }
+
+  return {
+    ok: true,
+    scope: wholeDocument ? 'document' : 'block',
+    sides: { current, base: content.source_snapshot, proposed: content.proposed_text },
+  };
+}
+
+/**
+ * `GET /:uid/threads/:tid/conflict`
+ *
+ * The three-way state of an open proposal against the document as it
+ * stands: what it was written against, what the document says now, and
+ * what it asks for — plus either the merge git can do unaided, or the
+ * hunks it can't.
+ *
+ * A pure read. Resolving is a separate, explicit POST, so opening the
+ * resolver never mints a commit on somebody's proposal branch.
+ */
+async function getThreadConflict(c: Context, deps: AppDeps) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  // Merging costs the per-document lock. Gate it on being able to act on
+  // the result, so a reader can't force the work by polling.
+  if (!canPropose(decision.role) && !canEdit(decision.role)) {
+    return c.json({ error: 'forbidden' }, 403);
+  }
+
+  const tid = c.req.param('tid');
+  if (!tid) return c.json({ error: 'not-found' }, 404);
+  const row = loadProposalRow(db, tid, doc.uid);
+  if (!row) return c.json({ error: 'proposal-required' }, 400);
+  if (row.proposal_status !== 'open') return c.json({ error: 'not-open' }, 400);
+
+  const sides = await readProposalConflictSides(deps, doc, row);
+  if (!sides.ok) return c.json({ error: sides.error }, sides.status);
+
+  const merged = await mergeThreeWay(sides.sides);
+  if (!merged.ok && merged.reason === 'unavailable') {
+    return c.json({ error: 'proposal-merge-unavailable' }, 503);
+  }
+
+  return c.json({
+    scope: sides.scope,
+    status: merged.ok ? 'clean' : 'conflict',
+    ...sides.sides,
+    merged: merged.ok ? merged.text : null,
+    segments: merged.ok ? null : merged.segments,
+    /** True when the merge leaves the document exactly as it already is. */
+    empty: merged.ok && merged.text === sides.sides.current,
+  });
+}
+
+/**
+ * `POST /:uid/threads/:tid/resolve`
+ *
+ * Settle a proposal against current main and rebuild its branch there,
+ * so a later accept is an ordinary fast-forward. With `resolved_text`
+ * the caller has decided; without it the server takes the merge git can
+ * make on its own and refuses if there isn't one.
+ *
+ * This is the same branch rewrite an in-place update does, under
+ * different authority: resolving a conflict is part of merging a
+ * proposal, so anyone who could accept it may resolve it — not only the
+ * author, who may be long gone by the time the document moves.
+ */
+async function resolveThreadConflict(c: Context, deps: AppDeps) {
+  const { db, realtime, store } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  const identity = decision.identity;
+
+  const tid = c.req.param('tid');
+  if (!tid) return c.json({ error: 'not-found' }, 404);
+  const row = loadProposalRow(db, tid, doc.uid);
+  if (!row) return c.json({ error: 'proposal-required' }, 400);
+  if (row.proposal_status !== 'open') return c.json({ error: 'not-open' }, 400);
+
+  const isAuthor = row.author_client_id === identity.clientId;
+  const mayResolve = canEdit(decision.role) || (isAuthor && canPropose(decision.role));
+  if (!mayResolve) return c.json({ error: 'forbidden' }, 403);
+  if (row.branch_ref !== `refs/proposals/${row.id}` || !row.base_oid) {
+    return c.json({ error: 'proposal-update-unavailable' }, 409);
+  }
+
+  const body = await safeJson(c);
+  if (!body) return c.json({ error: 'invalid-body' }, 400);
+  const parsedResolution = parseResolvedText(body.resolved_text);
+  if (!parsedResolution.ok) return c.json({ error: parsedResolution.error }, 400);
+  const parsedComment = parseOptionalBody(body.comment);
+  if (!parsedComment.ok) return c.json({ error: 'invalid-body' }, 400);
+  const resolutionComment = parsedComment.body;
+
+  // One read of the source serves both the merge and the splice. Taking
+  // them separately would leave a window where a save lands in between,
+  // and the resolution — merged against the source as it was — would be
+  // spliced over a block nobody in this exchange has seen.
+  const target = await readProposalRebaseTarget(deps, doc, row, identity);
+  if (!target.ok) return c.json({ error: target.error }, target.status);
+  const { baseOid, currentSource, blockRange, previousTipSource } = target;
+
+  const content = await readProposalContent(store, doc, row);
+  if (!content) return c.json({ error: 'proposal-diff-unavailable' }, 409);
+  const current = currentSource.slice(blockRange.start, blockRange.end);
+
+  let resolvedText: string;
+  if (parsedResolution.text !== undefined) {
+    resolvedText = parsedResolution.text;
+  } else {
+    const merged = await mergeThreeWay({
+      current,
+      base: content.source_snapshot,
+      proposed: content.proposed_text,
+    });
+    if (!merged.ok) {
+      if (merged.reason === 'unavailable') {
+        return c.json({ error: 'proposal-merge-unavailable' }, 503);
+      }
+      // Nothing to apply unattended — the caller has to pick a side.
+      return c.json({ error: 'proposal-conflict' }, 409);
+    }
+    resolvedText = merged.text;
+  }
+
+  // A resolution that matches the document leaves nothing to accept.
+  // Rebuilding the branch anyway would produce a proposal whose diff is
+  // empty and whose accept is a no-op, which reads as a broken button.
+  if (resolvedText === current) {
+    return c.json({ error: 'proposal-resolution-empty' }, 409);
+  }
+
+  try {
+    await store.createProposalBranch(
+      doc,
+      baseOid,
+      row.id,
+      currentSource.slice(0, blockRange.start) + resolvedText + currentSource.slice(blockRange.end),
+      identity,
+      row.body,
+    );
+  } catch (err) {
+    console.warn(`[marginalia] proposal-branch rewrite failed for ${tid} (${doc.uid}):`, err);
+    return c.json({ error: 'proposal-storage-unavailable' }, 503);
+  }
+
+  const now = Date.now();
+  let createdReply: { reply: CommentRow; mentionTargets: string[] } | null = null;
+  db.exec('BEGIN');
+  try {
+    db.prepare(
+      `UPDATE comments_edit_proposals
+          SET base_oid = ?, base_block_start = ?, base_block_end = ?
+        WHERE comment_id = ?`,
+    ).run(baseOid, blockRange.start, blockRange.end, tid);
+    // The rebuilt branch targets exactly this range of current main, so
+    // the conflict is gone by construction.
+    db.prepare(`UPDATE comments SET link_status = 'linked', updated_at = ? WHERE id = ?`).run(
+      now,
+      tid,
+    );
+    if (resolutionComment) {
+      createdReply = insertThreadReply(db, doc.uid, row, resolutionComment, identity);
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    const undo =
+      previousTipSource !== null
+        ? store.createProposalBranch(doc, row.base_oid, tid, previousTipSource, identity, row.body)
+        : store.deleteProposalBranch(doc, tid);
+    await undo.catch(() => undefined);
+    throw err;
+  }
+
+  const updated = loadThreadRow(db, tid, doc.uid);
+  if (!updated) return c.json({ error: 'not-found' }, 404);
+  if (createdReply) broadcastReplyCreated(deps, doc.uid, createdReply, identity);
+  if (isProposalRow(updated)) {
+    realtime.broadcast(
+      doc.uid,
+      { type: 'edit_proposal.updated', edit_proposal: toProposalWire(updated) },
+      identity.clientId,
+    );
+  }
+
+  const replies = loadReplies(db, doc.uid, tid);
+  const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updated]);
+  return c.json({
+    thread: await toThreadWire(db, store, doc, updated, replies, decision, reopenableAccepted),
+    created_reply_id: createdReply?.reply.id ?? null,
+  });
+}
+
+/**
+ * `resolved_text` absent means "merge it for me"; present it must be a
+ * string, and an empty one is a real resolution — deleting the block is
+ * a legitimate way to settle a conflict.
+ */
+function parseResolvedText(
+  raw: unknown,
+): { ok: true; text: string | undefined } | { ok: false; error: string } {
+  if (raw === undefined || raw === null) return { ok: true, text: undefined };
+  if (typeof raw !== 'string') return { ok: false, error: 'invalid-body' };
+  if (raw.length > MAX_PROPOSED_TEXT_LENGTH) return { ok: false, error: 'proposal-text-too-long' };
+  return { ok: true, text: raw };
 }
 
 /**
@@ -1554,6 +1960,12 @@ async function prepareAcceptProposalThread(
   const merge = await deps.store.mergeProposalBranch(doc, row.id, identity);
   if (!merge.ok) {
     if (merge.reason === 'conflict') {
+      // Record it so the proposal carries a conflict badge and the
+      // resolver for everyone, not just whoever happened to click
+      // Accept. Safe to pin now that resolving clears it — an
+      // `unavailable` merge still must not land here, since that one
+      // says nothing about the proposal.
+      markProposalConflicted(deps, doc, row, identity);
       throw new ThreadActionError(409, 'proposal-conflict');
     }
     // The merge tool itself is missing or broken — the proposal is fine,
@@ -1594,6 +2006,29 @@ async function prepareAcceptProposalThread(
     spliceStart,
     spliceStart + proposedText.length,
   );
+  const postAcceptAnchor = acceptedAnchor ? snapshotPostAcceptAnchor(acceptedAnchor) : null;
+
+  // A proposal can be the answer to a comment whose entire quoted text it
+  // replaces. Ordinary quote re-anchoring has no evidence left in that
+  // case, even though the proposal gives us an exact old-span -> new-span
+  // mapping. Carry the resolved comment onto the resulting paragraph. If
+  // its quote survived and re-anchored normally, leave the more precise
+  // selection alone.
+  const answeredCommentUpdate = row.answers_comment_id
+    ? commentAnchorUpdates.find((upd) => upd.commentId === row.answers_comment_id)
+    : undefined;
+  const relocateAnsweredComment =
+    postAcceptAnchor && answeredCommentUpdate?.linkStatus === 'orphaned'
+      ? row.answers_comment_id
+      : null;
+  if (relocateAnsweredComment && answeredCommentUpdate && postAcceptAnchor) {
+    answeredCommentUpdate.linkStatus = postAcceptAnchor.linkStatus;
+    answeredCommentUpdate.blockId = postAcceptAnchor.blockId;
+    answeredCommentUpdate.endBlockId = null;
+    answeredCommentUpdate.startOffset = postAcceptAnchor.startOffset;
+    answeredCommentUpdate.endOffset = postAcceptAnchor.endOffset;
+    answeredCommentUpdate.quote = postAcceptAnchor.quote;
+  }
 
   return {
     oid,
@@ -1604,6 +2039,25 @@ async function prepareAcceptProposalThread(
       const updateCommentStmt = deps.db.prepare(REANCHOR_COMMENT_SQL);
       for (const upd of commentAnchorUpdates) {
         updateCommentStmt.run(...reanchorParams(upd, now, upd.commentId));
+      }
+
+      if (relocateAnsweredComment && postAcceptAnchor) {
+        deps.db
+          .prepare(
+            `UPDATE comments
+                SET anchor_prefix = '',
+                    anchor_suffix = '',
+                    anchor_heading_path = ?,
+                    anchor_section_index = ?,
+                    anchor_section_index_path = ?
+              WHERE id = ?`,
+          )
+          .run(
+            postAcceptAnchor.headingPath,
+            postAcceptAnchor.sectionIndex,
+            postAcceptAnchor.sectionIndexPath,
+            relocateAnsweredComment,
+          );
       }
 
       deps.db
@@ -1618,6 +2072,9 @@ async function prepareAcceptProposalThread(
           `UPDATE comments
             SET anchor_block_id = ?,
                 anchor_end_block_id = NULL,
+                anchor_quote = ?,
+                anchor_prefix = ?,
+                anchor_suffix = ?,
                 anchor_start_offset = ?,
                 anchor_end_offset = ?,
                 anchor_heading_path = ?,
@@ -1630,17 +2087,16 @@ async function prepareAcceptProposalThread(
           WHERE id = ?`,
         )
         .run(
-          acceptedAnchor?.block.id ?? row.anchor_block_id,
-          null,
-          null,
-          acceptedAnchor
-            ? JSON.stringify(acceptedAnchor.block.headingPath)
-            : row.anchor_heading_path,
-          acceptedAnchor?.block.sectionIndex ?? row.anchor_section_index,
-          acceptedAnchor
-            ? JSON.stringify(acceptedAnchor.block.sectionIndexPath)
-            : row.anchor_section_index_path,
-          acceptedAnchor?.linkStatus ?? row.link_status,
+          postAcceptAnchor?.blockId ?? row.anchor_block_id,
+          postAcceptAnchor?.quote ?? row.anchor_quote,
+          postAcceptAnchor ? '' : row.anchor_prefix,
+          postAcceptAnchor ? '' : row.anchor_suffix,
+          postAcceptAnchor?.startOffset ?? row.anchor_start_offset,
+          postAcceptAnchor?.endOffset ?? row.anchor_end_offset,
+          postAcceptAnchor?.headingPath ?? row.anchor_heading_path,
+          postAcceptAnchor?.sectionIndex ?? row.anchor_section_index,
+          postAcceptAnchor?.sectionIndexPath ?? row.anchor_section_index_path,
+          postAcceptAnchor?.linkStatus ?? row.link_status,
           now,
           identity.displayName,
           now,
@@ -1684,6 +2140,17 @@ async function prepareReopenAcceptedProposalThread(
   });
 
   const knownBlocks = locateDocumentBlocks(doc, diff.before);
+  const restoredProposalAnchor =
+    row.base_block_start !== null && row.base_block_end !== null
+      ? locateProposalAnchorBySourceSpan(
+          knownBlocks,
+          rendered.blocks,
+          diff.before,
+          row.base_block_start,
+          row.base_block_end,
+          doc.format,
+        )
+      : null;
   return {
     oid,
     applyDb: () => {
@@ -1693,6 +2160,37 @@ async function prepareReopenAcceptedProposalThread(
       const updateStmt = deps.db.prepare(REANCHOR_COMMENT_SQL);
       for (const upd of commentAnchorUpdates) {
         updateStmt.run(...reanchorParams(upd, now, upd.commentId));
+      }
+
+      if (restoredProposalAnchor) {
+        deps.db
+          .prepare(
+            `UPDATE comments
+                SET anchor_block_id = ?,
+                    anchor_end_block_id = ?,
+                    anchor_quote = ?,
+                    anchor_prefix = '',
+                    anchor_suffix = '',
+                    anchor_start_offset = NULL,
+                    anchor_end_offset = NULL,
+                    anchor_heading_path = ?,
+                    anchor_section_index = ?,
+                    anchor_section_index_path = ?,
+                    link_status = ?,
+                    updated_at = ?
+              WHERE id = ?`,
+          )
+          .run(
+            restoredProposalAnchor.block.id,
+            restoredProposalAnchor.endBlock?.id ?? null,
+            restoredProposalAnchor.quote,
+            JSON.stringify(restoredProposalAnchor.block.headingPath),
+            restoredProposalAnchor.block.sectionIndex,
+            JSON.stringify(restoredProposalAnchor.block.sectionIndexPath),
+            restoredProposalAnchor.linkStatus,
+            now,
+            row.id,
+          );
       }
 
       const reopened = reopenAcceptedProposal(deps.db, doc.uid, row.id, now);
@@ -1751,29 +2249,45 @@ function loadReplyRow(
     .get(commentId, docUid, threadId, threadId) as CommentRow | undefined;
 }
 
-function loadReplies(db: Database, docUid: string, threadId: string | null): CommentRow[] {
-  if (threadId) {
-    return db
-      .prepare(
-        `SELECT *
-           FROM comments
-          WHERE doc_uid = ?
-            AND deleted_at IS NULL
-            AND (parent_id = ? OR parent_proposal_id = ?)
-          ORDER BY created_at ASC`,
-      )
-      .all(docUid, threadId, threadId) as CommentRow[];
-  }
+function loadReplies(db: Database, docUid: string, threadId: string): CommentRow[] {
   return db
     .prepare(
       `SELECT *
          FROM comments
         WHERE doc_uid = ?
           AND deleted_at IS NULL
-          AND (parent_id IS NOT NULL OR parent_proposal_id IS NOT NULL)
+          AND (parent_id = ? OR parent_proposal_id = ?)
         ORDER BY created_at ASC`,
     )
-    .all(docUid) as CommentRow[];
+    .all(docUid, threadId, threadId) as CommentRow[];
+}
+
+/**
+ * Replies for the roots being returned, rather than every reply in the
+ * document — with the list filtered down to open threads, the discussion
+ * under the resolved ones is dead weight.
+ *
+ * Batches share no thread, so per-thread order survives the concatenation
+ * even though the batches themselves are not merged.
+ */
+function loadRepliesForThreads(db: Database, docUid: string, threadIds: string[]): CommentRow[] {
+  const replies: CommentRow[] = [];
+  for (let i = 0; i < threadIds.length; i += ID_QUERY_BATCH) {
+    const batch = threadIds.slice(i, i + ID_QUERY_BATCH);
+    const placeholders = batch.map(() => '?').join(',');
+    const rows = db
+      .prepare(
+        `SELECT *
+           FROM comments
+          WHERE doc_uid = ?
+            AND deleted_at IS NULL
+            AND (parent_id IN (${placeholders}) OR parent_proposal_id IN (${placeholders}))
+          ORDER BY created_at ASC`,
+      )
+      .all(docUid, ...batch, ...batch) as CommentRow[];
+    replies.push(...rows);
+  }
+  return replies;
 }
 
 function groupRepliesByThread(replies: CommentRow[]): Map<string, CommentRow[]> {
@@ -1909,6 +2423,19 @@ async function toThreadWire(
         row.is_whole_document !== 1 &&
         row.branch_ref !== null &&
         row.base_oid !== null,
+      // Merging a proposal is the accepter's job, so resolving what
+      // stands in the way of merging it is too — not the author's alone,
+      // who may be gone by the time the document moves under them.
+      // Orphans need an anchor before there is anywhere to merge into.
+      resolve_conflict:
+        proposal &&
+        state === 'open' &&
+        decision.ok &&
+        (canEdit(decision.role) || (isRootAuthor && canPropose(decision.role))) &&
+        row.branch_ref === `refs/proposals/${row.id}` &&
+        row.base_oid !== null &&
+        (row.is_whole_document === 1 ||
+          (row.link_status !== 'orphaned' && row.anchor_block_id !== null)),
       reopen:
         state === 'resolved' &&
         (!proposal
@@ -2163,6 +2690,43 @@ function locateAcceptedProposalAnchor(
   return { block: rendered, linkStatus: located.confidence };
 }
 
+interface PostAcceptAnchorSnapshot {
+  blockId: string;
+  quote: string;
+  startOffset: number;
+  endOffset: number;
+  headingPath: string;
+  sectionIndex: number;
+  sectionIndexPath: string;
+  linkStatus: 'linked' | 'low-confidence';
+}
+
+/**
+ * Turn the paragraph produced by an accepted proposal into a complete new
+ * anchor. Keeping the old quote with the new content-hash block id makes the
+ * very next document save treat that id as stale and orphan the proposal.
+ * Accepted history is recovered from git, so the anchor can (and should)
+ * describe the current paragraph instead of doubling as the old snapshot.
+ */
+function snapshotPostAcceptAnchor({
+  block,
+  linkStatus,
+}: {
+  block: BlockInfo;
+  linkStatus: 'linked' | 'low-confidence';
+}): PostAcceptAnchorSnapshot {
+  return {
+    blockId: block.id,
+    quote: block.text,
+    startOffset: 0,
+    endOffset: block.text.length,
+    headingPath: JSON.stringify(block.headingPath),
+    sectionIndex: block.sectionIndex,
+    sectionIndexPath: JSON.stringify(block.sectionIndexPath),
+    linkStatus,
+  };
+}
+
 function changedSpan(
   before: string,
   after: string,
@@ -2184,81 +2748,7 @@ function changedSpan(
   };
 }
 
-function locateRepairAnchor(
-  blocks: Map<string, BlockSourceRange>,
-  renderedBlocks: BlockInfo[],
-  source: string,
-  start: number,
-  end: number,
-  format: DocumentRow['format'],
-): {
-  block: BlockInfo;
-  endBlock: BlockInfo | null;
-  quote: string;
-  linkStatus: 'linked' | 'low-confidence';
-} | null {
-  const renderedById = new Map(renderedBlocks.map((block) => [block.id, block]));
-  const sorted = Array.from(blocks.entries()).sort((a, b) => a[1].start - b[1].start);
-
-  for (const [id, range] of sorted) {
-    if (range.start !== start || range.end !== end) continue;
-    const block = renderedById.get(id);
-    if (!block) return null;
-    return {
-      block,
-      endBlock: null,
-      quote: source.slice(range.start, range.end),
-      linkStatus: 'linked',
-    };
-  }
-
-  let best: {
-    startId: string;
-    startRange: BlockSourceRange;
-    endId: string;
-    endRange: BlockSourceRange;
-    span: number;
-  } | null = null;
-  for (const [startId, startRange] of sorted) {
-    if (startRange.start !== start) continue;
-    for (const [endId, endRange] of sorted) {
-      if (endRange.end !== end) continue;
-      if (!canMergeMultiBlock(startRange, endRange, format)) continue;
-      const span =
-        Math.max(startRange.end, endRange.end) - Math.min(startRange.start, endRange.start);
-      if (!best || span < best.span) {
-        best = { startId, startRange, endId, endRange, span };
-      }
-    }
-  }
-  if (best) {
-    const block = renderedById.get(best.startId);
-    const endBlock = renderedById.get(best.endId);
-    if (!block || !endBlock) return null;
-    return {
-      block,
-      endBlock: best.endId === best.startId ? null : endBlock,
-      quote: source.slice(
-        Math.min(best.startRange.start, best.endRange.start),
-        Math.max(best.startRange.end, best.endRange.end),
-      ),
-      linkStatus: 'linked',
-    };
-  }
-
-  const located = findBlockBySourceSpan(blocks, start, end);
-  if (!located) return null;
-  const block = renderedById.get(located.id);
-  if (!block) return null;
-  return {
-    block,
-    endBlock: null,
-    quote: source.slice(start, end) || located.range.text,
-    linkStatus: located.confidence,
-  };
-}
-
-type RepairAnchor = NonNullable<ReturnType<typeof locateRepairAnchor>>;
+type RepairAnchor = NonNullable<ReturnType<typeof locateProposalAnchorBySourceSpan>>;
 
 async function locateConflictRepairAnchor(
   doc: DocumentRow,
@@ -2277,7 +2767,7 @@ async function locateConflictRepairAnchor(
 
   const rendered = await renderDocument(currentSource, doc.format);
   const blocks = locateDocumentBlocks(doc, currentSource);
-  return locateRepairAnchor(
+  return locateProposalAnchorBySourceSpan(
     blocks,
     rendered.blocks,
     currentSource,

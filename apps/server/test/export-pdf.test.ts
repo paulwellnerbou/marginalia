@@ -96,7 +96,7 @@ describe('PDF export', () => {
       new Request('http://test/api/documents', {
         method: 'POST',
         headers: headersFor(client),
-        body: JSON.stringify(body),
+        body: JSON.stringify({ invite_only: false, ...body }),
       }),
     );
     expect(res.status).toBe(201);

@@ -116,114 +116,115 @@ export function DocumentSettingsDialog({
           <GearIcon />
         </IconButton>
       </Dialog.Trigger>
-      <Dialog.Content size="3" maxWidth="640px">
-        <Dialog.Title>Document settings</Dialog.Title>
-        <Dialog.Description size="2" color="gray" mb="4">
-          Naming, presentation, and export. Permissions live in Access control.
-        </Dialog.Description>
+      <Dialog.Content size="3" maxWidth="640px" className="dialog-content--fixed-footer">
+        <div className="dialog-scroll-body">
+          <Dialog.Title>Document settings</Dialog.Title>
+          <Dialog.Description size="2" color="gray" mb="4">
+            Naming, presentation, and export. Permissions live in Access control.
+          </Dialog.Description>
 
-        <Flex direction="column" gap="4">
-          <Flex direction="column" gap="1">
-            <Text as="label" size="2" weight="medium" htmlFor="doc-name-setting">
-              Document name
-            </Text>
-            <Text size="1" color="gray">
-              Shown on the home page and in the browser tab. Leave blank to derive from the
-              document's title / first heading.
-            </Text>
-            <TextField.Root
-              id="doc-name-setting"
-              size="2"
-              value={docName}
-              onChange={(e) => setDocName(e.target.value)}
-              placeholder="Leave blank to use the document's title"
-              maxLength={200}
-            />
-          </Flex>
-
-          <Separator size="4" />
-
-          <Flex direction="column" gap="1">
-            <Text size="2" weight="medium">
-              Default theme
-            </Text>
-            <Text size="1" color="gray">
-              Applied to anyone opening this document for the first time.
-            </Text>
-            <Select.Root value={defaultTheme} onValueChange={setDefaultTheme}>
-              <Select.Trigger />
-              <Select.Content position="popper">
-                {BUILT_IN_THEMES.map((t) => (
-                  <Select.Item key={t.id} value={t.id}>
-                    {t.label}
-                  </Select.Item>
-                ))}
-              </Select.Content>
-            </Select.Root>
-          </Flex>
-
-          <Separator size="4" />
-
-          <Flex direction="column" gap="1">
-            <Text size="2" weight="medium">
-              Mermaid renderer (exports only)
-            </Text>
-            <Text size="1" color="gray">
-              Affects PDF and Word downloads only — the viewer always uses mermaid.js. "Default"
-              follows the server setting. Pick "High fidelity" if some diagrams render incorrectly
-              under "Fast".
-            </Text>
-            <Select.Root
-              value={mermaidChoice}
-              onValueChange={(v) =>
-                setMermaidChoice(v as MermaidRenderer | typeof DEFAULT_RENDERER_VALUE)
-              }
-            >
-              <Select.Trigger />
-              <Select.Content position="popper">
-                <Select.Item value={DEFAULT_RENDERER_VALUE}>Default</Select.Item>
-                <Select.Item value="mmdr">Fast (native, lower fidelity)</Select.Item>
-                <Select.Item value="chromium">High fidelity (Chromium, slower)</Select.Item>
-              </Select.Content>
-            </Select.Root>
-          </Flex>
-
-          <Separator size="4" />
-
-          <Flex direction="column" gap="2">
-            <Text size="2" weight="medium">
-              JSON bundle
-            </Text>
-            <Text size="1" color="gray">
-              Versioned bundle with the source, comments, full document history, and renderer
-              metadata for tooling or later import. Re-importing restores the original revisions,
-              authors, and timestamps. For day-to-day source or DOCX downloads, use the download
-              icon next to this gear instead.
-            </Text>
-            <Flex>
-              <Button variant="soft" onClick={exportJson} disabled={exporting}>
-                <DownloadIcon />
-                {exporting ? 'Exporting…' : 'Export JSON bundle'}
-              </Button>
+          <Flex direction="column" gap="4">
+            <Flex direction="column" gap="1">
+              <Text as="label" size="2" weight="medium" htmlFor="doc-name-setting">
+                Document name
+              </Text>
+              <Text size="1" color="gray">
+                Shown on the home page and in the browser tab. Leave blank to derive from the
+                document's title / first heading.
+              </Text>
+              <TextField.Root
+                id="doc-name-setting"
+                size="2"
+                value={docName}
+                onChange={(e) => setDocName(e.target.value)}
+                placeholder="Leave blank to use the document's title"
+                maxLength={200}
+              />
             </Flex>
+
+            <Separator size="4" />
+
+            <Flex direction="column" gap="1">
+              <Text size="2" weight="medium">
+                Default theme
+              </Text>
+              <Text size="1" color="gray">
+                Applied to anyone opening this document for the first time.
+              </Text>
+              <Select.Root value={defaultTheme} onValueChange={setDefaultTheme}>
+                <Select.Trigger />
+                <Select.Content position="popper">
+                  {BUILT_IN_THEMES.map((t) => (
+                    <Select.Item key={t.id} value={t.id}>
+                      {t.label}
+                    </Select.Item>
+                  ))}
+                </Select.Content>
+              </Select.Root>
+            </Flex>
+
+            <Separator size="4" />
+
+            <Flex direction="column" gap="1">
+              <Text size="2" weight="medium">
+                Mermaid renderer (exports only)
+              </Text>
+              <Text size="1" color="gray">
+                Affects PDF and Word downloads only — the viewer always uses mermaid.js. "Default"
+                follows the server setting. Pick "High fidelity" if some diagrams render incorrectly
+                under "Fast".
+              </Text>
+              <Select.Root
+                value={mermaidChoice}
+                onValueChange={(v) =>
+                  setMermaidChoice(v as MermaidRenderer | typeof DEFAULT_RENDERER_VALUE)
+                }
+              >
+                <Select.Trigger />
+                <Select.Content position="popper">
+                  <Select.Item value={DEFAULT_RENDERER_VALUE}>Default</Select.Item>
+                  <Select.Item value="mmdr">Fast (native, lower fidelity)</Select.Item>
+                  <Select.Item value="chromium">High fidelity (Chromium, slower)</Select.Item>
+                </Select.Content>
+              </Select.Root>
+            </Flex>
+
+            <Separator size="4" />
+
+            <Flex direction="column" gap="2">
+              <Text size="2" weight="medium">
+                JSON bundle
+              </Text>
+              <Text size="1" color="gray">
+                Versioned bundle with the source, comments, full document history, and renderer
+                metadata for tooling or later import. Re-importing restores the original revisions,
+                authors, and timestamps. For day-to-day source or DOCX downloads, use the download
+                icon next to this gear instead.
+              </Text>
+              <Flex>
+                <Button variant="soft" onClick={exportJson} disabled={exporting}>
+                  <DownloadIcon />
+                  {exporting ? 'Exporting…' : 'Export JSON bundle'}
+                </Button>
+              </Flex>
+            </Flex>
+
+            {error && (
+              <Callout.Root color="red" size="1">
+                <Callout.Text>{error}</Callout.Text>
+              </Callout.Root>
+            )}
           </Flex>
-
-          {error && (
-            <Callout.Root color="red" size="1">
-              <Callout.Text>{error}</Callout.Text>
-            </Callout.Root>
-          )}
-
-          <Flex gap="2" justify="end">
-            <Dialog.Close>
-              <Button variant="soft" color="gray">
-                Cancel
-              </Button>
-            </Dialog.Close>
-            <Button onClick={save} disabled={saving}>
-              {saving ? 'Saving…' : 'Save changes'}
+        </div>
+        <Flex className="dialog-footer" gap="2" justify="end" mt="4">
+          <Dialog.Close>
+            <Button variant="soft" color="gray">
+              Cancel
             </Button>
-          </Flex>
+          </Dialog.Close>
+          <Button onClick={save} disabled={saving}>
+            {saving ? 'Saving…' : 'Save changes'}
+          </Button>
         </Flex>
       </Dialog.Content>
     </Dialog.Root>
