@@ -303,6 +303,15 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Stand-in code for a failure that carried no `{ error }` body to name
+ * itself with — the reverse proxy answering for a server that died or
+ * never accepted the connection, a plain-text 500, an HTML error page.
+ * Exported so `apiErrorMessage` can recognise it and describe the
+ * status instead of showing the reader the word "unknown".
+ */
+export const UNKNOWN_ERROR_CODE = 'unknown';
+
 function encodeHeaderValue(s: string): string {
   // eslint-disable-next-line no-control-regex
   if (/^[\x20-\x7e]*$/.test(s)) return s;
@@ -458,7 +467,7 @@ async function request<T>(
     throw markTransportFailure(err);
   }
   if (!res.ok) {
-    let code = 'unknown';
+    let code: string = UNKNOWN_ERROR_CODE;
     try {
       const body = (await res.json()) as { error?: string };
       if (body.error) code = body.error;
@@ -508,7 +517,7 @@ async function requestBinary(
     throw markTransportFailure(err);
   }
   if (!res.ok) {
-    let code = 'unknown';
+    let code: string = UNKNOWN_ERROR_CODE;
     try {
       const body = (await res.clone().json()) as { error?: string };
       if (body.error) code = body.error;

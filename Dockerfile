@@ -54,12 +54,19 @@ ENV MARGINALIA_RELEASE_VERSION=$MARGINALIA_RELEASE_VERSION
 # Fixed UID/GID keeps the deploy script's host volume ownership predictable.
 RUN groupadd -g 999 marginalia && useradd -u 999 -g marginalia -s /bin/bash marginalia
 
-# Document storage is isomorphic-git, which needs no binary — but the
-# three-way merge behind accepting an edit proposal does. iso-git has no
-# recursive merge strategy, so GitStore falls back to `git merge-file`
-# (see mergeTextWithNativeGit) for criss-cross histories and overlapping
-# hunks. Without the binary that fallback fails and every such proposal
-# reports as an unresolvable conflict.
+# Document storage is isomorphic-git, which needs no binary — but two
+# things here do, so don't drop this on the grounds that the store is
+# pure JS:
+#
+#  - The three-way merge behind accepting an edit proposal. iso-git has
+#    no recursive merge strategy, so `mergeThreeWay` (conflict.ts) shells
+#    out to `git merge-file` for criss-cross histories and overlapping
+#    hunks. Without the binary every such proposal reports as an
+#    unresolvable conflict.
+#  - Streaming the JSON bundle export's packfile
+#    (`GitStore.openHistoryPackStream`). This one fails *quietly*: it
+#    falls back to building the whole pack in memory, which is what got
+#    the server OOM-killed on book-length documents to begin with.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git \
   && apt-get clean && rm -rf /var/lib/apt/lists/*

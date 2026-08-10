@@ -1913,6 +1913,42 @@ describe('threads API', () => {
     return { bundle, serialized, imported, headers };
   }
 
+  /**
+   * The bundle is emitted as JSON fragments around a streamed packfile
+   * rather than serialized whole, so the seams are worth pinning: a
+   * mis-spliced fragment yields either invalid JSON or a plausible
+   * bundle missing a field, and only the second one gets past a
+   * round-trip test.
+   */
+  test('the streamed bundle is well-formed and keeps its field order', async () => {
+    const uid = await newDoc('# Title');
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/export`, { headers: asAdmin() }),
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(res.headers.get('content-disposition')).toContain('.marginalia.json');
+
+    const bundle = JSON.parse(await res.text()) as Record<string, unknown>;
+    expect(Object.keys(bundle)).toEqual([
+      'version',
+      'kind',
+      'exported_at',
+      'document',
+      'representation',
+      'comments',
+      'history',
+      'participants',
+    ]);
+    expect(bundle.version).toBe(5);
+    expect(Object.keys(bundle.history as object)).toEqual(['pack_base64', 'head_oid', 'commits']);
+    // Base64 with no interior padding — the tell that chunks were
+    // encoded independently instead of across the byte stream.
+    const packBase64 = (bundle.history as { pack_base64: string }).pack_base64;
+    expect(packBase64).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+    expect(Buffer.from(packBase64, 'base64').subarray(0, 4).toString()).toBe('PACK');
+  });
+
   test('a deleted comment thread leaves no trace in a bundle', async () => {
     const uid = await newDoc('# Title');
     const blockId = await firstBlockId(uid);

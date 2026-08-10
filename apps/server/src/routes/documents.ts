@@ -61,6 +61,7 @@ import {
   type MermaidPrerasterResolver,
   prerasterizeMermaid,
 } from '../export/html-envelope.js';
+import { Base64StreamEncoder, jsonTextStream } from '../export/json-stream.js';
 import { renderMermaidWithChromium } from '../export/mermaid-chromium.js';
 import {
   type MermaidImageFormat,
@@ -75,7 +76,7 @@ import {
   exportPdf,
 } from '../export/pdf.js';
 import { loadPrintCss, loadThemeCss } from '../export/theme-css.js';
-import type { HistoryEntry as GitHistoryEntry, GitStore } from '../git-store.js';
+import type { HistoryEntry as GitHistoryEntry, GitStore, HistoryPackStream } from '../git-store.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
 import type { Realtime } from '../realtime.js';
 import { listDocUserNameMap, upsertDocUser } from '../users.js';
@@ -619,7 +620,14 @@ async function exportDocument(c: Context, deps: AppDeps) {
 
   // A bundle without history is still importable (older bundles have
   // none); it just lands as a single-commit document.
-  const historyPack = await store.exportHistoryPack(doc).catch(() => null);
+  //
+  // Streamed in preference to buffered: the pack is by far the largest
+  // thing in a bundle, and holding it — plus its base64, plus the JSON
+  // around it — is what used to OOM-kill the server on book-length
+  // documents. The buffered path stays as the fallback for a runtime
+  // without native git.
+  const historyStream = await store.openHistoryPackStream(doc).catch(() => null);
+  const historyBuffer = historyStream ? null : await store.exportHistoryPack(doc).catch(() => null);
 
   // Commits record only client ids, so display names in a restored
   // history resolve through `doc_users`. Without the roster every actor
@@ -628,7 +636,11 @@ async function exportDocument(c: Context, deps: AppDeps) {
     .prepare('SELECT client_id, display_name FROM doc_users WHERE doc_uid = ?')
     .all(doc.uid) as Array<{ client_id: string; display_name: string }>;
 
-  const bundle = {
+  // Everything above this line is small enough to hold; only `history`
+  // is written incrementally. Field order matches the object literal
+  // this replaced, so two exports of the same document stay diffable
+  // across the change.
+  const head = {
     version: 5 as const,
     kind: 'marginalia.document-bundle',
     exported_at: Date.now(),
@@ -652,23 +664,62 @@ async function exportDocument(c: Context, deps: AppDeps) {
       warnings: rendered.warnings,
     },
     comments: await mapBundleComments(comments, store, doc),
-    // Git objects for main, so the import can restore the real timeline
-    // (authors, timestamps, diffs) instead of a synthetic first commit.
-    // Object ids are preserved, which is what keeps `accepted_oid` and
-    // the restored-from trailers meaningful on the other side.
-    history: historyPack
-      ? {
-          pack_base64: Buffer.from(historyPack.pack).toString('base64'),
-          head_oid: historyPack.headOid,
-          commits: historyPack.commits,
-        }
-      : null,
-    participants,
   };
 
   const filename = (doc.name ?? doc.uid).replace(/[^\w.-]+/g, '_').slice(0, 80);
-  c.header('Content-Disposition', `attachment; filename="${filename}.marginalia.json"`);
-  return c.json(bundle);
+  return new Response(
+    jsonTextStream(bundleJson(head, historyStream, historyBuffer, participants)),
+    {
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'content-disposition': `attachment; filename="${filename}.marginalia.json"`,
+      },
+    },
+  );
+}
+
+/**
+ * The bundle as a sequence of JSON fragments.
+ *
+ * Git objects for main are embedded so the import can restore the real
+ * timeline (authors, timestamps, diffs) instead of a synthetic first
+ * commit. Object ids are preserved, which is what keeps `accepted_oid`
+ * and the restored-from trailers meaningful on the other side.
+ *
+ * The pack is the one field that can be arbitrarily large, so it is the
+ * one field never assembled: its bytes are base64'd and handed onward a
+ * chunk at a time. Everything else is stringified whole, which is what
+ * keeps this readable — those fields are bounded by the document's text
+ * and comment count, not by the length of its history.
+ */
+async function* bundleJson(
+  head: object,
+  streamed: HistoryPackStream | null,
+  buffered: { pack: Uint8Array; headOid: string; commits: number } | null,
+  participants: unknown,
+): AsyncGenerator<string> {
+  const headJson = JSON.stringify(head);
+  // Splice into the head's own object rather than nesting, so the
+  // fragments concatenate into exactly the shape the importer expects.
+  yield `${headJson.slice(0, -1)},"history":`;
+
+  if (streamed) {
+    yield `{"pack_base64":"`;
+    const encoder = new Base64StreamEncoder();
+    for await (const chunk of streamed.chunks) yield encoder.push(chunk);
+    yield encoder.flush();
+    yield `","head_oid":${JSON.stringify(streamed.headOid)},"commits":${streamed.commits}}`;
+  } else if (buffered) {
+    yield JSON.stringify({
+      pack_base64: Buffer.from(buffered.pack).toString('base64'),
+      head_oid: buffered.headOid,
+      commits: buffered.commits,
+    });
+  } else {
+    yield 'null';
+  }
+
+  yield `,"participants":${JSON.stringify(participants)}}`;
 }
 
 // --- Review-mode export payload --------------------------------------
