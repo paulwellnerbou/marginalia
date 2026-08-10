@@ -4489,7 +4489,7 @@ button.primary:disabled {
    sliced through. `overflow: hidden` also makes this a block formatting
    context, keeping the children's margins inside the clamp. */
 .ic-body-clip {
-  --ic-body-clamp-lines: 3;
+  --ic-body-clamp-lines: 4;
   max-height: calc(var(--ic-body-clamp-lines) * 1lh);
   overflow: hidden;
 }
