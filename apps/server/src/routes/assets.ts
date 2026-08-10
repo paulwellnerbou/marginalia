@@ -11,7 +11,15 @@ import {
 } from '../auth.js';
 import type { BlobStore } from '../blob-store.js';
 import type { ServerConfig } from '../config.js';
-import { COVER_MAX_BYTES, coverRefName, loadCoverDescriptor, sniffCoverMime } from '../cover.js';
+import {
+  COVER_MAX_BYTES,
+  COVER_THUMBNAIL_MIME,
+  COVER_THUMBNAIL_REF,
+  coverRefName,
+  createCoverThumbnail,
+  loadCoverDescriptor,
+  sniffCoverMime,
+} from '../cover.js';
 import type { AssetKind, AssetRow, DocumentAssetRow, DocumentRow } from '../db.js';
 import { isAssetKind } from '../db.js';
 
@@ -71,6 +79,7 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
   }
   const refName = normalizeRefName(refNameRaw);
   if (!refName) return c.json({ error: 'ref_name-invalid' }, 400);
+  if (refName === COVER_THUMBNAIL_REF) return c.json({ error: 'ref_name-reserved' }, 400);
 
   if (file.size > config.maxAssetBytes) {
     return c.json({ error: 'file-too-large', limit: config.maxAssetBytes }, 413);
@@ -202,12 +211,27 @@ async function uploadCover(c: Context, { db, blobs }: AssetsDeps) {
   const mime = sniffCoverMime(bytes);
   if (!mime) return c.json({ error: 'unsupported-cover-image' }, 400);
 
+  let thumbnailBytes: Uint8Array;
+  try {
+    thumbnailBytes = await createCoverThumbnail(bytes);
+  } catch {
+    return c.json({ error: 'unsupported-cover-image' }, 400);
+  }
+
   const refName = coverRefName(mime);
   await attachBlob(db, blobs, {
     docUid: doc.uid,
     refName,
     bytes,
     mime,
+    kind: 'image',
+    createdBy: decision.identity.displayName,
+  });
+  await attachBlob(db, blobs, {
+    docUid: doc.uid,
+    refName: COVER_THUMBNAIL_REF,
+    bytes: thumbnailBytes,
+    mime: COVER_THUMBNAIL_MIME,
     kind: 'image',
     createdBy: decision.identity.displayName,
   });
@@ -234,6 +258,7 @@ async function deleteCover(c: Context, { db, blobs }: AssetsDeps) {
 
   if (doc.cover_ref) {
     await detachAsset(db, blobs, doc.uid, doc.cover_ref);
+    await detachAsset(db, blobs, doc.uid, COVER_THUMBNAIL_REF);
     db.prepare('UPDATE documents SET cover_ref = NULL WHERE uid = ?').run(doc.uid);
   }
   return c.body(null, 204);
@@ -355,9 +380,11 @@ async function deleteAsset(c: Context, { db, blobs }: AssetsDeps) {
   const refName = decodeRefName(c.req.param('refName'));
   if (!refName) return c.json({ error: 'not-found' }, 404);
 
+  const deletingCover = doc.cover_ref === refName;
   if (!(await detachAsset(db, blobs, doc.uid, refName))) {
     return c.json({ error: 'not-found' }, 404);
   }
+  if (deletingCover) await detachAsset(db, blobs, doc.uid, COVER_THUMBNAIL_REF);
   return c.body(null, 204);
 }
 
@@ -438,10 +465,10 @@ export function listAttached(db: Database, docUid: string): AttachedAsset[] {
               da.created_by, a.size
          FROM document_assets da
          JOIN assets a ON a.id = da.asset_id
-         WHERE da.doc_uid = ?
+         WHERE da.doc_uid = ? AND da.ref_name != ?
          ORDER BY da.ref_name ASC`,
     )
-    .all(docUid) as AttachedAsset[];
+    .all(docUid, COVER_THUMBNAIL_REF) as AttachedAsset[];
 }
 
 function loadAttached(db: Database, docUid: string, refName: string): AttachedAsset | null {

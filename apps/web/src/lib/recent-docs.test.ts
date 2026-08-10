@@ -109,6 +109,22 @@ test('covers come from the server, so one added elsewhere shows up before the ne
   expect(merged[0]?.cover?.ref_name).toBe('cover.png');
 });
 
+test('cover thumbnails survive keyring merge and local persistence', () => {
+  const thumbnail = {
+    ref_name: '__marginalia-cover-thumbnail.webp',
+    asset_id: 'thumb-sha',
+    mime: 'image/webp',
+  };
+  const merged = mergeKeyringDocs([
+    entry({
+      cover: { ref_name: 'cover.png', asset_id: 'cover-sha', mime: 'image/png', thumbnail },
+    }),
+  ]);
+
+  expect(merged[0]?.cover?.thumbnail).toEqual(thumbnail);
+  expect(loadRecentDocs()[0]?.cover?.thumbnail).toEqual(thumbnail);
+});
+
 test('a cover removed elsewhere disappears here too', () => {
   // The other half of "the server wins on cover": null means the
   // document has none, not that the ring forgot to say. Keeping the

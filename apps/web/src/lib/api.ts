@@ -131,6 +131,14 @@ export interface DocumentCover {
   /** sha256 of the bytes; doubles as a cache-busting URL version. */
   asset_id: string;
   mime: string;
+  /** Upload-time derivative used by small UI previews; absent in older cached records. */
+  thumbnail?: DocumentCoverImage | null;
+}
+
+export interface DocumentCoverImage {
+  ref_name: string;
+  asset_id: string;
+  mime: string;
 }
 
 export interface Document {
@@ -889,9 +897,10 @@ export function deleteDocumentCover(uid: string, identity: Identity): Promise<vo
   });
 }
 
-/** Proxy URL for a document's cover image. */
+/** Proxy URL for the smallest available version of a document cover. */
 export function coverProxyUrl(uid: string, cover: DocumentCover): string {
-  return assetProxyUrl(uid, cover.ref_name, cover.asset_id);
+  const image = cover.thumbnail ?? cover;
+  return assetProxyUrl(uid, image.ref_name, image.asset_id);
 }
 
 export function assetProxyUrl(uid: string, refName: string, version?: string): string {
