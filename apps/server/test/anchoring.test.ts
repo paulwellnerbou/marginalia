@@ -233,6 +233,26 @@ describe('reanchor: short quotes', () => {
     expect(upd.startOffset).toBe(4);
   });
 
+  test('an intact context window wins a tie against a partial one', () => {
+    // `asAnchor` stores prefix/suffix as the client sent them, so a
+    // whitespace-only window is storable even though the browser's own
+    // capture reads them out of trimmed block text. Whitespace agreement
+    // scores zero however much of it survives, so the intact occurrence ties
+    // with the partial one and has to win that tie — losing it leaves the
+    // block looking like it holds only a drifted match.
+    const blocks = blockMap([
+      { id: 'b1', text: 'it, and then it ' },
+      { id: 'b2', text: 'But it, goes on.' },
+    ]);
+    const upd = reanchor(
+      comment({ anchor_block_id: 'b1', anchor_quote: 'it', anchor_suffix: ' ' }),
+      blocks,
+    );
+    expect(upd.linkStatus).toBe('linked');
+    expect(upd.blockId).toBe('b1');
+    expect(upd.startOffset).toBe(13);
+  });
+
   test('a distinctive quote that moved is still followed', () => {
     const blocks = blockMap([
       { id: 'b1', text: 'A different sentence now.' },

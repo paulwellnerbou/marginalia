@@ -401,6 +401,11 @@ function locateFragment(
  * A quote that stood on its own word boundaries when it was captured has to
  * do so here too — "it" inside "its" is a different word, not a shifted
  * one — which is what keeps one-word anchors from landing mid-word.
+ *
+ * Only the leading occurrence is ever read back, so `complete` breaks ties:
+ * a context window that is entirely whitespace scores zero however much of
+ * it agrees, and an intact occurrence that lost the tie would look partial
+ * to every caller that asks whether the context vouches for it.
  */
 function occurrencesOf(text: string, quote: string, prefix: string, suffix: string): Occurrence[] {
   if (!quote) return [];
@@ -410,7 +415,7 @@ function occurrencesOf(text: string, quote: string, prefix: string, suffix: stri
     if (wantsWordBounds && !isWordBounded(text, idx, quote.length)) continue;
     out.push({ offset: idx, ...contextAgreement(text, idx, quote.length, prefix, suffix) });
   }
-  out.sort((a, b) => b.context - a.context);
+  out.sort((a, b) => b.context - a.context || Number(b.complete) - Number(a.complete));
   return out;
 }
 
