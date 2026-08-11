@@ -2116,7 +2116,7 @@ async function prepareReopenAcceptedProposalThread(
 ): Promise<PreparedThreadWorkflow> {
   if (!row.accepted_oid) throw new ThreadActionError(409, 'not-reopenable');
 
-  const history = await deps.store.history(doc);
+  const history = await deps.store.history(doc, { depth: 2 });
   const latest = history[0];
   const parent = history[1];
   if (!latest || latest.oid !== row.accepted_oid || !parent) {
@@ -2310,7 +2310,7 @@ async function loadReopenableAcceptedThreadIds(
   const accepted = rows.filter((row) => row.proposal_status === 'accepted' && row.accepted_oid);
   if (accepted.length === 0) return new Set<string>();
 
-  const history = await deps.store.history(doc);
+  const history = await deps.store.history(doc, { depth: 2 });
   const latest = history[0];
   const parent = history[1];
   if (!latest || !parent) return new Set<string>();

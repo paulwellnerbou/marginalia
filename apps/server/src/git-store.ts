@@ -171,7 +171,23 @@ export class GitStore {
     });
   }
 
-  async history(doc: DocLocator): Promise<HistoryEntry[]> {
+  /**
+   * Commits that changed the doc file, newest first.
+   *
+   * `depth` bounds the walk for callers that only want the newest few
+   * entries. It counts *emitted* entries, not commits visited, so a run
+   * of commits that left the file untouched doesn't consume it — the
+   * walk keeps going until `depth` file-changing commits are found, then
+   * emits the boundary commit as one extra entry. That makes
+   * `history(doc, { depth: n })[i]` identical to the unbounded
+   * `history(doc)[i]` for every `i < n`, which is what the callers that
+   * compare against the tip rely on.
+   *
+   * Worth bounding: unbounded, this inflates every commit and tree in
+   * the repo, which on a doc with hundreds of revisions costs more than
+   * the rest of the request put together.
+   */
+  async history(doc: DocLocator, opts?: { depth?: number }): Promise<HistoryEntry[]> {
     const dir = this.repoDir(doc.uid);
     if (!existsSync(join(dir, '.git'))) return [];
     const entries = await git.log({
@@ -179,6 +195,7 @@ export class GitStore {
       dir,
       filepath: this.filename(doc.format),
       force: true, // include even if file was deleted in later commits
+      depth: opts?.depth,
     });
     return entries.map((e) => ({
       oid: e.oid,
@@ -329,15 +346,20 @@ export class GitStore {
    * oids recorded in SQLite (`accepted_oid`) and in commit trailers
    * (`X-Marginalia-Restored-From`) stay valid across the transplant.
    *
-   * Returns null — leaving no repo behind — if the pack is unusable, so
-   * the caller can fall back to seeding a fresh single-commit repo. A
+   * Declines — leaving no repo behind — if the pack is unusable, so the
+   * caller can fall back to seeding a fresh single-commit repo. A
    * corrupt or truncated bundle must not cost the user the import.
+   *
+   * The decline carries the underlying error rather than collapsing to
+   * a bare null: a pack truncated in transit, one whose bytes are
+   * corrupt, and one simply missing the head commit all fail here, and
+   * only that message tells an operator which of the three happened.
    */
   async importHistoryPack(
     doc: DocLocator,
     pack: Uint8Array,
     headOid: string,
-  ): Promise<{ oid: string } | null> {
+  ): Promise<ImportHistoryPackResult> {
     return this.withLock(doc.uid, async () => {
       const dir = this.repoDir(doc.uid);
       try {
@@ -362,11 +384,11 @@ export class GitStore {
         await git.writeRef({ fs, dir, ref: 'refs/heads/main', value: headOid, force: true });
         await git.checkout({ fs, dir, ref: 'main', force: true });
         this.initialized.add(doc.uid);
-        return { oid: headOid };
-      } catch {
+        return { ok: true, oid: headOid };
+      } catch (err) {
         rmSync(dir, { recursive: true, force: true });
         this.initialized.delete(doc.uid);
-        return null;
+        return { ok: false, reason: packFailureReason(err) };
       }
     });
   }
@@ -874,6 +896,12 @@ export type RewriteProposalBranchResult =
   | { ok: true; commitOid: string; baseOid: string; backupRef: string }
   | { ok: false; reason: 'absent' | 'stale' };
 
+/**
+ * `reason` is an operator diagnostic, not user-facing prose — it carries
+ * whatever git said, so it belongs in a log rather than in a response.
+ */
+export type ImportHistoryPackResult = { ok: true; oid: string } | { ok: false; reason: string };
+
 export interface ProposalRepairBranchResult {
   preview: PreviewProposalMergeResult;
   rewrite: RewriteProposalBranchResult | null;
@@ -903,9 +931,10 @@ export interface HistoryPackStream {
  * status line is long gone, so every later failure can do nothing but
  * tear the stream down.
  *
- * stdout is left in paused mode throughout — a `data` listener would
- * put it in flowing mode and drop everything arriving between here and
- * the consumer's first `next()`.
+ * stdout must stay attached to one reader for the whole read, and in
+ * paused mode: a `data` listener would put it in flowing mode and drop
+ * everything arriving between here and the consumer's first `next()`,
+ * and so would leaving it with no reader at all.
  */
 async function stdoutAfterFirstChunk(
   child: ChildProcessWithoutNullStreams,
@@ -926,46 +955,44 @@ async function stdoutAfterFirstChunk(
   const failure = (detail: string) =>
     new Error(`git ${child.spawnargs[1] ?? ''} ${detail}: ${stderr.trim()}`.replace(/\s+/g, ' '));
 
-  const first = await new Promise<Buffer>((resolve, reject) => {
-    const detach = () => {
-      stdout.off('readable', onReadable);
-      stdout.off('end', onEnd);
-      child.off('error', onError);
-      child.off('close', onClose);
-    };
-    const onReadable = () => {
-      const chunk = stdout.read() as Buffer | null;
-      if (chunk && chunk.length > 0) {
-        detach();
-        resolve(chunk);
-      }
-    };
-    const onEnd = () => {
-      detach();
-      reject(failure('produced no output'));
-    };
-    const onError = (err: Error) => {
-      detach();
-      reject(err);
-    };
-    const onClose = (code: number | null) => {
-      // Exit 0 can beat the first read: the pipe closes at EOF, not when
-      // we get around to draining what git already buffered there.
-      if (code !== 0) {
-        detach();
-        reject(failure(`exited ${code}`));
-      }
-    };
-    stdout.on('readable', onReadable);
-    stdout.on('end', onEnd);
-    child.on('error', onError);
-    child.on('close', onClose);
+  // One iterator over stdout, attached before the first pull and reused
+  // for the rest of the read. Taking the first chunk through a separate
+  // `readable`/`read()` handler and handing the stream to `for await`
+  // afterwards leaves it unattended in between, and whatever the child
+  // writes in that window is dropped: for `git pack-objects` that is the
+  // trailing checksum, written after the body, so the export silently
+  // ships a truncated pack that only fails much later, on import.
+  const chunks = stdout[Symbol.asyncIterator]();
+
+  const firstPull = chunks.next();
+  // Spawn failures (no git on the runtime) and argument failures (an
+  // unresolvable rev) both surface before any output. Exit 0 is not one
+  // of them even when it beats the first read: the pipe closes at EOF,
+  // not when we get around to draining what git already buffered there.
+  const failed = new Promise<never>((_, reject) => {
+    child.once('error', reject);
+    child.once('close', (code: number | null) => {
+      if (code !== 0) reject(failure(`exited ${code}`));
+    });
   });
+  // Whichever loses the race stays pending and may settle later; mark
+  // both handled so the loser can't surface as an unhandled rejection.
+  // A non-zero exit that lands after the first chunk is still caught, by
+  // the exit check once the stream drains.
+  firstPull.catch(() => {});
+  failed.catch(() => {});
+
+  const first = await Promise.race([firstPull, failed]);
+  if (first.done) throw failure('produced no output');
 
   return (async function* () {
     try {
-      yield first;
-      for await (const chunk of stdout) yield chunk as Uint8Array;
+      yield first.value as Uint8Array;
+      for (;;) {
+        const next = await chunks.next();
+        if (next.done) break;
+        yield next.value as Uint8Array;
+      }
       const code = await exitCode(child);
       if (code !== 0) throw failure(`exited ${code}`);
     } finally {
@@ -975,6 +1002,25 @@ async function stdoutAfterFirstChunk(
       if (child.exitCode === null) child.kill();
     }
   })();
+}
+
+/**
+ * The one useful line out of a failed pack read.
+ *
+ * isomorphic-git wraps its actual diagnosis in a multi-paragraph "please
+ * file a bug report" template and keeps the readable sentence in
+ * `data.message`, so logging `err.message` buries the only part an
+ * operator wants — which pack was bad and how — under boilerplate.
+ */
+function packFailureReason(err: unknown): string {
+  const data = (err as { data?: { message?: unknown } } | null)?.data;
+  const detail =
+    typeof data?.message === 'string'
+      ? data.message
+      : err instanceof Error
+        ? err.message
+        : String(err);
+  return detail.replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 
 function exitCode(child: ChildProcessWithoutNullStreams): Promise<number | null> {

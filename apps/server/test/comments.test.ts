@@ -2165,6 +2165,91 @@ describe('threads API', () => {
     }
   });
 
+  /**
+   * Dropping a history is a real loss for the importer, and until it is
+   * said out loud the only trace is a server log nobody reading the
+   * response ever sees. `absent` and `dropped` have to stay
+   * distinguishable: one is every pre-v5 bundle, the other is a bundle
+   * whose timeline we threw away.
+   */
+  test('an import reports whether the bundle history survived', async () => {
+    const uid = await newDoc('# Title');
+    await acceptedProposal(uid, 'Sharper title', '# Better title');
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/export`, { headers: asAdmin() }),
+    );
+    const bundle = (await exportRes.json()) as Record<string, unknown>;
+
+    const importWith = async (history: unknown) => {
+      const res = await app.hono.fetch(
+        new Request('http://test/api/documents/import', {
+          method: 'POST',
+          headers: rawHeadersFor(ALICE),
+          body: JSON.stringify({ ...bundle, history }),
+        }),
+      );
+      expect(res.status).toBe(201);
+      return (await res.json()) as { imported_history: string };
+    };
+
+    expect((await importWith(bundle.history)).imported_history).toBe('restored');
+    expect((await importWith(null)).imported_history).toBe('absent');
+    expect(
+      (await importWith({ pack_base64: 'bm90LWEtcGFjaw==', head_oid: 'f'.repeat(40) }))
+        .imported_history,
+    ).toBe('dropped');
+  });
+
+  /**
+   * The reason a pack was refused is the whole diagnosis — a truncated
+   * transfer, corrupt bytes, and a missing head commit are three
+   * different problems that all reach this one line.
+   */
+  test('a refused history pack logs why, not just that', async () => {
+    const uid = await newDoc('# Title');
+    const exportRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/export`, { headers: asAdmin() }),
+    );
+    const bundle = (await exportRes.json()) as Record<string, unknown>;
+    const good = bundle.history as { pack_base64: string; head_oid: string };
+    // Truncated mid-pack: indexes far enough to look like a pack, then
+    // fails its trailing checksum.
+    const truncated = Buffer.from(good.pack_base64, 'base64');
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => void warnings.push(String(args[0]));
+    try {
+      for (const history of [
+        { ...good, pack_base64: truncated.subarray(0, truncated.length - 8).toString('base64') },
+        { ...good, head_oid: '0'.repeat(40) },
+        { pack_base64: good.pack_base64, head_oid: 'nonsense' },
+      ]) {
+        const res = await app.hono.fetch(
+          new Request('http://test/api/documents/import', {
+            method: 'POST',
+            headers: rawHeadersFor(ALICE),
+            body: JSON.stringify({ ...bundle, history }),
+          }),
+        );
+        expect(res.status).toBe(201);
+      }
+    } finally {
+      console.warn = original;
+    }
+
+    expect(warnings).toHaveLength(3);
+    for (const line of warnings) {
+      expect(line).toContain('seeding a fresh repo');
+      // One line each: git's own errors run to several paragraphs of
+      // bug-report boilerplate, which is unreadable in a container log.
+      expect(line).not.toContain('\n');
+    }
+    // Each names its own cause rather than sharing one generic sentence.
+    expect(warnings[0]).toContain('Packfile payload corrupted');
+    expect(warnings[1]).toContain(`Could not find ${'0'.repeat(40)}`);
+    expect(warnings[2]).toContain('head oid is malformed');
+  });
+
   test('resolving a reply is rejected', async () => {
     const uid = await newDoc('# Title');
     const blockId = await firstBlockId(uid);
