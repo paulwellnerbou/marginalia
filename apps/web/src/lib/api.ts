@@ -1380,12 +1380,16 @@ function snapshotSet(uid: string, threads: Thread[]): void {
 
 export function listThreads(
   uid: string,
-  opts: { consumeMentions?: boolean } = {},
+  opts: { consumeMentions?: boolean; fresh?: boolean } = {},
 ): Promise<ListThreadsResponse> {
   const consumeMentions = opts.consumeMentions !== false;
   const cacheKey = `${uid}:${consumeMentions ? 'consume' : 'peek'}`;
   const existing = listThreadsInflight.get(cacheKey);
-  if (existing) return existing;
+  // Mutation reconciliation must start a read after that mutation, even when
+  // an older read for the same document is still in flight. Reusing the older
+  // promise is precisely how two simultaneous resolves used to collapse back
+  // to the first resolve's snapshot.
+  if (existing && !opts.fresh) return existing;
 
   // `state=all` explicitly: the endpoint serves open threads by default,
   // but the viewer renders resolved ones too — collapsed, filterable, and
@@ -1518,7 +1522,7 @@ export async function updateComment(
   cid: string,
   body: string,
   identity: Identity,
-): Promise<void> {
+): Promise<Thread> {
   const location = await findCommentLocation(uid, cid);
   const tid = location.thread.id;
   const isOpener = location.thread.comments[0].id === cid;
@@ -1532,6 +1536,7 @@ export async function updateComment(
     docUid: uid,
   });
   rememberThread(uid, res.thread);
+  return res.thread;
 }
 
 /**
@@ -1586,7 +1591,7 @@ export function createEditProposal(
     rationale?: string | null;
   },
   identity: Identity,
-): Promise<void> {
+): Promise<Thread> {
   return request<ThreadMutationResponse>(`/api/documents/${encodeURIComponent(uid)}/threads`, {
     method: 'POST',
     body: JSON.stringify({
@@ -1602,6 +1607,7 @@ export function createEditProposal(
     docUid: uid,
   }).then((res) => {
     rememberThread(uid, res.thread);
+    return res.thread;
   });
 }
 
@@ -1693,7 +1699,7 @@ export function acceptEditProposal(
   pid: string,
   identity: Identity,
   body?: string,
-): Promise<void> {
+): Promise<Thread> {
   const replyBody = body?.trim();
   return request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/respond`,
@@ -1708,6 +1714,7 @@ export function acceptEditProposal(
     },
   ).then((res) => {
     rememberThread(uid, res.thread);
+    return res.thread;
   });
 }
 
@@ -1716,7 +1723,7 @@ export function rejectEditProposal(
   pid: string,
   identity: Identity,
   body?: string,
-): Promise<void> {
+): Promise<Thread> {
   const replyBody = body?.trim();
   return request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/respond`,
@@ -1731,6 +1738,7 @@ export function rejectEditProposal(
     },
   ).then((res) => {
     rememberThread(uid, res.thread);
+    return res.thread;
   });
 }
 
@@ -1817,7 +1825,7 @@ export async function resolveThread(
   resolved: boolean,
   identity: Identity,
   body?: string,
-): Promise<void> {
+): Promise<Thread> {
   const replyBody = body?.trim();
   const res = await request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(threadId)}/respond`,
@@ -1832,4 +1840,5 @@ export async function resolveThread(
     },
   );
   rememberThread(uid, res.thread);
+  return res.thread;
 }

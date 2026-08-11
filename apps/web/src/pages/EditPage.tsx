@@ -1,7 +1,7 @@
 import type { RenderResult } from '@marginalia/renderer/types';
 import { Button, Container, Flex, Select, Slider, Text } from '@radix-ui/themes';
 import type { EditorView } from 'codemirror';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { AssetsPanel } from '../components/AssetsPanel.js';
@@ -106,6 +106,28 @@ export function EditPage() {
   const [error, setError] = useState<string | null>(null);
   const [attached, setAttached] = useState<AttachedAsset[]>([]);
   const displayName = useDisplayName();
+  const activeUidRef = useRef(uid);
+  useLayoutEffect(() => {
+    activeUidRef.current = uid;
+    return () => {
+      if (activeUidRef.current === uid) activeUidRef.current = undefined;
+    };
+  }, [uid]);
+
+  // React Router reuses EditPage when only :uid changes. Reset the complete
+  // document-scoped state during render so there is never a committed frame
+  // where the previous source can be saved under the new uid.
+  const [stateUid, setStateUid] = useState(uid);
+  if (stateUid !== uid) {
+    setStateUid(uid);
+    setDoc(null);
+    setSource('');
+    setSavedSource('');
+    setRendered(null);
+    setAttached([]);
+    setSaving(false);
+    setError(null);
+  }
 
   const [wordWrap, setWordWrap] = useState<boolean>(() => {
     const saved = localStorage.getItem(LS_WORD_WRAP);
@@ -208,8 +230,10 @@ export function EditPage() {
 
   useEffect(() => {
     if (!uid) return;
+    let cancelled = false;
     getDocument(uid).then(
       (d) => {
+        if (cancelled) return;
         setDoc(d);
         setSource(d.source);
         setSavedSource(d.source);
@@ -217,11 +241,15 @@ export function EditPage() {
         setAttached(d.attached_assets ?? []);
       },
       (err) => {
+        if (cancelled) return;
         reportError('EditPage.load', err, { uid });
         if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
         else setError('Failed to load');
       },
     );
+    return () => {
+      cancelled = true;
+    };
   }, [uid]);
 
   // Mirror ViewPage: sync localStorage to the server's authoritative
@@ -382,16 +410,18 @@ export function EditPage() {
   const uploadAndAttach = useCallback(
     async (refName: string, file: File) => {
       if (!uid) return;
+      const targetUid = uid;
       const resolvedName = displayName.trim();
       if (!resolvedName) {
         setError('Enter a display name before uploading.');
         return;
       }
       try {
-        const { asset } = await uploadAsset(uid, refName, file, {
+        const { asset } = await uploadAsset(targetUid, refName, file, {
           clientId: getClientId(),
           displayName: resolvedName,
         });
+        if (activeUidRef.current !== targetUid) return;
         // Upsert keyed on the server-returned canonical ref_name. Using
         // the caller-supplied `refName` could leave a duplicate if the
         // server normalized it (e.g. trimmed surrounding whitespace).
@@ -401,7 +431,8 @@ export function EditPage() {
           return next;
         });
       } catch (err) {
-        reportError('EditPage.uploadAsset', err, { uid, refName });
+        if (activeUidRef.current !== targetUid) return;
+        reportError('EditPage.uploadAsset', err, { uid: targetUid, refName });
         if (err instanceof ApiError) setError(`Upload failed: ${err.status} ${err.code}`);
         else setError('Upload failed');
       }
@@ -412,19 +443,22 @@ export function EditPage() {
   const handleDeleteAsset = useCallback(
     async (refName: string) => {
       if (!uid) return;
+      const targetUid = uid;
       const resolvedName = displayName.trim();
       if (!resolvedName) {
         setError('Enter a display name before deleting assets.');
         return;
       }
       try {
-        await deleteAttachedAsset(uid, refName, {
+        await deleteAttachedAsset(targetUid, refName, {
           clientId: getClientId(),
           displayName: resolvedName,
         });
+        if (activeUidRef.current !== targetUid) return;
         setAttached((prev) => prev.filter((a) => a.ref_name !== refName));
       } catch (err) {
-        reportError('EditPage.deleteAsset', err, { uid, refName });
+        if (activeUidRef.current !== targetUid) return;
+        reportError('EditPage.deleteAsset', err, { uid: targetUid, refName });
         if (err instanceof ApiError) setError(`Delete failed: ${err.status} ${err.code}`);
         else setError('Delete failed');
       }
@@ -477,6 +511,7 @@ export function EditPage() {
 
   async function handleSave(comment: string) {
     if (!uid) return;
+    const targetUid = uid;
     const resolved = displayName.trim();
     if (!resolved) {
       setError('Enter a display name to save.');
@@ -488,20 +523,23 @@ export function EditPage() {
     setError(null);
     try {
       const trimmed = comment.trim();
-      await updateDocument(uid, source, identity, trimmed || undefined);
+      await updateDocument(targetUid, source, identity, trimmed || undefined);
+      if (activeUidRef.current !== targetUid) return;
       setSavedSource(source);
-      navigate(`/d/${uid}`);
+      navigate(`/d/${targetUid}`);
     } catch (err) {
-      reportError('EditPage.save', err, { uid });
+      if (activeUidRef.current !== targetUid) return;
+      reportError('EditPage.save', err, { uid: targetUid });
       if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
       else setError(err instanceof Error ? `Save failed: ${err.message}` : 'Save failed');
     } finally {
-      setSaving(false);
+      if (activeUidRef.current === targetUid) setSaving(false);
     }
   }
 
   async function handleProposeEdit(rationale: string) {
     if (!uid || !doc) return;
+    const targetUid = uid;
     const resolved = displayName.trim();
     if (!resolved) {
       setError('Enter a display name to propose an edit.');
@@ -518,6 +556,7 @@ export function EditPage() {
       // what the server has at base — the proposed_text is the user's
       // new full source.
       const blocks = await loadBlockRanges(savedSource, doc.format);
+      if (activeUidRef.current !== targetUid) return;
       const first = blocks.entries().next();
       if (first.done) {
         setError('Cannot propose an edit on an empty document.');
@@ -526,7 +565,7 @@ export function EditPage() {
       const [firstBlockId, firstRange] = first.value;
       const anchorQuote = savedSource.slice(firstRange.start, firstRange.end).slice(0, 200);
       await createDocumentProposal(
-        uid,
+        targetUid,
         {
           proposed_text: source,
           rationale: rationale.trim() || null,
@@ -535,13 +574,15 @@ export function EditPage() {
         },
         identity,
       );
-      navigate(`/d/${uid}`);
+      if (activeUidRef.current !== targetUid) return;
+      navigate(`/d/${targetUid}`);
     } catch (err) {
-      reportError('EditPage.proposeEdit', err, { uid });
+      if (activeUidRef.current !== targetUid) return;
+      reportError('EditPage.proposeEdit', err, { uid: targetUid });
       if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
       else setError(err instanceof Error ? `Propose failed: ${err.message}` : 'Propose failed');
     } finally {
-      setSaving(false);
+      if (activeUidRef.current === targetUid) setSaving(false);
     }
   }
 

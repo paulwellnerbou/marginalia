@@ -36,7 +36,7 @@ export function DocumentSettingsDialog({
   onChange,
 }: {
   doc: Document;
-  onChange: (s: DocumentSettingsResponse) => void;
+  onChange: (uid: string, s: Partial<DocumentSettingsResponse>) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [docName, setDocName] = useState(doc.name ?? '');
@@ -69,7 +69,14 @@ export function DocumentSettingsDialog({
         mermaid_renderer: mermaidChoice === DEFAULT_RENDERER_VALUE ? null : mermaidChoice,
       };
       const result = await updateDocumentSettings(doc.uid, patch, identity);
-      onChange(result);
+      // Apply only the fields this mutation owned. Another settings dialog
+      // may have completed a disjoint PATCH while this response was in flight;
+      // copying its full snapshot would regress that newer field locally.
+      onChange(doc.uid, {
+        name: result.name,
+        default_theme: result.default_theme,
+        mermaid_renderer: result.mermaid_renderer,
+      });
       setOpen(false);
     } catch (err) {
       reportError('DocumentSettings.save', err);
@@ -105,7 +112,20 @@ export function DocumentSettingsDialog({
   }
 
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (next) {
+          // The component stays mounted between openings. Seed from the
+          // latest parent snapshot rather than an earlier visit's draft.
+          setDocName(doc.name ?? '');
+          setDefaultTheme(doc.default_theme);
+          setMermaidChoice(doc.mermaid_renderer ?? DEFAULT_RENDERER_VALUE);
+          setError(null);
+        }
+        setOpen(next);
+      }}
+    >
       <Dialog.Trigger>
         <IconButton
           variant="soft"

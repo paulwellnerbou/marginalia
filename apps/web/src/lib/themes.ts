@@ -48,8 +48,12 @@ const themeImports: Record<string, () => Promise<unknown>> = {
 
 const THEME_LINK_ATTR = 'data-marginalia-theme';
 let active: string | null = null;
+let requestGeneration = 0;
 
 export async function applyTheme(id: string): Promise<void> {
+  // Increment even when selecting the already-active theme: that intent must
+  // invalidate an older dynamic import which is still in flight.
+  const generation = ++requestGeneration;
   const loadTheme = themeImports[id];
   if (!loadTheme) {
     console.warn('[marginalia:theme] unknown theme', id);
@@ -57,6 +61,7 @@ export async function applyTheme(id: string): Promise<void> {
   }
   if (active === id) return;
   const mod = (await loadTheme()) as { default: string };
+  if (generation !== requestGeneration) return;
   const href = mod.default;
 
   const existing = document.querySelectorAll<HTMLLinkElement>(`link[${THEME_LINK_ATTR}]`);

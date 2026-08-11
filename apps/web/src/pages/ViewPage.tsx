@@ -118,15 +118,17 @@ export function ViewPage() {
     };
   }, [doc]);
 
-  function handleSettingsChanged(s: DocumentSettingsResponse) {
-    if (!doc) return;
-    setDoc({
-      ...doc,
-      name: s.name,
-      default_theme: s.default_theme,
-      mermaid_renderer: s.mermaid_renderer,
-      password_protected: s.password_protected,
-      invite_only: s.invite_only,
+  function handleSettingsChanged(changedUid: string, s: Partial<DocumentSettingsResponse>) {
+    setDoc((current) => {
+      if (!current || current.uid !== changedUid) return current;
+      return {
+        ...current,
+        ...(s.name !== undefined ? { name: s.name } : {}),
+        ...(s.default_theme !== undefined ? { default_theme: s.default_theme } : {}),
+        ...(s.mermaid_renderer !== undefined ? { mermaid_renderer: s.mermaid_renderer } : {}),
+        ...(s.password_protected !== undefined ? { password_protected: s.password_protected } : {}),
+        ...(s.invite_only !== undefined ? { invite_only: s.invite_only } : {}),
+      };
     });
   }
 

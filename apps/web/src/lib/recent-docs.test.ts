@@ -2,7 +2,13 @@
 
 import { beforeEach, expect, test } from 'bun:test';
 import type { KeyringDocEntry } from './api.js';
-import { loadRecentDocs, mergeKeyringDocs, type RecentDoc, recordVisit } from './recent-docs.js';
+import {
+  loadRecentDocs,
+  mergeKeyringDocs,
+  type RecentDoc,
+  recordVisit,
+  removeFromRecent,
+} from './recent-docs.js';
 
 const KEY = 'marginalia.recentDocs';
 
@@ -138,6 +144,20 @@ test('documents held only locally survive a sync', () => {
   recordVisit(local({ uid: 'only-here', visited_at: 20_000 }));
   const merged = mergeKeyringDocs([entry({ doc_uid: 'from-ring' })]);
   expect(merged.map((d) => d.uid).sort()).toEqual(['from-ring', 'only-here']);
+});
+
+test('a stale keyring snapshot cannot revive a document removed while it was in flight', () => {
+  recordVisit(local());
+  removeFromRecent('doc-1');
+
+  expect(mergeKeyringDocs([entry()])).toEqual([]);
+  expect(loadRecentDocs()).toEqual([]);
+
+  // A later authoritative snapshot that omits the uid acknowledges the
+  // deletion and clears the tombstone. Reopening the document may then add it.
+  expect(mergeKeyringDocs([])).toEqual([]);
+  recordVisit(local());
+  expect(loadRecentDocs().map((doc) => doc.uid)).toEqual(['doc-1']);
 });
 
 test('the merged list is what gets persisted', () => {
