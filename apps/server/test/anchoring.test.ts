@@ -162,6 +162,77 @@ describe('reanchor: short quotes', () => {
     expect(upd.blockId).toBe('b1');
   });
 
+  // The word a comment asks about is exactly the word an author edits, so
+  // "jacket" becomes "jackets" and the quote survives only inside a longer
+  // word. What is left of the neighbourhood is the filler every paragraph
+  // has — " the " before a noun — and taking that as evidence lands the
+  // comment several chapters away from anything it was about.
+  const PLURALIZED = blockMap([
+    {
+      id: 'ch6',
+      text: 'They go down onto the jackets together, skin along the whole length of skin.',
+      headingPath: ['Book', 'Chapter 6', 'Maeve'],
+      sectionIndexPath: [90, 90, 28, 12],
+    },
+    {
+      id: 'ch4',
+      text: 'He puts the coat on for the meadow rounds, because the jacket he rode in is sweat-damp.',
+      headingPath: ['Book', 'Chapter 4', 'Elias'],
+      sectionIndexPath: [40, 40, 42, 41],
+    },
+    {
+      id: 'ch2',
+      text: 'She waits by the gate, her hands drawn up inside her jacket sleeves.',
+      headingPath: ['Book', 'Chapter 2', 'Elias'],
+      sectionIndexPath: [20, 20, 10, 9],
+    },
+  ]);
+
+  const PLURALIZED_ANCHOR = {
+    anchor_quote: 'jacket',
+    anchor_prefix: 'They go down onto the ',
+    anchor_suffix: ' together, and the first full length of skin on skin in open sun',
+  };
+
+  test('filler left over from a rewritten neighbourhood is not evidence', () => {
+    const upd = reanchor(comment({ anchor_block_id: 'gone', ...PLURALIZED_ANCHOR }), PLURALIZED);
+    expect(upd.linkStatus).toBe('orphaned');
+    expect(upd.blockId).toBeNull();
+  });
+
+  test('a guess is not promoted to linked on the next pass', () => {
+    // The state an earlier bad match persists: the id points at the block it
+    // guessed, where the same " the " still agrees. Believing it there is how
+    // a guess stops being distinguishable from an anchor nobody doubted.
+    const upd = reanchor(
+      comment({ anchor_block_id: 'ch4', link_status: 'low-confidence', ...PLURALIZED_ANCHOR }),
+      PLURALIZED,
+    );
+    expect(upd.linkStatus).not.toBe('linked');
+  });
+
+  test('a short context that survives intact still links', () => {
+    // A quote against the edge of its block stores only the few chars that
+    // fit. All of them agreeing is the most that anchor can ever offer, so
+    // the bar for trusting it cannot be an absolute length.
+    const blocks = blockMap([
+      { id: 'b1', text: 'The cat sat.' },
+      { id: 'b2', text: 'Everyone agrees the cat sat there, and nobody minds.' },
+    ]);
+    const upd = reanchor(
+      comment({
+        anchor_block_id: 'b1',
+        anchor_quote: 'cat sat',
+        anchor_prefix: 'The ',
+        anchor_suffix: '.',
+      }),
+      blocks,
+    );
+    expect(upd.linkStatus).toBe('linked');
+    expect(upd.blockId).toBe('b1');
+    expect(upd.startOffset).toBe(4);
+  });
+
   test('a distinctive quote that moved is still followed', () => {
     const blocks = blockMap([
       { id: 'b1', text: 'A different sentence now.' },
@@ -216,6 +287,38 @@ describe('reanchor: heading-path affinity', () => {
       }),
       AMBIGUOUS,
     );
+    expect(upd.blockId).toBe('ch4');
+  });
+
+  test('the section the comment was written in outranks filler agreeing elsewhere', () => {
+    const blocks = blockMap([
+      {
+        id: 'ch1',
+        text: 'He checks the jacket pocket for the head collar and finds it empty.',
+        headingPath: ['Book', 'Chapter 1', 'Elias'],
+        sectionIndexPath: [10, 10, 8, 7],
+      },
+      {
+        id: 'ch4',
+        text: 'She stands with her braid over one shoulder, her jacket shaped close.',
+        headingPath: ['Book', 'Chapter 4', 'Elias'],
+        sectionIndexPath: [61, 61, 20, 15],
+      },
+    ]);
+    // ch1 keeps " the " before the quote; ch4 keeps nothing but has the
+    // heading path the comment was captured under.
+    const upd = reanchor(
+      comment({
+        anchor_block_id: 'gone',
+        anchor_quote: 'jacket',
+        anchor_prefix: 'he trades it for the ',
+        anchor_suffix: ' he rides in, and goes out',
+        anchor_heading_path: JSON.stringify(['Chapter 4', 'Elias']),
+        anchor_section_index_path: JSON.stringify([20, 15]),
+      }),
+      blocks,
+    );
+    expect(upd.linkStatus).toBe('low-confidence');
     expect(upd.blockId).toBe('ch4');
   });
 
