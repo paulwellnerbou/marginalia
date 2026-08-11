@@ -604,6 +604,11 @@ function UploadDialog({
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [createdTitle, setCreatedTitle] = useState<string>('Untitled');
   const [createdDocName, setCreatedDocName] = useState<string | null>(null);
+  // Set only when a bundle carried a history the server couldn't use.
+  // Worth saying out loud on the way out: the import still succeeds, so
+  // nothing else on this panel hints that the document just lost its
+  // timeline, and the bundle is the only copy of it.
+  const [historyDropped, setHistoryDropped] = useState(false);
   // Snapshot of the created doc's format, taken at upload/import time so
   // `openCreated()` writes the correct value into recent-docs even for
   // paths where the dialog's `format` state is stale (e.g. JSON bundle
@@ -666,6 +671,7 @@ function UploadDialog({
       saveInviteToken(res.uid, res.admin_invite.token);
       const adminUrl = window.location.origin + res.admin_invite.url;
 
+      setHistoryDropped(res.imported_history === 'dropped');
       setCreatedUid(res.uid);
       setCreatedToken(res.admin_invite.token);
       setCreatedAdminUrl(adminUrl);
@@ -716,6 +722,7 @@ function UploadDialog({
       saveInviteToken(res.uid, res.admin_invite.token);
       const adminUrl = window.location.origin + res.admin_invite.url;
 
+      setHistoryDropped(false);
       setCreatedUid(res.uid);
       setCreatedToken(res.admin_invite.token);
       setCreatedAdminUrl(adminUrl);
@@ -752,6 +759,7 @@ function UploadDialog({
     setCreatedTitle('Untitled');
     setCreatedDocName(null);
     setCreatedFormat(nextDraft?.format ?? 'markdown');
+    setHistoryDropped(false);
   }
 
   function openCreated() {
@@ -788,6 +796,15 @@ function UploadDialog({
                 control.
               </Dialog.Description>
               <Flex direction="column" gap="3">
+                {historyDropped && (
+                  <Callout.Root color="amber" size="1">
+                    <Callout.Text>
+                      The document imported, but its revision history could not be read from the
+                      bundle and was left out — it starts from a single version. Keep the bundle
+                      file: it still holds the original history.
+                    </Callout.Text>
+                  </Callout.Root>
+                )}
                 <Box className="created-admin-link">
                   <Text as="div" size="1" color="gray" mb="1">
                     Admin link

@@ -810,18 +810,31 @@ export function recoverCurrentPassword(uid: string): Promise<{ password: string 
   );
 }
 
+/**
+ * `imported_history` says what became of the bundle's packed git
+ * history: `restored` kept it, `absent` means the bundle never carried
+ * one (everything exported before bundle version 5), and `dropped`
+ * means it carried one the server could not use, so the document lands
+ * with a single commit instead of its real timeline. Optional because
+ * older servers don't send it.
+ */
+export type ImportedHistoryStatus = 'restored' | 'absent' | 'dropped';
+
+interface ImportBundleResponse {
+  imported_comments: number;
+  imported_edit_proposals?: number;
+  imported_history?: ImportedHistoryStatus;
+}
+
 export function importDocumentBundle(
   bundle: DocumentBundle,
   identity: Identity,
-): Promise<UploadResponse & { imported_comments: number; imported_edit_proposals?: number }> {
-  return request<UploadResponse & { imported_comments: number; imported_edit_proposals?: number }>(
-    '/api/documents/import',
-    {
-      method: 'POST',
-      body: JSON.stringify(bundle),
-      identity,
-    },
-  );
+): Promise<UploadResponse & ImportBundleResponse> {
+  return request<UploadResponse & ImportBundleResponse>('/api/documents/import', {
+    method: 'POST',
+    body: JSON.stringify(bundle),
+    identity,
+  });
 }
 
 // --- assets ----------------------------------------------------------

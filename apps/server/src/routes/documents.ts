@@ -1497,8 +1497,8 @@ async function importDocument(c: Context, deps: AppDeps) {
   // timestamps, diffs, and object ids — instead of collapsing to one
   // synthetic upload commit. Anything unusable about the pack falls back
   // to that plain upload rather than failing the import.
-  const restoredHistory = await restoreBundleHistory(store, { uid, format }, bundle.history);
-  if (restoredHistory) {
+  const historyOutcome = await restoreBundleHistory(store, { uid, format }, bundle.history);
+  if (historyOutcome.status === 'restored') {
     // The working tree now holds main's tip. If the bundle's source
     // disagrees (hand-edited bundle, or a tip that never matched), land
     // the declared source as a normal edit on top rather than silently
@@ -1734,6 +1734,12 @@ async function importDocument(c: Context, deps: AppDeps) {
       invite_only: true,
       imported_comments: importedComments,
       imported_edit_proposals: importedEditProposals,
+      // A bundle that carried a history we couldn't use imports as a
+      // one-commit document. That is a real loss and the server log is
+      // the only other trace of it, which the person who ran the import
+      // never sees. A stable status, not the underlying git error: the
+      // cause is an operator diagnostic and belongs in the log.
+      imported_history: historyOutcome.status,
     },
     201,
   );
@@ -1794,39 +1800,70 @@ const MAX_HISTORY_PACK_BYTES = 64 * 1024 * 1024;
 const MAX_HISTORY_PACK_BASE64_CHARS = Math.ceil(MAX_HISTORY_PACK_BYTES / 3) * 4;
 
 /**
+ * What became of a bundle's packed history. `absent` is the ordinary
+ * case for every bundle before version 5; `dropped` means the bundle
+ * carried a history and we could not use it, which costs the importer
+ * their timeline and so is worth telling them about.
+ */
+type BundleHistoryOutcome =
+  | { status: 'restored'; oid: string }
+  | { status: 'absent' }
+  | { status: 'dropped' };
+
+/**
  * Rebuild the imported doc's repo from a bundle's packed history.
- * Returns null when the bundle has none (every version before 5) or when
- * the pack can't be trusted — the caller then seeds a fresh repo.
+ * Anything unusable degrades to `dropped` — the caller then seeds a
+ * fresh repo — rather than failing the import.
+ *
+ * Every rejection says why. Silently discarding a history leaves the
+ * operator unable to tell a truncated pack from a corrupt one from a
+ * bundle that never carried history at all, and those want very
+ * different responses.
  */
 async function restoreBundleHistory(
   store: GitStore,
   doc: { uid: string; format: DocumentFormat },
   raw: unknown,
-): Promise<{ oid: string } | null> {
-  if (!raw || typeof raw !== 'object') return null;
+): Promise<BundleHistoryOutcome> {
+  // Carrying no history is normal, not a fault, so it is the one
+  // outcome that says nothing.
+  if (!raw || typeof raw !== 'object') return { status: 'absent' };
   const history = raw as Record<string, unknown>;
-  if (typeof history.pack_base64 !== 'string' || typeof history.head_oid !== 'string') return null;
-  if (!/^[0-9a-f]{40}$/.test(history.head_oid)) return null;
+
+  // One line per decline: these land in a container log next to
+  // everything else the import writes, so a reason that spans
+  // paragraphs is a reason nobody reads.
+  const decline = (reason: string): BundleHistoryOutcome => {
+    const line = reason.replace(/\s+/g, ' ').trim();
+    console.warn(`[marginalia] import ${doc.uid}: ${line}, seeding a fresh repo`);
+    return { status: 'dropped' };
+  };
+
+  if (typeof history.pack_base64 !== 'string' || typeof history.head_oid !== 'string') {
+    return decline('history is missing its pack or head oid');
+  }
+  if (!/^[0-9a-f]{40}$/.test(history.head_oid)) return decline('history head oid is malformed');
   if (history.pack_base64.length > MAX_HISTORY_PACK_BASE64_CHARS) {
-    console.warn(
-      `[marginalia] import ${doc.uid}: history pack exceeds size limit, seeding a fresh repo`,
-    );
-    return null;
+    return decline('history pack exceeds size limit');
   }
 
   let pack: Buffer;
   try {
     pack = Buffer.from(history.pack_base64, 'base64');
   } catch {
-    return null;
+    return decline('history pack is not valid base64');
   }
-  if (pack.length === 0 || pack.length > MAX_HISTORY_PACK_BYTES) return null;
+  if (pack.length === 0) return decline('history pack is empty');
+  if (pack.length > MAX_HISTORY_PACK_BYTES) return decline('history pack exceeds size limit');
 
-  const restored = await store.importHistoryPack(doc, pack, history.head_oid).catch(() => null);
-  if (!restored) {
-    console.warn(`[marginalia] import ${doc.uid}: unusable history pack, seeding a fresh repo`);
-  }
-  return restored;
+  const restored = await store
+    .importHistoryPack(doc, pack, history.head_oid)
+    .catch((err: unknown) => ({
+      ok: false as const,
+      reason: err instanceof Error ? err.message : String(err),
+    }));
+  if (!restored.ok) return decline(`unusable history pack — ${restored.reason}`);
+  return { status: 'restored', oid: restored.oid };
 }
 
 function reanchorAndBroadcast(
