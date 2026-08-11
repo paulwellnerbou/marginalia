@@ -240,6 +240,8 @@ const STRONG_CONTEXT = 12;
 interface Occurrence {
   offset: number;
   context: number;
+  /** Every stored context character that could agree here did. */
+  complete: boolean;
 }
 
 /**
@@ -263,6 +265,23 @@ function locateFragment(
   const prefix = context.prefix ?? '';
   const suffix = context.suffix ?? '';
 
+  const hasContext = prefix.length > 0 || suffix.length > 0;
+
+  /**
+   * Does the context surviving at this occurrence identify it, rather than
+   * merely fail to rule it out?
+   *
+   * Either enough of the neighbourhood survives that coincidence is
+   * implausible, or all of it does — a quote near the edge of its block
+   * stores only the few chars that fit, and those agreeing everywhere they
+   * can is the most that anchor will ever offer. Partial agreement earns
+   * nothing: the filler between content words (" the ", " and ") repeats in
+   * every paragraph of a real document, so a handful of chars is what a
+   * wrong block looks like, not a weak version of the right one.
+   */
+  const vouched = (hit: Occurrence): boolean =>
+    hasContext && (hit.context >= STRONG_CONTEXT || hit.complete);
+
   const sameBlock = preferredBlockId ? blocks.find((b) => b.id === preferredBlockId) : undefined;
   const sameHits = sameBlock ? occurrencesOf(sameBlock.text, quote, prefix, suffix) : [];
   const sameBest = sameHits[0];
@@ -274,14 +293,16 @@ function locateFragment(
     endOffset: sameBest!.offset + quote.length,
   });
 
-  // 1. Same block, and the stored context still surrounds the quote there.
+  // 1. Same block, and the stored context still vouches for the quote there.
   //    Block ids are content hashes, so a block that kept its id kept its
-  //    text: context that agrees nowhere in it means the id is a stale
-  //    pointer left by an earlier bad match, not an edited neighbourhood.
-  const hasContext = prefix.length > 0 || suffix.length > 0;
+  //    text: an anchor genuinely captured on it agrees with every context
+  //    char it stored. Anything less means the id is a stale pointer left by
+  //    an earlier bad match, not an edited neighbourhood — and promoting that
+  //    to 'linked' is how one bad guess becomes indistinguishable from an
+  //    anchor nobody ever doubted.
   if (sameBlock && sameBest) {
-    if (sameBest.context >= STRONG_CONTEXT) return sameBlockHit();
-    if (sameHits.length === 1 && (!hasContext || sameBest.context > 0)) return sameBlockHit();
+    if (vouched(sameBest)) return sameBlockHit();
+    if (!hasContext && sameHits.length === 1) return sameBlockHit();
   }
 
   // 2. Same block, quote gone, but most of it survives there — an edit
@@ -299,9 +320,11 @@ function locateFragment(
   }
 
   // 3. Rank every block holding the quote — including the original one when
-  //    its occurrences were ambiguous. Surviving context outranks section
-  //    affinity: a matching neighbourhood identifies the spot, while a
-  //    section index only narrows it down.
+  //    its occurrences were ambiguous. A vouched-for neighbourhood outranks
+  //    section affinity, which in turn outranks context too partial to be
+  //    worth anything: agreement that identifies the spot beats one that
+  //    narrows it down, but a chapter away is a worse guess than the section
+  //    the comment was written in, however many stray chars line up there.
   const candidates: Array<{
     block: BlockInfo;
     hit: Occurrence;
@@ -321,8 +344,9 @@ function locateFragment(
   }
   candidates.sort(
     (a, b) =>
-      b.hit.context - a.hit.context ||
+      Number(vouched(b.hit)) - Number(vouched(a.hit)) ||
       b.structural - a.structural ||
+      b.hit.context - a.hit.context ||
       Number(b.preferred) - Number(a.preferred),
   );
 
@@ -349,16 +373,15 @@ function locateFragment(
   // unrelated prose. Orphaning says so instead.
   //
   // The original block is the one exception, on the grounds that its id came
-  // from somewhere — but only while it isn't the stale id this whole ladder
-  // exists to catch. Stored context that was testable and agreed nowhere in
-  // it is exactly what stale looks like, so that case orphans like any other.
-  const preferredStillCredible = best.preferred && (!hasContext || best.hit.context > 0);
+  // from somewhere — but only while there was no stored context to test it
+  // against. Context that was testable and did not vouch for it is exactly
+  // what a stale id looks like, so that case orphans like any other.
+  const preferredUntested = best.preferred && !hasContext;
   const decisive =
     !runnerUp ||
-    preferredStillCredible ||
-    best.hit.context >= STRONG_CONTEXT ||
-    best.hit.context > runnerUp.hit.context ||
-    best.structural > runnerUp.structural;
+    preferredUntested ||
+    best.structural > runnerUp.structural ||
+    (vouched(best.hit) && (!vouched(runnerUp.hit) || best.hit.context > runnerUp.hit.context));
   if (!decisive) {
     return { linkStatus: 'orphaned', blockId: null, startOffset: null, endOffset: null };
   }
@@ -378,6 +401,11 @@ function locateFragment(
  * A quote that stood on its own word boundaries when it was captured has to
  * do so here too — "it" inside "its" is a different word, not a shifted
  * one — which is what keeps one-word anchors from landing mid-word.
+ *
+ * Only the leading occurrence is ever read back, so `complete` breaks ties:
+ * a context window that is entirely whitespace scores zero however much of
+ * it agrees, and an intact occurrence that lost the tie would look partial
+ * to every caller that asks whether the context vouches for it.
  */
 function occurrencesOf(text: string, quote: string, prefix: string, suffix: string): Occurrence[] {
   if (!quote) return [];
@@ -385,18 +413,21 @@ function occurrencesOf(text: string, quote: string, prefix: string, suffix: stri
   const out: Occurrence[] = [];
   for (let idx = text.indexOf(quote); idx >= 0; idx = text.indexOf(quote, idx + 1)) {
     if (wantsWordBounds && !isWordBounded(text, idx, quote.length)) continue;
-    out.push({ offset: idx, context: contextAgreement(text, idx, quote.length, prefix, suffix) });
+    out.push({ offset: idx, ...contextAgreement(text, idx, quote.length, prefix, suffix) });
   }
-  out.sort((a, b) => b.context - a.context);
+  out.sort((a, b) => b.context - a.context || Number(b.complete) - Number(a.complete));
   return out;
 }
 
 /**
- * Chars of stored prefix/suffix still present around `text[idx..idx+len)`.
+ * Chars of stored prefix/suffix still present around `text[idx..idx+len)`,
+ * and whether that is all of them.
  *
  * Agreement that is only whitespace counts for nothing: almost every word in
  * the document has a space on either side of it, so a shared space says only
  * that the match is word-shaped, which the word-bound check already covers.
+ * `complete` is judged on the raw run lengths rather than that score, so a
+ * short context that happens to be whitespace still reads as intact.
  */
 function contextAgreement(
   text: string,
@@ -404,7 +435,7 @@ function contextAgreement(
   len: number,
   prefix: string,
   suffix: string,
-): number {
+): { context: number; complete: boolean } {
   let back = 0;
   while (back < prefix.length && idx - back > 0 && text[idx - back - 1] === prefix.at(-1 - back)) {
     back++;
@@ -412,10 +443,12 @@ function contextAgreement(
   let forward = 0;
   const end = idx + len;
   while (forward < suffix.length && text[end + forward] === suffix[forward]) forward++;
-  return (
-    substantial(prefix.slice(prefix.length - back), back) +
-    substantial(suffix.slice(0, forward), forward)
-  );
+  return {
+    context:
+      substantial(prefix.slice(prefix.length - back), back) +
+      substantial(suffix.slice(0, forward), forward),
+    complete: back === prefix.length && forward === suffix.length,
+  };
 }
 
 function substantial(matched: string, length: number): number {

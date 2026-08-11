@@ -13,3 +13,5 @@ tsconfig.tsbuildinfo
 **/*.tsbuildinfo
 .data/
 out/
+marginalia.code-workspace
+AGENTS.md
