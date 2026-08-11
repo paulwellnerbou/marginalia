@@ -2077,7 +2077,7 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
-  const history = await store.history(doc);
+  const history = await store.history(doc, { depth: 2 });
   const latest = history[0];
   const parent = history[1];
   if (!latest || latest.oid !== targetOid) return c.json({ error: 'not-latest' }, 409);

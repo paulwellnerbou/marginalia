@@ -171,7 +171,23 @@ export class GitStore {
     });
   }
 
-  async history(doc: DocLocator): Promise<HistoryEntry[]> {
+  /**
+   * Commits that changed the doc file, newest first.
+   *
+   * `depth` bounds the walk for callers that only want the newest few
+   * entries. It counts *emitted* entries, not commits visited, so a run
+   * of commits that left the file untouched doesn't consume it — the
+   * walk keeps going until `depth` file-changing commits are found, then
+   * emits the boundary commit as one extra entry. That makes
+   * `history(doc, { depth: n })[i]` identical to the unbounded
+   * `history(doc)[i]` for every `i < n`, which is what the callers that
+   * compare against the tip rely on.
+   *
+   * Worth bounding: unbounded, this inflates every commit and tree in
+   * the repo, which on a doc with hundreds of revisions costs more than
+   * the rest of the request put together.
+   */
+  async history(doc: DocLocator, opts?: { depth?: number }): Promise<HistoryEntry[]> {
     const dir = this.repoDir(doc.uid);
     if (!existsSync(join(dir, '.git'))) return [];
     const entries = await git.log({
@@ -179,6 +195,7 @@ export class GitStore {
       dir,
       filepath: this.filename(doc.format),
       force: true, // include even if file was deleted in later commits
+      depth: opts?.depth,
     });
     return entries.map((e) => ({
       oid: e.oid,
