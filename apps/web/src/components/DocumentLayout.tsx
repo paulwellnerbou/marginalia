@@ -228,7 +228,7 @@ const EMPTY_SECTION_FILTER: ReadonlySet<string> = new Set();
 interface Props {
   doc: Document;
   /** Called by admin settings when the server-side settings change. */
-  onDocSettingsChanged?: (s: DocumentSettingsResponse) => void;
+  onDocSettingsChanged?: (uid: string, s: Partial<DocumentSettingsResponse>) => void;
   children?: ReactNode;
 }
 
@@ -431,6 +431,18 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   const [threads, setThreads] = useState<Thread[]>([]);
   const [mentionCandidates, setMentionCandidates] = useState<string[]>([]);
+  /**
+   * Full thread/document reads are authoritative snapshots, but the network
+   * does not preserve their freshness order. Only the newest read that was
+   * started may replace local state; entity-level mutation responses bump the
+   * same counter so a read begun before that mutation cannot undo it.
+   */
+  const threadSnapshotRequestRef = useRef(0);
+  const documentRefreshRequestRef = useRef(0);
+  /** Reaction controls are local to a comment row. Keep a resource-level
+   * queue as well so duplicate renderings of the same comment cannot toggle
+   * it concurrently. Different comments may still update in parallel. */
+  const reactionQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
   const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
   const pendingAnchor = pendingDraft?.mode === 'comment' ? pendingDraft.anchor : null;
   const pendingProposalTarget = pendingDraft?.mode === 'proposal' ? pendingDraft.target : null;
@@ -542,6 +554,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: doc.uid is kept so a doc swap reseeds live state even if the new doc has identical source/rendered strings.
   useEffect(() => {
+    // A parent-provided document is newer than any refresh already in flight.
+    documentRefreshRequestRef.current += 1;
     setLiveSource(doc.source);
     setLiveRendered(doc.rendered);
   }, [doc.uid, doc.source, doc.rendered]);
@@ -568,17 +582,22 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   // Hoisted above the effects/callbacks that list them as deps so the dep
   // array doesn't reference these in their TDZ during render.
   const refreshDoc = useCallback(async () => {
+    const requestId = ++documentRefreshRequestRef.current;
     try {
       const fresh = await getDocument(doc.uid);
+      if (requestId !== documentRefreshRequestRef.current) return;
       setLiveSource(fresh.source);
       setLiveRendered(fresh.rendered);
     } catch (err) {
+      if (requestId !== documentRefreshRequestRef.current) return;
       reportError('DocumentLayout.refreshDoc', err, { uid: doc.uid });
     }
   }, [doc.uid]);
 
   /** Merge one thread into the list, in the order the server would return it. */
   const landThread = useCallback((thread: Thread) => {
+    // A snapshot requested before this mutation completed is stale now.
+    threadSnapshotRequestRef.current += 1;
     setThreads((prev) => {
       const index = prev.findIndex((t) => t.id === thread.id);
       const next = index >= 0 ? prev.map((t, i) => (i === index ? thread : t)) : [...prev, thread];
@@ -588,12 +607,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   }, []);
 
   const refreshThreads = useCallback(async () => {
+    const requestId = ++threadSnapshotRequestRef.current;
     try {
-      const res = await retryRequest(() => listThreads(doc.uid, { consumeMentions: false }));
+      const res = await retryRequest(() =>
+        listThreads(doc.uid, { consumeMentions: false, fresh: true }),
+      );
+      if (requestId !== threadSnapshotRequestRef.current) return;
       setThreads(res.threads);
       setMentionCandidates(res.mention_candidates);
       threadsLoaded.current = true;
     } catch (err) {
+      if (requestId !== threadSnapshotRequestRef.current) return;
       reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
     }
   }, [doc.uid]);
@@ -1033,17 +1057,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     let cancelled = false;
     threadsLoaded.current = false;
+    const requestId = ++threadSnapshotRequestRef.current;
     retryRequest(() => listThreads(doc.uid)).then(
       (r) => {
         if (cancelled) return;
+        // Mention consumption is a side effect of this read. Deliver its
+        // notification even when a newer thread snapshot already won.
+        notifyPendingMentions(r.threads, r.pending_mentions);
+        if (requestId !== threadSnapshotRequestRef.current) return;
         setThreads(r.threads);
         setMentionCandidates(r.mention_candidates);
         threadsLoaded.current = true;
-        notifyPendingMentions(r.threads, r.pending_mentions);
       },
       (err) => {
+        if (cancelled || requestId !== threadSnapshotRequestRef.current) return;
         reportError('DocumentLayout.listThreads', err, { uid: doc.uid });
-        if (cancelled) return;
         // Silence here reads as "this document has no comments" — the
         // column, the highlights and the thread count all agree on it.
         // Say so instead; the realtime reconnect below is what actually
@@ -1160,14 +1188,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             break;
           }
           case 'mention.created': {
+            const requestId = ++threadSnapshotRequestRef.current;
             void listThreads(doc.uid)
               .then((res) => {
                 if (cancelled) return;
+                notifyPendingMentions(res.threads, res.pending_mentions);
+                if (requestId !== threadSnapshotRequestRef.current) return;
                 setThreads(res.threads);
                 setMentionCandidates(res.mention_candidates);
-                notifyPendingMentions(res.threads, res.pending_mentions);
               })
-              .catch((err) => reportError('DocumentLayout.mention.created', err, { uid: doc.uid }));
+              .catch((err) => {
+                if (cancelled || requestId !== threadSnapshotRequestRef.current) return;
+                reportError('DocumentLayout.mention.created', err, { uid: doc.uid });
+              });
             break;
           }
           case 'edit_proposal.created': {
@@ -1287,14 +1320,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       const identity = resolveIdentity(name);
       if (!identity) return;
       try {
-        await apiCreate(doc.uid, { parent_id: threadId, body }, identity);
+        const updated = await apiCreate(doc.uid, { parent_id: threadId, body }, identity);
+        landThread(updated);
         await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.replyToThread', err, { uid: doc.uid, threadId });
         reportFailure(apiErrorMessage(err, 'Could not post that reply'));
       }
     },
-    [doc.uid, resolveIdentity, refreshThreads],
+    [doc.uid, landThread, resolveIdentity, refreshThreads],
   );
 
   const onResolveThread = useCallback(
@@ -1315,14 +1349,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
       try {
         if (kind === 'resolve' || kind === 'reopen') {
-          await apiResolve(doc.uid, id, kind === 'resolve', identity, body);
+          const updated = await apiResolve(doc.uid, id, kind === 'resolve', identity, body);
+          landThread(updated);
           await refreshThreads();
         } else if (kind === 'accept') {
-          await apiAcceptProposal(doc.uid, id, identity, body);
+          const updated = await apiAcceptProposal(doc.uid, id, identity, body);
+          landThread(updated);
           await Promise.all([refreshDoc(), refreshThreads()]);
           setHistoryVersion((v) => v + 1);
         } else {
-          await apiRejectProposal(doc.uid, id, identity, body);
+          const updated = await apiRejectProposal(doc.uid, id, identity, body);
+          landThread(updated);
           await refreshThreads();
         }
         return { ok: true };
@@ -1342,7 +1379,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         return { ok: false, message };
       }
     },
-    [doc.uid, resolveIdentity, refreshThreads, refreshDoc],
+    [doc.uid, landThread, resolveIdentity, refreshThreads, refreshDoc],
   );
 
   const onResolveConflict = useCallback(
@@ -1360,7 +1397,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         const body: Parameters<typeof apiResolveConflict>[2] = {};
         if (payload.resolvedText !== undefined) body.resolved_text = payload.resolvedText;
         if (payload.comment) body.comment = payload.comment;
-        await apiResolveConflict(doc.uid, id, body, identity);
+        const updated = await apiResolveConflict(doc.uid, id, body, identity);
+        landThread(updated);
         // The proposal was rebuilt on current main, which re-anchors it
         // and can settle other proposals' mergeability too — refresh the
         // whole set rather than patching this one thread in.
@@ -1373,7 +1411,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         return { ok: false, message };
       }
     },
-    [doc.uid, resolveIdentity, refreshThreads],
+    [doc.uid, landThread, resolveIdentity, refreshThreads],
   );
 
   const onRepairThread = useCallback(
@@ -1386,6 +1424,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       }
       try {
         const repaired = await apiRepairProposalAnchor(doc.uid, id, identity);
+        threadSnapshotRequestRef.current += 1;
         setThreads((prev) => {
           const index = prev.findIndex((thread) => thread.id === repaired.id);
           const next =
@@ -1395,6 +1434,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           next.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
           return next;
         });
+        await refreshThreads();
         return { ok: true };
       } catch (err) {
         reportError('DocumentLayout.repairThread', err, { id });
@@ -1403,7 +1443,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         return { ok: false, message };
       }
     },
-    [doc.uid, resolveIdentity],
+    [doc.uid, resolveIdentity, refreshThreads],
   );
 
   const onEdit = useCallback(
@@ -1411,13 +1451,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       const identity = resolveIdentity();
       if (!identity) return;
       try {
-        await apiUpdate(doc.uid, id, body, identity);
+        const updated = await apiUpdate(doc.uid, id, body, identity);
+        landThread(updated);
         await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.editComment', err, { commentId: id });
       }
     },
-    [doc.uid, resolveIdentity, refreshThreads],
+    [doc.uid, landThread, resolveIdentity, refreshThreads],
   );
 
   const canEdit = doc.role === 'admin' || doc.role === 'editor';
@@ -1461,7 +1502,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           req.anchor_end_block_id = pendingProposalTarget.end_block_id;
         }
         if (payload.rationale) req.rationale = payload.rationale;
-        await apiCreateProposal(doc.uid, req, identity);
+        const created = await apiCreateProposal(doc.uid, req, identity);
+        landThread(created);
         setPendingDraft(null);
         if (
           sectionFilterActive &&
@@ -1485,6 +1527,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     },
     [
       doc.uid,
+      landThread,
       resolveIdentity,
       refreshThreads,
       pendingProposalTarget,
@@ -1515,7 +1558,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           proposed_text: payload.proposed_text,
         };
         if (payload.comment) req.comment = payload.comment;
-        await apiUpdateProposal(doc.uid, editingProposal.id, req, identity);
+        const updated = await apiUpdateProposal(doc.uid, editingProposal.id, req, identity);
+        landThread(updated);
         setEditingProposal(null);
         await refreshThreads();
       } catch (err) {
@@ -1526,7 +1570,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         reportFailure(apiErrorMessage(err, 'Could not update that proposal'));
       }
     },
-    [doc.uid, editingProposal, resolveIdentity, refreshThreads],
+    [doc.uid, editingProposal, landThread, resolveIdentity, refreshThreads],
   );
 
   const onDeleteThread = useCallback(
@@ -1535,7 +1579,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       if (!identity) return;
       try {
         await apiDeleteThread(doc.uid, threadId, identity);
+        threadSnapshotRequestRef.current += 1;
         setThreads((prev) => prev.filter((t) => t.id !== threadId));
+        await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.deleteThread', err, { threadId });
         reportFailure(apiErrorMessage(err, 'Delete failed'));
@@ -1551,6 +1597,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       if (!identity) return;
       try {
         await apiDelete(doc.uid, nodeId, identity);
+        threadSnapshotRequestRef.current += 1;
         setThreads((prev) =>
           prev.map((t) => {
             if (!t.comments.slice(1).some((r) => r.id === nodeId)) return t;
@@ -1561,11 +1608,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             };
           }),
         );
+        await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.deleteNode', err, { nodeId });
       }
     },
-    [doc.uid, resolveIdentity],
+    [doc.uid, resolveIdentity, refreshThreads],
   );
 
   const onReact = useCallback(
@@ -1575,18 +1623,54 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         reportFailure('Please set your display name first.');
         return;
       }
+      const previous = reactionQueuesRef.current.get(nodeId) ?? Promise.resolve();
+      const operation = previous
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            const updated = await apiToggleReaction(doc.uid, nodeId, emoji, identity);
+            const updatedComment = updated.comments.find((comment) => comment.id === nodeId);
+            threadSnapshotRequestRef.current += 1;
+            setThreads((prev) => {
+              const existing = prev.find((thread) => thread.id === updated.id);
+              if (!existing) {
+                const next = [...prev, updated];
+                next.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
+                return next;
+              }
+              // A reaction changes one comment, not the surrounding thread.
+              // Merging that row preserves reactions that completed in parallel
+              // on another comment in the same thread.
+              if (!updatedComment) {
+                return prev.map((thread) => (thread.id === updated.id ? updated : thread));
+              }
+              return prev.map((thread) =>
+                thread.id === updated.id
+                  ? {
+                      ...thread,
+                      comments: thread.comments.map((comment) =>
+                        comment.id === nodeId ? updatedComment : comment,
+                      ) as [Comment, ...Comment[]],
+                    }
+                  : thread,
+              );
+            });
+            await refreshThreads();
+          } catch (err) {
+            reportError('DocumentLayout.toggleReaction', err, { nodeId });
+            reportFailure(apiErrorMessage(err, 'Could not save that reaction'));
+          }
+        });
+      reactionQueuesRef.current.set(nodeId, operation);
       try {
-        // Server returns the updated thread; splice it into local state
-        // in place so a reaction toggle costs one network round-trip
-        // instead of one POST + one full listThreads refetch.
-        const updated = await apiToggleReaction(doc.uid, nodeId, emoji, identity);
-        setThreads((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
-      } catch (err) {
-        reportError('DocumentLayout.toggleReaction', err, { nodeId });
-        reportFailure(apiErrorMessage(err, 'Could not save that reaction'));
+        await operation;
+      } finally {
+        if (reactionQueuesRef.current.get(nodeId) === operation) {
+          reactionQueuesRef.current.delete(nodeId);
+        }
       }
     },
-    [doc.uid, resolveIdentity],
+    [doc.uid, resolveIdentity, refreshThreads],
   );
 
   const onRestoreHistoryVersion = useCallback(

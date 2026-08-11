@@ -40,7 +40,7 @@ export function AccessControlDialog({
   onChange,
 }: {
   doc: Document;
-  onChange: (s: DocumentSettingsResponse) => void;
+  onChange: (uid: string, s: Partial<DocumentSettingsResponse>) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [passwordProtected, setPasswordProtected] = useState(doc.password_protected);
@@ -90,7 +90,7 @@ export function AccessControlDialog({
     setError(null);
     try {
       const result = await updateDocumentSettings(doc.uid, { invite_only: next }, identity);
-      onChange(result);
+      onChange(doc.uid, { invite_only: result.invite_only });
       setInviteOnly(result.invite_only);
     } catch (err) {
       setInviteOnly(previous);
@@ -124,7 +124,7 @@ export function AccessControlDialog({
         password: next ? 'rotate' : null,
       };
       const result = await updateDocumentSettings(doc.uid, patch, identity);
-      onChange(result);
+      onChange(doc.uid, { password_protected: result.password_protected });
       setPasswordProtected(result.password_protected);
       if (result.password) {
         setDisclosedPassword({ label: 'New password', value: result.password });
@@ -151,7 +151,7 @@ export function AccessControlDialog({
     setSaving(true);
     try {
       const result = await updateDocumentSettings(doc.uid, { password: 'rotate' }, identity);
-      onChange(result);
+      onChange(doc.uid, { password_protected: result.password_protected });
       if (result.password) {
         setDisclosedPassword({ label: 'New password', value: result.password });
       }

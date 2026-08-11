@@ -33,6 +33,7 @@ import { loadRecentDocs, mergeKeyringDocs, type RecentDoc } from './recent-docs.
 
 const KEY = 'marginalia.keyring';
 const KEYRING_EVENT = 'marginalia:keyring-change';
+let pullRequestGeneration = 0;
 
 export function loadKeyringToken(): string | null {
   return localStorage.getItem(KEY);
@@ -133,8 +134,15 @@ export interface KeyringPull {
 export async function pullKeyring(): Promise<KeyringPull> {
   const token = loadKeyringToken();
   if (!token) return { docs: null, dropped: false, idleTtlMs: null };
+  const generation = ++pullRequestGeneration;
   try {
     const ring = await fetchKeyring(token);
+    // A newer pull—or a token rotation/deletion while this request was on
+    // the wire—owns the local keyring state now. Do not let this snapshot
+    // regress localStorage or the identity adopted from the ring.
+    if (generation !== pullRequestGeneration || token !== loadKeyringToken()) {
+      return { docs: null, dropped: false, idleTtlMs: null };
+    }
     adoptIdentity(ring);
     return {
       docs: mergeKeyringDocs(ring.docs),
@@ -142,6 +150,9 @@ export async function pullKeyring(): Promise<KeyringPull> {
       idleTtlMs: ring.idle_ttl_ms ?? null,
     };
   } catch (err) {
+    if (generation !== pullRequestGeneration || token !== loadKeyringToken()) {
+      return { docs: null, dropped: false, idleTtlMs: null };
+    }
     // Drop a dead token rather than retrying it on every page load.
     if (isNotFound(err)) {
       storeKeyringToken(null);

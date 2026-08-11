@@ -9,6 +9,7 @@
 import type { DocumentCover, DocumentCoverImage, DocumentFormat, KeyringDocEntry } from './api.js';
 
 const KEY = 'marginalia.recentDocs';
+const REMOVED_KEY = 'marginalia.recentDocs.removed';
 const MAX = 50;
 
 export interface RecentDoc {
@@ -52,6 +53,8 @@ export function loadRecentDocs(): RecentDoc[] {
 }
 
 export function recordVisit(doc: RecentDoc): void {
+  const removed = loadRemovalTombstones();
+  if (removed.delete(doc.uid)) saveRemovalTombstones(removed);
   const list = loadRecentDocs().filter((d) => d.uid !== doc.uid);
   list.unshift(doc);
   const trimmed = list.slice(0, MAX);
@@ -82,6 +85,12 @@ export function updateRecentDocCover(uid: string, cover: DocumentCover | null): 
 }
 
 export function removeFromRecent(uid: string): void {
+  // Keep a tombstone until a successful keyring pull confirms that the
+  // server no longer contains this document. A pull already in flight may
+  // otherwise merge its older snapshot after this local removal.
+  const removed = loadRemovalTombstones();
+  removed.add(uid);
+  saveRemovalTombstones(removed);
   const list = loadRecentDocs().filter((d) => d.uid !== uid);
   localStorage.setItem(KEY, JSON.stringify(list));
 }
@@ -102,8 +111,24 @@ export function removeFromRecent(uid: string): void {
  */
 export function mergeKeyringDocs(incoming: KeyringDocEntry[]): RecentDoc[] {
   const byUid = new Map(loadRecentDocs().map((d) => [d.uid, d]));
+  const incomingUids = new Set(incoming.map((entry) => entry.doc_uid));
+  const removed = loadRemovalTombstones();
+
+  // Absence from a successful server snapshot acknowledges the deletion.
+  // Entries still present may come from a pull that began before the delete;
+  // keep filtering those until a later pull confirms the server caught up.
+  let tombstonesChanged = false;
+  for (const uid of removed) {
+    byUid.delete(uid);
+    if (!incomingUids.has(uid)) {
+      removed.delete(uid);
+      tombstonesChanged = true;
+    }
+  }
+  if (tombstonesChanged) saveRemovalTombstones(removed);
 
   for (const entry of incoming) {
+    if (removed.has(entry.doc_uid)) continue;
     const local = byUid.get(entry.doc_uid);
     // No local fallback: the server reports cover state authoritatively,
     // so null means the document *has* no cover — not that the ring
@@ -134,6 +159,25 @@ export function mergeKeyringDocs(incoming: KeyringDocEntry[]): RecentDoc[] {
     /* quota exceeded — best-effort */
   }
   return merged;
+}
+
+function loadRemovalTombstones(): Set<string> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(REMOVED_KEY) ?? '[]') as unknown;
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((uid): uid is string => typeof uid === 'string'));
+  } catch {
+    return new Set();
+  }
+}
+
+function saveRemovalTombstones(removed: Set<string>): void {
+  try {
+    if (removed.size === 0) localStorage.removeItem(REMOVED_KEY);
+    else localStorage.setItem(REMOVED_KEY, JSON.stringify([...removed]));
+  } catch {
+    /* quota exceeded — best-effort */
+  }
 }
 
 const VALID_ROLES = new Set<RecentDoc['role']>(['admin', 'editor', 'collaborator', 'reader']);

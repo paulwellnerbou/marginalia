@@ -123,6 +123,34 @@ test('a pull carries the idle window back for the panel to quote', async () => {
   expect(localStorage.getItem('marginalia.keyring')).toBe('tok');
 });
 
+test('an older overlapping pull cannot land after a newer snapshot', async () => {
+  const { pullKeyring } = await import('./keyring.js');
+
+  localStorage.setItem('marginalia.keyring', 'tok');
+  const responders: Array<(response: Response) => void> = [];
+  (globalThis as { fetch?: unknown }).fetch = () =>
+    new Promise<Response>((resolve) => responders.push(resolve));
+
+  const older = pullKeyring();
+  const newer = pullKeyring();
+  const response = (idleTtlMs: number) =>
+    new Response(
+      JSON.stringify({
+        client_id: 'aaaaaaaaaaaaaaaaaaaa',
+        display_name: 'Paul',
+        idle_ttl_ms: idleTtlMs,
+        docs: [],
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+
+  responders[1]?.(response(222));
+  expect((await newer).idleTtlMs).toBe(222);
+
+  responders[0]?.(response(111));
+  expect((await older).idleTtlMs).toBeNull();
+});
+
 test('a pull that fails for any other reason keeps the token', async () => {
   const { pullKeyring } = await import('./keyring.js');
 

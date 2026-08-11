@@ -13,7 +13,7 @@ import {
   TextField,
   Tooltip,
 } from '@radix-ui/themes';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   createInvite,
   deleteInvite,
@@ -143,20 +143,38 @@ export function InvitesPanel({ uid }: { uid: string }) {
   const [role, setRole] = useState<Role>('reader');
   const [submitting, setSubmitting] = useState(false);
   const [rotating, setRotating] = useState(false);
+  const refreshRequestRef = useRef(0);
+  const [stateUid, setStateUid] = useState(uid);
+  if (stateUid !== uid) {
+    setStateUid(uid);
+    setInvites(null);
+    setError(null);
+    setName('');
+    setRole('reader');
+    setSubmitting(false);
+    setRotating(false);
+  }
 
   const refresh = useCallback(async () => {
+    const requestId = ++refreshRequestRef.current;
     try {
       const r = await listInvites(uid);
+      if (requestId !== refreshRequestRef.current) return;
       setInvites(r.invites);
     } catch (err) {
+      if (requestId !== refreshRequestRef.current) return;
       reportError('InvitesPanel.list', err, { uid });
       setError('Could not load invites');
     }
   }, [uid]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: displayName is the explicit refetch trigger so the invite list re-pulls after the user sets/changes their identity.
-  useEffect(() => {
+  useLayoutEffect(() => {
     void refresh();
+    return () => {
+      // Discard a response for the previous uid/identity trigger.
+      refreshRequestRef.current += 1;
+    };
   }, [displayName, refresh]);
 
   async function addInvite() {
@@ -179,7 +197,15 @@ export function InvitesPanel({ uid }: { uid: string }) {
 
     setSubmitting(true);
     try {
-      await createInvite(uid, payload, identity);
+      const { invite } = await createInvite(uid, payload, identity);
+      refreshRequestRef.current += 1;
+      setInvites((current) =>
+        current
+          ? [...current.filter((existing) => existing.token !== invite.token), invite].sort(
+              (a, b) => a.created_at - b.created_at,
+            )
+          : current,
+      );
       setName('');
       setRole('reader');
       await refresh();
@@ -201,6 +227,8 @@ export function InvitesPanel({ uid }: { uid: string }) {
     const identity = { clientId: getClientId(), displayName: identityName };
     try {
       await deleteInvite(uid, token, identity);
+      refreshRequestRef.current += 1;
+      setInvites((current) => current?.filter((invite) => invite.token !== token) ?? current);
       await refresh();
     } catch (err) {
       reportError('InvitesPanel.delete', err);
@@ -230,6 +258,14 @@ export function InvitesPanel({ uid }: { uid: string }) {
       // syncs only to this browser locks the rest out of their own
       // document, which is a worse outcome than the leak being rotated.
       keyringPushDoc(uid, admin_invite.token);
+      refreshRequestRef.current += 1;
+      setInvites((current) =>
+        current
+          ? current.map((invite) =>
+              invite.kind === 'admin' ? { ...invite, ...admin_invite } : invite,
+            )
+          : current,
+      );
       await refresh();
     } catch (err) {
       reportError('InvitesPanel.rotateAdmin', err);
