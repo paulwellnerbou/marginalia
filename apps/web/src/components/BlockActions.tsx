@@ -55,8 +55,8 @@ export function BlockActions({ rootRef, onPropose, onEditChapter }: Props) {
     function update(e: MouseEvent) {
       const t = e.target instanceof HTMLElement ? e.target : null;
 
-      // 1. Hovering the button (or its children, though there are none)
-      //    keeps the current target visible.
+      // 1. Hovering the action container or either button keeps the
+      //    current target visible.
       if (t && actionsRef.current?.contains(t)) {
         return;
       }
