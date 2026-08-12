@@ -1285,11 +1285,13 @@ export interface ThreadProposalData {
   answers_thread_id: string | null;
   /**
    * The proposal's current replacement text, recovered from the branch
-   * tip. Null when the branch is unreadable (deleted repo, legacy row) —
-   * in-place editing is impossible then.
+   * tip for open proposals. Closed proposals omit it because they cannot be
+   * edited; their historical change remains available from the diff endpoint.
+   * Also null when an open proposal's branch is unreadable (deleted repo,
+   * legacy row), in which case in-place editing is impossible.
    */
   proposed_text: string | null;
-  /** The base source range the proposal replaces, as of its base commit. */
+  /** Base range for an open proposal; omitted with `proposed_text` once closed. */
   source_snapshot: string | null;
 }
 

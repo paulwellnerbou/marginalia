@@ -59,6 +59,13 @@ APP_ENV_LABEL_VALUE="${APP_ENV_LABEL:-$DEFAULT_APP_ENV_LABEL}"
 PORT_VALUE="${PORT:-3434}"
 DATA_DIR_VALUE="${MARGINALIA_DATA_DIR:-/app/.data/}"
 WEB_DIR_VALUE="${MARGINALIA_WEB_DIR:-/app/apps/web/dist}"
+# Bun's renderer and proposal/history Git operations have a deliberately
+# bursty working set on long-reviewed documents. The old 512 MiB ceiling was
+# low enough for a post-accept thread refresh to be OOM-killed even though the
+# host had ample memory available. Keep the limits deploy-configurable, but
+# give both instances enough headroom by default.
+MEMORY_LIMIT_VALUE="${MARGINALIA_MEMORY_LIMIT:-1g}"
+MEMORY_RESERVATION_VALUE="${MARGINALIA_MEMORY_RESERVATION:-512m}"
 DEFAULT_HOST_PORT=3434
 if [[ "$INSTANCE" == "dev" ]]; then
   DEFAULT_HOST_PORT=3435
@@ -116,8 +123,8 @@ DOCKER_ARGS=(
   -d
   --name "marginalia-$INSTANCE"
   --restart unless-stopped
-  --memory=512m
-  --memory-reservation=256m
+  --memory="$MEMORY_LIMIT_VALUE"
+  --memory-reservation="$MEMORY_RESERVATION_VALUE"
   -v "$DEPLOY_PATH/data-$INSTANCE:/app/.data"
   -p "$PUBLISH_HOST:$HOST_PORT_VALUE:$PORT_VALUE"
   -e PORT="$PORT_VALUE"
@@ -187,5 +194,6 @@ echo "✅ $INSTANCE deployment complete!"
 echo "Container: marginalia-$INSTANCE"
 echo "Image: $FULL_IMAGE"
 echo "Host port: $PUBLISH_HOST:$HOST_PORT_VALUE -> $PORT_VALUE"
+echo "Memory: $MEMORY_LIMIT_VALUE (reservation: $MEMORY_RESERVATION_VALUE)"
 echo "Trusted proxy hops: $TRUSTED_PROXY_HOPS_VALUE ($TRUSTED_PROXY_HOPS_ORIGIN)"
 echo "=========================================="

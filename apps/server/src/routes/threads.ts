@@ -2545,6 +2545,18 @@ async function toThreadWire(
     isThreadIdVisible(db, doc.uid, proposalRow.answers_comment_id, viewerId)
       ? proposalRow.answers_comment_id
       : null;
+  // Closed proposals keep their branch so the dedicated diff endpoint can
+  // render the historical change, but the thread list has no use for their
+  // editable text: accepted/rejected cards cannot open the proposal editor.
+  // Avoid inflating two full document blobs for every archived proposal on
+  // every `state=all` refresh. Long-reviewed documents can carry hundreds of
+  // closed proposals; reading all of those branches was enough to exhaust the
+  // server's memory immediately after an accept, taking the next diff request
+  // down with the process.
+  const proposalContent =
+    proposalRow?.proposal_status === 'open'
+      ? await readProposalContent(store, doc, proposalRow)
+      : null;
 
   return {
     id: row.id,
@@ -2628,7 +2640,7 @@ async function toThreadWire(
     answered_by_thread_ids: answeredBy ?? [],
     proposal: proposalRow
       ? {
-          ...((await readProposalContent(store, doc, proposalRow)) ?? {
+          ...(proposalContent ?? {
             source_snapshot: null,
             proposed_text: null,
           }),

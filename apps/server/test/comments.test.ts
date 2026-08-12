@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -3110,7 +3110,19 @@ describe('threads API', () => {
       const after = await list(uid);
       expect(after.threads).toHaveLength(0);
       expect(after.counts).toEqual({ total: 1, open: 0, resolved: 1 });
-      expect((await list(uid, '?state=resolved')).threads.map((t) => t.id)).toEqual([proposalId]);
+      const readProposalTip = spyOn(app.store, 'readProposalTip');
+      const archived = (await list(uid, '?state=resolved')).threads;
+      expect(readProposalTip).not.toHaveBeenCalled();
+      readProposalTip.mockRestore();
+      expect(archived.map((t) => t.id)).toEqual([proposalId]);
+      // The archive only needs proposal identity/status. Its text remains
+      // available from the dedicated diff endpoint, while omitting it here
+      // prevents `state=all` from inflating every historical proposal branch
+      // during the refresh that follows an accept.
+      expect(archived[0]?.proposal).toMatchObject({
+        source_snapshot: null,
+        proposed_text: null,
+      });
     });
 
     test('thread_id fetches a resolved thread, and outranks the state filter', async () => {

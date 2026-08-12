@@ -2914,8 +2914,8 @@ describe('documents API', () => {
       (thread) => thread.comments[0].body === 'please improve this heading',
     )!;
     expect(importedProposalThread.proposal).toEqual({
-      source_snapshot: '# Hi',
-      proposed_text: '# Better Hi',
+      source_snapshot: null,
+      proposed_text: null,
       whole_document: false,
       answers_thread_id: null,
     });
