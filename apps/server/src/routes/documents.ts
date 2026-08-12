@@ -376,6 +376,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
     return c.json({ error: 'source-required' }, 400);
   }
   const rawCommitMessage = typeof body?.commit_message === 'string' ? body.commit_message : '';
+  const expectedSource = typeof body?.expected_source === 'string' ? body.expected_source : null;
   const commitMessage =
     rawCommitMessage
       // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters from user input is the intent
@@ -385,13 +386,25 @@ async function updateDocument(c: Context, deps: AppDeps) {
 
   let previousSource = '';
   try {
-    previousSource = store.read(doc);
+    previousSource = expectedSource ?? store.read(doc);
   } catch {
     /* new doc */
   }
 
   const writeOptions = commitMessage ? { commitMessage } : undefined;
-  const { oid } = await store.write(doc, nextSource, decision.identity, 'update', writeOptions);
+  const written =
+    expectedSource !== null
+      ? await store.writeIfCurrent(
+          doc,
+          expectedSource,
+          nextSource,
+          decision.identity,
+          'update',
+          writeOptions,
+        )
+      : await store.write(doc, nextSource, decision.identity, 'update', writeOptions);
+  if (!written) return c.json({ error: 'document-changed' }, 409);
+  const { oid } = written;
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
   const rendered = await renderDocument(nextSource, doc.format);
