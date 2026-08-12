@@ -1,7 +1,7 @@
 import { CheckIcon, CopyIcon } from '@radix-ui/react-icons';
 import { Button, Code, Dialog, Flex, IconButton, Text, Tooltip } from '@radix-ui/themes';
 import { QrCodeIcon } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { reportError } from '../lib/log.js';
 import { PairingQr } from './PairingQr.js';
 
