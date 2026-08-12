@@ -433,6 +433,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [threadTabVisibleCount, setThreadTabVisibleCount] = useState<{
     docUid: string;
+    sourceThreads: Thread[];
     count: number;
   } | null>(null);
   const [mentionCandidates, setMentionCandidates] = useState<string[]>([]);
@@ -1861,17 +1862,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     return threads.filter((t) => threadTouchesSections(t, blockSectionIds, sectionFilter));
   }, [threads, sectionFilterActive, blockSectionIds, sectionFilter]);
   const threadCount =
-    threadTabVisibleCount?.docUid === doc.uid
+    threadTabVisibleCount?.docUid === doc.uid &&
+    threadTabVisibleCount.sourceThreads === sectionVisibleThreads
       ? threadTabVisibleCount.count
       : sectionVisibleThreads.length;
   const onThreadTabVisibleCountChange = useCallback(
     (count: number) => {
       setThreadTabVisibleCount((current) => {
-        if (current?.docUid === doc.uid && current.count === count) return current;
-        return { docUid: doc.uid, count };
+        if (
+          current?.docUid === doc.uid &&
+          current.sourceThreads === sectionVisibleThreads &&
+          current.count === count
+        ) {
+          return current;
+        }
+        return { docUid: doc.uid, sourceThreads: sectionVisibleThreads, count };
       });
     },
-    [doc.uid],
+    [doc.uid, sectionVisibleThreads],
   );
 
   /**
