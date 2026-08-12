@@ -431,6 +431,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   });
 
   const [threads, setThreads] = useState<Thread[]>([]);
+  const [threadTabVisibleCount, setThreadTabVisibleCount] = useState<{
+    docUid: string;
+    sourceThreads: Thread[];
+    count: number;
+  } | null>(null);
   const [mentionCandidates, setMentionCandidates] = useState<string[]>([]);
   /**
    * Full thread/document reads are authoritative snapshots, but the network
@@ -1856,7 +1861,26 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     if (!sectionFilterActive || !blockSectionIds) return threads;
     return threads.filter((t) => threadTouchesSections(t, blockSectionIds, sectionFilter));
   }, [threads, sectionFilterActive, blockSectionIds, sectionFilter]);
-  const threadCount = sectionVisibleThreads.length;
+  const threadCount =
+    threadTabVisibleCount?.docUid === doc.uid &&
+    threadTabVisibleCount.sourceThreads === sectionVisibleThreads
+      ? threadTabVisibleCount.count
+      : sectionVisibleThreads.length;
+  const onThreadTabVisibleCountChange = useCallback(
+    (count: number) => {
+      setThreadTabVisibleCount((current) => {
+        if (
+          current?.docUid === doc.uid &&
+          current.sourceThreads === sectionVisibleThreads &&
+          current.count === count
+        ) {
+          return current;
+        }
+        return { docUid: doc.uid, sourceThreads: sectionVisibleThreads, count };
+      });
+    },
+    [doc.uid, sectionVisibleThreads],
+  );
 
   /**
    * Threads that get a card: the section filter, then the
@@ -2685,6 +2709,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   <InlineCommentsList
                     uid={doc.uid}
                     threads={sectionVisibleThreads}
+                    onVisibleCountChange={onThreadTabVisibleCountChange}
                     sectionFilterCount={sectionFilter.size}
                     onClearSectionFilter={clearSectionFilter}
                     blockRanges={blockRanges}
