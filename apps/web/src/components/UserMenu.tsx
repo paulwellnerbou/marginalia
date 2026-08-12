@@ -161,7 +161,12 @@ export function UserMenu({
               <Text size="1" color="gray">
                 Access link
               </Text>
-              <Copyable text={accessLink} ariaLabel="Copy access link" size="1" />
+              <Copyable
+                text={accessLink}
+                ariaLabel="Copy access link"
+                size="1"
+                className="copyable-access-link"
+              />
               <Text size="1" color="gray">
                 Opens this document on another device — the installed app keeps its own storage, so
                 it needs the link again. Anyone holding it gets {role ?? 'the same'} access.

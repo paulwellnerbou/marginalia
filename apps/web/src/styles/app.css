@@ -1906,6 +1906,23 @@ button.primary:disabled {
   padding: 0;
 }
 
+/* Access URLs are for copying, not reading. Keep even long document/token
+   pairs on one compact line in the user menu. */
+.copyable-access-link {
+  display: block;
+  width: 100%;
+}
+.copyable-access-link .copyable-surface {
+  display: flex;
+  width: 100%;
+}
+.copyable-access-link .copyable-text {
+  flex: 1;
+  font-size: 0.6875rem;
+  line-height: 1rem;
+  letter-spacing: -0.02em;
+}
+
 .copyable-multiline {
   display: block;
 }
@@ -1950,6 +1967,28 @@ button.primary:disabled {
 .created-admin-link {
   flex: 1;
   min-width: 0;
+}
+
+/* Plain-language anatomy of an access link in Access control. */
+.access-link-anatomy {
+  border: 1px solid var(--gray-a5);
+  border-radius: var(--radius-3);
+  background: var(--gray-a2);
+  padding: 0.65rem 0.75rem;
+}
+.access-link-anatomy__url {
+  gap: 0.15rem;
+}
+.access-link-anatomy__url code {
+  white-space: nowrap;
+}
+.access-link-anatomy__document {
+  background: var(--blue-a4);
+  color: var(--blue-11);
+}
+.access-link-anatomy__token {
+  background: var(--amber-a4);
+  color: var(--amber-11);
 }
 
 /* Subtle pop when the check appears. */

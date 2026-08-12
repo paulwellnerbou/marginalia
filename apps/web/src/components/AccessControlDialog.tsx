@@ -225,7 +225,7 @@ export function AccessControlDialog({
                   {/* The password below is a gate of its own, so what the URL
                     alone is worth depends on both settings. */}
                   {inviteOnly
-                    ? 'Only the access links below open this document. Anyone else holding the URL is turned away.'
+                    ? 'Only the access links below open this document. Anyone else holding the URL without its access token is turned away.'
                     : passwordProtected
                       ? 'Anyone with the document URL can read it, once they enter the password. Access links additionally grant comment or edit rights.'
                       : 'Anyone with the document URL can read it. Access links additionally grant comment or edit rights.'}

@@ -18,6 +18,8 @@ interface Props {
   size?: '1' | '2' | '3';
   /** If true, show an adjacent button that opens a QR code containing text. */
   qrCode?: boolean;
+  /** Optional class for context-specific presentation. */
+  className?: string;
 }
 
 /**
@@ -31,6 +33,7 @@ export function Copyable({
   ariaLabel = 'Copy',
   size = '2',
   qrCode = false,
+  className,
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [qrOpen, setQrOpen] = useState(false);
@@ -48,7 +51,9 @@ export function Copyable({
   }
 
   return (
-    <div className={`copyable ${multiline ? 'copyable-multiline' : 'copyable-inline'}`}>
+    <div
+      className={`copyable ${multiline ? 'copyable-multiline' : 'copyable-inline'}${className ? ` ${className}` : ''}`}
+    >
       <div className="copyable-surface">
         <Code size={size} className="copyable-text">
           {text}

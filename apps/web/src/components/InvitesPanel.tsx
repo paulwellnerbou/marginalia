@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   Callout,
+  Code,
   Flex,
   IconButton,
   SegmentedControl,
@@ -285,6 +286,25 @@ export function InvitesPanel({ uid }: { uid: string }) {
         only meant to be used by a specific person (useful for personal invites); a <b>generic</b>{' '}
         link lets the visitor bring their own name (useful for "anyone with this URL can comment").
       </Text>
+      <Box className="access-link-anatomy">
+        <Text as="div" size="1" color="gray" mb="2">
+          The URL combines the document's address with a secret access key:
+        </Text>
+        <Flex align="center" wrap="wrap" className="access-link-anatomy__url">
+          <Code size="1">https://…/d/</Code>
+          <Code size="1" className="access-link-anatomy__document">
+            Document ID
+          </Code>
+          <Code size="1">/</Code>
+          <Code size="1" className="access-link-anatomy__token">
+            Access token
+          </Code>
+        </Flex>
+        <Text as="div" size="1" color="gray" mt="2">
+          The <b>Document ID</b> finds the document. The <b>access token</b> is the secret key that
+          lets the link holder in with the role shown below.
+        </Text>
+      </Box>
 
       <Flex gap="2" align="end" wrap="wrap" className="invite-create-form">
         <Box>
