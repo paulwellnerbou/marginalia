@@ -1906,23 +1906,6 @@ button.primary:disabled {
   padding: 0;
 }
 
-/* Access URLs are for copying, not reading. Keep even long document/token
-   pairs on one compact line in the user menu. */
-.copyable-access-link {
-  display: block;
-  width: 100%;
-}
-.copyable-access-link .copyable-surface {
-  display: flex;
-  width: 100%;
-}
-.copyable-access-link .copyable-text {
-  flex: 1;
-  font-size: 0.6875rem;
-  line-height: 1rem;
-  letter-spacing: -0.02em;
-}
-
 .copyable-multiline {
   display: block;
 }
@@ -1962,6 +1945,27 @@ button.primary:disabled {
 }
 .copyable-multiline .copyable-btn--copied {
   transform: scale(1.15);
+}
+
+/* Access URLs are for copying, not reading. Keep document/token pairs on one
+   compact line in the Access control dialog, beside the QR and copy actions. */
+.copyable-access-link {
+  display: block;
+  width: 100%;
+}
+.copyable-access-link .copyable-surface {
+  display: flex;
+  width: 100%;
+}
+.copyable-access-link .copyable-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: normal;
+  font-size: 0.6875rem;
+  line-height: 1rem;
+  letter-spacing: -0.02em;
 }
 
 .created-admin-link {
