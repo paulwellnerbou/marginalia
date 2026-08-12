@@ -65,6 +65,8 @@ import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 interface Props {
   uid: string;
   threads: Thread[];
+  /** Reports the number of cards left after this tab's filters and search. */
+  onVisibleCountChange: (count: number) => void;
   /** Number of sections the TOC's section filter is focused on; 0 = filter off. */
   sectionFilterCount?: number;
   onClearSectionFilter?: () => void;
@@ -113,6 +115,7 @@ const FOCUS_HIGHLIGHT_MS = 1800;
 export function InlineCommentsList({
   uid,
   threads,
+  onVisibleCountChange,
   sectionFilterCount = 0,
   onClearSectionFilter,
   blockRanges,
@@ -232,6 +235,10 @@ export function InlineCommentsList({
     [sortedOrphans, itemMatches],
   );
   const visibleCount = visibleActive.length + visibleOrphans.length;
+
+  useEffect(() => {
+    onVisibleCountChange(visibleCount);
+  }, [visibleCount, onVisibleCountChange]);
 
   // Collapse state spans every thread, filtered out or not, so toggling a
   // filter never re-expands what the reader collapsed. Nested proposals
