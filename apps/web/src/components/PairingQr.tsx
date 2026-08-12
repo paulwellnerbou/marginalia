@@ -12,7 +12,15 @@ import { useMemo } from 'react';
  * and the whole point of this element is that it works on the first try
  * while someone is holding a phone up to a screen.
  */
-export function PairingQr({ value, size = 208 }: { value: string; size?: number }) {
+export function PairingQr({
+  value,
+  size = 208,
+  ariaLabel = 'QR code',
+}: {
+  value: string;
+  size?: number;
+  ariaLabel?: string;
+}) {
   // One path for the whole grid rather than a rect per module: a code of
   // this size is several hundred modules, and they never change
   // independently of each other.
@@ -41,7 +49,7 @@ export function PairingQr({ value, size = 208 }: { value: string; size?: number 
       height={size}
       viewBox={`0 0 ${extent} ${extent}`}
       role="img"
-      aria-label="Pairing QR code"
+      aria-label={ariaLabel}
       style={{ borderRadius: 'var(--radius-3)', display: 'block' }}
       shapeRendering="crispEdges"
     >

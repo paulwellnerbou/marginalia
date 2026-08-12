@@ -408,7 +408,7 @@ function PairingDialog({
 
           {pairing && (
             <Flex direction="column" align="center" gap="3">
-              <PairingQr value={pairUrl} />
+              <PairingQr value={pairUrl} ariaLabel="Pairing QR code" />
               <Copyable text={pairing.code} size="3" ariaLabel="Copy pairing code" />
               <Text size="1" color={remaining === 0 ? 'red' : 'gray'}>
                 {remaining === 0
