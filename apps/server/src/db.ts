@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS comments (
   body                  TEXT NOT NULL,
   -- 1 -> this comment is private to its author. If a root comment is hidden,
   -- the entire thread becomes private to the root author.
-  is_hidden             INTEGER NOT NULL DEFAULT 0
+  is_hidden             INTEGER NOT NULL DEFAULT 0,
   link_status           TEXT NOT NULL DEFAULT 'linked',
   resolved_at           INTEGER,
   resolved_by_name      TEXT,
