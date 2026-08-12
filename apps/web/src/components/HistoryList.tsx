@@ -478,9 +478,7 @@ export function HistoryList({
               </>
             ) : (
               <>
-                Git will apply the inverse of edit{' '}
-                <Code size="1">{revertTarget ? shortOid(revertTarget.oid) : ''}</Code> to the
-                current document and record the result as a new history entry. Comments and
+                This edit will be reverted and recorded as a new history entry. Comments and
                 proposals will not be reopened.
               </>
             )}

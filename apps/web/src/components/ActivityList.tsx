@@ -522,10 +522,8 @@ export function ActivityList({
         <AlertDialog.Content maxWidth="480px">
           <AlertDialog.Title>Revert this edit?</AlertDialog.Title>
           <AlertDialog.Description size="2">
-            Git will apply the inverse of edit{' '}
-            <Code size="1">{revertTarget ? shortOid(revertTarget.oid) : ''}</Code> to the current
-            document and record the result as a new history entry. Comments and proposals will not
-            be reopened.
+            This edit will be reverted and recorded as a new history entry. Comments and proposals
+            will not be reopened.
           </AlertDialog.Description>
           <Flex gap="2" justify="end" mt="4">
             <AlertDialog.Cancel>
