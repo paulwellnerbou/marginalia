@@ -16,6 +16,7 @@ import type { Context } from 'hono';
 import { Hono } from 'hono';
 import JSZip from 'jszip';
 import {
+  prepareBlockReplacements,
   REANCHOR_COMMENT_SQL,
   reanchor,
   reanchorParams,
@@ -191,7 +192,7 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.get('/:uid/history', async (c) => getHistory(c, deps));
   r.get('/:uid/history/:oid/diff', async (c) => getHistoryDiff(c, deps));
   r.post('/:uid/history/:oid/restore', async (c) => restoreHistoryVersion(c, deps));
-  r.post('/:uid/history/:oid/revert', async (c) => revertLatestHistoryVersion(c, deps));
+  r.post('/:uid/history/:oid/revert', async (c) => revertHistoryEdit(c, deps));
   r.post('/:uid/auth', async (c) => authenticate(c, deps));
   r.post('/:uid/logout', async (c) => logout(c, deps));
   r.post('/:uid/password/recover', async (c) => recoverCurrentPassword(c, deps));
@@ -394,22 +395,29 @@ async function updateDocument(c: Context, deps: AppDeps) {
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
   const rendered = await renderDocument(nextSource, doc.format);
+  const previousBlocks =
+    doc.format === 'asciidoc'
+      ? locateAllBlocksAsciidoc(previousSource)
+      : locateAllBlocks(previousSource);
+  // Include sub-block ids so comments and proposals on list items / table
+  // cells see the same before/after transition as top-level blocks.
+  const knownBlocks =
+    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(nextSource) : locateAllBlocks(nextSource);
+  const blockReplacements = prepareBlockReplacements({
+    before: previousBlocks,
+    after: knownBlocks,
+  });
   const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
   const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
   const now = Date.now();
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks, {
       isEditProposal: comment.is_edit_proposal === 1,
+      blockReplacements,
     });
     updateStmt.run(...reanchorParams(upd, now, comment.id));
   }
 
-  // Include sub-block ids so proposals on list items / table cells don't
-  // get orphaned after every save. Markdown uses the mdast-based locator;
-  // asciidoc hands off to its own pipeline, and its locator also emits
-  // sub-block ids for supported nested structures (e.g. list items).
-  const knownBlocks =
-    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(nextSource) : locateAllBlocks(nextSource);
   reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (isContentChange(previousSource, nextSource)) {
@@ -2084,8 +2092,10 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
+  let previousSource: string;
   let restoredSource: string;
   try {
+    previousSource = store.read(doc);
     restoredSource = await store.readAt(doc, targetOid);
   } catch {
     return c.json({ error: 'not-found' }, 404);
@@ -2098,27 +2108,28 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
   const rendered = await renderDocument(restoredSource, doc.format);
-  const topLevel = db
-    .prepare(
-      `SELECT * FROM comments
-         WHERE doc_uid = ? AND parent_id IS NULL AND deleted_at IS NULL`,
-    )
-    .all(doc.uid) as CommentRow[];
-  const updateStmt = db.prepare(
-    `UPDATE comments
-        SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-            link_status = ?, updated_at = ?
-      WHERE id = ?`,
-  );
-  for (const comment of topLevel) {
-    const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
-  }
-
+  const previousBlocks =
+    doc.format === 'asciidoc'
+      ? locateAllBlocksAsciidoc(previousSource)
+      : locateAllBlocks(previousSource);
   const knownBlocks =
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(restoredSource)
       : locateAllBlocks(restoredSource);
+  const blockReplacements = prepareBlockReplacements({
+    before: previousBlocks,
+    after: knownBlocks,
+  });
+  const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
+  const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
+  for (const comment of topLevel) {
+    const upd = reanchor(comment, rendered.blocks, {
+      isEditProposal: comment.is_edit_proposal === 1,
+      blockReplacements,
+    });
+    updateStmt.run(...reanchorParams(upd, now, comment.id));
+  }
+
   reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   realtime.broadcast(
@@ -2130,7 +2141,7 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   return c.json({ oid });
 }
 
-async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
+async function revertHistoryEdit(c: Context, deps: AppDeps) {
   const { db, store, realtime } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
@@ -2142,46 +2153,74 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
-  const history = await store.history(doc, { depth: 2 });
-  const latest = history[0];
-  const parent = history[1];
-  if (!latest || latest.oid !== targetOid) return c.json({ error: 'not-latest' }, 409);
-  if (!parent) return c.json({ error: 'no-parent' }, 409);
+  const history = await store.history(doc);
+  const target = history.find((entry) => entry.oid === targetOid);
+  if (!target) return c.json({ error: 'not-found' }, 404);
+  const meta = parseHistoryMetadata(target);
 
-  const diff = await store.diffAt(doc, targetOid);
-  if (!diff) return c.json({ error: 'not-found' }, 404);
+  let oid: string;
+  let previousSource: string;
+  let revertedSource: string;
+  let reopenedProposal: ReturnType<typeof reopenAcceptedProposal> = null;
 
-  const meta = parseHistoryMetadata(latest);
-  const { oid } = await store.write(doc, diff.before, decision.identity, 'restore', {
-    restoredFromOid: parent.oid,
-  });
+  if (meta.action === 'update') {
+    const reverted = await store.revertCommit(doc, targetOid, decision.identity);
+    if (!reverted.ok) {
+      if (reverted.reason === 'absent') return c.json({ error: 'not-found' }, 404);
+      if (reverted.reason === 'conflict') return c.json({ error: 'revert-conflict' }, 409);
+      if (reverted.reason === 'empty') return c.json({ error: 'already-reverted' }, 409);
+      return c.json({ error: 'git-unavailable' }, 503);
+    }
+    oid = reverted.oid;
+    previousSource = reverted.before;
+    revertedSource = reverted.after;
+  } else if (meta.action === 'accept-proposal' && meta.proposalId) {
+    // Proposal rollback retains its existing latest-only semantics because it
+    // must reopen discussion state alongside the source change. It is not the
+    // plain-edit shortcut exposed in Activities.
+    const latest = history[0];
+    const parent = history[1];
+    if (!latest || latest.oid !== targetOid) return c.json({ error: 'not-latest' }, 409);
+    if (!parent) return c.json({ error: 'no-parent' }, 409);
+    const diff = await store.diffAt(doc, targetOid);
+    if (!diff) return c.json({ error: 'not-found' }, 404);
+    ({ oid } = await store.write(doc, diff.before, decision.identity, 'restore', {
+      restoredFromOid: parent.oid,
+    }));
+    previousSource = diff.after;
+    revertedSource = diff.before;
+  } else {
+    return c.json({ error: 'plain-edit-required' }, 409);
+  }
   const now = Date.now();
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
-  const rendered = await renderDocument(diff.before, doc.format);
-  const topLevel = db
-    .prepare(
-      `SELECT * FROM comments
-         WHERE doc_uid = ? AND parent_id IS NULL AND deleted_at IS NULL`,
-    )
-    .all(doc.uid) as CommentRow[];
-  const updateStmt = db.prepare(
-    `UPDATE comments
-        SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-            link_status = ?, updated_at = ?
-      WHERE id = ?`,
-  );
+  const rendered = await renderDocument(revertedSource, doc.format);
+  const previousBlocks =
+    doc.format === 'asciidoc'
+      ? locateAllBlocksAsciidoc(previousSource)
+      : locateAllBlocks(previousSource);
+  const knownBlocks =
+    doc.format === 'asciidoc'
+      ? locateAllBlocksAsciidoc(revertedSource)
+      : locateAllBlocks(revertedSource);
+  const blockReplacements = prepareBlockReplacements({
+    before: previousBlocks,
+    after: knownBlocks,
+  });
+  const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
+  const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
   for (const comment of topLevel) {
-    const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
+    const upd = reanchor(comment, rendered.blocks, {
+      isEditProposal: comment.is_edit_proposal === 1,
+      blockReplacements,
+    });
+    updateStmt.run(...reanchorParams(upd, now, comment.id));
   }
 
-  const knownBlocks =
-    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(diff.before) : locateAllBlocks(diff.before);
-  const reopenedProposal =
-    meta.action === 'accept-proposal' && meta.proposalId
-      ? reopenAcceptedProposal(db, doc.uid, meta.proposalId, now)
-      : null;
+  if (meta.action === 'accept-proposal' && meta.proposalId) {
+    reopenedProposal = reopenAcceptedProposal(db, doc.uid, meta.proposalId, now);
+  }
   const reopenedProposalId = reopenedProposal?.id ?? null;
   if (
     reopenedProposal &&
@@ -2191,7 +2230,7 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
     const restoredAnchor = locateProposalAnchorBySourceSpan(
       knownBlocks,
       rendered.blocks,
-      diff.before,
+      revertedSource,
       reopenedProposal.base_block_start,
       reopenedProposal.base_block_end,
       doc.format,
@@ -2576,7 +2615,7 @@ function toInviteWire(row: InviteRow): Record<string, unknown> {
 
 // --- helpers ---------------------------------------------------------
 
-type HistoryAction = 'upload' | 'update' | 'restore' | 'accept-proposal' | 'unknown';
+type HistoryAction = 'upload' | 'update' | 'restore' | 'revert' | 'accept-proposal' | 'unknown';
 
 interface AcceptedProposalHistoryRow {
   id: string;
@@ -2615,6 +2654,7 @@ async function toHistoryWire(
     },
     timestamp: entry.timestamp,
     restored_from_oid: meta.restoredFromOid,
+    reverted_oid: meta.revertedOid,
     proposal,
   };
 }
@@ -2624,6 +2664,7 @@ function parseHistoryMetadata(entry: GitHistoryEntry): {
   clientId: string | null;
   proposalId: string | null;
   restoredFromOid: string | null;
+  revertedOid: string | null;
 } {
   const firstLine = entry.message.split('\n', 1)[0]?.trim() ?? '';
   const action = parseHistoryAction(firstLine);
@@ -2638,6 +2679,7 @@ function parseHistoryMetadata(entry: GitHistoryEntry): {
     clientId: trailerClientId ?? emailClientId,
     proposalId,
     restoredFromOid: readCommitTrailer(entry.message, 'X-Marginalia-Restored-From'),
+    revertedOid: readCommitTrailer(entry.message, 'X-Marginalia-Reverted-Oid'),
   };
 }
 
@@ -2645,6 +2687,7 @@ function parseHistoryAction(firstLine: string): HistoryAction {
   if (firstLine.startsWith('upload:')) return 'upload';
   if (firstLine.startsWith('update:')) return 'update';
   if (firstLine.startsWith('restore:')) return 'restore';
+  if (firstLine.startsWith('revert:')) return 'revert';
   if (firstLine.startsWith('accept-proposal:')) return 'accept-proposal';
   return 'unknown';
 }

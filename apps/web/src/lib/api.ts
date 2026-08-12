@@ -172,10 +172,11 @@ export interface Document {
 
 export interface HistoryEntry {
   oid: string;
-  action: 'upload' | 'update' | 'restore' | 'accept-proposal' | 'unknown';
+  action: 'upload' | 'update' | 'restore' | 'revert' | 'accept-proposal' | 'unknown';
   actor: { client_id: string | null; display_name: string | null };
   timestamp: number;
   restored_from_oid: string | null;
+  reverted_oid: string | null;
   proposal: {
     id: string;
     author: { client_id: string; display_name: string };

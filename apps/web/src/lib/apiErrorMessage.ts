@@ -56,6 +56,12 @@ const MESSAGES: Record<string, string> = {
   'invalid-body': 'The server rejected that input.',
   'invalid-emoji': 'That is not a supported reaction.',
   'source-required': 'The document cannot be saved empty.',
+  'plain-edit-required':
+    'Only plain document edits can be reverted here. Proposal changes must be undone through their proposal workflow.',
+  'revert-conflict':
+    'Git could not undo this edit cleanly because later changes overlap it. Review the diff and undo it manually.',
+  'already-reverted': 'This edit no longer changes the current document.',
+  'git-unavailable': 'The server cannot run Git right now. Try again later.',
   'not-latest': 'Someone else changed the document while you were editing. Reload and try again.',
   'not-found': 'That is gone — someone may have deleted it. Reload and try again.',
 };

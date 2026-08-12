@@ -1,4 +1,4 @@
-import { Box, Code, Flex, Text } from '@radix-ui/themes';
+import { AlertDialog, Box, Button, Code, Flex, Text } from '@radix-ui/themes';
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../lib/anchor-quote.js';
 import {
@@ -68,13 +68,25 @@ interface Props {
   version: number;
   threads: Thread[];
   onOpenThread?: (threadId: string) => void;
+  canRevert?: boolean;
+  onRevertEdit?: (entry: HistoryEntry) => Promise<void>;
 }
 
-export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
+export function ActivityList({
+  uid,
+  version,
+  threads,
+  onOpenThread,
+  canRevert = false,
+  onRevertEdit,
+}: Props) {
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [loadingDiffOid, setLoadingDiffOid] = useState<string | null>(null);
+  const [revertingOid, setRevertingOid] = useState<string | null>(null);
+  const [revertTarget, setRevertTarget] = useState<HistoryEntry | null>(null);
+  const [revertError, setRevertError] = useState<string | null>(null);
   const [selectedDiff, setSelectedDiff] = useState<SelectedDiff | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
   const diffRequestToken = useRef(0);
@@ -104,6 +116,9 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
   useEffect(() => {
     diffRequestToken.current += 1;
     setLoadingDiffOid(null);
+    setRevertingOid(null);
+    setRevertTarget(null);
+    setRevertError(null);
     setSelectedDiff(null);
     setDiffOpen(false);
     setDiffError(null);
@@ -160,7 +175,7 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
   }, [historyEntries, threads]);
 
   async function handleShowDiff(entry: HistoryEntry): Promise<void> {
-    if (loadingDiffOid) return;
+    if (loadingDiffOid || revertingOid) return;
 
     const requestToken = diffRequestToken.current + 1;
     diffRequestToken.current = requestToken;
@@ -184,6 +199,25 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
       if (diffRequestToken.current === requestToken) {
         setLoadingDiffOid(null);
       }
+    }
+  }
+
+  async function handleRevertConfirmed(): Promise<void> {
+    if (!revertTarget || !onRevertEdit || revertingOid) return;
+    setRevertError(null);
+    setRevertingOid(revertTarget.oid);
+    try {
+      await onRevertEdit(revertTarget);
+      setRevertTarget(null);
+    } catch (err) {
+      reportError('ActivityList.revertEdit', err, { uid, oid: revertTarget.oid });
+      setRevertError(
+        err instanceof Error && err.message === 'display-name-required'
+          ? 'Please set your display name first'
+          : 'Could not revert this edit',
+      );
+    } finally {
+      setRevertingOid(null);
     }
   }
 
@@ -220,6 +254,13 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
           <Box pb="2">
             <Text size="1" color="red">
               {diffError}
+            </Text>
+          </Box>
+        ) : null}
+        {revertError ? (
+          <Box pb="2">
+            <Text size="1" color="red">
+              {revertError}
             </Text>
           </Box>
         ) : null}
@@ -279,15 +320,41 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
                           Restored from <Code size="1">{shortOid(entry.restored_from_oid)}</Code>
                         </Text>
                       ) : null}
+                      {entry.reverted_oid ? (
+                        <Text size="1" color="gray" mt="2">
+                          Reverted <Code size="1">{shortOid(entry.reverted_oid)}</Code>
+                        </Text>
+                      ) : null}
                     </Box>
                   </Flex>
-                  <Box onClick={(e) => e.stopPropagation()} style={{ flexShrink: 0 }}>
+                  <Flex
+                    gap="2"
+                    wrap="wrap"
+                    justify="end"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ flexShrink: 0 }}
+                  >
                     <ShowDiffButton
                       onClick={() => void handleShowDiff(entry)}
-                      disabled={loadingDiffOid !== null}
+                      disabled={loadingDiffOid !== null || revertingOid !== null}
                       loading={loadingDiffOid === entry.oid}
                     />
-                  </Box>
+                    {canRevert && entry.action === 'update' && onRevertEdit ? (
+                      <Button
+                        size="1"
+                        variant="soft"
+                        color="amber"
+                        title="Undo this plain edit with git"
+                        onClick={() => {
+                          setRevertError(null);
+                          setRevertTarget(entry);
+                        }}
+                        disabled={loadingDiffOid !== null || revertingOid !== null}
+                      >
+                        {revertingOid === entry.oid ? 'Reverting…' : 'Revert'}
+                      </Button>
+                    ) : null}
+                  </Flex>
                 </Flex>
               </Flex>
             );
@@ -443,6 +510,37 @@ export function ActivityList({ uid, version, threads, onOpenThread }: Props) {
         before={selectedDiff?.before ?? ''}
         after={selectedDiff?.after ?? ''}
       />
+
+      <AlertDialog.Root
+        open={revertTarget !== null}
+        onOpenChange={(open) => {
+          if (open || revertingOid) return;
+          setRevertTarget(null);
+          setRevertError(null);
+        }}
+      >
+        <AlertDialog.Content maxWidth="480px">
+          <AlertDialog.Title>Revert this edit?</AlertDialog.Title>
+          <AlertDialog.Description size="2">
+            This edit will be reverted and recorded as a new history entry. Comments and proposals
+            will not be reopened.
+          </AlertDialog.Description>
+          <Flex gap="2" justify="end" mt="4">
+            <AlertDialog.Cancel>
+              <Button variant="soft" color="gray" disabled={revertingOid !== null}>
+                Cancel
+              </Button>
+            </AlertDialog.Cancel>
+            <Button
+              color="amber"
+              onClick={() => void handleRevertConfirmed()}
+              disabled={revertingOid !== null}
+            >
+              {revertingOid ? 'Reverting…' : 'Revert edit'}
+            </Button>
+          </Flex>
+        </AlertDialog.Content>
+      </AlertDialog.Root>
     </>
   );
 }

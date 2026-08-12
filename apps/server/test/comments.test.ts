@@ -693,7 +693,7 @@ describe('threads API', () => {
     expect(comments[0]!.link_status).toBe('low-confidence');
   });
 
-  test('re-anchoring: orphaned when quote disappears entirely', async () => {
+  test('re-anchoring: a one-block replacement stays attached but loses its exact range', async () => {
     const uid = await newDoc('# Title\n\nThe quick brown fox.\n');
     const res = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
@@ -714,7 +714,9 @@ describe('threads API', () => {
     );
 
     const comments = await list(uid, ALICE);
-    expect(comments[0]!.link_status).toBe('orphaned');
+    expect(comments[0]!.link_status).toBe('low-confidence');
+    expect((comments[0]!.anchor as ThreadAnchorShape).start_offset).toBeNull();
+    expect((comments[0]!.anchor as ThreadAnchorShape).end_offset).toBeNull();
   });
 
   describe('multi-block anchors', () => {

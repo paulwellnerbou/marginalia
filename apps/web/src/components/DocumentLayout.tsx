@@ -2013,7 +2013,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     ],
   );
 
-  const onRevertLatestHistoryVersion = useCallback(
+  const onRevertHistoryEdit = useCallback(
     async (entry: HistoryEntry) => {
       const identity = resolveIdentity();
       if (!identity) {
@@ -2024,11 +2024,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         const res = await apiRevertHistoryVersion(doc.uid, entry.oid, identity);
         await Promise.all([refreshDoc(), refreshThreads()]);
         setHistoryVersion((v) => v + 1);
-
-        const reopenedThreadId = res.reopened_proposal_id;
-        if (reopenedThreadId) openCommentThread(reopenedThreadId);
+        if (res.reopened_proposal_id) openCommentThread(res.reopened_proposal_id);
       } catch (err) {
-        reportError('DocumentLayout.revertLatestHistoryVersion', err, {
+        reportError('DocumentLayout.revertHistoryEdit', err, {
           oid: entry.oid,
           uid: doc.uid,
         });
@@ -2679,6 +2677,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     version={historyVersion}
                     threads={threads}
                     onOpenThread={openCommentThread}
+                    canRevert={canEdit}
+                    onRevertEdit={onRevertHistoryEdit}
                   />
                 </Tabs.Content>
                 <Tabs.Content value="comments" className="right-tab-panel">
@@ -2714,7 +2714,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     version={historyVersion}
                     canRestore={canEdit}
                     onRestoreAsNewDocument={onRestoreAsNewDocument}
-                    onRevertLatest={onRevertLatestHistoryVersion}
+                    onRevertEdit={onRevertHistoryEdit}
                     onOpenThread={openCommentThread}
                     {...(canEdit ? { onRestoreVersion: onRestoreHistoryVersion } : {})}
                   />

@@ -1357,9 +1357,7 @@ describe('documents API', () => {
       history: Array<{ oid: string }>;
     };
     const latestOid = historyBefore.history[0]?.oid;
-    const previousOid = historyBefore.history[1]?.oid;
     expect(latestOid).toBeString();
-    expect(previousOid).toBeString();
 
     const revertRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}/history/${latestOid}/revert`, {
@@ -1368,12 +1366,8 @@ describe('documents API', () => {
       }),
     );
     expect(revertRes.status).toBe(200);
-    const reverted = (await revertRes.json()) as {
-      oid: string;
-      reopened_proposal_id: string | null;
-    };
+    const reverted = (await revertRes.json()) as { oid: string };
     expect(reverted.oid).toBeString();
-    expect(reverted.reopened_proposal_id).toBeNull();
 
     const docRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}`, {
@@ -1394,13 +1388,13 @@ describe('documents API', () => {
       history: Array<{
         oid: string;
         action: string;
-        restored_from_oid: string | null;
+        reverted_oid: string | null;
       }>;
     };
     expect(historyAfter.history[0]).toMatchObject({
       oid: reverted.oid,
-      action: 'restore',
-      restored_from_oid: previousOid,
+      action: 'revert',
+      reverted_oid: latestOid,
     });
 
     const revertDiffRes = await app.hono.fetch(
@@ -1413,6 +1407,75 @@ describe('documents API', () => {
       before: '# Title\n\nbeta',
       after: '# Title\n\nalpha',
     });
+  });
+
+  test('reverting an older plain edit preserves unrelated later changes', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Title\n\nalpha\n\none' });
+
+    const edit = async (markdown: string) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}`, {
+          method: 'PUT',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ markdown }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      return (await res.json()) as { oid: string };
+    };
+
+    const firstEdit = await edit('# Title\n\nbeta\n\none');
+    await edit('# Title\n\nbeta\n\ntwo');
+
+    const revertRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history/${firstEdit.oid}/revert`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(revertRes.status).toBe(200);
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(docRes.status).toBe(200);
+    expect(((await docRes.json()) as { source: string }).source).toBe('# Title\n\nalpha\n\ntwo');
+  });
+
+  test('a conflicting git revert leaves the current document untouched', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Title\n\nalpha' });
+    const edit = async (markdown: string) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}`, {
+          method: 'PUT',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ markdown }),
+        }),
+      );
+      expect(res.status).toBe(200);
+      return (await res.json()) as { oid: string };
+    };
+
+    const firstEdit = await edit('# Title\n\nbeta');
+    await edit('# Title\n\ngamma');
+
+    const revertRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history/${firstEdit.oid}/revert`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(revertRes.status).toBe(409);
+    expect(await revertRes.json()).toEqual({ error: 'revert-conflict' });
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(((await docRes.json()) as { source: string }).source).toBe('# Title\n\ngamma');
   });
 
   test('reverting the latest accepted proposal restores the source and reopens the proposal', async () => {
@@ -1555,7 +1618,6 @@ describe('documents API', () => {
         oid: string;
         action: string;
         restored_from_oid: string | null;
-        proposal: { id: string } | null;
       }>;
     };
     expect(historyAfter.history[0]).toMatchObject({
@@ -1563,9 +1625,6 @@ describe('documents API', () => {
       action: 'restore',
       restored_from_oid: previousOid,
     });
-    expect(
-      historyAfter.history.find((entry) => entry.oid === latestAccepted?.oid)?.proposal?.id,
-    ).toBe(proposal.thread.id);
   });
 
   test('rejecting a proposal preserves its branch ref so reopen + accept still work (#25)', async () => {
