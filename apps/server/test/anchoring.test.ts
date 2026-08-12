@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { BlockInfo } from '@marginalia/renderer/types';
+import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
 import { reanchor } from '../src/anchoring.js';
 import type { CommentRow } from '../src/db.js';
 
@@ -62,6 +62,15 @@ function comment(anchor: Partial<CommentRow>): CommentRow {
     deleted_at: null,
     ...anchor,
   };
+}
+
+function sourceMap(specs: BlockSpec[]): Map<string, BlockSourceRange> {
+  return new Map(
+    specs.map((s, i) => [
+      s.id,
+      { start: i * 100, end: i * 100 + s.text.length, kind: 'paragraph', text: s.text },
+    ]),
+  );
 }
 
 describe('reanchor: short quotes', () => {
@@ -252,6 +261,122 @@ describe('reanchor: short quotes', () => {
     expect(upd.linkStatus).toBe('linked');
     expect(upd.blockId).toBe('b1');
     expect(upd.startOffset).toBe(13);
+  });
+
+  test('dialogue boilerplate does not launder a stale says anchor as linked', () => {
+    // Production regression CxaajFMvNRNlVHi1. The selected "says" was
+    // removed from the Chapter 6 paragraph. A stale id pointed at the only
+    // other occurrence preceded by the 12 raw characters `ing," Maeve `.
+    // Counting punctuation and a partial word made that coincidence meet the
+    // old STRONG_CONTEXT threshold and become permanently "linked".
+    const blocks = blockMap([
+      {
+        id: 'wrong-chapter-3',
+        text: '"We should know what we\'re doing," Maeve says to the sky. "Before somebody gets hurt."',
+      },
+      {
+        id: 'right-chapter-6',
+        text: '"He didn\'t say one useless thing." Maeve wipes her eyes. "He didn\'t ask a single question either."',
+      },
+      { id: 'other', text: '"Nothing changes," Maeve says, and closes the door.' },
+    ]);
+    const upd = reanchor(
+      comment({
+        anchor_block_id: 'wrong-chapter-3',
+        anchor_quote: 'says',
+        anchor_prefix: '"He didn\'t say one useless thing," Maeve ',
+        anchor_suffix: ' at the end, wiping her eyes. "He didn\'t ask a single question e',
+      }),
+      blocks,
+    );
+    expect(upd.linkStatus).toBe('orphaned');
+    expect(upd.blockId).toBeNull();
+  });
+
+  test('a paragraph rewrite plus adjacent deletion follows the replacement', () => {
+    const before = [
+      {
+        id: 'wrong-chapter-3',
+        text: '"We should know what we\'re doing," Maeve says to the sky.',
+      },
+      {
+        id: 'old-chapter-6',
+        text: '"He didn\'t say one useless thing," Maeve says at the end, wiping her eyes.',
+      },
+      { id: 'deleted', text: '"He meant it," Clara says.' },
+      { id: 'stable-after', text: 'They hold each other until dinner.' },
+    ];
+    const after = [
+      before[0]!,
+      {
+        id: 'new-chapter-6',
+        text: '"He didn\'t say one useless thing." Maeve wipes her eyes.',
+      },
+      before[3]!,
+    ];
+    const anchor = comment({
+      anchor_block_id: 'old-chapter-6',
+      anchor_quote: 'says',
+      anchor_prefix: '"He didn\'t say one useless thing," Maeve ',
+      anchor_suffix: ' at the end, wiping her eyes.',
+      anchor_start_offset: 41,
+      anchor_end_offset: 45,
+    });
+    const upd = reanchor(anchor, blockMap(after), {
+      blockTransition: { before: sourceMap(before), after: sourceMap(after) },
+    });
+    expect(upd).toMatchObject({
+      linkStatus: 'low-confidence',
+      blockId: 'new-chapter-6',
+      startOffset: null,
+      endOffset: null,
+    });
+
+    // The old quote stays available to explain the comment, but a later save
+    // must not use it to launch another global search from this intentionally
+    // block-only, low-confidence anchor.
+    const nextPass = reanchor(
+      comment({
+        ...anchor,
+        anchor_block_id: upd.blockId,
+        anchor_start_offset: upd.startOffset,
+        anchor_end_offset: upd.endOffset,
+        link_status: upd.linkStatus,
+      }),
+      blockMap(after),
+    );
+    expect(nextPass).toMatchObject({
+      linkStatus: 'low-confidence',
+      blockId: 'new-chapter-6',
+      startOffset: null,
+      endOffset: null,
+    });
+  });
+
+  test('similarity does not choose between repeated rewrite candidates', () => {
+    const before = [
+      { id: 'stable-before', text: 'Before.' },
+      { id: 'old-red', text: 'Maeve takes the red coat down from the hook.' },
+      { id: 'old-blue', text: 'Maeve takes the blue coat down from the hook.' },
+      { id: 'stable-after', text: 'After.' },
+    ];
+    const after = [
+      before[0]!,
+      { id: 'new-green', text: 'Maeve takes the green coat down from the hook.' },
+      before[3]!,
+    ];
+    const upd = reanchor(
+      comment({
+        anchor_block_id: 'old-red',
+        anchor_quote: 'red',
+        anchor_prefix: 'Maeve takes the ',
+        anchor_suffix: ' coat down from the hook.',
+      }),
+      blockMap(after),
+      { blockTransition: { before: sourceMap(before), after: sourceMap(after) } },
+    );
+    expect(upd.linkStatus).toBe('orphaned');
+    expect(upd.blockId).toBeNull();
   });
 
   test('a distinctive quote that moved is still followed', () => {

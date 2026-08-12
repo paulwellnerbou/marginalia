@@ -1,4 +1,4 @@
-import { type BlockInfo, splitSpanQuote } from '@marginalia/renderer';
+import { type BlockInfo, type BlockSourceRange, splitSpanQuote } from '@marginalia/renderer';
 import type { CommentLinkStatus, CommentRow } from './db.js';
 
 /**
@@ -104,6 +104,22 @@ export interface ReanchorOptions {
    * renders without a highlight to sit next to.
    */
   isEditProposal?: boolean;
+  /**
+   * The source block maps immediately before and after the edit that caused
+   * this re-anchoring pass. Content hashes deliberately change when a block
+   * changes, so quote search alone cannot tell a rewritten paragraph from an
+   * unrelated paragraph that happens to contain the same short word.
+   *
+   * When one old block is replaced by one new block between the same stable
+   * neighbours, this transition identifies the replacement directly. The
+   * anchor follows it as low-confidence, without guessing at a new text
+   * range. Edit proposals opt out: their source spans have a separate,
+   * proposal-specific relocation path.
+   */
+  blockTransition?: {
+    before: ReadonlyMap<string, BlockSourceRange>;
+    after: ReadonlyMap<string, BlockSourceRange>;
+  };
 }
 
 export function reanchor(
@@ -129,6 +145,7 @@ export function reanchor(
     blocks: options.isEditProposal ? blocks : blocks.filter((b) => b.anchorable),
     originalPath,
     originalIndexPath,
+    replacements: options.isEditProposal ? new Map() : replacementBlockIds(options.blockTransition),
   };
 
   const fragments = splitSpanQuote(quote);
@@ -151,6 +168,8 @@ interface Context {
   blocks: BlockInfo[];
   originalPath: string[] | null;
   originalIndexPath: number[] | null;
+  /** Old content-hash id -> block that replaced it in this exact edit. */
+  replacements: ReadonlyMap<string, string>;
 }
 
 interface FragmentMatch {
@@ -229,10 +248,11 @@ function reanchorSpan(ctx: Context, fragments: string[]): AnchorUpdate {
 }
 
 /**
- * Chars of surviving prefix/suffix agreement that make one occurrence of a
- * quote trustworthy on its own. Both sides are captured 32 chars wide, so
- * this is a modest fraction of an untouched neighbourhood — but far more
- * than a common short word picks up by accident.
+ * Word characters of surviving prefix/suffix agreement that make one
+ * occurrence of a quote trustworthy on its own. Both sides are captured 32
+ * chars wide. Spaces and dialogue punctuation carry almost no identifying
+ * information, and counting them let `ing," Maeve ` reach the old 12-char
+ * threshold and launder an unrelated occurrence of "says" as linked.
  */
 const STRONG_CONTEXT = 12;
 
@@ -242,6 +262,8 @@ interface Occurrence {
   context: number;
   /** Every stored context character that could agree here did. */
   complete: boolean;
+  /** One meaningful stored side agreed completely (the quote is near an edge). */
+  edgeComplete: boolean;
 }
 
 /**
@@ -280,7 +302,24 @@ function locateFragment(
    * wrong block looks like, not a weak version of the right one.
    */
   const vouched = (hit: Occurrence): boolean =>
-    hasContext && (hit.context >= STRONG_CONTEXT || hit.complete);
+    hasContext && (hit.context >= STRONG_CONTEXT || hit.complete || hit.edgeComplete);
+
+  // A content edit gives us evidence quote search can never recover: the
+  // before/after block walks show that this old hash was replaced at the same
+  // position between the same stable neighbours. Follow that paragraph even
+  // when the selected word itself was deleted. It stays low-confidence and
+  // unpositioned because the transition identifies the block, not an exact
+  // range inside its new text.
+  const replacementId = preferredBlockId ? ctx.replacements.get(preferredBlockId) : undefined;
+  const replacement = replacementId ? blocks.find((b) => b.id === replacementId) : undefined;
+  if (replacement) {
+    return {
+      linkStatus: 'low-confidence',
+      blockId: replacement.id,
+      startOffset: null,
+      endOffset: null,
+    };
+  }
 
   const sameBlock = preferredBlockId ? blocks.find((b) => b.id === preferredBlockId) : undefined;
   const sameHits = sameBlock ? occurrencesOf(sameBlock.text, quote, prefix, suffix) : [];
@@ -303,6 +342,24 @@ function locateFragment(
   if (sameBlock && sameBest) {
     if (vouched(sameBest)) return sameBlockHit();
     if (!hasContext && sameHits.length === 1) return sameBlockHit();
+  }
+
+  // A prior exact edit transition deliberately left this anchor on the
+  // replacement block without claiming an exact range. Keep that flagged
+  // block-only anchor stable on later saves; otherwise the still-stored short
+  // quote would immediately start another document-wide search.
+  if (
+    sameBlock &&
+    ctx.comment.link_status === 'low-confidence' &&
+    ctx.comment.anchor_start_offset === null &&
+    ctx.comment.anchor_end_offset === null
+  ) {
+    return {
+      linkStatus: 'low-confidence',
+      blockId: sameBlock.id,
+      startOffset: null,
+      endOffset: null,
+    };
   }
 
   // 2. Same block, quote gone, but most of it survives there — an edit
@@ -415,7 +472,12 @@ function occurrencesOf(text: string, quote: string, prefix: string, suffix: stri
     if (wantsWordBounds && !isWordBounded(text, idx, quote.length)) continue;
     out.push({ offset: idx, ...contextAgreement(text, idx, quote.length, prefix, suffix) });
   }
-  out.sort((a, b) => b.context - a.context || Number(b.complete) - Number(a.complete));
+  out.sort(
+    (a, b) =>
+      b.context - a.context ||
+      Number(b.complete) - Number(a.complete) ||
+      Number(b.edgeComplete) - Number(a.edgeComplete),
+  );
   return out;
 }
 
@@ -435,7 +497,7 @@ function contextAgreement(
   len: number,
   prefix: string,
   suffix: string,
-): { context: number; complete: boolean } {
+): { context: number; complete: boolean; edgeComplete: boolean } {
   let back = 0;
   while (back < prefix.length && idx - back > 0 && text[idx - back - 1] === prefix.at(-1 - back)) {
     back++;
@@ -443,16 +505,35 @@ function contextAgreement(
   let forward = 0;
   const end = idx + len;
   while (forward < suffix.length && text[end + forward] === suffix[forward]) forward++;
+  const matchedPrefix = prefix.slice(prefix.length - back);
+  const matchedSuffix = suffix.slice(0, forward);
   return {
-    context:
-      substantial(prefix.slice(prefix.length - back), back) +
-      substantial(suffix.slice(0, forward), forward),
+    context: substantial(matchedPrefix, back) + substantial(matchedSuffix, forward),
     complete: back === prefix.length && forward === suffix.length,
+    // Selection capture has less than 32 characters on a side only when the
+    // quote sits near that block edge. In that case a whole meaningful side
+    // is the strongest evidence the anchor can provide even if the other
+    // side was edited. Punctuation alone (notably a shared period) does not
+    // qualify; four word characters is enough for `Maeve `, but not ` the `.
+    edgeComplete:
+      (prefix.length > 0 &&
+        prefix.length < 32 &&
+        back === prefix.length &&
+        substantial(matchedPrefix, back) >= 4) ||
+      (suffix.length > 0 &&
+        suffix.length < 32 &&
+        forward === suffix.length &&
+        substantial(matchedSuffix, forward) >= 4),
   };
 }
 
 function substantial(matched: string, length: number): number {
-  return matched.trim().length > 0 ? length : 0;
+  if (length === 0) return 0;
+  let wordChars = 0;
+  for (const char of matched) {
+    if (WORD_CHAR.test(char)) wordChars++;
+  }
+  return wordChars;
 }
 
 const WORD_CHAR = /[\p{L}\p{N}_]/u;
@@ -466,6 +547,159 @@ function isWordBounded(text: string, idx: number, len: number): boolean {
   if (first && before && WORD_CHAR.test(first) && WORD_CHAR.test(before)) return false;
   if (last && after && WORD_CHAR.test(last) && WORD_CHAR.test(after)) return false;
   return true;
+}
+
+/**
+ * Map blocks replaced by the edit represented by `transition`.
+ *
+ * Stable content-hash ids on either side delimit edit hunks. Inside a hunk we
+ * map by position when the old and new block counts are equal and the paired
+ * kinds agree. Unequal hunks get a second, conservative mutual-similarity
+ * pass. Ambiguous rewrites, splits, joins, and structurally different blocks
+ * remain unmapped and fall back to the quote matcher.
+ */
+function replacementBlockIds(
+  transition: ReanchorOptions['blockTransition'],
+): ReadonlyMap<string, string> {
+  const replacements = new Map<string, string>();
+  if (!transition) return replacements;
+
+  const before = Array.from(transition.before.entries());
+  const after = Array.from(transition.after.entries());
+  const afterIndex = new Map(after.map(([id], index) => [id, index]));
+
+  let beforeCursor = 0;
+  let afterCursor = 0;
+  while (beforeCursor < before.length || afterCursor < after.length) {
+    const beforeId = before[beforeCursor]?.[0];
+    const afterId = after[afterCursor]?.[0];
+    if (beforeId !== undefined && beforeId === afterId) {
+      beforeCursor++;
+      afterCursor++;
+      continue;
+    }
+
+    let nextBefore = beforeCursor;
+    let nextAfter = afterCursor;
+    let foundBoundary = false;
+    for (; nextBefore < before.length; nextBefore++) {
+      const candidateAfter = afterIndex.get(before[nextBefore]![0]);
+      if (candidateAfter !== undefined && candidateAfter >= afterCursor) {
+        nextAfter = candidateAfter;
+        foundBoundary = true;
+        break;
+      }
+    }
+    if (!foundBoundary) {
+      nextBefore = before.length;
+      nextAfter = after.length;
+    }
+
+    const oldHunk = before.slice(beforeCursor, nextBefore);
+    const newHunk = after.slice(afterCursor, nextAfter);
+    if (oldHunk.length === newHunk.length) {
+      for (let i = 0; i < oldHunk.length; i++) {
+        const [oldId, oldBlock] = oldHunk[i]!;
+        const [newId, newBlock] = newHunk[i]!;
+        if (oldBlock.kind === newBlock.kind) replacements.set(oldId, newId);
+      }
+    } else {
+      mapSimilarHunkBlocks(oldHunk, newHunk, replacements);
+    }
+
+    beforeCursor = nextBefore;
+    afterCursor = nextAfter;
+  }
+  return replacements;
+}
+
+/**
+ * Map recognisably rewritten blocks inside an unequal-sized edit hunk.
+ *
+ * A proposal often changes one paragraph and deletes an adjacent one, so
+ * stable-neighbour alignment alone yields (say) three old blocks versus two
+ * new blocks. Pair only mutual best matches with substantial token overlap
+ * and a clear margin over their runner-up. This recovers the rewritten
+ * paragraph without pretending to understand splits, joins, or repeated
+ * boilerplate.
+ */
+function mapSimilarHunkBlocks(
+  oldHunk: Array<[string, BlockSourceRange]>,
+  newHunk: Array<[string, BlockSourceRange]>,
+  replacements: Map<string, string>,
+): void {
+  // A wholesale rewrite with no stable interior boundaries can make this
+  // hunk enormous. Similarity is only a conservative refinement, never a
+  // reason to spend quadratic work on the entire document.
+  if (oldHunk.length * newHunk.length > 10_000) return;
+
+  const oldBags = oldHunk.map(([, block]) => wordBagOf(block.text));
+  const newBags = newHunk.map(([, block]) => wordBagOf(block.text));
+  const scores = oldHunk.map(([, oldBlock], oldIndex) =>
+    newHunk.map(([, newBlock], newIndex) =>
+      oldBlock.kind === newBlock.kind
+        ? blockTextSimilarity(oldBags[oldIndex]!, newBags[newIndex]!)
+        : 0,
+    ),
+  );
+
+  const bestNewForOld = scores.map((row) => bestDistinctScore(row));
+  const bestOldForNew = newHunk.map((_, newIndex) =>
+    bestDistinctScore(scores.map((row) => row[newIndex] ?? 0)),
+  );
+
+  for (let oldIndex = 0; oldIndex < oldHunk.length; oldIndex++) {
+    const oldBest = bestNewForOld[oldIndex];
+    if (!oldBest || oldBest.score < 0.5 || oldBest.score - oldBest.runnerUp < 0.15) continue;
+    const newBest = bestOldForNew[oldBest.index];
+    if (!newBest || newBest.index !== oldIndex || newBest.score - newBest.runnerUp < 0.15) {
+      continue;
+    }
+    const old = oldHunk[oldIndex];
+    const replacement = newHunk[oldBest.index];
+    if (old && replacement) replacements.set(old[0], replacement[0]);
+  }
+}
+
+function bestDistinctScore(values: number[]): { index: number; score: number; runnerUp: number } {
+  let index = -1;
+  let score = 0;
+  let runnerUp = 0;
+  for (let i = 0; i < values.length; i++) {
+    const value = values[i] ?? 0;
+    if (value > score) {
+      runnerUp = score;
+      score = value;
+      index = i;
+    } else if (value > runnerUp) {
+      runnerUp = value;
+    }
+  }
+  return { index, score, runnerUp };
+}
+
+interface WordBag {
+  size: number;
+  counts: Map<string, number>;
+}
+
+/** Sørensen-Dice overlap of word multisets; repeated prose counts repeatedly. */
+function blockTextSimilarity(a: WordBag, b: WordBag): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  const [smaller, larger] =
+    a.counts.size <= b.counts.size ? [a.counts, b.counts] : [b.counts, a.counts];
+  let intersection = 0;
+  for (const [word, count] of smaller) {
+    intersection += Math.min(count, larger.get(word) ?? 0);
+  }
+  return (2 * intersection) / (a.size + b.size);
+}
+
+function wordBagOf(text: string): WordBag {
+  const words = text.toLocaleLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
+  const counts = new Map<string, number>();
+  for (const word of words) counts.set(word, (counts.get(word) ?? 0) + 1);
+  return { size: words.length, counts };
 }
 
 function noop(comment: CommentRow): AnchorUpdate {

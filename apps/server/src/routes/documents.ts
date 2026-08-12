@@ -394,22 +394,25 @@ async function updateDocument(c: Context, deps: AppDeps) {
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
   const rendered = await renderDocument(nextSource, doc.format);
+  const previousBlocks =
+    doc.format === 'asciidoc'
+      ? locateAllBlocksAsciidoc(previousSource)
+      : locateAllBlocks(previousSource);
+  // Include sub-block ids so comments and proposals on list items / table
+  // cells see the same before/after transition as top-level blocks.
+  const knownBlocks =
+    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(nextSource) : locateAllBlocks(nextSource);
   const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
   const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
   const now = Date.now();
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks, {
       isEditProposal: comment.is_edit_proposal === 1,
+      blockTransition: { before: previousBlocks, after: knownBlocks },
     });
     updateStmt.run(...reanchorParams(upd, now, comment.id));
   }
 
-  // Include sub-block ids so proposals on list items / table cells don't
-  // get orphaned after every save. Markdown uses the mdast-based locator;
-  // asciidoc hands off to its own pipeline, and its locator also emits
-  // sub-block ids for supported nested structures (e.g. list items).
-  const knownBlocks =
-    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(nextSource) : locateAllBlocks(nextSource);
   reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (isContentChange(previousSource, nextSource)) {
@@ -2084,8 +2087,10 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
+  let previousSource: string;
   let restoredSource: string;
   try {
+    previousSource = store.read(doc);
     restoredSource = await store.readAt(doc, targetOid);
   } catch {
     return c.json({ error: 'not-found' }, 404);
@@ -2098,27 +2103,24 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
   const rendered = await renderDocument(restoredSource, doc.format);
-  const topLevel = db
-    .prepare(
-      `SELECT * FROM comments
-         WHERE doc_uid = ? AND parent_id IS NULL AND deleted_at IS NULL`,
-    )
-    .all(doc.uid) as CommentRow[];
-  const updateStmt = db.prepare(
-    `UPDATE comments
-        SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-            link_status = ?, updated_at = ?
-      WHERE id = ?`,
-  );
-  for (const comment of topLevel) {
-    const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
-  }
-
+  const previousBlocks =
+    doc.format === 'asciidoc'
+      ? locateAllBlocksAsciidoc(previousSource)
+      : locateAllBlocks(previousSource);
   const knownBlocks =
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(restoredSource)
       : locateAllBlocks(restoredSource);
+  const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
+  const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
+  for (const comment of topLevel) {
+    const upd = reanchor(comment, rendered.blocks, {
+      isEditProposal: comment.is_edit_proposal === 1,
+      blockTransition: { before: previousBlocks, after: knownBlocks },
+    });
+    updateStmt.run(...reanchorParams(upd, now, comment.id));
+  }
+
   reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   realtime.broadcast(
@@ -2159,25 +2161,20 @@ async function revertLatestHistoryVersion(c: Context, deps: AppDeps) {
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
   const rendered = await renderDocument(diff.before, doc.format);
-  const topLevel = db
-    .prepare(
-      `SELECT * FROM comments
-         WHERE doc_uid = ? AND parent_id IS NULL AND deleted_at IS NULL`,
-    )
-    .all(doc.uid) as CommentRow[];
-  const updateStmt = db.prepare(
-    `UPDATE comments
-        SET anchor_block_id = ?, anchor_start_offset = ?, anchor_end_offset = ?,
-            link_status = ?, updated_at = ?
-      WHERE id = ?`,
-  );
-  for (const comment of topLevel) {
-    const upd = reanchor(comment, rendered.blocks);
-    updateStmt.run(upd.blockId, upd.startOffset, upd.endOffset, upd.linkStatus, now, comment.id);
-  }
-
+  const previousBlocks =
+    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(diff.after) : locateAllBlocks(diff.after);
   const knownBlocks =
     doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(diff.before) : locateAllBlocks(diff.before);
+  const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
+  const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
+  for (const comment of topLevel) {
+    const upd = reanchor(comment, rendered.blocks, {
+      isEditProposal: comment.is_edit_proposal === 1,
+      blockTransition: { before: previousBlocks, after: knownBlocks },
+    });
+    updateStmt.run(...reanchorParams(upd, now, comment.id));
+  }
+
   const reopenedProposal =
     meta.action === 'accept-proposal' && meta.proposalId
       ? reopenAcceptedProposal(db, doc.uid, meta.proposalId, now)

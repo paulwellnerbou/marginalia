@@ -2114,6 +2114,7 @@ async function prepareAcceptProposalThread(
     : locatePostMergeSpliceStart(doc, nextSource, proposedText, preMergeRange.start);
 
   const rendered = await renderDocument(nextSource, doc.format);
+  const previousBlocks = locateDocumentBlocks(doc, preMergeSource);
   const presentBlocks = locateDocumentBlocks(doc, nextSource);
   const topLevelComments = deps.db
     .prepare(
@@ -2128,7 +2129,9 @@ async function prepareAcceptProposalThread(
     )
     .all(doc.uid) as CommentRow[];
   const commentAnchorUpdates = topLevelComments.map((comment) => {
-    const upd = reanchor(comment, rendered.blocks);
+    const upd = reanchor(comment, rendered.blocks, {
+      blockTransition: { before: previousBlocks, after: presentBlocks },
+    });
     return { commentId: comment.id, ...upd };
   });
 
@@ -2144,13 +2147,14 @@ async function prepareAcceptProposalThread(
   // replaces. Ordinary quote re-anchoring has no evidence left in that
   // case, even though the proposal gives us an exact old-span -> new-span
   // mapping. Carry the resolved comment onto the resulting paragraph. If
-  // its quote survived and re-anchored normally, leave the more precise
-  // selection alone.
+  // its quote survived and stayed fully linked, leave the more precise
+  // selection alone; the generic block-transition fallback is deliberately
+  // low-confidence, so this exact proposal mapping supersedes it.
   const answeredCommentUpdate = row.answers_comment_id
     ? commentAnchorUpdates.find((upd) => upd.commentId === row.answers_comment_id)
     : undefined;
   const relocateAnsweredComment =
-    postAcceptAnchor && answeredCommentUpdate?.linkStatus === 'orphaned'
+    postAcceptAnchor && answeredCommentUpdate?.linkStatus !== 'linked'
       ? row.answers_comment_id
       : null;
   if (relocateAnsweredComment && answeredCommentUpdate && postAcceptAnchor) {
@@ -2263,15 +2267,17 @@ async function prepareReopenAcceptedProposalThread(
   });
 
   const rendered = await renderDocument(diff.before, doc.format);
+  const previousBlocks = locateDocumentBlocks(doc, diff.after);
+  const knownBlocks = locateDocumentBlocks(doc, diff.before);
   const topLevel = deps.db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
   const commentAnchorUpdates = topLevel.map((comment) => {
     const upd = reanchor(comment, rendered.blocks, {
       isEditProposal: comment.is_edit_proposal === 1,
+      blockTransition: { before: previousBlocks, after: knownBlocks },
     });
     return { commentId: comment.id, ...upd };
   });
 
-  const knownBlocks = locateDocumentBlocks(doc, diff.before);
   const restoredProposalAnchor =
     row.base_block_start !== null && row.base_block_end !== null
       ? locateProposalAnchorBySourceSpan(
