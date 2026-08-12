@@ -1,7 +1,9 @@
 import { CheckIcon, CopyIcon } from '@radix-ui/react-icons';
-import { Code, IconButton, Tooltip } from '@radix-ui/themes';
+import { Button, Code, Dialog, Flex, IconButton, Text, Tooltip } from '@radix-ui/themes';
+import { QrCodeIcon } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { reportError } from '../lib/log.js';
+import { PairingQr } from './PairingQr.js';
 
 interface Props {
   /** The value to display and copy to the clipboard. */
@@ -14,6 +16,8 @@ interface Props {
   ariaLabel?: string;
   /** Radix Code size. */
   size?: '1' | '2' | '3';
+  /** If true, show an adjacent button that opens a QR code containing text. */
+  qrCode?: boolean;
 }
 
 /**
@@ -21,8 +25,15 @@ interface Props {
  * and a check-mark confirmation animation on success. Replaces the big
  * "Copy X" buttons that used to live next to credentials.
  */
-export function Copyable({ text, multiline = false, ariaLabel = 'Copy', size = '2' }: Props) {
+export function Copyable({
+  text,
+  multiline = false,
+  ariaLabel = 'Copy',
+  size = '2',
+  qrCode = false,
+}: Props) {
   const [copied, setCopied] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
   const resetTimer = useRef<number | null>(null);
 
   async function copy() {
@@ -42,6 +53,21 @@ export function Copyable({ text, multiline = false, ariaLabel = 'Copy', size = '
         <Code size={size} className="copyable-text">
           {text}
         </Code>
+        {qrCode && (
+          <Tooltip content="Show QR code">
+            <IconButton
+              type="button"
+              size="1"
+              variant="ghost"
+              color="gray"
+              aria-label="Show QR code for this link"
+              className="copyable-btn"
+              onClick={() => setQrOpen(true)}
+            >
+              <QrCodeIcon size={15} />
+            </IconButton>
+          </Tooltip>
+        )}
         <Tooltip content={copied ? 'Copied!' : ariaLabel}>
           <IconButton
             type="button"
@@ -56,6 +82,28 @@ export function Copyable({ text, multiline = false, ariaLabel = 'Copy', size = '
           </IconButton>
         </Tooltip>
       </div>
+
+      {qrCode && (
+        <Dialog.Root open={qrOpen} onOpenChange={setQrOpen}>
+          <Dialog.Content maxWidth="26rem">
+            <Dialog.Title>Access link QR code</Dialog.Title>
+            <Dialog.Description size="2" color="gray" mb="4">
+              Scan this code to open the document with this access link.
+            </Dialog.Description>
+            <Flex direction="column" align="center" gap="3">
+              <PairingQr value={text} ariaLabel="Document access link QR code" />
+              <Text size="1" color="gray" align="center">
+                This code includes the access token. Treat it like the link itself.
+              </Text>
+            </Flex>
+            <Flex justify="end" mt="4">
+              <Dialog.Close>
+                <Button variant="soft">Done</Button>
+              </Dialog.Close>
+            </Flex>
+          </Dialog.Content>
+        </Dialog.Root>
+      )}
     </div>
   );
 }

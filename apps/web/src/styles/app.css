@@ -1911,7 +1911,7 @@ button.primary:disabled {
 }
 .copyable-multiline .copyable-surface {
   display: inline-flex;
-  align-items: flex-start;
+  align-items: center;
   max-width: 100%;
   box-sizing: border-box;
   padding: 0.35rem 0.35rem 0.35rem 0.5rem;
@@ -1941,8 +1941,7 @@ button.primary:disabled {
   transform: scale(1.15);
 }
 .copyable-multiline .copyable-btn {
-  align-self: flex-start;
-  margin-top: 0.05rem;
+  align-self: center;
 }
 .copyable-multiline .copyable-btn--copied {
   transform: scale(1.15);

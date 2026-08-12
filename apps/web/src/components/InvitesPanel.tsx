@@ -398,6 +398,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
                 text={window.location.origin + inv.url}
                 multiline
                 ariaLabel="Copy invite link"
+                qrCode
               />
             </Flex>
           ))}
