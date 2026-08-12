@@ -87,6 +87,9 @@ CREATE TABLE IF NOT EXISTS comments (
   author_client_id      TEXT NOT NULL,
   author_display_name   TEXT NOT NULL,
   body                  TEXT NOT NULL,
+  -- 1 -> this root thread is private to its author. Replies inherit the
+  -- root's visibility; route handlers only allow this on root comments.
+  is_hidden             INTEGER NOT NULL DEFAULT 0,
   link_status           TEXT NOT NULL DEFAULT 'linked',
   resolved_at           INTEGER,
   resolved_by_name      TEXT,
@@ -433,6 +436,8 @@ export interface CommentRow {
   author_client_id: string;
   author_display_name: string;
   body: string;
+  /** 1 when this root thread is visible only to its author. */
+  is_hidden: number;
   link_status: CommentLinkStatus;
   resolved_at: number | null;
   resolved_by_name: string | null;
@@ -533,6 +538,7 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments', 'anchor_section_index_path', 'TEXT');
   ensureColumn(db, 'comments', 'parent_proposal_id', 'TEXT');
   ensureColumn(db, 'comments', 'anchor_end_block_id', 'TEXT');
+  ensureColumn(db, 'comments', 'is_hidden', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'documents', 'format', "TEXT NOT NULL DEFAULT 'markdown'");
   ensureColumn(db, 'documents', 'password_recovery_ciphertext', 'TEXT');
   ensureColumn(db, 'documents', 'password_recovery_iv', 'TEXT');

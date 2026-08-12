@@ -4260,8 +4260,14 @@ button.primary:disabled {
   color: var(--ui-fg-muted);
 }
 
-.ic-row-meta-actions {
+.ic-row-meta-actions-group {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.ic-row-meta-actions {
   display: flex;
   align-items: center;
   gap: 0.15rem;
@@ -4270,7 +4276,9 @@ button.primary:disabled {
 }
 /* Per-row reveal: only the row being hovered/focused shows its actions. */
 .ic-row:hover .ic-row-meta-actions,
-.ic-row:focus-within .ic-row-meta-actions {
+.ic-row:focus-within .ic-row-meta-actions,
+.ic-row:hover .ic-icon-btn-visibility,
+.ic-row:focus-within .ic-icon-btn-visibility {
   opacity: 1;
 }
 /* Confirm prompts always visible regardless of hover state — keyboard
@@ -4283,7 +4291,8 @@ button.primary:disabled {
 /* Touch / coarse-pointer devices don't have hover — keep the row
    actions always visible there so they're reachable. */
 @media (hover: none), (pointer: coarse) {
-  .ic-row-meta-actions {
+  .ic-row-meta-actions,
+  .ic-icon-btn-visibility {
     opacity: 1;
   }
 }
@@ -4311,6 +4320,13 @@ button.primary:disabled {
 .ic-icon-btn-danger:hover:not(:disabled) {
   background: rgba(239, 68, 68, 0.12);
   color: #b91c1c;
+}
+.ic-icon-btn-visibility {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.ic-icon-btn-visibility.ic-icon-btn-visibility-active {
+  opacity: 1;
 }
 .ic-icon-btn svg {
   width: 13px;

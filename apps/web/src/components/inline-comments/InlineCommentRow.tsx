@@ -1,6 +1,8 @@
 import {
   CheckIcon,
   Cross2Icon,
+  EyeClosedIcon,
+  EyeOpenIcon,
   Link2Icon,
   Pencil2Icon,
   QuoteIcon,
@@ -22,6 +24,7 @@ interface Props {
   /** Resolves thread ids mentioned in the body into links. */
   threadRefs: ThreadRefApi;
   onEdit: (id: string, body: string) => Promise<void> | void;
+  onSetHidden: (id: string, hidden: boolean) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
   onQuote?: ((text: string) => void) | undefined;
   /**
@@ -38,6 +41,7 @@ export function InlineCommentRow({
   canQuote,
   threadRefs,
   onEdit,
+  onSetHidden,
   onDelete,
   onQuote,
   onReact,
@@ -48,6 +52,7 @@ export function InlineCommentRow({
   const [saving, setSaving] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [reacting, setReacting] = useState(false);
+  const [visibilityBusy, setVisibilityBusy] = useState(false);
   const linkCopyTimer = useRef<number | null>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -104,6 +109,7 @@ export function InlineCommentRow({
   const showQuote = !editing && !confirmingDelete && canQuote && onQuote;
   const showEdit = !editing && !confirmingDelete && node.capabilities.edit;
   const showDelete = !editing && !confirmingDelete && node.capabilities.delete;
+  const showHide = !editing && !confirmingDelete && node.capabilities.hide === true;
   const showReact = !editing && !confirmingDelete && node.capabilities.react && onReact;
   // Deleting the opener deletes the whole thread, replies included.
   const deleteLabel = variant === 'opener' ? 'Delete thread' : 'Delete';
@@ -121,6 +127,16 @@ export function InlineCommentRow({
     }
   }
 
+  async function toggleVisibility() {
+    if (!showHide || visibilityBusy) return;
+    setVisibilityBusy(true);
+    try {
+      await onSetHidden(node.id, !node.hidden);
+    } finally {
+      setVisibilityBusy(false);
+    }
+  }
+
   return (
     <div id={`comment-${node.id}`} className={`ic-row ic-row-${variant}`}>
       <InlineAvatar
@@ -135,79 +151,99 @@ export function InlineCommentRow({
             {formatTimestamp(node.created_at)}
           </span>
           {!editing && (
-            <div
-              className="ic-row-meta-actions"
-              data-confirming={confirmingDelete ? 'true' : undefined}
-            >
-              {confirmingDelete ? (
-                <>
-                  <button
-                    type="button"
-                    className="ic-icon-btn"
-                    onClick={() => setConfirmingDelete(false)}
-                    disabled={saving}
-                    title="Cancel"
-                    aria-label="Cancel"
-                  >
-                    <Cross2Icon />
-                  </button>
-                  <button
-                    type="button"
-                    className="ic-icon-btn ic-icon-btn-danger"
-                    onClick={() => void confirmDelete()}
-                    disabled={saving}
-                    title={confirmDeleteLabel}
-                    aria-label={confirmDeleteLabel}
-                  >
-                    <TrashIcon />
-                  </button>
-                </>
-              ) : (
-                <>
-                  {showQuote && (
+            <div className="ic-row-meta-actions-group">
+              <div
+                className="ic-row-meta-actions"
+                data-confirming={confirmingDelete ? 'true' : undefined}
+              >
+                {confirmingDelete ? (
+                  <>
                     <button
                       type="button"
                       className="ic-icon-btn"
-                      title="Quote"
-                      aria-label="Quote"
-                      onClick={() => onQuote?.(node.body)}
+                      onClick={() => setConfirmingDelete(false)}
+                      disabled={saving}
+                      title="Cancel"
+                      aria-label="Cancel"
                     >
-                      <QuoteIcon />
+                      <Cross2Icon />
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className="ic-icon-btn"
-                    title={linkCopied ? 'Link copied!' : 'Copy link to this comment'}
-                    aria-label={linkCopied ? 'Link copied!' : 'Copy link to this comment'}
-                    onClick={() => void copyLink()}
-                  >
-                    {linkCopied ? <CheckIcon /> : <Link2Icon />}
-                  </button>
-                  {showEdit && (
-                    <button
-                      type="button"
-                      className="ic-icon-btn"
-                      title="Edit"
-                      aria-label="Edit"
-                      onClick={startEdit}
-                    >
-                      <Pencil2Icon />
-                    </button>
-                  )}
-                  {showDelete && (
                     <button
                       type="button"
                       className="ic-icon-btn ic-icon-btn-danger"
-                      title={deleteLabel}
-                      aria-label={deleteLabel}
-                      onClick={() => setConfirmingDelete(true)}
+                      onClick={() => void confirmDelete()}
+                      disabled={saving}
+                      title={confirmDeleteLabel}
+                      aria-label={confirmDeleteLabel}
                     >
                       <TrashIcon />
                     </button>
-                  )}
-                  {showReact && <EmojiReactionPicker onPick={toggleReaction} disabled={reacting} />}
-                </>
+                  </>
+                ) : (
+                  <>
+                    {showQuote && (
+                      <button
+                        type="button"
+                        className="ic-icon-btn"
+                        title="Quote"
+                        aria-label="Quote"
+                        onClick={() => onQuote?.(node.body)}
+                      >
+                        <QuoteIcon />
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="ic-icon-btn"
+                      title={linkCopied ? 'Link copied!' : 'Copy link to this comment'}
+                      aria-label={linkCopied ? 'Link copied!' : 'Copy link to this comment'}
+                      onClick={() => void copyLink()}
+                    >
+                      {linkCopied ? <CheckIcon /> : <Link2Icon />}
+                    </button>
+                    {showEdit && (
+                      <button
+                        type="button"
+                        className="ic-icon-btn"
+                        title="Edit"
+                        aria-label="Edit"
+                        onClick={startEdit}
+                      >
+                        <Pencil2Icon />
+                      </button>
+                    )}
+                    {showDelete && (
+                      <button
+                        type="button"
+                        className="ic-icon-btn ic-icon-btn-danger"
+                        title={deleteLabel}
+                        aria-label={deleteLabel}
+                        onClick={() => setConfirmingDelete(true)}
+                      >
+                        <TrashIcon />
+                      </button>
+                    )}
+                    {showReact && <EmojiReactionPicker onPick={toggleReaction} disabled={reacting} />}
+                  </>
+                )}
+              </div>
+              {showHide && (
+                <button
+                  type="button"
+                  className={`ic-icon-btn ic-icon-btn-visibility${
+                    node.hidden ? ' ic-icon-btn-visibility-active' : ''
+                  }`}
+                  disabled={visibilityBusy}
+                  title={
+                    node.hidden
+                      ? 'Hidden — click to make this comment visible again'
+                      : 'Hide comment — only you will be able to see it'
+                  }
+                  aria-label={node.hidden ? 'Unhide comment' : 'Hide comment'}
+                  onClick={() => void toggleVisibility()}
+                >
+                  {node.hidden ? <EyeOpenIcon /> : <EyeClosedIcon />}
+                </button>
               )}
             </div>
           )}

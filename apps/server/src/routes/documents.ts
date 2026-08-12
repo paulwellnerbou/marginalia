@@ -614,9 +614,27 @@ async function exportDocument(c: Context, deps: AppDeps) {
          LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
         WHERE c.doc_uid = ?
           AND (c.deleted_at IS NULL OR cep.status = 'accepted')
+          AND (
+            ((c.parent_id IS NULL AND c.parent_proposal_id IS NULL)
+              AND (c.is_hidden = 0 OR c.author_client_id = ?))
+            OR
+            ((c.parent_id IS NOT NULL OR c.parent_proposal_id IS NOT NULL)
+              AND (c.is_hidden = 0 OR c.author_client_id = ?)
+              AND EXISTS (
+                SELECT 1 FROM comments root
+                 WHERE root.id = COALESCE(c.parent_id, c.parent_proposal_id)
+                   AND root.doc_uid = c.doc_uid
+                   AND (root.is_hidden = 0 OR root.author_client_id = ?)
+              ))
+          )
          ORDER BY created_at ASC`,
     )
-    .all(doc.uid) as BundleCommentRow[];
+    .all(
+      doc.uid,
+      decision.identity?.clientId ?? '',
+      decision.identity?.clientId ?? '',
+      decision.identity?.clientId ?? '',
+    ) as BundleCommentRow[];
 
   // A bundle without history is still importable (older bundles have
   // none); it just lands as a single-commit document.
@@ -746,6 +764,7 @@ async function* bundleJson(
 async function loadReviewThreadsForExport(
   deps: AppDeps,
   doc: DocumentRow,
+  viewerId: string | null,
 ): Promise<ReviewThread[]> {
   const { db, store } = deps;
 
@@ -776,9 +795,10 @@ async function loadReviewThreadsForExport(
           AND c.parent_id IS NULL
           AND c.parent_proposal_id IS NULL
           AND c.deleted_at IS NULL
+          AND (c.is_hidden = 0 OR c.author_client_id = ?)
         ORDER BY c.created_at ASC`,
     )
-    .all(doc.uid) as Row[];
+    .all(doc.uid, viewerId ?? '') as Row[];
 
   // Replies (one DB hit, group in memory). Drop deleted rows so they
   // don't appear as ghost replies in the exported comment thread.
@@ -832,11 +852,13 @@ async function loadReviewThreadsForExport(
       author: row.author_display_name,
       date: row.created_at,
     };
-    const threadReplies = (repliesByThread.get(row.id) ?? []).map((r) => ({
-      body: r.body,
-      author: r.author_display_name,
-      date: r.created_at,
-    }));
+    const threadReplies = (repliesByThread.get(row.id) ?? [])
+      .filter((r) => r.is_hidden === 0 || r.author_client_id === viewerId)
+      .map((r) => ({
+        body: r.body,
+        author: r.author_display_name,
+        date: r.created_at,
+      }));
     const thread: ReviewThread = {
       id: row.id,
       block_id: row.anchor_block_id,
@@ -1228,7 +1250,11 @@ async function exportDocumentAsDocx(
   // Unset → vanilla export.
   let review: ReviewExportData | undefined;
   if (!options.acceptedProposals && wantsReviewExport(c)) {
-    const threads = await loadReviewThreadsForExport(deps, doc);
+    const threads = await loadReviewThreadsForExport(
+      deps,
+      doc,
+      decision.identity?.clientId ?? null,
+    );
     if (threads.length > 0) {
       review = { threads };
     }
@@ -1551,10 +1577,10 @@ async function importDocument(c: Context, deps: AppDeps) {
         anchor_block_id, anchor_quote, anchor_prefix, anchor_suffix,
         anchor_start_offset, anchor_end_offset,
         anchor_heading_path, anchor_section_index, anchor_section_index_path,
-        author_client_id, author_display_name, body, link_status,
+        author_client_id, author_display_name, body, is_hidden, link_status,
         resolved_at, resolved_by_name,
         created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertEditProposal = db.prepare(
     `INSERT INTO comments_edit_proposals
@@ -1613,6 +1639,7 @@ async function importDocument(c: Context, deps: AppDeps) {
       row.author_client_id,
       row.author_display_name,
       row.body,
+      row.is_hidden === true ? 1 : 0,
       normalizeImportedLinkStatus(
         typeof row.link_status === 'string'
           ? row.link_status
@@ -1912,6 +1939,7 @@ async function mapBundleComments(
     author_client_id: row.author_client_id,
     author_display_name: row.author_display_name,
     body: row.body,
+    is_hidden: row.is_hidden === 1,
     link_status: row.link_status,
     resolved_at: row.resolved_at,
     resolved_by_name: row.resolved_by_name,
