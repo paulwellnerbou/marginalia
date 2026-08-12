@@ -1612,6 +1612,7 @@ describe('documents API', () => {
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
       }),
     );
+    expect(historyAfterRes.status).toBe(200);
     const historyAfter = (await historyAfterRes.json()) as {
       history: Array<{
         oid: string;

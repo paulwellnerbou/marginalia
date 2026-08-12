@@ -106,6 +106,18 @@ export class GitStore {
     this.initialized.add(uid);
   }
 
+  private async restoreMainAfterFailedRevert(dir: string, originalError?: unknown): Promise<void> {
+    try {
+      await execFileAsync('git', ['reset', '--hard', 'main'], { cwd: dir });
+    } catch (cleanupError) {
+      const errors = originalError === undefined ? [cleanupError] : [originalError, cleanupError];
+      throw new AggregateError(
+        errors,
+        'Git revert failed and the document repository could not be restored to main',
+      );
+    }
+  }
+
   read(doc: DocLocator): string {
     return readFileSync(this.filepath(doc), 'utf8');
   }
@@ -258,13 +270,13 @@ export class GitStore {
         // working tree. This repo contains only Marginalia-managed document
         // state, and the per-document lock prevents a concurrent save, so
         // restoring main here is both safe and necessary before returning.
-        await execFileAsync('git', ['reset', '--hard', 'main'], { cwd: dir }).catch(() => {});
+        await this.restoreMainAfterFailedRevert(dir, err);
         return { ok: false, reason: 'conflict' };
       }
 
       const after = this.read(doc);
       if (after === before) {
-        await execFileAsync('git', ['reset', '--hard', 'main'], { cwd: dir }).catch(() => {});
+        await this.restoreMainAfterFailedRevert(dir);
         return { ok: false, reason: 'empty' };
       }
 
@@ -282,7 +294,7 @@ export class GitStore {
       try {
         await execFileAsync('git', ['commit', '-m', message], { cwd: dir, env: commitEnv });
       } catch (err) {
-        await execFileAsync('git', ['reset', '--hard', 'main'], { cwd: dir }).catch(() => {});
+        await this.restoreMainAfterFailedRevert(dir, err);
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
           return { ok: false, reason: 'unavailable' };
         }

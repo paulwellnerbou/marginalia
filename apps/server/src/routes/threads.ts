@@ -5,6 +5,7 @@ import { renderDocument } from '@marginalia/renderer';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import {
+  prepareBlockReplacements,
   REANCHOR_COMMENT_SQL,
   reanchor,
   reanchorParams,
@@ -2116,6 +2117,10 @@ async function prepareAcceptProposalThread(
   const rendered = await renderDocument(nextSource, doc.format);
   const previousBlocks = locateDocumentBlocks(doc, preMergeSource);
   const presentBlocks = locateDocumentBlocks(doc, nextSource);
+  const blockReplacements = prepareBlockReplacements({
+    before: previousBlocks,
+    after: presentBlocks,
+  });
   const topLevelComments = deps.db
     .prepare(
       `SELECT c.*
@@ -2130,7 +2135,7 @@ async function prepareAcceptProposalThread(
     .all(doc.uid) as CommentRow[];
   const commentAnchorUpdates = topLevelComments.map((comment) => {
     const upd = reanchor(comment, rendered.blocks, {
-      blockTransition: { before: previousBlocks, after: presentBlocks },
+      blockReplacements,
     });
     return { commentId: comment.id, ...upd };
   });
@@ -2269,11 +2274,15 @@ async function prepareReopenAcceptedProposalThread(
   const rendered = await renderDocument(diff.before, doc.format);
   const previousBlocks = locateDocumentBlocks(doc, diff.after);
   const knownBlocks = locateDocumentBlocks(doc, diff.before);
+  const blockReplacements = prepareBlockReplacements({
+    before: previousBlocks,
+    after: knownBlocks,
+  });
   const topLevel = deps.db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
   const commentAnchorUpdates = topLevel.map((comment) => {
     const upd = reanchor(comment, rendered.blocks, {
       isEditProposal: comment.is_edit_proposal === 1,
-      blockTransition: { before: previousBlocks, after: knownBlocks },
+      blockReplacements,
     });
     return { commentId: comment.id, ...upd };
   });

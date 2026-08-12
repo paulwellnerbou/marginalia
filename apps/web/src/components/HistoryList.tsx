@@ -182,7 +182,7 @@ export function HistoryList({
       setRestoreError(
         err instanceof Error && err.message === 'display-name-required'
           ? 'Please set your display name first'
-          : 'Could not revert the latest change',
+          : 'Could not revert this edit',
       );
     } finally {
       setRestoringOid(null);

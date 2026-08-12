@@ -16,6 +16,7 @@ import type { Context } from 'hono';
 import { Hono } from 'hono';
 import JSZip from 'jszip';
 import {
+  prepareBlockReplacements,
   REANCHOR_COMMENT_SQL,
   reanchor,
   reanchorParams,
@@ -402,13 +403,17 @@ async function updateDocument(c: Context, deps: AppDeps) {
   // cells see the same before/after transition as top-level blocks.
   const knownBlocks =
     doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(nextSource) : locateAllBlocks(nextSource);
+  const blockReplacements = prepareBlockReplacements({
+    before: previousBlocks,
+    after: knownBlocks,
+  });
   const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
   const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
   const now = Date.now();
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks, {
       isEditProposal: comment.is_edit_proposal === 1,
-      blockTransition: { before: previousBlocks, after: knownBlocks },
+      blockReplacements,
     });
     updateStmt.run(...reanchorParams(upd, now, comment.id));
   }
@@ -2111,12 +2116,16 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(restoredSource)
       : locateAllBlocks(restoredSource);
+  const blockReplacements = prepareBlockReplacements({
+    before: previousBlocks,
+    after: knownBlocks,
+  });
   const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
   const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks, {
       isEditProposal: comment.is_edit_proposal === 1,
-      blockTransition: { before: previousBlocks, after: knownBlocks },
+      blockReplacements,
     });
     updateStmt.run(...reanchorParams(upd, now, comment.id));
   }
@@ -2195,12 +2204,16 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(revertedSource)
       : locateAllBlocks(revertedSource);
+  const blockReplacements = prepareBlockReplacements({
+    before: previousBlocks,
+    after: knownBlocks,
+  });
   const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
   const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
   for (const comment of topLevel) {
     const upd = reanchor(comment, rendered.blocks, {
       isEditProposal: comment.is_edit_proposal === 1,
-      blockTransition: { before: previousBlocks, after: knownBlocks },
+      blockReplacements,
     });
     updateStmt.run(...reanchorParams(upd, now, comment.id));
   }

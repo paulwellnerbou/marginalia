@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
-import { reanchor } from '../src/anchoring.js';
+import { prepareBlockReplacements, reanchor } from '../src/anchoring.js';
 import type { CommentRow } from '../src/db.js';
 
 /**
@@ -323,7 +323,10 @@ describe('reanchor: short quotes', () => {
       anchor_end_offset: 45,
     });
     const upd = reanchor(anchor, blockMap(after), {
-      blockTransition: { before: sourceMap(before), after: sourceMap(after) },
+      blockReplacements: prepareBlockReplacements({
+        before: sourceMap(before),
+        after: sourceMap(after),
+      }),
     });
     expect(upd).toMatchObject({
       linkStatus: 'low-confidence',
@@ -353,6 +356,42 @@ describe('reanchor: short quotes', () => {
     });
   });
 
+  test('a surviving repeated quote keeps its exact range in a rewritten block', () => {
+    const before = [
+      { id: 'stable-before', text: 'Before.' },
+      { id: 'old', text: 'First brown fox. Second brown fox.' },
+      { id: 'stable-after', text: 'After.' },
+    ];
+    const after = [
+      before[0]!,
+      { id: 'new', text: 'Added. First brown fox. Second brown fox.' },
+      before[2]!,
+    ];
+    const upd = reanchor(
+      comment({
+        anchor_block_id: 'old',
+        anchor_quote: 'brown fox',
+        anchor_prefix: 'First brown fox. Second ',
+        anchor_suffix: '.',
+        anchor_start_offset: 24,
+        anchor_end_offset: 33,
+      }),
+      blockMap(after),
+      {
+        blockReplacements: prepareBlockReplacements({
+          before: sourceMap(before),
+          after: sourceMap(after),
+        }),
+      },
+    );
+    expect(upd).toMatchObject({
+      linkStatus: 'low-confidence',
+      blockId: 'new',
+      startOffset: 31,
+      endOffset: 40,
+    });
+  });
+
   test('similarity does not choose between repeated rewrite candidates', () => {
     const before = [
       { id: 'stable-before', text: 'Before.' },
@@ -373,7 +412,12 @@ describe('reanchor: short quotes', () => {
         anchor_suffix: ' coat down from the hook.',
       }),
       blockMap(after),
-      { blockTransition: { before: sourceMap(before), after: sourceMap(after) } },
+      {
+        blockReplacements: prepareBlockReplacements({
+          before: sourceMap(before),
+          after: sourceMap(after),
+        }),
+      },
     );
     expect(upd.linkStatus).toBe('orphaned');
     expect(upd.blockId).toBeNull();

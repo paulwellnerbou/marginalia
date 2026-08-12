@@ -104,22 +104,13 @@ export interface ReanchorOptions {
    * renders without a highlight to sit next to.
    */
   isEditProposal?: boolean;
-  /**
-   * The source block maps immediately before and after the edit that caused
-   * this re-anchoring pass. Content hashes deliberately change when a block
-   * changes, so quote search alone cannot tell a rewritten paragraph from an
-   * unrelated paragraph that happens to contain the same short word.
-   *
-   * When one old block is replaced by one new block between the same stable
-   * neighbours, this transition identifies the replacement directly. The
-   * anchor follows it as low-confidence, without guessing at a new text
-   * range. Edit proposals opt out: their source spans have a separate,
-   * proposal-specific relocation path.
-   */
-  blockTransition?: {
-    before: ReadonlyMap<string, BlockSourceRange>;
-    after: ReadonlyMap<string, BlockSourceRange>;
-  };
+  /** Replacement evidence prepared once for every comment in this edit. */
+  blockReplacements?: ReadonlyMap<string, string>;
+}
+
+export interface BlockTransition {
+  before: ReadonlyMap<string, BlockSourceRange>;
+  after: ReadonlyMap<string, BlockSourceRange>;
 }
 
 export function reanchor(
@@ -145,7 +136,7 @@ export function reanchor(
     blocks: options.isEditProposal ? blocks : blocks.filter((b) => b.anchorable),
     originalPath,
     originalIndexPath,
-    replacements: options.isEditProposal ? new Map() : replacementBlockIds(options.blockTransition),
+    replacements: options.isEditProposal ? new Map() : (options.blockReplacements ?? new Map()),
   };
 
   const fragments = splitSpanQuote(quote);
@@ -313,6 +304,24 @@ function locateFragment(
   const replacementId = preferredBlockId ? ctx.replacements.get(preferredBlockId) : undefined;
   const replacement = replacementId ? blocks.find((b) => b.id === replacementId) : undefined;
   if (replacement) {
+    const hits = occurrencesOf(replacement.text, quote, prefix, suffix);
+    const best = hits[0];
+    const runnerUp = hits[1];
+    // The transition identifies the rewritten block. Preserve an exact range
+    // as well when the quote is unique there, or when its surviving context
+    // distinguishes one repeated occurrence. Otherwise keep the conservative
+    // block-only anchor below rather than choosing an arbitrary repetition.
+    if (
+      best &&
+      (!runnerUp || (vouched(best) && (!vouched(runnerUp) || best.context > runnerUp.context)))
+    ) {
+      return {
+        linkStatus: 'low-confidence',
+        blockId: replacement.id,
+        startOffset: best.offset,
+        endOffset: best.offset + quote.length,
+      };
+    }
     return {
       linkStatus: 'low-confidence',
       blockId: replacement.id,
@@ -558,8 +567,8 @@ function isWordBounded(text: string, idx: number, len: number): boolean {
  * pass. Ambiguous rewrites, splits, joins, and structurally different blocks
  * remain unmapped and fall back to the quote matcher.
  */
-function replacementBlockIds(
-  transition: ReanchorOptions['blockTransition'],
+export function prepareBlockReplacements(
+  transition: BlockTransition | undefined,
 ): ReadonlyMap<string, string> {
   const replacements = new Map<string, string>();
   if (!transition) return replacements;
