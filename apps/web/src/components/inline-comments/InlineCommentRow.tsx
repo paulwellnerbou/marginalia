@@ -1,14 +1,13 @@
 import {
   CheckIcon,
   Cross2Icon,
-  EyeNoneIcon,
-  EyeOpenIcon,
   Link2Icon,
   Pencil2Icon,
   QuoteIcon,
   TrashIcon,
 } from '@radix-ui/react-icons';
 import { Tooltip } from '@radix-ui/themes';
+import { Eye, EyeOff } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { Comment } from '../../lib/api.js';
 import { formatTimestamp, formatTimestampLong } from '../../lib/format-time.js';
@@ -249,7 +248,7 @@ export function InlineCommentRow({
                     aria-label={node.hidden ? 'Unhide comment' : 'Hide comment'}
                     onClick={() => void toggleVisibility()}
                   >
-                    {node.hidden ? <EyeNoneIcon /> : <EyeOpenIcon />}
+                    {node.hidden ? <EyeOff strokeWidth={2.25} /> : <Eye strokeWidth={2.25} />}
                   </button>
                 </Tooltip>
               )}
