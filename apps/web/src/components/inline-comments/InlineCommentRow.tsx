@@ -1,13 +1,14 @@
 import {
   CheckIcon,
   Cross2Icon,
-  EyeClosedIcon,
+  EyeNoneIcon,
   EyeOpenIcon,
   Link2Icon,
   Pencil2Icon,
   QuoteIcon,
   TrashIcon,
 } from '@radix-ui/react-icons';
+import { Tooltip } from '@radix-ui/themes';
 import { useEffect, useRef, useState } from 'react';
 import type { Comment } from '../../lib/api.js';
 import { formatTimestamp, formatTimestampLong } from '../../lib/format-time.js';
@@ -158,70 +159,76 @@ export function InlineCommentRow({
               >
                 {confirmingDelete ? (
                   <>
-                    <button
-                      type="button"
-                      className="ic-icon-btn"
-                      onClick={() => setConfirmingDelete(false)}
-                      disabled={saving}
-                      title="Cancel"
-                      aria-label="Cancel"
-                    >
-                      <Cross2Icon />
-                    </button>
-                    <button
-                      type="button"
-                      className="ic-icon-btn ic-icon-btn-danger"
-                      onClick={() => void confirmDelete()}
-                      disabled={saving}
-                      title={confirmDeleteLabel}
-                      aria-label={confirmDeleteLabel}
-                    >
-                      <TrashIcon />
-                    </button>
+                    <Tooltip content="Cancel">
+                      <button
+                        type="button"
+                        className="ic-icon-btn"
+                        onClick={() => setConfirmingDelete(false)}
+                        disabled={saving}
+                        aria-label="Cancel"
+                      >
+                        <Cross2Icon />
+                      </button>
+                    </Tooltip>
+                    <Tooltip content={confirmDeleteLabel}>
+                      <button
+                        type="button"
+                        className="ic-icon-btn ic-icon-btn-danger"
+                        onClick={() => void confirmDelete()}
+                        disabled={saving}
+                        aria-label={confirmDeleteLabel}
+                      >
+                        <TrashIcon />
+                      </button>
+                    </Tooltip>
                   </>
                 ) : (
                   <>
                     {showQuote && (
-                      <button
-                        type="button"
-                        className="ic-icon-btn"
-                        title="Quote"
-                        aria-label="Quote"
-                        onClick={() => onQuote?.(node.body)}
-                      >
-                        <QuoteIcon />
-                      </button>
+                      <Tooltip content="Quote">
+                        <button
+                          type="button"
+                          className="ic-icon-btn"
+                          aria-label="Quote"
+                          onClick={() => onQuote?.(node.body)}
+                        >
+                          <QuoteIcon />
+                        </button>
+                      </Tooltip>
                     )}
-                    <button
-                      type="button"
-                      className="ic-icon-btn"
-                      title={linkCopied ? 'Link copied!' : 'Copy link to this comment'}
-                      aria-label={linkCopied ? 'Link copied!' : 'Copy link to this comment'}
-                      onClick={() => void copyLink()}
-                    >
-                      {linkCopied ? <CheckIcon /> : <Link2Icon />}
-                    </button>
-                    {showEdit && (
+                    <Tooltip content={linkCopied ? 'Link copied!' : 'Copy link to this comment'}>
                       <button
                         type="button"
                         className="ic-icon-btn"
-                        title="Edit"
-                        aria-label="Edit"
-                        onClick={startEdit}
+                        aria-label={linkCopied ? 'Link copied!' : 'Copy link to this comment'}
+                        onClick={() => void copyLink()}
                       >
-                        <Pencil2Icon />
+                        {linkCopied ? <CheckIcon /> : <Link2Icon />}
                       </button>
+                    </Tooltip>
+                    {showEdit && (
+                      <Tooltip content="Edit">
+                        <button
+                          type="button"
+                          className="ic-icon-btn"
+                          aria-label="Edit"
+                          onClick={startEdit}
+                        >
+                          <Pencil2Icon />
+                        </button>
+                      </Tooltip>
                     )}
                     {showDelete && (
-                      <button
-                        type="button"
-                        className="ic-icon-btn ic-icon-btn-danger"
-                        title={deleteLabel}
-                        aria-label={deleteLabel}
-                        onClick={() => setConfirmingDelete(true)}
-                      >
-                        <TrashIcon />
-                      </button>
+                      <Tooltip content={deleteLabel}>
+                        <button
+                          type="button"
+                          className="ic-icon-btn ic-icon-btn-danger"
+                          aria-label={deleteLabel}
+                          onClick={() => setConfirmingDelete(true)}
+                        >
+                          <TrashIcon />
+                        </button>
+                      </Tooltip>
                     )}
                     {showReact && (
                       <EmojiReactionPicker onPick={toggleReaction} disabled={reacting} />
@@ -230,22 +237,21 @@ export function InlineCommentRow({
                 )}
               </div>
               {showHide && (
-                <button
-                  type="button"
-                  className={`ic-icon-btn ic-icon-btn-visibility${
-                    node.hidden ? ' ic-icon-btn-visibility-active' : ''
-                  }`}
-                  disabled={visibilityBusy}
-                  title={
-                    node.hidden
-                      ? 'Hidden — click to make this comment visible again'
-                      : 'Hide comment — only you will be able to see it'
-                  }
-                  aria-label={node.hidden ? 'Unhide comment' : 'Hide comment'}
-                  onClick={() => void toggleVisibility()}
+                <Tooltip
+                  content={node.hidden ? 'Hidden. Click to unhide' : 'Visible. Click to hide'}
                 >
-                  {node.hidden ? <EyeOpenIcon /> : <EyeClosedIcon />}
-                </button>
+                  <button
+                    type="button"
+                    className={`ic-icon-btn ic-icon-btn-visibility${
+                      node.hidden ? ' ic-icon-btn-visibility-active' : ''
+                    }`}
+                    disabled={visibilityBusy}
+                    aria-label={node.hidden ? 'Unhide comment' : 'Hide comment'}
+                    onClick={() => void toggleVisibility()}
+                  >
+                    {node.hidden ? <EyeNoneIcon /> : <EyeOpenIcon />}
+                  </button>
+                </Tooltip>
               )}
             </div>
           )}

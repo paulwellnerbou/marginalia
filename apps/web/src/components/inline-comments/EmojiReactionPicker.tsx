@@ -1,5 +1,5 @@
 import { FaceIcon } from '@radix-ui/react-icons';
-import { Popover } from '@radix-ui/themes';
+import { Popover, Tooltip } from '@radix-ui/themes';
 import { EmojiPicker } from 'frimousse';
 import { useState } from 'react';
 
@@ -33,18 +33,23 @@ export function EmojiReactionPicker({ onPick, disabled }: Props) {
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
-      {/* Themes' Popover.Trigger renders its own <button> and (unlike
-          its DropdownMenu sibling) strips `asChild`. Pass the styling
-          and a11y props straight to the Trigger and put the icon as
-          its child — wrapping a <button> inside would nest two of them. */}
-      <Popover.Trigger
-        className="ic-icon-btn"
-        title="Add reaction"
-        aria-label="Add reaction"
-        disabled={disabled}
-      >
-        <FaceIcon />
-      </Popover.Trigger>
+      {/* Popover.Trigger uses `asChild`, so its child must provide the
+          interactive element. Keeping a real button here also makes this
+          trigger exactly the same size and style as the row's other actions. */}
+      <Tooltip content="Add reaction">
+        <span className="ic-reaction-trigger-tooltip">
+          <Popover.Trigger>
+            <button
+              type="button"
+              className="ic-icon-btn"
+              aria-label="Add reaction"
+              disabled={disabled}
+            >
+              <FaceIcon />
+            </button>
+          </Popover.Trigger>
+        </span>
+      </Tooltip>
       <Popover.Content
         className="ic-reaction-popover"
         size="1"

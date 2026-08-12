@@ -4310,14 +4310,22 @@ button.primary:disabled {
   align-items: center;
   gap: 0.15rem;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 120ms ease;
 }
 /* Per-row reveal: only the row being hovered/focused shows its actions. */
 .ic-row:hover .ic-row-meta-actions,
 .ic-row:focus-within .ic-row-meta-actions,
+.ic-card:hover > .ic-card-body > .ic-row-opener .ic-row-meta-actions,
 .ic-row:hover .ic-icon-btn-visibility,
-.ic-row:focus-within .ic-icon-btn-visibility {
+.ic-row:focus-within .ic-icon-btn-visibility,
+.ic-card:hover > .ic-card-body > .ic-row-opener .ic-icon-btn-visibility {
   opacity: 1;
+}
+.ic-row:hover .ic-row-meta-actions,
+.ic-row:focus-within .ic-row-meta-actions,
+.ic-card:hover > .ic-card-body > .ic-row-opener .ic-row-meta-actions {
+  pointer-events: auto;
 }
 /* Confirm prompts always visible regardless of hover state — keyboard
    activation can move focus off the row when the originating button
@@ -4325,6 +4333,7 @@ button.primary:disabled {
 .ic-row-meta-actions:has(.ic-confirm-prompt),
 .ic-row-meta-actions[data-confirming="true"] {
   opacity: 1;
+  pointer-events: auto;
 }
 /* Touch / coarse-pointer devices don't have hover — keep the row
    actions always visible there so they're reachable. */
@@ -4333,15 +4342,22 @@ button.primary:disabled {
   .ic-icon-btn-visibility {
     opacity: 1;
   }
+  .ic-row-meta-actions {
+    pointer-events: auto;
+  }
 }
 
 .ic-icon-btn {
   appearance: none;
   background: transparent;
   border: 0;
-  padding: 0.18rem;
+  box-sizing: border-box;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
   border-radius: 5px;
   display: inline-flex;
+  flex: 0 0 1.25rem;
   align-items: center;
   justify-content: center;
   color: var(--ui-fg-muted);
@@ -4373,6 +4389,16 @@ button.primary:disabled {
 .ic-icon-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* The reaction control is both a tooltip and popover trigger. The tooltip
+   needs its own hover target so the two Radix `asChild` event chains do not
+   compete, while this wrapper preserves the exact action-button footprint. */
+.ic-reaction-trigger-tooltip {
+  display: inline-flex;
+  flex: 0 0 1.25rem;
+  width: 1.25rem;
+  height: 1.25rem;
 }
 
 .ic-reactions {
