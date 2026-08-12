@@ -164,8 +164,10 @@ async function listThreads(c: Context, deps: AppDeps) {
     'c.parent_id IS NULL',
     'c.parent_proposal_id IS NULL',
     'c.deleted_at IS NULL',
+    '(c.is_hidden = 0 OR c.author_client_id = ?)',
   ];
-  const params: string[] = [doc.uid];
+  const viewerId = decision.identity?.clientId ?? '';
+  const params: string[] = [doc.uid, viewerId];
   if (threadId) {
     // Naming a thread outranks the state filter — asking by id is how a
     // caller reaches one resolved thread without pulling the archive.
@@ -177,8 +179,9 @@ async function listThreads(c: Context, deps: AppDeps) {
                    WHERE r.doc_uid = c.doc_uid
                      AND r.deleted_at IS NULL
                      AND r.id = ?
+                     AND (r.is_hidden = 0 OR r.author_client_id = ?)
                      AND (r.parent_id = c.id OR r.parent_proposal_id = c.id)))`);
-    params.push(threadId, threadId);
+    params.push(threadId, threadId, viewerId);
   } else if (state === 'open') {
     conditions.push(OPEN_THREAD_SQL);
   } else if (state === 'resolved') {
@@ -204,18 +207,18 @@ async function listThreads(c: Context, deps: AppDeps) {
   // query. Without this, toThreadWire's per-thread fallback turns into
   // N+1 (one reactions query per root) and dominates the request as
   // thread counts grow.
-  const viewerId = decision.identity?.clientId ?? null;
   const reactionsByComment = loadCommentReactionsWire(
     db,
     doc.uid,
     [...roots.map((r) => r.id), ...replies.map((r) => r.id)],
-    viewerId,
+    viewerId || null,
   );
 
   const answersByThread = loadAnswersByThread(
     db,
     doc.uid,
     roots.map((r) => r.id),
+    viewerId || null,
   );
 
   const threads = await mapWithConcurrency(roots, 4, (root) =>
@@ -235,9 +238,9 @@ async function listThreads(c: Context, deps: AppDeps) {
     threads,
     // Always for the whole document, however the list was filtered: a
     // caller shown eight open threads still needs to know whether it is
-    // looking at all of them, and a hidden thread should read as
-    // "resolved" rather than as "gone".
-    counts: countThreadsByState(db, doc.uid),
+    // looking at all visible threads. Private threads do not contribute
+    // to another viewer's totals.
+    counts: countThreadsByState(db, doc.uid, viewerId || null),
     mention_candidates: listMentionCandidates(db, doc.uid),
     pending_mentions:
       c.req.query('consume_mentions') === 'false'
@@ -254,6 +257,7 @@ function parseThreadStateFilter(raw: string | undefined): ThreadStateFilter | nu
 function countThreadsByState(
   db: Database,
   docUid: string,
+  viewerId: string | null,
 ): { total: number; open: number; resolved: number } {
   const row = db
     .prepare(
@@ -264,9 +268,10 @@ function countThreadsByState(
         WHERE c.doc_uid = ?
           AND c.parent_id IS NULL
           AND c.parent_proposal_id IS NULL
-          AND c.deleted_at IS NULL`,
+          AND c.deleted_at IS NULL
+          AND (c.is_hidden = 0 OR c.author_client_id = ?)`,
     )
-    .get(docUid) as { total: number; open: number | null };
+    .get(docUid, viewerId ?? '') as { total: number; open: number | null };
   const open = row.open ?? 0;
   return { total: row.total, open, resolved: row.total - open };
 }
@@ -299,6 +304,11 @@ async function createThread(c: Context, deps: AppDeps) {
   const parsedProposal = asProposal(body.proposal);
   if (!parsedProposal.ok) return c.json({ error: parsedProposal.error }, 400);
   const proposal = parsedProposal.proposal;
+  if (body.hidden !== undefined && typeof body.hidden !== 'boolean') {
+    return c.json({ error: 'invalid-hidden' }, 400);
+  }
+  const hidden = body.hidden === true;
+  if (hidden && proposal) return c.json({ error: 'hidden-proposal-forbidden' }, 400);
   const storedRootBody = proposal ? (rootBody.body ?? DEFAULT_PROPOSAL_BODY) : rootBody.body;
 
   if (!proposal) {
@@ -306,7 +316,10 @@ async function createThread(c: Context, deps: AppDeps) {
     if (!rootBody.body) return c.json({ error: 'body-required' }, 400);
   } else {
     if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
-    if (proposal.answersThreadId && !isAnswerableThread(db, doc.uid, proposal.answersThreadId)) {
+    if (
+      proposal.answersThreadId &&
+      !isAnswerableThread(db, doc.uid, proposal.answersThreadId, identity.clientId)
+    ) {
       return c.json({ error: 'answers-thread-not-found' }, 400);
     }
   }
@@ -365,9 +378,9 @@ async function createThread(c: Context, deps: AppDeps) {
           anchor_start_offset, anchor_end_offset,
           anchor_heading_path, anchor_section_index, anchor_section_index_path,
           author_client_id, author_display_name,
-          body, link_status, resolved_at, resolved_by_name,
+          body, is_hidden, link_status, resolved_at, resolved_by_name,
           created_at, updated_at, deleted_at)
-       VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'linked', NULL, NULL, ?, ?, NULL)`,
+       VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'linked', NULL, NULL, ?, ?, NULL)`,
     ).run(
       id,
       doc.uid,
@@ -384,6 +397,7 @@ async function createThread(c: Context, deps: AppDeps) {
       identity.clientId,
       identity.displayName,
       storedRootBody,
+      hidden ? 1 : 0,
       now,
       now,
     );
@@ -416,15 +430,13 @@ async function createThread(c: Context, deps: AppDeps) {
   if (!root) return c.json({ error: 'not-found' }, 404);
   const thread = await toThreadWire(db, store, doc, root, [], decision, new Set<string>());
   const rootComment = db.prepare('SELECT * FROM comments WHERE id = ?').get(id) as CommentRow;
-  const mentionTargets = storeMentionsForComment(
-    db,
-    doc.uid,
-    id,
-    rootComment.body,
-    rootComment.author_display_name,
-  );
+  const mentionTargets = hidden
+    ? []
+    : storeMentionsForComment(db, doc.uid, id, rootComment.body, rootComment.author_display_name);
 
-  if (proposal && isProposalRow(root)) {
+  if (hidden) {
+    // Private threads never enter the document-wide realtime channel.
+  } else if (proposal && isProposalRow(root)) {
     realtime.broadcast(
       doc.uid,
       {
@@ -486,6 +498,7 @@ async function getThreadDiff(c: Context, deps: AppDeps) {
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const proposal = loadProposalRow(db, tid, doc.uid);
   if (!proposal) return c.json({ error: 'proposal-required' }, 400);
+  if (!canViewThread(proposal, decision.identity)) return c.json({ error: 'not-found' }, 404);
 
   const diff = await resolveProposalDiff(doc, proposal, deps);
   if (!diff) return c.json({ error: 'proposal-diff-unavailable' }, 410);
@@ -553,6 +566,7 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const row = loadProposalRow(db, tid, doc.uid);
   if (!row) return c.json({ error: 'proposal-required' }, 400);
+  if (!canViewThread(row, identity)) return c.json({ error: 'not-found' }, 404);
   if (row.proposal_status !== 'open') return c.json({ error: 'not-open' }, 400);
   if (row.is_whole_document === 1) return c.json({ error: 'proposal-repair-unavailable' }, 409);
   if (row.link_status !== 'orphaned') return c.json({ error: 'not-orphaned' }, 400);
@@ -701,6 +715,7 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const row = loadThreadRow(db, tid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
+  if (!canViewThread(row, identity)) return c.json({ error: 'not-found' }, 404);
   const isAuthor = row.author_client_id === identity.clientId;
   const isAdmin = decision.role === 'admin';
   if (!isAuthor && !isAdmin) return c.json({ error: 'forbidden' }, 403);
@@ -713,6 +728,15 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const parsedUpdate = asProposalUpdate(body.proposal);
   if (!parsedUpdate.ok) return c.json({ error: parsedUpdate.error }, 400);
   const proposalUpdate = parsedUpdate.update;
+  if (body.hidden !== undefined && typeof body.hidden !== 'boolean') {
+    return c.json({ error: 'invalid-hidden' }, 400);
+  }
+  const nextHidden: boolean | undefined =
+    typeof body.hidden === 'boolean' ? body.hidden : undefined;
+  if (nextHidden !== undefined && isProposalRow(row)) {
+    return c.json({ error: 'hidden-proposal-forbidden' }, 400);
+  }
+  if (nextHidden !== undefined && !isAuthor) return c.json({ error: 'forbidden' }, 403);
   const parsedComment = parseOptionalBody(body.comment);
   if (!parsedComment.ok) return c.json({ error: 'invalid-body' }, 400);
   const revisionComment = parsedComment.body;
@@ -721,7 +745,9 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   if (revisionComment && !proposalUpdate) {
     return c.json({ error: 'comment-requires-proposal' }, 400);
   }
-  if (next.body === undefined && !proposalUpdate) return c.json({ error: 'body-required' }, 400);
+  if (next.body === undefined && !proposalUpdate && nextHidden === undefined) {
+    return c.json({ error: 'body-required' }, 400);
+  }
   // Admins may revise somebody else's proposal, but the original
   // rationale/opener remains the author's own words. An admin revision
   // note belongs in `comment`, where it is attributed to the admin.
@@ -752,7 +778,8 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
         // Same base, same text — nothing would change; skip the branch
         // rewrite instead of minting an identical commit. A revision
         // comment still lands as a reply rather than being dropped.
-        let noopReply: { reply: CommentRow; mentionTargets: string[] } | null = null;
+        let noopReply: { reply: CommentRow; mentionTargets: string[]; hidden: boolean } | null =
+          null;
         if (revisionComment) {
           db.exec('BEGIN');
           try {
@@ -792,7 +819,7 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   }
 
   const now = Date.now();
-  let createdReply: { reply: CommentRow; mentionTargets: string[] } | null = null;
+  let createdReply: { reply: CommentRow; mentionTargets: string[]; hidden: boolean } | null = null;
   db.exec('BEGIN');
   try {
     if (branchUpdate) {
@@ -815,6 +842,27 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
         now,
         tid,
       );
+    }
+    if (nextHidden !== undefined) {
+      db.prepare('UPDATE comments SET is_hidden = ?, updated_at = ? WHERE id = ?').run(
+        nextHidden ? 1 : 0,
+        now,
+        tid,
+      );
+      if (nextHidden) {
+        // A private thread cannot notify people who are no longer allowed
+        // to read it. Remove undelivered mentions from its whole discussion.
+        db.prepare(
+          `DELETE FROM comment_mentions
+            WHERE doc_uid = ?
+              AND comment_id IN (
+                SELECT id FROM comments
+                 WHERE doc_uid = ?
+                   AND (id = ? OR parent_id = ? OR parent_proposal_id = ?)
+              )
+              AND delivered_at IS NULL`,
+        ).run(doc.uid, doc.uid, tid, tid, tid);
+      }
     }
     if (revisionComment) {
       createdReply = insertThreadReply(db, doc.uid, row, revisionComment, identity);
@@ -842,12 +890,27 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
   const updated = loadThreadRow(db, tid, doc.uid);
   if (!updated) return c.json({ error: 'not-found' }, 404);
   const mentionTargets =
-    next.body !== undefined
+    next.body !== undefined && updated.is_hidden === 0
       ? storeMentionsForComment(db, doc.uid, updated.id, updated.body, updated.author_display_name)
       : [];
 
   if (createdReply) broadcastReplyCreated(deps, doc.uid, createdReply, identity);
-  if (isProposalRow(updated)) {
+  const visibilityChanged = row.is_hidden !== updated.is_hidden;
+  if (updated.is_hidden === 1) {
+    if (visibilityChanged) {
+      realtime.broadcast(
+        doc.uid,
+        { type: 'comment.deleted', comment_id: updated.id },
+        identity.clientId,
+      );
+    }
+  } else if (visibilityChanged) {
+    realtime.broadcast(
+      doc.uid,
+      { type: 'comment.created', comment: toLegacyCommentWire(updated) },
+      identity.clientId,
+    );
+  } else if (isProposalRow(updated)) {
     realtime.broadcast(
       doc.uid,
       {
@@ -1062,6 +1125,7 @@ async function getThreadConflict(c: Context, deps: AppDeps) {
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const row = loadProposalRow(db, tid, doc.uid);
   if (!row) return c.json({ error: 'proposal-required' }, 400);
+  if (!canViewThread(row, decision.identity)) return c.json({ error: 'not-found' }, 404);
   if (row.proposal_status !== 'open') return c.json({ error: 'not-open' }, 400);
 
   const sides = await readProposalConflictSides(deps, doc, row);
@@ -1110,6 +1174,7 @@ async function resolveThreadConflict(c: Context, deps: AppDeps) {
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const row = loadProposalRow(db, tid, doc.uid);
   if (!row) return c.json({ error: 'proposal-required' }, 400);
+  if (!canViewThread(row, identity)) return c.json({ error: 'not-found' }, 404);
   if (row.proposal_status !== 'open') return c.json({ error: 'not-open' }, 400);
 
   const isAuthor = row.author_client_id === identity.clientId;
@@ -1180,7 +1245,7 @@ async function resolveThreadConflict(c: Context, deps: AppDeps) {
   }
 
   const now = Date.now();
-  let createdReply: { reply: CommentRow; mentionTargets: string[] } | null = null;
+  let createdReply: { reply: CommentRow; mentionTargets: string[]; hidden: boolean } | null = null;
   db.exec('BEGIN');
   try {
     db.prepare(
@@ -1252,7 +1317,7 @@ function insertThreadReply(
   root: ThreadRow,
   body: string,
   identity: Identity,
-): { reply: CommentRow; mentionTargets: string[] } {
+): { reply: CommentRow; mentionTargets: string[]; hidden: boolean } {
   const isProposal = isProposalRow(root);
   const id = newCommentId();
   const now = Date.now();
@@ -1274,22 +1339,20 @@ function insertThreadReply(
     now,
   );
   const reply = db.prepare('SELECT * FROM comments WHERE id = ?').get(id) as CommentRow;
-  const mentionTargets = storeMentionsForComment(
-    db,
-    docUid,
-    reply.id,
-    reply.body,
-    reply.author_display_name,
-  );
-  return { reply, mentionTargets };
+  const hidden = root.is_hidden === 1;
+  const mentionTargets = hidden
+    ? []
+    : storeMentionsForComment(db, docUid, reply.id, reply.body, reply.author_display_name);
+  return { reply, mentionTargets, hidden };
 }
 
 function broadcastReplyCreated(
   deps: AppDeps,
   docUid: string,
-  created: { reply: CommentRow; mentionTargets: string[] },
+  created: { reply: CommentRow; mentionTargets: string[]; hidden: boolean },
   identity: Identity,
 ): void {
+  if (created.hidden) return;
   deps.realtime.broadcast(
     docUid,
     { type: 'comment.created', comment: toLegacyCommentWire(created.reply) },
@@ -1326,6 +1389,7 @@ async function deleteThread(c: Context, deps: AppDeps) {
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const row = loadThreadRow(db, tid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
+  if (!canViewThread(row, decision.identity)) return c.json({ error: 'not-found' }, 404);
 
   const isAuthor = row.author_client_id === decision.identity.clientId;
   const isAdmin = decision.role === 'admin';
@@ -1354,7 +1418,7 @@ async function deleteThread(c: Context, deps: AppDeps) {
       { type: 'edit_proposal.deleted', edit_proposal_id: tid },
       decision.identity.clientId,
     );
-  } else {
+  } else if (row.is_hidden === 0) {
     realtime.broadcast(
       doc.uid,
       { type: 'comment.deleted', comment_id: tid },
@@ -1382,39 +1446,93 @@ async function editThreadReply(c: Context, deps: AppDeps) {
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const thread = loadThreadRow(db, tid, doc.uid);
   if (!thread) return c.json({ error: 'not-found' }, 404);
+  if (!canViewThread(thread, decision.identity)) return c.json({ error: 'not-found' }, 404);
 
   const cid = c.req.param('cid');
   if (!cid) return c.json({ error: 'not-found' }, 404);
   const reply = loadReplyRow(db, doc.uid, tid, cid);
   if (!reply) return c.json({ error: 'not-found' }, 404);
+  if (!canViewComment(reply, decision.identity)) return c.json({ error: 'not-found' }, 404);
   if (reply.author_client_id !== decision.identity.clientId) {
     return c.json({ error: 'forbidden' }, 403);
   }
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
+  if (body.hidden !== undefined && typeof body.hidden !== 'boolean') {
+    return c.json({ error: 'invalid-hidden' }, 400);
+  }
+  const nextHidden = typeof body.hidden === 'boolean' ? body.hidden : undefined;
   const next = parseOptionalBody(body.body);
   if (!next.ok) return c.json({ error: 'invalid-body' }, 400);
-  if (!next.body) return c.json({ error: 'body-required' }, 400);
+  if (!next.body && nextHidden === undefined) return c.json({ error: 'body-required' }, 400);
 
   const now = Date.now();
-  db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(next.body, now, cid);
+  db.exec('BEGIN');
+  try {
+    if (next.body) {
+      db.prepare('UPDATE comments SET body = ?, updated_at = ? WHERE id = ?').run(
+        next.body,
+        now,
+        cid,
+      );
+    }
+    if (nextHidden !== undefined) {
+      db.prepare('UPDATE comments SET is_hidden = ?, updated_at = ? WHERE id = ?').run(
+        nextHidden ? 1 : 0,
+        now,
+        cid,
+      );
+      if (nextHidden) {
+        db.prepare(
+          `DELETE FROM comment_mentions
+            WHERE doc_uid = ?
+              AND comment_id = ?
+              AND delivered_at IS NULL`,
+        ).run(doc.uid, cid);
+      }
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
 
   const updatedReply = loadReplyRow(db, doc.uid, tid, cid);
   if (!updatedReply) return c.json({ error: 'not-found' }, 404);
-  const mentionTargets = storeMentionsForComment(
-    db,
-    doc.uid,
-    updatedReply.id,
-    updatedReply.body,
-    updatedReply.author_display_name,
-  );
+  const mentionTargets =
+    !next.body || thread.is_hidden === 1 || updatedReply.is_hidden === 1
+      ? []
+      : storeMentionsForComment(
+          db,
+          doc.uid,
+          updatedReply.id,
+          updatedReply.body,
+          updatedReply.author_display_name,
+        );
 
-  realtime.broadcast(
-    doc.uid,
-    { type: 'comment.updated', comment: toLegacyCommentWire(updatedReply) },
-    decision.identity.clientId,
-  );
+  if (thread.is_hidden === 0) {
+    const visibilityChanged = reply.is_hidden !== updatedReply.is_hidden;
+    if (visibilityChanged && updatedReply.is_hidden === 1) {
+      realtime.broadcast(
+        doc.uid,
+        { type: 'comment.deleted', comment_id: updatedReply.id },
+        decision.identity.clientId,
+      );
+    } else if (visibilityChanged) {
+      realtime.broadcast(
+        doc.uid,
+        { type: 'comment.created', comment: toLegacyCommentWire(updatedReply) },
+        decision.identity.clientId,
+      );
+    } else if (updatedReply.is_hidden === 0) {
+      realtime.broadcast(
+        doc.uid,
+        { type: 'comment.updated', comment: toLegacyCommentWire(updatedReply) },
+        decision.identity.clientId,
+      );
+    }
+  }
   if (mentionTargets.length > 0) {
     realtime.broadcastToDisplayNames(
       doc.uid,
@@ -1460,22 +1578,26 @@ async function deleteThreadReply(c: Context, deps: AppDeps) {
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const thread = loadThreadRow(db, tid, doc.uid);
   if (!thread) return c.json({ error: 'not-found' }, 404);
+  if (!canViewThread(thread, decision.identity)) return c.json({ error: 'not-found' }, 404);
 
   const cid = c.req.param('cid');
   if (!cid) return c.json({ error: 'not-found' }, 404);
   const reply = loadReplyRow(db, doc.uid, tid, cid);
   if (!reply) return c.json({ error: 'not-found' }, 404);
+  if (!canViewComment(reply, decision.identity)) return c.json({ error: 'not-found' }, 404);
 
   const isAuthor = reply.author_client_id === decision.identity.clientId;
   const isAdmin = decision.role === 'admin';
   if (!isAuthor && !isAdmin) return c.json({ error: 'forbidden' }, 403);
 
   db.prepare('UPDATE comments SET deleted_at = ? WHERE id = ?').run(Date.now(), cid);
-  realtime.broadcast(
-    doc.uid,
-    { type: 'comment.deleted', comment_id: cid },
-    decision.identity.clientId,
-  );
+  if (thread.is_hidden === 0 && reply.is_hidden === 0) {
+    realtime.broadcast(
+      doc.uid,
+      { type: 'comment.deleted', comment_id: cid },
+      decision.identity.clientId,
+    );
+  }
   return c.body(null, 204);
 }
 
@@ -1505,8 +1627,10 @@ async function toggleCommentReaction(c: Context, deps: AppDeps) {
 
   const thread = loadThreadRow(db, tid, doc.uid);
   if (!thread) return c.json({ error: 'not-found' }, 404);
+  if (!canViewThread(thread, identity)) return c.json({ error: 'not-found' }, 404);
   const target = loadThreadNode(db, doc.uid, tid, cid);
   if (!target) return c.json({ error: 'not-found' }, 404);
+  if (!canViewComment(target, identity)) return c.json({ error: 'not-found' }, 404);
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
@@ -1556,11 +1680,13 @@ async function toggleCommentReaction(c: Context, deps: AppDeps) {
   // without needing a new event-type handler. The wire payload doesn't
   // need reactions on it — listThreads is the source of truth and will
   // deliver them on next fetch.
-  realtime.broadcast(
-    doc.uid,
-    { type: 'comment.updated', comment: toLegacyCommentWire(target) },
-    identity.clientId,
-  );
+  if (thread.is_hidden === 0 && target.is_hidden === 0) {
+    realtime.broadcast(
+      doc.uid,
+      { type: 'comment.updated', comment: toLegacyCommentWire(target) },
+      identity.clientId,
+    );
+  }
 
   // Thread row is unchanged by a reaction toggle, but the per-comment
   // reactions read inside `toThreadWire` is — that's the only thing we
@@ -1642,6 +1768,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
   if (!tid) return c.json({ error: 'not-found' }, 404);
   const row = loadThreadRow(db, tid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
+  if (!canViewThread(row, identity)) return c.json({ error: 'not-found' }, 404);
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
@@ -1787,7 +1914,11 @@ async function respondToThread(c: Context, deps: AppDeps) {
     broadcastReplyCreated(
       deps,
       doc.uid,
-      { reply: createdReply, mentionTargets: createdReplyMentionTargets },
+      {
+        reply: createdReply,
+        mentionTargets: createdReplyMentionTargets,
+        hidden: row.is_hidden === 1,
+      },
       identity,
     );
   }
@@ -1807,7 +1938,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
   const replies = loadReplies(db, doc.uid, tid);
   const reopenableAccepted = await loadReopenableAcceptedThreadIds(doc, deps, [updated]);
 
-  if (action) {
+  if (action && updated.is_hidden === 0) {
     if (isProposalRow(updated)) {
       realtime.broadcast(
         doc.uid,
@@ -1835,7 +1966,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
 
   if (resolvedAnsweredThreadId) {
     const answered = loadThreadRow(db, resolvedAnsweredThreadId, doc.uid);
-    if (answered) {
+    if (answered && answered.is_hidden === 0) {
       realtime.broadcast(
         doc.uid,
         { type: 'comment.updated', comment: toLegacyCommentWire(answered) },
@@ -1882,6 +2013,7 @@ function resolveAnsweredThread(
   if (!answeredId) return null;
   const answered = loadThreadRow(db, answeredId, docUid);
   if (!answered) return null;
+  if (!canViewThread(answered, identity)) return null;
   if (answered.proposal_status !== null) return null;
   if (answered.resolved_at !== null) return null;
 
@@ -2216,6 +2348,38 @@ function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
   return authorize(deps.db, doc, c.req.raw.headers, sessionToken, inviteSessionToken);
 }
 
+/** Hidden comments are private even from document admins. */
+function canViewComment(row: CommentRow, identity: Identity | null | undefined): boolean {
+  return row.is_hidden === 0 || identity?.clientId === row.author_client_id;
+}
+
+/** A hidden opener makes its complete thread private. */
+function canViewThread(row: CommentRow, identity: Identity | null | undefined): boolean {
+  return canViewComment(row, identity);
+}
+
+function isThreadIdVisible(
+  db: Database,
+  docUid: string,
+  threadId: string,
+  viewerId: string | null,
+): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1
+         FROM comments
+        WHERE id = ?
+          AND doc_uid = ?
+          AND parent_id IS NULL
+          AND parent_proposal_id IS NULL
+          AND deleted_at IS NULL
+          AND (is_hidden = 0 OR author_client_id = ?)
+        LIMIT 1`,
+    )
+    .get(threadId, docUid, viewerId ?? '');
+  return row !== null && row !== undefined;
+}
+
 function loadThreadRow(db: Database, threadId: string, docUid: string): ThreadRow | undefined {
   return db
     .prepare(
@@ -2366,11 +2530,21 @@ async function toThreadWire(
   const canReply = decision.ok && canComment(decision.role);
   const canRootEdit = viewerId !== null && viewerId === row.author_client_id;
   const canRootDelete = canRootEdit || isAdmin;
+  const visibleReplies = replies.filter((reply) =>
+    canViewComment(reply, decision.ok ? decision.identity : null),
+  );
 
   const reactionsByComment =
     preloadedReactions ??
-    loadCommentReactionsWire(db, doc.uid, [row.id, ...replies.map((r) => r.id)], viewerId);
-  const answeredBy = (preloadedAnswers ?? loadAnswersByThread(db, doc.uid, [row.id])).get(row.id);
+    loadCommentReactionsWire(db, doc.uid, [row.id, ...visibleReplies.map((r) => r.id)], viewerId);
+  const answeredBy = (preloadedAnswers ?? loadAnswersByThread(db, doc.uid, [row.id], viewerId)).get(
+    row.id,
+  );
+  const answersThreadId =
+    proposalRow?.answers_comment_id &&
+    isThreadIdVisible(db, doc.uid, proposalRow.answers_comment_id, viewerId)
+      ? proposalRow.answers_comment_id
+      : null;
 
   return {
     id: row.id,
@@ -2460,12 +2634,13 @@ async function toThreadWire(
           }),
           whole_document: proposalRow.is_whole_document === 1,
           /** Root thread this proposal answers, or null if it stands alone. */
-          answers_thread_id: proposalRow.answers_comment_id,
+          answers_thread_id: answersThreadId,
         }
       : null,
     comments: [
       {
         id: row.id,
+        hidden: row.is_hidden === 1,
         body: row.body,
         author: {
           client_id: row.author_client_id,
@@ -2474,14 +2649,16 @@ async function toThreadWire(
         capabilities: {
           edit: canRootEdit,
           delete: row.proposal_status === 'accepted' ? isAdmin : canRootDelete,
+          hide: !proposal && isRootAuthor,
           react: canReply,
         },
         reactions: reactionsByComment.get(row.id) ?? [],
         created_at: row.created_at,
         updated_at: row.updated_at,
       },
-      ...replies.map((reply) => ({
+      ...visibleReplies.map((reply) => ({
         id: reply.id,
+        hidden: reply.is_hidden === 1,
         body: reply.body,
         author: {
           client_id: reply.author_client_id,
@@ -2490,6 +2667,7 @@ async function toThreadWire(
         capabilities: {
           edit: viewerId !== null && viewerId === reply.author_client_id,
           delete: (viewerId !== null && viewerId === reply.author_client_id) || isAdmin,
+          hide: viewerId !== null && viewerId === reply.author_client_id,
           react: canReply,
         },
         reactions: reactionsByComment.get(reply.id) ?? [],
@@ -2525,6 +2703,7 @@ function loadAnswersByThread(
   db: Database,
   docUid: string,
   threadIds: string[],
+  viewerId: string | null,
 ): Map<string, string[]> {
   const out = new Map<string, string[]>();
   if (threadIds.length === 0) return out;
@@ -2544,10 +2723,14 @@ function loadAnswersByThread(
            JOIN comments c ON c.id = cep.comment_id
           WHERE c.doc_uid = ?
             AND c.deleted_at IS NULL
+            AND (c.is_hidden = 0 OR c.author_client_id = ?)
             AND cep.answers_comment_id IN (${placeholders})
           ORDER BY cep.answers_comment_id, c.created_at ASC`,
       )
-      .all(docUid, ...batch) as Array<{ comment_id: string; answers_comment_id: string }>;
+      .all(docUid, viewerId ?? '', ...batch) as Array<{
+      comment_id: string;
+      answers_comment_id: string;
+    }>;
     for (const row of rows) {
       const list = out.get(row.answers_comment_id);
       if (list) list.push(row.comment_id);
@@ -2990,16 +3173,22 @@ function asProposalUpdate(
  * live in this document, so a token for one document can't be used to
  * probe ids in another.
  */
-function isAnswerableThread(db: Database, docUid: string, threadId: string): boolean {
+function isAnswerableThread(
+  db: Database,
+  docUid: string,
+  threadId: string,
+  viewerId: string,
+): boolean {
   const row = db
     .prepare(
       `SELECT 1 FROM comments
         WHERE id = ? AND doc_uid = ?
           AND parent_id IS NULL AND parent_proposal_id IS NULL
           AND deleted_at IS NULL
+          AND (is_hidden = 0 OR author_client_id = ?)
         LIMIT 1`,
     )
-    .get(threadId, docUid);
+    .get(threadId, docUid, viewerId);
   return row !== null && row !== undefined;
 }
 

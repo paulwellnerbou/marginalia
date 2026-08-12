@@ -52,6 +52,7 @@ import {
   resolveEditProposalConflict as apiResolveConflict,
   restoreHistoryVersion as apiRestoreHistoryVersion,
   revertHistoryVersion as apiRevertHistoryVersion,
+  setCommentHidden as apiSetCommentHidden,
   toggleCommentReaction as apiToggleReaction,
   updateComment as apiUpdate,
   updateEditProposal as apiUpdateProposal,
@@ -1461,6 +1462,23 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
     [doc.uid, landThread, resolveIdentity, refreshThreads],
   );
 
+  const onSetCommentHidden = useCallback(
+    async (id: string, hidden: boolean) => {
+      const identity = resolveIdentity();
+      if (!identity) return;
+      try {
+        const updated = await apiSetCommentHidden(doc.uid, id, hidden, identity);
+        landThread(updated);
+        await refreshThreads();
+      } catch (err) {
+        reportError('DocumentLayout.setCommentHidden', err, { commentId: id, hidden });
+        const title = hidden ? 'Could not hide comment' : 'Could not unhide comment';
+        showErrorToast(title, apiErrorMessage(err, title));
+      }
+    },
+    [doc.uid, landThread, resolveIdentity, refreshThreads],
+  );
+
   const canEdit = doc.role === 'admin' || doc.role === 'editor';
 
   // Editors can fill missing-asset placeholders directly in view mode
@@ -2190,6 +2208,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       mentionCandidates={mentionCandidates}
       onReply={onReply}
       onEdit={onEdit}
+      onSetHidden={onSetCommentHidden}
       onDeleteNode={onDeleteNode}
       onDeleteThread={onDeleteThread}
       onResolveThread={onResolveThread}
@@ -2539,6 +2558,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     onCreate={onCreate}
                     onReply={onReply}
                     onEdit={onEdit}
+                    onSetHidden={onSetCommentHidden}
                     onDeleteNode={onDeleteNode}
                     onDeleteThread={onDeleteThread}
                     onResolveThread={onResolveThread}
@@ -2674,6 +2694,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     mentionCandidates={mentionCandidates}
                     onReply={onReply}
                     onEdit={onEdit}
+                    onSetHidden={onSetCommentHidden}
                     onDeleteNode={onDeleteNode}
                     onDeleteThread={onDeleteThread}
                     onResolveThread={onResolveThread}

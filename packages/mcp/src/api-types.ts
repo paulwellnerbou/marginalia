@@ -72,9 +72,10 @@ export interface DocumentWire {
 
 export interface ThreadCommentWire {
   id: string;
+  hidden?: boolean;
   body: string;
   author: { client_id: string; display_name: string };
-  capabilities: { edit: boolean; delete: boolean; react: boolean };
+  capabilities: { edit: boolean; delete: boolean; hide?: boolean; react: boolean };
   reactions: Array<{ emoji: string; count: number; reacted: boolean; authors: string[] }>;
   created_at: number;
   updated_at: number;

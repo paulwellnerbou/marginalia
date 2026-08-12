@@ -65,6 +65,7 @@ interface Props {
   onJump?: (() => void) | undefined;
   onReply: (threadId: string, body: string, name?: string) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
+  onSetHidden: (id: string, hidden: boolean) => Promise<void>;
   onDeleteNode: (id: string) => Promise<void>;
   onDeleteThread: (id: string) => Promise<void>;
   onResolveThread: (
@@ -139,6 +140,7 @@ export function InlineThreadCard({
   onJump,
   onReply,
   onEdit,
+  onSetHidden,
   onDeleteNode,
   onDeleteThread,
   onResolveThread,
@@ -173,7 +175,6 @@ export function InlineThreadCard({
   // The toast says the same thing but expires and doesn't name a thread;
   // this keeps the reason attached to the proposal it belongs to.
   const [actionError, setActionError] = useState<string | null>(null);
-
   const [diffOpen, setDiffOpen] = useState(false);
   const [resolvedDiff, setResolvedDiff] = useState<ProposalDiff | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
@@ -267,9 +268,8 @@ export function InlineThreadCard({
     return {
       ...base,
       capabilities: {
+        ...base.capabilities,
         edit: base.capabilities.edit && status === 'open',
-        delete: base.capabilities.delete,
-        react: base.capabilities.react,
       },
     };
   }, [thread.comments, proposal, status]);
@@ -600,6 +600,7 @@ export function InlineThreadCard({
             canQuote={canComment}
             threadRefs={threadRefs}
             onEdit={onEdit}
+            onSetHidden={onSetHidden}
             onDelete={() => onDeleteThread(thread.id)}
             onQuote={canComment ? handleQuote : undefined}
             onReact={onReact}
@@ -613,6 +614,7 @@ export function InlineThreadCard({
               canQuote={canComment}
               threadRefs={threadRefs}
               onEdit={onEdit}
+              onSetHidden={onSetHidden}
               onDelete={onDeleteNode}
               onQuote={canComment ? handleQuote : undefined}
               onReact={onReact}

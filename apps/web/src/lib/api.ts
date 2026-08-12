@@ -54,6 +54,7 @@ export interface ExportedComment {
   author_client_id: string;
   author_display_name: string;
   body: string;
+  is_hidden?: boolean;
   link_status: string;
   resolved_at: number | null;
   resolved_by_name: string | null;
@@ -1233,6 +1234,8 @@ export interface ThreadCapabilities {
 export interface ThreadNodeCapabilities {
   edit: boolean;
   delete: boolean;
+  /** Whether this viewer may make this comment private/public. */
+  hide?: boolean;
   /** Whether the viewer is allowed to add or toggle emoji reactions. */
   react: boolean;
 }
@@ -1262,6 +1265,8 @@ export interface ThreadAnchor {
 
 export interface Comment {
   id: string;
+  /** Private comments are returned only to their author. */
+  hidden?: boolean;
   body: string;
   author: { client_id: string; display_name: string };
   capabilities: ThreadNodeCapabilities;
@@ -1545,6 +1550,28 @@ export async function updateComment(
   const res = await request<ThreadMutationResponse>(path, {
     method: 'PATCH',
     body: JSON.stringify({ body }),
+    identity,
+    docUid: uid,
+  });
+  rememberThread(uid, res.thread);
+  return res.thread;
+}
+
+export async function setCommentHidden(
+  uid: string,
+  commentId: string,
+  hidden: boolean,
+  identity: Identity,
+): Promise<Thread> {
+  const location = await findCommentLocation(uid, commentId);
+  const threadId = location.thread.id;
+  const isOpener = location.thread.comments[0].id === commentId;
+  const path = isOpener
+    ? `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(threadId)}`
+    : `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(threadId)}/comments/${encodeURIComponent(commentId)}`;
+  const res = await request<ThreadMutationResponse>(path, {
+    method: 'PATCH',
+    body: JSON.stringify({ hidden }),
     identity,
     docUid: uid,
   });

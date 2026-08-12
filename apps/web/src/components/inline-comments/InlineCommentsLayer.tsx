@@ -71,6 +71,7 @@ interface Props {
   }) => Promise<void>;
   onReply: (threadId: string, body: string, name?: string) => Promise<void>;
   onEdit: (id: string, body: string) => Promise<void>;
+  onSetHidden: (id: string, hidden: boolean) => Promise<void>;
   onDeleteNode: (id: string) => Promise<void>;
   onDeleteThread: (id: string) => Promise<void>;
   onResolveThread: (
@@ -166,6 +167,7 @@ export function InlineCommentsLayer({
   onCreate,
   onReply,
   onEdit,
+  onSetHidden,
   onDeleteNode,
   onDeleteThread,
   onResolveThread,
@@ -945,6 +947,7 @@ export function InlineCommentsLayer({
         onJump={onJump}
         onReply={onReply}
         onEdit={onEdit}
+        onSetHidden={onSetHidden}
         onDeleteNode={onDeleteNode}
         onDeleteThread={onDeleteThread}
         onResolveThread={onResolveThread}

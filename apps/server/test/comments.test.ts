@@ -33,9 +33,10 @@ interface ThreadAnchorShape {
 
 interface ThreadCommentNodeShape {
   id: string;
+  hidden?: boolean;
   body: string;
   author: { client_id: string; display_name: string };
-  capabilities: { edit: boolean; delete: boolean; react?: boolean };
+  capabilities: { edit: boolean; delete: boolean; hide?: boolean; react?: boolean };
   reactions?: Array<{ emoji: string; count: number; reacted: boolean; authors: string[] }>;
   created_at: number;
   updated_at: number;
@@ -285,6 +286,196 @@ describe('threads API', () => {
     expect(comments).toHaveLength(2);
     expect(comments[1]!.parent_id).toBe(top.id);
     expect(comments[1]!.anchor).toBeNull();
+  });
+
+  test('hidden comments are visible only to their author and can be unhidden', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const created = await addComment(
+      uid,
+      ALICE,
+      { block_id: blockId, quote: 'Title' },
+      'Review the whole chapter @Bob',
+    );
+    const threadId = (created.body.comment as { id: string }).id;
+
+    const hideRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'PATCH',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ hidden: true }),
+      }),
+    );
+    expect(hideRes.status).toBe(200);
+    const hidden = (await hideRes.json()) as { thread: ThreadShape };
+    expect(hidden.thread.comments[0].hidden).toBe(true);
+    expect(hidden.thread.comments[0].capabilities.hide).toBe(true);
+
+    const aliceList = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+        headers: headersFor(ALICE),
+      }),
+    );
+    const aliceBody = (await aliceList.json()) as {
+      threads: ThreadShape[];
+      counts: { total: number };
+    };
+    expect(aliceBody.threads.map((thread) => thread.id)).toContain(threadId);
+    expect(aliceBody.counts.total).toBe(1);
+
+    // Privacy is based on authorship, not role: even a different admin
+    // must not be able to inspect the hidden thread.
+    const bobAsAdmin = asAdmin(BOB);
+    const bobList = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+        headers: bobAsAdmin,
+      }),
+    );
+    const bobBody = (await bobList.json()) as {
+      threads: ThreadShape[];
+      counts: { total: number };
+      pending_mentions: string[];
+    };
+    expect(bobBody.threads).toHaveLength(0);
+    expect(bobBody.counts.total).toBe(0);
+    expect(bobBody.pending_mentions).not.toContain(threadId);
+
+    const direct = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?thread_id=${threadId}`, {
+        headers: bobAsAdmin,
+      }),
+    );
+    expect(((await direct.json()) as { threads: ThreadShape[] }).threads).toHaveLength(0);
+
+    const reply = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}/respond`, {
+        method: 'POST',
+        headers: bobAsAdmin,
+        body: JSON.stringify({ body: 'I should not see this' }),
+      }),
+    );
+    expect(reply.status).toBe(404);
+
+    const answerProposal = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: bobAsAdmin,
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          body: 'Attempt to act on a private request',
+          proposal: {
+            proposed_text: '# Revised title',
+            answers_thread_id: threadId,
+          },
+        }),
+      }),
+    );
+    expect(answerProposal.status).toBe(400);
+    expect((await answerProposal.json()) as { error: string }).toEqual({
+      error: 'answers-thread-not-found',
+    });
+
+    const bundleRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/export`, { headers: bobAsAdmin }),
+    );
+    const bundle = (await bundleRes.json()) as { comments: Array<{ id: string }> };
+    expect(bundle.comments.map((comment) => comment.id)).not.toContain(threadId);
+
+    const unhideRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'PATCH',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ hidden: false }),
+      }),
+    );
+    expect(unhideRes.status).toBe(200);
+    const visibleToBob = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+        headers: headersFor(BOB),
+      }),
+    );
+    expect(
+      ((await visibleToBob.json()) as { threads: ThreadShape[] }).threads.map(
+        (thread) => thread.id,
+      ),
+    ).toContain(threadId);
+  });
+
+  test('hides an individual reply without hiding the rest of its thread', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const created = await addComment(
+      uid,
+      ALICE,
+      { block_id: blockId, quote: 'Title' },
+      'Visible opener',
+    );
+    const threadId = (created.body.comment as { id: string }).id;
+    const replied = await addReply(uid, BOB, threadId, 'Private follow-up @Alice');
+    const replyId = (replied.body.comment as { id: string }).id;
+
+    const hideRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}/comments/${replyId}`, {
+        method: 'PATCH',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ hidden: true }),
+      }),
+    );
+    expect(hideRes.status).toBe(200);
+    const bobThread = ((await hideRes.json()) as { thread: ThreadShape }).thread;
+    expect(bobThread.comments).toHaveLength(2);
+    expect(bobThread.comments[1]?.hidden).toBe(true);
+    expect(bobThread.comments[1]?.capabilities.hide).toBe(true);
+
+    const aliceList = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+        headers: headersFor(ALICE),
+      }),
+    );
+    const aliceThread = ((await aliceList.json()) as { threads: ThreadShape[] }).threads[0];
+    expect(aliceThread?.id).toBe(threadId);
+    expect(aliceThread?.comments.map((comment) => comment.id)).toEqual([threadId]);
+
+    const hiddenReplyLink = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?thread_id=${replyId}`, {
+        headers: headersFor(ALICE),
+      }),
+    );
+    expect(((await hiddenReplyLink.json()) as { threads: ThreadShape[] }).threads).toHaveLength(0);
+
+    const adminDelete = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}/comments/${replyId}`, {
+        method: 'DELETE',
+        headers: asAdmin(ALICE),
+      }),
+    );
+    expect(adminDelete.status).toBe(404);
+
+    const bundleRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/export`, { headers: headersFor(ALICE) }),
+    );
+    const bundle = (await bundleRes.json()) as { comments: Array<{ id: string }> };
+    expect(bundle.comments.map((comment) => comment.id)).toEqual([threadId]);
+
+    const unhideRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}/comments/${replyId}`, {
+        method: 'PATCH',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ hidden: false }),
+      }),
+    );
+    expect(unhideRes.status).toBe(200);
+
+    const visibleAgain = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+        headers: headersFor(ALICE),
+      }),
+    );
+    expect(
+      ((await visibleAgain.json()) as { threads: ThreadShape[] }).threads[0]?.comments.map(
+        (comment) => comment.id,
+      ),
+    ).toEqual([threadId, replyId]);
   });
 
   test('rejects nested replies (only one level)', async () => {
