@@ -1569,15 +1569,12 @@ export async function setCommentHidden(
   const path = isOpener
     ? `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(threadId)}`
     : `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(threadId)}/comments/${encodeURIComponent(commentId)}`;
-  const res = await request<ThreadMutationResponse>(
-    path,
-    {
-      method: 'PATCH',
-      body: JSON.stringify({ hidden }),
-      identity,
-      docUid: uid,
-    },
-  );
+  const res = await request<ThreadMutationResponse>(path, {
+    method: 'PATCH',
+    body: JSON.stringify({ hidden }),
+    identity,
+    docUid: uid,
+  });
   rememberThread(uid, res.thread);
   return res.thread;
 }

@@ -223,7 +223,9 @@ export function InlineCommentRow({
                         <TrashIcon />
                       </button>
                     )}
-                    {showReact && <EmojiReactionPicker onPick={toggleReaction} disabled={reacting} />}
+                    {showReact && (
+                      <EmojiReactionPicker onPick={toggleReaction} disabled={reacting} />
+                    )}
                   </>
                 )}
               </div>
