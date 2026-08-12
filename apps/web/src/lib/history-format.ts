@@ -8,6 +8,8 @@ export function describeEntry(entry: HistoryEntry): string {
       return 'Edited';
     case 'restore':
       return 'Restored';
+    case 'revert':
+      return 'Reverted edit';
     case 'accept-proposal':
       return 'Accepted proposal';
     default:

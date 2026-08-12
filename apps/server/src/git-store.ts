@@ -224,6 +224,76 @@ export class GitStore {
     return { before, after };
   }
 
+  /**
+   * Revert one document commit on top of the current main branch.
+   *
+   * This deliberately delegates patch inversion to native Git instead of
+   * replacing the document with the target commit's parent snapshot. That
+   * means an older plain edit can be undone without discarding unrelated
+   * changes committed after it. A conflicting inverse patch leaves main and
+   * the working tree untouched.
+   */
+  async revertCommit(
+    doc: DocLocator,
+    targetOid: string,
+    identity: { displayName: string; clientId: string },
+  ): Promise<RevertCommitResult> {
+    return this.withLock(doc.uid, async () => {
+      await this.ensureDocRepo(doc.uid);
+      const dir = this.repoDir(doc.uid);
+      const mainOid = await git.resolveRef({ fs, dir, ref: 'main' });
+      const isReachable =
+        mainOid === targetOid ||
+        (await git.isDescendent({ fs, dir, oid: mainOid, ancestor: targetOid }));
+      if (!isReachable) return { ok: false, reason: 'absent' };
+
+      const before = this.read(doc);
+      try {
+        await execFileAsync('git', ['revert', '--no-commit', targetOid], { cwd: dir });
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return { ok: false, reason: 'unavailable' };
+        }
+        // A failed revert can leave conflict stages and a partly written
+        // working tree. This repo contains only Marginalia-managed document
+        // state, and the per-document lock prevents a concurrent save, so
+        // restoring main here is both safe and necessary before returning.
+        await execFileAsync('git', ['reset', '--hard', 'main'], { cwd: dir }).catch(() => {});
+        return { ok: false, reason: 'conflict' };
+      }
+
+      const after = this.read(doc);
+      if (after === before) {
+        await execFileAsync('git', ['reset', '--hard', 'main'], { cwd: dir }).catch(() => {});
+        return { ok: false, reason: 'empty' };
+      }
+
+      const message =
+        `revert: ${targetOid}\n\n` +
+        `X-Marginalia-Client-ID: ${identity.clientId}\n` +
+        `X-Marginalia-Reverted-Oid: ${targetOid}\n`;
+      const commitEnv = {
+        ...process.env,
+        GIT_AUTHOR_NAME: identity.clientId,
+        GIT_AUTHOR_EMAIL: `${identity.clientId}@marginalia.local`,
+        GIT_COMMITTER_NAME: identity.clientId,
+        GIT_COMMITTER_EMAIL: `${identity.clientId}@marginalia.local`,
+      };
+      try {
+        await execFileAsync('git', ['commit', '-m', message], { cwd: dir, env: commitEnv });
+      } catch (err) {
+        await execFileAsync('git', ['reset', '--hard', 'main'], { cwd: dir }).catch(() => {});
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return { ok: false, reason: 'unavailable' };
+        }
+        throw err;
+      }
+
+      const oid = await git.resolveRef({ fs, dir, ref: 'main' });
+      return { ok: true, oid, before, after };
+    });
+  }
+
   /** Main's current tip oid for this doc. Throws if the repo isn't initialized. */
   async mainOid(doc: DocLocator): Promise<string> {
     return git.resolveRef({ fs, dir: this.repoDir(doc.uid), ref: 'main' });
@@ -895,6 +965,10 @@ export type PreviewProposalMergeIntoSourceResult =
 export type RewriteProposalBranchResult =
   | { ok: true; commitOid: string; baseOid: string; backupRef: string }
   | { ok: false; reason: 'absent' | 'stale' };
+
+export type RevertCommitResult =
+  | { ok: true; oid: string; before: string; after: string }
+  | { ok: false; reason: 'absent' | 'conflict' | 'empty' | 'unavailable' };
 
 /**
  * `reason` is an operator diagnostic, not user-facing prose — it carries

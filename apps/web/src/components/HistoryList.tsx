@@ -19,7 +19,7 @@ interface Props {
   version: number;
   canRestore?: boolean;
   onRestoreVersion?: (oid: string) => Promise<void>;
-  onRevertLatest?: (entry: HistoryEntry) => Promise<void>;
+  onRevertEdit?: (entry: HistoryEntry) => Promise<void>;
   onRestoreAsNewDocument?: (oid: string) => Promise<void>;
   onOpenThread?: (threadId: string) => void;
 }
@@ -33,7 +33,7 @@ export function HistoryList({
   version,
   canRestore = false,
   onRestoreVersion,
-  onRevertLatest,
+  onRevertEdit,
   onRestoreAsNewDocument,
   onOpenThread,
 }: Props) {
@@ -47,6 +47,7 @@ export function HistoryList({
   const [selectedDiff, setSelectedDiff] = useState<SelectedDiff | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
   const [restoreTarget, setRestoreTarget] = useState<HistoryEntry | null>(null);
+  const [revertTarget, setRevertTarget] = useState<HistoryEntry | null>(null);
   const diffRequestToken = useRef(0);
   const currentOid = entries?.[0]?.oid ?? null;
 
@@ -82,6 +83,7 @@ export function HistoryList({
     setDiffError(null);
     setRestoreError(null);
     setRestoreTarget(null);
+    setRevertTarget(null);
   }, [uid]);
 
   const displayedEntries = useMemo(() => entries ?? [], [entries]);
@@ -166,14 +168,17 @@ export function HistoryList({
     }
   }
 
-  async function handleRevertLatest(entry: HistoryEntry): Promise<void> {
-    if (!onRevertLatest || loadingDiffOid || restoringOid || openingNewDocumentOid) return;
+  async function handleRevertConfirmed(): Promise<void> {
+    if (!revertTarget || !onRevertEdit || loadingDiffOid || restoringOid || openingNewDocumentOid) {
+      return;
+    }
     setRestoreError(null);
-    setRestoringOid(entry.oid);
+    setRestoringOid(revertTarget.oid);
     try {
-      await onRevertLatest(entry);
+      await onRevertEdit(revertTarget);
+      setRevertTarget(null);
     } catch (err) {
-      reportError('HistoryList.revertLatest', err, { uid, oid: entry.oid });
+      reportError('HistoryList.revertEdit', err, { uid, oid: revertTarget.oid });
       setRestoreError(
         err instanceof Error && err.message === 'display-name-required'
           ? 'Please set your display name first'
@@ -253,12 +258,17 @@ export function HistoryList({
         ) : null}
         {displayedEntries.map((entry) => {
           const isCurrent = entry.oid === currentOid;
-          const canRevertLatest =
-            isCurrent && displayedEntries.length > 1 && Boolean(onRevertLatest);
+          const canRevertChange =
+            (entry.action === 'update' ||
+              (isCurrent &&
+                entry.action === 'accept-proposal' &&
+                entry.proposal !== null &&
+                !entry.proposal.deleted)) &&
+            Boolean(onRevertEdit);
           const revertTitle =
-            entry.action === 'accept-proposal' && entry.proposal && !entry.proposal.deleted
+            entry.action === 'accept-proposal'
               ? 'Revert and reopen the change proposal'
-              : 'Revert';
+              : 'Undo this plain edit with git';
           const actorName = historyActorLabel(entry.actor.display_name, entry.actor.client_id);
           const proposal = entry.proposal;
           const proposalAuthor = proposal
@@ -292,6 +302,11 @@ export function HistoryList({
                   {entry.restored_from_oid ? (
                     <Text size="1" color="gray" mt="2">
                       Restored from <Code size="1">{shortOid(entry.restored_from_oid)}</Code>
+                    </Text>
+                  ) : null}
+                  {entry.reverted_oid ? (
+                    <Text size="1" color="gray" mt="2">
+                      Reverted <Code size="1">{shortOid(entry.reverted_oid)}</Code>
                     </Text>
                   ) : null}
                   <Flex gap="2" wrap="wrap" mt="2">
@@ -332,13 +347,16 @@ export function HistoryList({
                         Open proposal
                       </Button>
                     ) : null}
-                    {canRestore && canRevertLatest ? (
+                    {canRestore && canRevertChange ? (
                       <Button
                         size="1"
                         variant="soft"
                         color="amber"
                         title={revertTitle}
-                        onClick={() => void handleRevertLatest(entry)}
+                        onClick={() => {
+                          setRestoreError(null);
+                          setRevertTarget(entry);
+                        }}
                         disabled={
                           loadingDiffOid !== null ||
                           restoringOid !== null ||
@@ -436,6 +454,49 @@ export function HistoryList({
               disabled={restoringOid !== null || openingNewDocumentOid !== null}
             >
               {restoringOid ? 'Restoring…' : 'Restore version'}
+            </Button>
+          </Flex>
+        </AlertDialog.Content>
+      </AlertDialog.Root>
+
+      <AlertDialog.Root
+        open={revertTarget !== null}
+        onOpenChange={(open) => {
+          if (open || restoringOid) return;
+          setRevertTarget(null);
+          setRestoreError(null);
+        }}
+      >
+        <AlertDialog.Content maxWidth="480px">
+          <AlertDialog.Title>Revert this edit?</AlertDialog.Title>
+          <AlertDialog.Description size="2">
+            {revertTarget?.action === 'accept-proposal' ? (
+              <>
+                The document will return to its state before proposal{' '}
+                <Code size="1">{shortOid(revertTarget.oid)}</Code> was accepted, and that proposal
+                will be reopened.
+              </>
+            ) : (
+              <>
+                Git will apply the inverse of edit{' '}
+                <Code size="1">{revertTarget ? shortOid(revertTarget.oid) : ''}</Code> to the
+                current document and record the result as a new history entry. Comments and
+                proposals will not be reopened.
+              </>
+            )}
+          </AlertDialog.Description>
+          <Flex gap="2" justify="end" mt="4">
+            <AlertDialog.Cancel>
+              <Button variant="soft" color="gray" disabled={restoringOid !== null}>
+                Cancel
+              </Button>
+            </AlertDialog.Cancel>
+            <Button
+              color="amber"
+              onClick={() => void handleRevertConfirmed()}
+              disabled={restoringOid !== null}
+            >
+              {restoringOid ? 'Reverting…' : 'Revert edit'}
             </Button>
           </Flex>
         </AlertDialog.Content>
