@@ -130,41 +130,77 @@ export class GitStore {
     meta: { proposalId?: string; restoredFromOid?: string; commitMessage?: string } = {},
   ): Promise<{ oid: string }> {
     return this.withLock(doc.uid, async () => {
-      await this.ensureDocRepo(doc.uid);
-      const dir = this.repoDir(doc.uid);
-      const filename = this.filename(doc.format);
-      atomicWrite(join(dir, filename), content);
-      await git.add({ fs, dir, filepath: filename });
-      const subject =
-        action === 'accept-proposal'
-          ? `${action}: ${meta.proposalId ?? doc.uid}`
-          : `${action}: ${doc.uid}`;
-      const trailers = [
-        `X-Marginalia-Client-ID: ${author.clientId}`,
-        meta.proposalId ? `X-Marginalia-Proposal-ID: ${meta.proposalId}` : null,
-        meta.restoredFromOid ? `X-Marginalia-Restored-From: ${meta.restoredFromOid}` : null,
-      ].filter((line): line is string => Boolean(line));
-      const sanitizedCommitMessage = meta.commitMessage
-        ? meta.commitMessage
-            .split('\n')
-            .filter((line) => !line.trim().startsWith('X-Marginalia-'))
-            .join('\n')
-            .trim() || undefined
-        : undefined;
-      const bodyParts = sanitizedCommitMessage
-        ? [sanitizedCommitMessage, trailers.join('\n')]
-        : [trailers.join('\n')];
-      const oid = await git.commit({
-        fs,
-        dir,
-        message: `${subject}\n\n${bodyParts.join('\n\n')}\n`,
-        author: {
-          name: author.clientId,
-          email: `${author.clientId}@marginalia.local`,
-        },
-      });
-      return { oid };
+      return this.writeUnlocked(doc, content, author, action, meta);
     });
+  }
+
+  /**
+   * Write only when the document still has the source the caller read.
+   * The compare and commit share the document mutex, closing the small
+   * read-then-PUT race for scoped editors that merge their change into the
+   * latest source before saving.
+   */
+  async writeIfCurrent(
+    doc: DocLocator,
+    expectedContent: string,
+    content: string,
+    author: { displayName: string; clientId: string },
+    action: 'update' | 'restore',
+    meta: { restoredFromOid?: string; commitMessage?: string } = {},
+  ): Promise<{ oid: string } | null> {
+    return this.withLock(doc.uid, async () => {
+      let current = '';
+      try {
+        current = this.read(doc);
+      } catch {
+        return null;
+      }
+      if (current !== expectedContent) return null;
+      return this.writeUnlocked(doc, content, author, action, meta);
+    });
+  }
+
+  private async writeUnlocked(
+    doc: DocLocator,
+    content: string,
+    author: { displayName: string; clientId: string },
+    action: 'upload' | 'update' | 'restore' | 'accept-proposal',
+    meta: { proposalId?: string; restoredFromOid?: string; commitMessage?: string },
+  ): Promise<{ oid: string }> {
+    await this.ensureDocRepo(doc.uid);
+    const dir = this.repoDir(doc.uid);
+    const filename = this.filename(doc.format);
+    atomicWrite(join(dir, filename), content);
+    await git.add({ fs, dir, filepath: filename });
+    const subject =
+      action === 'accept-proposal'
+        ? `${action}: ${meta.proposalId ?? doc.uid}`
+        : `${action}: ${doc.uid}`;
+    const trailers = [
+      `X-Marginalia-Client-ID: ${author.clientId}`,
+      meta.proposalId ? `X-Marginalia-Proposal-ID: ${meta.proposalId}` : null,
+      meta.restoredFromOid ? `X-Marginalia-Restored-From: ${meta.restoredFromOid}` : null,
+    ].filter((line): line is string => Boolean(line));
+    const sanitizedCommitMessage = meta.commitMessage
+      ? meta.commitMessage
+          .split('\n')
+          .filter((line) => !line.trim().startsWith('X-Marginalia-'))
+          .join('\n')
+          .trim() || undefined
+      : undefined;
+    const bodyParts = sanitizedCommitMessage
+      ? [sanitizedCommitMessage, trailers.join('\n')]
+      : [trailers.join('\n')];
+    const oid = await git.commit({
+      fs,
+      dir,
+      message: `${subject}\n\n${bodyParts.join('\n\n')}\n`,
+      author: {
+        name: author.clientId,
+        email: `${author.clientId}@marginalia.local`,
+      },
+    });
+    return { oid };
   }
 
   /**

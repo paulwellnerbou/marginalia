@@ -727,10 +727,15 @@ export function updateDocument(
   source: string,
   identity: Identity,
   commitMessage?: string,
+  expectedSource?: string,
 ): Promise<{ oid: string }> {
   return request<{ oid: string }>(`/api/documents/${encodeURIComponent(uid)}`, {
     method: 'PUT',
-    body: JSON.stringify({ source, ...(commitMessage ? { commit_message: commitMessage } : {}) }),
+    body: JSON.stringify({
+      source,
+      ...(commitMessage ? { commit_message: commitMessage } : {}),
+      ...(expectedSource !== undefined ? { expected_source: expectedSource } : {}),
+    }),
     identity,
     docUid: uid,
   });

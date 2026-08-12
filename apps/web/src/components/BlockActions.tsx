@@ -4,6 +4,7 @@ import type { ProposalTarget } from './SelectionToolbar.js';
 interface Props {
   rootRef: React.RefObject<HTMLElement | null>;
   onPropose: (target: ProposalTarget) => void;
+  onEditChapter?: (headingBlockId: string) => void;
 }
 
 const BLOCK_ACTIONS_FADE_OUT_MS = 260;
@@ -31,17 +32,19 @@ const BLOCK_ACTIONS_FADE_OUT_MS = 260;
  * a nested pane, not the viewport — `getBoundingClientRect()` already
  * yields viewport coordinates.
  */
-export function BlockActions({ rootRef, onPropose }: Props) {
+export function BlockActions({ rootRef, onPropose, onEditChapter }: Props) {
   const [hoveredTarget, setHoveredTarget] = useState<{
     blockId: string;
     rect: DOMRect;
+    isHeading: boolean;
   } | null>(null);
   const [renderedTarget, setRenderedTarget] = useState<{
     blockId: string;
     rect: DOMRect;
+    isHeading: boolean;
   } | null>(null);
   const [isVisible, setIsVisible] = useState(false);
-  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
   const hideTimeoutRef = useRef<number | null>(null);
   const [buttonSize, setButtonSize] = useState({ width: 0, height: 0 });
 
@@ -54,12 +57,12 @@ export function BlockActions({ rootRef, onPropose }: Props) {
 
       // 1. Hovering the button (or its children, though there are none)
       //    keeps the current target visible.
-      if (t && btnRef.current && (t === btnRef.current || btnRef.current.contains(t))) {
+      if (t && actionsRef.current?.contains(t)) {
         return;
       }
 
       // 2. Outside the document pane entirely → clear.
-      if (!t || !rootRef.current || !rootRef.current.contains(t)) {
+      if (!t || !rootRef.current?.contains(t)) {
         setHoveredTarget((prev) => (prev === null ? prev : null));
         return;
       }
@@ -67,7 +70,7 @@ export function BlockActions({ rootRef, onPropose }: Props) {
       // 3. Inside root — find nearest proposal-targetable block.
       const block = closestBlock(t);
       if (!block) {
-        const btnRect = btnRef.current?.getBoundingClientRect() ?? null;
+        const btnRect = actionsRef.current?.getBoundingClientRect() ?? null;
         const activeRect = hoveredTarget?.rect ?? renderedTarget?.rect ?? null;
         if (
           btnRect &&
@@ -83,7 +86,11 @@ export function BlockActions({ rootRef, onPropose }: Props) {
       if (!blockId) return;
       setHoveredTarget((prev) => {
         if (prev && prev.blockId === blockId) return prev;
-        return { blockId, rect: block.getBoundingClientRect() };
+        return {
+          blockId,
+          rect: block.getBoundingClientRect(),
+          isHeading: /^H[1-6]$/.test(block.tagName),
+        };
       });
     }
 
@@ -102,7 +109,7 @@ export function BlockActions({ rootRef, onPropose }: Props) {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: renderedTarget is the re-attach trigger so the observer re-binds whenever the floating button is re-shown for a different block.
   useLayoutEffect(() => {
-    const btn = btnRef.current;
+    const btn = actionsRef.current;
     if (!btn) return;
 
     const measure = () => {
@@ -168,11 +175,17 @@ export function BlockActions({ rootRef, onPropose }: Props) {
     setHoveredTarget(null);
   }
 
+  function editChapter() {
+    if (!renderedTarget?.isHeading) return;
+    onEditChapter?.(renderedTarget.blockId);
+    setHoveredTarget(null);
+  }
+
   // position: fixed — viewport-relative.
   // Keep the button just above the block instead of hanging out in the
   // right gutter. That matches the user's cursor path better, especially
   // on paragraphs whose box stretches wider than the visible text.
-  const buttonWidth = buttonSize.width || 124;
+  const buttonWidth = buttonSize.width || (renderedTarget.isHeading ? 230 : 124);
   const buttonHeight = buttonSize.height || 28;
   const style: React.CSSProperties = {
     top: Math.max(4, renderedTarget.rect.top - buttonHeight + 6),
@@ -180,17 +193,32 @@ export function BlockActions({ rootRef, onPropose }: Props) {
   };
 
   return (
-    <button
-      ref={btnRef}
-      type="button"
-      className={isVisible ? 'block-actions-btn is-visible' : 'block-actions-btn'}
+    <div
+      ref={actionsRef}
+      className={isVisible ? 'block-actions is-visible' : 'block-actions'}
       style={style}
-      onClick={propose}
-      title="Propose an edit to this block"
-      aria-label="Propose an edit to this block"
     >
-      ✎ Propose edit
-    </button>
+      <button
+        type="button"
+        className="block-actions-btn"
+        onClick={propose}
+        title="Propose an edit to this block"
+        aria-label="Propose an edit to this block"
+      >
+        ✎ Propose edit
+      </button>
+      {renderedTarget.isHeading && onEditChapter && (
+        <button
+          type="button"
+          className="block-actions-btn"
+          onClick={editChapter}
+          title="Edit this chapter"
+          aria-label="Edit this chapter"
+        >
+          Edit chapter
+        </button>
+      )}
+    </div>
   );
 }
 

@@ -2525,6 +2525,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                     <BlockActions
                       rootRef={docRef}
                       onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+                      onEditChapter={(headingBlockId) =>
+                        navigate(`/d/${doc.uid}/edit?chapter=${encodeURIComponent(headingBlockId)}`)
+                      }
                     />
                   )}
                 </div>

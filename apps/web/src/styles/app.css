@@ -3065,12 +3065,27 @@ button.primary:disabled {
 }
 
 /* ============================================================
- * Block hover action — "Propose edit"
+ * Block hover actions — "Propose edit" / "Edit chapter"
  * ============================================================ */
 
-.block-actions-btn {
+.block-actions {
   position: fixed;
   z-index: 9;
+  display: flex;
+  gap: 0.3rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 260ms ease-out;
+}
+.block-actions.is-visible {
+  opacity: 0.9;
+  pointer-events: auto;
+  transition: opacity 90ms ease-out;
+}
+.block-actions:hover {
+  opacity: 1;
+}
+.block-actions-btn {
   padding: 0.15rem 0.55rem;
   font-size: 0.75rem;
   font-weight: 500;
@@ -3081,23 +3096,11 @@ button.primary:disabled {
   border-radius: 4px;
   cursor: pointer;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
-  opacity: 0;
-  pointer-events: none;
   transition:
-    opacity 260ms ease-out,
-    border-color 120ms ease,
-    color 120ms ease;
-}
-.block-actions-btn.is-visible {
-  opacity: 0.9;
-  pointer-events: auto;
-  transition:
-    opacity 90ms ease-out,
     border-color 120ms ease,
     color 120ms ease;
 }
 .block-actions-btn:hover {
-  opacity: 1;
   border-color: var(--ui-accent);
   color: var(--ui-accent);
 }

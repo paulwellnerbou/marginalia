@@ -767,6 +767,35 @@ describe('documents API', () => {
     expect(res.status).toBe(200);
   });
 
+  test('conditional update refuses to overwrite a document that changed', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Original' });
+    const headers = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+
+    const first = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ source: '# Current' }),
+      }),
+    );
+    expect(first.status).toBe(200);
+
+    const stale = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers,
+        body: JSON.stringify({ source: '# Stale replacement', expected_source: '# Original' }),
+      }),
+    );
+    expect(stale.status).toBe(409);
+    expect(await stale.json()).toEqual({ error: 'document-changed' });
+
+    const current = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, { headers }),
+    );
+    expect(((await current.json()) as { source: string }).source).toBe('# Current');
+  });
+
   test('non-admin invite cannot create more invites', async () => {
     const created = await upload(CLIENT_A, { markdown: '# Hi' });
     const mkRes = await app.hono.fetch(

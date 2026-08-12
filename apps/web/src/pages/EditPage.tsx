@@ -2,7 +2,7 @@ import type { RenderResult } from '@marginalia/renderer/types';
 import { Button, Container, Flex, Select, Slider, Text } from '@radix-ui/themes';
 import type { EditorView } from 'codemirror';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { AssetsPanel } from '../components/AssetsPanel.js';
 import { EditToolbar } from '../components/EditToolbar.js';
@@ -15,6 +15,7 @@ import {
   type AttachedAsset,
   claimInvite,
   createDocumentProposal,
+  createEditProposal,
   type Document,
   deleteAttachedAsset,
   getDocument,
@@ -22,6 +23,7 @@ import {
   uploadAsset,
 } from '../lib/api.js';
 import { loadBlockRanges } from '../lib/block-range-loader.js';
+import { type ChapterScope, resolveChapterScope } from '../lib/chapter-scope.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
@@ -83,6 +85,8 @@ function attachedAssetKey(assets: readonly AttachedAsset[]): string {
 
 export function EditPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
+  const [searchParams] = useSearchParams();
+  const chapterBlockId = searchParams.get('chapter');
 
   useEffect(() => {
     if (!uid || !token) return;
@@ -90,17 +94,19 @@ export function EditPage() {
     // Strip the token from the address bar synchronously so copy-pasting the
     // URL no longer leaks the bearer credential, even if the claim request is
     // still in flight or the component later re-renders for a different uid.
-    window.history.replaceState({}, '', `/d/${uid}/edit`);
+    const chapterQuery = chapterBlockId ? `?chapter=${encodeURIComponent(chapterBlockId)}` : '';
+    window.history.replaceState({}, '', `/d/${uid}/edit${chapterQuery}`);
     claimInvite(uid, token).catch(() => {
       // 400 (admin invite), 409 (password-protected), 404 (invite gone):
       // fall back to invite-header auth via the token in localStorage.
     });
-  }, [uid, token]);
+  }, [uid, token, chapterBlockId]);
 
   const navigate = useNavigate();
   const [doc, setDoc] = useState<Document | null>(null);
   const [source, setSource] = useState('');
   const [savedSource, setSavedSource] = useState('');
+  const [chapterScope, setChapterScope] = useState<ChapterScope | null>(null);
   const [rendered, setRendered] = useState<Pick<RenderResult, 'html'> | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,12 +123,14 @@ export function EditPage() {
   // React Router reuses EditPage when only :uid changes. Reset the complete
   // document-scoped state during render so there is never a committed frame
   // where the previous source can be saved under the new uid.
-  const [stateUid, setStateUid] = useState(uid);
-  if (stateUid !== uid) {
-    setStateUid(uid);
+  const pageKey = `${uid ?? ''}:${chapterBlockId ?? ''}`;
+  const [stateKey, setStateKey] = useState(pageKey);
+  if (stateKey !== pageKey) {
+    setStateKey(pageKey);
     setDoc(null);
     setSource('');
     setSavedSource('');
+    setChapterScope(null);
     setRendered(null);
     setAttached([]);
     setSaving(false);
@@ -207,21 +215,27 @@ export function EditPage() {
   );
 
   const referencedRefs = useMemo(() => {
-    const refs = collectReferencedRefs(source, doc?.format ?? 'markdown');
+    const referenceSource =
+      doc && chapterScope
+        ? doc.source.slice(0, chapterScope.start) + source + doc.source.slice(chapterScope.end)
+        : source;
+    const refs = collectReferencedRefs(referenceSource, doc?.format ?? 'markdown');
     // The book cover is referenced by the document itself rather than by
     // its source, so it would otherwise read as an unreferenced leftover.
     if (doc?.cover) refs.add(doc.cover.ref_name);
     return refs;
-  }, [source, doc?.format, doc?.cover]);
+  }, [source, doc, chapterScope]);
 
   useEffect(() => {
     if (!doc) return;
     const previous = document.title;
-    document.title = `Editing: ${documentTitle(doc)} · Marginalia`;
+    document.title = chapterScope
+      ? `Editing chapter: ${chapterScope.title} · Marginalia`
+      : `Editing: ${documentTitle(doc)} · Marginalia`;
     return () => {
       document.title = previous;
     };
-  }, [doc]);
+  }, [doc, chapterScope]);
 
   useEffect(() => {
     if (!doc) return;
@@ -231,26 +245,38 @@ export function EditPage() {
   useEffect(() => {
     if (!uid) return;
     let cancelled = false;
-    getDocument(uid).then(
-      (d) => {
+    void (async () => {
+      try {
+        const d = await getDocument(uid);
         if (cancelled) return;
+        let scope: ChapterScope | null = null;
+        if (chapterBlockId) {
+          const ranges = await loadBlockRanges(d.source, d.format);
+          if (cancelled) return;
+          scope = resolveChapterScope(d.source, d.rendered.html, ranges, chapterBlockId);
+          if (!scope) {
+            setError('This chapter could not be found. It may have changed or been removed.');
+            return;
+          }
+        }
+        const initialSource = scope?.source ?? d.source;
+        setChapterScope(scope);
         setDoc(d);
-        setSource(d.source);
-        setSavedSource(d.source);
-        setRendered({ html: d.rendered.html });
+        setSource(initialSource);
+        setSavedSource(initialSource);
+        setRendered(scope ? null : { html: d.rendered.html });
         setAttached(d.attached_assets ?? []);
-      },
-      (err) => {
+      } catch (err) {
         if (cancelled) return;
         reportError('EditPage.load', err, { uid });
         if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
         else setError('Failed to load');
-      },
-    );
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [uid]);
+  }, [uid, chapterBlockId]);
 
   // Mirror ViewPage: sync localStorage to the server's authoritative
   // name so the shared UserMenu label and save identity match the
@@ -287,7 +313,7 @@ export function EditPage() {
         // gets a plain editor — no asciidoc grammar bundled, and the
         // markdown grammar mistokenizes `image::foo[]` etc.
         if (markdown) extensions.push(markdown());
-        const state = EditorState.create({ doc: doc.source, extensions });
+        const state = EditorState.create({ doc: chapterScope?.source ?? doc.source, extensions });
         viewRef.current = new EditorView({ state, parent: editorEl.current });
       },
       (err) => {
@@ -301,7 +327,7 @@ export function EditPage() {
       viewRef.current = null;
       wrapCompartmentRef.current = null;
     };
-  }, [doc, uid]);
+  }, [doc, uid, chapterScope]);
 
   // Toggle line wrapping without destroying the editor
   useEffect(() => {
@@ -324,7 +350,7 @@ export function EditPage() {
     // `getDocument()` already includes the authoritative server rendering.
     // Use it immediately and do not load the client renderer until source or
     // attachments actually diverge from that snapshot.
-    if (doc && source === savedSource && attachedKey === serverAttachedKey) {
+    if (!chapterScope && doc && source === savedSource && attachedKey === serverAttachedKey) {
       setRendered({ html: doc.rendered.html });
       return;
     }
@@ -354,7 +380,17 @@ export function EditPage() {
       }
     }, 200);
     return () => clearTimeout(handle);
-  }, [source, savedSource, uid, attachedRefs, assetVersions, attachedKey, serverAttachedKey, doc]);
+  }, [
+    source,
+    savedSource,
+    uid,
+    attachedRefs,
+    assetVersions,
+    attachedKey,
+    serverAttachedKey,
+    doc,
+    chapterScope,
+  ]);
 
   // Sync scrolling between source and preview
   // biome-ignore lint/correctness/useExhaustiveDependencies: doc/rendered are re-attach triggers — when the document or its rendering changes, the .cm-scroller / preview elements are re-mounted and the listeners need to bind to the fresh nodes.
@@ -523,14 +559,49 @@ export function EditPage() {
     setError(null);
     try {
       const trimmed = comment.trim();
-      await updateDocument(targetUid, source, identity, trimmed || undefined);
+      let nextDocumentSource = source;
+      let expectedDocumentSource: string | undefined;
+      if (chapterScope) {
+        // Re-read immediately before saving so unrelated chapters edited
+        // while this editor was open survive. The chapter itself must still
+        // match our base; otherwise replacing it would silently overwrite a
+        // concurrent edit.
+        const latest = await getDocument(targetUid);
+        const latestRanges = await loadBlockRanges(latest.source, latest.format);
+        const latestScope = resolveChapterScope(
+          latest.source,
+          latest.rendered.html,
+          latestRanges,
+          chapterScope.headingBlockId,
+        );
+        if (!latestScope || latestScope.source !== savedSource) {
+          setError(
+            'This chapter changed while you were editing. Close and reopen it to review the latest version.',
+          );
+          return;
+        }
+        nextDocumentSource =
+          latest.source.slice(0, latestScope.start) + source + latest.source.slice(latestScope.end);
+        expectedDocumentSource = latest.source;
+      }
+      await updateDocument(
+        targetUid,
+        nextDocumentSource,
+        identity,
+        trimmed || undefined,
+        expectedDocumentSource,
+      );
       if (activeUidRef.current !== targetUid) return;
       setSavedSource(source);
       navigate(`/d/${targetUid}`);
     } catch (err) {
       if (activeUidRef.current !== targetUid) return;
       reportError('EditPage.save', err, { uid: targetUid });
-      if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
+      if (err instanceof ApiError && err.code === 'document-changed') {
+        setError(
+          'The document changed just before your save. Review the latest chapter and try again.',
+        );
+      } else if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
       else setError(err instanceof Error ? `Save failed: ${err.message}` : 'Save failed');
     } finally {
       if (activeUidRef.current === targetUid) setSaving(false);
@@ -550,6 +621,34 @@ export function EditPage() {
     setSaving(true);
     setError(null);
     try {
+      if (chapterScope) {
+        const blocks = await loadBlockRanges(doc.source, doc.format);
+        const quote = chapterScope.blockIds
+          .map((id) => blocks.get(id)?.text ?? '')
+          .filter(Boolean)
+          .join('\n\n');
+        if (!quote) {
+          setError('Cannot anchor a proposal to this chapter.');
+          return;
+        }
+        await createEditProposal(
+          targetUid,
+          {
+            proposed_text: source,
+            rationale: rationale.trim() || null,
+            anchor_block_id: chapterScope.headingBlockId,
+            anchor_end_block_id:
+              chapterScope.endBlockId === chapterScope.headingBlockId
+                ? null
+                : chapterScope.endBlockId,
+            anchor_quote: quote,
+          },
+          identity,
+        );
+        if (activeUidRef.current !== targetUid) return;
+        navigate(`/d/${targetUid}`);
+        return;
+      }
       // Anchor the proposal at the first block of the *current saved*
       // source so the thread renders at the very top of the document.
       // Using savedSource (not source) keeps the anchor consistent with
@@ -620,7 +719,9 @@ export function EditPage() {
     <div className="edit-page">
       <PasswordPromptDialog docUid={doc.uid} docName={doc.name} />
       <AppBar
-        docTitle={`Editing: ${documentTitle(doc)}`}
+        docTitle={
+          chapterScope ? `Editing chapter: ${chapterScope.title}` : `Editing: ${documentTitle(doc)}`
+        }
         role={doc.role}
         docUid={doc.uid}
         passwordProtected={doc.password_protected}
