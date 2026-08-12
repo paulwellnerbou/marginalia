@@ -6,6 +6,8 @@ import {
   Pencil1Icon,
   PilcrowIcon,
 } from '@radix-ui/react-icons';
+import { Tooltip } from '@radix-ui/themes';
+import { EyeOff } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import type { Comment, ProposalConflict, ProposalDiff, Thread } from '../../lib/api.js';
@@ -273,6 +275,7 @@ export function InlineThreadCard({
       },
     };
   }, [thread.comments, proposal, status]);
+  const rootHidden = openerNode.hidden === true;
 
   function handleQuote(text: string) {
     const quoted = text
@@ -448,6 +451,7 @@ export function InlineThreadCard({
     proposal && status ? `ic-card-proposal-${status}` : '',
     isOrphan ? 'ic-card-orphaned' : '',
     isConflict ? 'ic-card-conflict' : '',
+    rootHidden ? 'ic-card-hidden' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -490,6 +494,14 @@ export function InlineThreadCard({
             )}
             {isResolved && !proposal && (
               <span className="ic-badge ic-badge-resolved">Resolved</span>
+            )}
+            {rootHidden && (
+              <Tooltip content="Only visible to you. Replies are hidden with the root comment.">
+                <span className="ic-badge ic-badge-hidden">
+                  <EyeOff className="ic-badge-icon" strokeWidth={2.25} aria-hidden="true" />
+                  Hidden thread
+                </span>
+              </Tooltip>
             )}
             {isConflict && <span className="ic-badge ic-badge-conflict">Conflict</span>}
             {isOrphan && <span className="ic-badge ic-badge-orphan">Orphaned</span>}
@@ -611,6 +623,7 @@ export function InlineThreadCard({
               key={reply.id}
               node={reply}
               variant="reply"
+              hiddenByRoot={rootHidden && reply.hidden !== true}
               canQuote={canComment}
               threadRefs={threadRefs}
               onEdit={onEdit}

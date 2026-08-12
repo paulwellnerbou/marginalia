@@ -20,6 +20,8 @@ import type { ThreadRefApi } from './threadRefs.js';
 interface Props {
   node: Comment;
   variant?: 'opener' | 'reply';
+  /** This reply is private because the thread opener is hidden. */
+  hiddenByRoot?: boolean;
   canQuote: boolean;
   /** Resolves thread ids mentioned in the body into links. */
   threadRefs: ThreadRefApi;
@@ -38,6 +40,7 @@ interface Props {
 export function InlineCommentRow({
   node,
   variant = 'opener',
+  hiddenByRoot = false,
   canQuote,
   threadRefs,
   onEdit,
@@ -111,6 +114,7 @@ export function InlineCommentRow({
   const showDelete = !editing && !confirmingDelete && node.capabilities.delete;
   const showHide = !editing && !confirmingDelete && node.capabilities.hide === true;
   const showReact = !editing && !confirmingDelete && node.capabilities.react && onReact;
+  const effectivelyHidden = node.hidden === true || hiddenByRoot;
   // Deleting the opener deletes the whole thread, replies included.
   const deleteLabel = variant === 'opener' ? 'Delete thread' : 'Delete';
   const confirmDeleteLabel = variant === 'opener' ? 'Confirm delete thread' : 'Confirm delete';
@@ -138,7 +142,12 @@ export function InlineCommentRow({
   }
 
   return (
-    <div id={`comment-${node.id}`} className={`ic-row ic-row-${variant}`}>
+    <div
+      id={`comment-${node.id}`}
+      className={`ic-row ic-row-${variant}${effectivelyHidden ? ' ic-row-hidden' : ''}${
+        hiddenByRoot ? ' ic-row-hidden-inherited' : ''
+      }`}
+    >
       <InlineAvatar
         name={node.author.display_name}
         seed={node.author.client_id}
