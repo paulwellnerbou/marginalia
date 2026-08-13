@@ -98,12 +98,18 @@ describe('hosted MCP endpoint', () => {
     expect(stream.status).toBe(200);
     expect(stream.headers.get('content-type')).toContain('text/event-stream');
 
-    const reader = stream.body?.getReader();
-    const first = await reader?.read();
-    expect(new TextDecoder().decode(first?.value)).toBe(': keepalive\n\n');
+    expect(stream.body).toBeTruthy();
 
-    await reader?.cancel();
-    await fetch(`${baseUrl}/mcp`, {
+    const reader = stream.body!.getReader();
+    let buffer = '';
+    while (!buffer.includes('\n\n')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += new TextDecoder().decode(value);
+    }
+    expect(buffer.startsWith(': keepalive\n\n')).toBe(true);
+
+    await reader.cancel();
       method: 'DELETE',
       headers: { 'mcp-session-id': sessionId as string },
     });
