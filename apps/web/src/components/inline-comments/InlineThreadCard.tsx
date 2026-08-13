@@ -24,6 +24,7 @@ import { DiffDialog } from '../DiffDialog.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
 import { InlineComposer, type InlineComposerHandle } from './InlineComposer.js';
 import type { ThreadActionResult } from './inlineUtils.js';
+import { proposalDiffNeedsRefresh } from './proposalDiffCache.js';
 import type { ThreadRefApi } from './threadRefs.js';
 
 /**
@@ -189,11 +190,19 @@ export function InlineThreadCard({
   const [conflictActionError, setConflictActionError] = useState<string | null>(null);
   const [applyingResolution, setApplyingResolution] = useState(false);
 
-  // An in-place content update (ours via the edit dialog, or another
+  const proposal = isProposal(thread);
+  const status = proposal ? proposalStatus(thread) : null;
+
+  // An in-place content update to an open proposal (ours via the edit dialog, or another
   // client's arriving through a thread refresh) makes any cached diff
   // stale. Dropping the cache is enough: the fetch effect below refills
   // it while the dialog is open, so an open dialog re-renders the
   // revised change in place instead of snapping shut.
+  //
+  // Closed proposal payloads deliberately replace proposed_text with null.
+  // Keep the existing diff across that lifecycle transition: acceptance
+  // has succeeded and the dialog is about to close, so clearing it would
+  // trigger a pointless historical-diff refetch and visible flicker.
   //
   // Dropped during render rather than from an effect, same as the reset
   // in ThreadComposer: an effect would commit one frame carrying the
@@ -202,7 +211,9 @@ export function InlineThreadCard({
   const [trackedProposedText, setTrackedProposedText] = useState(currentProposedText);
   if (trackedProposedText !== currentProposedText) {
     setTrackedProposedText(currentProposedText);
-    setResolvedDiff(null);
+    if (status && proposalDiffNeedsRefresh(status, trackedProposedText, currentProposedText)) {
+      setResolvedDiff(null);
+    }
   }
   const [idCopied, setIdCopied] = useState(false);
   const idCopyTimer = useRef<number | null>(null);
@@ -225,8 +236,6 @@ export function InlineThreadCard({
     }
   }
 
-  const proposal = isProposal(thread);
-  const status = proposal ? proposalStatus(thread) : null;
   const isResolved = thread.state === 'resolved';
   const isOrphan = thread.link_status === 'orphaned' && status !== 'accepted';
   const isConflict = proposal && thread.link_status === 'conflict' && status !== 'accepted';
