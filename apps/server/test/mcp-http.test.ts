@@ -98,18 +98,22 @@ describe('hosted MCP endpoint', () => {
     expect(stream.status).toBe(200);
     expect(stream.headers.get('content-type')).toContain('text/event-stream');
 
-    expect(stream.body).toBeTruthy();
+    const body = stream.body;
+    expect(body).toBeTruthy();
+    if (!body) throw new Error('SSE response has no body');
 
-    const reader = stream.body!.getReader();
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
     let buffer = '';
     while (!buffer.includes('\n\n')) {
       const { value, done } = await reader.read();
       if (done) break;
-      buffer += new TextDecoder().decode(value);
+      buffer += decoder.decode(value, { stream: true });
     }
     expect(buffer.startsWith(': keepalive\n\n')).toBe(true);
 
     await reader.cancel();
+    await fetch(`${baseUrl}/mcp`, {
       method: 'DELETE',
       headers: { 'mcp-session-id': sessionId as string },
     });
