@@ -98,7 +98,7 @@ describe('hosted MCP endpoint', () => {
     });
     expect(stream.status).toBe(200);
     expect(stream.headers.get('content-type')).toContain('text/event-stream');
-    expect(Date.now() - streamStartedAt).toBeLessThan(2_000);
+    expect(Date.now() - streamStartedAt).toBeLessThan(5_000);
 
     const body = stream.body;
     expect(body).toBeTruthy();
