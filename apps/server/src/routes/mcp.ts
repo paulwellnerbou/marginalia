@@ -46,6 +46,16 @@ export function mcpRouter(deps: { hono: Hono }): Hono {
 const SESSION_HEADER = 'mcp-session-id';
 
 /**
+ * Bun closes an HTTP request after 10 seconds without body activity by
+ * default. The SDK's default SSE keep-alive interval is 15 seconds, so a
+ * quiet GET stream is otherwise closed by Bun before its first keep-alive;
+ * a reverse proxy then surfaces the truncated upstream response as a 502.
+ * Keep this comfortably below Bun's default while leaving the timeout in
+ * place for every other request.
+ */
+const SSE_KEEP_ALIVE_MS = 5_000;
+
+/**
  * How long a session may sit unused, and how many may exist at once.
  *
  * Each holds an MCP server with its tool schemas plus the tokens it has
@@ -210,6 +220,7 @@ function buildSession(
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     enableJsonResponse: true,
+    keepAliveMs: SSE_KEEP_ALIVE_MS,
   });
 
   return { server, transport };
