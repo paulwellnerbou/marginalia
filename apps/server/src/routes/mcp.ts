@@ -54,6 +54,7 @@ const SESSION_HEADER = 'mcp-session-id';
  * place for every other request.
  */
 const SSE_KEEP_ALIVE_MS = 5_000;
+const SSE_CONNECTED_FRAME = new TextEncoder().encode(': connected\n\n');
 
 /**
  * How long a session may sit unused, and how many may exist at once.
@@ -71,6 +72,12 @@ interface Session {
   server: McpServer;
   transport: WebStandardStreamableHTTPServerTransport;
   lastUsed: number;
+  activeGet: ActiveSseResponse | null;
+}
+
+interface ActiveSseResponse {
+  response: Response;
+  cancel(reason?: unknown): Promise<void>;
 }
 
 class SessionStore {
@@ -99,6 +106,7 @@ class SessionStore {
     const session = this.sessions.get(id);
     if (!session) return;
     this.sessions.delete(id);
+    void session.activeGet?.cancel().catch(() => undefined);
     void session.transport.close().catch(() => undefined);
     void session.server.close().catch(() => undefined);
   }
@@ -119,7 +127,26 @@ async function handleMcp(c: Context, app: Hono, sessions: SessionStore): Promise
     // client handles by initializing again.
     if (!session) return notFoundSession();
     try {
-      return await session.transport.handleRequest(c.req.raw);
+      if (c.req.method === 'GET') {
+        // Bun does not reliably cancel a server-side ReadableStream as soon
+        // as its HTTP client disconnects. Clear the previous GET explicitly
+        // or the SDK's single-active-stream guard rejects this reconnect.
+        const previous = session.activeGet;
+        if (previous) {
+          session.activeGet = null;
+          await previous.cancel('Replaced by a reconnect.').catch(() => undefined);
+        }
+      }
+
+      const response = await session.transport.handleRequest(c.req.raw);
+      if (c.req.method !== 'GET') return response;
+
+      const active = primeSseResponse(response, () => {
+        if (session.activeGet === active) session.activeGet = null;
+      });
+      if (!active) return response;
+      session.activeGet = active;
+      return active.response;
     } finally {
       // A DELETE means the client is done with this session whether or
       // not the transport managed to answer, so drop it either way —
@@ -143,7 +170,7 @@ async function handleMcp(c: Context, app: Hono, sessions: SessionStore): Promise
     const id = transport.sessionId;
     if (id) {
       keep = true;
-      sessions.add(id, { server, transport, lastUsed: Date.now() });
+      sessions.add(id, { server, transport, lastUsed: Date.now(), activeGet: null });
     }
     return response;
   } finally {
@@ -154,6 +181,66 @@ async function handleMcp(c: Context, app: Hono, sessions: SessionStore): Promise
       await server.close().catch(() => undefined);
     }
   }
+}
+
+/**
+ * Send one harmless SSE comment as soon as a long-lived GET stream opens.
+ *
+ * Bun does not flush the response headers until the body produces bytes. A
+ * client with a five-second connection deadline would therefore race the
+ * first periodic keep-alive and reconnect even though the stream was healthy.
+ * Comments are ignored by SSE parsers, while cancellation of this wrapper is
+ * forwarded to the SDK stream so it can remove its active-stream mapping.
+ */
+function primeSseResponse(response: Response, onClosed: () => void): ActiveSseResponse | null {
+  const source = response.body;
+  if (!source || !response.headers.get('content-type')?.includes('text/event-stream')) {
+    return null;
+  }
+
+  const reader = source.getReader();
+  let closed = false;
+  const finish = () => {
+    if (closed) return;
+    closed = true;
+    onClosed();
+  };
+  const cancel = async (reason?: unknown) => {
+    try {
+      await reader.cancel(reason);
+    } finally {
+      finish();
+    }
+  };
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(SSE_CONNECTED_FRAME);
+    },
+    async pull(controller) {
+      try {
+        const { value, done } = await reader.read();
+        if (done) {
+          controller.close();
+          finish();
+        } else controller.enqueue(value);
+      } catch (error) {
+        controller.error(error);
+        finish();
+      }
+    },
+    async cancel(reason) {
+      await cancel(reason);
+    },
+  });
+
+  return {
+    response: new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+    cancel,
+  };
 }
 
 function notFoundSession(): Response {

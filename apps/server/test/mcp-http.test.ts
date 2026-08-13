@@ -63,7 +63,7 @@ describe('hosted MCP endpoint', () => {
     await client.close();
   });
 
-  test("keeps a quiet SSE stream alive before Bun's idle timeout", async () => {
+  test('opens a quiet SSE stream immediately and keeps it alive', async () => {
     const init = await fetch(`${baseUrl}/mcp`, {
       method: 'POST',
       headers: {
@@ -84,9 +84,10 @@ describe('hosted MCP endpoint', () => {
     const sessionId = init.headers.get('mcp-session-id');
     expect(sessionId).toBeTruthy();
 
-    // No notifications are sent to this stream. Its first bytes must be
-    // the transport keep-alive, and they must arrive before Bun's default
-    // ten-second HTTP idle timeout closes the upstream connection.
+    // No notifications are sent to this stream. The opening comment must
+    // flush the response before a client's five-second connection deadline,
+    // then the periodic comment must keep it ahead of Bun's idle timeout.
+    const streamStartedAt = Date.now();
     const stream = await fetch(`${baseUrl}/mcp`, {
       headers: {
         accept: 'text/event-stream',
@@ -97,6 +98,7 @@ describe('hosted MCP endpoint', () => {
     });
     expect(stream.status).toBe(200);
     expect(stream.headers.get('content-type')).toContain('text/event-stream');
+    expect(Date.now() - streamStartedAt).toBeLessThan(5_000);
 
     const body = stream.body;
     expect(body).toBeTruthy();
@@ -105,14 +107,33 @@ describe('hosted MCP endpoint', () => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    while (!buffer.includes('\n\n')) {
+    while (!buffer.includes(': keepalive\n\n')) {
       const { value, done } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
     }
-    expect(buffer.startsWith(': keepalive\n\n')).toBe(true);
+    expect(buffer.startsWith(': connected\n\n')).toBe(true);
+    expect(buffer).toContain(': keepalive\n\n');
 
     await reader.cancel();
+
+    // A reconnect uses the same session. The route must retire the previous
+    // stream even when Bun did not propagate the client's cancellation, or
+    // the SDK's single-active-GET guard rejects the successor.
+    const reconnected = await fetch(`${baseUrl}/mcp`, {
+      headers: {
+        accept: 'text/event-stream',
+        'mcp-session-id': sessionId as string,
+        'mcp-protocol-version': '2025-06-18',
+      },
+      signal: AbortSignal.timeout(2_000),
+    });
+    expect(reconnected.status).toBe(200);
+    const reconnectedReader = reconnected.body?.getReader();
+    const opened = await reconnectedReader?.read();
+    expect(decoder.decode(opened?.value)).toStartWith(': connected\n\n');
+    await reconnectedReader?.cancel();
+
     await fetch(`${baseUrl}/mcp`, {
       method: 'DELETE',
       headers: { 'mcp-session-id': sessionId as string },
