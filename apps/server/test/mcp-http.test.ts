@@ -63,6 +63,62 @@ describe('hosted MCP endpoint', () => {
     await client.close();
   });
 
+  test("keeps a quiet SSE stream alive before Bun's idle timeout", async () => {
+    const init = await fetch(`${baseUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-06-18',
+          capabilities: {},
+          clientInfo: { name: 'quiet-stream-test', version: '0' },
+        },
+      }),
+    });
+    const sessionId = init.headers.get('mcp-session-id');
+    expect(sessionId).toBeTruthy();
+
+    // No notifications are sent to this stream. Its first bytes must be
+    // the transport keep-alive, and they must arrive before Bun's default
+    // ten-second HTTP idle timeout closes the upstream connection.
+    const stream = await fetch(`${baseUrl}/mcp`, {
+      headers: {
+        accept: 'text/event-stream',
+        'mcp-session-id': sessionId as string,
+        'mcp-protocol-version': '2025-06-18',
+      },
+      signal: AbortSignal.timeout(9_000),
+    });
+    expect(stream.status).toBe(200);
+    expect(stream.headers.get('content-type')).toContain('text/event-stream');
+
+    const body = stream.body;
+    expect(body).toBeTruthy();
+    if (!body) throw new Error('SSE response has no body');
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (!buffer.includes('\n\n')) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+    }
+    expect(buffer.startsWith(': keepalive\n\n')).toBe(true);
+
+    await reader.cancel();
+    await fetch(`${baseUrl}/mcp`, {
+      method: 'DELETE',
+      headers: { 'mcp-session-id': sessionId as string },
+    });
+  }, 10_000);
+
   test('creates and reads a document with no local install', async () => {
     const client = await connect();
     const created = await callText(client, 'create_document', {
