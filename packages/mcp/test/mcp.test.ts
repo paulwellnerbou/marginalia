@@ -353,18 +353,22 @@ describe('marginalia MCP server', () => {
     expect(threads).toContain('Water rations');
   });
 
-  test('reads the paragraphs around a thread when context is asked for', async () => {
+  test('reads surrounding paragraphs by default for one thread, but not a thread list', async () => {
     const { adminUrl } = await seedBook();
-    await call('create_comment', {
+    const created = await call('create_comment', {
       document: adminUrl,
       anchor_text: 'Water rations: four days',
       body: 'How is this reconciled with the unknown distance?',
     });
+    const threadId = /^thread_id: (\S+)/m.exec(created)?.[1] as string;
 
     const bare = await call('list_threads', { document: adminUrl });
     expect(bare).not.toContain('By noon the dunes');
 
-    const withContext = await call('list_threads', { document: adminUrl, context_blocks: 1 });
+    const expandedList = await call('list_threads', { document: adminUrl, context_blocks: 1 });
+    expect(expandedList).toContain('By noon the dunes had swallowed the horizon');
+
+    const withContext = await call('list_threads', { document: adminUrl, thread_id: threadId });
     expect(withContext).toContain('source before the anchor (1 block)');
     expect(withContext).toContain('By noon the dunes had swallowed the horizon');
     expect(withContext).toContain('source after the anchor (1 block)');
@@ -372,6 +376,14 @@ describe('marginalia MCP server', () => {
     // The list enclosing the anchored bullet overlaps it, so context is
     // what reads around the list — the sibling bullet is not surroundings.
     expect(withContext).not.toContain('Distance to the well');
+
+    const withoutContext = await call('list_threads', {
+      document: adminUrl,
+      thread_id: threadId,
+      context_blocks: 0,
+    });
+    expect(withoutContext).not.toContain('By noon the dunes');
+    expect(withoutContext).not.toContain('## Chapter Three');
   });
 
   test('shows every block a comment spans, not only the first', async () => {
