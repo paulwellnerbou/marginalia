@@ -735,7 +735,7 @@ export function InlineThreadCard({
                             <button
                               type="button"
                               className="ic-btn ic-btn-ghost"
-                              onClick={() => onCreateProposal(thread)}
+                              onClick={() => onCreateProposal?.(thread)}
                             >
                               Create edit proposal
                             </button>
@@ -810,7 +810,7 @@ export function InlineThreadCard({
                   <button
                     type="button"
                     className="ic-btn ic-btn-ghost"
-                    onClick={() => onCreateProposal(thread)}
+                    onClick={() => onCreateProposal?.(thread)}
                   >
                     Create edit proposal
                   </button>
