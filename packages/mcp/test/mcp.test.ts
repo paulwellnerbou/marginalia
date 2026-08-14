@@ -384,6 +384,12 @@ describe('marginalia MCP server', () => {
     });
     expect(withoutContext).not.toContain('By noon the dunes');
     expect(withoutContext).not.toContain('## Chapter Three');
+
+    const invalidThread = await callExpectingError('list_threads', {
+      document: adminUrl,
+      thread_id: '   ',
+    });
+    expect(invalidThread).toContain('thread_id');
   });
 
   test('shows every block a comment spans, not only the first', async () => {

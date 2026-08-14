@@ -70,6 +70,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         kind: z.enum(['all', 'comments', 'proposals']).optional().describe('Default "all".'),
         thread_id: z
           .string()
+          .trim()
+          .min(1)
           .optional()
           .describe(
             'Show just this one thread, in full, resolved or not — the way back to a closed ' +
