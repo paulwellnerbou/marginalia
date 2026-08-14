@@ -39,3 +39,39 @@ test('a fresh thread reconciliation bypasses an older in-flight snapshot', async
   responders[0]?.(response());
   await Promise.all([older, newer]);
 });
+
+test('a browser-created proposal carries the comment thread it answers', async () => {
+  installLocalStorage();
+  const { createEditProposal } = await import('./api.js');
+  let requestBody: Record<string, unknown> | null = null;
+  (globalThis as { fetch?: unknown }).fetch = async (_input: unknown, init?: RequestInit) => {
+    requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({
+        thread: {
+          id: 'proposal-thread',
+          comments: [{ created_at: 1 }],
+        },
+      }),
+      { status: 201, headers: { 'content-type': 'application/json' } },
+    );
+  };
+
+  await createEditProposal(
+    'doc-linked-proposal',
+    {
+      anchor_block_id: 'paragraph-1',
+      anchor_quote: 'Original paragraph',
+      proposed_text: 'Rewritten paragraph',
+      answers_thread_id: 'comment-thread',
+    },
+    { clientId: 'client-1', displayName: 'Alice' },
+  );
+
+  expect(requestBody).toMatchObject({
+    proposal: {
+      proposed_text: 'Rewritten paragraph',
+      answers_thread_id: 'comment-thread',
+    },
+  });
+});
