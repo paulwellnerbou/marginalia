@@ -215,7 +215,7 @@ when no password is set.
 
 | Tool | |
 | --- | --- |
-| `list_threads` | Comments and edit proposals with their discussion and anchored text. Open threads only, unless `thread_id` names one or `state` asks for more. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter; `context_blocks` widens each one to the paragraphs around it. |
+| `list_threads` | Comments and edit proposals with their discussion and anchored text. Open threads only, unless `thread_id` names one or `state` asks for more. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter. A targeted thread includes one surrounding block on each side by default; `context_blocks` overrides that. |
 | `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet). |
 | `create_proposal` | A suggested replacement. `answers_thread_id` links it to the comment it answers. |
 | `update_proposal` | Revise an open proposal you authored, or any open proposal as document admin — new text, same thread, discussion intact. Rebuilds it against the current source, so it also refreshes a stale or conflicted proposal. `comment` posts a revision note in the discussion alongside the change. |
@@ -288,8 +288,9 @@ reviewed first.
 ## Reading around a comment
 
 A comment often argues about text it never quotes — *"this contradicts the paragraph
-above"*. `list_threads` shows the anchored block by default, and `context_blocks: 1` (up to
-3) adds that many blocks either side of it:
+above"*. `list_threads` shows the anchored block by default. When `thread_id` or a
+`#comment-…` link narrows the result to one thread, it also includes one block either side;
+`context_blocks` can request 0–3 explicitly:
 
 ```
 source before the anchor (1 block):
@@ -304,9 +305,10 @@ Context is whole blocks, never a character window — half a sentence of markdow
 than none. Nested blocks are stepped over, so context on a list item is what reads around
 the *whole list* rather than the neighbouring bullet.
 
-It defaults to off because every thread in the list pays for it; raise it once narrowed to
-one thread with `thread_id`. A comment covering several blocks — the viewer writes one when
-a selection spans paragraphs — shows all of them, not just the first.
+It defaults to off for a thread list because every thread would pay for it, and to one block
+either side for a targeted thread so a client can understand the comment without another
+call. Pass `context_blocks: 0` to omit it. A comment covering several blocks — the viewer
+writes one when a selection spans paragraphs — shows all of them, not just the first.
 
 ## Comments become proposals
 

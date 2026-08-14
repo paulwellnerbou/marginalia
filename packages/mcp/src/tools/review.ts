@@ -70,6 +70,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         kind: z.enum(['all', 'comments', 'proposals']).optional().describe('Default "all".'),
         thread_id: z
           .string()
+          .trim()
+          .min(1)
           .optional()
           .describe(
             'Show just this one thread, in full, resolved or not — the way back to a closed ' +
@@ -118,10 +120,11 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .optional()
           .describe(
             'Also show this many blocks of source either side of the anchor — the surrounding ' +
-              'paragraphs a comment argues about but does not quote. Default 0; worth raising ' +
-              'once narrowed to one thread, since every thread pays for it. Nested blocks are ' +
-              'stepped over, so context on a list item is the text around the whole list. ' +
-              'Ignored when include_anchor_source is false.',
+              'paragraphs a comment argues about but does not quote. Defaults to 1 when a ' +
+              'thread_id or #comment link narrows the result to one thread, and 0 for a list; ' +
+              'pass 0 explicitly to omit it. Nested blocks are stepped over, so context on a ' +
+              'list item is the text around the whole list. Ignored when include_anchor_source ' +
+              'is false.',
           ),
         limit: z.number().int().min(1).max(200).optional().describe('Max threads. Default 50.'),
       },
@@ -222,7 +225,10 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           blockDriftNote(loaded.blocks),
           threadList(threads, {
             includeAnchorSource: args.include_anchor_source !== false,
-            contextBlocks: args.context_blocks ?? 0,
+            // A focused read should carry enough prose to interpret references such as
+            // "the paragraph above" without a follow-up tool call. Keep broad queues lean:
+            // every listed thread would otherwise pay the same context cost.
+            contextBlocks: args.context_blocks ?? (targetId === null ? 0 : 1),
             blockMap: loaded.blocks,
             ref: loaded.ref,
           }),
