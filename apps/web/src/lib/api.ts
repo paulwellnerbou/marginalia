@@ -1637,6 +1637,8 @@ export function createEditProposal(
     anchor_quote: string;
     proposed_text: string;
     rationale?: string | null;
+    /** Comment thread this proposal answers; accepting it resolves that thread. */
+    answers_thread_id?: string | null;
   },
   identity: Identity,
 ): Promise<Thread> {
@@ -1649,7 +1651,10 @@ export function createEditProposal(
         quote: payload.anchor_quote,
       },
       body: payload.rationale,
-      proposal: { proposed_text: payload.proposed_text },
+      proposal: {
+        proposed_text: payload.proposed_text,
+        ...(payload.answers_thread_id ? { answers_thread_id: payload.answers_thread_id } : {}),
+      },
     }),
     identity,
     docUid: uid,

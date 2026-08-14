@@ -87,6 +87,8 @@ interface Props {
     payload: { resolvedText?: string; comment?: string },
   ) => Promise<ThreadActionResult>;
   onReact: (commentId: string, emoji: string) => Promise<void>;
+  /** Open a paragraph proposal linked to this plain comment thread. */
+  onCreateProposal?: ((thread: Thread) => void) | undefined;
   /** Open the edit-proposal dialog for this thread; absent hides the button. */
   onEditProposal?: ((thread: Thread) => void) | undefined;
 }
@@ -150,6 +152,7 @@ export function InlineThreadCard({
   onRepairThread,
   onResolveConflict,
   onReact,
+  onCreateProposal,
   onEditProposal,
 }: Props) {
   const composerRef = useRef<InlineComposerHandle>(null);
@@ -258,6 +261,12 @@ export function InlineThreadCard({
     (isConflict || resolvedDiff?.mergeable === 'conflict');
   const canResolve = !proposal && !isResolved && thread.capabilities.resolve;
   const canReopen = !proposal && isResolved && thread.capabilities.reopen;
+  const canCreateProposal =
+    !proposal &&
+    !isResolved &&
+    canComment &&
+    thread.anchor.block_id !== null &&
+    onCreateProposal !== undefined;
   // proposed_text is null when the branch tip is unreadable — nothing
   // to prefill an editor with, so no button either.
   const canUpdate =
@@ -661,7 +670,7 @@ export function InlineThreadCard({
                 closeReply();
               }}
               leftActions={
-                canAccept || canReject || canResolve || canReopen
+                canAccept || canReject || canResolve || canReopen || canCreateProposal
                   ? ({ canRunAction, runAction }) => {
                       // Keep the in-flight button enabled so screen readers
                       // announce its `aria-busy` state (disabled buttons drop
@@ -722,6 +731,15 @@ export function InlineThreadCard({
                               {workflowContent('Resolve', isRunning('resolve', 'composer'))}
                             </button>
                           )}
+                          {canCreateProposal && (
+                            <button
+                              type="button"
+                              className="ic-btn ic-btn-ghost"
+                              onClick={() => onCreateProposal(thread)}
+                            >
+                              Create edit proposal
+                            </button>
+                          )}
                           {canReopen && (
                             <button
                               type="button"
@@ -745,7 +763,12 @@ export function InlineThreadCard({
               }
             />
           ) : (
-            (canComment || canAccept || canReject || canResolve || canReopen) && (
+            (canComment ||
+              canAccept ||
+              canReject ||
+              canResolve ||
+              canReopen ||
+              canCreateProposal) && (
               <div className="ic-card-actions">
                 {canAccept && (
                   <button
@@ -781,6 +804,15 @@ export function InlineThreadCard({
                     aria-label="Resolve"
                   >
                     {workflowContent('Resolve', isRunning('resolve', 'standalone'))}
+                  </button>
+                )}
+                {canCreateProposal && (
+                  <button
+                    type="button"
+                    className="ic-btn ic-btn-ghost"
+                    onClick={() => onCreateProposal(thread)}
+                  >
+                    Create edit proposal
                   </button>
                 )}
                 {canReopen && (
