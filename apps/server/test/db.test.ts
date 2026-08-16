@@ -580,4 +580,53 @@ describe('openDatabase migrations', () => {
     expect(cols2.find((c) => c.name === 'doc_uid')?.pk).toBe(1);
     db2.close();
   });
+
+  test('invite sessions predating the invite_token back-link are dropped once', () => {
+    {
+      const seed = new Database(dbPath);
+      seed.exec(`
+        CREATE TABLE sessions (
+          token               TEXT PRIMARY KEY,
+          doc_uid             TEXT NOT NULL,
+          persistent          INTEGER NOT NULL DEFAULT 1,
+          expires_at          INTEGER NOT NULL,
+          invite_display_name TEXT,
+          invite_role         TEXT,
+          invite_kind         TEXT
+        );
+      `);
+      const far = Date.now() + 90 * 24 * 60 * 60 * 1000;
+      const insert = seed.prepare(
+        `INSERT INTO sessions
+           (token, doc_uid, persistent, expires_at,
+            invite_display_name, invite_role, invite_kind)
+         VALUES (?, ?, 1, ?, ?, ?, ?)`,
+      );
+      insert.run('sess-invite', 'doc-1', far, 'Bob', 'collaborator', 'named');
+      // A password session: no invite role, so nothing to revoke it from.
+      insert.run('sess-password', 'doc-1', far, null, null, null);
+      seed.close();
+    }
+
+    const db = openDatabase(dbPath);
+    const survivors = db.prepare('SELECT token FROM sessions').all() as Array<{ token: string }>;
+    expect(survivors.map((r) => r.token)).toEqual(['sess-password']);
+
+    // Sessions minted after the migration are not swept on the next open:
+    // they carry the back-link that makes them revocable.
+    db.prepare(
+      `INSERT INTO sessions
+         (token, doc_uid, persistent, expires_at,
+          invite_display_name, invite_role, invite_kind, invite_token)
+       VALUES ('sess-new', 'doc-1', 1, ?, 'Bob', 'collaborator', 'named', 'inv-1')`,
+    ).run(Date.now() + 90 * 24 * 60 * 60 * 1000);
+    db.close();
+
+    const db2 = openDatabase(dbPath);
+    const after = db2.prepare('SELECT token FROM sessions ORDER BY token').all() as Array<{
+      token: string;
+    }>;
+    expect(after.map((r) => r.token)).toEqual(['sess-new', 'sess-password']);
+    db2.close();
+  });
 });

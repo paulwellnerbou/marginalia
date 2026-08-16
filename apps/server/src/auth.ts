@@ -107,14 +107,15 @@ export function createSession(
   docUid: string,
   ttlMs: number,
   persistent = true,
-  invite?: { display_name: string | null; role: string; kind: string } | null,
+  invite?: { token: string; display_name: string | null; role: string; kind: string } | null,
 ): string {
   const token = newSessionToken();
   const expiresAt = Date.now() + ttlMs;
   db.prepare(
     `INSERT INTO sessions
-       (token, doc_uid, persistent, expires_at, invite_display_name, invite_role, invite_kind)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       (token, doc_uid, persistent, expires_at,
+        invite_display_name, invite_role, invite_kind, invite_token)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     token,
     docUid,
@@ -123,8 +124,19 @@ export function createSession(
     invite?.display_name ?? null,
     invite?.role ?? null,
     invite?.kind ?? null,
+    invite?.token ?? null,
   );
   return token;
+}
+
+/**
+ * Every session claimed from `inviteToken`. Revoking an invite has to reach
+ * these: `authorize` reads the role off the session row and never re-checks
+ * that the invite still exists, so a claimed session is an independent
+ * credential once minted.
+ */
+export function revokeInviteSessions(db: Database, inviteToken: string): void {
+  db.prepare('DELETE FROM sessions WHERE invite_token = ?').run(inviteToken);
 }
 
 export function readSession(db: Database, token: string): SessionRow | null {

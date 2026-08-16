@@ -3018,6 +3018,212 @@ describe('documents API', () => {
     expect(rOli.status).toBe(204);
   });
 
+  /**
+   * Invite lifecycle against a *claimed* session. The session is a second,
+   * independent credential — it snapshots the role and authorizes without
+   * re-reading the invite — so revoke and re-role have to reach it. Every
+   * case below is invite-only and sends the cookie alone (no token in any
+   * header), so a 200 can only come from the session.
+   */
+  describe('claimed invite sessions follow their invite', () => {
+    async function setup(role: 'reader' | 'collaborator' | 'editor' = 'collaborator') {
+      const created = await upload(CLIENT_A, {
+        markdown: '# Doc\n\nPara.\n',
+        invite_only: true,
+      });
+      const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+      const mkRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/invites`, {
+          method: 'POST',
+          headers: adminHeaders,
+          body: JSON.stringify({ kind: 'named', role, display_name: 'Bob' }),
+        }),
+      );
+      expect(mkRes.status).toBe(201);
+      const { invite } = (await mkRes.json()) as { invite: { token: string } };
+      const { status, cookie } = await claimInvite(created.uid, invite.token, CLIENT_B);
+      expect(status).toBe(201);
+      return { created, adminHeaders, invite, cookie };
+    }
+
+    /** Bob's view of the doc using only his claimed session. */
+    async function readAsBob(uid: string, cookie: string) {
+      return app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}`, {
+          headers: headersFor(CLIENT_B, { cookie }),
+        }),
+      );
+    }
+
+    /** A write that needs at least collaborator rights. */
+    async function commentAsBob(uid: string, cookie: string, blockId: string) {
+      return app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: headersFor(CLIENT_B, { cookie }),
+          body: JSON.stringify({
+            anchor: { block_id: blockId, quote: 'Para.' },
+            body: 'hello',
+          }),
+        }),
+      );
+    }
+
+    async function firstBlockId(uid: string, cookie: string): Promise<string> {
+      const res = await readAsBob(uid, cookie);
+      const j = (await res.json()) as { rendered: { blocks: Array<{ id: string }> } };
+      return j.rendered.blocks[0]!.id;
+    }
+
+    test('revoking the invite ends the session it minted', async () => {
+      const { created, adminHeaders, invite, cookie } = await setup();
+      expect((await readAsBob(created.uid, cookie)).status).toBe(200);
+
+      const delRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/invites/${invite.token}`, {
+          method: 'DELETE',
+          headers: adminHeaders,
+        }),
+      );
+      expect(delRes.status).toBe(204);
+
+      // The whole point: the cookie is dead too, not just the URL.
+      expect((await readAsBob(created.uid, cookie)).status).toBe(401);
+      const tokenRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}`, {
+          headers: withInvite(headersFor(CLIENT_B), invite.token),
+        }),
+      );
+      expect(tokenRes.status).toBe(401);
+    });
+
+    test('revoking one invite leaves another holder alone', async () => {
+      const { created, adminHeaders, invite, cookie } = await setup();
+      const mkRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/invites`, {
+          method: 'POST',
+          headers: adminHeaders,
+          body: JSON.stringify({ kind: 'named', role: 'collaborator', display_name: 'Carol' }),
+        }),
+      );
+      const { invite: carolInvite } = (await mkRes.json()) as { invite: { token: string } };
+      const carol = await claimInvite(created.uid, carolInvite.token, CLIENT_C);
+
+      await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/invites/${invite.token}`, {
+          method: 'DELETE',
+          headers: adminHeaders,
+        }),
+      );
+
+      expect((await readAsBob(created.uid, cookie)).status).toBe(401);
+      const carolRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}`, {
+          headers: headersFor(CLIENT_C, { cookie: carol.cookie }),
+        }),
+      );
+      expect(carolRes.status).toBe(200);
+    });
+
+    test('demoting to reader takes effect on the open session', async () => {
+      const { created, adminHeaders, invite, cookie } = await setup('collaborator');
+      const blockId = await firstBlockId(created.uid, cookie);
+      expect((await commentAsBob(created.uid, cookie, blockId)).status).toBe(201);
+
+      const patchRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/invites/${invite.token}`, {
+          method: 'PATCH',
+          headers: adminHeaders,
+          body: JSON.stringify({ role: 'reader' }),
+        }),
+      );
+      expect(patchRes.status).toBe(200);
+      expect(((await patchRes.json()) as { invite: { role: string } }).invite.role).toBe('reader');
+
+      // Still admitted, but no longer able to comment.
+      expect((await readAsBob(created.uid, cookie)).status).toBe(200);
+      expect((await commentAsBob(created.uid, cookie, blockId)).status).toBe(403);
+    });
+
+    test('promoting to editor takes effect on the open session and on the token', async () => {
+      const { created, adminHeaders, invite, cookie } = await setup('reader');
+      const blockId = await firstBlockId(created.uid, cookie);
+      expect((await commentAsBob(created.uid, cookie, blockId)).status).toBe(403);
+
+      const patchRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/invites/${invite.token}`, {
+          method: 'PATCH',
+          headers: adminHeaders,
+          body: JSON.stringify({ role: 'editor' }),
+        }),
+      );
+      expect(patchRes.status).toBe(200);
+      expect((await commentAsBob(created.uid, cookie, blockId)).status).toBe(201);
+
+      // A browser that never claimed sees the new role too — `authorize`
+      // reads it straight off the invite row.
+      const editRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}`, {
+          method: 'PUT',
+          headers: withInvite(headersFor(CLIENT_C), invite.token),
+          body: JSON.stringify({ markdown: '# Doc\n\nEdited.\n' }),
+        }),
+      );
+      expect(editRes.status).toBe(200);
+    });
+
+    test('PATCH rejects admin grants, the admin row, and non-admin callers', async () => {
+      const { created, adminHeaders, invite, cookie } = await setup();
+
+      const grantAdmin = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/invites/${invite.token}`, {
+          method: 'PATCH',
+          headers: adminHeaders,
+          body: JSON.stringify({ role: 'admin' }),
+        }),
+      );
+      expect(grantAdmin.status).toBe(400);
+      expect(((await grantAdmin.json()) as { error: string }).error).toBe(
+        'admin-role-not-grantable',
+      );
+
+      const editAdminRow = await app.hono.fetch(
+        new Request(
+          `http://test/api/documents/${created.uid}/invites/${created.admin_invite.token}`,
+          {
+            method: 'PATCH',
+            headers: adminHeaders,
+            body: JSON.stringify({ role: 'reader' }),
+          },
+        ),
+      );
+      expect(editAdminRow.status).toBe(403);
+      expect(((await editAdminRow.json()) as { error: string }).error).toBe(
+        'admin-invite-not-editable',
+      );
+
+      const badRole = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/invites/${invite.token}`, {
+          method: 'PATCH',
+          headers: adminHeaders,
+          body: JSON.stringify({ role: 'superuser' }),
+        }),
+      );
+      expect(badRole.status).toBe(400);
+
+      // Bob holds a collaborator session — nowhere near enough to re-role
+      // himself.
+      const selfPromote = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/invites/${invite.token}`, {
+          method: 'PATCH',
+          headers: headersFor(CLIENT_B, { cookie }),
+          body: JSON.stringify({ role: 'editor' }),
+        }),
+      );
+      expect(selfPromote.status).toBe(403);
+    });
+  });
+
   test('role gating: reader cannot comment, collaborator can, editor can edit', async () => {
     const created = await upload(CLIENT_A, { markdown: '# Hi' });
     const docRes = await app.hono.fetch(

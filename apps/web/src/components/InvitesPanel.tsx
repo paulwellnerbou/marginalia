@@ -22,7 +22,9 @@ import {
   listInvites,
   type Role,
   rotateAdminInvite,
+  updateInvite,
 } from '../lib/api.js';
+import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { getClientId, getDisplayName, useDisplayName } from '../lib/identity.js';
 import { saveInviteToken } from '../lib/invite.js';
 import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
@@ -144,6 +146,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
   const [role, setRole] = useState<Role>('reader');
   const [submitting, setSubmitting] = useState(false);
   const [rotating, setRotating] = useState(false);
+  const [savingRole, setSavingRole] = useState<string | null>(null);
   const refreshRequestRef = useRef(0);
   const [stateUid, setStateUid] = useState(uid);
   if (stateUid !== uid) {
@@ -154,6 +157,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
     setRole('reader');
     setSubmitting(false);
     setRotating(false);
+    setSavingRole(null);
   }
 
   const refresh = useCallback(async () => {
@@ -215,6 +219,35 @@ export function InvitesPanel({ uid }: { uid: string }) {
       setError(err instanceof Error ? err.message : 'Could not create invite');
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function changeRole(token: string, next: Role) {
+    setError(null);
+    const identityName = getDisplayName();
+    if (!identityName) {
+      setError('Please set your display name first.');
+      return;
+    }
+    const identity = { clientId: getClientId(), displayName: identityName };
+    // Optimistic: the select is a direct manipulation, so it should settle
+    // under the pointer rather than snapping back for a round-trip.
+    const previous = invites;
+    setInvites(
+      (current) => current?.map((i) => (i.token === token ? { ...i, role: next } : i)) ?? current,
+    );
+    setSavingRole(token);
+    try {
+      const { invite } = await updateInvite(uid, token, next, identity);
+      refreshRequestRef.current += 1;
+      setInvites((current) => current?.map((i) => (i.token === token ? invite : i)) ?? current);
+      await refresh();
+    } catch (err) {
+      reportError('InvitesPanel.updateRole', err);
+      setInvites(previous);
+      setError(apiErrorMessage(err, 'Could not change the role'));
+    } finally {
+      setSavingRole(null);
     }
   }
 
@@ -304,6 +337,10 @@ export function InvitesPanel({ uid }: { uid: string }) {
           The <b>Document ID</b> finds the document. The <b>access token</b> is the secret key that
           lets the link holder in with the role shown below.
         </Text>
+        <Text as="div" size="1" color="gray" mt="2">
+          Changing a role below keeps the same URL and applies right away, including to anyone who
+          already has the document open. Revoking takes effect just as immediately.
+        </Text>
       </Box>
 
       <Flex gap="2" align="end" wrap="wrap" className="invite-create-form">
@@ -391,14 +428,37 @@ export function InvitesPanel({ uid }: { uid: string }) {
                   <Text size="2" weight="medium">
                     {inv.display_name ?? <span style={{ fontStyle: 'italic' }}>Any visitor</span>}
                   </Text>
-                  <Badge
-                    size="1"
-                    color={appRoleColor(inv.role)}
-                    variant="soft"
-                    className="role-badge"
-                  >
-                    {inv.role}
-                  </Badge>
+                  {inv.kind === 'admin' ? (
+                    // The document's own admin row: fixed, like its delete
+                    // and its absence from the create form's role list.
+                    <Badge
+                      size="1"
+                      color={appRoleColor(inv.role)}
+                      variant="soft"
+                      className="role-badge"
+                    >
+                      {inv.role}
+                    </Badge>
+                  ) : (
+                    <Select.Root
+                      value={inv.role}
+                      onValueChange={(v) => void changeRole(inv.token, v as Role)}
+                      size="1"
+                      disabled={savingRole === inv.token}
+                    >
+                      <Select.Trigger
+                        variant="soft"
+                        color={appRoleColor(inv.role)}
+                        className="role-badge"
+                        aria-label={`Role for ${inv.display_name ?? 'any visitor'}: ${roleLabel(inv.role)}`}
+                      />
+                      <Select.Content position="popper">
+                        <Select.Item value="reader">Reader</Select.Item>
+                        <Select.Item value="collaborator">Collaborator</Select.Item>
+                        <Select.Item value="editor">Editor</Select.Item>
+                      </Select.Content>
+                    </Select.Root>
+                  )}
                   <Badge size="1" color={appInviteKindColor(inv.kind)} variant="surface">
                     {inv.kind}
                   </Badge>

@@ -402,6 +402,8 @@ export interface SessionRow {
   invite_display_name: string | null;
   invite_role: string | null;
   invite_kind: string | null;
+  /** Invite this session was claimed from; null for password sessions. */
+  invite_token: string | null;
 }
 
 export interface KeyringRow {
@@ -595,6 +597,23 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'sessions', 'invite_display_name', 'TEXT');
   ensureColumn(db, 'sessions', 'invite_role', 'TEXT');
   ensureColumn(db, 'sessions', 'invite_kind', 'TEXT');
+  // Back-link to the invite a session was claimed from, so revoking that
+  // invite can reach the sessions it already minted. Without it a claimed
+  // session outlives its own invite (the role is snapshotted at claim time
+  // and never re-checked), which made DELETE /invites/:token a URL-only
+  // revoke. NULL for password sessions.
+  const inviteBackLinkAdded = ensureColumn(db, 'sessions', 'invite_token', 'TEXT');
+  // Not in SCHEMA: on an upgraded DB the CREATE TABLE above is a no-op,
+  // so the index has to come after the column is guaranteed to exist.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_sessions_invite ON sessions(invite_token)');
+  if (inviteBackLinkAdded) {
+    // Invite sessions claimed before the back-link existed cannot be tied to
+    // the invite they came from, so a revoke could never reach them. Drop
+    // them here rather than leave them un-revocable for the rest of their
+    // 90 days: the holder re-claims from a link that still works, and every
+    // session from this point on is revocable exactly.
+    db.exec(`DELETE FROM sessions WHERE invite_role IS NOT NULL AND invite_token IS NULL`);
+  }
   ensureColumn(db, 'document_assets', 'mime', "TEXT NOT NULL DEFAULT 'application/octet-stream'");
   ensureColumn(db, 'documents', 'repo_dir', "TEXT NOT NULL DEFAULT ''");
   // Backfill per-doc repo subpath. Always = uid for now; the legacy
@@ -727,11 +746,12 @@ function migrateInvitesKind(db: Database): void {
   }
 }
 
-function ensureColumn(db: Database, table: string, column: string, ddl: string): void {
+/** True when the column was missing and has just been added. */
+function ensureColumn(db: Database, table: string, column: string, ddl: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  if (!cols.some((c) => c.name === column)) {
-    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
-  }
+  if (cols.some((c) => c.name === column)) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
+  return true;
 }
 
 function renameColumn(db: Database, table: string, from: string, to: string): void {
