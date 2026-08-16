@@ -17,6 +17,7 @@ import { FunnelIcon } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
+import { getClientId } from '../../lib/identity.js';
 import {
   buildThreadCollapseState,
   reconcileThreadCollapseState,
@@ -31,6 +32,7 @@ import {
   normalizeThreadSearch,
   type ThreadFilters,
   type ThreadKindFilter,
+  type ThreadRepliesFilter,
   type ThreadStatusFilter,
   threadMatchesFilters,
   threadMatchesSearch,
@@ -193,6 +195,12 @@ export function InlineCommentsList({
     };
   }, [threads, blockOrder]);
 
+  // Whose replies count as answers — the id the server stamps comments
+  // with. Read every render, not memoized: pairing adopts the keyring's
+  // clientId mid-session, and a frozen one would keep filtering as
+  // whoever this browser used to be.
+  const viewerClientId = getClientId();
+
   // Remembered per browser, so the pane opens the way it was left.
   const [sortMode, setSortMode] = useState<ThreadSortMode>(loadThreadSortMode);
   const [filters, setFilters] = useState<ThreadFilters>(loadThreadFilters);
@@ -222,11 +230,11 @@ export function InlineCommentsList({
   // surfaces a proposal that now renders inside its answered thread.
   const itemMatches = useCallback(
     (item: ThreadListItem) =>
-      (threadMatchesFilters(item.thread, filters) ||
-        item.nested.some((n) => threadMatchesFilters(n, filters))) &&
+      (threadMatchesFilters(item.thread, filters, viewerClientId) ||
+        item.nested.some((n) => threadMatchesFilters(n, filters, viewerClientId))) &&
       (threadMatchesSearch(item.thread, searchNeedle) ||
         item.nested.some((n) => threadMatchesSearch(n, searchNeedle))),
-    [filters, searchNeedle],
+    [filters, searchNeedle, viewerClientId],
   );
   const visibleActive = useMemo(
     () => sortedActive.filter(itemMatches),
@@ -550,6 +558,30 @@ export function InlineCommentsList({
                     </SegmentedControl.Item>
                     <SegmentedControl.Item value="proposals" title="Only edit proposals">
                       Proposals
+                    </SegmentedControl.Item>
+                  </SegmentedControl.Root>
+                </div>
+                <div className="ic-list-control">
+                  <Text as="label" htmlFor="ic-list-filter-replies" size="1" color="gray">
+                    Replies
+                  </Text>
+                  <SegmentedControl.Root
+                    id="ic-list-filter-replies"
+                    size="1"
+                    value={filters.replies}
+                    onValueChange={(v) =>
+                      setFilters((prev) => ({ ...prev, replies: v as ThreadRepliesFilter }))
+                    }
+                    aria-label="Filter threads by who replied last"
+                  >
+                    <SegmentedControl.Item value="all" title="Whoever replied last">
+                      All
+                    </SegmentedControl.Item>
+                    <SegmentedControl.Item
+                      value="unanswered"
+                      title="Only threads where someone else had the last word"
+                    >
+                      Unanswered
                     </SegmentedControl.Item>
                   </SegmentedControl.Root>
                 </div>

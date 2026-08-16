@@ -175,6 +175,8 @@ describe('threads-tab filters', () => {
     state?: Thread['state'];
     resolution?: Thread['resolution'];
     proposal?: Thread['proposal'];
+    /** client_ids of the messages, oldest first. */
+    authors?: [string, ...string[]];
   }): Thread {
     return {
       id: over.id,
@@ -200,17 +202,15 @@ describe('threads-tab filters', () => {
         repair: false,
         reopen: false,
       },
-      comments: [
-        {
-          id: `${over.id}-c1`,
-          body: 'hi',
-          author: { client_id: 'c', display_name: 'Bob' },
-          capabilities: { edit: true, delete: true, react: true },
-          reactions: [],
-          created_at: 1,
-          updated_at: 1,
-        },
-      ],
+      comments: (over.authors ?? ['c']).map((clientId, i) => ({
+        id: `${over.id}-c${i + 1}`,
+        body: 'hi',
+        author: { client_id: clientId, display_name: clientId === 'me' ? 'Me' : 'Bob' },
+        capabilities: { edit: true, delete: true, react: true },
+        reactions: [],
+        created_at: i + 1,
+        updated_at: i + 1,
+      })) as [Thread['comments'][0], ...Thread['comments'][0][]],
       answered_by_thread_ids: [],
       proposal: over.proposal ?? null,
     };
@@ -234,8 +234,8 @@ describe('threads-tab filters', () => {
   });
 
   const all = [openComment, resolvedComment, openProposal, acceptedProposal];
-  const matching = (filters: ThreadFilters) =>
-    all.filter((t) => threadMatchesFilters(t, filters)).map((t) => t.id);
+  const matching = (filters: ThreadFilters, viewer: string | null = 'me') =>
+    all.filter((t) => threadMatchesFilters(t, filters, viewer)).map((t) => t.id);
 
   test('the default filters keep every thread', () => {
     expect(matching(ALL_THREAD_FILTERS)).toEqual([
@@ -248,32 +248,73 @@ describe('threads-tab filters', () => {
   });
 
   test('unresolved drops resolved comments and decided proposals alike', () => {
-    expect(matching({ status: 'unresolved', kind: 'all' })).toEqual([
+    expect(matching({ ...ALL_THREAD_FILTERS, status: 'unresolved' })).toEqual([
       'open-comment',
       'open-proposal',
     ]);
   });
 
   test('edit proposals drops plain comments, decided ones included', () => {
-    expect(matching({ status: 'all', kind: 'proposals' })).toEqual([
+    expect(matching({ ...ALL_THREAD_FILTERS, kind: 'proposals' })).toEqual([
       'open-proposal',
       'accepted-proposal',
     ]);
   });
 
   test('both filters apply together', () => {
-    expect(matching({ status: 'unresolved', kind: 'proposals' })).toEqual(['open-proposal']);
-    expect(isFilteringThreads({ status: 'unresolved', kind: 'proposals' })).toBe(true);
-    expect(isFilteringThreads({ status: 'all', kind: 'proposals' })).toBe(true);
+    expect(matching({ ...ALL_THREAD_FILTERS, status: 'unresolved', kind: 'proposals' })).toEqual([
+      'open-proposal',
+    ]);
+    expect(isFilteringThreads({ status: 'unresolved', kind: 'proposals', replies: 'all' })).toBe(
+      true,
+    );
+    expect(isFilteringThreads({ status: 'all', kind: 'proposals', replies: 'all' })).toBe(true);
+    expect(isFilteringThreads({ status: 'all', kind: 'all', replies: 'unanswered' })).toBe(true);
+  });
+
+  describe('unanswered', () => {
+    const unanswered: ThreadFilters = { ...ALL_THREAD_FILTERS, replies: 'unanswered' };
+    const keeps = (t: Thread, viewer: string | null = 'me') =>
+      threadMatchesFilters(t, unanswered, viewer);
+
+    test('keeps a thread another author had the last word in', () => {
+      expect(keeps(makeThread({ id: 't', authors: ['me', 'c'] }))).toBe(true);
+      expect(keeps(makeThread({ id: 't', authors: ['c'] }))).toBe(true);
+    });
+
+    test('drops a thread the viewer replied to last, however it opened', () => {
+      expect(keeps(makeThread({ id: 't', authors: ['c', 'me'] }))).toBe(false);
+      expect(keeps(makeThread({ id: 't', authors: ['me'] }))).toBe(false);
+      // Only the last word counts — an earlier reply of the viewer's does not.
+      expect(keeps(makeThread({ id: 't', authors: ['c', 'me', 'c'] }))).toBe(true);
+    });
+
+    test('an unidentified viewer has answered nothing', () => {
+      expect(keeps(makeThread({ id: 't', authors: ['c', 'me'] }), null)).toBe(true);
+    });
+
+    test('composes with the other filters', () => {
+      const resolvedByViewer = makeThread({
+        id: 'resolved-by-me',
+        state: 'resolved',
+        resolution: { kind: 'resolve', at: 3, by_name: 'Me' },
+        authors: ['c', 'me'],
+      });
+      expect(threadMatchesFilters(resolvedByViewer, unanswered, 'me')).toBe(false);
+      expect(threadMatchesFilters(resolvedByViewer, { ...unanswered, replies: 'all' }, 'me')).toBe(
+        true,
+      );
+    });
   });
 
   test('a collapsed filter row can name what is active', () => {
     expect(activeThreadFilterLabels(ALL_THREAD_FILTERS)).toEqual([]);
-    expect(activeThreadFilterLabels({ status: 'unresolved', kind: 'all' })).toEqual(['Unresolved']);
-    expect(activeThreadFilterLabels({ status: 'unresolved', kind: 'proposals' })).toEqual([
+    expect(activeThreadFilterLabels({ ...ALL_THREAD_FILTERS, status: 'unresolved' })).toEqual([
       'Unresolved',
-      'Proposals',
     ]);
+    expect(
+      activeThreadFilterLabels({ status: 'unresolved', kind: 'proposals', replies: 'unanswered' }),
+    ).toEqual(['Unresolved', 'Proposals', 'Unanswered']);
   });
 });
 
