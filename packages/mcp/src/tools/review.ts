@@ -326,7 +326,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
               'block_id/anchor_text. Use only for sweeping rewrites.',
           ),
         answers_thread_ids: z
-          .array(z.string())
+          .array(z.string().trim().min(1))
           .optional()
           .describe(
             'The comment threads this proposal answers. Records a real link both ways — each ' +
@@ -337,6 +337,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           ),
         answers_thread_id: z
           .string()
+          .trim()
+          .min(1)
           .optional()
           .describe(
             'Deprecated: the one-thread spelling of `answers_thread_ids`, merged into it. ' +

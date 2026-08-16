@@ -669,6 +669,24 @@ describe('marginalia MCP server', () => {
     expect(open).toContain('No threads matched.');
   });
 
+  test('refuses a blank answered-thread id instead of claiming a link', async () => {
+    const { adminUrl } = await seedBook();
+    // A blank id names no thread, so the proposal would be created
+    // unlinked while the tool reported "Linked to thread " and a failed
+    // reply to it. Reject it at the schema instead.
+    const message = await callExpectingError('create_proposal', {
+      document: adminUrl,
+      anchor_text: 'Distance to the well: unknown',
+      proposed_text: '- Distance to the well: four days out, they guessed',
+      rationale: 'Concrete enough to argue with.',
+      answers_thread_ids: ['   '],
+    });
+    expect(message).toContain('answers_thread_ids');
+
+    const threads = await call('list_threads', { document: adminUrl, kind: 'proposals' });
+    expect(threads).toContain('No threads matched.');
+  });
+
   test('the deprecated answers_thread_id spelling still links', async () => {
     const { adminUrl } = await seedBook();
     const comment = await call('create_comment', {
