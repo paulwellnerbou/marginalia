@@ -29,36 +29,48 @@ beforeEach(() => store.clear());
 
 test('an untouched browser gets the shipped defaults', () => {
   expect(loadThreadSortMode()).toBe('latest');
-  expect(loadThreadFilters()).toEqual({ status: 'unresolved', kind: 'all' });
+  expect(loadThreadFilters()).toEqual({ status: 'unresolved', kind: 'all', replies: 'all' });
   expect(loadThreadFiltersOpen()).toBe(true);
 
   expect(DEFAULT_THREAD_SORT_MODE).toBe('latest');
-  expect(DEFAULT_THREAD_FILTERS).toEqual({ status: 'unresolved', kind: 'all' });
+  expect(DEFAULT_THREAD_FILTERS).toEqual({ status: 'unresolved', kind: 'all', replies: 'all' });
   expect(DEFAULT_THREAD_FILTERS_OPEN).toBe(true);
 });
 
 test('round-trips every setting', () => {
   saveThreadSortMode('document');
-  saveThreadFilters({ status: 'all', kind: 'proposals' });
+  saveThreadFilters({ status: 'all', kind: 'proposals', replies: 'unanswered' });
   saveThreadFiltersOpen(false);
 
   expect(loadThreadSortMode()).toBe('document');
-  expect(loadThreadFilters()).toEqual({ status: 'all', kind: 'proposals' });
+  expect(loadThreadFilters()).toEqual({ status: 'all', kind: 'proposals', replies: 'unanswered' });
   expect(loadThreadFiltersOpen()).toBe(false);
 });
 
 test('non-default values that match a default still round-trip', () => {
-  saveThreadFilters({ status: 'all', kind: 'all' });
-  expect(loadThreadFilters()).toEqual({ status: 'all', kind: 'all' });
+  saveThreadFilters({ status: 'all', kind: 'all', replies: 'all' });
+  expect(loadThreadFilters()).toEqual({ status: 'all', kind: 'all', replies: 'all' });
 });
 
 test('junk falls back per dimension, leaving the other one intact', () => {
   store.set('marginalia.threadListSort', 'oldest');
   store.set('marginalia.threadListStatus', 'resolved');
   store.set('marginalia.threadListKind', 'proposals');
+  store.set('marginalia.threadListReplies', 'answered');
 
   expect(loadThreadSortMode()).toBe('latest');
-  expect(loadThreadFilters()).toEqual({ status: 'unresolved', kind: 'proposals' });
+  expect(loadThreadFilters()).toEqual({
+    status: 'unresolved',
+    kind: 'proposals',
+    replies: 'all',
+  });
+});
+
+// A browser that last used the pane before this filter existed has no key
+// for it; it must open unfiltered rather than hiding the reader's own threads.
+test('a browser with no stored replies filter keeps every thread', () => {
+  store.set('marginalia.threadListStatus', 'all');
+  expect(loadThreadFilters().replies).toBe('all');
 });
 
 test('only a literal "true" keeps the filter row open', () => {
