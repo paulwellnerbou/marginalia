@@ -888,6 +888,7 @@ describe('documents API', () => {
     const blockId = [...locateAllBlocks(updated).entries()].find(
       ([, range]) => range.text === 'beta',
     )?.[0];
+    expect(blockId).toBeString();
     const threadRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
@@ -968,6 +969,7 @@ describe('documents API', () => {
         body: JSON.stringify({ name: 'Hi - Copy' }),
       }),
     );
+    expect(copyRes.status).toBe(201);
     const copy = (await copyRes.json()) as CreateResponse & { invite_only: boolean };
     expect(copy.invite_only).toBe(true);
 
@@ -1013,6 +1015,7 @@ describe('documents API', () => {
         body: JSON.stringify({ name: 'Hi - Copy', include_access: true }),
       }),
     );
+    expect(copyRes.status).toBe(201);
     const copy = (await copyRes.json()) as CreateResponse & { invite_only: boolean };
     expect(copy.invite_only).toBe(true);
 
