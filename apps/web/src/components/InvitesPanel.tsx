@@ -146,7 +146,10 @@ export function InvitesPanel({ uid }: { uid: string }) {
   const [role, setRole] = useState<Role>('reader');
   const [submitting, setSubmitting] = useState(false);
   const [rotating, setRotating] = useState(false);
-  const [savingRole, setSavingRole] = useState<string | null>(null);
+  // A set rather than one token: role changes on different rows overlap, and
+  // a single slot would let the second one re-enable the first row's select
+  // and then clear the flag out from under it while it is still in flight.
+  const [savingRoles, setSavingRoles] = useState<ReadonlySet<string>>(() => new Set());
   const refreshRequestRef = useRef(0);
   const [stateUid, setStateUid] = useState(uid);
   if (stateUid !== uid) {
@@ -157,7 +160,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
     setRole('reader');
     setSubmitting(false);
     setRotating(false);
-    setSavingRole(null);
+    setSavingRoles(new Set());
   }
 
   const refresh = useCallback(async () => {
@@ -240,7 +243,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
     setInvites(
       (current) => current?.map((i) => (i.token === token ? { ...i, role: next } : i)) ?? current,
     );
-    setSavingRole(token);
+    setSavingRoles((current) => new Set(current).add(token));
     try {
       const { invite } = await updateInvite(uid, token, next, identity);
       refreshRequestRef.current += 1;
@@ -256,7 +259,12 @@ export function InvitesPanel({ uid }: { uid: string }) {
       }
       setError(apiErrorMessage(err, 'Could not change the role'));
     } finally {
-      setSavingRole(null);
+      // Clears this row only, so a slower sibling request keeps its own.
+      setSavingRoles((current) => {
+        const next = new Set(current);
+        next.delete(token);
+        return next;
+      });
     }
   }
 
@@ -453,7 +461,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
                       value={inv.role}
                       onValueChange={(v) => void changeRole(inv.token, v as Role)}
                       size="1"
-                      disabled={savingRole === inv.token}
+                      disabled={savingRoles.has(inv.token)}
                     >
                       <Select.Trigger
                         variant="soft"
