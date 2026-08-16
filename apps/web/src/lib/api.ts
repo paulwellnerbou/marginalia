@@ -552,6 +552,39 @@ export function uploadDocument(opts: UploadOptions, identity: Identity): Promise
   });
 }
 
+export interface CopyDocumentOptions {
+  /** Name for the copy. Omit/empty → the copy derives its own title. */
+  name?: string;
+  /**
+   * Carry the source's invites (as new tokens), its participant roster
+   * and its `invite_only` setting. Omitted → the copy starts closed with
+   * the caller as its only member.
+   */
+  include_access?: boolean;
+}
+
+export interface CopyDocumentResponse extends UploadResponse {
+  /** uid of the document this one was copied from. */
+  copied_from: string;
+}
+
+/**
+ * Fork a document into a new one holding only its current text: fresh
+ * history, no comments, threads or edit proposals. Admin-only.
+ */
+export function copyDocument(
+  uid: string,
+  opts: CopyDocumentOptions,
+  identity: Identity,
+): Promise<CopyDocumentResponse> {
+  return request<CopyDocumentResponse>(`/api/documents/${encodeURIComponent(uid)}/copy`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    identity,
+    docUid: uid,
+  });
+}
+
 export function getDocument(uid: string): Promise<Document> {
   return request<Document>(`/api/documents/${encodeURIComponent(uid)}`, {
     method: 'GET',

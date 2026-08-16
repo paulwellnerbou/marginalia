@@ -408,6 +408,32 @@ required S3 var is missing. All reads still go through the per-document
 proxy — never share bucket credentials or pre-signed URLs with end
 users.
 
+## Copying a document
+
+**Copy document** — the copy icon in the per-document toolbar, next to the
+gear — forks a document into a new one holding only its current state.
+`POST /api/documents/:uid/copy` is the endpoint behind it, and it is
+admin-only.
+
+"Copy as new" means exactly that: the copy's git history begins with the
+copy, and no comments, threads or edit proposals come along. What does
+travel is the text as it stands, the document's name (yours to change in
+the dialog), its theme and renderer settings, and its attachments — those
+being junction rows onto content-addressed blobs, the copy points at the
+same bytes rather than duplicating them.
+
+**Include access and roles** carries the participant roster: every
+non-admin invite is re-minted on the copy with its role, name and note
+intact, and `invite_only` mirrors the source. The tokens themselves cannot
+carry, being the credential and the primary key both — the source's links
+keep opening the source, and the admin hands the new ones out. Leave it off
+and the copy is closed with the copier as its only member.
+
+The password gate travels either way: dropping it would quietly turn a
+protected document into an open one. Only the hash is stored, so the
+password itself can't come along — the copy gets a freshly generated one,
+shown once, exactly like a new upload's.
+
 ## JSON Bundles
 
 Documents can be exported and imported as versioned JSON bundles through the

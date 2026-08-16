@@ -871,6 +871,238 @@ describe('documents API', () => {
     expect(killAdmin.status).toBe(403);
   });
 
+  test('copy: the copy holds the current source, a history of its own, and no threads', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Title\n\nalpha' });
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+
+    // Give the source a second revision and a thread. Neither may travel.
+    const updated = '# Title\n\nbeta';
+    const editRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers: adminHeaders,
+        body: JSON.stringify({ markdown: updated }),
+      }),
+    );
+    expect(editRes.status).toBe(200);
+    const blockId = [...locateAllBlocks(updated).entries()].find(
+      ([, range]) => range.text === 'beta',
+    )?.[0];
+    const threadRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'beta' },
+          body: 'a note that stays behind',
+        }),
+      }),
+    );
+    expect(threadRes.status).toBe(201);
+
+    const copyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/copy`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ name: 'Title - Copy' }),
+      }),
+    );
+    expect(copyRes.status).toBe(201);
+    const copy = (await copyRes.json()) as CreateResponse & {
+      name: string;
+      copied_from: string;
+      invite_only: boolean;
+    };
+    expect(copy.uid).not.toBe(created.uid);
+    expect(copy.copied_from).toBe(created.uid);
+    expect(copy.name).toBe('Title - Copy');
+
+    const copyHeaders = withInvite(headersFor(CLIENT_A), copy.admin_invite.token);
+    const copyDocRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}`, { headers: copyHeaders }),
+    );
+    expect(copyDocRes.status).toBe(200);
+    const copyDoc = (await copyDocRes.json()) as { source: string; role: string };
+    expect(copyDoc.source).toBe(updated);
+    expect(copyDoc.role).toBe('admin');
+
+    // One commit, not the source's two: the copy's history starts here.
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}/history`, { headers: copyHeaders }),
+    );
+    const { history } = (await historyRes.json()) as {
+      history: Array<{ action: string }>;
+    };
+    expect(history).toHaveLength(1);
+    expect(history[0]?.action).toBe('upload');
+
+    const copyThreads = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}/threads`, { headers: copyHeaders }),
+    );
+    expect(((await copyThreads.json()) as { threads: unknown[] }).threads).toHaveLength(0);
+
+    // The source is untouched by having been copied.
+    const sourceThreads = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, { headers: adminHeaders }),
+    );
+    expect(((await sourceThreads.json()) as { threads: unknown[] }).threads).toHaveLength(1);
+  });
+
+  test('copy: without include_access the copy is closed and the copier is its only member', async () => {
+    // `upload` opts out of invite_only; the copy must not inherit that.
+    const created = await upload(CLIENT_A, { markdown: '# Hi' });
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    const inviteRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ display_name: 'Bob', role: 'editor' }),
+      }),
+    );
+    const { invite: bob } = (await inviteRes.json()) as { invite: { token: string } };
+
+    const copyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/copy`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ name: 'Hi - Copy' }),
+      }),
+    );
+    const copy = (await copyRes.json()) as CreateResponse & { invite_only: boolean };
+    expect(copy.invite_only).toBe(true);
+
+    // Bob's link opens the source, and nothing on the copy.
+    const bobOnSource = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        headers: withInvite(headersFor(CLIENT_B), bob.token),
+      }),
+    );
+    expect(bobOnSource.status).toBe(200);
+    const bobOnCopy = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}`, {
+        headers: withInvite(headersFor(CLIENT_B), bob.token),
+      }),
+    );
+    expect(bobOnCopy.status).toBe(401);
+
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}/invites`, {
+        headers: withInvite(headersFor(CLIENT_A), copy.admin_invite.token),
+      }),
+    );
+    const { invites } = (await listRes.json()) as { invites: Array<{ kind: string }> };
+    expect(invites.map((i) => i.kind)).toEqual(['admin']);
+  });
+
+  test('copy: include_access carries roles as new links, leaving the old ones on the source', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Hi', invite_only: true });
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    const inviteRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ display_name: 'Bob', role: 'editor', note: 'reviewer' }),
+      }),
+    );
+    const { invite: bob } = (await inviteRes.json()) as { invite: { token: string } };
+
+    const copyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/copy`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ name: 'Hi - Copy', include_access: true }),
+      }),
+    );
+    const copy = (await copyRes.json()) as CreateResponse & { invite_only: boolean };
+    expect(copy.invite_only).toBe(true);
+
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}/invites`, {
+        headers: withInvite(headersFor(CLIENT_A), copy.admin_invite.token),
+      }),
+    );
+    const { invites } = (await listRes.json()) as {
+      invites: Array<{ token: string; role: string; display_name: string; note: string | null }>;
+    };
+    const copiedBob = invites.find((i) => i.role === 'editor');
+    expect(copiedBob?.display_name).toBe('Bob');
+    expect(copiedBob?.note).toBe('reviewer');
+    // A token is the credential as well as the primary key, so the copy
+    // mints its own — the source's link must not reach it.
+    expect(copiedBob?.token).not.toBe(bob.token);
+    const bobsOldLink = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}`, {
+        headers: withInvite(headersFor(CLIENT_B), bob.token),
+      }),
+    );
+    expect(bobsOldLink.status).toBe(401);
+
+    const bobsNewLink = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}`, {
+        headers: withInvite(headersFor(CLIENT_B), copiedBob?.token ?? ''),
+      }),
+    );
+    expect(bobsNewLink.status).toBe(200);
+    expect(((await bobsNewLink.json()) as { role: string }).role).toBe('editor');
+  });
+
+  test('copy: a non-admin cannot copy the document', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Hi' });
+    const inviteRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/invites`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        body: JSON.stringify({ display_name: 'Bob', role: 'editor' }),
+      }),
+    );
+    const { invite: bob } = (await inviteRes.json()) as { invite: { token: string } };
+
+    const copyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/copy`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_B), bob.token),
+        body: JSON.stringify({ name: 'Bob’s fork' }),
+      }),
+    );
+    expect(copyRes.status).toBe(403);
+  });
+
+  test('copy: a password-protected document copies protected, with a new password', async () => {
+    const created = await upload(CLIENT_A, { markdown: '# Secret', password_protected: true });
+    expect(created.password).toBeString();
+    const cookie = await authenticateForDoc(created.uid, created.password!, CLIENT_A);
+
+    const copyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/copy`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A, { cookie }), created.admin_invite.token),
+        body: JSON.stringify({ name: 'Secret - Copy' }),
+      }),
+    );
+    expect(copyRes.status).toBe(201);
+    const copy = (await copyRes.json()) as CreateResponse;
+    // Only the hash is stored, so the password itself cannot travel —
+    // but the gate has to, or copying would quietly unlock the content.
+    expect(copy.password).toBeString();
+    expect(copy.password).not.toBe(created.password);
+
+    const noPassword = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A), copy.admin_invite.token),
+      }),
+    );
+    expect(noPassword.status).toBe(401);
+    expect(((await noPassword.json()) as { error: string }).error).toBe('password-required');
+
+    const copyCookie = await authenticateForDoc(copy.uid, copy.password!, CLIENT_A);
+    const withPassword = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}`, {
+        headers: withInvite(headersFor(CLIENT_A, { cookie: copyCookie }), copy.admin_invite.token),
+      }),
+    );
+    expect(withPassword.status).toBe(200);
+  });
+
   test('password-protected docs require a password session; invite still controls role', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Secret',
