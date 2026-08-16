@@ -1075,6 +1075,25 @@ export function createInvite(
   });
 }
 
+/**
+ * Re-role an existing invite without changing its URL. Applies to the token
+ * and to any session already claimed from it, so a recipient with the doc
+ * open moves to the new role without re-opening their link.
+ *
+ * Rejected for the admin invite (403) and for `role: 'admin'` (400).
+ */
+export function updateInvite(
+  uid: string,
+  token: string,
+  role: Role,
+  identity: Identity,
+): Promise<{ invite: Invite }> {
+  return request<{ invite: Invite }>(
+    `/api/documents/${encodeURIComponent(uid)}/invites/${encodeURIComponent(token)}`,
+    { method: 'PATCH', body: JSON.stringify({ role }), identity, docUid: uid },
+  );
+}
+
 export function deleteInvite(uid: string, token: string, identity: Identity): Promise<void> {
   return request<void>(
     `/api/documents/${encodeURIComponent(uid)}/invites/${encodeURIComponent(token)}`,

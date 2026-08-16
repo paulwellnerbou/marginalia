@@ -50,6 +50,12 @@ const MESSAGES: Record<string, string> = {
   'wrong-password': 'That password was not accepted.',
   'password-protected': 'This document is password protected.',
   'admin-token-required': 'This action needs an admin invite link.',
+  'admin-role-not-grantable': 'Admin cannot be granted through an access link.',
+  'admin-invite-not-editable':
+    'The admin link’s role is fixed. Rotate it instead if it has leaked.',
+  'admin-invite-not-deletable':
+    'The admin link cannot be revoked — rotate it instead if it has leaked.',
+  'role-required': 'Pick a role first.',
 
   // Content
   'body-required': 'Write something first.',

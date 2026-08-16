@@ -36,6 +36,7 @@ import {
   readIdentity,
   readInvite,
   readSession,
+  revokeInviteSessions,
   SESSION_COOKIE,
   verifyPassword,
 } from '../auth.js';
@@ -209,6 +210,7 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.post('/:uid/invites', async (c) => createInvite(c, deps));
   r.post('/:uid/invites/admin/rotate', async (c) => rotateAdminInvite(c, deps));
   r.post('/:uid/invites/:token/claim', async (c) => claimInvite(c, deps));
+  r.patch('/:uid/invites/:token', async (c) => updateInvite(c, deps));
   r.delete('/:uid/invites/:token', async (c) => deleteInvite(c, deps));
 
   return r;
@@ -2708,7 +2710,57 @@ async function deleteInvite(c: Context, deps: AppDeps) {
   }
 
   db.prepare('DELETE FROM invites WHERE token = ?').run(token);
+  // Dropping the row only kills the URL. Anyone who already opened it holds
+  // a claimed session that authorizes on its own.
+  revokeInviteSessions(db, token);
   return c.body(null, 204);
+}
+
+/**
+ * Change an existing invite's role in place, so an admin can promote or
+ * demote a collaborator without minting a new URL and chasing the recipient
+ * with it.
+ *
+ * Both credentials minted from the invite have to move together: the token
+ * (read live off the row by `authorize`) and any claimed session (which
+ * snapshotted the old role).
+ */
+async function updateInvite(c: Context, deps: AppDeps) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
+
+  const token = c.req.param('token');
+  if (!token) return c.json({ error: 'not-found' }, 404);
+
+  const body = await safeJson(c);
+  if (!body) return c.json({ error: 'invalid-body' }, 400);
+
+  const role = asRole(body.role);
+  if (!role) return c.json({ error: 'role-required' }, 400);
+  // Same two admin guards as createInvite: admin is never grantable through
+  // a third-party invite, and the document's own admin row is not editable
+  // here — demoting it would strand the document with no admin at all.
+  if (role === 'admin') return c.json({ error: 'admin-role-not-grantable' }, 400);
+
+  const row = db
+    .prepare('SELECT * FROM invites WHERE token = ? AND doc_uid = ?')
+    .get(token, doc.uid) as InviteRow | undefined;
+  if (!row) return c.json({ error: 'not-found' }, 404);
+  if (row.kind === 'admin') return c.json({ error: 'admin-invite-not-editable' }, 403);
+
+  if (row.role === role) return c.json({ invite: toInviteWire(row) });
+
+  db.prepare('UPDATE invites SET role = ? WHERE token = ?').run(role, token);
+  // Sessions claimed from this invite move with it, so an open tab is
+  // re-roled without its holder having to do anything.
+  db.prepare('UPDATE sessions SET invite_role = ? WHERE invite_token = ?').run(role, token);
+
+  return c.json({ invite: toInviteWire({ ...row, role }) });
 }
 
 /**
@@ -2744,6 +2796,7 @@ async function claimInvite(c: Context, deps: AppDeps) {
   // Mint an invite session. The invite row is NOT deleted so the user can
   // re-claim from another browser using the original URL.
   const sessionToken = createSession(db, doc.uid, config.namedInviteSessionTtlMs, true, {
+    token: invite.token,
     display_name: invite.display_name,
     role: invite.role,
     kind: invite.kind,
