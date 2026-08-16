@@ -170,6 +170,50 @@ describe('assets API', () => {
     expect(stillThere.status).toBe(200);
   });
 
+  test('replacing an attachment on the source leaves the copy on the original bytes', async () => {
+    const doc = await upload();
+    const original = new Uint8Array([137, 80, 78, 71, 1, 1, 1, 1]);
+    expect((await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', original)).status).toBe(201);
+
+    const copyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/copy`, {
+        method: 'POST',
+        headers: headers(ALICE, {
+          'content-type': 'application/json',
+          [INVITE_HEADER]: doc.admin_invite.token,
+        }),
+        body: JSON.stringify({ name: 'Hi - Copy' }),
+      }),
+    );
+    const copy = (await copyRes.json()) as { uid: string; admin_invite: { token: string } };
+
+    // "Changing the image" is a replace under the same ref name. Blobs are
+    // keyed by their own sha256, so the new bytes land beside the old ones
+    // and only the source's junction row is repointed — the copy is a
+    // separate document, and keeps what it was copied with.
+    const replacement = new Uint8Array([137, 80, 78, 71, 9, 9, 9, 9, 9, 9]);
+    expect((await putAsset(doc.uid, doc.admin_invite.token, 'cat.png', replacement)).status).toBe(
+      201,
+    );
+
+    const onSource = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/assets/cat.png`, {
+        headers: headers(ALICE, { [INVITE_HEADER]: doc.admin_invite.token }),
+      }),
+    );
+    expect(new Uint8Array(await onSource.arrayBuffer())).toEqual(replacement);
+
+    // The replace detaches the old asset and GCs it if orphaned — which it
+    // is not, because the copy still names it.
+    const onCopy = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}/assets/cat.png`, {
+        headers: headers(ALICE, { [INVITE_HEADER]: copy.admin_invite.token }),
+      }),
+    );
+    expect(onCopy.status).toBe(200);
+    expect(new Uint8Array(await onCopy.arrayBuffer())).toEqual(original);
+  });
+
   describe('invite-only documents: the image cookie', () => {
     /** An invite-only doc with one attached image, plus its admin token. */
     async function privateDocWithImage() {
