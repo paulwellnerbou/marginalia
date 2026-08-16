@@ -232,7 +232,11 @@ export function InvitesPanel({ uid }: { uid: string }) {
     const identity = { clientId: getClientId(), displayName: identityName };
     // Optimistic: the select is a direct manipulation, so it should settle
     // under the pointer rather than snapping back for a round-trip.
-    const previous = invites;
+    // Only this row's role is remembered for the rollback — creating and
+    // revoking stay live while the request is in flight, so restoring a
+    // whole snapshot of the list would undo whichever of those landed
+    // in the meantime.
+    const previousRole = invites?.find((i) => i.token === token)?.role;
     setInvites(
       (current) => current?.map((i) => (i.token === token ? { ...i, role: next } : i)) ?? current,
     );
@@ -244,7 +248,12 @@ export function InvitesPanel({ uid }: { uid: string }) {
       await refresh();
     } catch (err) {
       reportError('InvitesPanel.updateRole', err);
-      setInvites(previous);
+      if (previousRole) {
+        setInvites(
+          (current) =>
+            current?.map((i) => (i.token === token ? { ...i, role: previousRole } : i)) ?? current,
+        );
+      }
       setError(apiErrorMessage(err, 'Could not change the role'));
     } finally {
       setSavingRole(null);
