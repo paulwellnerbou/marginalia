@@ -1,4 +1,4 @@
-import { DownloadIcon, GearIcon } from '@radix-ui/react-icons';
+import { DownloadIcon, GearIcon, TrashIcon } from '@radix-ui/react-icons';
 import {
   Button,
   Callout,
@@ -11,25 +11,29 @@ import {
   TextField,
 } from '@radix-ui/themes';
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { Document, MermaidRenderer } from '../lib/api.js';
 import {
   type DocumentSettingsResponse,
+  deleteDocument,
   exportDocumentBundle,
   updateDocumentSettings,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
+import { forgetDocumentLocally } from '../lib/forget-doc.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { BUILT_IN_THEMES } from '../lib/themes.js';
+import { ArmedButton } from './ArmedButton.js';
 
 /**
  * "Document Settings" — non-permission concerns. Splits cleanly from
  * AccessControlDialog so admins can rename/restyle/export without the
  * mental overhead of a permissions screen.
  *
- * Surface: document name, default theme, JSON bundle export. The
- * everyday "download the source or a DOCX" lives in `DownloadMenu`
- * next to the gear, since it's not admin-only.
+ * Surface: document name, default theme, JSON bundle export, and
+ * deletion. The everyday "download the source or a DOCX" lives in
+ * `DownloadMenu` next to the gear, since it's not admin-only.
  */
 export function DocumentSettingsDialog({
   doc,
@@ -38,6 +42,7 @@ export function DocumentSettingsDialog({
   doc: Document;
   onChange: (uid: string, s: Partial<DocumentSettingsResponse>) => void;
 }) {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [docName, setDocName] = useState(doc.name ?? '');
   const [defaultTheme, setDefaultTheme] = useState(doc.default_theme);
@@ -49,6 +54,7 @@ export function DocumentSettingsDialog({
   >(doc.mermaid_renderer ?? DEFAULT_RENDERER_VALUE);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
@@ -111,6 +117,31 @@ export function DocumentSettingsDialog({
     }
   }
 
+  async function remove() {
+    const name = getDisplayName();
+    if (!name) {
+      setError('Please set your display name first.');
+      return;
+    }
+    setDeleting(true);
+    setError(null);
+    try {
+      // Server first: the invite token this request authorizes with is
+      // one of the things forgetDocumentLocally clears.
+      await deleteDocument(doc.uid, { clientId: getClientId(), displayName: name });
+      forgetDocumentLocally(doc.uid);
+      // Straight home rather than closing the dialog — the page behind it
+      // is rendering a document that no longer exists, and every control
+      // on it would now 404. `replace` keeps Back from returning to it.
+      navigate('/', { replace: true });
+    } catch (err) {
+      reportError('DocumentSettings.delete', err, { uid: doc.uid });
+      setError(apiErrorMessage(err, 'Could not delete this document'));
+      setDeleting(false);
+    }
+    // No `finally`: on success this component unmounts with the route.
+  }
+
   return (
     <Dialog.Root
       open={open}
@@ -122,6 +153,7 @@ export function DocumentSettingsDialog({
           setDefaultTheme(doc.default_theme);
           setMermaidChoice(doc.mermaid_renderer ?? DEFAULT_RENDERER_VALUE);
           setError(null);
+          setDeleting(false);
         }
         setOpen(next);
       }}
@@ -226,6 +258,30 @@ export function DocumentSettingsDialog({
                   <DownloadIcon />
                   {exporting ? 'Exporting…' : 'Export JSON bundle'}
                 </Button>
+              </Flex>
+            </Flex>
+
+            <Separator size="4" />
+
+            <Flex direction="column" gap="2">
+              <Text size="2" weight="medium" color="red">
+                Delete document
+              </Text>
+              <Text size="1" color="gray">
+                Erases the document from the server for everyone: its text, every revision in its
+                history, all comments and edit proposals, its attachments, and every access link.
+                This browser's copy of the link and password go too. There is no undo and no backup
+                — export the JSON bundle above first if you might want it back.
+              </Text>
+              <Flex>
+                <ArmedButton
+                  label={deleting ? 'Deleting…' : 'Delete document'}
+                  confirmLabel="Yes, delete permanently"
+                  color="red"
+                  icon={<TrashIcon />}
+                  disabled={deleting}
+                  onConfirm={remove}
+                />
               </Flex>
             </Flex>
 

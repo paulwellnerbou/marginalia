@@ -774,6 +774,21 @@ export function updateDocument(
   });
 }
 
+/**
+ * Destroy the document server-side: source, git history, comments,
+ * proposals, invites and attachments. Admin only, and irreversible —
+ * callers pair it with `forgetDocumentLocally` to drop this browser's
+ * leftovers. Must run *before* those are cleared: the invite token
+ * still in localStorage is what authorizes the request.
+ */
+export function deleteDocument(uid: string, identity: Identity): Promise<void> {
+  return request<void>(`/api/documents/${encodeURIComponent(uid)}`, {
+    method: 'DELETE',
+    identity,
+    docUid: uid,
+  });
+}
+
 export function getHistory(uid: string): Promise<{ history: HistoryEntry[] }> {
   return request<{ history: HistoryEntry[] }>(`/api/documents/${encodeURIComponent(uid)}/history`, {
     method: 'GET',

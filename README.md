@@ -534,6 +534,26 @@ All persistent server state lives in a single directory — the repo-root
                         absent when MARGINALIA_BLOB_STORAGE=s3)
 ```
 
+### Delete one document
+
+**Document settings → Delete document** (admins only, two-step confirm),
+or `DELETE /api/documents/:uid` directly. Either way the document is
+destroyed rather than hidden: its git repo — every revision, not just the
+current text — is removed from disk, and every row keyed to it goes with
+it, including comments, edit proposals, mentions, reactions, invites,
+sessions, the per-document user registry, and its attachments (blobs are
+GC'd when no other document references them). Copies of its access link
+are swept from every keyring, so the deletion reaches the owner's other
+devices instead of leaving them with a token for a document that no
+longer exists.
+
+The browser that issued the delete also drops its own leftovers: the
+recent-documents entry, the invite token, any saved password, and the
+per-document theme override.
+
+There is no undo and no backup. Export a JSON bundle first if the content
+might be wanted later.
+
 ### Clear everything
 
 Stop the server, then delete the data directory:

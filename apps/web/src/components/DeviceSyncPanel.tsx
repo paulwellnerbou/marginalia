@@ -10,7 +10,7 @@ import {
   Text,
   TextField,
 } from '@radix-ui/themes';
-import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { createKeyringPairing } from '../lib/api.js';
 import {
   connectKeyring,
@@ -24,6 +24,7 @@ import {
 } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { redeemErrorMessage } from '../lib/pairing-error.js';
+import { ArmedButton } from './ArmedButton.js';
 import { Copyable } from './Copyable.js';
 import { PairingQr } from './PairingQr.js';
 
@@ -319,71 +320,6 @@ function JoinByCode({ onPaired }: { onPaired: () => void }) {
         </Callout.Root>
       )}
     </Box>
-  );
-}
-
-/**
- * Two-step confirm, local rather than ConfirmButton because that one is
- * an icon-only trash affordance: both actions here are consequential in
- * ways a trash can doesn't convey, and each has to say in words what the
- * second click actually does — one replaces a token, the other destroys
- * the ring.
- */
-function ArmedButton({
-  label,
-  confirmLabel,
-  color,
-  icon,
-  onConfirm,
-  disabled,
-}: {
-  label: string;
-  confirmLabel: string;
-  color: 'amber' | 'red';
-  icon: ReactNode;
-  onConfirm: () => void | Promise<void>;
-  disabled?: boolean;
-}) {
-  const [armed, setArmed] = useState(false);
-  const timer = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!armed) return;
-    timer.current = window.setTimeout(() => setArmed(false), 4000);
-    return () => {
-      if (timer.current !== null) window.clearTimeout(timer.current);
-    };
-  }, [armed]);
-
-  useEffect(() => {
-    if (disabled && armed) setArmed(false);
-  }, [disabled, armed]);
-
-  if (!armed) {
-    return (
-      <Button variant="soft" color={color} disabled={disabled} onClick={() => setArmed(true)}>
-        {icon} {label}
-      </Button>
-    );
-  }
-
-  return (
-    <Flex gap="2">
-      <Button variant="soft" color="gray" onClick={() => setArmed(false)}>
-        Cancel
-      </Button>
-      <Button
-        variant="solid"
-        color={color}
-        disabled={disabled}
-        onClick={() => {
-          setArmed(false);
-          void onConfirm();
-        }}
-      >
-        {confirmLabel}
-      </Button>
-    </Flex>
   );
 }
 
