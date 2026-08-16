@@ -97,7 +97,13 @@ export function CopyDocumentDialog({ doc }: { doc: Document }) {
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (!next) reset();
+        // Closing mid-copy (Escape, click outside) does not cancel the
+        // request, so clearing `copying` here would re-enable the submit
+        // button for anyone who reopens before it lands — one stray
+        // Escape, and they make two documents. Keep the state; the
+        // request's own `finally` settles it, and reopening shows either
+        // the disabled form or the copy that meanwhile succeeded.
+        if (!next && !copying) reset();
       }}
     >
       <Dialog.Trigger>

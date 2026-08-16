@@ -185,6 +185,7 @@ describe('assets API', () => {
         body: JSON.stringify({ name: 'Hi - Copy' }),
       }),
     );
+    expect(copyRes.status).toBe(201);
     const copy = (await copyRes.json()) as { uid: string; admin_invite: { token: string } };
 
     // "Changing the image" is a replace under the same ref name. Blobs are
