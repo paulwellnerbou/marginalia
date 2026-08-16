@@ -258,7 +258,7 @@ function isRememberedRightTab(value: string | null): value is Exclude<RightTab, 
 
 type PendingDraft =
   | { mode: 'comment'; anchor: CommentAnchor }
-  | { mode: 'proposal'; target: ProposalTarget; answersThreadId?: string };
+  | { mode: 'proposal'; target: ProposalTarget; answersThreadIds?: string[] };
 
 /**
  * Failures used to land in a text slot in the document toolbar, which is
@@ -453,8 +453,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const [pendingDraft, setPendingDraft] = useState<PendingDraft | null>(null);
   const pendingAnchor = pendingDraft?.mode === 'comment' ? pendingDraft.anchor : null;
   const pendingProposalTarget = pendingDraft?.mode === 'proposal' ? pendingDraft.target : null;
-  const pendingProposalAnswersThreadId =
-    pendingDraft?.mode === 'proposal' ? pendingDraft.answersThreadId : undefined;
+  const pendingProposalAnswersThreadIds =
+    pendingDraft?.mode === 'proposal' ? pendingDraft.answersThreadIds : undefined;
   /**
    * Proposal thread whose text is being revised in the edit dialog.
    * A snapshot on purpose: thread refreshes while the dialog is open
@@ -1527,8 +1527,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         if (pendingProposalTarget.end_block_id) {
           req.anchor_end_block_id = pendingProposalTarget.end_block_id;
         }
-        if (pendingProposalAnswersThreadId) {
-          req.answers_thread_id = pendingProposalAnswersThreadId;
+        if (pendingProposalAnswersThreadIds?.length) {
+          req.answers_thread_ids = pendingProposalAnswersThreadIds;
         }
         if (payload.rationale) req.rationale = payload.rationale;
         const created = await apiCreateProposal(doc.uid, req, identity);
@@ -1560,7 +1560,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       resolveIdentity,
       refreshThreads,
       pendingProposalTarget,
-      pendingProposalAnswersThreadId,
+      pendingProposalAnswersThreadIds,
       sectionFilterActive,
       blockSectionIds,
       sectionFilter,
@@ -1588,7 +1588,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
       setEditingProposal(null);
       setPendingDraft({
         mode: 'proposal',
-        answersThreadId: thread.id,
+        answersThreadIds: [thread.id],
         target: {
           block_id: blockId,
           end_block_id: null,

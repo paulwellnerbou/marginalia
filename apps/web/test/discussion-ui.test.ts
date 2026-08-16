@@ -224,13 +224,13 @@ describe('threads-tab filters', () => {
   });
   const openProposal = makeThread({
     id: 'open-proposal',
-    proposal: { whole_document: false, answers_thread_id: null },
+    proposal: { whole_document: false, answers_thread_ids: [] },
   });
   const acceptedProposal = makeThread({
     id: 'accepted-proposal',
     state: 'resolved',
     resolution: { kind: 'accept', at: 3, by_name: 'Bob' },
-    proposal: { whole_document: false, answers_thread_id: null },
+    proposal: { whole_document: false, answers_thread_ids: [] },
   });
 
   const all = [openComment, resolvedComment, openProposal, acceptedProposal];

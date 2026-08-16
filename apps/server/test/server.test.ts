@@ -3196,6 +3196,7 @@ describe('documents API', () => {
           proposed_text: string;
           status: string;
           accepted_oid: string | null;
+          answers_comment_ids: string[];
           answers_comment_id: string | null;
         } | null;
       }>;
@@ -3223,6 +3224,7 @@ describe('documents API', () => {
       proposed_text: '# Better Hi',
       status: 'rejected',
       accepted_oid: null,
+      answers_comment_ids: [],
       answers_comment_id: null,
     });
     expect(
@@ -3288,7 +3290,7 @@ describe('documents API', () => {
       source_snapshot: null,
       proposed_text: null,
       whole_document: false,
-      answers_thread_id: null,
+      answers_thread_ids: [],
     });
     expect(importedProposalThread.state).toBe('resolved');
     expect(importedProposalThread.resolution?.kind).toBe('reject');
@@ -3499,7 +3501,7 @@ describe('documents API', () => {
           source_snapshot: string | null;
           proposed_text: string | null;
           whole_document: boolean;
-          answers_thread_id: string | null;
+          answers_thread_ids: string[];
         } | null;
         comments: [{ body: string }];
       }>;
@@ -3512,7 +3514,7 @@ describe('documents API', () => {
       source_snapshot: null,
       proposed_text: null,
       whole_document: false,
-      answers_thread_id: null,
+      answers_thread_ids: [],
     });
     expect(thread!.capabilities.accept).toBe(false);
     expect(thread!.capabilities.reject).toBe(true);

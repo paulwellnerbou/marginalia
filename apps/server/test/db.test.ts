@@ -467,6 +467,57 @@ describe('openDatabase migrations', () => {
     db.close();
   });
 
+  test('the single answers_comment_id link moves into comments_edit_proposal_answers', () => {
+    {
+      const seed = new Database(dbPath);
+      // Pre-list table: one answered comment per proposal, in a column.
+      seed.exec(`
+        CREATE TABLE comments_edit_proposals (
+          comment_id          TEXT PRIMARY KEY,
+          status              TEXT NOT NULL DEFAULT 'open',
+          accepted_oid        TEXT,
+          branch_ref          TEXT,
+          base_oid            TEXT,
+          base_block_start    INTEGER,
+          base_block_end      INTEGER,
+          answers_comment_id  TEXT
+        );
+      `);
+      const insert = seed.prepare(
+        `INSERT INTO comments_edit_proposals (comment_id, status, answers_comment_id)
+         VALUES (?, 'open', ?)`,
+      );
+      insert.run('prop-linked', 'cmt-1');
+      insert.run('prop-standalone', null);
+      seed.close();
+    }
+
+    const db = openDatabase(dbPath);
+
+    expect(
+      (db.prepare('PRAGMA table_info(comments_edit_proposals)').all() as Array<{ name: string }>)
+        .map((c) => c.name)
+        .includes('answers_comment_id'),
+    ).toBe(false);
+    expect(
+      db
+        .prepare(
+          `SELECT proposal_comment_id, answered_comment_id
+             FROM comments_edit_proposal_answers`,
+        )
+        .all(),
+    ).toEqual([{ proposal_comment_id: 'prop-linked', answered_comment_id: 'cmt-1' }]);
+    db.close();
+
+    // Idempotent: the column is gone, so a second open leaves the one
+    // link alone rather than re-inserting or dropping it.
+    const db2 = openDatabase(dbPath);
+    expect(db2.prepare('SELECT COUNT(*) AS n FROM comments_edit_proposal_answers').get()).toEqual({
+      n: 1,
+    });
+    db2.close();
+  });
+
   test('comment_reactions PK is rebuilt to include doc_uid when an old PK is detected', () => {
     {
       const seed = new Database(dbPath);

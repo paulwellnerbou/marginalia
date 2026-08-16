@@ -32,8 +32,12 @@ import type { ThreadRefApi } from './threadRefs.js';
  * the list so the card doesn't need the whole thread set.
  */
 export interface ThreadLinks {
-  /** The comment thread this proposal answers, if it answers one. */
-  answers: Thread | null;
+  /**
+   * The comment threads this proposal answers, oldest first. The card
+   * this one is nested in is filtered out by the caller — it is the
+   * card wrapped around this one, not a place to link to.
+   */
+  answers: Thread[];
   /** Proposals written to answer this comment thread, oldest first. */
   answeredBy: Thread[];
 }
@@ -43,9 +47,9 @@ interface Props {
   thread: Thread;
   links: ThreadLinks;
   /**
-   * This card renders inside the card of the thread its proposal
-   * answers. Drops the "Answers:" link — the answered thread is the
-   * card wrapped around this one.
+   * This card renders inside the card of one thread its proposal
+   * answers. Styling only — the link back to that thread is filtered
+   * out of `links.answers` by the caller.
    */
   nested?: boolean;
   /**
@@ -565,15 +569,16 @@ export function InlineThreadCard({
             assertive, and a second one here would announce it twice. This
             copy is persistent context to navigate back to. */}
         {actionError && <span className="ic-error">{actionError}</span>}
-        {!nested && links.answers && (
+        {links.answers.map((target) => (
           <ThreadLink
-            target={links.answers}
+            key={target.id}
+            target={target}
             onFocus={onFocusLinked}
-            title={`Written to answer ${links.answers.comments[0].author.display_name}'s comment`}
+            title={`Written to answer ${target.comments[0].author.display_name}'s comment`}
           >
-            Answers: {formatAnchorQuote(links.answers.anchor.quote, 48) || 'a comment'}
+            Answers: {formatAnchorQuote(target.anchor.quote, 48) || 'a comment'}
           </ThreadLink>
-        )}
+        ))}
         {links.answeredBy.length > 0 && (
           <div className="ic-card-answers">
             {links.answeredBy.map((target, index) => (

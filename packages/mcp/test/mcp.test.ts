@@ -587,7 +587,7 @@ describe('marginalia MCP server', () => {
       block_id: blockId,
       proposed_text: proposed,
       rationale: 'Varies the repeated line, as Paul asked.',
-      answers_thread_id: threadId,
+      answers_thread_ids: [threadId],
     });
     expect(created).toContain('Created an edit proposal');
     expect(created).toContain(`Linked to thread ${threadId}`);
@@ -625,6 +625,91 @@ describe('marginalia MCP server', () => {
 
     const open = await call('list_threads', { document: adminUrl, state: 'open' });
     expect(open).toContain('No threads matched.');
+  });
+
+  test('one proposal answers several comments on the same paragraph', async () => {
+    const { adminUrl } = await seedBook();
+    // Two reviewers, one paragraph: the rewrite settles both requests,
+    // so it links to both instead of being proposed twice.
+    const first = await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      body: 'Say when exactly.',
+    });
+    const firstId = /^thread_id: (\S+)/m.exec(first)?.[1] as string;
+    const second = await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      body: 'And name the caravan.',
+    });
+    const secondId = /^thread_id: (\S+)/m.exec(second)?.[1] as string;
+
+    const created = await call('create_proposal', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      proposed_text: 'Ibrahim’s caravan left at four, an hour before dawn.',
+      rationale: 'Answers both notes at once.',
+      answers_thread_ids: [firstId, secondId],
+    });
+    expect(created).toContain('Linked to 2 threads');
+    expect(created).toContain('Replied there too');
+    const proposalId = /^thread_id: (\S+)/m.exec(created)?.[1] as string;
+
+    const listed = await call('list_threads', { document: adminUrl });
+    expect(listed).toContain(`answers comment threads: ${firstId}, ${secondId}`);
+
+    const accepted = await call('respond_to_thread', {
+      document: adminUrl,
+      thread_id: proposalId,
+      action: 'accept',
+    });
+    expect(accepted).toContain(`Also resolved comment threads ${firstId}, ${secondId}`);
+
+    const open = await call('list_threads', { document: adminUrl, state: 'open' });
+    expect(open).toContain('No threads matched.');
+  });
+
+  test('refuses a blank answered-thread id instead of claiming a link', async () => {
+    const { adminUrl } = await seedBook();
+    // A blank id names no thread, so the proposal would be created
+    // unlinked while the tool reported "Linked to thread " and a failed
+    // reply to it. Reject it at the schema instead.
+    const message = await callExpectingError('create_proposal', {
+      document: adminUrl,
+      anchor_text: 'Distance to the well: unknown',
+      proposed_text: '- Distance to the well: four days out, they guessed',
+      rationale: 'Concrete enough to argue with.',
+      answers_thread_ids: ['   '],
+    });
+    expect(message).toContain('answers_thread_ids');
+
+    const threads = await call('list_threads', { document: adminUrl, kind: 'proposals' });
+    expect(threads).toContain('No threads matched.');
+  });
+
+  test('the deprecated answers_thread_id spelling still links', async () => {
+    const { adminUrl } = await seedBook();
+    const comment = await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      body: 'Say when exactly.',
+    });
+    const commentId = /^thread_id: (\S+)/m.exec(comment)?.[1] as string;
+
+    // Unknown arguments are stripped before the handler runs, so a
+    // caller still on the singular must not end up with an unlinked
+    // proposal and no sign that the link was dropped.
+    const created = await call('create_proposal', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      proposed_text: 'The caravan left at four, an hour before dawn.',
+      rationale: 'Concrete time.',
+      answers_thread_id: commentId,
+    });
+    expect(created).toContain(`Linked to thread ${commentId}`);
+
+    const listed = await call('list_threads', { document: adminUrl });
+    expect(listed).toContain(`answers comment thread: ${commentId}`);
   });
 
   test('replies to an edit proposal without deciding it', async () => {
@@ -1164,7 +1249,7 @@ describe('marginalia MCP server', () => {
       anchor_text: 'Distance to the well: unknown',
       proposed_text: '- Distance to the well: four days out, they guessed',
       rationale: 'Concrete enough to argue with.',
-      answers_thread_id: 'no-such-thread-id',
+      answers_thread_ids: ['no-such-thread-id'],
     });
     expect(message).toContain('answers-thread-not-found');
 
@@ -1195,7 +1280,7 @@ describe('marginalia MCP server', () => {
       anchor_text: 'The caravan left before dawn',
       proposed_text: 'The caravan left before dawn.',
       rationale: 'Tightened.',
-      answers_thread_id: firstId,
+      answers_thread_ids: [firstId],
     });
 
     // Answered by a proposal, so it drops off the backlog — even though

@@ -217,10 +217,10 @@ when no password is set.
 | --- | --- |
 | `list_threads` | Comments and edit proposals with their discussion and anchored text. Open threads only, unless `thread_id` names one or `state` asks for more. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter. A targeted thread includes one surrounding block on each side by default; `context_blocks` overrides that. |
 | `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet). |
-| `create_proposal` | A suggested replacement. `answers_thread_id` links it to the comment it answers. |
+| `create_proposal` | A suggested replacement. `answers_thread_ids` links it to the comments it answers — every one the edit settles, not just the one that prompted it. |
 | `update_proposal` | Revise an open proposal you authored, or any open proposal as document admin — new text, same thread, discussion intact. Rebuilds it against the current source, so it also refreshes a stale or conflicted proposal. `comment` posts a revision note in the discussion alongside the change. |
 | `reply_to_thread` | Answer a comment thread or an edit proposal. |
-| `respond_to_thread` | `resolve` / `accept` / `reject` / `reopen`, with an optional reply. Accepting a linked proposal also resolves the comment it answers. |
+| `respond_to_thread` | `resolve` / `accept` / `reject` / `reopen`, with an optional reply. Accepting a linked proposal also resolves every comment it answers. |
 | `react_to_comment` | Toggle an emoji on any message — a comment, a proposal's rationale, or a reply. |
 | `get_proposal_diff` | Before/after, plus whether it still applies cleanly. |
 | `repair_proposal_anchor` | Re-attach a proposal orphaned by an earlier accept. |
@@ -315,17 +315,23 @@ writes one when a selection spans paragraphs — shows all of them, not just the
 A comment says what is wrong; a proposal says what to write instead. Linking the two is
 what turns a review into a work queue.
 
-Pass `answers_thread_id` to `create_proposal` and Marginalia records a real link, not a
+Pass `answers_thread_ids` to `create_proposal` and Marginalia records a real link, not a
 mention in prose: the viewer renders the proposal *inside* the comment thread's card, one
 merged conversation instead of two cross-referenced cards. (When the pair can't render
 together — one side orphaned, say — the cards fall back to **See proposed change** /
-**Answers: “…”** links.) Accepting the proposal then resolves the comment — its request
-has been carried out. Rejecting leaves it open, because the request still stands.
+**Answers: “…”** links.) Accepting the proposal then resolves those comments — their
+requests have been carried out. Rejecting leaves them open, because the requests still
+stand.
 
-The link lives on the proposal, so one comment can collect several: a first attempt you
-reject and its replacement both point back at the same request. When the feedback is
-*"almost — change one thing"*, don't open a second proposal: `update_proposal` swaps in
-new text while the thread, its link and the discussion stay put.
+Name every comment the edit settles. A proposal replaces a whole block, and a paragraph
+under review often carries several comments; one rewrite that answers all of them is one
+proposal with several links, not the same edit proposed once per comment. It then renders
+inside each of those threads' cards.
+
+Links are many-to-many: one comment can also collect several proposals, because a first
+attempt you reject and its replacement both point back at the same request. When the
+feedback is *"almost — change one thing"*, don't open a second proposal: `update_proposal`
+swaps in new text while the thread, its links and the discussion stay put.
 
 `list_threads` with `needs_proposal: true` is the resulting backlog — open comment threads
 that no proposal answers yet. It differs from `awaiting_my_response` in the case that

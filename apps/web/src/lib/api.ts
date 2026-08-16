@@ -1332,11 +1332,13 @@ export interface Comment {
 export interface ThreadProposalData {
   whole_document: boolean;
   /**
-   * Root comment thread this proposal was written to answer, or null if
-   * it stands on its own. The reverse direction is
+   * Root comment threads this proposal was written to answer, oldest
+   * first; empty if it stands on its own. Several because one edit
+   * usually rewrites a paragraph that carries several comments, and
+   * accepting it resolves all of them. The reverse direction is
    * `Thread.answered_by_thread_ids`.
    */
-  answers_thread_id: string | null;
+  answers_thread_ids: string[];
   /**
    * The proposal's current replacement text, recovered from the branch
    * tip for open proposals. Closed proposals omit it because they cannot be
@@ -1685,8 +1687,8 @@ export function createEditProposal(
     anchor_quote: string;
     proposed_text: string;
     rationale?: string | null;
-    /** Comment thread this proposal answers; accepting it resolves that thread. */
-    answers_thread_id?: string | null;
+    /** Comment threads this proposal answers; accepting it resolves them all. */
+    answers_thread_ids?: string[];
   },
   identity: Identity,
 ): Promise<Thread> {
@@ -1701,7 +1703,9 @@ export function createEditProposal(
       body: payload.rationale,
       proposal: {
         proposed_text: payload.proposed_text,
-        ...(payload.answers_thread_id ? { answers_thread_id: payload.answers_thread_id } : {}),
+        ...(payload.answers_thread_ids?.length
+          ? { answers_thread_ids: payload.answers_thread_ids }
+          : {}),
       },
     }),
     identity,

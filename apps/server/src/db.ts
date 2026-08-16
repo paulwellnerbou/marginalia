@@ -114,13 +114,23 @@ CREATE TABLE IF NOT EXISTS comments_edit_proposals (
   branch_ref             TEXT,
   base_oid               TEXT,
   base_block_start       INTEGER,
-  base_block_end         INTEGER,
-  -- Root comment thread this proposal was written to answer, if any.
-  -- Lives on the proposal (not the comment) because one comment can
-  -- accumulate several proposals — a rejected first attempt and its
-  -- replacement both point back at the same request.
-  answers_comment_id     TEXT
+  base_block_end         INTEGER
 );
+
+-- Root comment threads a proposal was written to answer. Its own table
+-- rather than a column on either side: one comment can accumulate
+-- several proposals (a rejected first attempt and its replacement both
+-- point back at the same request), and one proposal can answer several
+-- comments, because an edit that rewrites a paragraph settles every
+-- request made about it.
+CREATE TABLE IF NOT EXISTS comments_edit_proposal_answers (
+  proposal_comment_id   TEXT NOT NULL,
+  answered_comment_id   TEXT NOT NULL,
+  PRIMARY KEY (proposal_comment_id, answered_comment_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_proposal_answers_answered
+  ON comments_edit_proposal_answers(answered_comment_id);
 
 CREATE TABLE IF NOT EXISTS comment_mentions (
   doc_uid               TEXT NOT NULL,
@@ -507,7 +517,6 @@ export interface EditProposalRow {
   base_oid: string | null;
   base_block_start: number | null;
   base_block_end: number | null;
-  answers_comment_id: string | null;
 }
 
 export interface EditProposalThreadRow extends CommentRow {
@@ -519,9 +528,37 @@ export interface EditProposalThreadRow extends CommentRow {
   base_block_start: number | null;
   base_block_end: number | null;
   is_whole_document: number;
-  answers_comment_id: string | null;
+  /** JSON array from `PROPOSAL_ANSWERS_JSON_SQL`; read via `parseAnswerIds`. */
+  answers_comment_ids: string | null;
   decided_at: number | null;
   decided_by_name: string | null;
+}
+
+/**
+ * The answered-thread ids of a proposal, as a scalar SELECT column, so
+ * every proposal row shape carries its links without a second query.
+ * Assumes the surrounding query aliases `comments` as `c`. Ordered by
+ * the answered comment's age, matching how the reverse index orders
+ * the proposals answering one comment; `rowid` breaks the tie between
+ * comments written in the same millisecond, which their ids would
+ * decide at random.
+ */
+export const PROPOSAL_ANSWERS_JSON_SQL = `
+  (SELECT json_group_array(answered)
+     FROM (SELECT a.answered_comment_id AS answered
+             FROM comments_edit_proposal_answers a
+             JOIN comments ac ON ac.id = a.answered_comment_id
+            WHERE a.proposal_comment_id = c.id
+            ORDER BY ac.created_at ASC, ac.rowid ASC)) AS answers_comment_ids`;
+
+export function parseAnswerIds(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((id): id is string => typeof id === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 export function openDatabase(path: string): Database {
@@ -554,7 +591,6 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments_edit_proposals', 'base_block_start', 'INTEGER');
   ensureColumn(db, 'comments_edit_proposals', 'base_block_end', 'INTEGER');
   ensureColumn(db, 'comments_edit_proposals', 'is_whole_document', 'INTEGER NOT NULL DEFAULT 0');
-  ensureColumn(db, 'comments_edit_proposals', 'answers_comment_id', 'TEXT');
   ensureColumn(db, 'sessions', 'persistent', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn(db, 'sessions', 'invite_display_name', 'TEXT');
   ensureColumn(db, 'sessions', 'invite_role', 'TEXT');
@@ -576,7 +612,25 @@ export function openDatabase(path: string): Database {
   migrateEditProposalsToCommentExtensions(db);
   migrateProposalDecisionColumnsToComments(db);
   migrateCommentReactionsPrimaryKey(db);
+  migrateProposalAnswersToOwnTable(db);
   return db;
+}
+
+/**
+ * Move the single `comments_edit_proposals.answers_comment_id` link into
+ * `comments_edit_proposal_answers`, which holds any number of them.
+ * Idempotent; no-op once the column is gone.
+ */
+function migrateProposalAnswersToOwnTable(db: Database): void {
+  if (!columnExists(db, 'comments_edit_proposals', 'answers_comment_id')) return;
+  db.exec(
+    `INSERT OR IGNORE INTO comments_edit_proposal_answers
+       (proposal_comment_id, answered_comment_id)
+     SELECT comment_id, answers_comment_id
+       FROM comments_edit_proposals
+      WHERE answers_comment_id IS NOT NULL`,
+  );
+  dropColumnIfExists(db, 'comments_edit_proposals', 'answers_comment_id');
 }
 
 /**

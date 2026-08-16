@@ -1,4 +1,4 @@
-import { isComment, isProposal, type Thread } from '../../lib/api.js';
+import { isComment, isProposal, type Thread, type ThreadProposalData } from '../../lib/api.js';
 
 /** Result of joining proposals with the comment threads they answer. */
 export interface ThreadNesting {
@@ -20,6 +20,12 @@ const EMPTY_NESTED: readonly Thread[] = [];
  * Join each edit proposal with the comment thread it was written to
  * answer, so the pair renders as one merged card instead of two
  * cross-linked ones.
+ *
+ * One proposal can answer several comments. It merges into exactly one
+ * of their cards — repeating the whole card, with its diff and its
+ * accept/reject controls, once per answered comment would read as
+ * several proposals. The others reach it through the "See proposed
+ * change" link they already carry.
  *
  * Nesting applies only within the given collection: callers pass the
  * threads that would render together (same list, same orphan bucket),
@@ -59,14 +65,7 @@ function nest(threads: Thread[], anchoredPlacement: boolean): ThreadNesting {
     for (const id of parent.answered_by_thread_ids) {
       const target = present.get(id);
       if (!target || !isProposal(target)) continue;
-      // Both link directions come from one server column, but the
-      // thread array can mix threads fetched at different times (a
-      // repaired anchor is spliced into an older list). Require the
-      // proposal to name this parent back, so a stale reverse index
-      // falls back to the cross-link rendering instead of filing a
-      // proposal under a comment it no longer answers.
-      if (target.proposal.answers_thread_id !== parent.id) continue;
-      if (anchoredPlacement && target.anchor.block_id && !parent.anchor.block_id) continue;
+      if (hostOf(target, present, anchoredPlacement) !== parent.id) continue;
       nested.push(target);
       parentOf.set(id, parent.id);
     }
@@ -74,6 +73,33 @@ function nest(threads: Thread[], anchoredPlacement: boolean): ThreadNesting {
   }
   const topLevel = parentOf.size === 0 ? threads : threads.filter((t) => !parentOf.has(t.id));
   return { topLevel, nestedByParent, parentOf };
+}
+
+/**
+ * The one card a proposal merges into: the first comment it answers
+ * that is on screen and able to host it. Oldest answered comment first,
+ * the order the server sends — so every view picks the same host, and a
+ * proposal cannot be adopted by two cards at once.
+ */
+function hostOf(
+  proposal: Thread & { proposal: ThreadProposalData },
+  present: Map<string, Thread>,
+  anchoredPlacement: boolean,
+): string | null {
+  for (const id of proposal.proposal.answers_thread_ids) {
+    const parent = present.get(id);
+    if (!parent || !isComment(parent)) continue;
+    // Both link directions come from one server table, but the thread
+    // array can mix threads fetched at different times (a repaired
+    // anchor is spliced into an older list). Require the candidate to
+    // name the proposal back, so a stale reverse index falls through to
+    // the next answered comment — or to the cross-link rendering —
+    // instead of filing the proposal under a card that disagrees.
+    if (!parent.answered_by_thread_ids.includes(proposal.id)) continue;
+    if (anchoredPlacement && proposal.anchor.block_id && !parent.anchor.block_id) continue;
+    return parent.id;
+  }
+  return null;
 }
 
 /** Nested proposals for one card, or an empty list. */

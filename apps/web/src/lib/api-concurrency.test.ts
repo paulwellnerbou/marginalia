@@ -63,7 +63,7 @@ test('a browser-created proposal carries the comment thread it answers', async (
       anchor_block_id: 'paragraph-1',
       anchor_quote: 'Original paragraph',
       proposed_text: 'Rewritten paragraph',
-      answers_thread_id: 'comment-thread',
+      answers_thread_ids: ['comment-thread'],
     },
     { clientId: 'client-1', displayName: 'Alice' },
   );
@@ -71,7 +71,7 @@ test('a browser-created proposal carries the comment thread it answers', async (
   expect(requestBody).toMatchObject({
     proposal: {
       proposed_text: 'Rewritten paragraph',
-      answers_thread_id: 'comment-thread',
+      answers_thread_ids: ['comment-thread'],
     },
   });
 });
