@@ -12,6 +12,7 @@ import {
   textForChoice,
   undecidedCount,
 } from '../lib/conflict-resolution.js';
+import { DialogLoading } from './DialogLoading.js';
 import { DiffView } from './DiffView.js';
 import { Disclosure } from './Disclosure.js';
 
@@ -146,9 +147,7 @@ export function ConflictDialog({
             <Callout.Text>{error}</Callout.Text>
           </Callout.Root>
         ) : loading || !conflict ? (
-          <Text color="gray" size="2" as="p">
-            Working out where this proposal stands…
-          </Text>
+          <DialogLoading>Working out where this proposal stands…</DialogLoading>
         ) : clean ? (
           <div className="cf-clean">
             {/* Suppressed under `unchanged`: the amber callout above has

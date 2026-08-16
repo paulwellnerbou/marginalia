@@ -1,4 +1,5 @@
 import { Button, Dialog, Flex, Text } from '@radix-ui/themes';
+import { DialogLoading } from './DialogLoading.js';
 import { DiffView } from './DiffView.js';
 
 interface Props {
@@ -57,9 +58,7 @@ export function DiffDialog({
               {error}
             </Text>
           ) : loading ? (
-            <Text color="gray" size="2" as="p">
-              Loading diff…
-            </Text>
+            <DialogLoading>Loading diff…</DialogLoading>
           ) : (
             <DiffView before={before} after={after} contextLines={contextLines} active={open} />
           )}
