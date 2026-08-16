@@ -195,8 +195,11 @@ export function InlineCommentsList({
     };
   }, [threads, blockOrder]);
 
-  /** Whose replies count as answers — the id the server stamps comments with. */
-  const viewerClientId = useMemo(() => getClientId(), []);
+  // Whose replies count as answers — the id the server stamps comments
+  // with. Read every render, not memoized: pairing adopts the keyring's
+  // clientId mid-session, and a frozen one would keep filtering as
+  // whoever this browser used to be.
+  const viewerClientId = getClientId();
 
   // Remembered per browser, so the pane opens the way it was left.
   const [sortMode, setSortMode] = useState<ThreadSortMode>(loadThreadSortMode);
