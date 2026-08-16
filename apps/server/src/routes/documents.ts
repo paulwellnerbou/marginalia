@@ -578,10 +578,16 @@ async function deleteDocument(c: Context, deps: AppDeps) {
   ).run(doc.uid);
   db.prepare('DELETE FROM comments WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM comment_mentions WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM comment_reactions WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM doc_users WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM document_assets WHERE doc_uid = ?').run(doc.uid);
+  // Every ring's copy of an invite token for this doc, across all the
+  // owner's devices and anyone else they shared a token with. Reads
+  // already drop rows whose document is gone, so this is about not
+  // leaving dead credentials in the store, not about correctness.
+  db.prepare('DELETE FROM keyring_docs WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
 
   for (const id of attachedAssetIds) {

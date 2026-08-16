@@ -2612,12 +2612,23 @@ describe('documents API', () => {
     );
     const doc = (await docRes.json()) as { rendered: { blocks: Array<{ id: string }> } };
     const blockId = doc.rendered.blocks[0]!.id;
-    await app.hono.fetch(
+    const threadRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
         body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Hi' }, body: 'a' }),
       }),
+    );
+    const thread = (await threadRes.json()) as { thread: { id: string } };
+    await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${thread.thread.id}/comments/${thread.thread.id}/reactions`,
+        {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ emoji: '👍' }),
+        },
+      ),
     );
     await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}/threads`, {
@@ -2629,6 +2640,34 @@ describe('documents API', () => {
             anchor_kind: 'heading',
             proposed_text: '# Hello',
           },
+        }),
+      }),
+    );
+
+    const assetForm = new FormData();
+    assetForm.append('file', new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' }), 'a.png');
+    assetForm.append('ref_name', 'a.png');
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/assets`, {
+        method: 'POST',
+        // No content-type: FormData sets the multipart boundary itself.
+        headers: new Headers({
+          [CLIENT_HEADER]: CLIENT_A.id,
+          [CLIENT_NAME_HEADER]: CLIENT_A.name,
+          [INVITE_HEADER]: created.admin_invite.token,
+        }),
+        body: assetForm,
+      }),
+    );
+
+    // A keyring holding this doc's invite token — the copy that survives
+    // on the owner's other devices unless deletion sweeps it too.
+    await app.hono.fetch(
+      new Request('http://test/api/keyrings', {
+        method: 'POST',
+        headers: headersFor(CLIENT_A),
+        body: JSON.stringify({
+          docs: [{ doc_uid: created.uid, invite_token: created.admin_invite.token }],
         }),
       }),
     );
@@ -2655,7 +2694,10 @@ describe('documents API', () => {
     expect(countBefore('doc_users')).toBeGreaterThan(0);
     expect(countBefore('comments_edit_proposals')).toBeGreaterThan(0);
     expect(countBefore('comments')).toBeGreaterThan(0);
+    expect(countBefore('comment_reactions')).toBeGreaterThan(0);
     expect(countBefore('invites')).toBeGreaterThan(0);
+    expect(countBefore('document_assets')).toBeGreaterThan(0);
+    expect(countBefore('keyring_docs')).toBeGreaterThan(0);
 
     // Non-admin can't delete. Bob is a reader on this public doc (no
     // invite) → authorize succeeds with role=reader, then the admin check
@@ -2691,12 +2733,18 @@ describe('documents API', () => {
       'comments',
       'comments_edit_proposals',
       'comment_mentions',
+      'comment_reactions',
       'doc_users',
       'invites',
       'sessions',
+      'document_assets',
+      'keyring_docs',
     ]) {
       expect(countBefore(table)).toBe(0);
     }
+
+    // The blob itself, not just the junction row: nothing else referenced it.
+    expect((app.db.prepare('SELECT count(*) AS n FROM assets').get() as { n: number }).n).toBe(0);
   });
 
   test('admin invite cannot be deleted; other invites can', async () => {

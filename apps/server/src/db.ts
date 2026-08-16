@@ -251,9 +251,10 @@ CREATE INDEX IF NOT EXISTS idx_keyrings_updated_at ON keyrings(updated_at);
 
 -- One row per document a keyring knows about. invite_token is whatever
 -- capability that person holds for the doc — admin, editor, reader; the
--- keyring neither inspects nor upgrades it. Rows can outlive the
--- document (deletion doesn't cascade from here), so reads join
--- documents and drop the misses instead of trusting this table alone.
+-- keyring neither inspects nor upgrades it. Deleting a document sweeps
+-- its rows from every ring, but reads still join documents and drop the
+-- misses rather than trusting this table alone: rings written before
+-- that sweep existed can still name documents that are long gone.
 CREATE TABLE IF NOT EXISTS keyring_docs (
   keyring_token TEXT NOT NULL,
   doc_uid       TEXT NOT NULL,
