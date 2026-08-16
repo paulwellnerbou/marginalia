@@ -119,6 +119,7 @@ import { AccessControlDialog } from './AccessControlDialog.js';
 import { ActivityList } from './ActivityList.js';
 import { AppBar } from './AppBar.js';
 import { BlockActions } from './BlockActions.js';
+import { CopyDocumentDialog } from './CopyDocumentDialog.js';
 import { DisplayStepper } from './DisplayStepper.js';
 import {
   type DocumentSearchResult,
@@ -2384,6 +2385,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
             {children}
             {doc.role === 'admin' && onDocSettingsChanged && (
               <>
+                <CopyDocumentDialog doc={doc} />
                 <DocumentSettingsDialog doc={doc} onChange={onDocSettingsChanged} />
                 <AccessControlDialog doc={doc} onChange={onDocSettingsChanged} />
               </>

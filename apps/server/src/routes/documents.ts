@@ -188,6 +188,7 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.get('/:uid/export.pdf', async (c) => exportDocumentAsPdf(c, deps));
   r.put('/:uid', async (c) => updateDocument(c, deps));
   r.patch('/:uid/settings', async (c) => updateSettings(c, deps));
+  r.post('/:uid/copy', async (c) => copyDocument(c, deps));
   r.delete('/:uid', async (c) => deleteDocument(c, deps));
   r.get('/:uid/history', async (c) => getHistory(c, deps));
   r.get('/:uid/history/:oid/diff', async (c) => getHistoryDiff(c, deps));
@@ -290,6 +291,199 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
     mermaid_renderer: null,
     format,
     invite_only: inviteOnly,
+  };
+  if (plaintextPassword) {
+    response.password = plaintextPassword;
+    c.header('Cache-Control', 'no-store');
+  }
+  return c.json(response, 201);
+}
+
+// --- POST /api/documents/:uid/copy -----------------------------------
+
+interface CopiedInviteRow {
+  display_name: string | null;
+  role: InviteRole;
+  kind: InviteKind;
+  note: string | null;
+  created_by_name: string;
+}
+
+interface CopiedDocUserRow {
+  client_id: string;
+  display_name: string;
+  first_seen_at: number;
+  last_seen_at: number;
+}
+
+interface CopiedAttachmentRow {
+  ref_name: string;
+  asset_id: string;
+  kind: string;
+  mime: string;
+}
+
+/**
+ * Fork a document into a new one carrying nothing but its current state:
+ * a fresh repo whose history starts at this copy, and no comments,
+ * threads or edit proposals at all. The caller becomes its admin.
+ *
+ * Admin-only. Reading the source is enough to reproduce its text by
+ * hand, but the roster below is not something a reader may hand out.
+ */
+async function copyDocument(c: Context, deps: AppDeps) {
+  const { db, store } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
+  const identity = decision.identity;
+  if (!identity) return c.json({ error: 'identity-required' }, 400);
+
+  const body = await safeJson(c);
+  if (!body) return c.json({ error: 'invalid-body' }, 400);
+
+  const includeAccess = body.include_access === true;
+  const docName =
+    typeof body.name === 'string' && body.name.trim().length > 0
+      ? body.name.trim().slice(0, 200)
+      : null;
+
+  const source = store.read(doc);
+  const uid = newDocumentUid();
+  const now = Date.now();
+
+  // The password gate travels even when the roles don't — dropping it
+  // would quietly turn a protected document into an unprotected one.
+  // The password itself cannot travel (only its hash is stored), so the
+  // copy gets a fresh one, returned once like a new upload's.
+  let passwordHash: string | null = null;
+  let plaintextPassword: string | null = null;
+  if (doc.password_hash !== null) {
+    plaintextPassword = generatePassword();
+    passwordHash = await hashPassword(plaintextPassword);
+  }
+
+  // invite_only only relaxes when the roster comes along; a copy nobody
+  // else has been let into starts closed however open the source was.
+  const inviteOnly = includeAccess ? doc.invite_only === 1 : true;
+
+  await store.write({ uid, format: doc.format }, source, identity, 'upload');
+
+  const adminInvite = db.transaction(() => {
+    db.prepare(
+      `INSERT INTO documents
+         (uid, repo_dir, name, password_hash, editable_by_anyone, invite_only, default_theme,
+          format, mermaid_renderer, cover_ref, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      uid,
+      uid,
+      docName,
+      passwordHash,
+      inviteOnly ? 1 : 0,
+      doc.default_theme,
+      doc.format,
+      doc.mermaid_renderer,
+      doc.cover_ref,
+      now,
+      now,
+    );
+    upsertDocUser(db, uid, identity);
+
+    // Attachments are junction rows onto content-addressed blobs, so the
+    // copy points at the same bytes instead of duplicating them — and
+    // `cover_ref` above resolves. `created_by` becomes the copier: the
+    // source client ids belong to the roster a copy may be leaving behind.
+    const attachments = db
+      .prepare('SELECT ref_name, asset_id, kind, mime FROM document_assets WHERE doc_uid = ?')
+      .all(doc.uid) as CopiedAttachmentRow[];
+    const insertAttachment = db.prepare(
+      `INSERT INTO document_assets
+         (doc_uid, ref_name, asset_id, kind, mime, created_at, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const a of attachments) {
+      insertAttachment.run(uid, a.ref_name, a.asset_id, a.kind, a.mime, now, identity.clientId);
+    }
+
+    if (includeAccess) {
+      // Fresh tokens: an invite token is both the credential and the
+      // primary key, so the source's links have to keep pointing at the
+      // source. Roles, names and notes carry; the new links do not
+      // reach anyone until the admin hands them out. Admin invites are
+      // skipped so the copy has exactly one — the caller's, minted below.
+      const invites = db
+        .prepare(
+          `SELECT display_name, role, kind, note, created_by_name
+             FROM invites
+            WHERE doc_uid = ? AND kind != 'admin' AND role != 'admin'
+            ORDER BY created_at`,
+        )
+        .all(doc.uid) as CopiedInviteRow[];
+      for (const inv of invites) {
+        createInviteRow(db, {
+          docUid: uid,
+          displayName: inv.display_name,
+          role: inv.role,
+          kind: inv.kind,
+          note: inv.note,
+          createdByName: inv.created_by_name,
+        });
+      }
+
+      // The registry too, so author names and @mentions resolve in the
+      // copy from the first visit rather than only once each person
+      // returns. OR IGNORE keeps the caller's row upserted just above.
+      const users = db
+        .prepare(
+          'SELECT client_id, display_name, first_seen_at, last_seen_at FROM doc_users WHERE doc_uid = ?',
+        )
+        .all(doc.uid) as CopiedDocUserRow[];
+      const insertUser = db.prepare(
+        `INSERT OR IGNORE INTO doc_users
+           (doc_uid, client_id, display_name, first_seen_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      );
+      for (const u of users) {
+        insertUser.run(uid, u.client_id, u.display_name, u.first_seen_at, u.last_seen_at);
+      }
+    }
+
+    return createInviteRow(db, {
+      docUid: uid,
+      displayName: identity.displayName,
+      role: 'admin',
+      kind: 'admin',
+      note: 'Author',
+      createdByName: identity.displayName,
+    });
+  })();
+
+  if (plaintextPassword) {
+    const recovery = encryptRecoverablePassword(plaintextPassword, uid, adminInvite.token);
+    db.prepare(
+      `UPDATE documents
+          SET password_recovery_ciphertext = ?, password_recovery_iv = ?
+        WHERE uid = ?`,
+    ).run(recovery.ciphertext, recovery.iv, uid);
+  }
+
+  const response: Record<string, unknown> = {
+    uid,
+    name: docName,
+    admin_invite: {
+      token: adminInvite.token,
+      url: `/d/${uid}/${adminInvite.token}`,
+      display_name: adminInvite.display_name,
+    },
+    default_theme: doc.default_theme,
+    mermaid_renderer: doc.mermaid_renderer,
+    format: doc.format,
+    invite_only: inviteOnly,
+    copied_from: doc.uid,
   };
   if (plaintextPassword) {
     response.password = plaintextPassword;
