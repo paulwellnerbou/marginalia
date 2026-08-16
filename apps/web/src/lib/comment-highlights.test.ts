@@ -57,7 +57,7 @@ function proposal(id: string, overrides: Partial<Thread> = {}): Thread {
   return thread(id, {
     proposal: {
       whole_document: false,
-      answers_thread_id: null,
+      answers_thread_ids: [],
       proposed_text: null,
       source_snapshot: null,
     },

@@ -404,27 +404,35 @@ export function InlineCommentsList({
     [refIndex, focusLinked],
   );
 
-  function renderCard(thread: Thread, nested: readonly Thread[], asNested: boolean): ReactNode {
+  function renderCard(
+    thread: Thread,
+    nested: readonly Thread[],
+    parentId: string | null,
+  ): ReactNode {
     const blockId = thread.anchor.block_id;
     const onJump = blockId
       ? () => onScrollToAnchor(blockId, thread.anchor.quote, thread.id)
       : undefined;
     const rawLinks = threadLinks(thread, byId);
     // Proposals rendered inside this card need no "See proposed change"
-    // link on top — the card itself is right below.
-    let links = rawLinks;
-    if (nested.length > 0) {
-      const nestedIds = new Set(nested.map((n) => n.id));
-      links = { ...rawLinks, answeredBy: rawLinks.answeredBy.filter((t) => !nestedIds.has(t.id)) };
-    }
+    // link on top — the card itself is right below. A nested proposal
+    // likewise drops the "Answers:" link to the card it sits in, but
+    // keeps the ones to the other comments it answers.
+    const nestedIds = new Set(nested.map((n) => n.id));
+    const links = {
+      answers: parentId ? rawLinks.answers.filter((t) => t.id !== parentId) : rawLinks.answers,
+      answeredBy: rawLinks.answeredBy.filter((t) => !nestedIds.has(t.id)),
+    };
     return (
       <InlineThreadCard
         key={thread.id}
         uid={uid}
         thread={thread}
         links={links}
-        nested={asNested}
-        nestedCards={nested.length > 0 ? nested.map((n) => renderCard(n, [], true)) : undefined}
+        nested={parentId !== null}
+        nestedCards={
+          nested.length > 0 ? nested.map((n) => renderCard(n, [], thread.id)) : undefined
+        }
         onFocusLinked={focusLinked}
         threadRefs={threadRefs}
         canComment={canComment}
@@ -451,7 +459,7 @@ export function InlineCommentsList({
   }
 
   function renderItem(item: ThreadListItem) {
-    return renderCard(item.thread, item.nested, false);
+    return renderCard(item.thread, item.nested, null);
   }
 
   return (

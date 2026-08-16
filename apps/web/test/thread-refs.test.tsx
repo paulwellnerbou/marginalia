@@ -59,7 +59,7 @@ function thread(overrides: Partial<Thread> & Pick<Thread, 'id' | 'comments'>): T
 const proposalThread = thread({
   id: PROPOSAL_ID,
   comments: [comment(PROPOSAL_ID, 'Tightens the wording.')],
-  proposal: { whole_document: false, answers_thread_id: COMMENT_ID },
+  proposal: { whole_document: false, answers_thread_ids: [COMMENT_ID] },
 });
 
 const commentThread = thread({

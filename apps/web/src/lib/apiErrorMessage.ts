@@ -37,7 +37,8 @@ const MESSAGES: Record<string, string> = {
   'anchor-block-not-found': 'That part of the document no longer exists. Reload and try again.',
   'anchor-required': 'Select some text to anchor this to first.',
   'anchor-too-long': 'That selection is too long to anchor a comment to.',
-  'answers-thread-not-found': 'The comment this proposal answers no longer exists.',
+  'answers-thread-not-found': 'A comment this proposal answers no longer exists.',
+  'too-many-answered-threads': 'This proposal answers too many comments at once.',
 
   // Access and identity
   forbidden: 'You do not have permission to do that.',

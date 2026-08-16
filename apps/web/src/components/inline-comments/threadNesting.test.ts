@@ -55,12 +55,16 @@ function thread(id: string, overrides: Partial<Thread> = {}): Thread {
   };
 }
 
-function proposal(id: string, answersId: string | null, overrides: Partial<Thread> = {}): Thread {
+function proposal(
+  id: string,
+  answers: string | string[] | null,
+  overrides: Partial<Thread> = {},
+): Thread {
   return thread(id, {
     proposal: {
       whole_document: false,
-      answers_thread_id: answersId,
-      // Nesting keys off `answers_thread_id` alone; the branch-derived
+      answers_thread_ids: answers === null ? [] : typeof answers === 'string' ? [answers] : answers,
+      // Nesting keys off `answers_thread_ids` alone; the branch-derived
       // text fields just have to be present.
       proposed_text: null,
       source_snapshot: null,
@@ -94,6 +98,53 @@ test('multiple proposals keep the answered_by order (oldest first)', () => {
   const nesting = computeThreadNesting([p2, parent, p1]);
   expect(nestedThreadsOf(nesting, 'C').map((t) => t.id)).toEqual(['P1', 'P2']);
   expect(nesting.topLevel.map((t) => t.id)).toEqual(['C']);
+});
+
+test('a proposal answering several comments nests under the first of them', () => {
+  // Repeating the whole card under each answered comment would read as
+  // several proposals. The others keep their "See proposed change" link.
+  const first = thread('C1', { answered_by_thread_ids: ['P'] });
+  const second = thread('C2', { answered_by_thread_ids: ['P'] });
+  const p = proposal('P', ['C1', 'C2']);
+  const nesting = computeThreadNesting([second, first, p]);
+  expect(nesting.topLevel.map((t) => t.id)).toEqual(['C2', 'C1']);
+  expect(nestedThreadsOf(nesting, 'C1').map((t) => t.id)).toEqual(['P']);
+  expect(nestedThreadsOf(nesting, 'C2')).toEqual([]);
+  // The host follows the proposal's own link order, not the order the
+  // cards happen to be sorted in, so every view agrees on one card.
+  expect(nesting.parentOf.get('P')).toBe('C1');
+});
+
+test('a proposal falls through to the next answered comment on screen', () => {
+  // The first answered comment is filtered out of this collection
+  // (resolved, another orphan bucket): the next one hosts it instead.
+  const second = thread('C2', { answered_by_thread_ids: ['P'] });
+  const p = proposal('P', ['C1', 'C2']);
+  const nesting = computeThreadNesting([second, p]);
+  expect(nesting.topLevel.map((t) => t.id)).toEqual(['C2']);
+  expect(nestedThreadsOf(nesting, 'C2').map((t) => t.id)).toEqual(['P']);
+  expect(nesting.parentOf.get('P')).toBe('C2');
+});
+
+test('anchored placement passes an unanchored host over for the next one', () => {
+  const unanchored = orphaned(thread('C1', { answered_by_thread_ids: ['P'] }));
+  const anchored = thread('C2', { answered_by_thread_ids: ['P'] });
+  const p = proposal('P', ['C1', 'C2']);
+  const nesting = computeAnchoredThreadNesting([unanchored, anchored, p]);
+  // C1 answers first but has no anchor to place the merged card at, so
+  // the proposal would be dragged away from the text it highlights.
+  expect(nesting.topLevel.map((t) => t.id)).toEqual(['C1', 'C2']);
+  expect(nestedThreadsOf(nesting, 'C1')).toEqual([]);
+  expect(nestedThreadsOf(nesting, 'C2').map((t) => t.id)).toEqual(['P']);
+});
+
+test('a stale reverse index on the first host falls through to the second', () => {
+  const first = thread('C1', { answered_by_thread_ids: [] });
+  const second = thread('C2', { answered_by_thread_ids: ['P'] });
+  const p = proposal('P', ['C1', 'C2']);
+  const nesting = computeThreadNesting([first, second, p]);
+  expect(nesting.topLevel.map((t) => t.id)).toEqual(['C1', 'C2']);
+  expect(nestedThreadsOf(nesting, 'C2').map((t) => t.id)).toEqual(['P']);
 });
 
 test('a proposal whose answered thread is absent stays top-level', () => {

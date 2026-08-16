@@ -53,7 +53,14 @@ import type {
   InviteRow,
   MermaidRenderer,
 } from '../db.js';
-import { isDocumentFormat, isInviteKind, isInviteRole, isMermaidRenderer } from '../db.js';
+import {
+  isDocumentFormat,
+  isInviteKind,
+  isInviteRole,
+  isMermaidRenderer,
+  PROPOSAL_ANSWERS_JSON_SQL,
+  parseAnswerIds,
+} from '../db.js';
 import { type EpubChapter, type EpubCover, exportEpub } from '../export/epub.js';
 import {
   countLiveMermaidBlocks,
@@ -160,7 +167,7 @@ interface BundleCommentRow extends CommentRow {
   base_oid: string | null;
   base_block_start: number | null;
   base_block_end: number | null;
-  answers_comment_id: string | null;
+  answers_comment_ids: string | null;
 }
 
 export function documentsRouter(deps: AppDeps): Hono {
@@ -770,6 +777,10 @@ async function deleteDocument(c: Context, deps: AppDeps) {
     `DELETE FROM comments_edit_proposals
       WHERE comment_id IN (SELECT id FROM comments WHERE doc_uid = ?)`,
   ).run(doc.uid);
+  db.prepare(
+    `DELETE FROM comments_edit_proposal_answers
+      WHERE proposal_comment_id IN (SELECT id FROM comments WHERE doc_uid = ?)`,
+  ).run(doc.uid);
   db.prepare('DELETE FROM comments WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM comment_mentions WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM doc_users WHERE doc_uid = ?').run(doc.uid);
@@ -824,7 +835,7 @@ async function exportDocument(c: Context, deps: AppDeps) {
          cep.base_oid,
          cep.base_block_start,
          cep.base_block_end,
-         cep.answers_comment_id
+         ${PROPOSAL_ANSWERS_JSON_SQL}
          FROM comments c
          LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
         WHERE c.doc_uid = ?
@@ -1800,8 +1811,13 @@ async function importDocument(c: Context, deps: AppDeps) {
   const insertEditProposal = db.prepare(
     `INSERT INTO comments_edit_proposals
        (comment_id, status, accepted_oid, branch_ref, base_oid, base_block_start,
-        base_block_end, answers_comment_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        base_block_end)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertProposalAnswer = db.prepare(
+    `INSERT OR IGNORE INTO comments_edit_proposal_answers
+       (proposal_comment_id, answered_comment_id)
+     VALUES (?, ?)`,
   );
 
   // Imported proposals get their branch built here from the bundle's
@@ -1886,23 +1902,47 @@ async function importDocument(c: Context, deps: AppDeps) {
       // row with null branch metadata; the diff endpoint returns
       // unavailable, matching the issue's "default null + block reopen
       // for pre-migration rows" stance.
-      // Comment ids are regenerated on import, so the back-link has to
-      // travel through the same map as parent_id — otherwise it would
-      // point at an id belonging to the source document.
-      const answersOldId =
-        typeof proposal.answers_comment_id === 'string' ? proposal.answers_comment_id : null;
-      const answersNewId = answersOldId ? (idMap.get(answersOldId) ?? null) : null;
+      // Comment ids are regenerated on import, so the back-links have to
+      // travel through the same map as parent_id — otherwise they would
+      // point at ids belonging to the source document.
+      // `answers_comment_id` is the pre-list spelling, still read so an
+      // older bundle keeps its one link.
+      const answersOldIds = Array.isArray(proposal.answers_comment_ids)
+        ? proposal.answers_comment_ids.filter((id): id is string => typeof id === 'string')
+        : typeof proposal.answers_comment_id === 'string'
+          ? [proposal.answers_comment_id]
+          : [];
+      const answersNewIds = [
+        ...new Set(answersOldIds.map((id) => idMap.get(id)).filter((id) => id !== undefined)),
+      ];
+      const insertProposalRow = (
+        branchRef: string | null,
+        baseOid: string | null,
+        blockStart: number | null,
+        blockEnd: number | null,
+      ): void => {
+        insertEditProposal.run(
+          newId,
+          status,
+          acceptedOid,
+          branchRef,
+          baseOid,
+          blockStart,
+          blockEnd,
+        );
+        for (const answeredId of answersNewIds) insertProposalAnswer.run(newId, answeredId);
+      };
 
       // A tombstone exists only so a preserved accept commit can name its
       // author. Keep status + accepted_oid (that oid is what links it to
       // the commit) and skip every branch operation.
       if (deletedAt !== null) {
-        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null, answersNewId);
+        insertProposalRow(null, null, null, null);
         continue;
       }
 
       if (status === 'accepted') {
-        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null, answersNewId);
+        insertProposalRow(null, null, null, null);
         importedEditProposals += 1;
         continue;
       }
@@ -1925,7 +1965,7 @@ async function importDocument(c: Context, deps: AppDeps) {
                   anchor_end_block_id = NULL
             WHERE id = ?`,
         ).run(newId);
-        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null, answersNewId);
+        insertProposalRow(null, null, null, null);
         importedEditProposals += 1;
         continue;
       }
@@ -1942,23 +1982,14 @@ async function importDocument(c: Context, deps: AppDeps) {
           { clientId: row.author_client_id, displayName: row.author_display_name },
           typeof row.body === 'string' ? row.body : null,
         );
-        insertEditProposal.run(
-          newId,
-          status,
-          acceptedOid,
-          result.refName,
-          importBaseOid,
-          range.start,
-          range.end,
-          answersNewId,
-        );
+        insertProposalRow(result.refName, importBaseOid, range.start, range.end);
         importedEditProposals += 1;
       } catch (err) {
         console.warn(
           `[marginalia] import preserved undiffable proposal ${newId} (${uid}): branch creation failed:`,
           err,
         );
-        insertEditProposal.run(newId, status, acceptedOid, null, null, null, null, answersNewId);
+        insertProposalRow(null, null, null, null);
         importedEditProposals += 1;
       }
     }
@@ -2177,9 +2208,13 @@ async function bundleProposalPayload(
   proposed_text: string;
   status: EditProposalStatus;
   accepted_oid: string | null;
+  answers_comment_ids: string[];
   answers_comment_id: string | null;
 } | null> {
   if (row.proposal_status === null) return null;
+  // `answers_comment_id` rides along for importers that predate the
+  // list; they keep the first link instead of losing every one of them.
+  const answered = parseAnswerIds(row.answers_comment_ids);
   const content = await readProposalContent(store, doc, row);
   if (content) {
     return {
@@ -2187,7 +2222,8 @@ async function bundleProposalPayload(
       proposed_text: content.proposed_text,
       status: row.proposal_status,
       accepted_oid: row.accepted_oid,
-      answers_comment_id: row.answers_comment_id,
+      answers_comment_ids: answered,
+      answers_comment_id: answered[0] ?? null,
     };
   }
   // Historical row without recoverable content (legacy accepted, or
@@ -2202,7 +2238,8 @@ async function bundleProposalPayload(
     proposed_text: '',
     status: row.proposal_status,
     accepted_oid: row.accepted_oid,
-    answers_comment_id: row.answers_comment_id,
+    answers_comment_ids: answered,
+    answers_comment_id: answered[0] ?? null,
   };
 }
 

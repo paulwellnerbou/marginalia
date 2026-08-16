@@ -114,8 +114,11 @@ export interface ThreadWire {
     source_snapshot: string | null;
     proposed_text: string | null;
     whole_document: boolean;
-    /** Root thread this proposal answers, or null if it stands alone. */
-    answers_thread_id: string | null;
+    /**
+     * Root threads this proposal answers, oldest first; empty if it
+     * stands alone. Accepting it resolves all of them.
+     */
+    answers_thread_ids: string[];
   } | null;
   comments: ThreadCommentWire[];
 }

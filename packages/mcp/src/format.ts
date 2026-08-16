@@ -248,8 +248,12 @@ export function threadDetail(
   lines.push(`you can: ${enabledCapabilities(thread)}`);
   // Both ends of the comment → proposal link, so a reader of either
   // thread can find the other without a second call.
-  if (thread.proposal?.answers_thread_id) {
-    lines.push(`answers comment thread: ${thread.proposal.answers_thread_id}`);
+  const answers = thread.proposal?.answers_thread_ids ?? [];
+  if (answers.length > 0) {
+    lines.push(
+      `answers comment thread${answers.length === 1 ? '' : 's'}: ${answers.join(', ')}` +
+        ' (all resolved on accept)',
+    );
   }
   if (thread.answered_by_thread_ids.length > 0) {
     lines.push(`answered by proposal(s): ${thread.answered_by_thread_ids.join(', ')}`);

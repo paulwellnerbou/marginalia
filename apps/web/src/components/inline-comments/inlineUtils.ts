@@ -40,10 +40,11 @@ export function inlineAvatarHue(seed: string): number {
 export function threadLinks(
   thread: Thread,
   byId: Map<string, Thread>,
-): { answers: Thread | null; answeredBy: Thread[] } {
-  const answersId = thread.proposal?.answers_thread_id ?? null;
+): { answers: Thread[]; answeredBy: Thread[] } {
   return {
-    answers: answersId ? (byId.get(answersId) ?? null) : null,
+    answers: (thread.proposal?.answers_thread_ids ?? [])
+      .map((id) => byId.get(id))
+      .filter((t): t is Thread => t !== undefined),
     answeredBy: thread.answered_by_thread_ids
       .map((id) => byId.get(id))
       .filter((t): t is Thread => t !== undefined),

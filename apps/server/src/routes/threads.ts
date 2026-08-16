@@ -24,13 +24,15 @@ import {
 } from '../auth.js';
 import { mapWithConcurrency } from '../concurrency.js';
 import { mergeThreeWay, type ThreeWaySides } from '../conflict.js';
-import type {
-  CommentLinkStatus,
-  CommentReactionRow,
-  CommentRow,
-  DocumentRow,
-  EditProposalStatus,
-  EditProposalThreadRow,
+import {
+  type CommentLinkStatus,
+  type CommentReactionRow,
+  type CommentRow,
+  type DocumentRow,
+  type EditProposalStatus,
+  type EditProposalThreadRow,
+  PROPOSAL_ANSWERS_JSON_SQL,
+  parseAnswerIds,
 } from '../db.js';
 import type { GitStore } from '../git-store.js';
 import {
@@ -61,7 +63,7 @@ interface ThreadRow extends CommentRow {
   base_block_start: number | null;
   base_block_end: number | null;
   is_whole_document: number | null;
-  answers_comment_id: string | null;
+  answers_comment_ids: string | null;
   decided_at: number | null;
   decided_by_name: string | null;
 }
@@ -88,7 +90,7 @@ const THREAD_SELECT = `
     cep.base_block_start,
     cep.base_block_end,
     cep.is_whole_document,
-    cep.answers_comment_id,
+    ${PROPOSAL_ANSWERS_JSON_SQL},
     c.resolved_at AS decided_at,
     c.resolved_by_name AS decided_by_name
   FROM comments c
@@ -317,11 +319,10 @@ async function createThread(c: Context, deps: AppDeps) {
     if (!rootBody.body) return c.json({ error: 'body-required' }, 400);
   } else {
     if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
-    if (
-      proposal.answersThreadId &&
-      !isAnswerableThread(db, doc.uid, proposal.answersThreadId, identity.clientId)
-    ) {
-      return c.json({ error: 'answers-thread-not-found' }, 400);
+    for (const answeredId of proposal.answersThreadIds) {
+      if (!isAnswerableThread(db, doc.uid, answeredId, identity.clientId)) {
+        return c.json({ error: 'answers-thread-not-found' }, 400);
+      }
     }
   }
 
@@ -408,8 +409,8 @@ async function createThread(c: Context, deps: AppDeps) {
         `INSERT INTO comments_edit_proposals
            (comment_id, status, accepted_oid,
             branch_ref, base_oid, base_block_start, base_block_end,
-            is_whole_document, answers_comment_id)
-         VALUES (?, 'open', NULL, ?, ?, ?, ?, ?, ?)`,
+            is_whole_document)
+         VALUES (?, 'open', NULL, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         branchRef,
@@ -417,8 +418,13 @@ async function createThread(c: Context, deps: AppDeps) {
         blockRange?.start ?? null,
         blockRange?.end ?? null,
         proposal.wholeDocument ? 1 : 0,
-        proposal.answersThreadId,
       );
+      const linkAnswer = db.prepare(
+        `INSERT INTO comments_edit_proposal_answers
+           (proposal_comment_id, answered_comment_id)
+         VALUES (?, ?)`,
+      );
+      for (const answeredId of proposal.answersThreadIds) linkAnswer.run(id, answeredId);
     }
     db.exec('COMMIT');
   } catch (err) {
@@ -1821,9 +1827,9 @@ async function respondToThread(c: Context, deps: AppDeps) {
   }
 
   let documentOid: string | null = null;
-  // Set when accepting a proposal also closes the comment thread it was
-  // written to answer.
-  let resolvedAnsweredThreadId: string | null = null;
+  // Filled when accepting a proposal also closes the comment threads it
+  // was written to answer.
+  let resolvedAnsweredThreadIds: string[] = [];
   let preparedWorkflow: PreparedThreadWorkflow | null = null;
   let createdReplyId: string | null = null;
   let createdReply: CommentRow | null = null;
@@ -1868,7 +1874,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
       if (!preparedWorkflow) throw new ThreadActionError(409, 'proposal-orphaned');
       documentOid = preparedWorkflow.oid;
       reanchoredProposalUpdates = preparedWorkflow.applyDb();
-      resolvedAnsweredThreadId = resolveAnsweredThread(db, doc.uid, row, identity);
+      resolvedAnsweredThreadIds = resolveAnsweredThreads(db, doc.uid, row, identity);
     } else if (action === 'reopen') {
       const now = Date.now();
       if (!isProposal) {
@@ -1965,8 +1971,8 @@ async function respondToThread(c: Context, deps: AppDeps) {
     );
   }
 
-  if (resolvedAnsweredThreadId) {
-    const answered = loadThreadRow(db, resolvedAnsweredThreadId, doc.uid);
+  for (const answeredId of resolvedAnsweredThreadIds) {
+    const answered = loadThreadRow(db, answeredId, doc.uid);
     if (answered && answered.is_hidden === 0) {
       realtime.broadcast(
         doc.uid,
@@ -1987,14 +1993,15 @@ async function respondToThread(c: Context, deps: AppDeps) {
       reopenableAccepted,
     ),
     created_reply_id: createdReplyId,
-    resolved_answered_thread_id: resolvedAnsweredThreadId,
+    resolved_answered_thread_ids: resolvedAnsweredThreadIds,
   });
 }
 
 /**
- * Accepting a proposal carries out what the comment it answers asked
- * for, so close that comment too rather than leaving a request standing
- * whose fix has already landed.
+ * Accepting a proposal carries out what the comments it answers asked
+ * for, so close those comments too rather than leaving requests standing
+ * whose fix has already landed. An edit usually rewrites a whole
+ * paragraph, so it can settle several of them at once.
  *
  * Only plain comment threads are closed. A proposal thread has its own
  * accepted/rejected lifecycle in `comments_edit_proposals.status`, and
@@ -2002,29 +2009,31 @@ async function respondToThread(c: Context, deps: AppDeps) {
  * disagreeing. Already-resolved threads are left alone so the original
  * resolver keeps the credit.
  *
- * Returns the id it resolved, or null if there was nothing to do.
+ * Returns the ids it resolved, empty if there was nothing to do.
  */
-function resolveAnsweredThread(
+function resolveAnsweredThreads(
   db: Database,
   docUid: string,
   proposal: ThreadRow,
   identity: Identity,
-): string | null {
-  const answeredId = proposal.answers_comment_id;
-  if (!answeredId) return null;
-  const answered = loadThreadRow(db, answeredId, docUid);
-  if (!answered) return null;
-  if (!canViewThread(answered, identity)) return null;
-  if (answered.proposal_status !== null) return null;
-  if (answered.resolved_at !== null) return null;
-
+): string[] {
+  const resolved: string[] = [];
   const now = Date.now();
-  db.prepare(
+  const close = db.prepare(
     `UPDATE comments
         SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
       WHERE id = ? AND doc_uid = ?`,
-  ).run(now, identity.displayName, now, answeredId, docUid);
-  return answeredId;
+  );
+  for (const answeredId of parseAnswerIds(proposal.answers_comment_ids)) {
+    const answered = loadThreadRow(db, answeredId, docUid);
+    if (!answered) continue;
+    if (!canViewThread(answered, identity)) continue;
+    if (answered.proposal_status !== null) continue;
+    if (answered.resolved_at !== null) continue;
+    close.run(now, identity.displayName, now, answeredId, docUid);
+    resolved.push(answeredId);
+  }
+  return resolved;
 }
 
 async function prepareAcceptProposalThread(
@@ -2155,20 +2164,19 @@ async function prepareAcceptProposalThread(
   // its quote survived and stayed fully linked, leave the more precise
   // selection alone; the generic block-transition fallback is deliberately
   // low-confidence, so this exact proposal mapping supersedes it.
-  const answeredCommentUpdate = row.answers_comment_id
-    ? commentAnchorUpdates.find((upd) => upd.commentId === row.answers_comment_id)
-    : undefined;
-  const relocateAnsweredComment =
-    postAcceptAnchor && answeredCommentUpdate?.linkStatus !== 'linked'
-      ? row.answers_comment_id
-      : null;
-  if (relocateAnsweredComment && answeredCommentUpdate && postAcceptAnchor) {
-    answeredCommentUpdate.linkStatus = postAcceptAnchor.linkStatus;
-    answeredCommentUpdate.blockId = postAcceptAnchor.blockId;
-    answeredCommentUpdate.endBlockId = null;
-    answeredCommentUpdate.startOffset = postAcceptAnchor.startOffset;
-    answeredCommentUpdate.endOffset = postAcceptAnchor.endOffset;
-    answeredCommentUpdate.quote = postAcceptAnchor.quote;
+  const relocatedAnsweredComments: string[] = [];
+  if (postAcceptAnchor) {
+    for (const answeredId of parseAnswerIds(row.answers_comment_ids)) {
+      const upd = commentAnchorUpdates.find((u) => u.commentId === answeredId);
+      if (!upd || upd.linkStatus === 'linked') continue;
+      upd.linkStatus = postAcceptAnchor.linkStatus;
+      upd.blockId = postAcceptAnchor.blockId;
+      upd.endBlockId = null;
+      upd.startOffset = postAcceptAnchor.startOffset;
+      upd.endOffset = postAcceptAnchor.endOffset;
+      upd.quote = postAcceptAnchor.quote;
+      relocatedAnsweredComments.push(answeredId);
+    }
   }
 
   return {
@@ -2182,23 +2190,24 @@ async function prepareAcceptProposalThread(
         updateCommentStmt.run(...reanchorParams(upd, now, upd.commentId));
       }
 
-      if (relocateAnsweredComment && postAcceptAnchor) {
-        deps.db
-          .prepare(
-            `UPDATE comments
-                SET anchor_prefix = '',
-                    anchor_suffix = '',
-                    anchor_heading_path = ?,
-                    anchor_section_index = ?,
-                    anchor_section_index_path = ?
-              WHERE id = ?`,
-          )
-          .run(
+      if (postAcceptAnchor && relocatedAnsweredComments.length > 0) {
+        const carryAnchor = deps.db.prepare(
+          `UPDATE comments
+              SET anchor_prefix = '',
+                  anchor_suffix = '',
+                  anchor_heading_path = ?,
+                  anchor_section_index = ?,
+                  anchor_section_index_path = ?
+            WHERE id = ?`,
+        );
+        for (const answeredId of relocatedAnsweredComments) {
+          carryAnchor.run(
             postAcceptAnchor.headingPath,
             postAcceptAnchor.sectionIndex,
             postAcceptAnchor.sectionIndexPath,
-            relocateAnsweredComment,
+            answeredId,
           );
+        }
       }
 
       deps.db
@@ -2555,11 +2564,11 @@ async function toThreadWire(
   const answeredBy = (preloadedAnswers ?? loadAnswersByThread(db, doc.uid, [row.id], viewerId)).get(
     row.id,
   );
-  const answersThreadId =
-    proposalRow?.answers_comment_id &&
-    isThreadIdVisible(db, doc.uid, proposalRow.answers_comment_id, viewerId)
-      ? proposalRow.answers_comment_id
-      : null;
+  const answersThreadIds = proposalRow
+    ? parseAnswerIds(proposalRow.answers_comment_ids).filter((id) =>
+        isThreadIdVisible(db, doc.uid, id, viewerId),
+      )
+    : [];
   // Closed proposals keep their branch so the dedicated diff endpoint can
   // render the historical change, but the thread list has no use for their
   // editable text: accepted/rejected cards cannot open the proposal editor.
@@ -2660,8 +2669,11 @@ async function toThreadWire(
             proposed_text: null,
           }),
           whole_document: proposalRow.is_whole_document === 1,
-          /** Root thread this proposal answers, or null if it stands alone. */
-          answers_thread_id: answersThreadId,
+          /**
+           * Root threads this proposal answers, oldest first; empty if
+           * it stands alone. Accepting it resolves all of them.
+           */
+          answers_thread_ids: answersThreadIds,
         }
       : null,
     comments: [
@@ -2721,10 +2733,10 @@ interface ReactionWire {
 const ID_QUERY_BATCH = 500;
 
 /**
- * Reverse of `answers_comment_id`: which proposals answer each thread.
- * One query for the whole page — the forward direction is a column, but
+ * Which proposals answer each thread. One query for the whole page —
  * the UI and the review queue both want "has anything been proposed for
- * this comment yet?", which only the reverse answers.
+ * this comment yet?", which the per-proposal link list can't answer
+ * without reading every proposal in the document.
  */
 function loadAnswersByThread(
   db: Database,
@@ -2745,23 +2757,23 @@ function loadAnswersByThread(
     const placeholders = batch.map(() => '?').join(',');
     const rows = db
       .prepare(
-        `SELECT cep.comment_id, cep.answers_comment_id
-           FROM comments_edit_proposals cep
-           JOIN comments c ON c.id = cep.comment_id
+        `SELECT a.proposal_comment_id, a.answered_comment_id
+           FROM comments_edit_proposal_answers a
+           JOIN comments c ON c.id = a.proposal_comment_id
           WHERE c.doc_uid = ?
             AND c.deleted_at IS NULL
             AND (c.is_hidden = 0 OR c.author_client_id = ?)
-            AND cep.answers_comment_id IN (${placeholders})
-          ORDER BY cep.answers_comment_id, c.created_at ASC`,
+            AND a.answered_comment_id IN (${placeholders})
+          ORDER BY a.answered_comment_id, c.created_at ASC, c.rowid ASC`,
       )
       .all(docUid, viewerId ?? '', ...batch) as Array<{
-      comment_id: string;
-      answers_comment_id: string;
+      proposal_comment_id: string;
+      answered_comment_id: string;
     }>;
     for (const row of rows) {
-      const list = out.get(row.answers_comment_id);
-      if (list) list.push(row.comment_id);
-      else out.set(row.answers_comment_id, [row.comment_id]);
+      const list = out.get(row.answered_comment_id);
+      if (list) list.push(row.proposal_comment_id);
+      else out.set(row.answered_comment_id, [row.proposal_comment_id]);
     }
   }
   return out;
@@ -3143,18 +3155,26 @@ function asAnchor(v: unknown): AnchorParseResult {
 
 const MAX_PROPOSED_TEXT_LENGTH = 60000;
 
+/**
+ * A rewrite settles the requests standing against the text it replaces,
+ * and a paragraph can carry a good many. The cap is only there to keep
+ * a malformed payload from writing an unbounded number of link rows.
+ */
+const MAX_ANSWERED_THREADS = 100;
+
 interface ParsedProposal {
   proposedText: string;
   wholeDocument: boolean;
-  /** Root thread this proposal answers, validated against the DB by the caller. */
-  answersThreadId: string | null;
+  /** Root threads this proposal answers, validated against the DB by the caller. */
+  answersThreadIds: string[];
 }
 
-function asProposal(
-  v: unknown,
-):
+function asProposal(v: unknown):
   | { ok: true; proposal: ParsedProposal | null }
-  | { ok: false; error: 'proposal-text-required' | 'proposal-text-too-long' } {
+  | {
+      ok: false;
+      error: 'proposal-text-required' | 'proposal-text-too-long' | 'too-many-answered-threads';
+    } {
   if (v === null || v === undefined) return { ok: true, proposal: null };
   if (typeof v !== 'object') return { ok: false, error: 'proposal-text-required' };
   const proposal = v as Record<string, unknown>;
@@ -3164,19 +3184,29 @@ function asProposal(
     return { ok: false, error: 'proposal-text-too-long' };
   }
   const wholeDocument = proposal.whole_document === true;
+  // `answers_thread_id` is the single-link spelling this replaced. Still
+  // accepted so a client that predates the list keeps working.
+  const single = asString(proposal.answers_thread_id);
+  const listed = Array.isArray(proposal.answers_thread_ids)
+    ? proposal.answers_thread_ids.filter((id): id is string => typeof id === 'string' && id !== '')
+    : [];
+  const answersThreadIds = [...new Set(single ? [single, ...listed] : listed)];
+  if (answersThreadIds.length > MAX_ANSWERED_THREADS) {
+    return { ok: false, error: 'too-many-answered-threads' };
+  }
   return {
     ok: true,
     proposal: {
       proposedText,
       wholeDocument,
-      answersThreadId: asString(proposal.answers_thread_id),
+      answersThreadIds,
     },
   };
 }
 
 /**
  * The `proposal` payload of a PATCH: only `proposed_text` is mutable.
- * The anchor, `whole_document`, and `answers_thread_id` are fixed at
+ * The anchor, `whole_document`, and `answers_thread_ids` are fixed at
  * create time — moving a proposal is a delete + re-create.
  */
 function asProposalUpdate(
@@ -3195,8 +3225,8 @@ function asProposalUpdate(
 }
 
 /**
- * A proposal may name the root thread it answers. Only root threads
- * qualify — a reply is not a request in its own right — and it must
+ * A proposal may name the root threads it answers. Only root threads
+ * qualify — a reply is not a request in its own right — and they must
  * live in this document, so a token for one document can't be used to
  * probe ids in another.
  */
