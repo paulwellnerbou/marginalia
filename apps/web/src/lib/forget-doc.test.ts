@@ -6,10 +6,24 @@ import { beforeEach, expect, test } from 'bun:test';
 // localStorage at import time via their dependencies — install the
 // stand-in before the dynamic import below.
 const store = new Map<string, string>();
+// Set to make writes to a matching key throw, standing in for a browser
+// with storage blocked or a full quota.
+let rejectWritesTo: ((key: string) => boolean) | null = null;
+
+function guardWrite(key: string): void {
+  if (rejectWritesTo?.(key)) throw new DOMException('quota', 'QuotaExceededError');
+}
+
 (globalThis as { localStorage?: unknown }).localStorage = {
   getItem: (k: string) => store.get(k) ?? null,
-  setItem: (k: string, v: string) => void store.set(k, v),
-  removeItem: (k: string) => void store.delete(k),
+  setItem: (k: string, v: string) => {
+    guardWrite(k);
+    store.set(k, v);
+  },
+  removeItem: (k: string) => {
+    guardWrite(k);
+    store.delete(k);
+  },
   clear: () => store.clear(),
   key: (i: number) => [...store.keys()][i] ?? null,
   get length() {
@@ -37,6 +51,7 @@ const { forgetDocumentLocally } = await import('./forget-doc.js');
 const UID = 'doc-1';
 
 function seed(): void {
+  rejectWritesTo = null;
   store.clear();
   store.set(
     'marginalia.recentDocs',
@@ -99,4 +114,23 @@ test('tombstones the uid so an in-flight keyring pull cannot restore it', () => 
     store.get('marginalia.recentDocs.removed') ?? '[]',
   ) as unknown as string[];
   expect(tombstones).toContain(UID);
+});
+
+// The server has already destroyed the document by the time this runs.
+// A store that refuses to write must not surface as a failed delete, and
+// must not take the remaining stores down with it.
+test('survives a store that throws, and still clears the rest', () => {
+  rejectWritesTo = (key) => key === 'marginalia.recentDocs';
+  const consoleError = console.error;
+  console.error = () => {};
+
+  try {
+    expect(() => forgetDocumentLocally(UID)).not.toThrow();
+  } finally {
+    console.error = consoleError;
+  }
+
+  expect(store.get(`marginalia.invite.${UID}`)).toBeUndefined();
+  expect(store.get(`marginalia.password.${UID}`)).toBeUndefined();
+  expect(store.get(`marginalia.theme.${UID}`)).toBeUndefined();
 });
