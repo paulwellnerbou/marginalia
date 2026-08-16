@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { renderDocument } from '@marginalia/renderer';
 import type { DocumentWire, ThreadWire } from '../src/api-types.js';
 import { buildBlockMap, type DocumentBlock, type DocumentBlockMap } from '../src/blocks.js';
-import { documentHeader, threadDetail } from '../src/format.js';
+import { type ContextScope, documentHeader, threadDetail, threadList } from '../src/format.js';
 
 const SOURCE = `# Guide
 
@@ -87,9 +87,8 @@ function threadOn(blockId: string | null, endBlockId: string | null): ThreadWire
   };
 }
 
-const options = (map: DocumentBlockMap | null) => ({
-  includeAnchorSource: true,
-  contextBlocks: 0,
+const options = (map: DocumentBlockMap | null, context: ContextScope = 'block') => ({
+  context,
   blockMap: map,
   ref: { baseUrl: 'https://marginalia.test', uid: 'test-uid', token: 'secret-invite-token-1' },
 });
@@ -163,6 +162,112 @@ describe('threadDetail anchors', () => {
     const out = threadDetail(threadOn('ffffffffffffffff', null), 1, 1, options(null));
     expect(out).toContain('section Guide');
     expect(out).not.toContain('end_block_id=');
+  });
+});
+
+describe('threadDetail section context', () => {
+  const BOOK = `# Manual
+
+## Setup
+
+Install it first.
+
+## Usage
+
+Run the thing.
+
+### Flags
+
+- verbose mode
+- quiet mode
+`;
+
+  test('prints the innermost section around the anchor, not the whole chapter', async () => {
+    const map = await blockMap(BOOK);
+    const item = map.blocks.find((b) => b.kind === 'listItem') as DocumentBlock;
+    const out = threadDetail(threadOn(item.id, null), 1, 1, options(map, 'section'));
+
+    expect(out).toContain('section source — Manual › Usage › Flags');
+    expect(out).toContain('### Flags');
+    expect(out).toContain('- verbose mode');
+    // The enclosing chapter is a `get_document` call away; printing it
+    // here would make "section" mean the whole document for a comment
+    // deep in the tree.
+    expect(out).not.toContain('Run the thing');
+  });
+
+  test('recovers a section for a thread whose anchor block is gone', async () => {
+    const map = await blockMap(BOOK);
+    const orphan: ThreadWire = {
+      ...threadOn(null, null),
+      link_status: 'orphaned',
+      anchor: { ...threadOn(null, null).anchor, heading_path: ['Manual', 'Setup'] },
+    };
+    const out = threadDetail(orphan, 1, 1, options(map, 'section'));
+
+    // No block to neighbour, so this is the only setting under which an
+    // orphan arrives with any of the text it was written about.
+    expect(out).toContain('section source — Manual › Setup');
+    expect(out).toContain('Install it first.');
+  });
+
+  test('prints a shared section once and points the rest at it', async () => {
+    const map = await blockMap(BOOK);
+    const items = map.blocks.filter((b) => b.kind === 'listItem');
+    const out = threadList(
+      [
+        { ...threadOn((items[0] as DocumentBlock).id, null), id: 'thread-a' },
+        { ...threadOn((items[1] as DocumentBlock).id, null), id: 'thread-b' },
+      ],
+      options(map, 'section'),
+    );
+
+    expect(out.match(/- verbose mode/g)?.length).toBe(2);
+    // Twice as the anchored blocks themselves, but the surrounding
+    // section body only once.
+    expect(out.match(/^\s*\| ### Flags$/gm)?.length).toBe(1);
+    expect(out).toContain('printed above under thread thread-a');
+  });
+
+  test('names what the response budget withheld instead of trimming quietly', async () => {
+    // Chapters big enough that the third cannot fit in what the first two
+    // leave of the per-response budget. Two paragraphs each, so the last
+    // chapter is reached twice — once withheld, once a repeat of it.
+    // Every paragraph's text differs per chapter: block ids are content
+    // hashes, so repeating one verbatim would give two chapters a block
+    // with the same id and send the lookup to whichever came first.
+    const chapters = [1, 2, 3]
+      .map(
+        (n) =>
+          `## Chapter ${n}\n\n${`Sentence ${n}. `.repeat(600)}\n\n${`Filler ${n}. `.repeat(900)}\n`,
+      )
+      .join('\n');
+    const map = await blockMap(`# Epic\n\n${chapters}`);
+    const paragraphs = map.blocks.filter((b) => b.kind === 'paragraph');
+    expect(paragraphs.length).toBe(6);
+    const out = threadList(
+      paragraphs.map((b, i) => ({ ...threadOn(b.id, null), id: `thread-${i}` })),
+      options(map, 'section'),
+    );
+
+    expect(out).toContain('truncated at');
+    expect(out).toContain('withheld — this response’s section budget is spent');
+    expect(out).toContain('get_document with section: "Epic > Chapter 3"');
+    // Chapter 3 was withheld, so the second thread in it must not claim
+    // the text is above — that would send the reader looking for prose
+    // this response never contained.
+    expect(out).not.toContain('printed above under thread thread-4');
+    expect(out.match(/withheld — this response’s section budget is spent/g)?.length).toBe(2);
+    // The chapters that did fit still dedupe normally.
+    expect(out).toContain('printed above under thread thread-0');
+  });
+
+  test('says a thread outside every section has no section to show', async () => {
+    // Text before the first heading belongs to no section.
+    const map = await blockMap('Loose intro.\n\n# Manual\n\nBody.\n');
+    const intro = map.blocks.find((b) => b.kind === 'paragraph') as DocumentBlock;
+    const out = threadDetail(threadOn(intro.id, null), 1, 1, options(map, 'section'));
+    expect(out).toContain('section source: unavailable');
   });
 });
 

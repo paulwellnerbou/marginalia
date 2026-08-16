@@ -9,7 +9,7 @@ import {
   sectionContains,
 } from '../blocks.js';
 import { commentUrl } from '../document-ref.js';
-import { lineDiff, threadDetail, threadList, threadStatus } from '../format.js';
+import { type ContextScope, lineDiff, threadDetail, threadList, threadStatus } from '../format.js';
 import {
   blockDriftNote,
   documentArg,
@@ -108,24 +108,36 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
               'comments. Excludes threads you opened and nobody answered, and re-includes ones ' +
               'where the reviewer came back after your reply.',
           ),
+        context: z
+          .union([z.enum(['none', 'block', 'section']), z.number().int().min(0).max(10)])
+          .optional()
+          .describe(
+            'How much document text to print under each thread:\n' +
+              '  "none"     — no source at all\n' +
+              '  "block"    — the anchored block only\n' +
+              '  0-10       — that block plus N blocks of source either side, the surrounding ' +
+              'paragraphs a comment argues about but does not quote (nested blocks are stepped ' +
+              'over, so context on a list item is the text around the whole list)\n' +
+              '  "section"  — the whole section the anchor sits in, heading included: the way ' +
+              'to answer "what chapter is this comment arguing about" in one call instead of a ' +
+              'follow-up get_document. Innermost section, printed once however many threads ' +
+              'share it, and the only setting that still produces text for a thread whose ' +
+              'anchor block was edited away.\n' +
+              'Defaults to "block" for a list and 1 when a thread_id or #comment link narrows ' +
+              'the result to one thread. Reach for "section" on a focused thread or a filtered ' +
+              'queue — on a long unfiltered one it echoes much of the document back.',
+          ),
         include_anchor_source: z
           .boolean()
           .optional()
-          .describe('Include the anchored block’s current source under each thread. Default true.'),
+          .describe('Deprecated: false is the same as context: "none". Use `context`.'),
         context_blocks: z
           .number()
           .int()
           .min(0)
-          .max(3)
+          .max(10)
           .optional()
-          .describe(
-            'Also show this many blocks of source either side of the anchor — the surrounding ' +
-              'paragraphs a comment argues about but does not quote. Defaults to 1 when a ' +
-              'thread_id or #comment link narrows the result to one thread, and 0 for a list; ' +
-              'pass 0 explicitly to omit it. Nested blocks are stepped over, so context on a ' +
-              'list item is the text around the whole list. Ignored when include_anchor_source ' +
-              'is false.',
-          ),
+          .describe('Deprecated: the numeric spelling of `context`, merged into it.'),
         limit: z.number().int().min(1).max(200).optional().describe('Max threads. Default 50.'),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
@@ -224,11 +236,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           header,
           blockDriftNote(loaded.blocks),
           threadList(threads, {
-            includeAnchorSource: args.include_anchor_source !== false,
-            // A focused read should carry enough prose to interpret references such as
-            // "the paragraph above" without a follow-up tool call. Keep broad queues lean:
-            // every listed thread would otherwise pay the same context cost.
-            contextBlocks: args.context_blocks ?? (targetId === null ? 0 : 1),
+            context: resolveContext(args, targetId),
             blockMap: loaded.blocks,
             ref: loaded.ref,
           }),
@@ -771,14 +779,38 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         return text(
           `Repaired proposal ${args.thread_id} — link status is now "${res.thread.link_status}".`,
           threadDetail(res.thread, 1, 1, {
-            includeAnchorSource: true,
-            contextBlocks: 0,
+            context: 'block',
             blockMap: loaded.blocks,
             ref: loaded.ref,
           }),
         );
       }),
   );
+}
+
+/**
+ * How much source to print, from the current argument and the two it
+ * replaced.
+ *
+ * An explicit `context` wins over both: a caller who names the new
+ * argument means it, even alongside a stale `include_anchor_source` some
+ * wrapper still sends. The default is unchanged — a focused read carries
+ * enough prose to interpret "the paragraph above" without a second call,
+ * while a broad queue stays lean, since every listed thread would
+ * otherwise pay the same cost.
+ */
+function resolveContext(
+  args: {
+    context?: ContextScope | undefined;
+    context_blocks?: number | undefined;
+    include_anchor_source?: boolean | undefined;
+  },
+  targetId: string | null,
+): ContextScope {
+  if (args.context !== undefined) return args.context;
+  if (args.include_anchor_source === false) return 'none';
+  if (args.context_blocks !== undefined) return args.context_blocks;
+  return targetId === null ? 'block' : 1;
 }
 
 /**
