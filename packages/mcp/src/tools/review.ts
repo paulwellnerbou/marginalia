@@ -335,6 +335,13 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
               'comment the edit settles, not just the one that prompted it: rewriting a ' +
               'paragraph usually answers each open comment anchored in it.',
           ),
+        answers_thread_id: z
+          .string()
+          .optional()
+          .describe(
+            'Deprecated: the one-thread spelling of `answers_thread_ids`, merged into it. ' +
+              'Use `answers_thread_ids` instead.',
+          ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -362,7 +369,15 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           args.whole_document ? undefined : args.anchor_text,
           endBlock,
         );
-        const answered = [...new Set(args.answers_thread_ids ?? [])];
+        // Unknown arguments are stripped before the handler sees them,
+        // so dropping the singular from the schema would have turned a
+        // caller that still sends it into a silently unlinked proposal.
+        const answered = [
+          ...new Set([
+            ...(args.answers_thread_id ? [args.answers_thread_id] : []),
+            ...(args.answers_thread_ids ?? []),
+          ]),
+        ];
         const { thread } = await ctx.client.json<ThreadMutationWire>(
           loaded.ref,
           `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads`,

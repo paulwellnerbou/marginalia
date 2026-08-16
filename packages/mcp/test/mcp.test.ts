@@ -669,6 +669,31 @@ describe('marginalia MCP server', () => {
     expect(open).toContain('No threads matched.');
   });
 
+  test('the deprecated answers_thread_id spelling still links', async () => {
+    const { adminUrl } = await seedBook();
+    const comment = await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      body: 'Say when exactly.',
+    });
+    const commentId = /^thread_id: (\S+)/m.exec(comment)?.[1] as string;
+
+    // Unknown arguments are stripped before the handler runs, so a
+    // caller still on the singular must not end up with an unlinked
+    // proposal and no sign that the link was dropped.
+    const created = await call('create_proposal', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      proposed_text: 'The caravan left at four, an hour before dawn.',
+      rationale: 'Concrete time.',
+      answers_thread_id: commentId,
+    });
+    expect(created).toContain(`Linked to thread ${commentId}`);
+
+    const listed = await call('list_threads', { document: adminUrl });
+    expect(listed).toContain(`answers comment thread: ${commentId}`);
+  });
+
   test('replies to an edit proposal without deciding it', async () => {
     const { adminUrl } = await seedBook();
     const created = await call('create_proposal', {
