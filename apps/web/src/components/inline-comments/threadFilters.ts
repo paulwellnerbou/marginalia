@@ -15,29 +15,57 @@ export interface ThreadFilters {
 export const ALL_THREAD_FILTERS: ThreadFilters = { status: 'all', kind: 'all', replies: 'all' };
 
 /**
- * 'unresolved' keys off thread state, so an accepted or rejected
- * proposal drops out alongside a resolved comment.
+ * Filters one card: a thread plus the proposal threads nested inside
+ * it, which render as a single merged unit.
  *
- * 'unanswered' keeps what is waiting on the viewer, identified by
- * client_id — the same identity the server stamps comments with, so a
- * shared display name can't make someone else's reply count as yours.
+ * 'unresolved' and 'proposals' key off a thread at a time, and the card
+ * stays whenever any part of it matches — so "Proposals" still surfaces
+ * a proposal that now renders inside the comment it answers.
+ *
+ * 'unanswered' is judged over the card as a whole: it keeps what is
+ * waiting on the viewer, and a reply left on a nested proposal answers
+ * the merged conversation even though the comment thread's own tail is
+ * still somebody else's. The viewer is identified by client_id — the
+ * same identity the server stamps comments with, so a shared display
+ * name can't make someone else's reply count as yours.
  */
-export function threadMatchesFilters(
+export function cardMatchesFilters(
   thread: Thread,
+  nested: readonly Thread[],
   filters: ThreadFilters,
   viewerClientId: string | null,
 ): boolean {
+  if (filters.replies === 'unanswered' && viewerHadLastWord(thread, nested, viewerClientId)) {
+    return false;
+  }
+  return (
+    matchesStatusAndKind(thread, filters) || nested.some((n) => matchesStatusAndKind(n, filters))
+  );
+}
+
+function matchesStatusAndKind(thread: Thread, filters: ThreadFilters): boolean {
   if (filters.status === 'unresolved' && isResolved(thread)) return false;
   if (filters.kind === 'proposals' && !isProposal(thread)) return false;
-  if (filters.replies === 'unanswered' && viewerHadLastWord(thread, viewerClientId)) return false;
   return true;
 }
 
-/** comments are oldest-first, so the tail is the latest message. */
-function viewerHadLastWord(thread: Thread, viewerClientId: string | null): boolean {
+/**
+ * comments are oldest-first, so each thread's tail is its latest
+ * message; across the card the newest of those tails wins. Ties go to
+ * the thread the card is named after, the one the reader sees first.
+ */
+function viewerHadLastWord(
+  thread: Thread,
+  nested: readonly Thread[],
+  viewerClientId: string | null,
+): boolean {
   if (!viewerClientId) return false;
-  const last = thread.comments[thread.comments.length - 1];
-  return last?.author.client_id === viewerClientId;
+  let latest = thread.comments[thread.comments.length - 1];
+  for (const n of nested) {
+    const last = n.comments[n.comments.length - 1];
+    if (last && (!latest || last.created_at > latest.created_at)) latest = last;
+  }
+  return latest?.author.client_id === viewerClientId;
 }
 
 /** Names the non-default filters so a collapsed filter row can still say what it is hiding. */
