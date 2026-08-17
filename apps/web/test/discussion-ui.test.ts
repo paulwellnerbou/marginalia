@@ -18,6 +18,7 @@ import {
   activeThreadFilterLabels,
   cardMatchesFilters,
   isFilteringThreads,
+  type ThreadCard,
   type ThreadFilters,
 } from '../src/components/inline-comments/threadFilters.js';
 import type { Thread } from '../src/lib/api.js';
@@ -235,9 +236,15 @@ describe('threads-tab filters', () => {
     proposal: { whole_document: false, answers_thread_ids: [] },
   });
 
+  const card = (thread: Thread, nested: Thread[] = [], linked: Thread[] = []): ThreadCard => ({
+    thread,
+    nested,
+    linked,
+  });
+
   const all = [openComment, resolvedComment, openProposal, acceptedProposal];
   const matching = (filters: ThreadFilters, viewer: string | null = 'me') =>
-    all.filter((t) => cardMatchesFilters(t, [], filters, viewer)).map((t) => t.id);
+    all.filter((t) => cardMatchesFilters(card(t), filters, viewer)).map((t) => t.id);
 
   test('the default filters keep every thread', () => {
     expect(matching(ALL_THREAD_FILTERS)).toEqual([
@@ -277,7 +284,7 @@ describe('threads-tab filters', () => {
   describe('unanswered', () => {
     const unanswered: ThreadFilters = { ...ALL_THREAD_FILTERS, replies: 'unanswered' };
     const keeps = (t: Thread, viewer: string | null = 'me') =>
-      cardMatchesFilters(t, [], unanswered, viewer);
+      cardMatchesFilters(card(t), unanswered, viewer);
 
     test('keeps a thread another author had the last word in', () => {
       expect(keeps(makeThread({ id: 't', authors: ['me', 'c'] }))).toBe(true);
@@ -302,9 +309,9 @@ describe('threads-tab filters', () => {
         resolution: { kind: 'resolve', at: 3, by_name: 'Me' },
         authors: ['c', 'me'],
       });
-      expect(cardMatchesFilters(resolvedByViewer, [], unanswered, 'me')).toBe(false);
+      expect(cardMatchesFilters(card(resolvedByViewer), unanswered, 'me')).toBe(false);
       expect(
-        cardMatchesFilters(resolvedByViewer, [], { ...unanswered, replies: 'all' }, 'me'),
+        cardMatchesFilters(card(resolvedByViewer), { ...unanswered, replies: 'all' }, 'me'),
       ).toBe(true);
     });
   });
@@ -324,26 +331,75 @@ describe('threads-tab filters', () => {
       });
 
     test('a reply on the nested proposal answers the whole card', () => {
-      expect(cardMatchesFilters(comment, [proposal(['c', 'me'])], unanswered, 'me')).toBe(false);
+      expect(cardMatchesFilters(card(comment, [proposal(['c', 'me'])]), unanswered, 'me')).toBe(
+        false,
+      );
     });
 
     test('a later word of someone else’s keeps the card waiting', () => {
-      expect(cardMatchesFilters(comment, [proposal(['me', 'c'])], unanswered, 'me')).toBe(true);
+      expect(cardMatchesFilters(card(comment, [proposal(['me', 'c'])]), unanswered, 'me')).toBe(
+        true,
+      );
       // Answered in the comment thread, then reopened on the proposal.
       const answered = makeThread({ id: 'comment', authors: ['c', 'me'], at: 1 });
-      expect(cardMatchesFilters(answered, [proposal(['c'])], unanswered, 'me')).toBe(true);
+      expect(cardMatchesFilters(card(answered, [proposal(['c'])]), unanswered, 'me')).toBe(true);
     });
 
     test('the newest message wins, whichever thread it sits in', () => {
       // The proposal predates the comment's last word.
       const late = makeThread({ id: 'comment', authors: ['c', 'me'], at: 20 });
-      expect(cardMatchesFilters(late, [proposal(['c'])], unanswered, 'me')).toBe(false);
+      expect(cardMatchesFilters(card(late, [proposal(['c'])]), unanswered, 'me')).toBe(false);
     });
 
     test('the other filters still keep a card any part of it matches', () => {
       const proposals: ThreadFilters = { ...ALL_THREAD_FILTERS, kind: 'proposals' };
-      expect(cardMatchesFilters(comment, [proposal(['c'])], proposals, 'me')).toBe(true);
-      expect(cardMatchesFilters(comment, [], proposals, 'me')).toBe(false);
+      expect(cardMatchesFilters(card(comment, [proposal(['c'])]), proposals, 'me')).toBe(true);
+      expect(cardMatchesFilters(card(comment), proposals, 'me')).toBe(false);
+    });
+  });
+
+  describe('a card that only cross-links to the thread it was answered in', () => {
+    const unanswered: ThreadFilters = { ...ALL_THREAD_FILTERS, replies: 'unanswered' };
+    // One proposal can answer several comments but merges into only one
+    // of their cards; the rest link to it with "See proposed change".
+    const comment = makeThread({ id: 'comment', authors: ['me', 'c'], at: 1 });
+    const proposal = (authors: [string, ...string[]], at = 10) =>
+      makeThread({
+        id: 'proposal',
+        authors,
+        at,
+        proposal: { whole_document: false, answers_thread_ids: ['comment'] },
+      });
+
+    test('a reply the viewer left in the linked thread answers this card too', () => {
+      expect(cardMatchesFilters(card(comment, [], [proposal(['c', 'me'])]), unanswered, 'me')).toBe(
+        false,
+      );
+    });
+
+    test('with nothing said back, the card keeps waiting', () => {
+      expect(cardMatchesFilters(card(comment, [], [proposal(['c'])]), unanswered, 'me')).toBe(true);
+    });
+
+    test('the linked thread’s own backlog stays on the linked thread', () => {
+      // The other author came back there after the viewer's reply. That
+      // card is the one waiting; listing this one too would double the
+      // same exchange in the queue.
+      expect(
+        cardMatchesFilters(card(comment, [], [proposal(['c', 'me', 'c'])]), unanswered, 'me'),
+      ).toBe(false);
+      // …but a later word in *this* card does bring it back.
+      const asked = makeThread({ id: 'comment', authors: ['me', 'c'], at: 30 });
+      expect(cardMatchesFilters(card(asked, [], [proposal(['c', 'me'])]), unanswered, 'me')).toBe(
+        true,
+      );
+    });
+
+    test('an older reply of the viewer’s does not clear a fresh question', () => {
+      // The viewer replied on the proposal, then was asked again here.
+      expect(
+        cardMatchesFilters(card(comment, [], [proposal(['c', 'me'], 0)]), unanswered, 'me'),
+      ).toBe(true);
     });
   });
 
