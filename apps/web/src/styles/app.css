@@ -2512,8 +2512,9 @@ button.primary:disabled {
   min-width: 0;
 }
 
-/* Three rows out of one wrapping flex line: sort and the actions share line
-   one, the filter chips and the search box each claim a full basis below. */
+/* Stacked rows out of one wrapping flex line: sort and the actions share line
+   one, then the filter chips claim a full basis below, and the search box
+   another whenever it is open. */
 .ic-list-controls {
   display: flex;
   flex-wrap: wrap;
