@@ -213,7 +213,7 @@ function computeSectionContext(
  */
 const TRANSPARENT_CONTAINER_RE =
   /(?:^|\s)(?:collapse-section|collapse-section-inner|sect\d+|sectionbody)(?:\s|$)/;
-function collectTopLevelBlocks(root: HTMLElement): HTMLElement[] {
+export function collectTopLevelBlocks(root: HTMLElement): HTMLElement[] {
   const out: HTMLElement[] = [];
   for (const child of Array.from(root.children)) {
     if (!(child instanceof HTMLElement)) continue;

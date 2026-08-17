@@ -7,6 +7,7 @@ import { isInjectedChromeText } from '../lib/block-text.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { revealElement } from '../lib/paged-reading.js';
+import { collectTopLevelBlocks } from '../lib/selection.js';
 import { isAppleWebKit } from '../lib/webkit.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
 
@@ -119,10 +120,24 @@ export function RenderedDoc({
     const el = ref.current;
     if (!el) return;
     if (lastHtml.current === rendered.html) return;
-    el.innerHTML = rendered.html;
-    // innerHTML replaces children but leaves the article's own
-    // attributes intact — clear the marker so a doc swap re-installs.
-    el.removeAttribute('data-collapse-installed');
+
+    // Most source changes — accepting an edit proposal above all — rewrite
+    // a handful of adjacent blocks and leave the rest of the document
+    // identical. Replacing innerHTML for those throws away every node:
+    // the element-keyed highlight cache misses on all of them, mermaid
+    // re-renders, the collapse install is redone, and every comment card
+    // re-measures. Splice the changed run in instead and the untouched
+    // DOM — and everything keyed to it — simply stays.
+    const patched = lastHtml.current !== null ? patchChangedBlocks(el, rendered.html) : null;
+
+    if (patched) {
+      markChangedBlocks(patched);
+    } else {
+      el.innerHTML = rendered.html;
+      // innerHTML replaces children but leaves the article's own
+      // attributes intact — clear the marker so a doc swap re-installs.
+      el.removeAttribute('data-collapse-installed');
+    }
     lastHtml.current = rendered.html;
     void renderMermaidIn(el);
     replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
@@ -133,6 +148,11 @@ export function RenderedDoc({
     // this the target stays unscrolled-to (and unrevealed if it sits
     // inside a folded section). hashchange doesn't fire on its own
     // here either — the hash isn't changing.
+    //
+    // Only after a full swap: a patch leaves the reader's target on
+    // screen where it was, and re-running this would scroll away from
+    // whatever they were reading when the edit landed.
+    if (patched) return;
     const initialHash = window.location.hash.slice(1);
     if (initialHash) {
       let id = initialHash;
@@ -582,6 +602,97 @@ function svgToDataUrl(svg: SVGElement): string {
   }
   const xml = new XMLSerializer().serializeToString(clone);
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(xml)}`;
+}
+
+/** Marks a changed block so CSS can animate it in. Cleared on animation end. */
+const CHANGED_BLOCK_CLASS = 'block-changed';
+
+function markChangedBlocks(blocks: HTMLElement[]): void {
+  for (const block of blocks) {
+    block.classList.add(CHANGED_BLOCK_CLASS);
+    const clear = () => block.classList.remove(CHANGED_BLOCK_CLASS);
+    block.addEventListener('animationend', clear, { once: true });
+    // Under reduced motion the animation never runs, so `animationend`
+    // never fires — drop the class on a timer as well.
+    window.setTimeout(clear, 1500);
+  }
+}
+
+/** True if `el` is, or contains, a heading. */
+function hasHeading(el: HTMLElement): boolean {
+  return /^H[1-6]$/.test(el.tagName) || el.querySelector('h1,h2,h3,h4,h5,h6') !== null;
+}
+
+/**
+ * Splice the run of blocks that changed into the live article, leaving every
+ * other element — and so every highlight, mermaid render and measured card
+ * position keyed to it — untouched. Returns the newly inserted elements, or
+ * null when the change is not one this can safely express, in which case the
+ * caller falls back to replacing innerHTML.
+ *
+ * The changed run is derived by matching block ids inward from both ends, so
+ * it needs nothing from the server and copes with a replacement that changes
+ * the number of blocks.
+ */
+function patchChangedBlocks(root: HTMLElement, nextHtml: string): HTMLElement[] | null {
+  const staging = document.createElement('div');
+  staging.innerHTML = nextHtml;
+
+  const live = collectTopLevelBlocks(root);
+  const fresh = collectTopLevelBlocks(staging);
+  if (live.length === 0 || fresh.length === 0) return null;
+
+  // Block ids are content hashes, so an untouched paragraph keeps its id.
+  // Comparing the DOM to the parsed replacement needs no server metadata.
+  const prevIds = live.map((el) => el.getAttribute('data-block'));
+  const nextIds = fresh.map((el) => el.getAttribute('data-block'));
+  if (prevIds.some((id) => id === null) || nextIds.some((id) => id === null)) return null;
+
+  let start = 0;
+  while (start < prevIds.length && start < nextIds.length && prevIds[start] === nextIds[start]) {
+    start++;
+  }
+  let tail = 0;
+  while (
+    tail < prevIds.length - start &&
+    tail < nextIds.length - start &&
+    prevIds[prevIds.length - 1 - tail] === nextIds[nextIds.length - 1 - tail]
+  ) {
+    tail++;
+  }
+
+  const removed = live.slice(start, live.length - tail);
+  const insertCount = nextIds.length - tail - start;
+  // Identical block lists — the html differs somewhere a block diff cannot
+  // see (theme chrome, an attribute). Let the full swap handle it.
+  if (removed.length === 0 && insertCount === 0) return null;
+
+  // Headings own the collapse wrappers this splices into, so moving one
+  // means rebuilding that structure — not worth expressing here.
+  if (removed.some(hasHeading)) return null;
+
+  // Anchor the insert: before the first removed element, or before the
+  // first surviving block after the run when this is a pure insertion.
+  const anchor = removed[0] ?? live[start] ?? null;
+  if (!anchor) return null;
+  const parent = anchor.parentNode;
+  if (!parent) return null;
+  // A run spanning several parents means it crosses a section boundary.
+  if (removed.some((el) => el.parentNode !== parent)) return null;
+
+  const inserted = fresh.slice(start, start + insertCount);
+  if (inserted.some(hasHeading)) return null;
+  // Mermaid blocks are rendered in place by an async pass keyed to the whole
+  // article; re-running it over a partially patched tree is not worth the risk.
+  if (inserted.some((el) => el.querySelector('.mermaid') || el.classList.contains('mermaid'))) {
+    return null;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const el of inserted) frag.appendChild(el);
+  parent.insertBefore(frag, anchor);
+  for (const el of removed) el.remove();
+  return inserted;
 }
 
 /** How one block's highlights are painted, and the signature that says so. */

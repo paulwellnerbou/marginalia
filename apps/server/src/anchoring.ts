@@ -62,6 +62,30 @@ export const REANCHOR_COMMENT_SQL = `
          updated_at = ?
    WHERE id = ?`;
 
+/**
+ * Whether re-anchoring left the comment exactly where it was.
+ *
+ * Most edits move nothing: accepting one proposal re-runs `reanchor` over
+ * every root comment in the document, and the overwhelming majority resolve
+ * to the anchor they already had. Writing those rows anyway bumps
+ * `updated_at` on each one, which makes them look changed to every client —
+ * a full thread list then differs only by timestamps, and the viewer
+ * re-renders every card for nothing.
+ *
+ * Mirrors REANCHOR_COMMENT_SQL, including its `COALESCE` on the quote:
+ * a null `quote` means "keep the stored one", so it is never a change.
+ */
+export function anchorUnchanged(comment: CommentRow, upd: AnchorUpdate): boolean {
+  return (
+    upd.blockId === comment.anchor_block_id &&
+    upd.endBlockId === comment.anchor_end_block_id &&
+    upd.startOffset === comment.anchor_start_offset &&
+    upd.endOffset === comment.anchor_end_offset &&
+    upd.linkStatus === comment.link_status &&
+    (upd.quote === null || upd.quote === comment.anchor_quote)
+  );
+}
+
 export function reanchorParams(
   upd: AnchorUpdate,
   now: number,

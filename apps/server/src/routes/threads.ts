@@ -1,10 +1,11 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
-import { renderDocument } from '@marginalia/renderer';
+import type { BlockInfo, BlockSourceRange, RenderResult } from '@marginalia/renderer';
+import { renderDocument, rewriteAssetReferences } from '@marginalia/renderer';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import {
+  anchorUnchanged,
   prepareBlockReplacements,
   REANCHOR_COMMENT_SQL,
   reanchor,
@@ -40,6 +41,7 @@ import {
   listMentionCandidates,
   storeMentionsForComment,
 } from '../mentions.js';
+import { listAttached } from './assets.js';
 import { toWire as toLegacyCommentWire } from './comments.js';
 import type { AppDeps } from './documents.js';
 import {
@@ -76,6 +78,11 @@ type RespondAction = 'resolve' | 'accept' | 'reject' | 'reopen';
 interface PreparedThreadWorkflow {
   oid: string;
   applyDb: () => EditProposalThreadRow[];
+  // The post-merge source and its render, already computed here to
+  // re-anchor comments. Handed back so the response can carry the new
+  // document and the client is spared a full re-fetch + re-render of it.
+  nextSource: string;
+  rendered: RenderResult;
 }
 
 const DEFAULT_PROPOSAL_BODY = 'Proposed change';
@@ -1982,6 +1989,21 @@ async function respondToThread(c: Context, deps: AppDeps) {
     }
   }
 
+  // Accepting rewrites the document, and the client used to learn the new
+  // text only by re-fetching and re-rendering the whole thing. Both are
+  // already in hand here, so hand them back and skip that round trip.
+  let documentPayload: { oid: string; source: string; rendered: RenderResult } | null = null;
+  if (preparedWorkflow && documentOid) {
+    const attached = listAttached(db, doc.uid);
+    const rendered = preparedWorkflow.rendered;
+    rendered.html = await rewriteAssetReferences(rendered.html, {
+      docUid: doc.uid,
+      attached: new Set(attached.map((a) => a.ref_name)),
+      assetVersions: new Map(attached.map((a) => [a.ref_name, a.asset_id])),
+    });
+    documentPayload = { oid: documentOid, source: preparedWorkflow.nextSource, rendered };
+  }
+
   return c.json({
     thread: await toThreadWire(
       deps.db,
@@ -1994,6 +2016,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
     ),
     created_reply_id: createdReplyId,
     resolved_answered_thread_ids: resolvedAnsweredThreadIds,
+    document: documentPayload,
   });
 }
 
@@ -2142,12 +2165,13 @@ async function prepareAcceptProposalThread(
           AND cep.comment_id IS NULL`,
     )
     .all(doc.uid) as CommentRow[];
-  const commentAnchorUpdates = topLevelComments.map((comment) => {
-    const upd = reanchor(comment, rendered.blocks, {
-      blockReplacements,
-    });
-    return { commentId: comment.id, ...upd };
-  });
+  // Re-anchor everything first and decide what to write only at the end:
+  // the relocation pass below rewrites some of these, so whether an update
+  // is a no-op is not settled until it has run.
+  const anchorCandidates = topLevelComments.map((comment) => ({
+    comment,
+    upd: reanchor(comment, rendered.blocks, { blockReplacements }),
+  }));
 
   const acceptedAnchor = locateAcceptedProposalAnchor(
     presentBlocks,
@@ -2167,7 +2191,7 @@ async function prepareAcceptProposalThread(
   const relocatedAnsweredComments: string[] = [];
   if (postAcceptAnchor) {
     for (const answeredId of parseAnswerIds(row.answers_comment_ids)) {
-      const upd = commentAnchorUpdates.find((u) => u.commentId === answeredId);
+      const upd = anchorCandidates.find((c) => c.comment.id === answeredId)?.upd;
       if (!upd || upd.linkStatus === 'linked') continue;
       upd.linkStatus = postAcceptAnchor.linkStatus;
       upd.blockId = postAcceptAnchor.blockId;
@@ -2179,8 +2203,18 @@ async function prepareAcceptProposalThread(
     }
   }
 
+  // Now that relocation has had its say, drop the rows that did not move —
+  // see `anchorUnchanged`. A comment the proposal answers is typically
+  // already orphaned, so re-anchoring alone leaves it untouched; filtering
+  // before the pass above would have hidden it from the re-home.
+  const commentAnchorUpdates = anchorCandidates
+    .filter(({ comment, upd }) => !anchorUnchanged(comment, upd))
+    .map(({ comment, upd }) => ({ commentId: comment.id, ...upd }));
+
   return {
     oid,
+    nextSource,
+    rendered,
     applyDb: () => {
       const now = Date.now();
       deps.db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
@@ -2288,12 +2322,14 @@ async function prepareReopenAcceptedProposalThread(
     after: knownBlocks,
   });
   const topLevel = deps.db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
-  const commentAnchorUpdates = topLevel.map((comment) => {
+  const commentAnchorUpdates = topLevel.flatMap((comment) => {
     const upd = reanchor(comment, rendered.blocks, {
       isEditProposal: comment.is_edit_proposal === 1,
       blockReplacements,
     });
-    return { commentId: comment.id, ...upd };
+    // Skip the rows that did not move — see `anchorUnchanged`.
+    if (anchorUnchanged(comment, upd)) return [];
+    return [{ commentId: comment.id, ...upd }];
   });
 
   const restoredProposalAnchor =
@@ -2309,6 +2345,8 @@ async function prepareReopenAcceptedProposalThread(
       : null;
   return {
     oid,
+    nextSource: diff.before,
+    rendered,
     applyDb: () => {
       const now = Date.now();
       deps.db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
