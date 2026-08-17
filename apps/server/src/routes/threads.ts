@@ -1992,8 +1992,13 @@ async function respondToThread(c: Context, deps: AppDeps) {
   // Accepting rewrites the document, and the client used to learn the new
   // text only by re-fetching and re-rendering the whole thing. Both are
   // already in hand here, so hand them back and skip that round trip.
+  //
+  // Accept only. Reopening an accepted proposal also rewrites the document,
+  // but no client reads this field on that path — `resolveThread` keeps just
+  // the thread — so building it there would mean an asset rewrite over the
+  // whole document and a payload the size of the document, for nothing.
   let documentPayload: { oid: string; source: string; rendered: RenderResult } | null = null;
-  if (preparedWorkflow && documentOid) {
+  if (action === 'accept' && preparedWorkflow && documentOid) {
     const attached = listAttached(db, doc.uid);
     const rendered = preparedWorkflow.rendered;
     rendered.html = await rewriteAssetReferences(rendered.html, {
