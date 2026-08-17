@@ -16,6 +16,7 @@ import type { Context } from 'hono';
 import { Hono } from 'hono';
 import JSZip from 'jszip';
 import {
+  anchorUnchanged,
   prepareBlockReplacements,
   REANCHOR_COMMENT_SQL,
   reanchor,
@@ -631,6 +632,8 @@ async function updateDocument(c: Context, deps: AppDeps) {
       isEditProposal: comment.is_edit_proposal === 1,
       blockReplacements,
     });
+    // Skip the rows that did not move — see `anchorUnchanged`.
+    if (anchorUnchanged(comment, upd)) continue;
     updateStmt.run(...reanchorParams(upd, now, comment.id));
   }
 
@@ -2379,6 +2382,8 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
       isEditProposal: comment.is_edit_proposal === 1,
       blockReplacements,
     });
+    // Skip the rows that did not move — see `anchorUnchanged`.
+    if (anchorUnchanged(comment, upd)) continue;
     updateStmt.run(...reanchorParams(upd, now, comment.id));
   }
 
@@ -2467,6 +2472,8 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
       isEditProposal: comment.is_edit_proposal === 1,
       blockReplacements,
     });
+    // Skip the rows that did not move — see `anchorUnchanged`.
+    if (anchorUnchanged(comment, upd)) continue;
     updateStmt.run(...reanchorParams(upd, now, comment.id));
   }
 

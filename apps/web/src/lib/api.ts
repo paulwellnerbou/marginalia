@@ -1519,6 +1519,15 @@ export function listThreads(
 interface ThreadMutationResponse {
   thread: Thread;
   created_reply_id?: string | null;
+  /** Present when the action rewrote the document (accept / reopen-accept). */
+  document?: AcceptedDocument | null;
+}
+
+/** The post-accept document, so callers need not re-fetch it. */
+export interface AcceptedDocument {
+  oid: string;
+  source: string;
+  rendered: RenderedDocument;
 }
 
 interface CommentLocation {
@@ -1823,7 +1832,7 @@ export function acceptEditProposal(
   pid: string,
   identity: Identity,
   body?: string,
-): Promise<Thread> {
+): Promise<{ thread: Thread; document: AcceptedDocument | null }> {
   const replyBody = body?.trim();
   return request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/respond`,
@@ -1838,7 +1847,7 @@ export function acceptEditProposal(
     },
   ).then((res) => {
     rememberThread(uid, res.thread);
-    return res.thread;
+    return { thread: res.thread, document: res.document ?? null };
   });
 }
 

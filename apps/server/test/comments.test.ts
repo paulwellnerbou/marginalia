@@ -1476,6 +1476,101 @@ describe('threads API', () => {
     expect(after.source).toBe('ALPHA\n\nbeta\n\noutro\n');
   });
 
+  test('accepting a proposal returns the rewritten document with the response', async () => {
+    const uid = await newDoc('alpha\n\nbeta\n');
+    const blockId = await firstBlockId(uid);
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          proposal: { proposed_text: 'ALPHA' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
+
+    const acceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(acceptRes.status).toBe(200);
+    const accepted = (await acceptRes.json()) as {
+      document: { oid: string; source: string; rendered: { html: string } } | null;
+    };
+
+    // The client applies this directly instead of re-fetching the document.
+    expect(accepted.document).not.toBeNull();
+    expect(accepted.document?.source).toBe('ALPHA\n\nbeta\n');
+    expect(accepted.document?.oid).toBeString();
+    expect(accepted.document?.rendered.html).toContain('ALPHA');
+
+    // …and it must match what a re-fetch would have produced.
+    const fetched = (await (
+      await app.hono.fetch(new Request(`http://test/api/documents/${uid}`, { headers: asAdmin() }))
+    ).json()) as { source: string; rendered: { html: string } };
+    expect(accepted.document?.source).toBe(fetched.source);
+    expect(accepted.document?.rendered.html).toBe(fetched.rendered.html);
+  });
+
+  test('accepting a proposal leaves unmoved comments untouched', async () => {
+    const uid = await newDoc('alpha\n\nbeta\n\ngamma\n');
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: asAdmin() }),
+    );
+    const blocks = (
+      (await docRes.json()) as { rendered: { blocks: Array<{ id: string; text: string }> } }
+    ).rendered.blocks;
+    const alphaBlock = blocks.find((b) => b.text.includes('alpha'))!.id;
+    const gammaBlock = blocks.find((b) => b.text.includes('gamma'))!.id;
+
+    // A comment on a paragraph the proposal does not touch.
+    const bystander = await addComment(uid, CAROL, { block_id: gammaBlock, quote: 'gamma' }, 'hi');
+    expect(bystander.status).toBe(201);
+    const bystanderId = (bystander.body.comment as { id: string }).id;
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: alphaBlock, quote: 'alpha' },
+          proposal: { proposed_text: 'ALPHA' },
+        }),
+      }),
+    );
+    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
+
+    const readRow = () =>
+      app.db
+        .prepare('SELECT updated_at, anchor_block_id, link_status FROM comments WHERE id = ?')
+        .get(bystanderId) as {
+        updated_at: number;
+        anchor_block_id: string | null;
+        link_status: string;
+      };
+    const before = readRow();
+
+    const acceptRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    // Re-anchoring resolved it to the same place, so the row must not be
+    // rewritten: a bumped `updated_at` makes every client treat the comment
+    // as changed and re-render it for nothing.
+    expect(readRow()).toEqual(before);
+  });
+
   test('conflicting proposal repair falls back to original line number anchor', async () => {
     const uid = await newDoc('# Welcome\n\nThreaded comments you can resolve\n\nTail\n');
     const docRes = await app.hono.fetch(

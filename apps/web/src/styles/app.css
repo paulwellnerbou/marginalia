@@ -3897,6 +3897,34 @@ button.primary:disabled {
   animation: ic-flash 760ms ease-out;
 }
 
+/* A block spliced into the document by an accepted proposal (or any other
+   edit that lands while it is on screen). Same inset-shadow idiom as
+   .ic-card-flash, for the same reason: document themes own the block's
+   background, so animating it would pop at the end. Paired with a short
+   fade so replaced text reads as arriving rather than blinking. */
+@keyframes doc-block-changed {
+  0% {
+    opacity: 0;
+    box-shadow: inset 0 0 0 9999px rgba(59, 130, 246, 0.18);
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 1;
+    box-shadow: inset 0 0 0 9999px rgba(59, 130, 246, 0);
+  }
+}
+.marginalia .block-changed {
+  animation: doc-block-changed 900ms ease-out;
+  border-radius: 3px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .marginalia .block-changed {
+    animation: none;
+  }
+}
+
 .ic-card-orphaned {
   border-style: dashed;
 }

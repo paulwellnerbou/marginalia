@@ -276,6 +276,17 @@ function reportFailure(message: string): void {
   showErrorToast('That didn’t work', message);
 }
 
+/**
+ * Run `fn` once the browser is idle, falling back to a macrotask where
+ * `requestIdleCallback` is missing (Safari). Deliberately not cancellable:
+ * callers use it for follow-up work that must still land if the user
+ * navigates within the document.
+ */
+function whenIdle(fn: () => void): void {
+  if (window.requestIdleCallback) window.requestIdleCallback(fn, { timeout: 1000 });
+  else window.setTimeout(fn, 0);
+}
+
 export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   const navigate = useNavigate();
   const canComment = doc.role !== 'reader';
@@ -1362,10 +1373,34 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
           landThread(updated);
           await refreshThreads();
         } else if (kind === 'accept') {
-          const updated = await apiAcceptProposal(doc.uid, id, identity, body);
+          const { thread: updated, document: accepted } = await apiAcceptProposal(
+            doc.uid,
+            id,
+            identity,
+            body,
+          );
           landThread(updated);
-          await Promise.all([refreshDoc(), refreshThreads()]);
-          setHistoryVersion((v) => v + 1);
+          // The response already carries the rewritten document, so only fall
+          // back to a re-fetch if an older server left it out.
+          if (accepted) {
+            setLiveSource(accepted.source);
+            setLiveRendered(accepted.rendered);
+            // A snapshot requested before this accept described the old text.
+            documentRefreshRequestRef.current += 1;
+            // The new text and the card's own state are what the user is
+            // waiting on, and both are in hand now. Re-reading the thread
+            // list and the history panel only corrects things they cannot
+            // see yet, so let this action finish and do that work at idle —
+            // otherwise the button sits spinning through a full re-render of
+            // every comment card.
+            whenIdle(() => {
+              void refreshThreads();
+              setHistoryVersion((v) => v + 1);
+            });
+          } else {
+            await Promise.all([refreshDoc(), refreshThreads()]);
+            setHistoryVersion((v) => v + 1);
+          }
         } else {
           const updated = await apiRejectProposal(doc.uid, id, identity, body);
           landThread(updated);
