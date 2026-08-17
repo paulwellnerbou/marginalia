@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   adjacentThreadTarget,
+  type CardOffsetInput,
   clampCardLeft,
+  clampCardOffset,
   computeFloatingCardPosition,
   currentThreadIndex,
   type FloatingCardPlacementInput,
@@ -77,6 +79,61 @@ describe('clampCardLeft', () => {
   test('centers a card wider than the host', () => {
     expect(clampCardLeft(50, 380, 400)).toBe(10);
     expect(clampCardLeft(50, 500, 400)).toBe(0);
+  });
+});
+
+describe('clampCardOffset', () => {
+  // A 400x200 card sitting at (100, 500) in an 800-wide host, with the
+  // visible window covering 400..1000.
+  function offsetInput(overrides: Partial<CardOffsetInput> = {}): CardOffsetInput {
+    return {
+      baseTop: 500,
+      baseLeft: 100,
+      dx: 0,
+      dy: 0,
+      cardWidth: 400,
+      cardHeight: 200,
+      hostWidth: 800,
+      viewTop: 400,
+      viewHeight: 600,
+      ...overrides,
+    };
+  }
+
+  test('passes through an offset that keeps the card in view', () => {
+    expect(clampCardOffset(offsetInput({ dx: 200, dy: 120 }))).toEqual({ dx: 200, dy: 120 });
+  });
+
+  test('stops at the host edges', () => {
+    // Right edge: 800 - 400 - 12 = 388, so 288px of travel from 100.
+    expect(clampCardOffset(offsetInput({ dx: 5000 })).dx).toBe(288);
+    // Left margin is 12, so -88 from 100.
+    expect(clampCardOffset(offsetInput({ dx: -5000 })).dx).toBe(-88);
+  });
+
+  test('stops at the edges of the visible window', () => {
+    // Bottom: 400 + 600 - 200 - 12 = 788, so 288px down from 500.
+    expect(clampCardOffset(offsetInput({ dy: 5000 })).dy).toBe(288);
+    // Top of the window is 400, plus the 12 margin: 88px up from 500.
+    expect(clampCardOffset(offsetInput({ dy: -5000 })).dy).toBe(-88);
+  });
+
+  test('never pushes the card above the start of the document', () => {
+    const clamped = clampCardOffset(offsetInput({ baseTop: 40, dy: -5000, viewTop: -30 }));
+    expect(clamped.dy).toBe(-40);
+  });
+
+  test('keeps a card taller than the window covering it', () => {
+    // 900 tall in a 600 window: it can sit between "bottom edge at the
+    // bottom of the window" and "top edge at the top", nowhere else.
+    const tall = offsetInput({ cardHeight: 900, baseTop: 420 });
+    expect(clampCardOffset({ ...tall, dy: 5000 }).dy).toBe(400 + 12 - 420);
+    expect(clampCardOffset({ ...tall, dy: -5000 }).dy).toBe(400 + 600 - 900 - 12 - 420);
+  });
+
+  test('centers a card too wide to move sideways', () => {
+    const clamped = clampCardOffset(offsetInput({ cardWidth: 500, hostWidth: 400, dx: 300 }));
+    expect(clamped.dx).toBe(-100);
   });
 });
 

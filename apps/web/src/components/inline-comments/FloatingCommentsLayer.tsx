@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
+import { FloatingCardGrip } from './FloatingCardGrip.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 import {
   COMMENT_FLASH_MS,
@@ -19,6 +20,7 @@ import {
 } from './inlineUtils.js';
 import { computeAnchoredThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
+import { useFloatingCardDrag } from './useFloatingCardDrag.js';
 import { useFloatingCardPlacement } from './useFloatingCardPlacement.js';
 
 interface Props {
@@ -228,6 +230,14 @@ export function FloatingCommentsLayer({
     repositionKeys: [docHtml, threads],
   });
 
+  const drag = useFloatingCardDrag({
+    cardEl,
+    hostRef,
+    scrollContainerRef,
+    pos,
+    resetKey: openId,
+  });
+
   // Deferred scroll for focus signals that asked for it (deep links,
   // activity clicks): once the card has a position, bring it into view.
   useEffect(() => {
@@ -405,16 +415,17 @@ export function FloatingCommentsLayer({
       {openThread && (
         <div
           ref={setCardEl}
-          className="ic-float-card"
+          className={`ic-float-card${drag.dragging ? ' ic-float-card-dragging' : ''}`}
           role="dialog"
           aria-label="Comment thread"
           tabIndex={-1}
           style={
             pos
-              ? { top: `${pos.top}px`, left: `${pos.left}px` }
+              ? { top: `${pos.top + drag.offset.dy}px`, left: `${pos.left + drag.offset.dx}px` }
               : { top: 0, left: 0, visibility: 'hidden' }
           }
         >
+          <FloatingCardGrip drag={drag} label="Move this comment card" />
           <button
             type="button"
             className="ic-float-close"

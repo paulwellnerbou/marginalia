@@ -3,7 +3,9 @@ import { type RefObject, useCallback, useRef, useState } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
 import { resolveAnchorElement } from '../../lib/anchor-target.js';
 import type { CommentAnchor } from '../../lib/api.js';
+import { FloatingCardGrip } from './FloatingCardGrip.js';
 import { InlineComposer } from './InlineComposer.js';
+import { useFloatingCardDrag } from './useFloatingCardDrag.js';
 import { useFloatingCardPlacement } from './useFloatingCardPlacement.js';
 
 interface Props {
@@ -73,6 +75,14 @@ export function PendingCommentPopover({
     repositionKeys: [docHtml],
   });
 
+  const drag = useFloatingCardDrag({
+    cardEl,
+    hostRef,
+    scrollContainerRef,
+    pos,
+    resetKey: anchor,
+  });
+
   async function submitNew(body: string, name?: string) {
     const payload: Parameters<typeof onCreate>[0] = { anchor, body };
     if (name !== undefined) payload.display_name = name;
@@ -83,15 +93,16 @@ export function PendingCommentPopover({
     <div ref={hostRef} className="ic-float-host">
       <div
         ref={setCardEl}
-        className="ic-float-card"
+        className={`ic-float-card${drag.dragging ? ' ic-float-card-dragging' : ''}`}
         role="dialog"
         aria-label="New comment"
         style={
           pos
-            ? { top: `${pos.top}px`, left: `${pos.left}px` }
+            ? { top: `${pos.top + drag.offset.dy}px`, left: `${pos.left + drag.offset.dx}px` }
             : { top: 0, left: 0, visibility: 'hidden' }
         }
       >
+        <FloatingCardGrip drag={drag} label="Move this comment draft" />
         <button
           type="button"
           className="ic-float-close"
