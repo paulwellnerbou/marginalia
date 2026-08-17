@@ -198,14 +198,15 @@ export function sectionContains(section: DocumentSection, block: DocumentBlock):
  * A caller who meant the enclosing chapter can name it to `get_document`.
  *
  * Sections are in document order, so among those containing the block
- * the last one starts latest and is therefore the deepest.
+ * the last one starts latest and is therefore the deepest. Scanning
+ * backwards makes that the first hit rather than the surviving one.
  */
 export function sectionAt(map: DocumentBlockMap, block: DocumentBlock): DocumentSection | null {
-  let found: DocumentSection | null = null;
-  for (const section of map.sections) {
-    if (sectionContains(section, block)) found = section;
+  for (let i = map.sections.length - 1; i >= 0; i--) {
+    const section = map.sections[i] as DocumentSection;
+    if (sectionContains(section, block)) return section;
   }
-  return found;
+  return null;
 }
 
 /**
