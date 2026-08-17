@@ -14,6 +14,8 @@ const NUDGE_PX = 24;
 const NUDGE_FAST_FACTOR = 4;
 /** Pointer travel under this is a tap on the handle, not a drag. */
 const DRAG_SLOP_PX = 4;
+/** A click this soon after a drag is that drag's own, not an activation. */
+const TRAILING_CLICK_MS = 300;
 
 const NO_OFFSET = { dx: 0, dy: 0 } as const;
 
@@ -37,6 +39,7 @@ export interface FloatingCardDrag {
   /** Bind to the drag handle. */
   handleProps: {
     onPointerDown: (event: PointerEvent) => void;
+    onClick: () => void;
     onKeyDown: (event: KeyboardEvent) => void;
   };
 }
@@ -69,6 +72,10 @@ export function useFloatingCardDrag({
   const posRef = useRef(pos);
   /** The pointer that owns the drag in progress, if there is one. */
   const dragPointer = useRef<number | null>(null);
+  /** Ends the drag in progress. Held so unmounting can end one too. */
+  const teardown = useRef<(() => void) | null>(null);
+  /** When the last drag ended, to disown the click trailing it. */
+  const dragEndedAt = useRef(0);
   useEffect(() => {
     posRef.current = pos;
   }, [pos]);
@@ -141,8 +148,8 @@ export function useFloatingCardDrag({
       const pointerId = event.pointerId;
       dragPointer.current = pointerId;
       // Suppresses the text selection a drag off the handle would
-      // otherwise start; the click event it may also cost us is unused,
-      // taps are handled on pointerup below.
+      // otherwise start. Costs us the click in some browsers, which is
+      // why a tap is settled on pointerup rather than in `onClick`.
       event.preventDefault();
       const startX = event.clientX;
       const startY = event.clientY;
@@ -160,16 +167,21 @@ export function useFloatingCardDrag({
       };
       const onEnd = (ev: globalThis.PointerEvent) => {
         if (ev.pointerId !== pointerId) return;
-        dragPointer.current = null;
-        document.removeEventListener('pointermove', onMove);
-        document.removeEventListener('pointerup', onEnd);
-        document.removeEventListener('pointercancel', onEnd);
-        setDragging(false);
+        if (dragged) dragEndedAt.current = performance.now();
+        teardown.current?.();
         // Tapping the handle sends the card back to its anchor — the
         // only way back other than closing and reopening the thread.
         if (ev.type === 'pointerup' && !dragged) reset();
       };
 
+      teardown.current = () => {
+        teardown.current = null;
+        dragPointer.current = null;
+        document.removeEventListener('pointermove', onMove);
+        document.removeEventListener('pointerup', onEnd);
+        document.removeEventListener('pointercancel', onEnd);
+        setDragging(false);
+      };
       document.addEventListener('pointermove', onMove);
       document.addEventListener('pointerup', onEnd);
       document.addEventListener('pointercancel', onEnd);
@@ -177,13 +189,25 @@ export function useFloatingCardDrag({
     [move, reset],
   );
 
+  /**
+   * Snap back. Distinct from the pointerup path above because assistive
+   * tech activates a button with a bare `click` — no pointer events, no
+   * keydown — and the handle's own label promises this action.
+   *
+   * A finished drag can leave a click behind, which must not undo the
+   * drag it belongs to. That one arrives within a frame of pointerup;
+   * anything later is a real activation. Judged on a clock rather than
+   * a flag set at pointerup, because a drag released away from the
+   * handle produces no click at all — a flag would sit there armed and
+   * swallow the next genuine one.
+   */
+  const onClick = useCallback(() => {
+    if (performance.now() - dragEndedAt.current < TRAILING_CLICK_MS) return;
+    reset();
+  }, [reset]);
+
   const onKeyDown = useCallback(
     (event: KeyboardEvent) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        reset();
-        return;
-      }
       const step = event.shiftKey ? NUDGE_PX * NUDGE_FAST_FACTOR : NUDGE_PX;
       let dx = 0;
       let dy = 0;
@@ -196,13 +220,19 @@ export function useFloatingCardDrag({
       const cur = offsetRef.current;
       move(cur.dx + dx, cur.dy + dy);
     },
-    [move, reset],
+    [move],
   );
+
+  // A card can go away mid-drag — a refresh drops the open thread, the
+  // reader navigates — and the terminal pointer event then never
+  // reaches a live handler. Without this the document listeners outlive
+  // the card, holding a dead closure.
+  useEffect(() => () => teardown.current?.(), []);
 
   return {
     offset,
     moved: offset.dx !== 0 || offset.dy !== 0,
     dragging,
-    handleProps: { onPointerDown, onKeyDown },
+    handleProps: { onPointerDown, onClick, onKeyDown },
   };
 }
