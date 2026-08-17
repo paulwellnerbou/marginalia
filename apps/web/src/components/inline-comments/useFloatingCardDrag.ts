@@ -67,6 +67,8 @@ export function useFloatingCardDrag({
   // last of any burst inside one task.
   const offsetRef = useRef(offset);
   const posRef = useRef(pos);
+  /** The pointer that owns the drag in progress, if there is one. */
+  const dragPointer = useRef<number | null>(null);
   useEffect(() => {
     posRef.current = pos;
   }, [pos]);
@@ -130,6 +132,14 @@ export function useFloatingCardDrag({
   const onPointerDown = useCallback(
     (event: PointerEvent) => {
       if (event.button !== 0) return;
+      // One pointer owns a drag from start to finish. The listeners
+      // below are on the document, so on a touch screen every other
+      // finger on the glass reports through them too: an unfiltered
+      // drag would be steered by whichever finger moved last, and
+      // ended by whichever lifted first.
+      if (dragPointer.current !== null) return;
+      const pointerId = event.pointerId;
+      dragPointer.current = pointerId;
       // Suppresses the text selection a drag off the handle would
       // otherwise start; the click event it may also cost us is unused,
       // taps are handled on pointerup below.
@@ -141,6 +151,7 @@ export function useFloatingCardDrag({
       setDragging(true);
 
       const onMove = (ev: globalThis.PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
         const dx = ev.clientX - startX;
         const dy = ev.clientY - startY;
         if (!dragged && Math.hypot(dx, dy) <= DRAG_SLOP_PX) return;
@@ -148,6 +159,8 @@ export function useFloatingCardDrag({
         move(base.dx + dx, base.dy + dy);
       };
       const onEnd = (ev: globalThis.PointerEvent) => {
+        if (ev.pointerId !== pointerId) return;
+        dragPointer.current = null;
         document.removeEventListener('pointermove', onMove);
         document.removeEventListener('pointerup', onEnd);
         document.removeEventListener('pointercancel', onEnd);
