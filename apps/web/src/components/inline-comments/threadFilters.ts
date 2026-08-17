@@ -68,13 +68,44 @@ function viewerHadLastWord(
   return latest?.author.client_id === viewerClientId;
 }
 
-/** Names the non-default filters so a collapsed filter row can still say what it is hiding. */
+/**
+ * The filter row's switches, one per axis. Each is a plain on/off: off
+ * *is* 'all', which is why the row offers no "All" to pick — turning the
+ * switch off already means it.
+ */
+export interface ThreadFilterToggle {
+  /** Doubles as the name of the filter while it is on. */
+  label: string;
+  /** What turning it on keeps. */
+  hint: string;
+  isOn: (filters: ThreadFilters) => boolean;
+  toggle: (filters: ThreadFilters) => ThreadFilters;
+}
+
+export const THREAD_FILTER_TOGGLES: readonly ThreadFilterToggle[] = [
+  {
+    label: 'Unresolved',
+    hint: 'Only threads still open',
+    isOn: (f) => f.status === 'unresolved',
+    toggle: (f) => ({ ...f, status: f.status === 'unresolved' ? 'all' : 'unresolved' }),
+  },
+  {
+    label: 'Proposals',
+    hint: 'Only edit proposals',
+    isOn: (f) => f.kind === 'proposals',
+    toggle: (f) => ({ ...f, kind: f.kind === 'proposals' ? 'all' : 'proposals' }),
+  },
+  {
+    label: 'Unanswered',
+    hint: 'Only threads where someone else had the last word',
+    isOn: (f) => f.replies === 'unanswered',
+    toggle: (f) => ({ ...f, replies: f.replies === 'unanswered' ? 'all' : 'unanswered' }),
+  },
+];
+
+/** Names the filters that are narrowing the list. */
 export function activeThreadFilterLabels(filters: ThreadFilters): string[] {
-  const labels: string[] = [];
-  if (filters.status === 'unresolved') labels.push('Unresolved');
-  if (filters.kind === 'proposals') labels.push('Proposals');
-  if (filters.replies === 'unanswered') labels.push('Unanswered');
-  return labels;
+  return THREAD_FILTER_TOGGLES.filter((t) => t.isOn(filters)).map((t) => t.label);
 }
 
 export function isFilteringThreads(filters: ThreadFilters): boolean {

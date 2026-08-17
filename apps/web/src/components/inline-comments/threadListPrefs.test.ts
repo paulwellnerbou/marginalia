@@ -3,13 +3,10 @@
 import { beforeEach, expect, test } from 'bun:test';
 import {
   DEFAULT_THREAD_FILTERS,
-  DEFAULT_THREAD_FILTERS_OPEN,
   DEFAULT_THREAD_SORT_MODE,
   loadThreadFilters,
-  loadThreadFiltersOpen,
   loadThreadSortMode,
   saveThreadFilters,
-  saveThreadFiltersOpen,
   saveThreadSortMode,
 } from './threadListPrefs.js';
 
@@ -30,21 +27,17 @@ beforeEach(() => store.clear());
 test('an untouched browser gets the shipped defaults', () => {
   expect(loadThreadSortMode()).toBe('latest');
   expect(loadThreadFilters()).toEqual({ status: 'unresolved', kind: 'all', replies: 'all' });
-  expect(loadThreadFiltersOpen()).toBe(true);
 
   expect(DEFAULT_THREAD_SORT_MODE).toBe('latest');
   expect(DEFAULT_THREAD_FILTERS).toEqual({ status: 'unresolved', kind: 'all', replies: 'all' });
-  expect(DEFAULT_THREAD_FILTERS_OPEN).toBe(true);
 });
 
 test('round-trips every setting', () => {
   saveThreadSortMode('document');
   saveThreadFilters({ status: 'all', kind: 'proposals', replies: 'unanswered' });
-  saveThreadFiltersOpen(false);
 
   expect(loadThreadSortMode()).toBe('document');
   expect(loadThreadFilters()).toEqual({ status: 'all', kind: 'proposals', replies: 'unanswered' });
-  expect(loadThreadFiltersOpen()).toBe(false);
 });
 
 test('non-default values that match a default still round-trip', () => {
@@ -71,11 +64,4 @@ test('junk falls back per dimension, leaving the other one intact', () => {
 test('a browser with no stored replies filter keeps every thread', () => {
   store.set('marginalia.threadListStatus', 'all');
   expect(loadThreadFilters().replies).toBe('all');
-});
-
-test('only a literal "true" keeps the filter row open', () => {
-  store.set('marginalia.threadListFiltersOpen', 'yes');
-  expect(loadThreadFiltersOpen()).toBe(false);
-  store.set('marginalia.threadListFiltersOpen', 'true');
-  expect(loadThreadFiltersOpen()).toBe(true);
 });

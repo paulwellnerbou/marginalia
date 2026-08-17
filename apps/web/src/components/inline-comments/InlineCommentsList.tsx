@@ -1,18 +1,12 @@
 import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
 import {
+  ClockIcon,
   Cross2Icon,
   DotsHorizontalIcon,
   MagnifyingGlassIcon,
-  MixerHorizontalIcon,
+  TextAlignLeftIcon,
 } from '@radix-ui/react-icons';
-import {
-  Button,
-  DropdownMenu,
-  IconButton,
-  SegmentedControl,
-  Text,
-  TextField,
-} from '@radix-ui/themes';
+import { Button, DropdownMenu, IconButton, Text, TextField } from '@radix-ui/themes';
 import { FunnelIcon } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Thread } from '../../lib/api.js';
@@ -27,22 +21,17 @@ import { InlineThreadCard } from './InlineThreadCard.js';
 import { type ThreadActionResult, threadLinks, threadsById } from './inlineUtils.js';
 import {
   ALL_THREAD_FILTERS,
-  activeThreadFilterLabels,
   cardMatchesFilters,
   isFilteringThreads,
   normalizeThreadSearch,
+  THREAD_FILTER_TOGGLES,
   type ThreadFilters,
-  type ThreadKindFilter,
-  type ThreadRepliesFilter,
-  type ThreadStatusFilter,
   threadMatchesSearch,
 } from './threadFilters.js';
 import {
   loadThreadFilters,
-  loadThreadFiltersOpen,
   loadThreadSortMode,
   saveThreadFilters,
-  saveThreadFiltersOpen,
   saveThreadSortMode,
   type ThreadSortMode,
 } from './threadListPrefs.js';
@@ -114,6 +103,12 @@ interface ThreadListItem {
 
 const FOCUS_FLASH_MS = 760;
 const FOCUS_HIGHLIGHT_MS = 1800;
+
+/** Names the order the list is in, not the one clicking would pick. */
+const SORT_MODE_LABELS: Record<ThreadSortMode, string> = {
+  document: 'Document order',
+  latest: 'Latest first',
+};
 
 export function InlineCommentsList({
   uid,
@@ -204,7 +199,6 @@ export function InlineCommentsList({
   // Remembered per browser, so the pane opens the way it was left.
   const [sortMode, setSortMode] = useState<ThreadSortMode>(loadThreadSortMode);
   const [filters, setFilters] = useState<ThreadFilters>(loadThreadFilters);
-  const [filtersOpen, setFiltersOpen] = useState(loadThreadFiltersOpen);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const searchNeedle = useMemo(() => normalizeThreadSearch(searchQuery), [searchQuery]);
@@ -215,9 +209,6 @@ export function InlineCommentsList({
   useEffect(() => {
     saveThreadFilters(filters);
   }, [filters]);
-  useEffect(() => {
-    saveThreadFiltersOpen(filtersOpen);
-  }, [filtersOpen]);
 
   const sortedActive = useMemo(() => sortItems(activeItems, sortMode), [activeItems, sortMode]);
   const sortedOrphans = useMemo(
@@ -349,15 +340,11 @@ export function InlineCommentsList({
     return () => window.cancelAnimationFrame(frame);
   }, [searchOpen]);
 
-  const activeFilters = activeThreadFilterLabels(filters);
-  const filterToggleLabel = filtersOpen
-    ? 'Hide thread filters'
-    : activeFilters.length > 0
-      ? `Thread filters — ${activeFilters.join(', ')}`
-      : 'Filter threads';
   const searchToggleLabel = searchOpen
     ? 'Hide thread search'
     : 'Search threads by id, text, or author';
+
+  const otherSortMode: ThreadSortMode = sortMode === 'document' ? 'latest' : 'document';
 
   function toggleSearch() {
     // Closing always clears: a query that keeps filtering from behind a
@@ -494,99 +481,22 @@ export function InlineCommentsList({
           empty pane. */}
       {(totalCards > 1 || searchOpen || (totalCards > 0 && isFilteringThreads(filters))) && (
         <div className="ic-list-controls">
-          {/* Wraps: one row on a wide pane, one row per control on a narrow one. */}
-          <div className="ic-list-control-groups">
-            <div className="ic-list-control">
-              <Text as="label" htmlFor="ic-list-sort" size="1" color="gray">
-                Sort by
-              </Text>
-              <SegmentedControl.Root
-                id="ic-list-sort"
-                size="1"
-                value={sortMode}
-                onValueChange={(v) => setSortMode(v as ThreadSortMode)}
-                aria-label="Sort threads"
-              >
-                <SegmentedControl.Item value="document" title="Appearance in document">
-                  Appearance
-                </SegmentedControl.Item>
-                <SegmentedControl.Item value="latest" title="Latest activity first">
-                  Latest
-                </SegmentedControl.Item>
-              </SegmentedControl.Root>
-            </div>
-
-            {filtersOpen && (
-              <>
-                <div className="ic-list-control">
-                  <Text as="label" htmlFor="ic-list-filter-status" size="1" color="gray">
-                    Status
-                  </Text>
-                  <SegmentedControl.Root
-                    id="ic-list-filter-status"
-                    size="1"
-                    value={filters.status}
-                    onValueChange={(v) =>
-                      setFilters((prev) => ({ ...prev, status: v as ThreadStatusFilter }))
-                    }
-                    aria-label="Filter threads by status"
-                  >
-                    <SegmentedControl.Item value="all" title="Resolved and unresolved threads">
-                      All
-                    </SegmentedControl.Item>
-                    <SegmentedControl.Item value="unresolved" title="Only threads still open">
-                      Unresolved
-                    </SegmentedControl.Item>
-                  </SegmentedControl.Root>
-                </div>
-                <div className="ic-list-control">
-                  <Text as="label" htmlFor="ic-list-filter-kind" size="1" color="gray">
-                    Type
-                  </Text>
-                  <SegmentedControl.Root
-                    id="ic-list-filter-kind"
-                    size="1"
-                    value={filters.kind}
-                    onValueChange={(v) =>
-                      setFilters((prev) => ({ ...prev, kind: v as ThreadKindFilter }))
-                    }
-                    aria-label="Filter threads by type"
-                  >
-                    <SegmentedControl.Item value="all" title="Comments and edit proposals">
-                      All
-                    </SegmentedControl.Item>
-                    <SegmentedControl.Item value="proposals" title="Only edit proposals">
-                      Proposals
-                    </SegmentedControl.Item>
-                  </SegmentedControl.Root>
-                </div>
-                <div className="ic-list-control">
-                  <Text as="label" htmlFor="ic-list-filter-replies" size="1" color="gray">
-                    Replies
-                  </Text>
-                  <SegmentedControl.Root
-                    id="ic-list-filter-replies"
-                    size="1"
-                    value={filters.replies}
-                    onValueChange={(v) =>
-                      setFilters((prev) => ({ ...prev, replies: v as ThreadRepliesFilter }))
-                    }
-                    aria-label="Filter threads by who replied last"
-                  >
-                    <SegmentedControl.Item value="all" title="Whoever replied last">
-                      All
-                    </SegmentedControl.Item>
-                    <SegmentedControl.Item
-                      value="unanswered"
-                      title="Only threads where someone else had the last word"
-                    >
-                      Unanswered
-                    </SegmentedControl.Item>
-                  </SegmentedControl.Root>
-                </div>
-              </>
+          {/* Current order, not a filter — a plain button rather than a pill,
+              so it can't read as one of the chips below. */}
+          <button
+            type="button"
+            className="ic-list-sort"
+            aria-label={`Sorted by ${SORT_MODE_LABELS[sortMode].toLowerCase()} — switch to ${SORT_MODE_LABELS[otherSortMode].toLowerCase()}`}
+            title={`Sort by ${SORT_MODE_LABELS[otherSortMode].toLowerCase()}`}
+            onClick={() => setSortMode(otherSortMode)}
+          >
+            {sortMode === 'document' ? (
+              <TextAlignLeftIcon className="ic-list-sort-icon" aria-hidden />
+            ) : (
+              <ClockIcon className="ic-list-sort-icon" aria-hidden />
             )}
-          </div>
+            {SORT_MODE_LABELS[sortMode]}
+          </button>
 
           <div className="ic-list-controls-actions">
             <IconButton
@@ -600,24 +510,7 @@ export function InlineCommentsList({
             >
               <MagnifyingGlassIcon />
             </IconButton>
-            {/* Accent (rather than gray) while filtering, so the state carries
-                even where the indicator dot is easy to miss. */}
-            {/* Stays `ghost` in both states — `soft` drops the negative margin
-                a ghost button carries, so the icon visibly grows on toggle. */}
-            <IconButton
-              variant="ghost"
-              size="1"
-              {...(activeFilters.length > 0 ? {} : { color: 'gray' as const })}
-              className="ic-list-filter-toggle"
-              data-filtering={activeFilters.length > 0 ? 'true' : undefined}
-              aria-expanded={filtersOpen}
-              aria-label={filterToggleLabel}
-              title={filterToggleLabel}
-              onClick={() => setFiltersOpen((v) => !v)}
-            >
-              <MixerHorizontalIcon />
-            </IconButton>
-            {/* The menu has nothing to do with filtering — don't let the two
+            {/* The menu has nothing to do with search — don't let the two
                 icons read as one control. */}
             <span className="ic-list-controls-divider" aria-hidden="true" />
             <DropdownMenu.Root>
@@ -632,6 +525,27 @@ export function InlineCommentsList({
                 </DropdownMenu.Item>
               </DropdownMenu.Content>
             </DropdownMenu.Root>
+          </div>
+
+          {/* Compact enough to stay put, so there is no disclosure to open and
+              no dot to say a filter is on: an unlit chip *is* "all". */}
+          {/* biome-ignore lint/a11y/useSemanticElements: <fieldset> is form-only; these are filter switches */}
+          <div className="ic-list-filter-chips" role="group" aria-label="Filter threads">
+            {THREAD_FILTER_TOGGLES.map((filter) => {
+              const on = filter.isOn(filters);
+              return (
+                <button
+                  key={filter.label}
+                  type="button"
+                  className="ic-list-filter-chip"
+                  aria-pressed={on}
+                  title={on ? `Stop showing only ${filter.label.toLowerCase()}` : filter.hint}
+                  onClick={() => setFilters(filter.toggle)}
+                >
+                  {filter.label}
+                </button>
+              );
+            })}
           </div>
 
           {searchOpen && (

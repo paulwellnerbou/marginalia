@@ -2512,13 +2512,13 @@ button.primary:disabled {
   min-width: 0;
 }
 
-/* Wraps too, so the actions drop to their own line on a pane too narrow to
-   hold them beside the controls rather than overlapping them. */
+/* Three rows out of one wrapping flex line: sort and the actions share line
+   one, the filter chips and the search box each claim a full basis below. */
 .ic-list-controls {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 0.4rem;
+  align-items: center;
+  gap: 0.35rem 0.5rem;
   /* Sort, filters and search stay reachable while the threads scroll under
      them. The negative margins cancel .ic-list's padding so the opaque strip
      spans the pane edge to edge; the padding puts the spacing back inside. */
@@ -2531,36 +2531,100 @@ button.primary:disabled {
   border-bottom: 1px solid var(--ui-border);
 }
 
-/* Each control keeps its own label, so wrapping stays readable: the pane
-   decides whether they sit on one row or stack. The min-content basis is
-   what lets the actions share line one whenever the widest single control
-   still leaves room for them. */
-.ic-list-control-groups {
-  flex: 1 1 min-content;
+/* Shares line one with the actions. No pill or track: the sort order is
+   not one of the filters below, and looking like them would say it is. */
+.ic-list-sort {
+  flex: none;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.4rem;
+  /* Cancels the left padding so the icon starts on the same x as the chips'
+     left edge below, while the hover surface keeps its breathing room. */
+  margin-left: -0.4rem;
+  border: 0;
+  border-radius: var(--radius-2);
+  background: transparent;
+  color: var(--ui-fg);
+  font: inherit;
+  font-size: var(--font-size-1);
+  line-height: var(--line-height-1);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ic-list-sort:hover {
+  background: var(--gray-a3);
+}
+
+.ic-list-sort:focus-visible {
+  outline: 2px solid var(--ui-accent-focus);
+  outline-offset: 1px;
+}
+
+.ic-list-sort-icon {
+  width: 13px;
+  height: 13px;
+  color: var(--ui-fg-muted);
+}
+
+/* Full flex-basis keeps the chips on their own row under the sort button,
+   so they read as one group however wide the pane is. */
+.ic-list-filter-chips {
+  flex: 1 1 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.3rem 0.6rem;
+  gap: 0.3rem;
 }
 
-/* flex: none so a tight pane wraps whole controls instead of squeezing
-   their labels onto two lines. */
-.ic-list-control {
-  flex: none;
-  display: flex;
+/* Same pill vocabulary as the reaction chips (.ic-reaction-chip): outlined
+   while off, accent-filled once it is narrowing the list. State rides on the
+   fill alone — a leading check would eat the width that keeps all three on
+   one line in a pane this narrow. */
+.ic-list-filter-chip {
+  appearance: none;
+  display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  padding: 0.05rem 0.5rem;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ui-fg-muted);
+  font: inherit;
+  font-size: var(--font-size-1);
+  line-height: 1.6;
   white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color 80ms ease,
+    border-color 80ms ease,
+    color 80ms ease;
 }
 
-/* A shared label width lines every control up on the same x once the row
-   wraps — the widest label ("Sort by") sets it. */
-.ic-list-control > label {
-  min-width: 2.6rem;
+.ic-list-filter-chip:hover {
+  border-color: var(--gray-8);
+  color: var(--ui-fg);
 }
 
-/* Right-aligned on whichever line it lands on. Generous gap: the ghost
-   buttons' negative margins eat into it. */
+.ic-list-filter-chip[aria-pressed="true"] {
+  border-color: var(--accent-7);
+  background: var(--accent-3);
+  color: var(--accent-11);
+}
+
+.ic-list-filter-chip[aria-pressed="true"]:hover {
+  background: var(--accent-4);
+}
+
+.ic-list-filter-chip:focus-visible {
+  outline: 2px solid var(--ui-accent-focus);
+  outline-offset: 1px;
+}
+
+/* Pinned to the right of line one. Generous gap: the ghost buttons'
+   negative margins eat into it. */
 .ic-list-controls-actions {
   flex: none;
   margin-left: auto;
@@ -2577,7 +2641,7 @@ button.primary:disabled {
 }
 
 /* Full flex-basis drops the search box onto its own row of the controls
-   flex-wrap, under whatever the toggles wrapped into. */
+   flex-wrap, below the filter chips. */
 .ic-list-search {
   flex: 1 1 100%;
   display: flex;
@@ -2618,22 +2682,6 @@ button.primary:disabled {
 .ic-list-search-clear-icon {
   width: 14px;
   height: 14px;
-}
-
-.ic-list-filter-toggle {
-  position: relative;
-}
-
-/* Says a filter is on while the controls that set it are hidden. */
-.ic-list-filter-toggle[data-filtering]::after {
-  content: "";
-  position: absolute;
-  top: -1px;
-  right: -1px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-9);
 }
 
 .ic-list-orphans {
