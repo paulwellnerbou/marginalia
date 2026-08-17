@@ -1518,6 +1518,46 @@ describe('threads API', () => {
     expect(accepted.document?.rendered.html).toBe(fetched.rendered.html);
   });
 
+  test('reopening an accepted proposal reverts without shipping the document', async () => {
+    const uid = await newDoc('alpha\n\nbeta\n');
+    const blockId = await firstBlockId(uid);
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          proposal: { proposed_text: 'ALPHA' },
+        }),
+      }),
+    );
+    const proposed = (await proposeRes.json()) as { thread: ThreadShape };
+    const respond = (body: unknown) =>
+      app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${proposed.thread.id}/respond`, {
+          method: 'POST',
+          headers: asAdmin(),
+          body: JSON.stringify(body),
+        }),
+      );
+
+    expect((await respond({ action: 'accept' })).status).toBe(200);
+
+    const reopenRes = await respond({ action: 'reopen' });
+    expect(reopenRes.status).toBe(200);
+    const reopened = (await reopenRes.json()) as { document: unknown };
+
+    // The revert really happens…
+    const after = (await (
+      await app.hono.fetch(new Request(`http://test/api/documents/${uid}`, { headers: asAdmin() }))
+    ).json()) as { source: string };
+    expect(after.source).toBe('alpha\n\nbeta\n');
+    // …but no client reads `document` on this path, so building it would mean
+    // an asset rewrite over the whole document and a document-sized payload
+    // that goes straight in the bin.
+    expect(reopened.document).toBeNull();
+  });
+
   test('accepting a proposal leaves unmoved comments untouched', async () => {
     const uid = await newDoc('alpha\n\nbeta\n\ngamma\n');
     const docRes = await app.hono.fetch(
