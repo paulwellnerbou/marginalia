@@ -215,7 +215,7 @@ when no password is set.
 
 | Tool | |
 | --- | --- |
-| `list_threads` | Comments and edit proposals with their discussion and anchored text. Open threads only, unless `thread_id` names one or `state` asks for more. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter. A targeted thread includes one surrounding block on each side by default; `context_blocks` overrides that. |
+| `list_threads` | Comments and edit proposals with their discussion and anchored text. Open threads only, unless `thread_id` names one or `state` asks for more. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter. A targeted thread includes one surrounding block on each side by default; `context` overrides that with a block count, `"section"` for the whole enclosing section, or `"none"`. |
 | `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet). |
 | `create_proposal` | A suggested replacement. `answers_thread_ids` links it to the comments it answers — every one the edit settles, not just the one that prompted it. |
 | `update_proposal` | Revise an open proposal you authored, or any open proposal as document admin — new text, same thread, discussion intact. Rebuilds it against the current source, so it also refreshes a stale or conflicted proposal. `comment` posts a revision note in the discussion alongside the change. |
@@ -288,9 +288,15 @@ reviewed first.
 ## Reading around a comment
 
 A comment often argues about text it never quotes — *"this contradicts the paragraph
-above"*. `list_threads` shows the anchored block by default. When `thread_id` or a
-`#comment-…` link narrows the result to one thread, it also includes one block either side;
-`context_blocks` can request 0–3 explicitly:
+above"*. `list_threads` takes a `context` argument for how much of the document to print
+under each thread:
+
+| `context` | What it prints |
+| --- | --- |
+| `"none"` | No source at all. |
+| `"block"` | The anchored block only. |
+| `0`–`10` | That block plus N whole blocks either side. |
+| `"section"` | The entire section the anchor sits in, heading included. |
 
 ```
 source before the anchor (1 block):
@@ -301,14 +307,28 @@ source after the anchor (1 block):
   | ## Chapter Three
 ```
 
-Context is whole blocks, never a character window — half a sentence of markdown is worse
-than none. Nested blocks are stepped over, so context on a list item is what reads around
-the *whole list* rather than the neighbouring bullet.
+Block context is whole blocks, never a character window — half a sentence of markdown is
+worse than none. Nested blocks are stepped over, so context on a list item is what reads
+around the *whole list* rather than the neighbouring bullet.
 
-It defaults to off for a thread list because every thread would pay for it, and to one block
-either side for a targeted thread so a client can understand the comment without another
-call. Pass `context_blocks: 0` to omit it. A comment covering several blocks — the viewer
-writes one when a selection spans paragraphs — shows all of them, not just the first.
+`"section"` answers the other question — *which chapter is this argument about* — without a
+follow-up `get_document`. It takes the innermost section, so a comment under `### Flags`
+gets that subsection rather than the chapter enclosing it; name the parent to `get_document`
+when you want more. Threads cluster in the chapter under discussion, so a section is printed
+once per response and later threads sharing it say where it appeared. It is also the only
+setting that still produces text for an *orphaned* thread: the anchor block is gone, but the
+heading path it was captured under survives. Sections are charged against one budget for the
+whole response; past it they are named, with the `get_document` call that reads them, rather
+than trimmed silently. Reach for it on a focused thread or a `section`-filtered queue — on a
+long unfiltered one it echoes much of the document back.
+
+Context defaults to `"block"` for a thread list, because every thread would otherwise pay
+for it, and to `1` for a thread targeted by `thread_id` or a `#comment-…` link, so a client
+can understand that comment without another call. A comment covering several blocks — the
+viewer writes one when a selection spans paragraphs — shows all of them, not just the first.
+
+`context_blocks` and `include_anchor_source` are the earlier spellings of the numeric and
+`"none"` settings. Both still work; an explicit `context` wins over either.
 
 ## Comments become proposals
 

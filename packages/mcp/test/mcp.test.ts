@@ -392,6 +392,59 @@ describe('marginalia MCP server', () => {
     expect(invalidThread).toContain('thread_id');
   });
 
+  test('reads the whole enclosing section in one call', async () => {
+    const { adminUrl } = await seedBook();
+    await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'Water rations: four days',
+      body: 'Four days of water for a distance nobody has measured?',
+    });
+
+    const withSection = await call('list_threads', { document: adminUrl, context: 'section' });
+    expect(withSection).toContain('section source — The Salt Road › Chapter Two');
+    // The chapter entire: the prose the comment argues about, and the
+    // sibling bullet a block-count context deliberately steps over.
+    expect(withSection).toContain('By noon the dunes had swallowed the horizon');
+    expect(withSection).toContain('Distance to the well: unknown');
+    // Its own chapter, not the book.
+    expect(withSection).not.toContain('They reached the well on the fourth evening');
+    expect(withSection).not.toContain('The caravan left before dawn');
+
+    const noSource = await call('list_threads', { document: adminUrl, context: 'none' });
+    expect(noSource).not.toContain('current source of the anchored block');
+    // The anchor's own quote is not source context — it says what the
+    // comment points at, and survives every scope.
+    expect(noSource).toContain('quoted text: "Water rations: four days"');
+    expect(noSource).toContain('Four days of water');
+  });
+
+  test('still honours the two arguments `context` replaced', async () => {
+    const { adminUrl } = await seedBook();
+    await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'Water rations: four days',
+      body: 'How is this reconciled with the unknown distance?',
+    });
+
+    const legacyBlocks = await call('list_threads', { document: adminUrl, context_blocks: 1 });
+    expect(legacyBlocks).toContain('By noon the dunes had swallowed the horizon');
+
+    const legacyOff = await call('list_threads', {
+      document: adminUrl,
+      include_anchor_source: false,
+    });
+    expect(legacyOff).not.toContain('current source of the anchored block');
+
+    // An explicit `context` outranks a stale flag a wrapper still sends,
+    // so naming the new argument is never silently overruled.
+    const bothGiven = await call('list_threads', {
+      document: adminUrl,
+      context: 'section',
+      include_anchor_source: false,
+    });
+    expect(bothGiven).toContain('section source — The Salt Road › Chapter Two');
+  });
+
   test('shows every block a comment spans, not only the first', async () => {
     const { adminUrl, uid } = await seedBook();
     const invite = await call('create_invite', {

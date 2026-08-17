@@ -6,6 +6,8 @@ import {
   type DocumentBlock,
   type DocumentBlockMap,
   type DocumentSection,
+  sectionAt,
+  sectionByPath,
 } from './blocks.js';
 import type { DocumentRef } from './document-ref.js';
 import { commentUrl, documentUrl, viewerUrl } from './document-ref.js';
@@ -139,9 +141,9 @@ export function sectionHeader(section: DocumentSection): string {
     .join('\n');
 }
 
-function size(text: string): string {
+/** `lines` is worth passing when the caller already knows it — see `sectionContext`. */
+function size(text: string, lines = text.split('\n').length): string {
   const chars = text.length;
-  const lines = text.split('\n').length;
   const human = chars >= 1000 ? `${(chars / 1000).toFixed(1)}k chars` : `${chars} chars`;
   return `${human}, ${lines} lines`;
 }
@@ -181,20 +183,51 @@ export function blockList(
   return `${blocks.length} of ${total} blocks\n\n${parts.join('\n\n')}`;
 }
 
+/**
+ * How much document text to print under a thread.
+ *
+ * `'none'` prints none, `'block'` the anchored block alone, a number
+ * that block plus N whole blocks either side, and `'section'` the entire
+ * section the anchor sits in — the "what chapter is this argument about"
+ * question, which no count of blocks answers reliably.
+ */
+export type ContextScope = 'none' | 'block' | 'section' | number;
+
 export interface ThreadListOptions {
-  /** Include the anchored block's current source under each thread. */
-  includeAnchorSource: boolean;
-  /** Whole blocks of surrounding source to add either side of it. */
-  contextBlocks: number;
+  context: ContextScope;
   blockMap: DocumentBlockMap | null;
   /** Where the threads live, so each can carry its shareable link. */
   ref: DocumentRef;
 }
 
+/**
+ * Section source is charged against one budget for the whole response.
+ *
+ * A chapter under every thread of a long queue would repeat the document
+ * back several times over; the ledger prints each section once and stops
+ * once the response has spent this much on them, naming what it withheld
+ * rather than trimming silently.
+ */
+const SECTION_SOURCE_BUDGET = 24000;
+/** Below this much budget left, print nothing rather than a useless sliver. */
+const SECTION_MIN_SLICE = 500;
+
+interface SectionLedger {
+  /** Section index → the thread it was already printed under. */
+  shown: Map<number, string>;
+  /** Characters of section source this response may still print. */
+  budget: number;
+}
+
+function newSectionLedger(): SectionLedger {
+  return { shown: new Map(), budget: SECTION_SOURCE_BUDGET };
+}
+
 export function threadList(threads: ThreadWire[], options: ThreadListOptions): string {
   if (threads.length === 0) return 'No threads matched.';
+  const ledger = newSectionLedger();
   return threads
-    .map((thread, i) => threadDetail(thread, i + 1, threads.length, options))
+    .map((thread, i) => threadDetail(thread, i + 1, threads.length, options, ledger))
     .join('\n\n');
 }
 
@@ -203,6 +236,7 @@ export function threadDetail(
   position: number,
   total: number,
   options: ThreadListOptions,
+  ledger: SectionLedger = newSectionLedger(),
 ): string {
   const kind = thread.proposal ? 'EDIT PROPOSAL' : 'COMMENT THREAD';
   const status = threadStatus(thread);
@@ -273,9 +307,10 @@ export function threadDetail(
     }
   });
 
+  const contextBlocks = typeof options.context === 'number' ? options.context : 0;
   const around =
-    options.includeAnchorSource && options.blockMap && block
-      ? anchorNeighbourhood(options.blockMap, block, endBlock, options.contextBlocks)
+    options.context !== 'none' && options.blockMap && block
+      ? anchorNeighbourhood(options.blockMap, block, endBlock, contextBlocks)
       : null;
   if (around?.before) {
     lines.push(`source before the anchor (${plural(around.beforeBlocks, 'block')}):`);
@@ -294,8 +329,63 @@ export function threadDetail(
     lines.push(`source after the anchor (${plural(around.afterBlocks, 'block')}):`);
     lines.push(gutter(around.after));
   }
+  if (options.context === 'section' && options.blockMap) {
+    // An orphaned thread has no block left to locate, but its anchor kept
+    // the heading path — the one setting under which such a thread still
+    // comes with the text it was written about.
+    const section = block
+      ? sectionAt(options.blockMap, block)
+      : sectionByPath(options.blockMap, anchor.heading_path ?? []);
+    lines.push(
+      ...(section
+        ? sectionContext(section, thread.id, ledger)
+        : ['section source: unavailable — this thread could not be placed in any section']),
+    );
+  }
 
   return lines.join('\n');
+}
+
+/**
+ * The anchor's whole section, or a pointer to where it already appeared.
+ *
+ * Repeats are the common case: threads cluster in the chapter under
+ * discussion, and printing it per thread would spend the response on the
+ * same prose. Naming the thread it was printed under keeps it findable.
+ */
+function sectionContext(
+  section: DocumentSection,
+  threadId: string,
+  ledger: SectionLedger,
+): string[] {
+  const path = section.path.join(' › ');
+  // The line count from the recorded range, not a scan of the source: the
+  // label is printed for every thread in the section, repeats included.
+  // A trailing-trimmed section spans exactly this many lines.
+  const lines = section.endLine - section.startLine + 1;
+  const label = `section source — ${path} (lines ${section.startLine}-${section.endLine}, ${size(section.source, lines)})`;
+  const readIt = `get_document with section: ${JSON.stringify(section.path.join(' > '))}`;
+
+  const shownUnder = ledger.shown.get(section.index);
+  if (shownUnder !== undefined) return [`${label}: printed above under thread ${shownUnder}`];
+
+  // Recorded only once it really is above: pointing a reader at a
+  // section that was itself withheld would send them looking for text
+  // this response never contained. A budget too small to carry a usable
+  // slice is spent — a 40-character fragment of a chapter is not context.
+  if (ledger.budget < SECTION_MIN_SLICE) {
+    return [
+      `${label}: withheld — this response’s section budget is spent. Read it with ${readIt}.`,
+    ];
+  }
+  const spend = Math.min(section.source.length, ledger.budget);
+  ledger.budget -= spend;
+  ledger.shown.set(section.index, threadId);
+  const body =
+    spend < section.source.length
+      ? `${section.source.slice(0, spend)}\n…(truncated at ${spend} of ${section.source.length} chars — read the rest with ${readIt})`
+      : section.source;
+  return [`${label}:`, gutter(body)];
 }
 
 /**

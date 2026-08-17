@@ -189,6 +189,43 @@ export function sectionContains(section: DocumentSection, block: DocumentBlock):
   return block.index >= section.fromBlock && block.index < section.toBlock;
 }
 
+/**
+ * The innermost section a block sits in.
+ *
+ * Sections nest, so a block under `### Detail` belongs to that section
+ * and to every chapter above it. The innermost is the one the block's
+ * own `headingPath` ends with — the unit a comment was written against.
+ * A caller who meant the enclosing chapter can name it to `get_document`.
+ *
+ * Sections are in document order, so among those containing the block
+ * the last one starts latest and is therefore the deepest. Scanning
+ * backwards makes that the first hit rather than the surviving one.
+ */
+export function sectionAt(map: DocumentBlockMap, block: DocumentBlock): DocumentSection | null {
+  for (let i = map.sections.length - 1; i >= 0; i--) {
+    const section = map.sections[i] as DocumentSection;
+    if (sectionContains(section, block)) return section;
+  }
+  return null;
+}
+
+/**
+ * The section whose heading path is exactly `path`.
+ *
+ * The way back to a location for a thread whose anchor block is gone:
+ * the anchor keeps the heading path it was captured under even after the
+ * block it pointed at was rewritten away. Two sections can share a path
+ * (one parent, two identically titled children), and a wrong chapter is
+ * worse than none, so ambiguity yields null.
+ */
+export function sectionByPath(map: DocumentBlockMap, path: string[]): DocumentSection | null {
+  if (path.length === 0) return null;
+  const matches = map.sections.filter(
+    (s) => s.path.length === path.length && s.path.every((segment, i) => segment === path[i]),
+  );
+  return matches.length === 1 ? (matches[0] as DocumentSection) : null;
+}
+
 type PlacedBlock = DocumentBlock & { start: number; end: number };
 
 const topLevelCache = new WeakMap<DocumentBlockMap, PlacedBlock[]>();
