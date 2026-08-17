@@ -28,13 +28,13 @@ import { type ThreadActionResult, threadLinks, threadsById } from './inlineUtils
 import {
   ALL_THREAD_FILTERS,
   activeThreadFilterLabels,
+  cardMatchesFilters,
   isFilteringThreads,
   normalizeThreadSearch,
   type ThreadFilters,
   type ThreadKindFilter,
   type ThreadRepliesFilter,
   type ThreadStatusFilter,
-  threadMatchesFilters,
   threadMatchesSearch,
 } from './threadFilters.js';
 import {
@@ -225,13 +225,12 @@ export function InlineCommentsList({
     [orphanedItems, sortMode],
   );
 
-  // A merged card is one unit: it stays visible when the thread OR any
-  // proposal nested inside it matches, so the "Proposals" filter still
-  // surfaces a proposal that now renders inside its answered thread.
+  // A merged card is one unit: search keeps it when the thread or any
+  // proposal nested inside it matches, and the filters judge the unit —
+  // see cardMatchesFilters.
   const itemMatches = useCallback(
     (item: ThreadListItem) =>
-      (threadMatchesFilters(item.thread, filters, viewerClientId) ||
-        item.nested.some((n) => threadMatchesFilters(n, filters, viewerClientId))) &&
+      cardMatchesFilters(item.thread, item.nested, filters, viewerClientId) &&
       (threadMatchesSearch(item.thread, searchNeedle) ||
         item.nested.some((n) => threadMatchesSearch(n, searchNeedle))),
     [filters, searchNeedle, viewerClientId],
