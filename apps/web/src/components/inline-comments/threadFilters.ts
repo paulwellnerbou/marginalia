@@ -1,4 +1,4 @@
-import { isProposal, isResolved, type Thread } from '../../lib/api.js';
+import { type Comment, isProposal, isResolved, type Thread } from '../../lib/api.js';
 
 /** Threads-tab filters. See threadListPrefs for what they start out as. */
 export type ThreadStatusFilter = 'all' | 'unresolved';
@@ -71,20 +71,26 @@ function matchesStatusAndKind(thread: Thread, filters: ThreadFilters): boolean {
  */
 function viewerHasAnswered(card: ThreadCard, viewerClientId: string | null): boolean {
   if (!viewerClientId) return false;
+  const isViewer = (c: Comment) => c.author.client_id === viewerClientId;
+  const isSomeoneElse = (c: Comment) => c.author.client_id !== viewerClientId;
   let mine = Number.NEGATIVE_INFINITY;
   let theirs = Number.NEGATIVE_INFINITY;
   for (const t of [card.thread, ...card.nested]) {
-    for (const c of t.comments) {
-      if (c.author.client_id === viewerClientId) mine = Math.max(mine, c.created_at);
-      else theirs = Math.max(theirs, c.created_at);
-    }
+    mine = Math.max(mine, newestWord(t, isViewer));
+    theirs = Math.max(theirs, newestWord(t, isSomeoneElse));
   }
-  for (const t of card.linked) {
-    for (const c of t.comments) {
-      if (c.author.client_id === viewerClientId) mine = Math.max(mine, c.created_at);
-    }
-  }
+  // A linked thread lends the viewer's word, never anyone else's.
+  for (const t of card.linked) mine = Math.max(mine, newestWord(t, isViewer));
   return mine > theirs;
+}
+
+/** comments are oldest-first, so walk back and stop at the first hit. */
+function newestWord(thread: Thread, by: (comment: Comment) => boolean): number {
+  for (let i = thread.comments.length - 1; i >= 0; i--) {
+    const c = thread.comments[i];
+    if (c && by(c)) return c.created_at;
+  }
+  return Number.NEGATIVE_INFINITY;
 }
 
 /**
