@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { renderDocument } from '@marginalia/renderer';
 import type { DocumentWire, ThreadWire } from '../src/api-types.js';
-import { buildBlockMap, type DocumentBlock, type DocumentBlockMap } from '../src/blocks.js';
+import {
+  buildBlockMap,
+  type DocumentBlock,
+  type DocumentBlockMap,
+  type DocumentSection,
+} from '../src/blocks.js';
 import { type ContextScope, documentHeader, threadDetail, threadList } from '../src/format.js';
 
 const SOURCE = `# Guide
@@ -194,6 +199,20 @@ Run the thing.
     // here would make "section" mean the whole document for a comment
     // deep in the tree.
     expect(out).not.toContain('Run the thing');
+  });
+
+  test('labels the section with a size that matches its source', async () => {
+    const map = await blockMap(BOOK);
+    const item = map.blocks.find((b) => b.kind === 'listItem') as DocumentBlock;
+    const flags = map.sections.find((s) => s.heading === 'Flags') as DocumentSection;
+    const out = threadDetail(threadOn(item.id, null), 1, 1, options(map, 'section'));
+
+    // The line count is derived from the recorded line range rather than
+    // counted off the source, so the two must not drift apart.
+    expect(out).toContain(
+      `section source — Manual › Usage › Flags (lines ${flags.startLine}-${flags.endLine}, ` +
+        `${flags.source.length} chars, ${flags.source.split('\n').length} lines)`,
+    );
   });
 
   test('recovers a section for a thread whose anchor block is gone', async () => {

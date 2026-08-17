@@ -141,9 +141,9 @@ export function sectionHeader(section: DocumentSection): string {
     .join('\n');
 }
 
-function size(text: string): string {
+/** `lines` is worth passing when the caller already knows it — see `sectionContext`. */
+function size(text: string, lines = text.split('\n').length): string {
   const chars = text.length;
-  const lines = text.split('\n').length;
   const human = chars >= 1000 ? `${(chars / 1000).toFixed(1)}k chars` : `${chars} chars`;
   return `${human}, ${lines} lines`;
 }
@@ -359,7 +359,11 @@ function sectionContext(
   ledger: SectionLedger,
 ): string[] {
   const path = section.path.join(' › ');
-  const label = `section source — ${path} (lines ${section.startLine}-${section.endLine}, ${size(section.source)})`;
+  // The line count from the recorded range, not a scan of the source: the
+  // label is printed for every thread in the section, repeats included.
+  // A trailing-trimmed section spans exactly this many lines.
+  const lines = section.endLine - section.startLine + 1;
+  const label = `section source — ${path} (lines ${section.startLine}-${section.endLine}, ${size(section.source, lines)})`;
   const readIt = `get_document with section: ${JSON.stringify(section.path.join(' > '))}`;
 
   const shownUnder = ledger.shown.get(section.index);
