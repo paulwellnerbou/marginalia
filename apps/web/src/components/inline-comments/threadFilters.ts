@@ -31,8 +31,10 @@ export interface ThreadCard {
  * Filters one card.
  *
  * 'unresolved' and 'proposals' key off a thread at a time, and the card
- * stays whenever any part of it matches — so "Proposals" still surfaces
- * a proposal that now renders inside the comment it answers.
+ * stays whenever what it renders — its own thread or a proposal nested
+ * in it — matches, so "Proposals" still surfaces a proposal that now
+ * renders inside the comment it answers. Cross-linked threads have no
+ * say here: they are shown by the cards they belong to.
  *
  * 'unanswered' keeps what is waiting on the viewer, identified by
  * client_id — the same identity the server stamps comments with, so a
