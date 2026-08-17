@@ -109,7 +109,7 @@ export function activeThreadFilterLabels(filters: ThreadFilters): string[] {
 }
 
 export function isFilteringThreads(filters: ThreadFilters): boolean {
-  return activeThreadFilterLabels(filters).length > 0;
+  return THREAD_FILTER_TOGGLES.some((t) => t.isOn(filters));
 }
 
 /**
