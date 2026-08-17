@@ -3420,6 +3420,40 @@ describe('threads API', () => {
       }
     });
 
+    test('an already-orphaned comment is still carried onto the accepted paragraph', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const commentId = await seedComment(uid, blockId);
+      const proposal = await propose(uid, ALICE, blockId, '# Fixed', [commentId]);
+      expect(proposal.status).toBe(201);
+
+      // Orphan it up front, exactly as `reanchor` would leave it. Re-anchoring
+      // during the accept then produces the same result it already has, so the
+      // relocation pass is the only thing that can re-home it — and it must
+      // still see the comment even though nothing about the anchor moved.
+      app.db
+        .prepare(
+          `UPDATE comments
+              SET link_status = 'orphaned',
+                  anchor_block_id = NULL,
+                  anchor_end_block_id = NULL,
+                  anchor_start_offset = NULL,
+                  anchor_end_offset = NULL
+            WHERE id = ?`,
+        )
+        .run(commentId);
+
+      const accept = await respond(uid, proposal.id as string, 'accept');
+      expect(accept.status).toBe(200);
+
+      const threads = await threadsOf(uid);
+      const accepted = threads.find((t) => t.id === proposal.id)!;
+      const comment = threads.find((t) => t.id === commentId)!;
+      expect(comment.link_status).toBe('linked');
+      expect(comment.anchor.block_id).toBe(accepted.anchor.block_id);
+      expect(comment.anchor.quote).toBe('Fixed');
+    });
+
     test('a link named twice is stored once', async () => {
       const uid = await newDoc('# Title\n');
       const blockId = await firstBlockId(uid);

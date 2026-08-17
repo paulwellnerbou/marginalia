@@ -2165,14 +2165,13 @@ async function prepareAcceptProposalThread(
           AND cep.comment_id IS NULL`,
     )
     .all(doc.uid) as CommentRow[];
-  const commentAnchorUpdates = topLevelComments.flatMap((comment) => {
-    const upd = reanchor(comment, rendered.blocks, {
-      blockReplacements,
-    });
-    // Skip the rows that did not move — see `anchorUnchanged`.
-    if (anchorUnchanged(comment, upd)) return [];
-    return [{ commentId: comment.id, ...upd }];
-  });
+  // Re-anchor everything first and decide what to write only at the end:
+  // the relocation pass below rewrites some of these, so whether an update
+  // is a no-op is not settled until it has run.
+  const anchorCandidates = topLevelComments.map((comment) => ({
+    comment,
+    upd: reanchor(comment, rendered.blocks, { blockReplacements }),
+  }));
 
   const acceptedAnchor = locateAcceptedProposalAnchor(
     presentBlocks,
@@ -2192,7 +2191,7 @@ async function prepareAcceptProposalThread(
   const relocatedAnsweredComments: string[] = [];
   if (postAcceptAnchor) {
     for (const answeredId of parseAnswerIds(row.answers_comment_ids)) {
-      const upd = commentAnchorUpdates.find((u) => u.commentId === answeredId);
+      const upd = anchorCandidates.find((c) => c.comment.id === answeredId)?.upd;
       if (!upd || upd.linkStatus === 'linked') continue;
       upd.linkStatus = postAcceptAnchor.linkStatus;
       upd.blockId = postAcceptAnchor.blockId;
@@ -2203,6 +2202,14 @@ async function prepareAcceptProposalThread(
       relocatedAnsweredComments.push(answeredId);
     }
   }
+
+  // Now that relocation has had its say, drop the rows that did not move —
+  // see `anchorUnchanged`. A comment the proposal answers is typically
+  // already orphaned, so re-anchoring alone leaves it untouched; filtering
+  // before the pass above would have hidden it from the re-home.
+  const commentAnchorUpdates = anchorCandidates
+    .filter(({ comment, upd }) => !anchorUnchanged(comment, upd))
+    .map(({ comment, upd }) => ({ commentId: comment.id, ...upd }));
 
   return {
     oid,
