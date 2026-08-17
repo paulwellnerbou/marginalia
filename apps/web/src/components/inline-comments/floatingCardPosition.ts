@@ -73,6 +73,50 @@ export function clampCardLeft(
   return Math.min(Math.max(anchorLeft, margin), max);
 }
 
+export interface CardOffsetInput {
+  /** Anchored position the offset is applied on top of, in host space. */
+  baseTop: number;
+  baseLeft: number;
+  /** Offset the reader dragged the card by. */
+  dx: number;
+  dy: number;
+  cardWidth: number;
+  cardHeight: number;
+  hostWidth: number;
+  /** Visible window of the scroll container, in host space. */
+  viewTop: number;
+  viewHeight: number;
+  margin?: number;
+}
+
+/**
+ * Trim a dragged offset so the card stays inside the host and the
+ * visible window — a card shoved past either edge is unreachable, and
+ * the reader has no way to get it back.
+ *
+ * Returned as an offset rather than a position so the card keeps
+ * following its anchor: every re-placement adds this delta to the fresh
+ * anchored position.
+ */
+export function clampCardOffset(input: CardOffsetInput): { dx: number; dy: number } {
+  const margin = input.margin ?? DEFAULT_MARGIN;
+  const left = clampCardLeft(input.baseLeft + input.dx, input.cardWidth, input.hostWidth, margin);
+  const lowest = input.viewTop + margin;
+  const highest = input.viewTop + input.viewHeight - input.cardHeight - margin;
+  // A card taller than the window inverts that pair: it cannot sit
+  // inside the window at all, and the range between the two bounds is
+  // instead every position that still covers it end to end. Clamping
+  // into the min/max of the pair keeps the card on screen either way.
+  const top = Math.max(
+    Math.min(
+      Math.max(input.baseTop + input.dy, Math.min(lowest, highest)),
+      Math.max(lowest, highest),
+    ),
+    0,
+  );
+  return { dx: left - input.baseLeft, dy: top - input.baseTop };
+}
+
 /**
  * How far the reader may sit from a thread's landing position and still
  * count as standing on it. Settled jumps are within 2px.

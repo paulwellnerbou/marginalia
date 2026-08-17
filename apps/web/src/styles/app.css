@@ -3799,10 +3799,10 @@ button.primary:disabled {
 .ic-float-card .ic-card-collapse {
   display: none;
 }
-.ic-float-close {
+.ic-float-close,
+.ic-float-grip {
   position: absolute;
   top: -8px;
-  right: -8px;
   z-index: 1;
   width: 22px;
   height: 22px;
@@ -3817,9 +3817,47 @@ button.primary:disabled {
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
-.ic-float-close:hover {
+.ic-float-close {
+  right: -8px;
+}
+.ic-float-close:hover,
+.ic-float-grip:hover {
   background: var(--accent-9);
   color: var(--accent-contrast);
+}
+/* The card's only grab area — everything else stays selectable, which
+   is the point: the card is pushed aside to read and copy the text it
+   was covering. `touch-action: none` keeps a touch drag from being
+   claimed by the scroll container instead. */
+.ic-float-grip {
+  left: -8px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ic-float-grip:active {
+  cursor: grabbing;
+}
+/* Floating mode is the default on tablets, where this is a *drag*
+   target rather than something to tap once — worth more than the 22px
+   the close button gets by. Grown outward, into the margin around the
+   card, so it takes no room from the header underneath. */
+@media (pointer: coarse) {
+  .ic-float-grip {
+    top: -14px;
+    left: -14px;
+    width: 34px;
+    height: 34px;
+  }
+}
+/* Belt and braces against a drag painting a selection across the card
+   it is moving, in browsers that start one despite the prevented
+   pointerdown. */
+.ic-float-card-dragging,
+.ic-float-card-dragging * {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Pill toolbar for floating mode — same vertical placement as
