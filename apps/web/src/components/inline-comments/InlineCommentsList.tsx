@@ -25,6 +25,7 @@ import {
   isFilteringThreads,
   normalizeThreadSearch,
   THREAD_FILTER_TOGGLES,
+  type ThreadCard,
   type ThreadFilters,
   threadMatchesSearch,
 } from './threadFilters.js';
@@ -88,11 +89,8 @@ interface Props {
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
 }
 
-interface ThreadListItem {
+interface ThreadListItem extends ThreadCard {
   id: string;
-  thread: Thread;
-  /** Proposal threads rendered inside this card (they answer this thread). */
-  nested: readonly Thread[];
   blockIndex: number;
   sectionIndexPath: number[];
   startOffset: number;
@@ -147,6 +145,8 @@ export function InlineCommentsList({
     return order;
   }, [blockRanges]);
 
+  const byId = useMemo(() => threadsById(threads), [threads]);
+
   const { activeItems, orphanedItems, parentOf } = useMemo(() => {
     const activeThreads: Thread[] = [];
     const orphanThreads: Thread[] = [];
@@ -172,6 +172,9 @@ export function InlineCommentsList({
           id: t.id,
           thread: t,
           nested,
+          // Drawn from every thread, not just this bucket: a reply of
+          // the viewer's counts wherever the conversation carried it.
+          linked: linkedThreads(t, nested, byId),
           blockIndex: t.anchor.block_id
             ? (blockOrder.get(t.anchor.block_id) ?? Number.MAX_SAFE_INTEGER)
             : Number.MAX_SAFE_INTEGER,
@@ -188,7 +191,7 @@ export function InlineCommentsList({
       orphanedItems: buildItems(orphanThreads, true),
       parentOf: parents,
     };
-  }, [threads, blockOrder]);
+  }, [threads, blockOrder, byId]);
 
   // Whose replies count as answers — the id the server stamps comments
   // with. Read every render, not memoized: pairing adopts the keyring's
@@ -221,7 +224,7 @@ export function InlineCommentsList({
   // see cardMatchesFilters.
   const itemMatches = useCallback(
     (item: ThreadListItem) =>
-      cardMatchesFilters(item.thread, item.nested, filters, viewerClientId) &&
+      cardMatchesFilters(item, filters, viewerClientId) &&
       (threadMatchesSearch(item.thread, searchNeedle) ||
         item.nested.some((n) => threadMatchesSearch(n, searchNeedle))),
     [filters, searchNeedle, viewerClientId],
@@ -379,7 +382,6 @@ export function InlineCommentsList({
     });
   }
 
-  const byId = useMemo(() => threadsById(threads), [threads]);
   const refIndex = useMemo(() => threadRefIndex(threads), [threads]);
 
   /** Jump to a linked thread by scrolling to its anchor, which focuses it. */
@@ -638,6 +640,29 @@ function shouldAutoCollapse(t: Thread): boolean {
     if (s === 'accepted' || s === 'rejected') return true;
   }
   return false;
+}
+
+/**
+ * The threads a card cross-links to: proposals answering it that render
+ * in another card, and the comments a proposal card answers. What the
+ * card already renders inside itself is not a link.
+ */
+function linkedThreads(
+  thread: Thread,
+  nested: readonly Thread[],
+  byId: Map<string, Thread>,
+): Thread[] {
+  const inCard = new Set([thread.id, ...nested.map((n) => n.id)]);
+  const linked = new Map<string, Thread>();
+  for (const source of [thread, ...nested]) {
+    const ids = [...source.answered_by_thread_ids, ...(source.proposal?.answers_thread_ids ?? [])];
+    for (const id of ids) {
+      if (inCard.has(id) || linked.has(id)) continue;
+      const target = byId.get(id);
+      if (target) linked.set(id, target);
+    }
+  }
+  return [...linked.values()];
 }
 
 function latestActivityTs(t: Thread): number {

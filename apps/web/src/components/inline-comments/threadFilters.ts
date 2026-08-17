@@ -14,32 +14,43 @@ export interface ThreadFilters {
 /** Filters nothing out — what "clear the filters" resets to. */
 export const ALL_THREAD_FILTERS: ThreadFilters = { status: 'all', kind: 'all', replies: 'all' };
 
+/** One card in the list, and the threads its conversation reaches into. */
+export interface ThreadCard {
+  thread: Thread;
+  /** Proposal threads merged into this card, rendered inside it. */
+  nested: readonly Thread[];
+  /**
+   * Threads this card only cross-links to — the proposals answering it
+   * that render in someone else's card, and the comments a proposal
+   * card answers. They carry cards of their own.
+   */
+  linked: readonly Thread[];
+}
+
 /**
- * Filters one card: a thread plus the proposal threads nested inside
- * it, which render as a single merged unit.
+ * Filters one card.
  *
  * 'unresolved' and 'proposals' key off a thread at a time, and the card
  * stays whenever any part of it matches — so "Proposals" still surfaces
  * a proposal that now renders inside the comment it answers.
  *
- * 'unanswered' is judged over the card as a whole: it keeps what is
- * waiting on the viewer, and a reply left on a nested proposal answers
- * the merged conversation even though the comment thread's own tail is
- * still somebody else's. The viewer is identified by client_id — the
- * same identity the server stamps comments with, so a shared display
- * name can't make someone else's reply count as yours.
+ * 'unanswered' keeps what is waiting on the viewer, identified by
+ * client_id — the same identity the server stamps comments with, so a
+ * shared display name can't make someone else's reply count as yours.
+ * It is judged over the conversation rather than the thread: a reply
+ * the viewer left on an answering proposal answers this card too, even
+ * though the comment thread's own tail is still the "Addressed in edit
+ * proposal …" hand-off.
  */
 export function cardMatchesFilters(
-  thread: Thread,
-  nested: readonly Thread[],
+  card: ThreadCard,
   filters: ThreadFilters,
   viewerClientId: string | null,
 ): boolean {
-  if (filters.replies === 'unanswered' && viewerHadLastWord(thread, nested, viewerClientId)) {
-    return false;
-  }
+  if (filters.replies === 'unanswered' && viewerHasAnswered(card, viewerClientId)) return false;
   return (
-    matchesStatusAndKind(thread, filters) || nested.some((n) => matchesStatusAndKind(n, filters))
+    matchesStatusAndKind(card.thread, filters) ||
+    card.nested.some((n) => matchesStatusAndKind(n, filters))
   );
 }
 
@@ -50,22 +61,30 @@ function matchesStatusAndKind(thread: Thread, filters: ThreadFilters): boolean {
 }
 
 /**
- * comments are oldest-first, so each thread's tail is its latest
- * message; across the card the newest of those tails wins. Ties go to
- * the thread the card is named after, the one the reader sees first.
+ * The viewer has spoken later than anyone else has *here*. Their word
+ * counts wherever the conversation carried it, but a linked thread's
+ * later traffic does not drag this card back into the queue — that
+ * thread has a card of its own to be waiting in, and one exchange
+ * should be one entry.
+ *
+ * A tie keeps the card: work is worse missed than listed twice.
  */
-function viewerHadLastWord(
-  thread: Thread,
-  nested: readonly Thread[],
-  viewerClientId: string | null,
-): boolean {
+function viewerHasAnswered(card: ThreadCard, viewerClientId: string | null): boolean {
   if (!viewerClientId) return false;
-  let latest = thread.comments[thread.comments.length - 1];
-  for (const n of nested) {
-    const last = n.comments[n.comments.length - 1];
-    if (last && (!latest || last.created_at > latest.created_at)) latest = last;
+  let mine = Number.NEGATIVE_INFINITY;
+  let theirs = Number.NEGATIVE_INFINITY;
+  for (const t of [card.thread, ...card.nested]) {
+    for (const c of t.comments) {
+      if (c.author.client_id === viewerClientId) mine = Math.max(mine, c.created_at);
+      else theirs = Math.max(theirs, c.created_at);
+    }
   }
-  return latest?.author.client_id === viewerClientId;
+  for (const t of card.linked) {
+    for (const c of t.comments) {
+      if (c.author.client_id === viewerClientId) mine = Math.max(mine, c.created_at);
+    }
+  }
+  return mine > theirs;
 }
 
 /**
