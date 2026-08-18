@@ -17,6 +17,7 @@ import { getDisplayName, setDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
 import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
+import { openTab } from '../lib/open-tabs.js';
 import { recordVisit } from '../lib/recent-docs.js';
 
 export function ViewPage() {
@@ -95,6 +96,12 @@ export function ViewPage() {
       updated_at: doc.updated_at,
       ...(stored ? { invite_token: stored } : {}),
       ...(doc.cover ? { cover: doc.cover } : {}),
+    });
+    openTab({
+      uid: doc.uid,
+      title: documentTitle(doc),
+      format: doc.format,
+      ...(stored ? { invite_token: stored } : {}),
     });
   }, [doc]);
 

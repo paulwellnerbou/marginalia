@@ -2,25 +2,33 @@ import { Flex, Separator, Text } from '@radix-ui/themes';
 import { type ReactNode, useId } from 'react';
 import { Link } from 'react-router-dom';
 import type { DocumentFormat, Role } from '../lib/api.js';
+import { useOpenTabs } from '../lib/open-tabs.js';
 import { AppearanceToggle } from './AppearanceToggle.js';
+import { DocumentTabs } from './DocumentTabs.js';
 import { FormatBadge } from './FormatBadge.js';
 import { UserMenu } from './UserMenu.js';
 
 interface Props {
-  /** Document title shown after the brand, when viewing/editing a doc. */
+  /** Document title shown after the brand, when viewing/editing a doc.
+   *  Suppressed once the doc has a tab of its own — the tab already
+   *  carries the name — so this is the fallback for a browser whose
+   *  storage refused the strip. */
   docTitle?: string;
   role?: Role | undefined;
   docUid?: string;
   passwordProtected?: boolean;
   onLogout?: () => void;
-  /** Source flavour of the currently-open doc. Drives the MARKDOWN /
-   *  ASCIIDOC badge next to the title — omitted on the home page. */
+  /** Source flavour of the currently-open doc, badged next to the
+   *  fallback title. Omitted on the home page. */
   format?: DocumentFormat;
   /** Extra trailing slot for page-specific controls (e.g. Save/Cancel in
    *  EditPage). Rendered before the appearance/user. */
   trailing?: ReactNode;
   /** Expand the user trigger to show the current display name. */
   showUserName?: boolean;
+  /** Standing label alongside the tabs, for state the tab can't show
+   *  (EditPage's chapter scope). */
+  contextLabel?: string | undefined;
 }
 
 /**
@@ -36,8 +44,11 @@ export function AppBar({
   format,
   trailing,
   showUserName,
+  contextLabel,
 }: Props) {
   const brandGradientId = useId().replace(/:/g, '');
+  const tabs = useOpenTabs();
+  const tabbed = tabs.some((t) => t.uid === docUid);
 
   return (
     <Flex align="center" gap="3" px="3" py="2" className="app-bar">
@@ -94,14 +105,22 @@ export function AppBar({
         </span>
         <span className="app-brand-wordmark">Marginalia</span>
       </Link>
-      {docTitle && (
+      {(tabs.length > 0 || docTitle || contextLabel) && (
+        <Separator orientation="vertical" size="2" />
+      )}
+      <DocumentTabs tabs={tabs} />
+      {docTitle && !tabbed && (
         <>
-          <Separator orientation="vertical" size="2" />
           <Text size="2" className="app-bar-title" truncate>
             {docTitle}
           </Text>
           {format && <FormatBadge format={format} />}
         </>
+      )}
+      {contextLabel && (
+        <Text size="2" color="gray" className="app-bar-context" truncate>
+          {contextLabel}
+        </Text>
       )}
       <span className="spacer" />
       {trailing}

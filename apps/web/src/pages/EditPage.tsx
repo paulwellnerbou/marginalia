@@ -27,8 +27,9 @@ import { type ChapterScope, resolveChapterScope } from '../lib/chapter-scope.js'
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
-import { saveInviteToken } from '../lib/invite.js';
+import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
 import { reportError } from '../lib/log.js';
+import { openTab } from '../lib/open-tabs.js';
 import { loadRenderer } from '../lib/renderer-loader.js';
 import {
   applyTheme,
@@ -240,6 +241,19 @@ export function EditPage() {
   useEffect(() => {
     if (!doc) return;
     setTheme(getUserThemeOverride(doc.uid) ?? doc.default_theme);
+  }, [doc]);
+
+  // Landing straight on an edit URL is an open too, so the strip shows
+  // the document you are editing.
+  useEffect(() => {
+    if (!doc) return;
+    const stored = loadInviteToken(doc.uid);
+    openTab({
+      uid: doc.uid,
+      title: documentTitle(doc),
+      format: doc.format,
+      ...(stored ? { invite_token: stored } : {}),
+    });
   }, [doc]);
 
   useEffect(() => {
@@ -719,9 +733,8 @@ export function EditPage() {
     <div className="edit-page">
       <PasswordPromptDialog docUid={doc.uid} docName={doc.name} />
       <AppBar
-        docTitle={
-          chapterScope ? `Editing chapter: ${chapterScope.title}` : `Editing: ${documentTitle(doc)}`
-        }
+        docTitle={`Editing: ${documentTitle(doc)}`}
+        {...(chapterScope ? { contextLabel: `Chapter: ${chapterScope.title}` } : {})}
         role={doc.role}
         docUid={doc.uid}
         passwordProtected={doc.password_protected}
