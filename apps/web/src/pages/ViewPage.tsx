@@ -17,7 +17,16 @@ import { getDisplayName, setDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
 import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
+import { openTab } from '../lib/open-tabs.js';
 import { recordVisit } from '../lib/recent-docs.js';
+
+/**
+ * How long a document swap may take before it admits to being one. A
+ * switch between tabs is usually well inside this, and a progress bar
+ * that flashes for eighty milliseconds only makes the app look busier
+ * than it is.
+ */
+const PENDING_GRACE_MS = 220;
 
 export function ViewPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
@@ -25,6 +34,7 @@ export function ViewPage() {
   const [error, setError] = useState<string | null>(null);
   // Bumped by the error "Try again" button to re-trigger getDocument.
   const [reloadNonce, setReloadNonce] = useState(0);
+  const [pending, setPending] = useState(false);
 
   // Persist the URL-supplied invite token, then claim it to mint a session
   // cookie, then strip the token from the address bar so copy-pasting the
@@ -47,11 +57,16 @@ export function ViewPage() {
   useEffect(() => {
     if (!uid) return;
     let cancelled = false;
-    // Reset per-load state so a lingering error from the previous uid
-    // doesn't force the error UI over the incoming doc. React Router
-    // reuses this component across /d/:uid route changes.
+    // Reset the error so a lingering one from the previous uid doesn't
+    // force the error UI over the incoming doc. React Router reuses this
+    // component across /d/:uid route changes.
+    //
+    // The document itself is deliberately left on screen: blanking it
+    // tears the whole three-pane shell down for as long as the fetch
+    // takes, and the reader watches the page collapse and rebuild for
+    // what is usually less than a tenth of a second. It stays until the
+    // next one is ready to take its place in a single commit.
     setError(null);
-    setDoc(null);
     (async () => {
       try {
         const d = await getDocument(uid);
@@ -96,6 +111,12 @@ export function ViewPage() {
       ...(stored ? { invite_token: stored } : {}),
       ...(doc.cover ? { cover: doc.cover } : {}),
     });
+    openTab({
+      uid: doc.uid,
+      title: documentTitle(doc),
+      format: doc.format,
+      ...(stored ? { invite_token: stored } : {}),
+    });
   }, [doc]);
 
   // Sync localStorage to the server's authoritative name so the header
@@ -108,6 +129,19 @@ export function ViewPage() {
       setDisplayName(doc.display_name);
     }
   }, [doc]);
+
+  // What is on screen belongs to the tab being left until the next
+  // document lands. Announced only once the wait is long enough to
+  // wonder about.
+  const loading = !!uid && !!doc && doc.uid !== uid;
+  useEffect(() => {
+    if (!loading) {
+      setPending(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setPending(true), PENDING_GRACE_MS);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
 
   useEffect(() => {
     if (!doc) return;
@@ -153,22 +187,28 @@ export function ViewPage() {
       </>
     );
   }
-  if (!doc) {
-    return (
-      <>
-        <AppBar />
-        {uid && <PasswordPromptDialog docUid={uid} />}
-        <Container size="2" py="8">
-          <Text color="gray">Loading…</Text>
-        </Container>
-      </>
-    );
-  }
+  // Nothing to hold on to yet — a cold load, not a tab switch.
+  if (!doc) return <DocumentLoading {...(uid ? { uid } : {})} />;
 
   return (
     <>
-      <PasswordPromptDialog docUid={doc.uid} docName={doc.name} />
-      <DocumentLayout doc={doc} onDocSettingsChanged={handleSettingsChanged}>
+      {/* Remounted per document: the saved-password and admin-recovery
+          state is read once, at mount, from the uid it was given. Keys
+          are prefixed because these two are siblings and would otherwise
+          collide whenever the URL and the loaded document agree. */}
+      <PasswordPromptDialog
+        key={`prompt-${uid}`}
+        docUid={uid ?? doc.uid}
+        {...(loading ? {} : { docName: doc.name })}
+      />
+      {/* Keyed by uid so the arriving document mounts fresh, exactly as
+          it did back when the shell was torn down between the two. */}
+      <DocumentLayout
+        key={`layout-${doc.uid}`}
+        doc={doc}
+        pending={pending}
+        onDocSettingsChanged={handleSettingsChanged}
+      >
         {(doc.role === 'admin' || doc.role === 'editor') && (
           <Button variant="soft" asChild>
             <Link to={`/d/${doc.uid}/edit`}>Edit</Link>
@@ -176,5 +216,24 @@ export function ViewPage() {
         )}
       </DocumentLayout>
     </>
+  );
+}
+
+/**
+ * First paint of a document, before there is anything to show. Holds the
+ * page shell — app bar, full-height body — so the real layout lands into
+ * the same frame rather than pushing a short page out of the way.
+ */
+function DocumentLoading({ uid }: { uid?: string }) {
+  return (
+    <div className="doc-page">
+      <AppBar />
+      {uid && <PasswordPromptDialog docUid={uid} />}
+      <div className="doc-loading">
+        <Text size="2" color="gray">
+          Loading…
+        </Text>
+      </div>
+    </div>
   );
 }

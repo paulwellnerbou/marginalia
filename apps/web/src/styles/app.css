@@ -425,6 +425,124 @@ button.primary:disabled {
   font-weight: 500;
   max-width: 40ch;
 }
+.app-bar-context {
+  max-width: 28ch;
+}
+
+/* --- Open-document tabs --------------------------------------------
+   The strip is the only part of the bar that grows with use, so it is
+   the only part allowed to shrink and scroll. Its scrollbar is hidden
+   the way `.doc-chrome`'s is: the row is 48px tall and a horizontal
+   scrollbar inside it would eat a third of a tab. */
+.doc-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.doc-tabs::-webkit-scrollbar {
+  display: none;
+}
+.doc-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  /* Tabs shrink before they scroll, but only to where a title is still
+     worth reading — past that the strip scrolls instead. The ceiling
+     keeps one book-length title from swallowing the whole strip. */
+  min-width: 7rem;
+  max-width: 15rem;
+  height: 30px;
+  padding-right: 0.15rem;
+  border-radius: var(--ui-control-radius);
+  border: 1px solid transparent;
+  color: var(--ui-fg-muted);
+}
+.doc-tab:hover {
+  background: var(--gray-a3);
+}
+.doc-tab--active {
+  background: var(--accent-a3);
+  border-color: var(--accent-a5);
+  color: var(--gray-12);
+}
+.doc-tab-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0 0.15rem 0 0.55rem;
+  color: inherit;
+  text-decoration: none;
+}
+.doc-tab--active .doc-tab-link {
+  font-weight: 500;
+}
+.doc-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.875rem;
+}
+.doc-tab-editing {
+  flex: none;
+  color: var(--ui-accent);
+}
+.doc-tab .format-badge {
+  flex: none;
+}
+.doc-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.15rem;
+  height: 1.15rem;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ui-fg-muted);
+}
+.doc-tab-close:hover {
+  background: var(--gray-a4);
+  color: var(--gray-12);
+}
+/* Where there is a pointer to hover with, the ✕ stays out of the way
+   until the tab is under it — eight of them lit at once is all the eye
+   sees. A touch screen has no hover to reveal it, so there it stays. */
+@media (hover: hover) {
+  .doc-tab-close {
+    opacity: 0;
+  }
+  .doc-tab:hover .doc-tab-close,
+  .doc-tab:focus-within .doc-tab-close {
+    opacity: 1;
+  }
+}
+.doc-tab-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: var(--ui-control-radius);
+  color: var(--ui-fg-muted);
+}
+.doc-tab-add:hover {
+  background: var(--gray-a3);
+  color: var(--gray-12);
+}
+.doc-tab-link:focus-visible,
+.doc-tab-close:focus-visible,
+.doc-tab-add:focus-visible {
+  outline: 2px solid var(--ui-accent-focus);
+  outline-offset: -1px;
+  border-radius: 4px;
+}
 
 .user-menu-trigger--with-name {
   max-width: min(18rem, 32vw);
@@ -448,6 +566,84 @@ button.primary:disabled {
   /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
   height: 100dvh;
   overflow: hidden;
+  /* Anchors the loading bar under the app bar. */
+  position: relative;
+}
+
+/* First paint of a document, before there is anything to show. */
+.doc-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* --- Switching documents --------------------------------------------
+   The shell stays standing while the next document loads, so a switch
+   moves the text and nothing else. What is on screen until then belongs
+   to the tab being left: dimmed, and inert from the markup side, so it
+   can't be read as the document that the strip is already pointing at.
+
+   Neither signal is mounted until the wait has earned one — ViewPage
+   holds them back for `PENDING_GRACE_MS`, so a switch that lands inside
+   that shows no loading state at all. */
+.doc-layout--pending {
+  opacity: 0.5;
+  transition: opacity 200ms ease;
+}
+
+/* Positioned rather than placed in the column flow: 2px of layout would
+   shove the whole document down to announce that it is loading. */
+.doc-pending {
+  position: absolute;
+  top: var(--app-bar-height);
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 19;
+  opacity: 0;
+  background-image: linear-gradient(90deg, transparent, var(--ui-accent), transparent);
+  background-size: 45% 100%;
+  background-repeat: no-repeat;
+  animation:
+    doc-pending-in 140ms ease-out forwards,
+    doc-pending-sweep 1.1s ease-in-out infinite;
+}
+@keyframes doc-pending-in {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes doc-pending-sweep {
+  from {
+    background-position: -45% 0;
+  }
+  to {
+    background-position: 145% 0;
+  }
+}
+
+/* The document arrives with a short fade rather than a hard cut: the
+   swap is a single commit, and at that speed an instant replacement
+   reads as the page flinching. */
+@media (prefers-reduced-motion: no-preference) {
+  .doc-viewport {
+    animation: doc-enter 160ms ease-out;
+  }
+}
+@keyframes doc-enter {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still says "loading", without a thing travelling across the screen. */
+  .doc-pending {
+    background-image: none;
+    background-color: var(--ui-accent);
+    animation: doc-pending-in 1ms linear forwards;
+  }
 }
 .doc-layout {
   flex: 1;
@@ -2232,6 +2428,24 @@ button.primary:disabled {
 @media (max-width: 640px) {
   .user-menu-trigger--with-name {
     max-width: 11rem;
+  }
+
+  /* The brand mark still gets you home; the wordmark is 8rem the tab
+     strip needs more. */
+  .app-brand-wordmark {
+    display: none;
+  }
+
+  /* A phone can't fit even two whole tabs, and shrinking them to fit
+     leaves initials. Hold them wide enough to read and let the strip
+     scroll, the way a phone browser's own tabs behave. */
+  .doc-tab {
+    min-width: 9rem;
+  }
+
+  /* The one format worth the width is the one you're reading. */
+  .doc-tab:not(.doc-tab--active) .format-badge {
+    display: none;
   }
 
   .landing-github-link {

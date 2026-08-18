@@ -11,6 +11,7 @@
 import { clearInviteToken } from './invite.js';
 import { removeDoc as removeKeyringDoc } from './keyring.js';
 import { reportError } from './log.js';
+import { closeTab } from './open-tabs.js';
 import { clearSavedPassword } from './passwords.js';
 import { removeFromRecent } from './recent-docs.js';
 import { setUserThemeOverride } from './themes.js';
@@ -22,6 +23,7 @@ export function forgetDocumentLocally(uid: string): void {
   // Best-effort server call; the ring is a copy, and a failure here
   // can't be allowed to look like the delete didn't happen.
   attempt(uid, 'keyring', () => removeKeyringDoc(uid));
+  attempt(uid, 'openTabs', () => closeTab(uid));
   attempt(uid, 'invite', () => clearInviteToken(uid));
   attempt(uid, 'password', () => clearSavedPassword(uid));
   attempt(uid, 'theme', () => setUserThemeOverride(uid, null));

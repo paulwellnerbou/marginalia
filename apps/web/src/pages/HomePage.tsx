@@ -62,6 +62,7 @@ import {
   consumePendingNewDocumentDraft,
   type PendingNewDocumentDraft,
 } from '../lib/new-document-draft.js';
+import { closeTab } from '../lib/open-tabs.js';
 import {
   loadRecentDocs,
   openUrlFor,
@@ -236,6 +237,9 @@ export function HomePage() {
           doc={r}
           onRemove={() => {
             removeFromRecent(r.uid);
+            // A document dropped from the list can't stay in the tab
+            // strip: reopening it from there would only put it back.
+            closeTab(r.uid);
             keyringRemoveDoc(r.uid);
             refreshRecent();
           }}

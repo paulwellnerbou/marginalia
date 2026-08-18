@@ -77,6 +77,13 @@ function seed(): void {
       },
     ]),
   );
+  store.set(
+    'marginalia.openTabs',
+    JSON.stringify([
+      { uid: UID, title: 'Doomed', format: 'markdown', invite_token: 'tok' },
+      { uid: 'doc-2', title: 'Survivor', format: 'markdown' },
+    ]),
+  );
   store.set(`marginalia.invite.${UID}`, 'tok');
   store.set(`marginalia.password.${UID}`, 'hunter2');
   store.set(`marginalia.theme.${UID}`, 'sepia');
@@ -97,6 +104,9 @@ test('clears every per-document key for the deleted doc', () => {
 
   const recent = JSON.parse(store.get('marginalia.recentDocs') ?? '[]') as Array<{ uid: string }>;
   expect(recent.map((d) => d.uid)).toEqual(['doc-2']);
+
+  const tabs = JSON.parse(store.get('marginalia.openTabs') ?? '[]') as Array<{ uid: string }>;
+  expect(tabs.map((t) => t.uid)).toEqual(['doc-2']);
 });
 
 test('leaves other documents alone', () => {
