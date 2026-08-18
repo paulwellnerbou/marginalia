@@ -120,11 +120,20 @@ export function pagedScrollerOf(el: Element): HTMLElement | null {
 
 export function measurePages(scroll: HTMLElement): PageMetrics {
   const pitch = pitchOf(scroll);
-  const pageCount = pageCountOf(extentOf(scroll), pitch);
+  const extent = extentOf(scroll);
+  const pageCount = pageCountOf(extent, pitch);
+  const offset = offsetOf(scroll);
+  // A last page the content only partly fills can never be scrolled to
+  // its own start — the scroller stops at `extent - pitch` — so rounding
+  // the offset would name the page before it however far the reader
+  // scrolls. Resting against the end *is* the last page. Only vertical
+  // pages hit this; column boxes are a whole pitch wide even when the
+  // text runs out early.
+  const atEnd = offset >= extent - pitch - PAGE_EPSILON_PX;
   return {
     pitch,
     pageCount,
-    currentPage: clampPage(pageIndexAt(offsetOf(scroll), pitch), pageCount),
+    currentPage: atEnd ? pageCount - 1 : clampPage(pageIndexAt(offset, pitch), pageCount),
   };
 }
 

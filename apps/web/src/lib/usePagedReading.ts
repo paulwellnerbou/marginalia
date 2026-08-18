@@ -22,6 +22,12 @@ const HELD_PLACE_SETTLE_MS = 200;
  * otherwise fire the swipe *and* the zone's click, turning two pages.
  */
 const TAP_AFTER_SWIPE_MS = 400;
+/**
+ * How long a programmatic turn is trusted to still be in flight. Only a
+ * safety net for a smooth scroll that gets cancelled or never lands;
+ * arriving at the target clears the wait immediately.
+ */
+const TURN_SETTLE_MS = 700;
 
 export interface PagedReading {
   /** 0-based index of the page on screen. */
@@ -220,13 +226,32 @@ export function usePagedReading(
   const [pageCount, setPageCount] = useState(1);
   const [tooWideToPaint, setTooWideToPaint] = useState(false);
 
+  /**
+   * The page a turn we started is on its way to. A smooth scroll reports
+   * every offset it passes through, and the first half of the journey
+   * still rounds to the page being left — so following those events
+   * walks the counter back to the old page and forward again on every
+   * single turn.
+   */
+  const pendingTurn = useRef<{ page: number; until: number } | null>(null);
+
+  /** Adopt a measured page unless a turn we started is still under way. */
+  const acceptPage = useCallback((measured: number) => {
+    const pending = pendingTurn.current;
+    if (pending) {
+      if (measured !== pending.page && performance.now() < pending.until) return;
+      pendingTurn.current = null;
+    }
+    setPage(measured);
+  }, []);
+
   const syncFromScroller = useCallback(() => {
     const scroll = scrollRef.current;
     if (!scroll) return;
     const metrics = measurePages(scroll);
     setPageCount(metrics.pageCount);
-    setPage(metrics.currentPage);
-  }, [scrollRef]);
+    acceptPage(metrics.currentPage);
+  }, [scrollRef, acceptPage]);
 
   const goTo = useCallback(
     (index: number, behavior: ScrollBehavior = 'smooth') => {
@@ -235,6 +260,7 @@ export function usePagedReading(
       const { pageCount: total } = measurePages(scroll);
       const next = clampPage(index, total);
       goToPage(scroll, next, behavior);
+      pendingTurn.current = { page: next, until: performance.now() + TURN_SETTLE_MS };
       // Optimistic: a programmatic scroll's own event is the only other
       // thing that would move the indicator, and it can be throttled or
       // (in embedded browsers) never delivered at all.
@@ -300,6 +326,7 @@ export function usePagedReading(
       setPageCount(1);
       heldPlace.current = null;
       geometry.current = null;
+      pendingTurn.current = null;
       setTooWideToPaint(false);
     }
 
@@ -417,7 +444,7 @@ export function usePagedReading(
       // Nothing moved — a highlight repaint, a mermaid swap. Re-snapping
       // would only risk nudging a reader mid-gesture.
       if (previous && previous.pitch === metrics.pitch && previous.extent === extent) {
-        setPage(metrics.currentPage);
+        acceptPage(metrics.currentPage);
         return;
       }
 
@@ -435,6 +462,10 @@ export function usePagedReading(
       // and nothing else brings it back — the reader is left swiping
       // through blank pages with the pager insisting they are at the end.
       goToPage(scroll, target, 'auto');
+      // Same guard as a turn: an instant scroll still delivers its event
+      // a frame later, and on a shrinking document that event can arrive
+      // reporting the offset from before the jump.
+      pendingTurn.current = { page: target, until: performance.now() + TURN_SETTLE_MS };
       setPage(target);
     };
     const schedule = () => {
@@ -464,7 +495,7 @@ export function usePagedReading(
       window.removeEventListener('resize', schedule);
       for (const o of observers) o.disconnect();
     };
-  }, [enabled, vertical, scrollRef, syncFromScroller, remeasureKey]);
+  }, [enabled, vertical, scrollRef, syncFromScroller, acceptPage, remeasureKey]);
 
   // Note where the reader is once they have stopped moving, so the value
   // re-measurement reads was taken under the layout they were reading in.
