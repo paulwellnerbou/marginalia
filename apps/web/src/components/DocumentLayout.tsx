@@ -135,6 +135,7 @@ import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
 import { COMMENT_FLASH_MS, type ThreadActionResult } from './inline-comments/inlineUtils.js';
 import { PendingCommentPopover } from './inline-comments/PendingCommentPopover.js';
 import { McpPanel } from './McpPanel.js';
+import { PageJump } from './PageJump.js';
 import { ReadAloudControls } from './ReadAloudControls.js';
 import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
 import { ResizeHandle } from './ResizeHandle.js';
@@ -2726,9 +2727,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
               >
                 <ChevronLeftIcon />
               </IconButton>
-              <Text size="1" color="gray" className="doc-pager-count" aria-live="polite">
-                Page {pages.page + 1} of {pages.pageCount}
-              </Text>
+              <PageJump
+                page={pages.page}
+                pageCount={pages.pageCount}
+                // Instant: a jump is rarely to the next page, and smooth
+                // scrolling a hundred pitches is a long blur of columns.
+                onGoTo={(index) => pages.goTo(index, 'auto')}
+              />
               <IconButton
                 variant="ghost"
                 size="1"

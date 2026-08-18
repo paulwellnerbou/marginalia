@@ -1118,6 +1118,18 @@ button.primary:disabled {
   min-width: 12ch;
   text-align: center;
   font-variant-numeric: tabular-nums;
+  /* The counter opens the jump field, but it reads as a label rather
+     than a third control so the pager stays one quiet line. */
+  font-weight: inherit;
+}
+.doc-pager-jump-field {
+  /* Wide enough for a four-figure page number: vertical pages slice a
+     book into far more of them than columns do. */
+  width: 7ch;
+}
+.doc-pager-jump-field input {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .pane-header {
