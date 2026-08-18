@@ -468,7 +468,8 @@ export function InlineCommentsList({
           document with no threads at all has nothing to filter, and the
           remembered filters would otherwise put a control row above an
           empty pane. */}
-      {(totalCards > 1 || (totalCards > 0 && isFilteringThreads(filters))) && (
+      {(totalCards > 1 ||
+        (totalCards > 0 && (searchQuery !== '' || isFilteringThreads(filters)))) && (
         <div className="ic-list-controls">
           {/* No disclosure: the box has a row to itself either way, so a
               magnifier that only uncovers it costs a control and a state to
@@ -491,11 +492,16 @@ export function InlineCommentsList({
             <TextField.Slot>
               <MagnifyingGlassIcon />
             </TextField.Slot>
-            {searchNeedle !== '' && (
+            {/* Anything in the box gets a way out, including whitespace the
+                normalizer throws away — a query that filters nothing still has
+                to be clearable. The count is the part that needs a real one. */}
+            {searchQuery !== '' && (
               <TextField.Slot side="right" className="ic-list-search-clear-slot">
-                <span className="ic-list-search-count">
-                  {visibleCount} of {totalCards}
-                </span>
+                {searchNeedle !== '' && (
+                  <span className="ic-list-search-count">
+                    {visibleCount} of {totalCards}
+                  </span>
+                )}
                 {/* Keeps the caret in the field, so typing can continue. */}
                 <button
                   type="button"
