@@ -22,8 +22,11 @@ export function PageJump({ page, pageCount, onGoTo }: Props) {
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState('');
 
-  const requested = Number.parseInt(value, 10);
-  const valid = Number.isFinite(requested) && requested >= 1 && requested <= pageCount;
+  // `Number`, not `parseInt`: a number field accepts `1.5` and `1e2`, and
+  // parsing the leading digits of those reads them both as page 1 — an
+  // unremarkable-looking jump to a page nobody asked for.
+  const requested = Number(value);
+  const valid = Number.isInteger(requested) && requested >= 1 && requested <= pageCount;
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
