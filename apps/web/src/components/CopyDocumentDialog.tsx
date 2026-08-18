@@ -7,12 +7,13 @@ import {
   Dialog,
   Flex,
   IconButton,
+  RadioCards,
   Text,
   TextField,
 } from '@radix-ui/themes';
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { CopyDocumentResponse, Document } from '../lib/api.js';
+import type { CopyDocumentResponse, CopyMode, Document } from '../lib/api.js';
 import { copyDocument } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
@@ -25,9 +26,9 @@ import { Copyable } from './Copyable.js';
 import { PasswordDisclosureCard } from './PasswordDisclosureCard.js';
 
 /**
- * "Copy as new" — fork this document into a fresh one holding only its
- * current text. The copy starts clean: its history begins here, and no
- * comments, threads or edit proposals come along.
+ * Fork this document into a new one, either carrying its whole working
+ * life across — history, threads, comments, proposals — or taking only
+ * the text as it stands right now.
  *
  * Admin-only, like the gear and Access control it sits beside, because
  * the roster is copyable from here.
@@ -37,6 +38,7 @@ export function CopyDocumentDialog({ doc }: { doc: Document }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [includeAccess, setIncludeAccess] = useState(false);
+  const [mode, setMode] = useState<CopyMode>('full');
   const [copying, setCopying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<CopyDocumentResponse | null>(null);
@@ -56,7 +58,7 @@ export function CopyDocumentDialog({ doc }: { doc: Document }) {
     try {
       const res = await copyDocument(
         doc.uid,
-        { name: copyName, include_access: includeAccess },
+        { name: copyName, include_access: includeAccess, mode },
         { clientId: getClientId(), displayName },
       );
       const title = res.name ?? copyName;
@@ -87,6 +89,7 @@ export function CopyDocumentDialog({ doc }: { doc: Document }) {
   function reset() {
     setName('');
     setIncludeAccess(false);
+    setMode('full');
     setCopying(false);
     setError(null);
     setCreated(null);
@@ -166,11 +169,62 @@ export function CopyDocumentDialog({ doc }: { doc: Document }) {
             <div className="dialog-scroll-body">
               <Dialog.Title>Copy document</Dialog.Title>
               <Dialog.Description size="2" color="gray" mb="4">
-                Creates a new document from this one's current state. The copy starts clean: its
-                history begins with the copy, and no comments, threads or edit proposals come along.
+                Creates a second document from this one. It gets its own URL and its own admin link;
+                nothing you do to it touches this one.
               </Dialog.Description>
 
               <Flex direction="column" gap="4">
+                <Flex direction="column" gap="2">
+                  <Text as="div" size="2" weight="medium">
+                    What to copy
+                  </Text>
+                  {/* Cards rather than a toggle: the two differ in what
+                      they leave behind, and a copy cannot be undone, so
+                      both descriptions stay on screen to be compared
+                      instead of alternating as the choice changes. */}
+                  <RadioCards.Root
+                    size="1"
+                    columns={{ initial: '1', sm: '2' }}
+                    value={mode}
+                    onValueChange={(v) => setMode(v as CopyMode)}
+                    aria-label="What to copy"
+                  >
+                    {/* Named explicitly, or the card's whole text becomes
+                        the accessible name and a screen reader reads the
+                        title and the description as one run-on phrase. */}
+                    <RadioCards.Item
+                      value="full"
+                      aria-label="Copy with history"
+                      aria-describedby="copy-mode-full-hint"
+                    >
+                      <Flex direction="column" gap="1" align="start">
+                        <Text size="2" weight="medium">
+                          Copy with history
+                        </Text>
+                        <Text size="1" color="gray" id="copy-mode-full-hint">
+                          Every thread, comment and edit proposal comes across, open or settled,
+                          along with the document's full revision history.
+                        </Text>
+                      </Flex>
+                    </RadioCards.Item>
+                    <RadioCards.Item
+                      value="clean"
+                      aria-label="Clean copy"
+                      aria-describedby="copy-mode-clean-hint"
+                    >
+                      <Flex direction="column" gap="1" align="start">
+                        <Text size="2" weight="medium">
+                          Clean copy
+                        </Text>
+                        <Text size="1" color="gray" id="copy-mode-clean-hint">
+                          Only the text as it stands now. The history is cut and the discussion is
+                          left behind.
+                        </Text>
+                      </Flex>
+                    </RadioCards.Item>
+                  </RadioCards.Root>
+                </Flex>
+
                 <Flex direction="column" gap="1">
                   <Text as="label" size="2" weight="medium" htmlFor="copy-doc-name">
                     Name of the copy
@@ -197,13 +251,11 @@ export function CopyDocumentDialog({ doc }: { doc: Document }) {
                       Include access and roles
                     </Flex>
                   </Text>
-                  <Flex pl="6">
-                    <Text size="1" color="gray">
-                      {includeAccess
-                        ? "Everyone's role and name carry over, as freshly minted access links — the originals keep opening this document only, so you hand the new ones out yourself."
-                        : "You are the copy's only member. Nobody reaches it until you invite them."}
-                    </Text>
-                  </Flex>
+                  <Text size="1" color="gray">
+                    {includeAccess
+                      ? "Everyone's role and name carry over, as freshly minted access links — the originals keep opening this document only, so you hand the new ones out yourself."
+                      : "You are the copy's only member. Nobody reaches it until you invite them."}
+                  </Text>
                 </Flex>
 
                 {doc.password_protected && (
@@ -229,7 +281,7 @@ export function CopyDocumentDialog({ doc }: { doc: Document }) {
                 </Button>
               </Dialog.Close>
               <Button type="submit" disabled={copying}>
-                {copying ? 'Copying…' : 'Copy as new'}
+                {copying ? 'Copying…' : 'Copy document'}
               </Button>
             </Flex>
           </form>

@@ -552,6 +552,13 @@ export function uploadDocument(opts: UploadOptions, identity: Identity): Promise
   });
 }
 
+/**
+ * 'full' carries the document's whole working life — revision history,
+ * threads, comments, edit proposals. 'clean' takes only the text as it
+ * stands, with the history cut and the discussion left behind.
+ */
+export type CopyMode = 'full' | 'clean';
+
 export interface CopyDocumentOptions {
   /** Name for the copy. Omit/empty → the copy derives its own title. */
   name?: string;
@@ -561,16 +568,20 @@ export interface CopyDocumentOptions {
    * the caller as its only member.
    */
   include_access?: boolean;
+  /** Omitted → the server's default, which is `clean`. */
+  mode?: CopyMode;
 }
 
 export interface CopyDocumentResponse extends UploadResponse {
   /** uid of the document this one was copied from. */
   copied_from: string;
+  /** What the server actually applied. */
+  mode: CopyMode;
 }
 
 /**
- * Fork a document into a new one holding only its current text: fresh
- * history, no comments, threads or edit proposals. Admin-only.
+ * Fork a document into a new one — carrying its history and discussion
+ * across, or taking only its current text. Admin-only.
  */
 export function copyDocument(
   uid: string,

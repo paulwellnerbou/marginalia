@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams, execFile, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import fs, {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -216,6 +217,50 @@ export class GitStore {
         rmSync(dir, { recursive: true, force: true });
       }
       this.initialized.delete(uid);
+    });
+  }
+
+  /**
+   * Copy a document's whole repository into another document's slot —
+   * every commit, every branch, every proposal ref.
+   *
+   * Proposal refs are named after the comment that owns them, and a
+   * copy re-mints comment ids (the column is a global primary key), so
+   * each live one is rewritten to its new name. The
+   * `refs/proposals-original/*` backups are deliberately left under
+   * their old names: nothing ever reads them back, they exist only to
+   * keep superseded commits from being collected, and that job does not
+   * depend on what they are called.
+   *
+   * Runs under the source's lock so it cannot copy a half-written tree.
+   * The destination needs no lock — its uid is not in the database yet,
+   * so nothing else can reach it.
+   */
+  async forkDocRepo(
+    srcUid: string,
+    destUid: string,
+    proposalIds: ReadonlyMap<string, string>,
+  ): Promise<void> {
+    return this.withLock(srcUid, async () => {
+      const src = this.repoDir(srcUid);
+      if (!existsSync(src)) throw new Error(`no repository for ${srcUid}`);
+      const dir = this.repoDir(destUid);
+      rmSync(dir, { recursive: true, force: true });
+      cpSync(src, dir, { recursive: true });
+
+      for (const [oldId, newId] of proposalIds) {
+        let oid: string;
+        try {
+          oid = await git.resolveRef({ fs, dir, ref: proposalRef(oldId) });
+        } catch {
+          // Accepted and rejected proposals keep no branch. Their rows
+          // still copy; there is just no ref to carry across.
+          continue;
+        }
+        await git.writeRef({ fs, dir, ref: proposalRef(newId), value: oid, force: true });
+        await git.deleteRef({ fs, dir, ref: proposalRef(oldId) });
+      }
+      this.initialized.add(destUid);
     });
   }
 

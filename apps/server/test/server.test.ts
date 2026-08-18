@@ -871,6 +871,270 @@ describe('documents API', () => {
     expect(killAdmin.status).toBe(403);
   });
 
+  /**
+   * A source document with two revisions, a thread, and an open edit
+   * proposal with a reply — enough that a full copy has to carry
+   * history, anchors, proposal refs and comment parentage all at once.
+   */
+  async function docWithDiscussion() {
+    const first = '# Title\n\nalpha\n\ngamma';
+    const created = await upload(CLIENT_A, { markdown: first });
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+
+    const updated = '# Title\n\nbeta\n\ngamma';
+    const editRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, {
+        method: 'PUT',
+        headers: adminHeaders,
+        body: JSON.stringify({ markdown: updated }),
+      }),
+    );
+    expect(editRes.status).toBe(200);
+
+    const blockOf = (text: string) => {
+      const id = [...locateAllBlocks(updated).entries()].find(([, r]) => r.text === text)?.[0];
+      expect(id).toBeString();
+      return id;
+    };
+
+    const threadRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          anchor: { block_id: blockOf('beta'), quote: 'beta' },
+          body: 'a plain note',
+        }),
+      }),
+    );
+    expect(threadRes.status).toBe(201);
+    const thread = (await threadRes.json()) as { thread: { id: string } };
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          anchor: { block_id: blockOf('gamma'), quote: 'gamma' },
+          body: 'try this instead',
+          proposal: { proposed_text: 'gamma, revised' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+
+    const replyRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        {
+          method: 'POST',
+          headers: adminHeaders,
+          body: JSON.stringify({ body: 'agreed' }),
+        },
+      ),
+    );
+    expect(replyRes.status).toBe(200);
+
+    return {
+      created,
+      adminHeaders,
+      updated,
+      threadId: thread.thread.id,
+      proposalId: proposal.thread.id,
+    };
+  }
+
+  async function copyDocument(
+    uid: string,
+    headers: Headers,
+    body: Record<string, unknown>,
+  ): Promise<CreateResponse & { mode: string; invite_only: boolean; copied_from: string }> {
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/copy`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      }),
+    );
+    expect(res.status).toBe(201);
+    return (await res.json()) as CreateResponse & {
+      mode: string;
+      invite_only: boolean;
+      copied_from: string;
+    };
+  }
+
+  test('copy full: history, threads and proposals all come across', async () => {
+    const { created, adminHeaders, updated } = await docWithDiscussion();
+
+    const copy = await copyDocument(created.uid, adminHeaders, {
+      name: 'Full copy',
+      mode: 'full',
+    });
+    expect(copy.mode).toBe('full');
+    const copyHeaders = withInvite(headersFor(CLIENT_A), copy.admin_invite.token);
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}`, { headers: copyHeaders }),
+    );
+    expect(((await docRes.json()) as { source: string }).source).toBe(updated);
+
+    // Both of the source's commits, not a single fresh one.
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}/history`, { headers: copyHeaders }),
+    );
+    const { history } = (await historyRes.json()) as { history: Array<{ oid: string }> };
+    expect(history).toHaveLength(2);
+
+    const srcHistoryRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, { headers: adminHeaders }),
+    );
+    const srcHistory = ((await srcHistoryRes.json()) as { history: Array<{ oid: string }> })
+      .history;
+    // Same objects, so every oid a proposal recorded still resolves.
+    expect(history.map((h) => h.oid)).toEqual(srcHistory.map((h) => h.oid));
+
+    type Thread = {
+      id: string;
+      comments: Array<{ body: string }>;
+      proposal: unknown;
+    };
+    const threadsOf = async (uid: string, headers: Headers) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads?state=all`, { headers }),
+      );
+      expect(res.status).toBe(200);
+      return ((await res.json()) as { threads: Thread[] }).threads;
+    };
+    const threads = await threadsOf(copy.uid, copyHeaders);
+    const srcThreads = await threadsOf(created.uid, adminHeaders);
+
+    expect(threads).toHaveLength(2);
+    expect(threads.map((t) => t.comments[0]?.body).sort()).toEqual([
+      'a plain note',
+      'try this instead',
+    ]);
+    // Reply counts per thread match the source's, so nothing was lost
+    // in the parent remapping.
+    const shape = (list: Thread[]) => list.map((t) => t.comments.length).sort();
+    // [1, 2]: the plain note alone, and the proposal plus its reply. Named
+    // so the comparison below cannot pass by both sides being empty.
+    expect(shape(srcThreads)).toEqual([1, 2]);
+    expect(shape(threads)).toEqual(shape(srcThreads));
+
+    // The proposal is still diffable, which only holds if its branch ref
+    // was renamed to the comment id the copy gave it.
+    const proposalThread = threads.find((t) => t.proposal);
+    expect(proposalThread).toBeDefined();
+    const diffRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${copy.uid}/edit-proposals/${proposalThread!.id}/diff`,
+        { headers: copyHeaders },
+      ),
+    );
+    expect(diffRes.status).toBe(200);
+  });
+
+  test('copy full: the copy gets its own comment ids and the source is untouched', async () => {
+    const { created, adminHeaders, threadId, proposalId } = await docWithDiscussion();
+    const copy = await copyDocument(created.uid, adminHeaders, { name: 'C', mode: 'full' });
+    const copyHeaders = withInvite(headersFor(CLIENT_A), copy.admin_invite.token);
+
+    const listOf = async (uid: string, headers: Headers) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads?state=all`, { headers }),
+      );
+      return ((await res.json()) as { threads: Array<{ id: string }> }).threads.map((t) => t.id);
+    };
+    const copyIds = await listOf(copy.uid, copyHeaders);
+    const srcIds = await listOf(created.uid, adminHeaders);
+
+    expect(srcIds.sort()).toEqual([threadId, proposalId].sort());
+    // `comments.id` is a global primary key — sharing them is impossible,
+    // and the source must not have lost its own.
+    for (const id of copyIds) expect(srcIds).not.toContain(id);
+  });
+
+  test('copy full: copies every column of a comment', async () => {
+    const { created, adminHeaders } = await docWithDiscussion();
+    const copy = await copyDocument(created.uid, adminHeaders, { name: 'C', mode: 'full' });
+
+    const db = app.db;
+    const pick = (uid: string) =>
+      db
+        .prepare("SELECT * FROM comments WHERE doc_uid = ? AND body = 'a plain note'")
+        .get(uid) as Record<string, unknown>;
+    const before = pick(created.uid);
+    const after = pick(copy.uid);
+    expect(before).toBeTruthy();
+    expect(after).toBeTruthy();
+
+    // Every column has to survive the copy. Only the ones naming the
+    // document or the comment itself may differ — anything else drifting
+    // means a column was added and the copy quietly stopped carrying it.
+    const sameColumns = (
+      src: Record<string, unknown>,
+      dst: Record<string, unknown>,
+      remapped: string[],
+    ) => {
+      const skip = new Set(remapped);
+      for (const column of Object.keys(src)) {
+        if (skip.has(column)) continue;
+        expect(`${column}=${String(dst[column])}`).toBe(`${column}=${String(src[column])}`);
+      }
+    };
+    sameColumns(before, after, ['id', 'doc_uid', 'parent_id', 'parent_proposal_id']);
+    expect(after.doc_uid).toBe(copy.uid);
+    expect(after.id).not.toBe(before.id);
+
+    // Same for the proposal row, which is where the columns with real
+    // values live — status, the base oid and the replaced span.
+    const proposalOf = (uid: string) =>
+      db
+        .prepare(
+          `SELECT p.* FROM comments_edit_proposals p
+             JOIN comments c ON c.id = p.comment_id
+            WHERE c.doc_uid = ?`,
+        )
+        .get(uid) as Record<string, unknown>;
+    const srcProposal = proposalOf(created.uid);
+    const copyProposal = proposalOf(copy.uid);
+    expect(srcProposal).toBeTruthy();
+    expect(copyProposal).toBeTruthy();
+    expect(srcProposal.base_oid).toBeString();
+    sameColumns(srcProposal, copyProposal, ['comment_id', 'branch_ref']);
+    // The ref is renamed to the copy's comment id; the oid it records is
+    // the same object, the repository having been forked whole.
+    expect(copyProposal.branch_ref).toBe(`refs/proposals/${copyProposal.comment_id}`);
+    expect(copyProposal.comment_id).not.toBe(srcProposal.comment_id);
+  });
+
+  test('copy full: a clean copy of the same document carries none of it', async () => {
+    const { created, adminHeaders } = await docWithDiscussion();
+    const copy = await copyDocument(created.uid, adminHeaders, { name: 'C', mode: 'clean' });
+    const copyHeaders = withInvite(headersFor(CLIENT_A), copy.admin_invite.token);
+    expect(copy.mode).toBe('clean');
+
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}/history`, { headers: copyHeaders }),
+    );
+    expect(((await historyRes.json()) as { history: unknown[] }).history).toHaveLength(1);
+
+    const threadsRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${copy.uid}/threads?state=all`, {
+        headers: copyHeaders,
+      }),
+    );
+    expect(((await threadsRes.json()) as { threads: unknown[] }).threads).toHaveLength(0);
+  });
+
+  test('copy: an unrecognised mode falls back to the clean copy', async () => {
+    const { created, adminHeaders } = await docWithDiscussion();
+    const copy = await copyDocument(created.uid, adminHeaders, { name: 'C', mode: 'everything' });
+    expect(copy.mode).toBe('clean');
+  });
+
   test('copy: the copy holds the current source, a history of its own, and no threads', async () => {
     const created = await upload(CLIENT_A, { markdown: '# Title\n\nalpha' });
     const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);

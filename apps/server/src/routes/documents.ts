@@ -356,6 +356,10 @@ async function copyDocument(c: Context, deps: AppDeps) {
   if (!body) return c.json({ error: 'invalid-body' }, 400);
 
   const includeAccess = body.include_access === true;
+  // 'full' carries the discussion and the repository as they stand;
+  // 'clean' takes only the current text. Anything unrecognised reads as
+  // 'clean', which is the conservative one — it copies strictly less.
+  const mode: CopyMode = body.mode === 'full' ? 'full' : 'clean';
   const docName =
     typeof body.name === 'string' && body.name.trim().length > 0
       ? body.name.trim().slice(0, 200)
@@ -364,6 +368,11 @@ async function copyDocument(c: Context, deps: AppDeps) {
   const source = store.read(doc);
   const uid = newDocumentUid();
   const now = Date.now();
+
+  // Read before the repository is forked: the fork has to rename each
+  // proposal ref to the comment id the copy will give it, so the id map
+  // has to exist first.
+  const discussion = mode === 'full' ? readDiscussion(db, doc.uid) : null;
 
   // The password gate travels even when the roles don't — dropping it
   // would quietly turn a protected document into an unprotected one.
@@ -380,7 +389,16 @@ async function copyDocument(c: Context, deps: AppDeps) {
   // else has been let into starts closed however open the source was.
   const inviteOnly = includeAccess ? doc.invite_only === 1 : true;
 
-  await store.write({ uid, format: doc.format }, source, identity, 'upload');
+  if (discussion) {
+    // Whole-repository copy, so every commit oid the discussion refers
+    // to — a proposal's `base_oid`, an accepted one's `accepted_oid` —
+    // still resolves in the copy, and the text is identical so every
+    // anchor still lands. Rebuilding from the source text instead (the
+    // way bundle import has to) would invalidate both.
+    await store.forkDocRepo(doc.uid, uid, discussion.proposalIds);
+  } else {
+    await store.write({ uid, format: doc.format }, source, identity, 'upload');
+  }
 
   const adminInvite = db.transaction(() => {
     db.prepare(
@@ -419,6 +437,15 @@ async function copyDocument(c: Context, deps: AppDeps) {
       insertAttachment.run(uid, a.ref_name, a.asset_id, a.kind, a.mime, now, identity.clientId);
     }
 
+    if (discussion) {
+      writeDiscussion(db, uid, discussion);
+      // The registry rides with the discussion regardless of the access
+      // toggle. It grants nothing — `authorize` never reads it — but the
+      // comments that just came across name these people, so without it
+      // a later rename would not reach their copied comments.
+      copyDocUsers(db, doc.uid, uid);
+    }
+
     if (includeAccess) {
       // Fresh tokens: an invite token is both the credential and the
       // primary key, so the source's links have to keep pointing at the
@@ -446,20 +473,8 @@ async function copyDocument(c: Context, deps: AppDeps) {
 
       // The registry too, so author names and @mentions resolve in the
       // copy from the first visit rather than only once each person
-      // returns. OR IGNORE keeps the caller's row upserted just above.
-      const users = db
-        .prepare(
-          'SELECT client_id, display_name, first_seen_at, last_seen_at FROM doc_users WHERE doc_uid = ?',
-        )
-        .all(doc.uid) as CopiedDocUserRow[];
-      const insertUser = db.prepare(
-        `INSERT OR IGNORE INTO doc_users
-           (doc_uid, client_id, display_name, first_seen_at, last_seen_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      );
-      for (const u of users) {
-        insertUser.run(uid, u.client_id, u.display_name, u.first_seen_at, u.last_seen_at);
-      }
+      // returns. Idempotent, so a full copy having done it already is fine.
+      copyDocUsers(db, doc.uid, uid);
     }
 
     return createInviteRow(db, {
@@ -494,12 +509,178 @@ async function copyDocument(c: Context, deps: AppDeps) {
     format: doc.format,
     invite_only: inviteOnly,
     copied_from: doc.uid,
+    mode,
   };
   if (plaintextPassword) {
     response.password = plaintextPassword;
     c.header('Cache-Control', 'no-store');
   }
   return c.json(response, 201);
+}
+
+type CopyMode = 'full' | 'clean';
+
+/**
+ * Everything a document's discussion consists of, plus the translation
+ * table from its comment ids to the ones the copy will use.
+ *
+ * `comments.id` is a global primary key, so a copy cannot keep the
+ * originals — and because a proposal's git ref is named after its
+ * comment, the map has to be settled before the repository is forked.
+ */
+interface DiscussionCopy {
+  ids: Map<string, string>;
+  /** The subset that owns an edit proposal, so a ref may need renaming. */
+  proposalIds: Map<string, string>;
+  comments: Record<string, unknown>[];
+  proposals: Record<string, unknown>[];
+  answers: Record<string, unknown>[];
+  mentions: Record<string, unknown>[];
+  reactions: Record<string, unknown>[];
+}
+
+function readDiscussion(db: Database, srcUid: string): DiscussionCopy {
+  const comments = db
+    .prepare('SELECT * FROM comments WHERE doc_uid = ? ORDER BY created_at')
+    .all(srcUid) as Record<string, unknown>[];
+  const ids = new Map<string, string>();
+  for (const row of comments) {
+    if (typeof row.id === 'string') ids.set(row.id, randomBytes(12).toString('base64url'));
+  }
+
+  const proposals = db
+    .prepare(
+      `SELECT p.* FROM comments_edit_proposals p
+         JOIN comments c ON c.id = p.comment_id
+        WHERE c.doc_uid = ?`,
+    )
+    .all(srcUid) as Record<string, unknown>[];
+  const proposalIds = new Map<string, string>();
+  for (const row of proposals) {
+    const oldId = row.comment_id;
+    const newId = typeof oldId === 'string' ? ids.get(oldId) : undefined;
+    if (typeof oldId === 'string' && newId) proposalIds.set(oldId, newId);
+  }
+
+  const answers = db
+    .prepare(
+      `SELECT a.* FROM comments_edit_proposal_answers a
+         JOIN comments c ON c.id = a.proposal_comment_id
+        WHERE c.doc_uid = ?`,
+    )
+    .all(srcUid) as Record<string, unknown>[];
+
+  const mentions = db
+    .prepare('SELECT * FROM comment_mentions WHERE doc_uid = ?')
+    .all(srcUid) as Record<string, unknown>[];
+  const reactions = db
+    .prepare('SELECT * FROM comment_reactions WHERE doc_uid = ?')
+    .all(srcUid) as Record<string, unknown>[];
+
+  return { ids, proposalIds, comments, proposals, answers, mentions, reactions };
+}
+
+/**
+ * Re-insert a discussion against a new document, rewriting every column
+ * that names a comment.
+ *
+ * Rows are re-inserted column-for-column off `SELECT *` rather than
+ * through a hand-written column list: a copy that silently dropped a
+ * column added later would be a quiet data-loss bug, and the shape here
+ * then follows the schema on its own. `copies every column` in
+ * server.test.ts holds this to it.
+ */
+function writeDiscussion(db: Database, uid: string, discussion: DiscussionCopy): void {
+  const { ids } = discussion;
+  const mapId = (v: unknown): unknown => (typeof v === 'string' ? (ids.get(v) ?? v) : v);
+
+  insertRows(db, 'comments', discussion.comments, (row) => {
+    // A row whose parent did not come across would dangle; there is no
+    // such row today (parents are always in the same document) but the
+    // copy should not be the thing that discovers otherwise.
+    if (typeof row.parent_id === 'string' && !ids.has(row.parent_id)) return null;
+    if (typeof row.parent_proposal_id === 'string' && !ids.has(row.parent_proposal_id)) return null;
+    return {
+      ...row,
+      id: mapId(row.id),
+      doc_uid: uid,
+      parent_id: mapId(row.parent_id),
+      parent_proposal_id: mapId(row.parent_proposal_id),
+    };
+  });
+
+  insertRows(db, 'comments_edit_proposals', discussion.proposals, (row) => {
+    const newId = typeof row.comment_id === 'string' ? ids.get(row.comment_id) : undefined;
+    if (!newId) return null;
+    return {
+      ...row,
+      comment_id: newId,
+      // The ref was renamed to match when the repository was forked.
+      branch_ref: typeof row.branch_ref === 'string' ? `refs/proposals/${newId}` : row.branch_ref,
+    };
+  });
+
+  insertRows(db, 'comments_edit_proposal_answers', discussion.answers, (row) => ({
+    ...row,
+    proposal_comment_id: mapId(row.proposal_comment_id),
+    answered_comment_id: mapId(row.answered_comment_id),
+  }));
+
+  insertRows(db, 'comment_mentions', discussion.mentions, (row) => ({
+    ...row,
+    doc_uid: uid,
+    comment_id: mapId(row.comment_id),
+  }));
+
+  insertRows(db, 'comment_reactions', discussion.reactions, (row) => ({
+    ...row,
+    doc_uid: uid,
+    comment_id: mapId(row.comment_id),
+  }));
+}
+
+/**
+ * Insert rows read with `SELECT *`, one prepared statement per table.
+ * `patch` returns the row to write, or null to drop it. Column names
+ * come from the table's own rows, never from a request.
+ */
+function insertRows(
+  db: Database,
+  table: string,
+  rows: Record<string, unknown>[],
+  patch: (row: Record<string, unknown>) => Record<string, unknown> | null,
+): void {
+  let stmt: ReturnType<Database['prepare']> | null = null;
+  let columns: string[] = [];
+  for (const row of rows) {
+    const next = patch(row);
+    if (!next) continue;
+    const cols = Object.keys(next);
+    if (!stmt || cols.length !== columns.length || cols.some((c, i) => c !== columns[i])) {
+      columns = cols;
+      stmt = db.prepare(
+        `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
+      );
+    }
+    stmt.run(...columns.map((c) => next[c] as never));
+  }
+}
+
+/** Registry rows only; grants nothing on its own. Safe to run twice. */
+function copyDocUsers(db: Database, srcUid: string, uid: string): void {
+  const users = db
+    .prepare(
+      'SELECT client_id, display_name, first_seen_at, last_seen_at FROM doc_users WHERE doc_uid = ?',
+    )
+    .all(srcUid) as CopiedDocUserRow[];
+  const insertUser = db.prepare(
+    `INSERT OR IGNORE INTO doc_users
+       (doc_uid, client_id, display_name, first_seen_at, last_seen_at)
+     VALUES (?, ?, ?, ?, ?)`,
+  );
+  for (const u of users) {
+    insertUser.run(uid, u.client_id, u.display_name, u.first_seen_at, u.last_seen_at);
+  }
 }
 
 // --- GET /api/documents/:uid -----------------------------------------
