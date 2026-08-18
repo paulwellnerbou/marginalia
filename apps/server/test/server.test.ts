@@ -1070,16 +1070,44 @@ describe('documents API', () => {
     expect(before).toBeTruthy();
     expect(after).toBeTruthy();
 
-    // Every column has to survive the copy. Only the three that name the
+    // Every column has to survive the copy. Only the ones naming the
     // document or the comment itself may differ — anything else drifting
     // means a column was added and the copy quietly stopped carrying it.
-    const remapped = new Set(['id', 'doc_uid', 'parent_id', 'parent_proposal_id']);
-    for (const column of Object.keys(before)) {
-      if (remapped.has(column)) continue;
-      expect(`${column}=${String(after[column])}`).toBe(`${column}=${String(before[column])}`);
-    }
+    const sameColumns = (
+      src: Record<string, unknown>,
+      dst: Record<string, unknown>,
+      remapped: string[],
+    ) => {
+      const skip = new Set(remapped);
+      for (const column of Object.keys(src)) {
+        if (skip.has(column)) continue;
+        expect(`${column}=${String(dst[column])}`).toBe(`${column}=${String(src[column])}`);
+      }
+    };
+    sameColumns(before, after, ['id', 'doc_uid', 'parent_id', 'parent_proposal_id']);
     expect(after.doc_uid).toBe(copy.uid);
     expect(after.id).not.toBe(before.id);
+
+    // Same for the proposal row, which is where the columns with real
+    // values live — status, the base oid and the replaced span.
+    const proposalOf = (uid: string) =>
+      db
+        .prepare(
+          `SELECT p.* FROM comments_edit_proposals p
+             JOIN comments c ON c.id = p.comment_id
+            WHERE c.doc_uid = ?`,
+        )
+        .get(uid) as Record<string, unknown>;
+    const srcProposal = proposalOf(created.uid);
+    const copyProposal = proposalOf(copy.uid);
+    expect(srcProposal).toBeTruthy();
+    expect(copyProposal).toBeTruthy();
+    expect(srcProposal.base_oid).toBeString();
+    sameColumns(srcProposal, copyProposal, ['comment_id', 'branch_ref']);
+    // The ref is renamed to the copy's comment id; the oid it records is
+    // the same object, the repository having been forked whole.
+    expect(copyProposal.branch_ref).toBe(`refs/proposals/${copyProposal.comment_id}`);
+    expect(copyProposal.comment_id).not.toBe(srcProposal.comment_id);
   });
 
   test('copy full: a clean copy of the same document carries none of it', async () => {

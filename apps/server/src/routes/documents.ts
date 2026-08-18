@@ -534,7 +534,7 @@ interface DiscussionCopy {
   proposalIds: Map<string, string>;
   comments: Record<string, unknown>[];
   proposals: Record<string, unknown>[];
-  answers: Array<{ proposal_comment_id: string; answered_comment_id: string }>;
+  answers: Record<string, unknown>[];
   mentions: Record<string, unknown>[];
   reactions: Record<string, unknown>[];
 }
@@ -568,7 +568,7 @@ function readDiscussion(db: Database, srcUid: string): DiscussionCopy {
          JOIN comments c ON c.id = a.proposal_comment_id
         WHERE c.doc_uid = ?`,
     )
-    .all(srcUid) as Array<{ proposal_comment_id: string; answered_comment_id: string }>;
+    .all(srcUid) as Record<string, unknown>[];
 
   const mentions = db
     .prepare('SELECT * FROM comment_mentions WHERE doc_uid = ?')
@@ -621,6 +621,7 @@ function writeDiscussion(db: Database, uid: string, discussion: DiscussionCopy):
   });
 
   insertRows(db, 'comments_edit_proposal_answers', discussion.answers, (row) => ({
+    ...row,
     proposal_comment_id: mapId(row.proposal_comment_id),
     answered_comment_id: mapId(row.answered_comment_id),
   }));
