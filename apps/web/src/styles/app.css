@@ -2512,14 +2512,13 @@ button.primary:disabled {
   min-width: 0;
 }
 
-/* Stacked rows out of one wrapping flex line: sort and the actions share line
-   one, then the filter chips claim a full basis below, and the search box
-   another whenever it is open. */
+/* Stacked rows: the search box, then the sort button with the overflow menu,
+   then the filter chips. A column rather than one wrapping line — wrapping
+   would put them wherever they happened to fit. */
 .ic-list-controls {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 0.5rem;
+  flex-direction: column;
+  gap: 0.35rem;
   /* Sort, filters and search stay reachable while the threads scroll under
      them. The negative margins cancel .ic-list's padding so the opaque strip
      spans the pane edge to edge; the padding puts the spacing back inside. */
@@ -2532,8 +2531,15 @@ button.primary:disabled {
   border-bottom: 1px solid var(--ui-border);
 }
 
-/* Shares line one with the actions. No pill or track: the sort order is
-   not one of the filters below, and looking like them would say it is. */
+.ic-list-controls-bottom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+}
+
+/* Leads the row above the chips. No pill or track: the sort order is not one
+   of the filters below it, and looking like them would say it is. */
 .ic-list-sort {
   flex: none;
   appearance: none;
@@ -2541,8 +2547,8 @@ button.primary:disabled {
   align-items: center;
   gap: 0.3rem;
   padding: 0.1rem 0.4rem;
-  /* Cancels the left padding so the icon starts on the same x as the chips'
-     left edge below, while the hover surface keeps its breathing room. */
+  /* Cancels the left padding so the icon starts on the same x as the cards
+     below, while the hover surface keeps its breathing room. */
   margin-left: -0.4rem;
   border: 0;
   border-radius: var(--radius-2);
@@ -2570,8 +2576,22 @@ button.primary:disabled {
   color: var(--ui-fg-muted);
 }
 
-/* Full flex-basis keeps the chips on their own row under the sort button,
-   so they read as one group however wide the pane is. */
+/* The affordance: without it the row reads as a caption for the list. Faint
+   at rest so the label still leads, full strength once the cursor is on it. */
+.ic-list-sort-swap {
+  width: 12px;
+  height: 12px;
+  margin-left: 0.05rem;
+  color: var(--ui-fg-muted);
+  opacity: 0.75;
+}
+
+.ic-list-sort:hover .ic-list-sort-swap {
+  opacity: 1;
+}
+
+/* Full flex-basis keeps the chips on their own row under the sort button, so
+   they read as one group however wide the pane is. */
 .ic-list-filter-chips {
   flex: 1 1 100%;
   display: flex;
@@ -2624,45 +2644,29 @@ button.primary:disabled {
   outline-offset: 1px;
 }
 
-/* Pinned to the right of line one. Generous gap: the ghost buttons'
-   negative margins eat into it. */
-.ic-list-controls-actions {
+/* Pinned to the right of the sort button, whose row it shares: the menu acts
+   on the list as a whole, which is what that row is about — the query above it
+   is a different subject. */
+.ic-list-menu-trigger {
   flex: none;
   margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
 }
 
-.ic-list-controls-divider {
-  width: 1px;
-  align-self: stretch;
-  min-height: 1.1rem;
-  background: var(--ui-border);
-}
-
-/* Full flex-basis drops the search box onto its own row of the controls
-   flex-wrap, below the filter chips. */
-.ic-list-search {
-  flex: 1 1 100%;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  margin-top: 0.15rem;
-}
-
-.ic-list-search-field {
-  flex: 1;
-}
-
+/* Rides inside the field next to the clear button rather than beside the box,
+   which would cost the query the room to be read on a narrow pane. Only there
+   while a query is. */
 .ic-list-search-count {
   flex: none;
   white-space: nowrap;
+  font-size: var(--font-size-1);
+  line-height: var(--line-height-1);
+  color: var(--gray-11);
 }
 
 /* Same clear affordance as the TOC filter (.toc-search-clear). */
 .ic-list-search-clear-slot {
   padding-right: 0.2rem;
+  gap: 0.35rem;
 }
 
 .ic-list-search-clear {
