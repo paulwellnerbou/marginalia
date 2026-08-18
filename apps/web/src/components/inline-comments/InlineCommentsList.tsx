@@ -487,7 +487,6 @@ export function InlineCommentsList({
             }}
             placeholder="Search by id, text, or author"
             aria-label="Search threads by id, text, or author"
-            className="ic-list-search-field"
           >
             <TextField.Slot>
               <MagnifyingGlassIcon />
