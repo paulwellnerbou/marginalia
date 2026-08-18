@@ -566,6 +566,84 @@ button.primary:disabled {
   /* biome-ignore lint/suspicious/noDuplicateProperties: dvh fallback for older browsers */
   height: 100dvh;
   overflow: hidden;
+  /* Anchors the loading bar under the app bar. */
+  position: relative;
+}
+
+/* First paint of a document, before there is anything to show. */
+.doc-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* --- Switching documents --------------------------------------------
+   The shell stays standing while the next document loads, so a switch
+   moves the text and nothing else. What is on screen until then belongs
+   to the tab being left: dimmed, and inert from the markup side, so it
+   can't be read as the document that the strip is already pointing at.
+
+   Neither signal is mounted until the wait has earned one — ViewPage
+   holds them back for `PENDING_GRACE_MS`, so a switch that lands inside
+   that shows no loading state at all. */
+.doc-layout--pending {
+  opacity: 0.5;
+  transition: opacity 200ms ease;
+}
+
+/* Positioned rather than placed in the column flow: 2px of layout would
+   shove the whole document down to announce that it is loading. */
+.doc-pending {
+  position: absolute;
+  top: var(--app-bar-height);
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 19;
+  opacity: 0;
+  background-image: linear-gradient(90deg, transparent, var(--ui-accent), transparent);
+  background-size: 45% 100%;
+  background-repeat: no-repeat;
+  animation:
+    doc-pending-in 140ms ease-out forwards,
+    doc-pending-sweep 1.1s ease-in-out infinite;
+}
+@keyframes doc-pending-in {
+  to {
+    opacity: 1;
+  }
+}
+@keyframes doc-pending-sweep {
+  from {
+    background-position: -45% 0;
+  }
+  to {
+    background-position: 145% 0;
+  }
+}
+
+/* The document arrives with a short fade rather than a hard cut: the
+   swap is a single commit, and at that speed an instant replacement
+   reads as the page flinching. */
+@media (prefers-reduced-motion: no-preference) {
+  .doc-viewport {
+    animation: doc-enter 160ms ease-out;
+  }
+}
+@keyframes doc-enter {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still says "loading", without a thing travelling across the screen. */
+  .doc-pending {
+    background-image: none;
+    background-color: var(--ui-accent);
+    animation: doc-pending-in 1ms linear forwards;
+  }
 }
 .doc-layout {
   flex: 1;

@@ -232,6 +232,10 @@ interface Props {
   /** Called by admin settings when the server-side settings change. */
   onDocSettingsChanged?: (uid: string, s: Partial<DocumentSettingsResponse>) => void;
   children?: ReactNode;
+  /** Another document is on its way in and this one is only still here
+   *  to keep the shell standing. Dimmed and made inert: it belongs to
+   *  the tab the reader has already left. */
+  pending?: boolean;
 }
 
 interface ThreadFocusTarget {
@@ -287,7 +291,7 @@ function whenIdle(fn: () => void): void {
   else window.setTimeout(fn, 0);
 }
 
-export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
+export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }: Props) {
   const navigate = useNavigate();
   const canComment = doc.role !== 'reader';
   const [compactViewport] = useState(isCompactViewport);
@@ -2360,10 +2364,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         format={doc.format}
       />
 
+      {pending && <span className="doc-pending" role="progressbar" aria-label="Loading document" />}
+
       <div
-        className={`doc-layout${overlayPanes ? ' doc-layout-overlay' : ''}`}
+        className={`doc-layout${overlayPanes ? ' doc-layout-overlay' : ''}${pending ? ' doc-layout--pending' : ''}`}
         style={gridStyle}
         onTransitionEnd={onPanesSettled}
+        inert={pending}
       >
         {overlayPaneOpen && (
           <button
