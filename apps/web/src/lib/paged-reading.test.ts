@@ -1,5 +1,34 @@
 import { describe, expect, test } from 'bun:test';
-import { clampPage, pageCountOf, pageIndexAt, pageIndexOfOffset } from './paged-reading.js';
+import {
+  clampPage,
+  measurePages,
+  PAGED_CLASS,
+  PAGED_VERTICAL_CLASS,
+  pageCountOf,
+  pageIndexAt,
+  pageIndexOfOffset,
+} from './paged-reading.js';
+
+/** Just enough of a scroller for the geometry `measurePages` reads. */
+function scroller(options: {
+  vertical?: boolean;
+  pitch: number;
+  extent: number;
+  offset: number;
+}): HTMLElement {
+  const { vertical = false, pitch, extent, offset } = options;
+  const mode = vertical ? PAGED_VERTICAL_CLASS : PAGED_CLASS;
+  return {
+    classList: { contains: (name: string) => name === mode },
+    clientWidth: vertical ? 600 : pitch,
+    clientHeight: vertical ? pitch : 600,
+    scrollWidth: vertical ? 600 : extent,
+    scrollHeight: vertical ? extent : 600,
+    scrollLeft: vertical ? 0 : offset,
+    scrollTop: vertical ? offset : 0,
+    getBoundingClientRect: () => ({ height: pitch }),
+  } as unknown as HTMLElement;
+}
 
 describe('pageCountOf', () => {
   test('a document shorter than one page is still one page', () => {
@@ -99,5 +128,35 @@ describe('a fractional pitch', () => {
     // previous page and half a line of this one.
     const rounded = Math.round(PITCH); // 821
     expect(pageIndexOfOffset(199 * PITCH, rounded)).toBe(198);
+  });
+});
+
+describe('measurePages', () => {
+  test('reads the page a settled horizontal scroller rests on', () => {
+    const metrics = measurePages(scroller({ pitch: 800, extent: 2400, offset: 1600 }));
+    expect(metrics).toEqual({ pitch: 800, pageCount: 3, currentPage: 2 });
+  });
+
+  test('the end of a partly-filled last page is that last page', () => {
+    // Vertical pages slice ordinary flow, so the document ends part-way
+    // into page 3 and the scroller stops at 1100 — well short of that
+    // page's own start at 1600.
+    const metrics = measurePages(
+      scroller({ vertical: true, pitch: 800, extent: 1900, offset: 1100 }),
+    );
+    expect(metrics.pageCount).toBe(3);
+    expect(metrics.currentPage).toBe(2);
+  });
+
+  test('a page mid-document is still read from the offset', () => {
+    const metrics = measurePages(
+      scroller({ vertical: true, pitch: 800, extent: 1900, offset: 800 }),
+    );
+    expect(metrics.currentPage).toBe(1);
+  });
+
+  test('a document that fits on one page is on page one', () => {
+    const metrics = measurePages(scroller({ pitch: 800, extent: 800, offset: 0 }));
+    expect(metrics).toEqual({ pitch: 800, pageCount: 1, currentPage: 0 });
   });
 });
