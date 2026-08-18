@@ -7,7 +7,7 @@ import {
   TextAlignLeftIcon,
 } from '@radix-ui/react-icons';
 import { Button, DropdownMenu, IconButton, Text, TextField } from '@radix-ui/themes';
-import { FunnelIcon } from 'lucide-react';
+import { ArrowUpDownIcon, FunnelIcon } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
@@ -205,7 +205,6 @@ export function InlineCommentsList({
   // Remembered per browser, so the pane opens the way it was left.
   const [sortMode, setSortMode] = useState<ThreadSortMode>(loadThreadSortMode);
   const [filters, setFilters] = useState<ThreadFilters>(loadThreadFilters);
-  const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const searchNeedle = useMemo(() => normalizeThreadSearch(searchQuery), [searchQuery]);
 
@@ -337,26 +336,11 @@ export function InlineCommentsList({
     };
   }, [focusedThread, threadIds, visibleIds, collapsed, parentOf]);
 
-  // Focus once the input exists — it mounts a frame after the toggle.
-  useEffect(() => {
-    if (!searchOpen) return;
-    const input = searchInputRef.current;
-    if (!input) return;
-    const frame = window.requestAnimationFrame(() => input.focus());
-    return () => window.cancelAnimationFrame(frame);
-  }, [searchOpen]);
-
-  const searchToggleLabel = searchOpen
-    ? 'Hide thread search'
-    : 'Search threads by id, text, or author';
-
   const otherSortMode: ThreadSortMode = sortMode === 'document' ? 'latest' : 'document';
 
-  function toggleSearch() {
-    // Closing always clears: a query that keeps filtering from behind a
-    // closed box would look like threads had vanished.
-    if (searchOpen) setSearchQuery('');
-    setSearchOpen(!searchOpen);
+  function clearSearch() {
+    setSearchQuery('');
+    searchInputRef.current?.focus({ preventScroll: true });
   }
 
   function toggleCollapsed(id: string) {
@@ -484,43 +468,83 @@ export function InlineCommentsList({
           document with no threads at all has nothing to filter, and the
           remembered filters would otherwise put a control row above an
           empty pane. */}
-      {(totalCards > 1 || searchOpen || (totalCards > 0 && isFilteringThreads(filters))) && (
+      {(totalCards > 1 ||
+        (totalCards > 0 && (searchQuery !== '' || isFilteringThreads(filters)))) && (
         <div className="ic-list-controls">
-          {/* Current order, not a filter — a plain button rather than a pill,
-              so it can't read as one of the chips below. */}
-          <button
-            type="button"
-            className="ic-list-sort"
-            aria-label={`Sorted by ${SORT_MODE_LABELS[sortMode].toLowerCase()} — switch to ${SORT_MODE_LABELS[otherSortMode].toLowerCase()}`}
-            title={`Sort by ${SORT_MODE_LABELS[otherSortMode].toLowerCase()}`}
-            onClick={() => setSortMode(otherSortMode)}
+          {/* No disclosure: the box has a row to itself either way, so a
+              magnifier that only uncovers it costs a control and a state to
+              save nothing. */}
+          <TextField.Root
+            ref={searchInputRef}
+            size="1"
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Escape' || !searchQuery) return;
+              e.preventDefault();
+              setSearchQuery('');
+            }}
+            placeholder="Search by id, text, or author"
+            aria-label="Search threads by id, text, or author"
           >
-            {sortMode === 'document' ? (
-              <TextAlignLeftIcon className="ic-list-sort-icon" aria-hidden />
-            ) : (
-              <ClockIcon className="ic-list-sort-icon" aria-hidden />
-            )}
-            {SORT_MODE_LABELS[sortMode]}
-          </button>
-
-          <div className="ic-list-controls-actions">
-            <IconButton
-              variant="ghost"
-              size="1"
-              {...(searchOpen ? {} : { color: 'gray' as const })}
-              aria-expanded={searchOpen}
-              aria-label={searchToggleLabel}
-              title={searchToggleLabel}
-              onClick={toggleSearch}
-            >
+            <TextField.Slot>
               <MagnifyingGlassIcon />
-            </IconButton>
-            {/* The menu has nothing to do with search — don't let the two
-                icons read as one control. */}
-            <span className="ic-list-controls-divider" aria-hidden="true" />
+            </TextField.Slot>
+            {/* Anything in the box gets a way out, including whitespace the
+                normalizer throws away — a query that filters nothing still has
+                to be clearable. The count is the part that needs a real one. */}
+            {searchQuery !== '' && (
+              <TextField.Slot side="right" className="ic-list-search-clear-slot">
+                {searchNeedle !== '' && (
+                  <span className="ic-list-search-count">
+                    {visibleCount} of {totalCards}
+                  </span>
+                )}
+                {/* Keeps the caret in the field, so typing can continue. */}
+                <button
+                  type="button"
+                  className="ic-list-search-clear"
+                  aria-label="Clear thread search"
+                  title="Clear search"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={clearSearch}
+                >
+                  <Cross2Icon className="ic-list-search-clear-icon" />
+                </button>
+              </TextField.Slot>
+            )}
+          </TextField.Root>
+
+          <div className="ic-list-controls-bottom">
+            {/* Order, not a filter — plain-button dress rather than a pill, so
+                it can't read as one of the chips below. The trailing arrows are
+                what say it switches; the label alone reads as a caption. */}
+            <button
+              type="button"
+              className="ic-list-sort"
+              aria-label={`Sorted by ${SORT_MODE_LABELS[sortMode].toLowerCase()} — switch to ${SORT_MODE_LABELS[otherSortMode].toLowerCase()}`}
+              title={`Sort by ${SORT_MODE_LABELS[otherSortMode].toLowerCase()}`}
+              onClick={() => setSortMode(otherSortMode)}
+            >
+              {sortMode === 'document' ? (
+                <TextAlignLeftIcon className="ic-list-sort-icon" aria-hidden />
+              ) : (
+                <ClockIcon className="ic-list-sort-icon" aria-hidden />
+              )}
+              {SORT_MODE_LABELS[sortMode]}
+              <ArrowUpDownIcon className="ic-list-sort-swap" aria-hidden />
+            </button>
+
             <DropdownMenu.Root>
               <DropdownMenu.Trigger>
-                <IconButton variant="ghost" size="1" aria-label="More thread actions">
+                <IconButton
+                  variant="ghost"
+                  size="1"
+                  color="gray"
+                  className="ic-list-menu-trigger"
+                  aria-label="More thread actions"
+                >
                   <DotsHorizontalIcon />
                 </IconButton>
               </DropdownMenu.Trigger>
@@ -530,76 +554,28 @@ export function InlineCommentsList({
                 </DropdownMenu.Item>
               </DropdownMenu.Content>
             </DropdownMenu.Root>
-          </div>
 
-          {/* Compact enough to stay put, so there is no disclosure to open and
-              no dot to say a filter is on: an unlit chip *is* "all". */}
-          {/* biome-ignore lint/a11y/useSemanticElements: <fieldset> is form-only; these are filter switches */}
-          <div className="ic-list-filter-chips" role="group" aria-label="Filter threads">
-            {THREAD_FILTER_TOGGLES.map((filter) => {
-              const on = filter.isOn(filters);
-              return (
-                <button
-                  key={filter.label}
-                  type="button"
-                  className="ic-list-filter-chip"
-                  aria-pressed={on}
-                  title={on ? `Stop showing only ${filter.label.toLowerCase()}` : filter.hint}
-                  onClick={() => setFilters(filter.toggle)}
-                >
-                  {filter.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {searchOpen && (
-            <div className="ic-list-search">
-              <TextField.Root
-                ref={searchInputRef}
-                size="1"
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key !== 'Escape') return;
-                  e.preventDefault();
-                  if (searchQuery) setSearchQuery('');
-                  else toggleSearch();
-                }}
-                placeholder="Search by id, text, or author"
-                aria-label="Search threads by id, text, or author"
-                className="ic-list-search-field"
-              >
-                <TextField.Slot>
-                  <MagnifyingGlassIcon />
-                </TextField.Slot>
-                {searchQuery !== '' && (
-                  <TextField.Slot side="right" className="ic-list-search-clear-slot">
-                    {/* Keeps the caret in the field, so typing can continue. */}
-                    <button
-                      type="button"
-                      className="ic-list-search-clear"
-                      aria-label="Clear thread search"
-                      title="Clear search"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        setSearchQuery('');
-                        searchInputRef.current?.focus({ preventScroll: true });
-                      }}
-                    >
-                      <Cross2Icon className="ic-list-search-clear-icon" />
-                    </button>
-                  </TextField.Slot>
-                )}
-              </TextField.Root>
-              {searchNeedle !== '' && (
-                <Text size="1" color="gray" className="ic-list-search-count">
-                  {visibleCount} of {totalCards}
-                </Text>
-              )}
+            {/* Compact enough to stay put, so there is no disclosure to open and
+                no dot to say a filter is on: an unlit chip *is* "all". */}
+            {/* biome-ignore lint/a11y/useSemanticElements: <fieldset> is form-only; these are filter switches */}
+            <div className="ic-list-filter-chips" role="group" aria-label="Filter threads">
+              {THREAD_FILTER_TOGGLES.map((filter) => {
+                const on = filter.isOn(filters);
+                return (
+                  <button
+                    key={filter.label}
+                    type="button"
+                    className="ic-list-filter-chip"
+                    aria-pressed={on}
+                    title={on ? `Stop showing only ${filter.label.toLowerCase()}` : filter.hint}
+                    onClick={() => setFilters(filter.toggle)}
+                  >
+                    {filter.label}
+                  </button>
+                );
+              })}
             </div>
-          )}
+          </div>
         </div>
       )}
 
