@@ -429,16 +429,16 @@ onto content-addressed blobs, the copy points at the same bytes rather
 than duplicating them. An unrecognised `mode` reads as `clean`, which is
 the option that copies strictly less.
 
-A normal copy is a whole-repository fork rather than a replay, which is
-what keeps it honest: every commit oid the discussion refers to — a
-proposal's `base_oid`, an accepted one's `accepted_oid` — still resolves
-in the copy, and the text is identical so every anchor still lands.
-Rebuilding from the source text, the way bundle import has to, would
-invalidate both.
+**Copy with history** is a whole-repository fork rather than a replay,
+which is what keeps it honest: every commit oid the discussion refers to
+— a proposal's `base_oid`, an accepted one's `accepted_oid` — still
+resolves in the copy, and the text is identical so every anchor still
+lands. Rebuilding from the source text, the way bundle import has to,
+would invalidate both.
 
-The one thing a normal copy cannot keep is comment ids. `comments.id` is a
-global primary key, so the copy re-mints every one and rewrites each
-column that names a comment — parentage, mention and reaction rows, the
+The one thing it cannot keep is comment ids. `comments.id` is a global
+primary key, so the copy re-mints every one and rewrites each column
+that names a comment — parentage, mention and reaction rows, the
 proposal answers table, and each proposal's git ref, which is named after
 the comment that owns it. `copies every column` in `server.test.ts` holds
 the row copy to the schema, so a column added later cannot be silently
