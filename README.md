@@ -411,16 +411,38 @@ users.
 ## Copying a document
 
 **Copy document** — the copy icon in the per-document toolbar, next to the
-gear — forks a document into a new one holding only its current state.
-`POST /api/documents/:uid/copy` is the endpoint behind it, and it is
-admin-only.
+gear — forks a document into a second one with its own URL and its own
+admin link. `POST /api/documents/:uid/copy` is the endpoint behind it, and
+it is admin-only.
 
-"Copy as new" means exactly that: the copy's git history begins with the
-copy, and no comments, threads or edit proposals come along. What does
-travel is the text as it stands, the document's name (yours to change in
-the dialog), its theme and renderer settings, and its attachments — those
-being junction rows onto content-addressed blobs, the copy points at the
-same bytes rather than duplicating them.
+There are two kinds, chosen in the dialog and sent as `mode`:
+
+- **Copy with history** (`mode: "full"`) takes the document's whole
+  working life: the complete revision history, and every thread, comment
+  and edit proposal, open or settled.
+- **Clean copy** (`mode: "clean"`) takes only the text as it stands. The
+  history is cut to a single commit and the discussion is left behind.
+
+Either way the name (yours to change in the dialog), theme and renderer
+settings, and attachments come across — attachments being junction rows
+onto content-addressed blobs, the copy points at the same bytes rather
+than duplicating them. An unrecognised `mode` reads as `clean`, which is
+the option that copies strictly less.
+
+A normal copy is a whole-repository fork rather than a replay, which is
+what keeps it honest: every commit oid the discussion refers to — a
+proposal's `base_oid`, an accepted one's `accepted_oid` — still resolves
+in the copy, and the text is identical so every anchor still lands.
+Rebuilding from the source text, the way bundle import has to, would
+invalidate both.
+
+The one thing a normal copy cannot keep is comment ids. `comments.id` is a
+global primary key, so the copy re-mints every one and rewrites each
+column that names a comment — parentage, mention and reaction rows, the
+proposal answers table, and each proposal's git ref, which is named after
+the comment that owns it. `copies every column` in `server.test.ts` holds
+the row copy to the schema, so a column added later cannot be silently
+dropped.
 
 **Include access and roles** carries the participant roster: every
 non-admin invite is re-minted on the copy with its role, name and note
