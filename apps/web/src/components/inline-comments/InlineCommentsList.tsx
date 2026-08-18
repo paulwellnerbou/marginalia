@@ -57,6 +57,8 @@ import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 interface Props {
   uid: string;
   threads: Thread[];
+  /** True until the document's first thread read settles. */
+  loading?: boolean;
   /** Reports the number of cards left after this tab's filters and search. */
   onVisibleCountChange: (count: number) => void;
   /** Number of sections the TOC's section filter is focused on; 0 = filter off. */
@@ -111,6 +113,7 @@ const SORT_MODE_LABELS: Record<ThreadSortMode, string> = {
 export function InlineCommentsList({
   uid,
   threads,
+  loading = false,
   onVisibleCountChange,
   sectionFilterCount = 0,
   onClearSectionFilter,
@@ -610,7 +613,13 @@ export function InlineCommentsList({
         </section>
       )}
 
-      {totalCards === 0 && (
+      {loading && totalCards === 0 && (
+        <div className="ic-list-empty" role="status">
+          <span className="ic-spinner" aria-hidden="true" /> Loading threads…
+        </div>
+      )}
+
+      {!loading && totalCards === 0 && (
         <div className="ic-list-empty">
           {sectionFilterCount > 0
             ? 'No threads in the focused sections.'

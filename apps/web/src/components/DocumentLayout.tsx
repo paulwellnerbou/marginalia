@@ -443,6 +443,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   });
 
   const [threads, setThreads] = useState<Thread[]>([]);
+  /**
+   * An empty list reads as "no comments here", so the first read of a
+   * document has to say it is still going — `threadsLoaded` is a ref and
+   * cannot drive a render. Only the initial per-document read flips this;
+   * later refreshes redraw threads that are already on screen.
+   */
+  const [threadsLoading, setThreadsLoading] = useState(true);
   const [threadTabVisibleCount, setThreadTabVisibleCount] = useState<{
     docUid: string;
     sourceThreads: Thread[];
@@ -1077,10 +1084,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
   useEffect(() => {
     let cancelled = false;
     threadsLoaded.current = false;
+    setThreadsLoading(true);
     const requestId = ++threadSnapshotRequestRef.current;
     retryRequest(() => listThreads(doc.uid)).then(
       (r) => {
         if (cancelled) return;
+        setThreadsLoading(false);
         // Mention consumption is a side effect of this read. Deliver its
         // notification even when a newer thread snapshot already won.
         notifyPendingMentions(r.threads, r.pending_mentions);
@@ -1090,7 +1099,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
         threadsLoaded.current = true;
       },
       (err) => {
-        if (cancelled || requestId !== threadSnapshotRequestRef.current) return;
+        if (cancelled) return;
+        // The read is over either way; a pane still claiming to load
+        // would outlast the failure toast below.
+        setThreadsLoading(false);
+        if (requestId !== threadSnapshotRequestRef.current) return;
         reportError('DocumentLayout.listThreads', err, { uid: doc.uid });
         // Silence here reads as "this document has no comments" — the
         // column, the highlights and the thread count all agree on it.
@@ -2789,6 +2802,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children }: Props) {
                   <InlineCommentsList
                     uid={doc.uid}
                     threads={sectionVisibleThreads}
+                    loading={threadsLoading}
                     onVisibleCountChange={onThreadTabVisibleCountChange}
                     sectionFilterCount={sectionFilter.size}
                     onClearSectionFilter={clearSectionFilter}
