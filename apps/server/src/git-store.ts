@@ -313,12 +313,19 @@ export class GitStore {
    */
   private async autoGc(uid: string): Promise<void> {
     const dir = this.repoDir(uid);
+    // The repo can go away while this sits queued — the document was
+    // deleted, or a test tore its fixture down. There is nothing to pack
+    // and, importantly, nothing wrong: a vanished directory makes git
+    // fail in a way that reads exactly like a missing binary.
+    if (!existsSync(dir)) return;
     try {
       if ((await this.looseObjectCount(dir)) < this.looseObjectLimit) return;
       await execFileAsync('git', ['gc', '--quiet'], { cwd: dir });
       // A pack leaves no loose objects behind, so the next check is a
       // cheap no-op until another `looseObjectLimit` have accumulated.
     } catch (err) {
+      // Same race, lost a moment later.
+      if (!existsSync(dir)) return;
       if (this.warnedGcUnavailable) return;
       this.warnedGcUnavailable = true;
       // Message only — a spawn failure's stack points at node internals

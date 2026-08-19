@@ -170,6 +170,28 @@ Para C baseline.
     expect(Number(countObjects().count)).toBeGreaterThan(0);
   });
 
+  test('a repo deleted while packing was queued is not mistaken for a broken git', async () => {
+    // `destroyDocRepo` can remove the repo between a write and the
+    // packing it scheduled. git then fails with "unable to read current
+    // working directory", which reads exactly like a missing binary and
+    // would tell an operator to go and install one.
+    const errors: unknown[][] = [];
+    const realError = console.error;
+    console.error = (...args: unknown[]) => void errors.push(args);
+    try {
+      const tuned = new GitStore(dir, { everyWrites: 1, looseObjectLimit: 1 });
+      await tuned.init();
+      const doomed: DocLocator = { uid: 'doc-doomed', format: 'markdown' };
+      await tuned.write(doomed, INITIAL, author, 'upload');
+      await tuned.destroyDocRepo(doomed.uid);
+      await tuned.whenMaintenanceSettled();
+    } finally {
+      console.error = realError;
+    }
+
+    expect(errors).toEqual([]);
+  });
+
   test('a missing git binary leaves writes working', async () => {
     const realPath = process.env.PATH;
     process.env.PATH = join(dir, 'no-binaries-here');
