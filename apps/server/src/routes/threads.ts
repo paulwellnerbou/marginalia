@@ -2944,7 +2944,7 @@ function locatePostMergeSpliceStart(
 }
 
 function locateAcceptedProposalAnchor(
-  blocks: Map<string, BlockSourceRange>,
+  blocks: ReadonlyMap<string, BlockSourceRange>,
   renderedBlocks: BlockInfo[],
   start: number,
   end: number,

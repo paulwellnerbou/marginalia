@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
-import { canMergeMultiBlock, locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
+import { canMergeMultiBlock } from '@marginalia/renderer';
+import { locateDocumentBlocksCached } from '../block-cache.js';
 import {
   type DocumentRow,
   type EditProposalThreadRow,
@@ -48,7 +49,7 @@ const PROPOSAL_SELECT = `
 export function reanchorProposals(
   db: Database,
   docUid: string,
-  blocks: Map<string, BlockSourceRange>,
+  blocks: ReadonlyMap<string, BlockSourceRange>,
   format: 'markdown' | 'asciidoc',
   now: number,
   broadcast?: (row: EditProposalThreadRow) => void,
@@ -180,15 +181,19 @@ export function locateAnchorRange(
   };
 }
 
+/**
+ * Block ranges for a document source, memoized — see `block-cache.ts` for
+ * why. Read-only: the returned map is shared between callers.
+ */
 export function locateDocumentBlocks(
   doc: DocumentRow,
   source: string,
-): Map<string, BlockSourceRange> {
-  return doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
+): ReadonlyMap<string, BlockSourceRange> {
+  return locateDocumentBlocksCached(doc.format, source);
 }
 
 export function findBlockBySourceSpan(
-  blocks: Map<string, BlockSourceRange>,
+  blocks: ReadonlyMap<string, BlockSourceRange>,
   start: number,
   end: number,
 ): { id: string; range: BlockSourceRange; confidence: 'linked' | 'low-confidence' } | null {
@@ -239,7 +244,7 @@ export function findBlockBySourceSpan(
  * must deliberately put the open proposal back on its original span.
  */
 export function locateProposalAnchorBySourceSpan(
-  blocks: Map<string, BlockSourceRange>,
+  blocks: ReadonlyMap<string, BlockSourceRange>,
   renderedBlocks: BlockInfo[],
   source: string,
   start: number,
