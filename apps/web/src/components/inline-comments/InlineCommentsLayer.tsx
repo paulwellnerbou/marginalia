@@ -111,6 +111,17 @@ interface RenderItem {
 
 const PENDING_ID = '__pending__';
 const STACK_GAP_PX = 8;
+
+/**
+ * How far outside the visible band a card is still rendered.
+ *
+ * Cards in this column are positioned absolutely, so one that is out of
+ * view can simply be left out — no spacer is needed, the column's height
+ * is set from the measured anchors either way. Generous, because the
+ * band updates on scroll and a card appearing late is worse than a few
+ * extra cards rendered.
+ */
+const CARD_CULL_MARGIN_PX = 1200;
 /**
  * Base offset above each sticky card: the toolbar's own CSS `top`
  * (8px, see `.ic-toolbar` in app.css) plus a `STACK_GAP_PX` gap below
@@ -757,27 +768,34 @@ export function InlineCommentsLayer({
     };
   }, [open, recomputeGlobalState, scrollContainerRef, stackingEnabled]);
 
-  // Keep the visible band current for as long as a draft is open, so
-  // the composer stays clamped into view while the reader scrolls
-  // around the text they are quoting.
+  /*
+   * Keep the visible band current the whole time the column is open.
+   *
+   * It was previously tracked only while a draft was open, because the
+   * composer is clamped into view. Now it also decides which cards are
+   * rendered at all, so it has to be right whenever the column is.
+   *
+   * No `requestAnimationFrame`: it is throttled or stopped whenever the
+   * page is not being painted — a background tab, an occluded window —
+   * and a band that stops updating strands the column on whichever cards
+   * it last had. `syncViewport` reads two properties and bails out when
+   * nothing moved, so it is cheap enough to run on the event itself.
+   */
   useEffect(() => {
-    if (!open || !pendingAnchor) return;
+    if (!open) return;
     const scroll = scrollContainerRef.current;
     if (!scroll) return;
-    let raf = 0;
-    const onScroll = () => {
-      if (raf) return;
-      raf = window.requestAnimationFrame(() => {
-        raf = 0;
-        syncViewport();
-      });
-    };
-    scroll.addEventListener('scroll', onScroll, { passive: true });
+    syncViewport();
+    scroll.addEventListener('scroll', syncViewport, { passive: true });
+    window.addEventListener('resize', syncViewport, { passive: true });
+    const ro = new ResizeObserver(syncViewport);
+    ro.observe(scroll);
     return () => {
-      if (raf) window.cancelAnimationFrame(raf);
-      scroll.removeEventListener('scroll', onScroll);
+      scroll.removeEventListener('scroll', syncViewport);
+      window.removeEventListener('resize', syncViewport);
+      ro.disconnect();
     };
-  }, [open, pendingAnchor, scrollContainerRef, syncViewport]);
+  }, [open, scrollContainerRef, syncViewport]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: layoutVersion / docHtml are explicit re-measure triggers; requestRemeasure is the action invoked from the body.
   useLayoutEffect(() => {
@@ -1088,6 +1106,28 @@ export function InlineCommentsLayer({
                 lifted = true;
               }
             }
+
+            /*
+             * Skip cards well outside the visible band. A card is a heavy
+             * tree — around a dozen Radix controls each with their own
+             * context and effects — so rendering one per thread is what
+             * made a document with a long review freeze for seconds on
+             * every change to the thread list.
+             *
+             * The card still occupies its place in `renderItems` and in
+             * the metrics the sticky state machine works from; only the
+             * DOM for it is skipped. The pending composer always renders
+             * — it is what the reader is typing into — and so does the
+             * focused thread, which a jump is about to scroll to and
+             * find by DOM query.
+             */
+            const offscreen =
+              viewport.height > 0 &&
+              item.id !== PENDING_ID &&
+              item.id !== focusedThread?.threadId &&
+              (containerTop + containerHeight < viewport.top - CARD_CULL_MARGIN_PX ||
+                containerTop > viewport.top + viewport.height + CARD_CULL_MARGIN_PX);
+            if (offscreen) return null;
 
             return (
               <div
