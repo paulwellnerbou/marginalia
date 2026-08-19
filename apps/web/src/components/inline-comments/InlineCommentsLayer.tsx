@@ -991,6 +991,19 @@ export function InlineCommentsLayer({
   const showEmpty = sorted.length === 0 && !pendingAnchor;
   const minHeight = Math.max(columnHeight, stackingEnabled ? 0 : noStackLayout.totalHeight);
 
+  /*
+   * The card the focus target renders in. A nested proposal is drawn
+   * inside its parent's card rather than as an item of its own, so
+   * exempting its own id from culling would exempt nothing and leave the
+   * card holding it culled whenever it sits outside the band — which is
+   * the normal case, since a jump scrolls *to* an off-screen card. The
+   * focus effect would then query for an element that never mounted and
+   * neither scroll nor flash. Same resolution the effect itself does.
+   */
+  const focusedCardId = focusedThread
+    ? (nesting.parentOf.get(focusedThread.threadId) ?? focusedThread.threadId)
+    : null;
+
   return (
     <aside
       ref={rootRef}
@@ -1124,7 +1137,7 @@ export function InlineCommentsLayer({
             const offscreen =
               viewport.height > 0 &&
               item.id !== PENDING_ID &&
-              item.id !== focusedThread?.threadId &&
+              item.id !== focusedCardId &&
               (containerTop + containerHeight < viewport.top - CARD_CULL_MARGIN_PX ||
                 containerTop > viewport.top + viewport.height + CARD_CULL_MARGIN_PX);
             if (offscreen) return null;
