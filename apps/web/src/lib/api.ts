@@ -1486,10 +1486,18 @@ function snapshotSet(uid: string, threads: Thread[]): void {
 
 export function listThreads(
   uid: string,
-  opts: { consumeMentions?: boolean; fresh?: boolean } = {},
+  opts: { consumeMentions?: boolean; fresh?: boolean; state?: 'open' | 'all' } = {},
 ): Promise<ListThreadsResponse> {
   const consumeMentions = opts.consumeMentions !== false;
-  const cacheKey = `${uid}:${consumeMentions ? 'consume' : 'peek'}`;
+  // `state=all` by default: the viewer renders resolved threads too —
+  // collapsed, filterable, and reopenable — so it wants the archive as
+  // well. Callers opening a document ask for `open` first to get the live
+  // column on screen without waiting for the archive, which on a
+  // long-reviewed document is the overwhelming majority of the payload.
+  const state = opts.state ?? 'all';
+  // State is part of the key: an open-only read must never be handed to a
+  // caller that asked for the archive.
+  const cacheKey = `${uid}:${state}:${consumeMentions ? 'consume' : 'peek'}`;
   const existing = listThreadsInflight.get(cacheKey);
   // Mutation reconciliation must start a read after that mutation, even when
   // an older read for the same document is still in flight. Reusing the older
@@ -1497,10 +1505,7 @@ export function listThreads(
   // to the first resolve's snapshot.
   if (existing && !opts.fresh) return existing;
 
-  // `state=all` explicitly: the endpoint serves open threads by default,
-  // but the viewer renders resolved ones too — collapsed, filterable, and
-  // reopenable — so it wants the archive as well.
-  const query = new URLSearchParams({ state: 'all' });
+  const query = new URLSearchParams({ state });
   if (!consumeMentions) query.set('consume_mentions', 'false');
   const promise = request<ListThreadsResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads?${query}`,
@@ -1511,7 +1516,10 @@ export function listThreads(
     },
   )
     .then((res) => {
-      snapshotSet(uid, res.threads);
+      // Only a full read is a complete index of the document. Letting a
+      // filtered one land here would tell `findCommentLocation` that every
+      // resolved thread had ceased to exist.
+      if (state === 'all') snapshotSet(uid, res.threads);
       return res;
     })
     .finally(() => {
@@ -1525,6 +1533,39 @@ export function listThreads(
 
   listThreadsInflight.set(cacheKey, promise);
   return promise;
+}
+
+/**
+ * Read one thread by id.
+ *
+ * The realtime path uses this to reconcile a single thread instead of
+ * re-reading the whole document: a remote comment used to cost a full
+ * `state=all` refetch — every thread, including an archive that had not
+ * changed — for one card's worth of new text.
+ *
+ * The server resolves a reply id to its root thread, so callers may pass
+ * either. Returns null when the thread is gone or no longer visible to
+ * this viewer, which the caller should treat as a removal.
+ */
+export async function fetchThread(uid: string, threadId: string): Promise<Thread | null> {
+  const query = new URLSearchParams({
+    state: 'all',
+    thread_id: threadId,
+    // A targeted reconcile is not the reader looking at their mentions;
+    // consuming them here would drop the notification the next full read
+    // is supposed to deliver.
+    consume_mentions: 'false',
+  });
+  const res = await request<ListThreadsResponse>(
+    `/api/documents/${encodeURIComponent(uid)}/threads?${query}`,
+    { method: 'GET', docUid: uid, timeoutMs: LIST_THREADS_TIMEOUT_MS },
+  );
+  // At most one row can match: the filter is "this id, or the root of the
+  // reply with this id", and no reply shares an id with a root.
+  const thread = res.threads[0] ?? null;
+  if (thread) rememberThread(uid, thread);
+  else forgetComment(uid, threadId);
+  return thread;
 }
 
 interface ThreadMutationResponse {

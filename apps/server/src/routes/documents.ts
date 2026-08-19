@@ -6,7 +6,6 @@ import {
   extractDocumentTitle,
   locateAllBlocks,
   locateAllBlocksAsciidoc,
-  renderDocument,
   rewriteAssetReferences,
   sanitizeDocumentFilename,
   spanHead,
@@ -89,6 +88,7 @@ import { loadPrintCss, loadThemeCss } from '../export/theme-css.js';
 import type { HistoryEntry as GitHistoryEntry, GitStore, HistoryPackStream } from '../git-store.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
 import type { Realtime } from '../realtime.js';
+import { renderDocumentCached, renderDocumentCopy } from '../render-cache.js';
 import { listDocUserNameMap, upsertDocUser } from '../users.js';
 import { gcAssetIfOrphan, listAttached } from './assets.js';
 import {
@@ -706,7 +706,7 @@ async function getDocument(c: Context, deps: AppDeps) {
   }
 
   const source = store.read(doc);
-  const rendered = await renderDocument(source, doc.format);
+  const rendered = await renderDocumentCopy(source, doc.format);
   const attached = listAttached(db, doc.uid);
   rendered.html = await rewriteAssetReferences(rendered.html, {
     docUid: doc.uid,
@@ -792,7 +792,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
   const { oid } = written;
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
-  const rendered = await renderDocument(nextSource, doc.format);
+  const rendered = await renderDocumentCached(nextSource, doc.format);
   const previousBlocks =
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(previousSource)
@@ -1005,7 +1005,7 @@ async function exportDocument(c: Context, deps: AppDeps) {
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
 
   const source = store.read(doc);
-  const rendered = await renderDocument(source, doc.format);
+  const rendered = await renderDocumentCached(source, doc.format);
   // Deleted threads are omitted — deletion is meant to be complete —
   // with one deliberate exception: a deleted *accepted* proposal still
   // ships as a tombstone, because the packed history below contains its
@@ -1531,7 +1531,7 @@ async function exportDocumentAsEpub(
 
   const chapters: EpubChapter[] = [];
   for (const chapter of sourceChapters) {
-    const rendered = await renderDocument(chapter.source, doc.format, { mermaid: 'svg' });
+    const rendered = await renderDocumentCached(chapter.source, doc.format, { mermaid: 'svg' });
     let html = await inlineImageAssets(rendered.html, attached, deps.blobs);
     if (rendered.mermaid.length > 0) {
       // Anything the renderer couldn't rasterize (engine missing,
@@ -1780,7 +1780,7 @@ async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
   // Render the document with the same format-agnostic entry the
   // viewer uses; mermaid stays in 'client' mode so the export page
   // can run the real mermaid runtime (see export/html-envelope.ts).
-  const rendered = await renderDocument(source, doc.format, { mermaid: 'client' });
+  const rendered = await renderDocumentCached(source, doc.format, { mermaid: 'client' });
 
   // Build the attached-asset map once and reuse for image inlining.
   // Absolute URLs never reach the inliner — they're left alone so
@@ -2543,7 +2543,7 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   const now = Date.now();
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
-  const rendered = await renderDocument(restoredSource, doc.format);
+  const rendered = await renderDocumentCached(restoredSource, doc.format);
   const previousBlocks =
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(previousSource)
@@ -2633,7 +2633,7 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
   const now = Date.now();
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
-  const rendered = await renderDocument(revertedSource, doc.format);
+  const rendered = await renderDocumentCached(revertedSource, doc.format);
   const previousBlocks =
     doc.format === 'asciidoc'
       ? locateAllBlocksAsciidoc(previousSource)
