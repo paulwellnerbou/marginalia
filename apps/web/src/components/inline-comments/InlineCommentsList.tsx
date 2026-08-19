@@ -294,9 +294,19 @@ export function InlineCommentsList({
     keys: activeKeys,
     estimateHeight: DEFAULT_ROW_ESTIMATE,
     rootRef,
-    // Whatever the focus effect below is about to scroll to has to exist
-    // in the DOM for it to find, however far down the list it sits.
-    pinnedKey: focusedThread?.threadId ?? null,
+    /*
+     * Whatever the focus effect below is about to scroll to has to exist
+     * in the DOM for it to find, however far down the list it sits.
+     *
+     * A nested proposal renders inside its parent's card and is not a row
+     * of this list, so pinning its own id would find nothing to re-centre
+     * on and leave the card that holds it unrendered — the focus effect
+     * would then query for an element that was never mounted, and the
+     * scroll and flash would silently not happen.
+     */
+    pinnedKey: focusedThread
+      ? (parentOf.get(focusedThread.threadId) ?? focusedThread.threadId)
+      : null,
   });
   const windowedActive = useMemo(
     () => visibleActive.slice(win.start, win.end),

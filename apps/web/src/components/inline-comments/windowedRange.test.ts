@@ -80,6 +80,16 @@ describe('windowedRange', () => {
     expect(r.end - r.start).toBeLessThan(20);
   });
 
+  test('a pinned key that is not a row is ignored rather than guessed at', () => {
+    // Nested proposals render inside their parent's card and are not rows
+    // of this list. Passing one here cannot re-centre anything, which is
+    // why the caller resolves it to the card that contains it first.
+    const plain = range({ viewportTop: 50_000 });
+    const unknown = range({ viewportTop: 50_000, pinnedKey: 'not-a-row' });
+
+    expect(unknown).toEqual(plain);
+  });
+
   test('a pinned row already on screen leaves the window alone', () => {
     const plain = range({ viewportTop: 50_000 });
     const pinned = range({ viewportTop: 50_000, pinnedKey: 't505' });

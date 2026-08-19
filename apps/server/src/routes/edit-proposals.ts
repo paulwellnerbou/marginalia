@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
-import { canMergeMultiBlock, locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
+import { canMergeMultiBlock } from '@marginalia/renderer';
 import { locateDocumentBlocksCached } from '../block-cache.js';
 import {
   type DocumentRow,
