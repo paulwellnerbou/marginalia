@@ -38,6 +38,11 @@ import {
 } from './threadListPrefs.js';
 import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
+import {
+  DEFAULT_ROW_ESTIMATE,
+  useIsomorphicLayoutEffect,
+  useWindowedList,
+} from './useWindowedList.js';
 
 /**
  * Right-pane list of comment threads using the same inline-comment
@@ -277,6 +282,43 @@ export function InlineCommentsList({
     return ids;
   }, [visibleActive, visibleOrphans]);
   const allCollapsed = threadIds.length > 0 && threadIds.every((id) => collapsed.has(id));
+
+  /*
+   * Only the cards near the viewport are rendered. A card is a heavy tree
+   * — a dozen Radix controls each carrying their own context and effects —
+   * so re-rendering a thousand of them is what made accepting a proposal
+   * freeze the page long after the request had come back.
+   */
+  const activeKeys = useMemo(() => visibleActive.map((item) => item.id), [visibleActive]);
+  const win = useWindowedList({
+    keys: activeKeys,
+    estimateHeight: DEFAULT_ROW_ESTIMATE,
+    rootRef,
+    // Whatever the focus effect below is about to scroll to has to exist
+    // in the DOM for it to find, however far down the list it sits.
+    pinnedKey: focusedThread?.threadId ?? null,
+  });
+  const windowedActive = useMemo(
+    () => visibleActive.slice(win.start, win.end),
+    [visibleActive, win.start, win.end],
+  );
+
+  /*
+   * Record what the rendered cards actually measure, so the spacers above
+   * and below them stand for real heights rather than the estimate. Read
+   * off the DOM after commit rather than through a ref on each card: the
+   * card owns its own root element, and threading a measuring ref through
+   * it (and through the nested cards it renders) would put layout
+   * plumbing in a component that has no other reason to know about it.
+   */
+  useIsomorphicLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    for (const el of root.querySelectorAll<HTMLElement>(':scope > [data-comment-thread-id]')) {
+      const id = el.getAttribute('data-comment-thread-id');
+      if (id) win.measure(id)(el);
+    }
+  });
 
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; phase: 'a' | 'b' } | null>(null);
@@ -613,7 +655,9 @@ export function InlineCommentsList({
         </div>
       )}
 
-      {visibleActive.map(renderItem)}
+      {win.padTop > 0 && <div style={{ height: win.padTop }} aria-hidden="true" />}
+      {windowedActive.map(renderItem)}
+      {win.padBottom > 0 && <div style={{ height: win.padBottom }} aria-hidden="true" />}
     </div>
   );
 }
