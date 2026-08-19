@@ -19,6 +19,39 @@ import type { DocumentFormat } from './db.js';
 const execFileAsync = promisify(execFile);
 
 /**
+ * Loose objects a doc repo may accumulate before it is packed.
+ *
+ * `git gc --auto` is not used to make this decision. Its threshold
+ * defaults to 6700 and, worse, it estimates the count by sampling a
+ * single fanout directory — both tuned for repos full of small objects.
+ * These repos are the opposite: a whole document snapshot per edit, so
+ * objects run to hundreds of kilobytes and there are comparatively few
+ * of them. One measured repo held 158 MB across 4768 loose objects —
+ * under git's threshold, so its heuristic would never have fired — and
+ * packed to 3.0 MB in three seconds. Counting exactly is cheap and means
+ * the policy is ours rather than a guess made for a different workload.
+ */
+const DEFAULT_GC_LOOSE_OBJECTS = 512;
+
+/**
+ * Commits between packing checks.
+ *
+ * The check is a process spawn and usually decides to do nothing, so
+ * asking only every so often keeps it off the ordinary write. It costs
+ * nothing in responsiveness: the threshold above is what decides when
+ * packing happens, so a late check just packs slightly more at once.
+ */
+const DEFAULT_WRITES_PER_MAINTENANCE_CHECK = 50;
+
+/** Tuning for the automatic repo packing described above. */
+export interface GitStoreMaintenanceOptions {
+  /** Loose objects tolerated before a repo is packed. */
+  looseObjectLimit?: number;
+  /** Commits between checks of that limit. */
+  everyWrites?: number;
+}
+
+/**
  * Per-document git storage. Each document lives in its own repo at
  * `<reposBaseDir>/<uid>/`, with the source pinned to a fixed in-repo
  * filename (`document.md` for markdown, `document.adoc` for asciidoc).
@@ -38,8 +71,23 @@ const execFileAsync = promisify(execFile);
 export class GitStore {
   private readonly chains = new Map<string, Promise<unknown>>();
   private readonly initialized = new Set<string>();
+  /** Commits since this uid was last checked for packing. */
+  private readonly writesSinceMaintenance = new Map<string, number>();
+  /** Tail of the chained background packing; see `whenMaintenanceSettled`. */
+  private pendingMaintenance: Promise<void> = Promise.resolve();
+  private warnedGcUnavailable = false;
 
-  constructor(private readonly reposBaseDir: string) {}
+  private readonly looseObjectLimit: number;
+  private readonly writesPerMaintenanceCheck: number;
+
+  constructor(
+    private readonly reposBaseDir: string,
+    maintenance: GitStoreMaintenanceOptions = {},
+  ) {
+    this.looseObjectLimit = maintenance.looseObjectLimit ?? DEFAULT_GC_LOOSE_OBJECTS;
+    this.writesPerMaintenanceCheck =
+      maintenance.everyWrites ?? DEFAULT_WRITES_PER_MAINTENANCE_CHECK;
+  }
 
   /**
    * Ensure the base directory exists. Per-doc repos are created lazily
@@ -201,7 +249,113 @@ export class GitStore {
         email: `${author.clientId}@marginalia.local`,
       },
     });
+    this.noteWriteForMaintenance(doc.uid);
     return { oid };
+  }
+
+  /**
+   * Count a commit towards housekeeping, and every so often pack the
+   * repo if it has accumulated enough loose objects.
+   *
+   * isomorphic-git only ever writes loose objects and loose refs, and
+   * nothing else here packs them, so without this a doc repo grows
+   * without bound: one measured repo reached 158 MB of loose objects and
+   * 932 refs for a document whose packed form is 3 MB.
+   *
+   * Deliberately not awaited. Packing is housekeeping — it must not slow
+   * a save down, must not hold the per-doc lock, and must never turn a
+   * successful commit into a failed request. `gc` is safe to run
+   * alongside concurrent readers and writers: git takes its own lock,
+   * writes `packed-refs` atomically, and leaves recent unreachable
+   * objects alone.
+   */
+  private noteWriteForMaintenance(uid: string): void {
+    // Check on the first write this process makes to a document, then
+    // every `writesPerMaintenanceCheck` after. The first check is what
+    // heals a repo that grew large before any of this existed: it is
+    // already over the limit and would otherwise have to wait for fifty
+    // more edits to find out. On a fresh repo it costs one `count-objects`
+    // and does nothing.
+    const seenBefore = this.writesSinceMaintenance.has(uid);
+    const writes = (this.writesSinceMaintenance.get(uid) ?? 0) + 1;
+    if (seenBefore && writes < this.writesPerMaintenanceCheck) {
+      this.writesSinceMaintenance.set(uid, writes);
+      return;
+    }
+    this.writesSinceMaintenance.set(uid, 0);
+    // Chained rather than fired in parallel: several busy documents
+    // should not pack at once, and it gives `whenMaintenanceSettled` a
+    // single thing to wait on.
+    this.pendingMaintenance = this.pendingMaintenance.then(() => this.autoGc(uid));
+  }
+
+  /**
+   * Settles once background packing started by recent writes has
+   * finished.
+   *
+   * Nothing on the request path waits for this — that is the whole point
+   * of the scheduling above. It exists so a caller that needs the repo
+   * quiet can have it: a test asserting the packing actually happened,
+   * or a shutdown that would rather not leave a gc half-done.
+   */
+  async whenMaintenanceSettled(): Promise<void> {
+    await this.pendingMaintenance;
+  }
+
+  /**
+   * Pack one repo, but only once it has crossed the loose-object limit.
+   *
+   * Never `--prune=now`. Accepting a proposal deliberately keeps its
+   * branch, because for a three-way accept that ref is the only thing
+   * holding the authored tip reachable; git's default two-week prune
+   * grace is the safety net for the window in which a ref is being
+   * rewritten. Packing is the win here — pruning is not worth the risk.
+   */
+  private async autoGc(uid: string): Promise<void> {
+    const dir = this.repoDir(uid);
+    try {
+      if ((await this.looseObjectCount(dir)) < this.looseObjectLimit) return;
+      await execFileAsync('git', ['gc', '--quiet'], { cwd: dir });
+      // A pack leaves no loose objects behind, so the next check is a
+      // cheap no-op until another `looseObjectLimit` have accumulated.
+    } catch (err) {
+      if (this.warnedGcUnavailable) return;
+      this.warnedGcUnavailable = true;
+      // Message only — a spawn failure's stack points at node internals
+      // and buries the one line that says what to fix. Same shape as the
+      // `git merge-file` warning in conflict.ts.
+      console.error(
+        '[marginalia] `git gc` is unavailable, so document repos will keep growing as loose objects. Install git in the runtime image. Cause:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  /**
+   * Exact number of loose objects in a repo.
+   *
+   * `count-objects -v` reports the real count rather than the sampled
+   * estimate `gc --auto` works from, which matters here: these repos
+   * hold few, very large objects, and a sample of one fanout directory
+   * is mostly noise at that scale.
+   */
+  private async looseObjectCount(dir: string): Promise<number> {
+    const { stdout } = await execFileAsync('git', ['count-objects', '-v'], { cwd: dir });
+    const match = /^count: (\d+)$/m.exec(stdout);
+    return match ? Number(match[1]) : 0;
+  }
+
+  /**
+   * Pack one document's repo now, waiting for it to finish.
+   *
+   * The scheduled path above is throttled and fire-and-forget, which is
+   * right for a live server and useless to a caller that needs the repo
+   * packed before it looks at it — a one-off migration over existing
+   * repos, or a test. Same `gc` invocation, same refusal to prune.
+   */
+  async packNow(uid: string): Promise<void> {
+    this.writesSinceMaintenance.set(uid, 0);
+    await execFileAsync('git', ['gc', '--quiet'], { cwd: this.repoDir(uid) });
   }
 
   /**
