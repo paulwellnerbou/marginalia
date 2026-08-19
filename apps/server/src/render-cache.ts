@@ -151,7 +151,11 @@ export async function renderDocumentCopy(
   return { ...(await renderDocumentCached(source, format, options)) };
 }
 
-/** Diagnostics for `/api/version`; also used by the cache's own tests. */
+/**
+ * Cache counters, read by this module's tests. Deliberately not served
+ * over HTTP: `/api/version` is unauthenticated and polled by every
+ * client to spot a new deploy, which is no place for server internals.
+ */
 export function renderCacheStats(): {
   entries: number;
   bytes: number;
