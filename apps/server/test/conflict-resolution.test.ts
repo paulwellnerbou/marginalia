@@ -10,6 +10,8 @@ import type { ConflictSegment } from '../src/conflict.js';
 const ALICE = { id: 'aaaaaaaaaaaaaaaaaaaa', name: 'Alice' };
 const BOB = { id: 'bbbbbbbbbbbbbbbbbbbb', name: 'Bob' };
 const DANA = { id: 'dddddddddddddddddddd', name: 'Dana' };
+/** Invited, but only to read — distinct from a visitor with no invite at all. */
+const RUTH = { id: 'rrrrrrrrrrrrrrrrrrrr', name: 'Ruth' };
 
 interface ThreadShape {
   id: string;
@@ -119,6 +121,7 @@ describe('proposal conflict resolution', () => {
     inviteByClientId.set(ALICE.id, adminToken);
     inviteByClientId.set(BOB.id, await createInvite(j.uid, BOB.name, 'collaborator'));
     inviteByClientId.set(DANA.id, await createInvite(j.uid, DANA.name, 'editor'));
+    inviteByClientId.set(RUTH.id, await createInvite(j.uid, RUTH.name, 'reader'));
     return j.uid;
   }
 
@@ -285,11 +288,26 @@ describe('proposal conflict resolution', () => {
       const { uid, tid } = await conflictedDoc();
       const res = await app.hono.fetch(
         new Request(`http://test/api/documents/${uid}/threads/${tid}/conflict`, {
+          headers: headersFor(RUTH),
+        }),
+      );
+
+      // Forbidden, not unauthorized: Ruth is a known participant, she
+      // just has no use for a merge she could never act on.
+      expect(res.status).toBe(403);
+    });
+
+    test('is closed to a visitor with no invite at all', async () => {
+      const { uid, tid } = await conflictedDoc();
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${tid}/conflict`, {
           headers: rawHeadersFor(DANA),
         }),
       );
 
-      expect(res.status).toBe(403);
+      // Documents are invite-only unless created otherwise, so an
+      // unaccompanied client id gets no further than the door.
+      expect(res.status).toBe(401);
     });
   });
 
@@ -389,6 +407,21 @@ describe('proposal conflict resolution', () => {
         new Request(`http://test/api/documents/${uid}/threads/${tid}/resolve`, {
           method: 'POST',
           headers: rawHeadersFor(DANA),
+          body: JSON.stringify({ resolved_text: 'nope' }),
+        }),
+      );
+
+      // Documents are invite-only unless created otherwise, so this
+      // never reaches the permission check.
+      expect(res.status).toBe(401);
+    });
+
+    test('a reader may not', async () => {
+      const { uid, tid } = await conflictedDoc();
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${tid}/resolve`, {
+          method: 'POST',
+          headers: headersFor(RUTH),
           body: JSON.stringify({ resolved_text: 'nope' }),
         }),
       );

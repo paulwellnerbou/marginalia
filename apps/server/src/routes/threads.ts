@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
 import type { BlockInfo, BlockSourceRange, RenderResult } from '@marginalia/renderer';
-import { renderDocument, rewriteAssetReferences } from '@marginalia/renderer';
+import { rewriteAssetReferences } from '@marginalia/renderer';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import {
@@ -41,6 +41,7 @@ import {
   listMentionCandidates,
   storeMentionsForComment,
 } from '../mentions.js';
+import { renderDocumentCached, renderDocumentCopy } from '../render-cache.js';
 import { listAttached } from './assets.js';
 import { toWire as toLegacyCommentWire } from './comments.js';
 import type { AppDeps } from './documents.js';
@@ -603,7 +604,7 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
         baseBlockEnd: changed.beforeEnd,
       };
 
-      const rendered = await renderDocument(preview.before, doc.format);
+      const rendered = await renderDocumentCached(preview.before, doc.format);
       const blocks = locateDocumentBlocks(doc, preview.before);
       anchor = locateProposalAnchorBySourceSpan(
         blocks,
@@ -2151,7 +2152,7 @@ async function prepareAcceptProposalThread(
     ? 0
     : locatePostMergeSpliceStart(doc, nextSource, proposedText, preMergeRange.start);
 
-  const rendered = await renderDocument(nextSource, doc.format);
+  const rendered = await renderDocumentCopy(nextSource, doc.format);
   const previousBlocks = locateDocumentBlocks(doc, preMergeSource);
   const presentBlocks = locateDocumentBlocks(doc, nextSource);
   const blockReplacements = prepareBlockReplacements({
@@ -2319,7 +2320,7 @@ async function prepareReopenAcceptedProposalThread(
     restoredFromOid: parent.oid,
   });
 
-  const rendered = await renderDocument(diff.before, doc.format);
+  const rendered = await renderDocumentCached(diff.before, doc.format);
   const previousBlocks = locateDocumentBlocks(doc, diff.after);
   const knownBlocks = locateDocumentBlocks(doc, diff.before);
   const blockReplacements = prepareBlockReplacements({
@@ -3030,7 +3031,7 @@ async function locateConflictRepairAnchor(
   const currentSpan = sourceSpanForLineSpan(currentSource, lineSpan.startLine, lineSpan.endLine);
   if (!currentSpan) return null;
 
-  const rendered = await renderDocument(currentSource, doc.format);
+  const rendered = await renderDocumentCached(currentSource, doc.format);
   const blocks = locateDocumentBlocks(doc, currentSource);
   return locateProposalAnchorBySourceSpan(
     blocks,

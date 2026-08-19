@@ -17,7 +17,7 @@
     "start": "bun --bun apps/server/src/main.ts",
     "typecheck": "bun run --filter '*' typecheck",
     "test": "bun test",
-    "test:ci": "bun test apps/server/test/server.test.ts apps/server/test/comments.test.ts apps/server/test/assets.test.ts apps/server/test/cover.test.ts apps/server/test/keyrings.test.ts apps/server/test/rate-limit.test.ts apps/server/test/mcp-http.test.ts apps/server/test/mermaid-rust.test.ts apps/server/test/mermaid-prerender.test.ts apps/server/test/mermaid-chromium.test.ts packages/renderer/test packages/cli/test packages/mcp/test apps/web",
+    "test:ci": "bun test apps/server/test packages/renderer/test packages/cli/test packages/mcp/test apps/web",
     "test:chromium": "MARGINALIA_TEST_PROFILE=chromium bun test apps/server/test/mermaid-chromium.test.ts apps/server/test/export-pdf.test.ts",
     "test:ci:chromium": "MARGINALIA_TEST_PROFILE=chromium bun test apps/server/test/mermaid-chromium.test.ts apps/server/test/export-pdf.test.ts",
     "test:realtime": "bun test apps/server/test/realtime.test.ts",

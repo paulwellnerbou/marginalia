@@ -57,6 +57,7 @@ import {
   updateComment as apiUpdate,
   updateEditProposal as apiUpdateProposal,
   type Comment,
+  fetchThread,
   getDocument,
   getHistoryDiff,
   type HistoryEntry,
@@ -102,6 +103,11 @@ import {
   getUserThemeOverride,
   setUserThemeOverride,
 } from '../lib/themes.js';
+import {
+  mergeArchiveThreads,
+  threadContainingComment,
+  threadIdOfComment,
+} from '../lib/thread-reconcile.js';
 import {
   COARSE_POINTER,
   readUiScale,
@@ -469,6 +475,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
    */
   const threadSnapshotRequestRef = useRef(0);
   const documentRefreshRequestRef = useRef(0);
+  /**
+   * Set only while the initial archive read is in flight; collects the ids
+   * of threads reconciled locally in that window so the merge does not
+   * overwrite them with the older archive copy. Null the rest of the time —
+   * once the archive has landed there is nothing to protect against.
+   */
+  const archiveMergeGuard = useRef<Set<string> | null>(null);
+  /**
+   * Current threads, readable from the realtime callback. The subscription
+   * must not re-run per keystroke of somebody else's comment, so it cannot
+   * close over `threads` itself.
+   */
+  const threadsRef = useRef<Thread[]>([]);
   /** Reaction controls are local to a comment row. Keep a resource-level
    * queue as well so duplicate renderings of the same comment cannot toggle
    * it concurrently. Different comments may still update in parallel. */
@@ -630,12 +649,22 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   const landThread = useCallback((thread: Thread) => {
     // A snapshot requested before this mutation completed is stale now.
     threadSnapshotRequestRef.current += 1;
+    archiveMergeGuard.current?.add(thread.id);
     setThreads((prev) => {
       const index = prev.findIndex((t) => t.id === thread.id);
       const next = index >= 0 ? prev.map((t, i) => (i === index ? thread : t)) : [...prev, thread];
       next.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
       return next;
     });
+  }, []);
+
+  threadsRef.current = threads;
+
+  /** Remove a thread that has been deleted or is no longer visible here. */
+  const dropThread = useCallback((threadId: string) => {
+    threadSnapshotRequestRef.current += 1;
+    archiveMergeGuard.current?.add(threadId);
+    setThreads((prev) => prev.filter((t) => t.id !== threadId));
   }, []);
 
   const refreshThreads = useCallback(async () => {
@@ -1086,29 +1115,75 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     });
   }, [docSearchOpen, deferredDocSearchQuery, searchResults]);
 
+  /*
+   * Two-phase load. On a long-reviewed document the archive dwarfs the live
+   * column — hundreds of settled proposals against a handful of open
+   * threads — and reading both together is what made opening the document
+   * slow. So: read the open threads, paint, then fetch the archive behind
+   * that and merge it in.
+   *
+   * Mention consumption stays on the archive read. It is a server-side
+   * side effect that may only happen once, and `notifyPendingMentions`
+   * has to be able to find the mentioned comment — which may well sit in
+   * a thread that was resolved.
+   */
   useEffect(() => {
     let cancelled = false;
     threadsLoaded.current = false;
     setThreadsLoading(true);
     const requestId = ++threadSnapshotRequestRef.current;
-    retryRequest(() => listThreads(doc.uid)).then(
+    // Threads reconciled locally while the archive read is in flight. The
+    // archive answers a question asked before those landed, so it must not
+    // be allowed to undo them.
+    const mutatedDuringArchiveRead = new Set<string>();
+    archiveMergeGuard.current = mutatedDuringArchiveRead;
+
+    function loadArchive() {
+      retryRequest(() => listThreads(doc.uid, { state: 'all', fresh: true })).then(
+        (r) => {
+          if (cancelled) return;
+          // Deliver the mention notification even when a newer snapshot
+          // already won — consumption already happened server-side.
+          notifyPendingMentions(r.threads, r.pending_mentions);
+          setMentionCandidates(r.mention_candidates);
+          setThreads((prev) => mergeArchiveThreads(prev, r.threads, mutatedDuringArchiveRead));
+          if (archiveMergeGuard.current === mutatedDuringArchiveRead) {
+            archiveMergeGuard.current = null;
+          }
+        },
+        (err) => {
+          if (cancelled || isAbortError(err)) return;
+          reportError('DocumentLayout.listThreads.archive', err, { uid: doc.uid });
+          // The open threads are already on screen, so this is a partial
+          // failure: say what is missing rather than claiming the column
+          // failed to load.
+          reportFailure(
+            apiErrorMessage(err, 'Could not load resolved comments. Reconnecting will retry.'),
+          );
+        },
+      );
+    }
+
+    retryRequest(() => listThreads(doc.uid, { state: 'open', consumeMentions: false })).then(
       (r) => {
         if (cancelled) return;
         setThreadsLoading(false);
-        // Mention consumption is a side effect of this read. Deliver its
-        // notification even when a newer thread snapshot already won.
-        notifyPendingMentions(r.threads, r.pending_mentions);
-        if (requestId !== threadSnapshotRequestRef.current) return;
-        setThreads(r.threads);
-        setMentionCandidates(r.mention_candidates);
-        threadsLoaded.current = true;
+        // A mutation that landed while this was in flight outranks it. Only
+        // the snapshot is stale though — the archive still has to be read,
+        // or this session would never see a resolved thread. Its own merge
+        // is what protects the newer local state.
+        if (requestId === threadSnapshotRequestRef.current) {
+          setThreads(r.threads);
+          threadsLoaded.current = true;
+        }
+        loadArchive();
       },
       (err) => {
         if (cancelled) return;
         // The read is over either way; a pane still claiming to load
         // would outlast the failure toast below.
         setThreadsLoading(false);
-        if (requestId !== threadSnapshotRequestRef.current) return;
+        if (requestId !== threadSnapshotRequestRef.current || isAbortError(err)) return;
         reportError('DocumentLayout.listThreads', err, { uid: doc.uid });
         // Silence here reads as "this document has no comments" — the
         // column, the highlights and the thread count all agree on it.
@@ -1121,6 +1196,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     );
     return () => {
       cancelled = true;
+      if (archiveMergeGuard.current === mutatedDuringArchiveRead) {
+        archiveMergeGuard.current = null;
+      }
     };
   }, [doc.uid]);
 
@@ -1212,17 +1290,80 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         void refreshThreads();
       }, 300);
     }
+
+    /*
+     * Realtime reconciliation is per thread, not per document.
+     *
+     * Every one of these events used to schedule a full `state=all` read.
+     * On a document with a large review history that is megabytes re-read,
+     * re-parsed and re-rendered because one person typed one reply — and
+     * during an active discussion it repeated every few seconds. The event
+     * already names the thread that changed, so read back just that one.
+     *
+     * The server is still the authority on the thread's wire shape: this
+     * re-reads the thread rather than reconstructing it from the event
+     * payload, so the card cannot drift from what a full read would say.
+     */
+    const pending = new Map<string, ReturnType<typeof setTimeout>>();
+    function reconcileThread(threadId: string) {
+      // Coalesce a burst on one thread — a reply and its mention arrive
+      // together — while leaving different threads independent.
+      const queued = pending.get(threadId);
+      if (queued) clearTimeout(queued);
+      pending.set(
+        threadId,
+        setTimeout(() => {
+          pending.delete(threadId);
+          if (cancelled) return;
+          archiveMergeGuard.current?.add(threadId);
+          fetchThread(doc.uid, threadId).then(
+            (thread) => {
+              if (cancelled) return;
+              // Null means gone or no longer visible to this viewer;
+              // either way it should leave the column.
+              if (thread) landThread(thread);
+              else dropThread(threadId);
+            },
+            (err) => {
+              if (cancelled) return;
+              // Fall back to a full reconcile rather than leaving the
+              // column showing a thread that has moved on without it.
+              reportError('DocumentLayout.reconcileThread', err, { uid: doc.uid, threadId });
+              scheduleRefresh();
+            },
+          );
+        }, 150),
+      );
+    }
+
     void ensureNotificationPermission();
     const sub = subscribeToDocumentEvents(
       doc.uid,
       (event) => {
         switch (event.type) {
           case 'comment.created':
-          case 'comment.updated':
-          case 'comment.deleted':
-          case 'edit_proposal.updated':
+          case 'comment.updated': {
+            const id = threadIdOfComment(event.comment);
+            if (id) reconcileThread(id);
+            else scheduleRefresh();
+            break;
+          }
+          case 'edit_proposal.updated': {
+            const id = typeof event.edit_proposal.id === 'string' ? event.edit_proposal.id : null;
+            if (id) reconcileThread(id);
+            else scheduleRefresh();
+            break;
+          }
+          case 'comment.deleted': {
+            // A deleted root leaves outright; a deleted reply means its
+            // root has to be re-read to lose that reply.
+            const root = threadContainingComment(threadsRef.current, event.comment_id);
+            if (root === event.comment_id || root === null) dropThread(event.comment_id);
+            else reconcileThread(root);
+            break;
+          }
           case 'edit_proposal.deleted': {
-            scheduleRefresh();
+            dropThread(event.edit_proposal_id);
             break;
           }
           case 'mention.created': {
@@ -1242,8 +1383,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
             break;
           }
           case 'edit_proposal.created': {
-            void refreshThreads();
             const raw = event.edit_proposal as Record<string, unknown>;
+            const id = typeof raw.id === 'string' ? raw.id : null;
+            if (id) reconcileThread(id);
+            else scheduleRefresh();
             const comment = raw.comment as Record<string, unknown> | undefined;
             const author = comment?.author as { display_name?: string } | undefined;
             notify('New edit proposal', `${author?.display_name ?? 'Someone'} proposed a change.`);
@@ -1280,9 +1423,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     return () => {
       cancelled = true;
       if (refreshTimer) clearTimeout(refreshTimer);
+      for (const timer of pending.values()) clearTimeout(timer);
+      pending.clear();
       sub.close();
     };
-  }, [doc.uid, refreshThreads]);
+  }, [doc.uid, refreshThreads, landThread, dropThread]);
 
   // Memoized so downstream useCallbacks can list it as a single dep instead
   // of mirroring [displayName, effectiveDisplayName] each time.
@@ -3012,6 +3157,16 @@ function scrollToTargetAndSettle(
   for (const ev of SETTLE_USER_EVENTS) {
     scroll.addEventListener(ev, stop, { passive: true, once: true });
   }
+}
+
+/**
+ * A read the browser tore down, because the reader navigated away or the
+ * view unmounted while it was in flight. Nothing failed that the reader
+ * needs telling about — `isTransientError` likewise treats it as final
+ * rather than something to retry.
+ */
+function isAbortError(err: unknown): boolean {
+  return (err as { name?: unknown } | null)?.name === 'AbortError';
 }
 
 function notifyPendingMentions(threads: Thread[], pendingMentionIds: string[]): void {
