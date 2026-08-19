@@ -48,10 +48,13 @@ interface Entry {
 
 /** Insertion order is the LRU order; a hit re-inserts to move to the back. */
 const entries = new Map<string, Entry>();
+/** Renders currently running, so concurrent misses on a key share one. */
+const inFlight = new Map<string, Promise<RenderResult>>();
 let totalBytes = 0;
 
 let hits = 0;
 let misses = 0;
+let coalesced = 0;
 
 /**
  * Approximate retained size. `html` dominates by an order of magnitude;
@@ -124,17 +127,53 @@ export async function renderDocumentCached(
     return hit.result;
   }
 
+  // Join a render already running for this key rather than starting a
+  // second one. The case this exists for is the one that hurts most: a
+  // deploy empties the cache, several readers open the same large
+  // document at once, and each would otherwise pay the full render.
+  const running = inFlight.get(key);
+  if (running) {
+    coalesced += 1;
+    return running;
+  }
+
   misses += 1;
-  const result = await renderDocument(source, format, options);
+  const render = (async () => {
+    const result = await renderDocument(source, format, options);
+    store(key, result);
+    return result;
+  })();
+  inFlight.set(key, render);
+  try {
+    return await render;
+  } finally {
+    // Only clear our own entry; a later call may already have claimed the
+    // key. A failed render leaves nothing behind, so the next caller
+    // retries rather than inheriting the rejection.
+    if (inFlight.get(key) === render) inFlight.delete(key);
+  }
+}
+
+/**
+ * Put a finished render in the cache, keeping `totalBytes` equal to what
+ * the map actually holds.
+ *
+ * Discounting any entry already under this key is what makes that true:
+ * an overwrite replaces one entry but would otherwise add its bytes a
+ * second time, and the accounting would drift up until `evictTo` began
+ * shedding entries the budget could well afford — eventually emptying
+ * the map while the phantom total kept it evicting.
+ */
+function store(key: string, result: RenderResult): void {
   const bytes = sizeOf(result);
   // A single document larger than the whole budget would evict everything
   // and still not fit; serve it without caching rather than thrashing.
-  if (bytes <= MAX_BYTES) {
-    entries.set(key, { result, bytes });
-    totalBytes += bytes;
-    evictTo(MAX_BYTES);
-  }
-  return result;
+  if (bytes > MAX_BYTES) return;
+  const previous = entries.get(key);
+  if (previous) totalBytes -= previous.bytes;
+  entries.set(key, { result, bytes });
+  totalBytes += bytes;
+  evictTo(MAX_BYTES);
 }
 
 /**
@@ -162,14 +201,18 @@ export function renderCacheStats(): {
   maxBytes: number;
   hits: number;
   misses: number;
+  /** Reads that joined a render already in progress instead of starting one. */
+  coalesced: number;
 } {
-  return { entries: entries.size, bytes: totalBytes, maxBytes: MAX_BYTES, hits, misses };
+  return { entries: entries.size, bytes: totalBytes, maxBytes: MAX_BYTES, hits, misses, coalesced };
 }
 
 /** Test seam — the cache is process-global and would leak between cases. */
 export function resetRenderCache(): void {
   entries.clear();
+  inFlight.clear();
   totalBytes = 0;
   hits = 0;
   misses = 0;
+  coalesced = 0;
 }

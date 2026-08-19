@@ -75,6 +75,56 @@ describe('renderDocumentCopy', () => {
   });
 });
 
+describe('concurrent cold reads', () => {
+  test('share a single render instead of each paying for one', async () => {
+    const source = `# Doc\n\n${'body text '.repeat(200)}\n`;
+
+    const [a, b, c] = await Promise.all([
+      renderDocumentCached(source, 'markdown'),
+      renderDocumentCached(source, 'markdown'),
+      renderDocumentCached(source, 'markdown'),
+    ]);
+
+    // One render, two readers joining it — the deploy-then-everyone-
+    // reloads case, where paying three times is the whole problem.
+    expect(renderCacheStats()).toMatchObject({ misses: 1, coalesced: 2, entries: 1 });
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+  });
+
+  test('do not inflate the byte accounting past what the cache holds', async () => {
+    const source = `# Doc\n\n${'body text '.repeat(200)}\n`;
+    await Promise.all([
+      renderDocumentCached(source, 'markdown'),
+      renderDocumentCached(source, 'markdown'),
+      renderDocumentCached(source, 'markdown'),
+    ]);
+    const concurrent = renderCacheStats();
+
+    // What one entry really costs, measured on its own.
+    resetRenderCache();
+    await renderDocumentCached(source, 'markdown');
+
+    // Counting a shared entry once per waiter drifts `bytes` upwards,
+    // and eviction then sheds entries the budget could well afford.
+    expect(concurrent.entries).toBe(1);
+    expect(concurrent.bytes).toBe(renderCacheStats().bytes);
+  });
+
+  test('a settled render is cached, not left in flight', async () => {
+    const source = '# Settled\n';
+    await Promise.all([
+      renderDocumentCached(source, 'markdown'),
+      renderDocumentCached(source, 'markdown'),
+    ]);
+
+    await renderDocumentCached(source, 'markdown');
+    // A hit, not another coalesce: the in-flight entry was cleared and
+    // the result stored.
+    expect(renderCacheStats()).toMatchObject({ hits: 1, misses: 1, coalesced: 1 });
+  });
+});
+
 describe('cache budget', () => {
   test('evicts least-recently-used entries once the budget is exceeded', async () => {
     // The budget is read from the environment at module load, so rather than

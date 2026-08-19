@@ -378,6 +378,10 @@ export class GitStore {
         rmSync(dir, { recursive: true, force: true });
       }
       this.initialized.delete(uid);
+      // Same reason as `initialized`: nothing else prunes this, so a
+      // server that churns through documents would keep a counter per
+      // uid it had ever written to, for as long as it ran.
+      this.writesSinceMaintenance.delete(uid);
     });
   }
 

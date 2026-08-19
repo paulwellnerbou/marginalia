@@ -192,6 +192,20 @@ Para C baseline.
     expect(errors).toEqual([]);
   });
 
+  test('destroying a repo forgets its packing counter', async () => {
+    // Nothing else prunes the per-uid counter, so a server that churns
+    // through documents would hold one entry per uid it ever wrote to.
+    const tuned = new GitStore(dir, { everyWrites: 5, looseObjectLimit: 1_000_000 });
+    await tuned.init();
+    const temp: DocLocator = { uid: 'doc-temp', format: 'markdown' };
+    await tuned.write(temp, INITIAL, author, 'upload');
+    await tuned.destroyDocRepo(temp.uid);
+
+    const counters = (tuned as unknown as { writesSinceMaintenance: Map<string, number> })
+      .writesSinceMaintenance;
+    expect(counters.has(temp.uid)).toBe(false);
+  });
+
   test('a missing git binary leaves writes working', async () => {
     const realPath = process.env.PATH;
     process.env.PATH = join(dir, 'no-binaries-here');
