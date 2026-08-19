@@ -109,42 +109,67 @@ export function useWindowedList({
     [noteHeight],
   );
 
-  // Track the scrolling ancestor's position. Reads happen on scroll and on
-  // resize; both are passive and rAF-coalesced so a fast scroll does not
-  // queue a layout read per event.
+  /*
+   * Track the scrolling ancestor's position.
+   *
+   * Deliberately not coalesced through `requestAnimationFrame`. rAF is
+   * throttled or stopped outright whenever the page is not being painted
+   * — a background tab, an occluded window, a machine saving power — and
+   * a scroll handler that never runs leaves the list showing whichever
+   * rows it happened to have when the throttling began. The work here is
+   * one cheap property read, so it can simply run on the event.
+   *
+   * The list's offset inside the scroller is measured separately, on
+   * mount and on resize, so scrolling itself reads `scrollTop` alone and
+   * never forces layout.
+   */
   // biome-ignore lint/correctness/useExhaustiveDependencies: keys.length is the re-attach trigger — the scrolling ancestor only exists, and only becomes scrollable, once the list has rows.
   useEffect(() => {
     if (!windowed) return;
     const root = rootRef.current;
     const scroller = scrollParentOf(root);
     if (!scroller || !root) return;
+    const isPageScroller = scroller === document.scrollingElement;
 
-    let frame = 0;
-    const read = () => {
-      frame = 0;
+    // Distance from the top of the scroller's content to the top of the
+    // list. Constant while the list sits where it is, so it is measured
+    // rather than recomputed per scroll event.
+    let listOffset = 0;
+    const measureOffset = () => {
       const rootTop = root.getBoundingClientRect().top;
-      const scrollerTop =
-        scroller === document.scrollingElement ? 0 : scroller.getBoundingClientRect().top;
-      setViewport({
-        // Where the viewport starts, in the list's own coordinates.
-        top: scrollerTop - rootTop,
-        height: scroller === document.scrollingElement ? window.innerHeight : scroller.clientHeight,
-      });
-    };
-    const onScroll = () => {
-      if (frame) return;
-      frame = requestAnimationFrame(read);
+      const scrollerTop = isPageScroller ? 0 : scroller.getBoundingClientRect().top;
+      listOffset = rootTop - scrollerTop + scroller.scrollTop;
     };
 
+    let lastTop = Number.NaN;
+    let lastHeight = Number.NaN;
+    const read = () => {
+      const top = scroller.scrollTop - listOffset;
+      const height = isPageScroller ? window.innerHeight : scroller.clientHeight;
+      // A few pixels of scroll cannot change which rows are rendered, and
+      // re-rendering on every one of them would be the cost this hook
+      // exists to avoid.
+      if (Math.abs(top - lastTop) < 8 && height === lastHeight) return;
+      lastTop = top;
+      lastHeight = height;
+      setViewport({ top, height });
+    };
+    const onResize = () => {
+      measureOffset();
+      lastTop = Number.NaN;
+      read();
+    };
+
+    measureOffset();
     read();
-    scroller.addEventListener('scroll', onScroll, { passive: true });
-    window.addEventListener('resize', onScroll, { passive: true });
-    const ro = new ResizeObserver(onScroll);
+    scroller.addEventListener('scroll', read, { passive: true });
+    window.addEventListener('resize', onResize, { passive: true });
+    const ro = new ResizeObserver(onResize);
     ro.observe(scroller);
+    ro.observe(root);
     return () => {
-      if (frame) cancelAnimationFrame(frame);
-      scroller.removeEventListener('scroll', onScroll);
-      window.removeEventListener('resize', onScroll);
+      scroller.removeEventListener('scroll', read);
+      window.removeEventListener('resize', onResize);
       ro.disconnect();
     };
   }, [windowed, rootRef, keys.length]);
