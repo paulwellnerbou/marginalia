@@ -420,9 +420,10 @@ export function windowProposalDiff(
   original: { before: string; after: string },
   range: { start: number; end: number },
   contextLines: number = DIFF_WINDOW_CONTEXT_LINES,
-): { before: string; after: string } {
+): { before: string; after: string; lineOffset: number } {
   const { before, after } = original;
-  if (range.start < 0 || range.end > before.length || range.end < range.start) return original;
+  const unchanged = { ...original, lineOffset: 0 };
+  if (range.start < 0 || range.end > before.length || range.end < range.start) return unchanged;
 
   const beforeLines = before.split('\n');
   const afterLines = after.split('\n');
@@ -437,16 +438,20 @@ export function windowProposalDiff(
   // lost, since that block is the only thing that changed.
   const deltaLines = afterLines.length - beforeLines.length;
   const afterTo = Math.min(afterLines.length, beforeTo + deltaLines);
-  if (afterTo < from) return original;
+  if (afterTo < from) return unchanged;
 
   // Prove the assumption before acting on it: if anything outside the
   // window differs, the change is not where the row says it is (a rebased
   // or hand-edited branch), and narrowing would hide it.
   const sameHead = beforeLines.slice(0, from).join('\n') === afterLines.slice(0, from).join('\n');
   const sameTail = beforeLines.slice(beforeTo).join('\n') === afterLines.slice(afterTo).join('\n');
-  if (!sameHead || !sameTail) return original;
+  if (!sameHead || !sameTail) return unchanged;
 
   return {
+    // The reviewer is shown real line numbers, so the window has to say
+    // where it starts — without it the dialog would number line 4051 as
+    // line 1 and quietly lie about where the change is.
+    lineOffset: from,
     before: beforeLines.slice(from, beforeTo).join('\n'),
     after: afterLines.slice(from, afterTo).join('\n'),
   };

@@ -3783,6 +3783,9 @@ describe('documents API', () => {
       original: {
         before: '# Hi\n\nOriginal.\n',
         after: '# Better Hi\n\nOriginal.\n',
+        // Short enough that the context reaches both ends, so the excerpt
+        // is the whole document and numbering starts at the top.
+        line_offset: 0,
       },
       mergeable: null,
     });

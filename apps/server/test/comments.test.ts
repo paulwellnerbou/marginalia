@@ -2737,6 +2737,9 @@ describe('threads API', () => {
     const original = {
       before: '# Title\n\nA paragraph.\n',
       after: '# Better title\n\nA paragraph.\n',
+      // Short enough that the context reaches both ends, so the excerpt is
+      // the whole document and numbering starts at the top.
+      line_offset: 0,
     };
     const diffRes = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/threads/${thread.id}/diff`, {

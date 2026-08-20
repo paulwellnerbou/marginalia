@@ -102,18 +102,41 @@ describe('windowProposalDiff', () => {
 
     expect(win.before).toBe(before);
     expect(win.after).toBe(after);
+    expect(win.lineOffset).toBe(0);
   });
 
   test('leaves the pair alone when the range is nonsense', () => {
     const before = doc(50);
     const after = doc(50, { line: 10, text: 'Changed.' });
 
-    expect(windowProposalDiff({ before, after }, { start: -1, end: 5 })).toEqual({ before, after });
-    expect(windowProposalDiff({ before, after }, { start: 10, end: 5 })).toEqual({ before, after });
-    expect(windowProposalDiff({ before, after }, { start: 0, end: before.length + 100 })).toEqual({
-      before,
-      after,
-    });
+    const untouched = { before, after, lineOffset: 0 };
+    expect(windowProposalDiff({ before, after }, { start: -1, end: 5 })).toEqual(untouched);
+    expect(windowProposalDiff({ before, after }, { start: 10, end: 5 })).toEqual(untouched);
+    expect(windowProposalDiff({ before, after }, { start: 0, end: before.length + 100 })).toEqual(
+      untouched,
+    );
+  });
+
+  test('reports where the window starts, so line numbers stay absolute', () => {
+    // The dialog shows real line numbers. Without the offset it would
+    // label the window's first line as line 1 and misplace the change by
+    // thousands of lines.
+    const before = doc(500);
+    const after = doc(500, { line: 250, text: 'Paragraph 250, revised.' });
+
+    const win = windowProposalDiff({ before, after }, rangeOfLine(before, 250), 12);
+
+    expect(win.lineOffset).toBe(238);
+    expect(win.before.split('\n')[0]).toBe('Paragraph 238.');
+  });
+
+  test('an unwindowed pair starts at the top', () => {
+    const before = doc(20);
+    const after = doc(20, { line: 5, text: 'Changed.' });
+
+    // Context reaches past both ends, so the window is the whole document
+    // and the numbering is unchanged.
+    expect(windowProposalDiff({ before, after }, rangeOfLine(before, 5), 40).lineOffset).toBe(0);
   });
 
   test('a block near the start or end does not run off the document', () => {

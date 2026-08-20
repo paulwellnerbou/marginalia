@@ -874,6 +874,7 @@ export function InlineThreadCard({
           before={resolvedDiff?.original?.before ?? resolvedDiff?.before ?? ''}
           after={resolvedDiff?.original?.after ?? resolvedDiff?.after ?? ''}
           contextLines={3}
+          startLine={(resolvedDiff?.original?.line_offset ?? 0) + 1}
           loading={loadingDiff}
           error={diffError}
           actionError={actionError}

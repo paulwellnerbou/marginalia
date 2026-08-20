@@ -217,7 +217,13 @@ export interface HistoryDiff {
  */
 export interface ProposalDiff extends HistoryDiff {
   mergeable: 'clean' | 'conflict' | 'stale' | 'unavailable' | null;
-  original: HistoryDiff | null;
+  /**
+   * The change in its surroundings. Narrowed to the block a proposal
+   * touches rather than the whole document, so `line_offset` says which
+   * document line the excerpt starts at — the diff shows real line
+   * numbers and would otherwise call the first one line 1.
+   */
+  original: (HistoryDiff & { line_offset?: number }) | null;
 }
 
 /** A run of text the merge agreed on, or one it left for a person. */
