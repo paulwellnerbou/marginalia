@@ -401,6 +401,24 @@ function waitForAuth(docUid: string): Promise<void> {
 }
 
 /**
+ * Ceiling on any request that does not ask for its own.
+ *
+ * Every request used to run without one unless it opted in, and only two
+ * reads ever did. A response body that stalls — a half-open socket, a
+ * network that changed underneath, an HTTP/3 stream that never finishes —
+ * then leaves the promise pending for as long as the tab is open. One
+ * observed accept sat like that for five minutes: the server had written
+ * the whole response and logged 200, the tab was alive and polling, and
+ * the button spun with no error and no way back. Failing is recoverable;
+ * hanging is not.
+ *
+ * Generous, because it has to clear the slowest honest case — an accept
+ * returns the rewritten document, which is hundreds of kilobytes — and a
+ * ceiling that cuts those off would be a worse bug than the one it fixes.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 90_000;
+
+/**
  * A timeout signal, or null where the runtime has no `AbortSignal.timeout`.
  *
  * Degrading to "no ceiling" is deliberate. The alternative — an
@@ -412,8 +430,8 @@ function waitForAuth(docUid: string): Promise<void> {
  * calling a missing method would instead throw synchronously and turn
  * every read into a hard failure.
  */
-function timeoutSignal(timeoutMs: number | undefined): AbortSignal | null {
-  if (timeoutMs === undefined) return null;
+function timeoutSignal(timeoutMs: number | null): AbortSignal | null {
+  if (timeoutMs === null) return null;
   if (typeof AbortSignal?.timeout !== 'function') return null;
   return AbortSignal.timeout(timeoutMs);
 }
@@ -426,8 +444,10 @@ async function request<T>(
     _retry?: boolean;
     /**
      * Reject with a `TimeoutError` if the whole exchange, body included,
-     * outlasts this. Opt-in: uploads and exports are legitimately slow,
-     * and a ceiling that fits a JSON read would cut them off.
+     * outlasts this. Defaults to `DEFAULT_REQUEST_TIMEOUT_MS`; pass
+     * `null` for the calls that are legitimately slow — a bundle export
+     * or an upload — where a ceiling that fits a JSON read would cut
+     * them off.
      *
      * A caller's own `signal` still wins where one is given. Where it
      * isn't, the signal is minted fresh on each pass through this
@@ -436,7 +456,7 @@ async function request<T>(
      * dialog for a minute, and a signal carried over from the first
      * attempt would abort the second the instant it began.
      */
-    timeoutMs?: number;
+    timeoutMs?: number | null;
   } = {},
 ): Promise<T> {
   const headers = new Headers(init.headers);
@@ -460,7 +480,9 @@ async function request<T>(
     if (token) headers.set('x-marginalia-invite', token);
   }
 
-  const signal = init.signal ?? timeoutSignal(init.timeoutMs);
+  const signal =
+    init.signal ??
+    timeoutSignal(init.timeoutMs === undefined ? DEFAULT_REQUEST_TIMEOUT_MS : init.timeoutMs);
   let res: Response;
   try {
     res = await fetch(path, {
@@ -613,6 +635,8 @@ export function exportDocumentBundle(uid: string): Promise<DocumentBundle> {
   return request<DocumentBundle>(`/api/documents/${encodeURIComponent(uid)}/export`, {
     method: 'GET',
     docUid: uid,
+    // A whole-history bundle is legitimately slow and legitimately huge.
+    timeoutMs: null,
   });
 }
 
@@ -939,6 +963,9 @@ export function uploadAsset(
     body: form,
     identity,
     docUid: uid,
+    // The reader chose this file; it can be as large as the limit allows
+    // and as slow as their connection makes it.
+    timeoutMs: null,
   });
 }
 

@@ -91,6 +91,13 @@ const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 503, 504]);
 
 export function apiErrorMessage(err: unknown, fallback: string): string {
   if (!(err instanceof ApiError)) {
+    // The request ran past its ceiling. Distinct from a dropped
+    // connection: the server may well have done the work and only the
+    // answer went missing, so the advice is to look rather than to
+    // assume nothing happened.
+    if ((err as { name?: unknown } | null)?.name === 'TimeoutError') {
+      return `${fallback} — the server did not answer in time. It may still have gone through; reload to see where things stand.`;
+    }
     // Only a rejection tagged at the `fetch` call site — never a bug in
     // our own code that happens to throw the same `TypeError` shape.
     if (isTransientError(err)) {

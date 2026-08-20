@@ -77,3 +77,15 @@ describe('apiErrorMessage', () => {
     expect(apiErrorMessage(new TypeError('x is not a function'), FALLBACK)).toBe(FALLBACK);
   });
 });
+
+test('a request that ran past its ceiling says the work may still have happened', () => {
+  // The observed failure: the server finished an accept and logged 200,
+  // but the response never arrived. Telling the reader "it failed" would
+  // be wrong — the proposal was accepted.
+  const timeout = new DOMException('The operation timed out.', 'TimeoutError');
+
+  const message = apiErrorMessage(timeout, 'Could not accept this thread');
+
+  expect(message).toContain('did not answer in time');
+  expect(message).toContain('reload');
+});
