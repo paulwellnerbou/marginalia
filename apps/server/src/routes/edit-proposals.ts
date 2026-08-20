@@ -387,6 +387,71 @@ export async function readProposalContent(
   }
 }
 
+/**
+ * Lines of surrounding document kept either side of a proposal's changed
+ * block when the diff is narrowed.
+ *
+ * The review dialog renders three lines of context and offers no way to
+ * ask for more, so this is already four times what it can display —
+ * headroom in case that changes, without another round trip.
+ *
+ * Sized against real prose rather than a guess: a "line" in these
+ * documents is a whole paragraph, so on the measured case each one costs
+ * about 300 bytes a side. Twelve lands the payload near 7 KB where forty
+ * would have been 24 KB, against 885 KB before any windowing at all.
+ */
+const DIFF_WINDOW_CONTEXT_LINES = 12;
+
+/**
+ * Narrow a whole-document before/after pair to the neighbourhood of the
+ * block a proposal changes.
+ *
+ * A block-scoped proposal changes one paragraph, but both sides of the
+ * diff are whole documents: one measured pair was 453 KB each to show a
+ * single changed line, and every re-open paid for it again. The review
+ * view has no line numbers and no way to expand context, so a window is
+ * indistinguishable from the full text in what it renders.
+ *
+ * Returns the original pair unchanged whenever the narrowing cannot be
+ * proven safe — the text outside the window has to be identical on both
+ * sides, or the window would be hiding part of the change.
+ */
+export function windowProposalDiff(
+  original: { before: string; after: string },
+  range: { start: number; end: number },
+  contextLines: number = DIFF_WINDOW_CONTEXT_LINES,
+): { before: string; after: string } {
+  const { before, after } = original;
+  if (range.start < 0 || range.end > before.length || range.end < range.start) return original;
+
+  const beforeLines = before.split('\n');
+  const afterLines = after.split('\n');
+  // Which lines the changed range covers. `start` and `end` are offsets
+  // into `before`, so both are counted there.
+  const startLine = before.slice(0, range.start).split('\n').length - 1;
+  const endLine = before.slice(0, range.end).split('\n').length - 1;
+
+  const from = Math.max(0, startLine - contextLines);
+  const beforeTo = Math.min(beforeLines.length, endLine + 1 + contextLines);
+  // Everything after the block shifts by however many lines it gained or
+  // lost, since that block is the only thing that changed.
+  const deltaLines = afterLines.length - beforeLines.length;
+  const afterTo = Math.min(afterLines.length, beforeTo + deltaLines);
+  if (afterTo < from) return original;
+
+  // Prove the assumption before acting on it: if anything outside the
+  // window differs, the change is not where the row says it is (a rebased
+  // or hand-edited branch), and narrowing would hide it.
+  const sameHead = beforeLines.slice(0, from).join('\n') === afterLines.slice(0, from).join('\n');
+  const sameTail = beforeLines.slice(beforeTo).join('\n') === afterLines.slice(afterTo).join('\n');
+  if (!sameHead || !sameTail) return original;
+
+  return {
+    before: beforeLines.slice(from, beforeTo).join('\n'),
+    after: afterLines.slice(from, afterTo).join('\n'),
+  };
+}
+
 export async function readProposalFullContent(
   store: GitStore,
   doc: DocumentRow,

@@ -56,6 +56,7 @@ import {
   reanchorProposals,
   reopenAcceptedProposal,
   toWire as toProposalWire,
+  windowProposalDiff,
 } from './edit-proposals.js';
 
 interface ThreadRow extends CommentRow {
@@ -562,7 +563,21 @@ async function resolveProposalDiff(
 } | null> {
   const content = await readProposalContent(deps.store, doc, proposal);
   if (!content) return null;
-  const original = await readProposalFullContent(deps.store, doc, proposal);
+  const full = await readProposalFullContent(deps.store, doc, proposal);
+  // A block-scoped proposal changes one paragraph, so the reviewer needs
+  // that paragraph and its surroundings — not two copies of the whole
+  // document, which is what this used to send. A whole-document proposal
+  // genuinely is the whole document, and keeps it.
+  const original =
+    full &&
+    proposal.is_whole_document !== 1 &&
+    proposal.base_block_start !== null &&
+    proposal.base_block_end !== null
+      ? windowProposalDiff(full, {
+          start: proposal.base_block_start,
+          end: proposal.base_block_end,
+        })
+      : full;
   return { before: content.source_snapshot, after: content.proposed_text, original };
 }
 
