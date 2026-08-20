@@ -16,6 +16,13 @@ interface Props {
   /** Number of unchanged lines to show around each changed hunk. `null` shows the full diff. */
   contextLines?: number | null;
   /**
+   * Document line the first line of `before`/`after` is, when they are an
+   * excerpt rather than the whole text. Line numbers are shown to the
+   * reader, so an excerpt that numbered itself from 1 would put the change
+   * thousands of lines from where it really is.
+   */
+  startLine?: number;
+  /**
    * When false, layout-measuring effects are skipped. Useful when the diff is
    * rendered inside a Dialog that may keep content mounted while closed.
    * Defaults to true.
@@ -25,12 +32,18 @@ interface Props {
 
 const EMPTY_EQUAL_LINE: DiffLine = { op: 'equal', text: '' };
 
-export function DiffView({ before, after, contextLines = null, active = true }: Props) {
+export function DiffView({
+  before,
+  after,
+  contextLines = null,
+  active = true,
+  startLine = 1,
+}: Props) {
   const lines = useMemo(() => diffLines(before, after), [before, after]);
   const hasChanges = lines.some((line) => line.op !== 'equal');
   const renderedLines = useMemo(
-    () => compactRenderableLines(buildRenderableLines(lines), contextLines),
-    [lines, contextLines],
+    () => compactRenderableLines(buildRenderableLines(lines, startLine), contextLines),
+    [lines, contextLines, startLine],
   );
   const overviewLines = useMemo(
     () => renderedLines.map((entry) => entry.line ?? EMPTY_EQUAL_LINE),
@@ -338,10 +351,10 @@ interface RenderableDiffLine {
   omittedCount?: number;
 }
 
-function buildRenderableLines(lines: DiffLine[]): RenderableDiffLine[] {
+function buildRenderableLines(lines: DiffLine[], startLine = 1): RenderableDiffLine[] {
   const occurrences = new Map<string, number>();
-  let oldLine = 1;
-  let newLine = 1;
+  let oldLine = startLine;
+  let newLine = startLine;
   return lines.map((line, index) => {
     const signature = `${line.op} ${line.text}`;
     const occurrence = occurrences.get(signature) ?? 0;

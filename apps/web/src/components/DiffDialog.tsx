@@ -10,6 +10,8 @@ interface Props {
   after: string;
   /** Number of unchanged lines to show around each changed hunk. `null` shows the full diff. */
   contextLines?: number | null;
+  /** Document line the excerpt starts at; see DiffView. */
+  startLine?: number;
   /** Rendered in the dialog footer. E.g. Accept/Reject buttons. */
   actions?: React.ReactNode;
   /** Optional reply composer for diffs that originate from a comment thread. */
@@ -33,6 +35,7 @@ export function DiffDialog({
   before,
   after,
   contextLines = null,
+  startLine = 1,
   actions,
   replyComposer,
   loading = false,
@@ -60,7 +63,13 @@ export function DiffDialog({
           ) : loading ? (
             <DialogLoading>Loading diff…</DialogLoading>
           ) : (
-            <DiffView before={before} after={after} contextLines={contextLines} active={open} />
+            <DiffView
+              before={before}
+              after={after}
+              contextLines={contextLines}
+              startLine={startLine}
+              active={open}
+            />
           )}
 
           {replyComposer && (

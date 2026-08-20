@@ -24,7 +24,11 @@ import { DiffDialog } from '../DiffDialog.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
 import { InlineComposer, type InlineComposerHandle } from './InlineComposer.js';
 import type { ThreadActionResult } from './inlineUtils.js';
-import { proposalDiffNeedsRefresh } from './proposalDiffCache.js';
+import {
+  proposalDiffNeedsRefresh,
+  readCachedProposalDiff,
+  writeCachedProposalDiff,
+} from './proposalDiffCache.js';
 import type { ThreadRefApi } from './threadRefs.js';
 
 /**
@@ -341,11 +345,23 @@ export function InlineThreadCard({
   const threadId = thread.id;
   useEffect(() => {
     if (!diffOpen || !proposal || resolvedDiff !== null) return;
+    // Windowing destroys cards that scroll out of view, taking their
+    // diff state with them, so re-opening one used to re-fetch the whole
+    // payload. The cache outlives the card; it validates against the
+    // proposal's current text, so an edited proposal still re-reads.
+    const cached = status
+      ? readCachedProposalDiff(uid, threadId, status, currentProposedText)
+      : null;
+    if (cached) {
+      setResolvedDiff(cached);
+      return;
+    }
     let cancelled = false;
     setLoadingDiff(true);
     setDiffError(null);
     getEditProposalDiff(uid, threadId)
       .then((diff) => {
+        writeCachedProposalDiff(uid, threadId, currentProposedText, diff);
         if (!cancelled) setResolvedDiff(diff);
       })
       .catch((err) => {
@@ -358,7 +374,7 @@ export function InlineThreadCard({
     return () => {
       cancelled = true;
     };
-  }, [diffOpen, proposal, resolvedDiff, uid, threadId]);
+  }, [diffOpen, proposal, resolvedDiff, uid, threadId, status, currentProposedText]);
 
   // Same shape as the diff fetch above, and refilled the same way: the
   // opener drops the cached conflict, so every open re-reads where the
@@ -858,6 +874,7 @@ export function InlineThreadCard({
           before={resolvedDiff?.original?.before ?? resolvedDiff?.before ?? ''}
           after={resolvedDiff?.original?.after ?? resolvedDiff?.after ?? ''}
           contextLines={3}
+          startLine={(resolvedDiff?.original?.line_offset ?? 0) + 1}
           loading={loadingDiff}
           error={diffError}
           actionError={actionError}
