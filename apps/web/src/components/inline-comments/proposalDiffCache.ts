@@ -44,19 +44,25 @@ const MAX_ENTRIES = 32;
 /** Insertion order is the LRU order; a hit re-inserts to move to the back. */
 const entries = new Map<string, Entry>();
 
-function keyOf(uid: string, threadId: string, mergeable: boolean): string {
-  return `${uid}|${threadId}|${mergeable ? 'm' : 'p'}`;
+function keyOf(uid: string, threadId: string): string {
+  return `${uid}|${threadId}`;
 }
 
-/** The cached diff for this proposal, or null if there is nothing usable. */
+/**
+ * The cached diff for this proposal, or null if there is nothing usable.
+ *
+ * These are the plain diffs, the only kind anything fetches. The endpoint
+ * also has a `?mergeable=1` variant that answers with a merge status
+ * attached; if something starts asking for that, it needs its own key
+ * rather than this one, which would hand it a diff with the field absent.
+ */
 export function readCachedProposalDiff(
   uid: string,
   threadId: string,
   status: ProposalStatus,
   proposedText: string | null,
-  mergeable = false,
 ): ProposalDiff | null {
-  const key = keyOf(uid, threadId, mergeable);
+  const key = keyOf(uid, threadId);
   const hit = entries.get(key);
   if (!hit) return null;
   if (proposalDiffNeedsRefresh(status, hit.proposedText, proposedText)) {
@@ -74,9 +80,8 @@ export function writeCachedProposalDiff(
   threadId: string,
   proposedText: string | null,
   diff: ProposalDiff,
-  mergeable = false,
 ): void {
-  const key = keyOf(uid, threadId, mergeable);
+  const key = keyOf(uid, threadId);
   entries.delete(key);
   entries.set(key, { proposedText, diff });
   if (entries.size > MAX_ENTRIES) {
