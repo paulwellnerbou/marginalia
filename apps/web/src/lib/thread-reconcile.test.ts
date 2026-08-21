@@ -4,6 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Thread } from './api.js';
 import {
   mergeArchiveThreads,
+  mergeOpenThreads,
   threadContainingComment,
   threadIdOfComment,
 } from './thread-reconcile.js';
@@ -117,5 +118,46 @@ describe('mergeArchiveThreads', () => {
     );
 
     expect(merged.map((t) => t.id)).toEqual(['a']);
+  });
+});
+
+describe('mergeOpenThreads', () => {
+  test('replaces the open set and keeps everything settled', () => {
+    const archived = thread('done-1', 1);
+    const openWas = thread('open-1', 2);
+    const openNow = thread('open-1', 2, ['new-reply']);
+
+    const merged = mergeOpenThreads([archived, openWas], [openNow]);
+
+    expect(merged.map((t) => t.id)).toEqual(['done-1', 'open-1']);
+    // The re-read copy wins for the open thread; the archive is untouched.
+    expect(merged.find((t) => t.id === 'open-1')).toBe(openNow);
+    expect(merged.find((t) => t.id === 'done-1')).toBe(archived);
+  });
+
+  test('adds a thread opened elsewhere since the last read', () => {
+    const merged = mergeOpenThreads([thread('a', 1)], [thread('a', 1), thread('b', 2)]);
+
+    expect(merged.map((t) => t.id)).toEqual(['a', 'b']);
+  });
+
+  test('keeps the archive even when the open read is empty', () => {
+    // Resolving the last open thread: the read answers with nothing, and
+    // dropping the settled work on that basis would empty the column.
+    const merged = mergeOpenThreads([thread('done-1', 1), thread('done-2', 2)], []);
+
+    expect(merged.map((t) => t.id)).toEqual(['done-1', 'done-2']);
+  });
+
+  test('orders by root timestamp, as a full read arrives', () => {
+    const merged = mergeOpenThreads([thread('late', 9)], [thread('early', 1), thread('mid', 5)]);
+
+    expect(merged.map((t) => t.id)).toEqual(['early', 'mid', 'late']);
+  });
+
+  test('a thread appearing in both is not duplicated', () => {
+    const merged = mergeOpenThreads([thread('x', 1), thread('y', 2)], [thread('x', 1)]);
+
+    expect(merged.map((t) => t.id)).toEqual(['x', 'y']);
   });
 });

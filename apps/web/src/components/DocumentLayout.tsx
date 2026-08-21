@@ -105,6 +105,7 @@ import {
 } from '../lib/themes.js';
 import {
   mergeArchiveThreads,
+  mergeOpenThreads,
   threadContainingComment,
   threadIdOfComment,
 } from '../lib/thread-reconcile.js';
@@ -685,13 +686,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
    */
   const reconcileRunning = useRef(false);
   const reconcileQueued = useRef(false);
-  const refreshThreadsRef = useRef<(() => Promise<void>) | null>(null);
+  const reconcileOpenThreadsRef = useRef<(() => Promise<void>) | null>(null);
   const reconcileThreadsSoon = useCallback(() => {
     // Held until the read settles, not just until it starts. Clearing it
     // earlier would let every mutation made while a read was in flight
-    // start another one — and on the review that prompted this, each is
-    // megabytes and can take half a minute, so they would pile up
-    // precisely when things are already slow.
+    // start another one, so a burst of them — resolving a run of threads,
+    // say — would put a read in flight for each instead of one for all.
     if (reconcileRunning.current) {
       reconcileQueued.current = true;
       return;
@@ -703,7 +703,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         // more read, rather than by one per request.
         do {
           reconcileQueued.current = false;
-          await refreshThreadsRef.current?.();
+          await reconcileOpenThreadsRef.current?.();
         } while (reconcileQueued.current);
       } finally {
         reconcileRunning.current = false;
@@ -726,15 +726,34 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
     }
   }, [doc.uid]);
+
   /*
-   * Kept in a ref so `reconcileThreadsSoon` can stay stable across
-   * renders. Assigned after commit rather than during render: a render
-   * React discards would otherwise leave this pointing at that render's
-   * callback, which on a document switch is the wrong `doc.uid`.
+   * The read a mutation triggers: the open threads only.
+   *
+   * `refreshThreads` above re-reads the whole document, which is what a
+   * reconnect needs — events were missed, so nothing local can be
+   * trusted. A mutation is not that: the change is already applied, and
+   * everything settled is still settled. Re-reading it costs 3.17 MB
+   * against 32 KB on the document that prompted this.
    */
+  const reconcileOpenThreads = useCallback(async () => {
+    const requestId = ++threadSnapshotRequestRef.current;
+    try {
+      const res = await retryRequest(() =>
+        listThreads(doc.uid, { state: 'open', consumeMentions: false, fresh: true }),
+      );
+      if (requestId !== threadSnapshotRequestRef.current) return;
+      setThreads((prev) => mergeOpenThreads(prev, res.threads));
+      setMentionCandidates(res.mention_candidates);
+      threadsLoaded.current = true;
+    } catch (err) {
+      if (requestId !== threadSnapshotRequestRef.current) return;
+      reportError('DocumentLayout.reconcileOpenThreads', err, { uid: doc.uid });
+    }
+  }, [doc.uid]);
   useEffect(() => {
-    refreshThreadsRef.current = refreshThreads;
-  }, [refreshThreads]);
+    reconcileOpenThreadsRef.current = reconcileOpenThreads;
+  }, [reconcileOpenThreads]);
 
   const scrollToAnchor = useCallback(
     (blockId: string, quote?: string | null, threadId?: string, scrollOffset = 0): boolean => {

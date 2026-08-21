@@ -70,3 +70,27 @@ export function mergeArchiveThreads(
   merged.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
   return merged;
 }
+
+/**
+ * Fold a read of the open threads into the list already on screen.
+ *
+ * Reconciling after a mutation used to re-read every thread in the
+ * document. On a long review that is overwhelmingly settled history:
+ * one measured document answered `state=all` with 1871 threads and
+ * 3.17 MB, of which 1837 threads and 99% of the bytes were resolved
+ * work that cannot have changed. The same document answers `state=open`
+ * with 34 threads and 32 KB.
+ *
+ * So the open set is re-read and the rest is kept. What that gives up is
+ * an archived thread changing without this client hearing about it —
+ * and it does hear: a resolve, a delete or an edit elsewhere arrives as
+ * a realtime event and is reconciled thread by thread. The gap is only
+ * while the socket is down, and coming back up triggers a full read
+ * precisely because events were missed then.
+ */
+export function mergeOpenThreads(local: readonly Thread[], open: readonly Thread[]): Thread[] {
+  const fresh = new Set(open.map((t) => t.id));
+  const merged = [...open, ...local.filter((t) => !fresh.has(t.id))];
+  merged.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
+  return merged;
+}
