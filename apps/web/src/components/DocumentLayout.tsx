@@ -470,6 +470,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   } | null>(null);
   const [mentionCandidates, setMentionCandidates] = useState<string[]>([]);
   /**
+   * How many resolved threads the document has, reported by every read
+   * whatever it asked for. The archive is only fetched on demand, so this
+   * is the one thing that tells a list holding no threads whether there is
+   * anything to fetch — see InlineCommentsList's `resolvedThreadCount`.
+   */
+  const [resolvedThreadCount, setResolvedThreadCount] = useState(0);
+  /**
    * Full thread/document reads are authoritative snapshots, but the network
    * does not preserve their freshness order. Only the newest read that was
    * started may replace local state; entity-level mutation responses bump the
@@ -776,6 +783,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       // so it is merged rather than swapped in — a resolved thread pulled
       // in on its own, by a deep link or a mutation, has to survive.
       setThreads((prev) => (withArchive ? res.threads : mergeOpenThreads(prev, res.threads)));
+      setResolvedThreadCount(res.counts?.resolved ?? 0);
       // This read was the whole document, so the archive is present again
       // however the last attempt at it ended. Latch it so the next trigger
       // does not fetch it a second time.
@@ -805,6 +813,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       );
       if (requestId !== threadSnapshotRequestRef.current) return;
       setThreads((prev) => mergeOpenThreads(prev, res.threads));
+      setResolvedThreadCount(res.counts?.resolved ?? 0);
       setMentionCandidates(res.mention_candidates);
       threadsLoaded.current = true;
     } catch (err) {
@@ -855,6 +864,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       (r) => {
         if (uid !== archiveUidRef.current) return;
         setMentionCandidates(r.mention_candidates);
+        setResolvedThreadCount(r.counts?.resolved ?? 0);
         setThreads((prev) => mergeArchiveThreads(prev, r.threads, mutatedDuringArchiveRead));
         releaseGuard();
       },
@@ -1321,6 +1331,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     let cancelled = false;
     threadsLoaded.current = false;
     setThreadsLoading(true);
+    setResolvedThreadCount(0);
     const requestId = ++threadSnapshotRequestRef.current;
     archiveUidRef.current = doc.uid;
     archiveLoad.current = null;
@@ -1334,6 +1345,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         // A mutation that landed while this was in flight outranks it.
         if (requestId === threadSnapshotRequestRef.current) {
           setThreads(r.threads);
+          setResolvedThreadCount(r.counts?.resolved ?? 0);
           threadsLoaded.current = true;
         }
         setMentionCandidates(r.mention_candidates);
@@ -3156,6 +3168,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                     threads={sectionVisibleThreads}
                     loading={threadsLoading}
                     onVisibleCountChange={onThreadTabVisibleCountChange}
+                    resolvedThreadCount={resolvedThreadCount}
                     sectionFilterCount={sectionFilter.size}
                     onClearSectionFilter={clearSectionFilter}
                     blockRanges={blockRanges}
