@@ -88,6 +88,7 @@ import {
   pageIndexOfElement,
   pageIndexOfOffset,
 } from '../lib/paged-reading.js';
+import { partitionPendingMentions } from '../lib/pending-mentions.js';
 import { retryRequest } from '../lib/retry.js';
 import {
   anchorTouchesSections,
@@ -483,6 +484,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
    * once the archive has landed there is nothing to protect against.
    */
   const archiveMergeGuard = useRef<Set<string> | null>(null);
+  /** The document the in-flight archive read belongs to, so a stale one
+   * cannot merge settled threads into a document that has since changed. */
+  const archiveUidRef = useRef<string>('');
   /**
    * Current threads, readable from the realtime callback. The subscription
    * must not re-run per keystroke of somebody else's comment, so it cannot
@@ -747,13 +751,35 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   }, []);
 
   const refreshThreads = useCallback(async () => {
+    // Matched to what this session asked for. A reconnect has to distrust
+    // everything local, but only for the part the reader wanted: pulling
+    // the archive to recover someone who never asked to see settled work
+    // would put the whole load-time payload back on the wire.
+    //
+    // Keyed to the asking, not to whether it arrived. A failed archive read
+    // toasts "Reconnecting will retry", and this is the retry — keying it
+    // to success would leave the reader who most needs it, the one whose
+    // read failed, as the only one it never runs for.
+    const withArchive = archiveWanted.current;
     const requestId = ++threadSnapshotRequestRef.current;
     try {
       const res = await retryRequest(() =>
-        listThreads(doc.uid, { consumeMentions: false, fresh: true }),
+        listThreads(
+          doc.uid,
+          withArchive
+            ? { consumeMentions: false, fresh: true }
+            : { state: 'open', consumeMentions: false, fresh: true },
+        ),
       );
       if (requestId !== threadSnapshotRequestRef.current) return;
-      setThreads(res.threads);
+      // Without the archive the fresh open set is not the whole document,
+      // so it is merged rather than swapped in — a resolved thread pulled
+      // in on its own, by a deep link or a mutation, has to survive.
+      setThreads((prev) => (withArchive ? res.threads : mergeOpenThreads(prev, res.threads)));
+      // This read was the whole document, so the archive is present again
+      // however the last attempt at it ended. Latch it so the next trigger
+      // does not fetch it a second time.
+      if (withArchive) archiveLoad.current = Promise.resolve();
       setMentionCandidates(res.mention_candidates);
       threadsLoaded.current = true;
     } catch (err) {
@@ -789,6 +815,65 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   useEffect(() => {
     reconcileOpenThreadsRef.current = reconcileOpenThreads;
   }, [reconcileOpenThreads]);
+
+  /*
+   * The resolved archive, read the first time something needs it.
+   *
+   * This is the largest thing the page ever fetches: one measured document
+   * answers `state=all` with 2343 threads and 518 KB against 6.5 KB for the
+   * open set, and 98% of it is settled. A default load renders none of it —
+   * the thread list opens filtered to unresolved and resolved highlights are
+   * invisible until switched on — so it was 518 KB spent on what the reader
+   * cannot see.
+   *
+   * Every path that can put settled work on screen calls this first: showing
+   * resolved threads or highlights, searching, following a link into one, or
+   * a mention that turns out to live in one. Reads once per document and
+   * remembers; a failure clears the latch so a later trigger can retry.
+   */
+  const archiveLoad = useRef<Promise<void> | null>(null);
+  /** Whether anything has asked for the archive, however that ask ended. */
+  const archiveWanted = useRef(false);
+  const undeliveredMentions = useRef<string[]>([]);
+  const ensureArchive = useCallback((): Promise<void> => {
+    archiveWanted.current = true;
+    const existing = archiveLoad.current;
+    if (existing) return existing;
+    const uid = doc.uid;
+    // Threads reconciled locally while this read is in flight. It answers a
+    // question asked before those landed, so it must not undo them.
+    const mutatedDuringArchiveRead = new Set<string>();
+    archiveMergeGuard.current = mutatedDuringArchiveRead;
+    const releaseGuard = () => {
+      if (archiveMergeGuard.current === mutatedDuringArchiveRead) {
+        archiveMergeGuard.current = null;
+      }
+    };
+    const run = retryRequest(() =>
+      listThreads(uid, { state: 'all', consumeMentions: false, fresh: true }),
+    ).then(
+      (r) => {
+        if (uid !== archiveUidRef.current) return;
+        setMentionCandidates(r.mention_candidates);
+        setThreads((prev) => mergeArchiveThreads(prev, r.threads, mutatedDuringArchiveRead));
+        releaseGuard();
+      },
+      (err) => {
+        releaseGuard();
+        archiveLoad.current = null;
+        if (uid !== archiveUidRef.current || isAbortError(err)) return;
+        reportError('DocumentLayout.listThreads.archive', err, { uid });
+        // The open threads are already on screen, so this is a partial
+        // failure: say what is missing rather than claiming the column
+        // failed to load.
+        reportFailure(
+          apiErrorMessage(err, 'Could not load resolved comments. Reconnecting will retry.'),
+        );
+      },
+    );
+    archiveLoad.current = run;
+    return run;
+  }, [doc.uid]);
 
   const scrollToAnchor = useCallback(
     (blockId: string, quote?: string | null, threadId?: string, scrollOffset = 0): boolean => {
@@ -1223,67 +1308,41 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   }, [docSearchOpen, deferredDocSearchQuery, searchResults]);
 
   /*
-   * Two-phase load. On a long-reviewed document the archive dwarfs the live
-   * column — hundreds of settled proposals against a handful of open
-   * threads — and reading both together is what made opening the document
-   * slow. So: read the open threads, paint, then fetch the archive behind
-   * that and merge it in.
+   * Opening a document reads the open threads and nothing else.
    *
-   * Mention consumption stays on the archive read. It is a server-side
-   * side effect that may only happen once, and `notifyPendingMentions`
-   * has to be able to find the mentioned comment — which may well sit in
-   * a thread that was resolved.
+   * The archive is fetched by `ensureArchive`, on demand. Mention
+   * consumption moves here with the read that now happens on load: it is a
+   * server-side side effect that may only happen once, so it cannot sit on
+   * a read that may never be made. What it costs is that a mention inside a
+   * settled thread has no comment to name yet — those ids are carried over
+   * and delivered once the archive arrives.
    */
   useEffect(() => {
     let cancelled = false;
     threadsLoaded.current = false;
     setThreadsLoading(true);
     const requestId = ++threadSnapshotRequestRef.current;
-    // Threads reconciled locally while the archive read is in flight. The
-    // archive answers a question asked before those landed, so it must not
-    // be allowed to undo them.
-    const mutatedDuringArchiveRead = new Set<string>();
-    archiveMergeGuard.current = mutatedDuringArchiveRead;
+    archiveUidRef.current = doc.uid;
+    archiveLoad.current = null;
+    archiveWanted.current = false;
+    undeliveredMentions.current = [];
 
-    function loadArchive() {
-      retryRequest(() => listThreads(doc.uid, { state: 'all', fresh: true })).then(
-        (r) => {
-          if (cancelled) return;
-          // Deliver the mention notification even when a newer snapshot
-          // already won — consumption already happened server-side.
-          notifyPendingMentions(r.threads, r.pending_mentions);
-          setMentionCandidates(r.mention_candidates);
-          setThreads((prev) => mergeArchiveThreads(prev, r.threads, mutatedDuringArchiveRead));
-          if (archiveMergeGuard.current === mutatedDuringArchiveRead) {
-            archiveMergeGuard.current = null;
-          }
-        },
-        (err) => {
-          if (cancelled || isAbortError(err)) return;
-          reportError('DocumentLayout.listThreads.archive', err, { uid: doc.uid });
-          // The open threads are already on screen, so this is a partial
-          // failure: say what is missing rather than claiming the column
-          // failed to load.
-          reportFailure(
-            apiErrorMessage(err, 'Could not load resolved comments. Reconnecting will retry.'),
-          );
-        },
-      );
-    }
-
-    retryRequest(() => listThreads(doc.uid, { state: 'open', consumeMentions: false })).then(
+    retryRequest(() => listThreads(doc.uid, { state: 'open' })).then(
       (r) => {
         if (cancelled) return;
         setThreadsLoading(false);
-        // A mutation that landed while this was in flight outranks it. Only
-        // the snapshot is stale though — the archive still has to be read,
-        // or this session would never see a resolved thread. Its own merge
-        // is what protects the newer local state.
+        // A mutation that landed while this was in flight outranks it.
         if (requestId === threadSnapshotRequestRef.current) {
           setThreads(r.threads);
           threadsLoaded.current = true;
         }
-        loadArchive();
+        setMentionCandidates(r.mention_candidates);
+        // Consumed server-side already, so anything not deliverable from
+        // the open threads has to be chased rather than dropped. The effect
+        // below does the delivering — this only has to make sure the
+        // threads it needs get fetched.
+        undeliveredMentions.current = r.pending_mentions;
+        if (r.pending_mentions.length > 0) void ensureArchive();
       },
       (err) => {
         if (cancelled) return;
@@ -1303,19 +1362,46 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     );
     return () => {
       cancelled = true;
-      if (archiveMergeGuard.current === mutatedDuringArchiveRead) {
-        archiveMergeGuard.current = null;
-      }
     };
-  }, [doc.uid]);
+  }, [doc.uid, ensureArchive]);
+
+  // Show resolved threads anywhere and the archive has to be there.
+  useEffect(() => {
+    if (!inlineCommentsHideResolved) void ensureArchive();
+  }, [inlineCommentsHideResolved, ensureArchive]);
+
+  /*
+   * Deliver pending mentions as soon as a thread carrying one is on screen.
+   *
+   * Driven by the threads themselves rather than by whichever read produced
+   * them, because the reads race: a remembered "show all" filter starts the
+   * archive on mount, alongside the open read that discovers what is still
+   * pending. Either can land first, so neither can be the one place that
+   * delivers — the archive would find nothing pending yet and then latch,
+   * and the open read would get a settled promise back. The server has
+   * already cleared these, so a miss here is a notification nobody gets.
+   */
+  useEffect(() => {
+    if (undeliveredMentions.current.length === 0) return;
+    undeliveredMentions.current = notifyPendingMentions(threads, undeliveredMentions.current);
+  }, [threads]);
 
   // Process a pending deep-link comment once threads have loaded.
   useEffect(() => {
     const commentId = pendingDeepLinkCommentId.current;
-    if (!commentId || threads.length === 0) return;
+    // Emptiness is now an answer, not a wait: a document whose threads are
+    // all settled reads back no open ones, and bailing out on length would
+    // never reach the archive fetch below — which is exactly where a link
+    // from a mention notification points.
+    if (!commentId || !threadsLoaded.current) return;
 
     const thread = threads.find((t) => t.comments.some((c) => c.id === commentId));
-    if (!thread) return;
+    if (!thread) {
+      // A link into a settled thread lands before the archive does. Keep
+      // the id pending and fetch it; this effect re-runs when it merges.
+      void ensureArchive();
+      return;
+    }
 
     // Clear so subsequent thread refreshes don't re-scroll.
     pendingDeepLinkCommentId.current = null;
@@ -1386,7 +1472,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     // threads is the real trigger; scrollToAnchor is a stable useCallback;
     // setInlineCommentsOpen/setFocusedThread are stable useState dispatchers;
     // pendingDeepLinkCommentId is a ref (not reactive).
-  }, [threads, floatingComments, scrollToAnchor]);
+  }, [threads, floatingComments, scrollToAnchor, ensureArchive]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3089,6 +3175,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                     onCreateProposal={onCreateProposalForComment}
                     onEditProposal={onEditProposal}
                     onScrollToAnchor={scrollToAnchor}
+                    onNeedResolvedThreads={ensureArchive}
                   />
                 </Tabs.Content>
                 <Tabs.Content value="mcp" className="right-tab-panel">
@@ -3278,18 +3365,17 @@ function isAbortError(err: unknown): boolean {
   return (err as { name?: unknown } | null)?.name === 'AbortError';
 }
 
-function notifyPendingMentions(threads: Thread[], pendingMentionIds: string[]): void {
-  if (pendingMentionIds.length === 0) return;
-  const byId = new Map<string, Comment>();
-  for (const t of threads) {
-    for (const c of t.comments) byId.set(c.id, c);
+/**
+ * Notify for each pending mention these threads can describe, and return
+ * the ids they could not. See `partitionPendingMentions` for why the
+ * leftovers matter.
+ */
+function notifyPendingMentions(threads: Thread[], pendingMentionIds: string[]): string[] {
+  const { deliverable, undelivered } = partitionPendingMentions(threads, pendingMentionIds);
+  for (const node of deliverable) {
+    notify('Mentioned in a comment', `${node.author.display_name}: ${node.body.slice(0, 120)}`);
   }
-  for (const id of pendingMentionIds) {
-    const node = byId.get(id);
-    if (node) {
-      notify('Mentioned in a comment', `${node.author.display_name}: ${node.body.slice(0, 120)}`);
-    }
-  }
+  return undelivered;
 }
 
 function flattenTocIds(nodes: readonly TocNode[]): string[] {

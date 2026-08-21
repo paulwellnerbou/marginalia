@@ -94,6 +94,13 @@ interface Props {
   onCreateProposal?: ((thread: Thread) => void) | undefined;
   onEditProposal?: ((thread: Thread) => void) | undefined;
   onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
+  /**
+   * Called when this list needs threads the document may not have fetched.
+   * Opening a document reads only the open threads, so showing resolved
+   * ones — or searching, which is expected to reach them — has to ask for
+   * the archive first. Safe to call repeatedly; it reads at most once.
+   */
+  onNeedResolvedThreads?: () => void;
 }
 
 interface ThreadListItem extends ThreadCard {
@@ -139,6 +146,7 @@ export function InlineCommentsList({
   onCreateProposal,
   onEditProposal,
   onScrollToAnchor,
+  onNeedResolvedThreads,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -219,6 +227,28 @@ export function InlineCommentsList({
   useEffect(() => {
     saveThreadFilters(filters);
   }, [filters]);
+
+  /*
+   * Ask for the archive when the reader asks to see settled work.
+   *
+   * Keyed to the request, not to `filters.status`. Focusing a thread that
+   * the filters hide widens them to everything on its own (see the focus
+   * effect below), and that thread is already loaded — reading the whole
+   * archive to satisfy it would spend the entire load-time payload we just
+   * stopped spending, on a deep link to a single open thread.
+   *
+   * Remembered filters still count: a reader who left the list showing
+   * resolved threads gets the archive on mount, exactly as before.
+   */
+  useEffect(() => {
+    if (loadThreadFilters().status === 'all') onNeedResolvedThreads?.();
+  }, [onNeedResolvedThreads]);
+
+  // A search that silently skipped the archive would read as "that comment
+  // is gone" rather than "not loaded yet".
+  useEffect(() => {
+    if (searchNeedle) onNeedResolvedThreads?.();
+  }, [searchNeedle, onNeedResolvedThreads]);
 
   const sortedActive = useMemo(() => sortItems(activeItems, sortMode), [activeItems, sortMode]);
   const sortedOrphans = useMemo(
@@ -620,7 +650,11 @@ export function InlineCommentsList({
                     className="ic-list-filter-chip"
                     aria-pressed={on}
                     title={on ? `Stop showing only ${filter.label.toLowerCase()}` : filter.hint}
-                    onClick={() => setFilters(filter.toggle)}
+                    onClick={() => {
+                      const next = filter.toggle(filters);
+                      if (next.status === 'all') onNeedResolvedThreads?.();
+                      setFilters(next);
+                    }}
                   >
                     {filter.label}
                   </button>
