@@ -683,14 +683,31 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
    * PATCH long since answered in twenty-eight milliseconds — the comment
    * was saved and the interface simply stopped.
    */
-  const reconcilePending = useRef(false);
+  const reconcileRunning = useRef(false);
+  const reconcileQueued = useRef(false);
   const refreshThreadsRef = useRef<(() => Promise<void>) | null>(null);
   const reconcileThreadsSoon = useCallback(() => {
-    if (reconcilePending.current) return;
-    reconcilePending.current = true;
-    whenIdle(() => {
-      reconcilePending.current = false;
-      void refreshThreadsRef.current?.();
+    // Held until the read settles, not just until it starts. Clearing it
+    // earlier would let every mutation made while a read was in flight
+    // start another one — and on the review that prompted this, each is
+    // megabytes and can take half a minute, so they would pile up
+    // precisely when things are already slow.
+    if (reconcileRunning.current) {
+      reconcileQueued.current = true;
+      return;
+    }
+    reconcileRunning.current = true;
+    whenIdle(async () => {
+      try {
+        // Anything asked for while a read was running is answered by one
+        // more read, rather than by one per request.
+        do {
+          reconcileQueued.current = false;
+          await refreshThreadsRef.current?.();
+        } while (reconcileQueued.current);
+      } finally {
+        reconcileRunning.current = false;
+      }
     });
   }, []);
 
@@ -709,7 +726,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
     }
   }, [doc.uid]);
-  refreshThreadsRef.current = refreshThreads;
+  /*
+   * Kept in a ref so `reconcileThreadsSoon` can stay stable across
+   * renders. Assigned after commit rather than during render: a render
+   * React discards would otherwise leave this pointing at that render's
+   * callback, which on a document switch is the wrong `doc.uid`.
+   */
+  useEffect(() => {
+    refreshThreadsRef.current = refreshThreads;
+  }, [refreshThreads]);
 
   const scrollToAnchor = useCallback(
     (blockId: string, quote?: string | null, threadId?: string, scrollOffset = 0): boolean => {
