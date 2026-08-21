@@ -667,6 +667,50 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     setThreads((prev) => prev.filter((t) => t.id !== threadId));
   }, []);
 
+  /*
+   * Reconcile the thread list after a local mutation, without making the
+   * reader wait for it.
+   *
+   * Every one of these handlers has already applied what changed — the
+   * mutation response carries the authoritative thread, and the ones that
+   * delete or react update their own row. The full read exists only to
+   * catch what the response cannot describe: accepting a proposal
+   * resolves the threads it answers, deleting one unlinks them. That is a
+   * safety net, and a safety net must not block the UI.
+   *
+   * It used to be awaited. On a long review the read is hundreds of
+   * kilobytes, and one measured edit sat for thirty seconds with the
+   * PATCH long since answered in twenty-eight milliseconds — the comment
+   * was saved and the interface simply stopped.
+   */
+  const reconcileRunning = useRef(false);
+  const reconcileQueued = useRef(false);
+  const refreshThreadsRef = useRef<(() => Promise<void>) | null>(null);
+  const reconcileThreadsSoon = useCallback(() => {
+    // Held until the read settles, not just until it starts. Clearing it
+    // earlier would let every mutation made while a read was in flight
+    // start another one — and on the review that prompted this, each is
+    // megabytes and can take half a minute, so they would pile up
+    // precisely when things are already slow.
+    if (reconcileRunning.current) {
+      reconcileQueued.current = true;
+      return;
+    }
+    reconcileRunning.current = true;
+    whenIdle(async () => {
+      try {
+        // Anything asked for while a read was running is answered by one
+        // more read, rather than by one per request.
+        do {
+          reconcileQueued.current = false;
+          await refreshThreadsRef.current?.();
+        } while (reconcileQueued.current);
+      } finally {
+        reconcileRunning.current = false;
+      }
+    });
+  }, []);
+
   const refreshThreads = useCallback(async () => {
     const requestId = ++threadSnapshotRequestRef.current;
     try {
@@ -682,6 +726,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
     }
   }, [doc.uid]);
+  /*
+   * Kept in a ref so `reconcileThreadsSoon` can stay stable across
+   * renders. Assigned after commit rather than during render: a render
+   * React discards would otherwise leave this pointing at that render's
+   * callback, which on a document switch is the wrong `doc.uid`.
+   */
+  useEffect(() => {
+    refreshThreadsRef.current = refreshThreads;
+  }, [refreshThreads]);
 
   const scrollToAnchor = useCallback(
     (blockId: string, quote?: string | null, threadId?: string, scrollOffset = 0): boolean => {
@@ -1479,7 +1532,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         ) {
           clearSectionFilter();
         }
-        await refreshThreads();
+        reconcileThreadsSoon();
       } catch (err) {
         reportError('DocumentLayout.createComment', err, { uid: doc.uid });
         reportFailure(apiErrorMessage(err, 'Could not post that comment'));
@@ -1490,7 +1543,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       doc.uid,
       landThread,
       resolveIdentity,
-      refreshThreads,
+      reconcileThreadsSoon,
       sectionFilterActive,
       blockSectionIds,
       sectionFilter,
@@ -1505,13 +1558,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       try {
         const updated = await apiCreate(doc.uid, { parent_id: threadId, body }, identity);
         landThread(updated);
-        await refreshThreads();
+        reconcileThreadsSoon();
       } catch (err) {
         reportError('DocumentLayout.replyToThread', err, { uid: doc.uid, threadId });
         reportFailure(apiErrorMessage(err, 'Could not post that reply'));
       }
     },
-    [doc.uid, landThread, resolveIdentity, refreshThreads],
+    [doc.uid, landThread, resolveIdentity, reconcileThreadsSoon],
   );
 
   const onResolveThread = useCallback(
@@ -1534,7 +1587,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         if (kind === 'resolve' || kind === 'reopen') {
           const updated = await apiResolve(doc.uid, id, kind === 'resolve', identity, body);
           landThread(updated);
-          await refreshThreads();
+          reconcileThreadsSoon();
         } else if (kind === 'accept') {
           const { thread: updated, document: accepted } = await apiAcceptProposal(
             doc.uid,
@@ -1556,18 +1609,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
             // see yet, so let this action finish and do that work at idle —
             // otherwise the button sits spinning through a full re-render of
             // every comment card.
-            whenIdle(() => {
-              void refreshThreads();
-              setHistoryVersion((v) => v + 1);
-            });
+            reconcileThreadsSoon();
+            whenIdle(() => setHistoryVersion((v) => v + 1));
           } else {
-            await Promise.all([refreshDoc(), refreshThreads()]);
+            reconcileThreadsSoon();
+            void refreshDoc();
             setHistoryVersion((v) => v + 1);
           }
         } else {
           const updated = await apiRejectProposal(doc.uid, id, identity, body);
           landThread(updated);
-          await refreshThreads();
+          reconcileThreadsSoon();
         }
         return { ok: true };
       } catch (err) {
@@ -1578,7 +1630,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         // conflict or a dead anchor — so the card can offer the way out.
         // Without this the badge and its button appear only on the next
         // unrelated refresh.
-        if (kind === 'accept') await refreshThreads().catch(() => undefined);
+        if (kind === 'accept') reconcileThreadsSoon();
         // Signal failure so callers (composer / diff dialog) don't clear
         // drafts or close on a failed accept/reject. Don't re-throw —
         // `void runWorkflow(...)` callsites would surface the rejection
@@ -1586,7 +1638,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         return { ok: false, message };
       }
     },
-    [doc.uid, landThread, resolveIdentity, refreshThreads, refreshDoc],
+    [doc.uid, landThread, resolveIdentity, reconcileThreadsSoon, refreshDoc],
   );
 
   const onResolveConflict = useCallback(
@@ -1609,7 +1661,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         // The proposal was rebuilt on current main, which re-anchors it
         // and can settle other proposals' mergeability too — refresh the
         // whole set rather than patching this one thread in.
-        await refreshThreads();
+        reconcileThreadsSoon();
         return { ok: true };
       } catch (err) {
         reportError('DocumentLayout.resolveConflict', err, { id });
@@ -1618,7 +1670,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         return { ok: false, message };
       }
     },
-    [doc.uid, landThread, resolveIdentity, refreshThreads],
+    [doc.uid, landThread, resolveIdentity, reconcileThreadsSoon],
   );
 
   const onRepairThread = useCallback(
@@ -1641,7 +1693,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
           next.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
           return next;
         });
-        await refreshThreads();
+        reconcileThreadsSoon();
         return { ok: true };
       } catch (err) {
         reportError('DocumentLayout.repairThread', err, { id });
@@ -1650,7 +1702,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         return { ok: false, message };
       }
     },
-    [doc.uid, resolveIdentity, refreshThreads],
+    [doc.uid, resolveIdentity, reconcileThreadsSoon],
   );
 
   const onEdit = useCallback(
@@ -1659,13 +1711,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       if (!identity) return;
       try {
         const updated = await apiUpdate(doc.uid, id, body, identity);
+        // The response is the thread. Editing a body changes nothing
+        // else, so there is nothing to reconcile against.
         landThread(updated);
-        await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.editComment', err, { commentId: id });
       }
     },
-    [doc.uid, landThread, resolveIdentity, refreshThreads],
+    [doc.uid, landThread, resolveIdentity],
   );
 
   const onSetCommentHidden = useCallback(
@@ -1675,14 +1728,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       try {
         const updated = await apiSetCommentHidden(doc.uid, id, hidden, identity);
         landThread(updated);
-        await refreshThreads();
       } catch (err) {
         reportError('DocumentLayout.setCommentHidden', err, { commentId: id, hidden });
         const title = hidden ? 'Could not hide comment' : 'Could not unhide comment';
         showErrorToast(title, apiErrorMessage(err, title));
       }
     },
-    [doc.uid, landThread, resolveIdentity, refreshThreads],
+    [doc.uid, landThread, resolveIdentity],
   );
 
   const canEdit = doc.role === 'admin' || doc.role === 'editor';
@@ -1746,7 +1798,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         ) {
           clearSectionFilter();
         }
-        await refreshThreads();
+        reconcileThreadsSoon();
       } catch (err) {
         reportError('DocumentLayout.createProposal', err, { uid: doc.uid });
         reportFailure(apiErrorMessage(err, 'Could not create that proposal'));
@@ -1756,7 +1808,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       doc.uid,
       landThread,
       resolveIdentity,
-      refreshThreads,
+      reconcileThreadsSoon,
       pendingProposalTarget,
       pendingProposalAnswersThreadIds,
       sectionFilterActive,
@@ -1821,7 +1873,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         const updated = await apiUpdateProposal(doc.uid, editingProposal.id, req, identity);
         landThread(updated);
         setEditingProposal(null);
-        await refreshThreads();
+        reconcileThreadsSoon();
       } catch (err) {
         reportError('DocumentLayout.updateProposal', err, {
           uid: doc.uid,
@@ -1830,7 +1882,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         reportFailure(apiErrorMessage(err, 'Could not update that proposal'));
       }
     },
-    [doc.uid, editingProposal, landThread, resolveIdentity, refreshThreads],
+    [doc.uid, editingProposal, landThread, resolveIdentity, reconcileThreadsSoon],
   );
 
   const onDeleteThread = useCallback(
@@ -1841,14 +1893,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         await apiDeleteThread(doc.uid, threadId, identity);
         threadSnapshotRequestRef.current += 1;
         setThreads((prev) => prev.filter((t) => t.id !== threadId));
-        await refreshThreads();
+        reconcileThreadsSoon();
       } catch (err) {
         reportError('DocumentLayout.deleteThread', err, { threadId });
         reportFailure(apiErrorMessage(err, 'Delete failed'));
-        await refreshThreads();
+        reconcileThreadsSoon();
       }
     },
-    [doc.uid, resolveIdentity, refreshThreads],
+    [doc.uid, resolveIdentity, reconcileThreadsSoon],
   );
 
   const onDeleteNode = useCallback(
@@ -1868,12 +1920,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
             };
           }),
         );
-        await refreshThreads();
+        reconcileThreadsSoon();
       } catch (err) {
         reportError('DocumentLayout.deleteNode', err, { nodeId });
       }
     },
-    [doc.uid, resolveIdentity, refreshThreads],
+    [doc.uid, resolveIdentity, reconcileThreadsSoon],
   );
 
   const onReact = useCallback(
@@ -1915,7 +1967,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                   : thread,
               );
             });
-            await refreshThreads();
+            reconcileThreadsSoon();
           } catch (err) {
             reportError('DocumentLayout.toggleReaction', err, { nodeId });
             reportFailure(apiErrorMessage(err, 'Could not save that reaction'));
@@ -1930,7 +1982,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         }
       }
     },
-    [doc.uid, resolveIdentity, refreshThreads],
+    [doc.uid, resolveIdentity, reconcileThreadsSoon],
   );
 
   const onRestoreHistoryVersion = useCallback(
@@ -1942,7 +1994,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       }
       try {
         await apiRestoreHistoryVersion(doc.uid, oid, identity);
-        await Promise.all([refreshDoc(), refreshThreads()]);
+        reconcileThreadsSoon();
+        void refreshDoc();
         setHistoryVersion((v) => v + 1);
       } catch (err) {
         reportError('DocumentLayout.restoreHistoryVersion', err, { oid, uid: doc.uid });
@@ -1950,7 +2003,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         throw err;
       }
     },
-    [doc.uid, resolveIdentity, refreshDoc, refreshThreads],
+    [doc.uid, resolveIdentity, refreshDoc, reconcileThreadsSoon],
   );
 
   const onRestoreAsNewDocument = useCallback(
@@ -2283,7 +2336,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       }
       try {
         const res = await apiRevertHistoryVersion(doc.uid, entry.oid, identity);
-        await Promise.all([refreshDoc(), refreshThreads()]);
+        reconcileThreadsSoon();
+        void refreshDoc();
         setHistoryVersion((v) => v + 1);
         if (res.reopened_proposal_id) openCommentThread(res.reopened_proposal_id);
       } catch (err) {
@@ -2295,7 +2349,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         throw err;
       }
     },
-    [doc.uid, resolveIdentity, openCommentThread, refreshDoc, refreshThreads],
+    [doc.uid, resolveIdentity, openCommentThread, refreshDoc, reconcileThreadsSoon],
   );
 
   const updateSearchResults = useCallback((results: DocumentSearchResult[]) => {
