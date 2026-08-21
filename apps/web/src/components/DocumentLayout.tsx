@@ -844,9 +844,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       (r) => {
         if (uid !== archiveUidRef.current) return;
         archiveLoaded.current = true;
-        // Mentions were consumed by the open read, which could not match
-        // the ones sitting in settled threads. This is where they are.
-        undeliveredMentions.current = notifyPendingMentions(r.threads, undeliveredMentions.current);
         setMentionCandidates(r.mention_candidates);
         setThreads((prev) => mergeArchiveThreads(prev, r.threads, mutatedDuringArchiveRead));
         releaseGuard();
@@ -1331,12 +1328,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         }
         setMentionCandidates(r.mention_candidates);
         // Consumed server-side already, so anything not deliverable from
-        // the open threads has to be chased rather than dropped.
-        const undelivered = notifyPendingMentions(r.threads, r.pending_mentions);
-        if (undelivered.length > 0) {
-          undeliveredMentions.current = undelivered;
-          void ensureArchive();
-        }
+        // the open threads has to be chased rather than dropped. The effect
+        // below does the delivering — this only has to make sure the
+        // threads it needs get fetched.
+        undeliveredMentions.current = r.pending_mentions;
+        if (r.pending_mentions.length > 0) void ensureArchive();
       },
       (err) => {
         if (cancelled) return;
@@ -1364,10 +1360,30 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     if (!inlineCommentsHideResolved) void ensureArchive();
   }, [inlineCommentsHideResolved, ensureArchive]);
 
+  /*
+   * Deliver pending mentions as soon as a thread carrying one is on screen.
+   *
+   * Driven by the threads themselves rather than by whichever read produced
+   * them, because the reads race: a remembered "show all" filter starts the
+   * archive on mount, alongside the open read that discovers what is still
+   * pending. Either can land first, so neither can be the one place that
+   * delivers — the archive would find nothing pending yet and then latch,
+   * and the open read would get a settled promise back. The server has
+   * already cleared these, so a miss here is a notification nobody gets.
+   */
+  useEffect(() => {
+    if (undeliveredMentions.current.length === 0) return;
+    undeliveredMentions.current = notifyPendingMentions(threads, undeliveredMentions.current);
+  }, [threads]);
+
   // Process a pending deep-link comment once threads have loaded.
   useEffect(() => {
     const commentId = pendingDeepLinkCommentId.current;
-    if (!commentId || threads.length === 0) return;
+    // Emptiness is now an answer, not a wait: a document whose threads are
+    // all settled reads back no open ones, and bailing out on length would
+    // never reach the archive fetch below — which is exactly where a link
+    // from a mention notification points.
+    if (!commentId || !threadsLoaded.current) return;
 
     const thread = threads.find((t) => t.comments.some((c) => c.id === commentId));
     if (!thread) {
