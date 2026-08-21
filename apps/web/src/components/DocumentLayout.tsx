@@ -751,11 +751,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   }, []);
 
   const refreshThreads = useCallback(async () => {
-    // Matched to what this session holds. A reconnect has to distrust
-    // everything local, but only for the part it actually loaded: pulling
-    // the archive to recover a reader who never asked to see settled work
+    // Matched to what this session asked for. A reconnect has to distrust
+    // everything local, but only for the part the reader wanted: pulling
+    // the archive to recover someone who never asked to see settled work
     // would put the whole load-time payload back on the wire.
-    const withArchive = archiveLoaded.current;
+    //
+    // Keyed to the asking, not to whether it arrived. A failed archive read
+    // toasts "Reconnecting will retry", and this is the retry — keying it
+    // to success would leave the reader who most needs it, the one whose
+    // read failed, as the only one it never runs for.
+    const withArchive = archiveWanted.current;
     const requestId = ++threadSnapshotRequestRef.current;
     try {
       const res = await retryRequest(() =>
@@ -771,6 +776,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       // so it is merged rather than swapped in — a resolved thread pulled
       // in on its own, by a deep link or a mutation, has to survive.
       setThreads((prev) => (withArchive ? res.threads : mergeOpenThreads(prev, res.threads)));
+      // This read was the whole document, so the archive is present again
+      // however the last attempt at it ended. Latch it so the next trigger
+      // does not fetch it a second time.
+      if (withArchive) archiveLoad.current = Promise.resolve();
       setMentionCandidates(res.mention_candidates);
       threadsLoaded.current = true;
     } catch (err) {
@@ -823,9 +832,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
    * remembers; a failure clears the latch so a later trigger can retry.
    */
   const archiveLoad = useRef<Promise<void> | null>(null);
-  const archiveLoaded = useRef(false);
+  /** Whether anything has asked for the archive, however that ask ended. */
+  const archiveWanted = useRef(false);
   const undeliveredMentions = useRef<string[]>([]);
   const ensureArchive = useCallback((): Promise<void> => {
+    archiveWanted.current = true;
     const existing = archiveLoad.current;
     if (existing) return existing;
     const uid = doc.uid;
@@ -843,7 +854,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     ).then(
       (r) => {
         if (uid !== archiveUidRef.current) return;
-        archiveLoaded.current = true;
         setMentionCandidates(r.mention_candidates);
         setThreads((prev) => mergeArchiveThreads(prev, r.threads, mutatedDuringArchiveRead));
         releaseGuard();
@@ -1314,7 +1324,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     const requestId = ++threadSnapshotRequestRef.current;
     archiveUidRef.current = doc.uid;
     archiveLoad.current = null;
-    archiveLoaded.current = false;
+    archiveWanted.current = false;
     undeliveredMentions.current = [];
 
     retryRequest(() => listThreads(doc.uid, { state: 'open' })).then(
