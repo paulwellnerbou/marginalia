@@ -152,3 +152,44 @@ test('fetchThread reports a vanished thread as null', async () => {
 
   expect(await fetchThread('doc-gone', 'deleted-1')).toBeNull();
 });
+
+/**
+ * Accepting a proposal also resolves the plain comment threads it answers.
+ * The acting client is excluded from the broadcast that tells everyone
+ * else, and the reconcile that follows reads only the open set — where a
+ * just-resolved thread no longer appears. So this response is the only
+ * place that client can learn which threads moved, and dropping the field
+ * left them showing as open until a full refresh.
+ */
+test('acceptEditProposal surfaces the threads the accept also resolved', async () => {
+  installLocalStorage();
+  const { acceptEditProposal } = await import('./api.js');
+  recordUrls(() =>
+    json({
+      thread: thread('proposal-1'),
+      resolved_answered_thread_ids: ['answered-a', 'answered-b'],
+    }),
+  );
+
+  const res = await acceptEditProposal('doc-accept', 'proposal-1', {
+    clientId: 'c1',
+    displayName: 'Ruth',
+  });
+
+  expect(res.resolvedAnsweredThreadIds).toEqual(['answered-a', 'answered-b']);
+});
+
+test('an accept that answered nothing reports an empty list, not undefined', async () => {
+  // The caller reads `.length` and iterates without guarding, and older
+  // servers omit the field entirely.
+  installLocalStorage();
+  const { acceptEditProposal } = await import('./api.js');
+  recordUrls(() => json({ thread: thread('proposal-2') }));
+
+  const res = await acceptEditProposal('doc-accept', 'proposal-2', {
+    clientId: 'c1',
+    displayName: 'Ruth',
+  });
+
+  expect(res.resolvedAnsweredThreadIds).toEqual([]);
+});
