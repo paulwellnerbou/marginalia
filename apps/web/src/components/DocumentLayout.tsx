@@ -470,10 +470,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   } | null>(null);
   const [mentionCandidates, setMentionCandidates] = useState<string[]>([]);
   /**
-   * How many resolved threads the document has, reported by every read
-   * whatever it asked for. The archive is only fetched on demand, so this
-   * is the one thing that tells a list holding no threads whether there is
-   * anything to fetch — see InlineCommentsList's `resolvedThreadCount`.
+   * How many resolved threads the document has, as the server counts them.
+   * Every read reports it whatever state it asked for, so the open set
+   * carries it too — which is what tells a list holding no threads whether
+   * there is anything to fetch. Kept in step with `threads`: whichever read
+   * is allowed to set those sets this. The archive itself stays on demand;
+   * see `ensureArchive` and InlineCommentsList's `resolvedThreadCount`.
    */
   const [resolvedThreadCount, setResolvedThreadCount] = useState(0);
   /**
@@ -1579,6 +1581,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                 notifyPendingMentions(res.threads, res.pending_mentions);
                 if (requestId !== threadSnapshotRequestRef.current) return;
                 setThreads(res.threads);
+                setResolvedThreadCount(res.counts?.resolved ?? 0);
                 setMentionCandidates(res.mention_candidates);
               })
               .catch((err) => {

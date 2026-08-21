@@ -157,9 +157,21 @@ test('settled threads alone do not raise the row when nothing is filtering', () 
 });
 
 test('the empty list gives the narrowest reason that applies', () => {
-  expect(emptyMessage({ totalCards: 0, resolvedCount: 4, sectionFilterCount: 2 })).toBe(
-    'No threads in the focused sections.',
-  );
   expect(emptyMessage({ totalCards: 3, searching: true })).toBe('No threads match this search.');
   expect(emptyMessage({ totalCards: 3 })).toBe('No threads match the selected filters.');
+});
+
+test('the focused sections are only blamed when the chips cannot be', () => {
+  // Nothing unread to reveal: the sections really are empty.
+  expect(emptyMessage({ sectionFilterCount: 2, filters: ALL_THREAD_FILTERS })).toBe(
+    'No threads in the focused sections.',
+  );
+  expect(
+    emptyMessage({ sectionFilterCount: 2, resolvedCount: 4, filters: ALL_THREAD_FILTERS }),
+  ).toBe('No threads in the focused sections.');
+  // Settled threads the filter hides could be sitting in those very
+  // sections — claiming they hold nothing would be a guess.
+  expect(emptyMessage({ sectionFilterCount: 2, resolvedCount: 4 })).toBe(
+    'No threads match the selected filters.',
+  );
 });

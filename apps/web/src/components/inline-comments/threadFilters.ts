@@ -206,15 +206,18 @@ export function threadListEmptyMessage(args: {
   canComment: boolean;
 }): string {
   const { totalCards, resolvedCount, sectionFilterCount, searching, filters, canComment } = args;
-  // The narrower reason first: threads the section filter dropped were
-  // never offered to the search or the chips.
-  if (totalCards === 0 && sectionFilterCount > 0) return 'No threads in the focused sections.';
-  if (searching) return 'No threads match this search.';
   // Settled threads count as filtered out even before the archive is
   // read — turning the chip off is what fetches them.
-  if (totalCards > 0 || (resolvedCount > 0 && isFilteringThreads(filters))) {
-    return 'No threads match the selected filters.';
+  const filtersHideMore = totalCards > 0 || (resolvedCount > 0 && isFilteringThreads(filters));
+  // The section filter is only the reason when nothing else can be. With
+  // the archive unread, "none in these sections" is a claim about threads
+  // this list has never seen — and clearing the chips may well produce
+  // some. The pane's own note says which sections are in focus either way.
+  if (totalCards === 0 && sectionFilterCount > 0 && !filtersHideMore) {
+    return 'No threads in the focused sections.';
   }
+  if (searching) return 'No threads match this search.';
+  if (filtersHideMore) return 'No threads match the selected filters.';
   return canComment
     ? 'Select text in the document to comment.'
     : 'You have read-only access to this document.';
