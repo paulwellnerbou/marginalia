@@ -22,11 +22,12 @@ import { type ThreadActionResult, threadLinks, threadsById } from './inlineUtils
 import {
   ALL_THREAD_FILTERS,
   cardMatchesFilters,
-  isFilteringThreads,
   normalizeThreadSearch,
+  showThreadListControls,
   THREAD_FILTER_TOGGLES,
   type ThreadCard,
   type ThreadFilters,
+  threadListEmptyMessage,
   threadMatchesSearch,
 } from './threadFilters.js';
 import {
@@ -66,6 +67,14 @@ interface Props {
   loading?: boolean;
   /** Reports the number of cards left after this tab's filters and search. */
   onVisibleCountChange: (count: number) => void;
+  /**
+   * Resolved threads the whole document has, as the server counts them —
+   * including the ones this list has not loaded. Opening a document reads
+   * only the open threads, so without this an empty list cannot tell "no
+   * comments here" from "every comment is settled", and would drop the
+   * filter row that is the only way to ask for the settled ones.
+   */
+  resolvedThreadCount?: number;
   /** Number of sections the TOC's section filter is focused on; 0 = filter off. */
   sectionFilterCount?: number;
   onClearSectionFilter?: () => void;
@@ -127,6 +136,7 @@ export function InlineCommentsList({
   threads,
   loading = false,
   onVisibleCountChange,
+  resolvedThreadCount = 0,
   sectionFilterCount = 0,
   onClearSectionFilter,
   blockRanges,
@@ -546,12 +556,15 @@ export function InlineCommentsList({
         </div>
       )}
       {/* Stay mounted while a filter or search is on, or deletions dropping the
-          count to one would strand the reader with no way to clear it. A
-          document with no threads at all has nothing to filter, and the
-          remembered filters would otherwise put a control row above an
-          empty pane. */}
-      {(totalCards > 1 ||
-        (totalCards > 0 && (searchQuery !== '' || isFilteringThreads(filters)))) && (
+          count to one — or a filter hiding every thread there is — would
+          strand the reader with no way to clear it. A document with no
+          threads at all, settled ones included, has nothing to filter. */}
+      {showThreadListControls({
+        totalCards,
+        resolvedCount: resolvedThreadCount,
+        searching: searchQuery !== '',
+        filters,
+      }) && (
         <div className="ic-list-controls">
           {/* No disclosure: the box has a row to itself either way, so a
               magnifier that only uncovers it costs a control and a state to
@@ -675,28 +688,23 @@ export function InlineCommentsList({
         </section>
       )}
 
-      {loading && totalCards === 0 && (
+      {loading && totalCards === 0 ? (
         <div className="ic-list-empty" role="status">
           <span className="ic-spinner" aria-hidden="true" /> Loading threads…
         </div>
-      )}
-
-      {!loading && totalCards === 0 && (
-        <div className="ic-list-empty">
-          {sectionFilterCount > 0
-            ? 'No threads in the focused sections.'
-            : canComment
-              ? 'Select text in the document to comment.'
-              : 'You have read-only access to this document.'}
-        </div>
-      )}
-
-      {totalCards > 0 && visibleCount === 0 && (
-        <div className="ic-list-empty">
-          {searchNeedle !== ''
-            ? 'No threads match this search.'
-            : 'No threads match the selected filters.'}
-        </div>
+      ) : (
+        visibleCount === 0 && (
+          <div className="ic-list-empty">
+            {threadListEmptyMessage({
+              totalCards,
+              resolvedCount: resolvedThreadCount,
+              sectionFilterCount,
+              searching: searchNeedle !== '',
+              filters,
+              canComment,
+            })}
+          </div>
+        )
       )}
 
       {win.padTop > 0 && <div style={{ height: win.padTop }} aria-hidden="true" />}

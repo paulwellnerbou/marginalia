@@ -167,3 +167,58 @@ export function threadMatchesSearch(thread: Thread, normalizedQuery: string): bo
       c.body.toLowerCase().includes(q),
   );
 }
+
+/**
+ * Whether the list's control row has anything to act on.
+ *
+ * It has to outlive an empty list: the filters are usually what emptied
+ * it, and unmounting them takes away the only way back. `resolvedCount`
+ * is the server's whole-document tally, which is what makes that case
+ * tellable at all — the archive is not read until something needs it, so
+ * a list with nothing in it cannot say on its own whether the document
+ * has no comments or only settled ones.
+ *
+ * A single unfiltered card still gets no row: there is nothing to sort,
+ * search or narrow down to.
+ */
+export function showThreadListControls(args: {
+  /** Cards the list holds, before its own filters and search. */
+  totalCards: number;
+  /** Resolved threads the document has, loaded here or not. */
+  resolvedCount: number;
+  searching: boolean;
+  filters: ThreadFilters;
+}): boolean {
+  const { totalCards, resolvedCount, searching, filters } = args;
+  if (totalCards > 1) return true;
+  if (totalCards === 0 && resolvedCount === 0) return false;
+  return searching || isFilteringThreads(filters);
+}
+
+/** What the list says when it is showing no cards at all. */
+export function threadListEmptyMessage(args: {
+  totalCards: number;
+  resolvedCount: number;
+  /** Sections the TOC filter is focused on; 0 = filter off. */
+  sectionFilterCount: number;
+  searching: boolean;
+  filters: ThreadFilters;
+  canComment: boolean;
+}): string {
+  const { totalCards, resolvedCount, sectionFilterCount, searching, filters, canComment } = args;
+  // Settled threads count as filtered out even before the archive is
+  // read — turning the chip off is what fetches them.
+  const filtersHideMore = totalCards > 0 || (resolvedCount > 0 && isFilteringThreads(filters));
+  // The section filter is only the reason when nothing else can be. With
+  // the archive unread, "none in these sections" is a claim about threads
+  // this list has never seen — and clearing the chips may well produce
+  // some. The pane's own note says which sections are in focus either way.
+  if (totalCards === 0 && sectionFilterCount > 0 && !filtersHideMore) {
+    return 'No threads in the focused sections.';
+  }
+  if (searching) return 'No threads match this search.';
+  if (filtersHideMore) return 'No threads match the selected filters.';
+  return canComment
+    ? 'Select text in the document to comment.'
+    : 'You have read-only access to this document.';
+}

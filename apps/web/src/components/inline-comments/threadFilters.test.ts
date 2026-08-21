@@ -2,7 +2,14 @@
 
 import { expect, test } from 'bun:test';
 import type { Comment, Thread } from '../../lib/api.js';
-import { normalizeThreadSearch, threadMatchesSearch } from './threadFilters.js';
+import {
+  ALL_THREAD_FILTERS,
+  normalizeThreadSearch,
+  showThreadListControls,
+  type ThreadFilters,
+  threadListEmptyMessage,
+  threadMatchesSearch,
+} from './threadFilters.js';
 
 function comment(id: string, body: string, author = 'Paul'): Comment {
   return {
@@ -96,4 +103,75 @@ test('matches author names and message bodies', () => {
 
 test('matches the anchored quote', () => {
   expect(threadMatchesSearch(SAMPLE, normalizeThreadSearch('anchored words'))).toBe(true);
+});
+
+const UNRESOLVED_ONLY: ThreadFilters = { status: 'unresolved', kind: 'all', replies: 'all' };
+
+function controls(over: Partial<Parameters<typeof showThreadListControls>[0]> = {}) {
+  return showThreadListControls({
+    totalCards: 0,
+    resolvedCount: 0,
+    searching: false,
+    filters: UNRESOLVED_ONLY,
+    ...over,
+  });
+}
+
+function emptyMessage(over: Partial<Parameters<typeof threadListEmptyMessage>[0]> = {}) {
+  return threadListEmptyMessage({
+    totalCards: 0,
+    resolvedCount: 0,
+    sectionFilterCount: 0,
+    searching: false,
+    filters: UNRESOLVED_ONLY,
+    canComment: true,
+    ...over,
+  });
+}
+
+test('the control row survives a filter that hides every thread there is', () => {
+  // The archive is unread, so the list holds nothing to count — only the
+  // document's own tally says the chips still have something to reveal.
+  expect(controls({ totalCards: 0, resolvedCount: 4 })).toBe(true);
+  expect(emptyMessage({ totalCards: 0, resolvedCount: 4 })).toBe(
+    'No threads match the selected filters.',
+  );
+});
+
+test('a document with nothing to filter gets no control row', () => {
+  expect(controls({ totalCards: 0, resolvedCount: 0 })).toBe(false);
+  expect(controls({ totalCards: 1, resolvedCount: 0, filters: ALL_THREAD_FILTERS })).toBe(false);
+  expect(emptyMessage()).toBe('Select text in the document to comment.');
+  expect(emptyMessage({ canComment: false })).toBe('You have read-only access to this document.');
+});
+
+test('one card left under a filter or search keeps its way back', () => {
+  expect(controls({ totalCards: 1 })).toBe(true);
+  expect(controls({ totalCards: 1, searching: true, filters: ALL_THREAD_FILTERS })).toBe(true);
+  expect(controls({ totalCards: 2, filters: ALL_THREAD_FILTERS })).toBe(true);
+});
+
+test('settled threads alone do not raise the row when nothing is filtering', () => {
+  // Nothing to undo: the archive read is on its way in and will fill the list.
+  expect(controls({ totalCards: 0, resolvedCount: 4, filters: ALL_THREAD_FILTERS })).toBe(false);
+});
+
+test('the empty list gives the narrowest reason that applies', () => {
+  expect(emptyMessage({ totalCards: 3, searching: true })).toBe('No threads match this search.');
+  expect(emptyMessage({ totalCards: 3 })).toBe('No threads match the selected filters.');
+});
+
+test('the focused sections are only blamed when the chips cannot be', () => {
+  // Nothing unread to reveal: the sections really are empty.
+  expect(emptyMessage({ sectionFilterCount: 2, filters: ALL_THREAD_FILTERS })).toBe(
+    'No threads in the focused sections.',
+  );
+  expect(
+    emptyMessage({ sectionFilterCount: 2, resolvedCount: 4, filters: ALL_THREAD_FILTERS }),
+  ).toBe('No threads in the focused sections.');
+  // Settled threads the filter hides could be sitting in those very
+  // sections — claiming they hold nothing would be a guess.
+  expect(emptyMessage({ sectionFilterCount: 2, resolvedCount: 4 })).toBe(
+    'No threads match the selected filters.',
+  );
 });
