@@ -668,6 +668,41 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     setThreads((prev) => prev.filter((t) => t.id !== threadId));
   }, []);
 
+  /**
+   * Re-read threads the server resolved as a side effect of a mutation.
+   *
+   * Accepting a proposal also resolves the plain comment threads it
+   * answers. Every other client hears about those through `comment.updated`;
+   * the acting client is deliberately excluded from that broadcast, and the
+   * reconcile behind it reads only the open set — where a thread that has
+   * just been resolved no longer appears. So without this the accepting
+   * user's own list keeps showing them open until a full refresh.
+   *
+   * The response names them but not their new shape, so read each one back
+   * rather than reconstructing it here: the server decides `capabilities`
+   * and `resolution`, which are what the card renders. Never rejects — this
+   * corrects what the reader cannot see yet and must not fail the accept.
+   */
+  const landAnsweredThreads = useCallback(
+    async (threadIds: readonly string[]) => {
+      await Promise.all(
+        threadIds.map((threadId) => {
+          archiveMergeGuard.current?.add(threadId);
+          return fetchThread(doc.uid, threadId).then(
+            (thread) => {
+              if (thread) landThread(thread);
+              else dropThread(threadId);
+            },
+            (err) => {
+              reportError('DocumentLayout.landAnsweredThreads', err, { uid: doc.uid, threadId });
+            },
+          );
+        }),
+      );
+    },
+    [doc.uid, landThread, dropThread],
+  );
+
   /*
    * Reconcile the thread list after a local mutation, without making the
    * reader wait for it.
@@ -1608,12 +1643,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
           landThread(updated);
           reconcileThreadsSoon();
         } else if (kind === 'accept') {
-          const { thread: updated, document: accepted } = await apiAcceptProposal(
-            doc.uid,
-            id,
-            identity,
-            body,
-          );
+          const {
+            thread: updated,
+            document: accepted,
+            resolvedAnsweredThreadIds,
+          } = await apiAcceptProposal(doc.uid, id, identity, body);
           landThread(updated);
           // The response already carries the rewritten document, so only fall
           // back to a re-fetch if an older server left it out.
@@ -1628,13 +1662,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
             // see yet, so let this action finish and do that work at idle —
             // otherwise the button sits spinning through a full re-render of
             // every comment card.
-            reconcileThreadsSoon();
             whenIdle(() => setHistoryVersion((v) => v + 1));
           } else {
-            reconcileThreadsSoon();
             void refreshDoc();
             setHistoryVersion((v) => v + 1);
           }
+          // Before the reconcile, not alongside it: landing a thread marks
+          // any read already in flight as stale, so doing these afterwards
+          // would throw away the very reconcile they precede.
+          void landAnsweredThreads(resolvedAnsweredThreadIds).then(reconcileThreadsSoon);
         } else {
           const updated = await apiRejectProposal(doc.uid, id, identity, body);
           landThread(updated);
@@ -1657,7 +1693,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         return { ok: false, message };
       }
     },
-    [doc.uid, landThread, resolveIdentity, reconcileThreadsSoon, refreshDoc],
+    [doc.uid, landThread, resolveIdentity, reconcileThreadsSoon, refreshDoc, landAnsweredThreads],
   );
 
   const onResolveConflict = useCallback(

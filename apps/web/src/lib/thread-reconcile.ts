@@ -87,6 +87,12 @@ export function mergeArchiveThreads(
  * a realtime event and is reconciled thread by thread. The gap is only
  * while the socket is down, and coming back up triggers a full read
  * precisely because events were missed then.
+ *
+ * The one change a client makes that it does not hear back this way is
+ * accepting a proposal, which resolves the threads that proposal answers
+ * without broadcasting to the accepter. Those threads leave the open set,
+ * so this keeps the stale copies; the accept handler names them from the
+ * mutation response and lands them itself before calling for a reconcile.
  */
 export function mergeOpenThreads(local: readonly Thread[], open: readonly Thread[]): Thread[] {
   const fresh = new Set(open.map((t) => t.id));
