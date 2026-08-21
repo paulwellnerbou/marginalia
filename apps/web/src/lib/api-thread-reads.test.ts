@@ -193,3 +193,22 @@ test('an accept that answered nothing reports an empty list, not undefined', asy
 
   expect(res.resolvedAnsweredThreadIds).toEqual([]);
 });
+
+/**
+ * Opening a document now reads only the open threads, and mention
+ * consumption rides on that read — it is a server-side side effect that
+ * happens once, so it cannot sit on the archive read, which may never be
+ * made. Silencing it here would lose every mention notification on load.
+ */
+test('the open read consumes mentions, because the load path depends on it', async () => {
+  installLocalStorage();
+  const { listThreads } = await import('./api.js');
+  const urls = recordUrls(() =>
+    json({ threads: [], mention_candidates: [], pending_mentions: [] }),
+  );
+
+  await listThreads('doc-load', { state: 'open' });
+
+  expect(urls[0]).toContain('state=open');
+  expect(urls[0]).not.toContain('consume_mentions=false');
+});
