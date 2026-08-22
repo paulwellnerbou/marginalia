@@ -777,13 +777,14 @@ function paintBlockHighlights(block: HTMLElement, plan: BlockHighlightPlan): voi
   if (plan.blockScope) {
     block.dataset.commentHighlightBlock = 'true';
     if (plan.blockScope.interactive) block.classList.add('comment-highlight-block');
-    if (plan.blockScope.threadId) {
+    // Same rule as the range marks: only an open thread gets the id the
+    // click handler reads, so a settled proposal can't turn its whole
+    // paragraph into a click target.
+    if (plan.blockScope.threadId && plan.blockScope.interactive) {
       block.dataset.commentThreadId = plan.blockScope.threadId;
-      if (plan.blockScope.interactive) {
-        block.tabIndex = 0;
-        block.setAttribute('role', 'button');
-        block.setAttribute('aria-label', 'Open comment thread');
-      }
+      block.tabIndex = 0;
+      block.setAttribute('role', 'button');
+      block.setAttribute('aria-label', 'Open comment thread');
     }
   }
   if (plan.ranges.length === 0) return;
@@ -848,17 +849,20 @@ function planCommentHighlights(
       if (highlight.scope === 'block') {
         if (map.rawLength <= 0) continue;
         const hasOpen = highlight.state === 'open';
-        // Several threads can mark the same block; the last one names it,
-        // but one open thread is enough to keep the block clickable.
+        // Several threads can mark the same block, and one open thread is
+        // enough to keep it clickable. The id is what that click opens, so
+        // an open thread claims it over a settled one; among equals the
+        // last still wins.
         const previous = blockScopeByBlock.get(block);
         blockScopeByBlock.set(block, {
-          threadId: highlight.threadId ?? previous?.threadId ?? null,
+          threadId: hasOpen
+            ? (highlight.threadId ?? previous?.threadId ?? null)
+            : (previous?.threadId ?? highlight.threadId ?? null),
           interactive: hasOpen || previous?.interactive === true,
         });
-        // Resolved block-scope highlights only need the block-level
-        // dataset for click/scroll targeting — wrapping the entire
-        // block's text in transparent <mark>s adds DOM bloat with no
-        // visible effect. Click/flash falls back to [data-block].
+        // Wrapping a settled proposal's whole block in transparent
+        // <mark>s adds DOM bloat with no visible effect, and it is not a
+        // click target either way. Flash falls back to [data-block].
         if (!hasOpen) continue;
         rawStart = 0;
         rawEnd = map.rawLength;
@@ -1231,19 +1235,22 @@ function wrapTextSlice(
   // treat as visible "open" so it isn't styled transparent.
   const isVisuallyOpen = threads.length === 0 || openThread !== undefined;
   mark.className = isVisuallyOpen ? 'comment-highlight' : 'comment-highlight-resolved';
-  const targetThread = openThread ?? threads[0];
   if (threads.length > 0) {
     // Overlapping ranges merge into one mark; every covered thread must
     // stay findable for scroll-to-thread, not just the click target.
     mark.dataset.commentThreadIds = threads.map((t) => t.id).join(' ');
   }
-  if (targetThread) {
-    mark.dataset.commentThreadId = targetThread.id;
-    if (openThread) {
-      mark.tabIndex = 0;
-      mark.setAttribute('role', 'button');
-      mark.setAttribute('aria-label', 'Open comment thread');
-    }
+  // The singular id is what the document's click and keydown handlers
+  // open, so it only ever names an open thread. A resolved mark paints
+  // no marker at all, so making it a click target turns ordinary-looking
+  // words into a trap: it opens a settled card and lifts whatever
+  // filters were hiding it. Resolved threads are opened from the Threads
+  // tab and Activities, which list them on purpose.
+  if (openThread) {
+    mark.dataset.commentThreadId = openThread.id;
+    mark.tabIndex = 0;
+    mark.setAttribute('role', 'button');
+    mark.setAttribute('aria-label', 'Open comment thread');
   }
   parent.insertBefore(mark, target);
   mark.appendChild(target);

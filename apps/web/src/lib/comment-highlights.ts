@@ -35,11 +35,13 @@ export interface CommentHighlightOptions {
 
 /**
  * A resolved thread's highlight is invisible (see
- * `mark.comment-highlight-resolved`) but still a click target, so with
- * "show resolved" off it would open a card from text that carries no
- * marker at all. Dropping those threads here rather than styling them
- * away also keeps the marks out of the DOM, which is what a long-lived
- * document with hundreds of settled threads actually needs.
+ * `mark.comment-highlight-resolved`) and never a click target — the
+ * renderer withholds the id its click handler reads from anything but an
+ * open thread, so settled threads are opened from the Threads tab and
+ * Activities, which list them on purpose. Dropping them here as well,
+ * rather than styling them away, keeps the marks out of the DOM
+ * entirely, which is what a long-lived document with hundreds of settled
+ * threads actually needs.
  */
 export function buildCommentHighlights(
   threads: readonly Thread[],
@@ -71,12 +73,11 @@ export function buildCommentHighlights(
         });
       }
     } else if (thread.state === 'open') {
-      // Block-scope highlights are visual + interactive on the *whole*
-      // anchored block. For resolved proposals that would silently turn
-      // the whole paragraph into a click target (and intercept clicks on
-      // links inside it), so only emit them while the proposal is open.
-      // Activities-tab navigation falls back to [data-block]/[data-subblock]
-      // via blockId, so scroll-to-anchor still works for resolved ones.
+      // Block-scope highlights paint a background across the *whole*
+      // anchored block, which a settled proposal has no business doing,
+      // so only emit them while the proposal is open. Activities-tab
+      // navigation falls back to [data-block]/[data-subblock] via
+      // blockId, so scroll-to-anchor still works for resolved ones.
       highlights.push({
         scope: 'block',
         threadId: thread.id,
