@@ -51,14 +51,16 @@ export function PendingCommentPopover({
   /**
    * Prefer the painted highlight — its rect follows the quoted line
    * rather than the whole block. The draft's is the only comment mark
-   * without a thread id. A quote the highlight pass could not place
-   * falls back to the anchored block.
+   * belonging to no thread, which is what the plural id list says: the
+   * singular one is only on marks the reader can click, so resolved
+   * marks lack it too. A quote the highlight pass could not place falls
+   * back to the anchored block.
    */
   const resolveAnchorEl = useCallback((): HTMLElement | null => {
     const doc = docElementRef.current;
     if (!doc) return null;
     const mark = doc.querySelector<HTMLElement>(
-      'mark[data-comment-highlight]:not([data-comment-thread-id])',
+      'mark[data-comment-highlight]:not([data-comment-thread-ids])',
     );
     if (mark) return mark;
     if (anchor.block_id) return resolveAnchorElement(doc, anchor.block_id, anchor.quote);
