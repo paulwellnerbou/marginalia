@@ -1,6 +1,6 @@
 import { type ChildProcessWithoutNullStreams, execFile, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import fs, {
+import nodeFs, {
   cpSync,
   existsSync,
   mkdirSync,
@@ -10,13 +10,68 @@ import fs, {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import * as git from 'isomorphic-git';
 import { mergeThreeWay } from './conflict.js';
 import type { DocumentFormat } from './db.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Attempts at writing one object into a repo `gc` is reaping in parallel.
+ *
+ * isomorphic-git writes a loose object by writing `objects/XX/<rest>`,
+ * and if that fails creating `objects/XX/` and writing once more. `gc`
+ * packs the loose objects away and then removes the fanout directories
+ * it emptied, so it can delete `objects/XX/` in the gap between that
+ * mkdir and that second write. isomorphic-git has no third attempt, so
+ * the write fails with ENOENT and takes the save down with it.
+ *
+ * One more attempt would not settle it: a `gc` run walks those
+ * directories twice, once when `repack -d` prunes the objects it just
+ * packed and again in `prune`. Four leaves three chances to recreate the
+ * directory — one more than `gc` can take it away — and gets there
+ * without leaning on isomorphic-git's own retry to make up a shortfall.
+ * Retrying costs nothing and risks nothing: an object's path is its
+ * content, so writing it again writes the same bytes to the same place.
+ */
+const GC_RACE_WRITE_ATTEMPTS = 4;
+
+type WriteFileArgs = Parameters<typeof nodeFs.promises.writeFile>;
+
+async function writeCreatingReapedDirs(...args: WriteFileArgs): Promise<void> {
+  const file = args[0];
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await nodeFs.promises.writeFile(...args);
+    } catch (err) {
+      const missing = (err as NodeJS.ErrnoException | null)?.code === 'ENOENT';
+      if (!missing || typeof file !== 'string' || attempt === GC_RACE_WRITE_ATTEMPTS) throw err;
+      await nodeFs.promises.mkdir(dirname(file), { recursive: true });
+    }
+  }
+}
+
+/**
+ * The filesystem isomorphic-git works through in this module — the real
+ * one, with the write above swapped in.
+ *
+ * Deliberately named `fs`, and deliberately the only `fs` in scope that
+ * isomorphic-git could be handed: packing runs concurrently with writes
+ * on purpose (see `noteWriteForMaintenance`), so a call that reached
+ * past this to `node:fs` would be the one that fails under `gc`.
+ *
+ * Delegates by reference rather than copying `nodeFs.promises`: which
+ * methods isomorphic-git binds is its business, and a copy would freeze
+ * today's answer.
+ */
+const fs = {
+  promises: new Proxy(nodeFs.promises, {
+    get: (target, prop, receiver) =>
+      prop === 'writeFile' ? writeCreatingReapedDirs : Reflect.get(target, prop, receiver),
+  }),
+};
 
 /**
  * Loose objects a doc repo may accumulate before it is packed.
@@ -264,10 +319,17 @@ export class GitStore {
    *
    * Deliberately not awaited. Packing is housekeeping — it must not slow
    * a save down, must not hold the per-doc lock, and must never turn a
-   * successful commit into a failed request. `gc` is safe to run
-   * alongside concurrent readers and writers: git takes its own lock,
-   * writes `packed-refs` atomically, and leaves recent unreachable
-   * objects alone.
+   * successful commit into a failed request.
+   *
+   * Which means `gc` runs while isomorphic-git is still writing to the
+   * same repo, and most of what it does is safe there: git takes its own
+   * lock, writes `packed-refs` atomically, keeps recent unreachable
+   * objects, and a loose object it packs away is still found — reads
+   * fall through to the packfile, and loose refs to `packed-refs`. The
+   * one thing that is not safe is the empty `objects/XX/` directories it
+   * reaps behind itself, which can strand a write that was about to use
+   * one. That is what the `fs` at the top of this file exists to absorb;
+   * without it, packing a busy document fails the save that provoked it.
    */
   private noteWriteForMaintenance(uid: string): void {
     // Check on the first write this process makes to a document, then

@@ -158,6 +158,83 @@ Para C baseline.
     expect((await tuned.history(busy)).length).toBeGreaterThan(1);
   });
 
+  /**
+   * Stand in for `gc` reaping a fanout directory out from under a write.
+   *
+   * `git gc` packs the loose objects away and then rmdir's every
+   * `objects/XX/` it emptied, while isomorphic-git writes an object by
+   * writing `objects/XX/<rest>`, creating `objects/XX/` if that fails,
+   * and writing again. Reap on the mkdir itself and that interleaving
+   * happens every time instead of in the microseconds-wide window a
+   * loaded CI runner occasionally finds — which is how this arrived, as
+   * an occasional red build rather than a test.
+   *
+   * Counted per directory, so `times` is what a single object's write
+   * has to survive rather than a budget shared across the objects a
+   * commit writes.
+   */
+  function reapFanoutDirs(times: number): () => void {
+    const realMkdir = fs.promises.mkdir;
+    const remaining = new Map<string, number>();
+    fs.promises.mkdir = (async (path: fs.PathLike, options: unknown) => {
+      const result = await realMkdir(path, options as Parameters<typeof realMkdir>[1]);
+      const created = String(path);
+      const left = remaining.get(created) ?? times;
+      if (left > 0 && /[/\\]objects[/\\][0-9a-f]{2}$/.test(created)) {
+        remaining.set(created, left - 1);
+        rmSync(created, { recursive: true, force: true });
+      }
+      return result;
+    }) as typeof fs.promises.mkdir;
+    return () => {
+      fs.promises.mkdir = realMkdir;
+    };
+  }
+
+  test('a write finishes even though packing reaped the directory under it', async () => {
+    // The CI flake: `autoGc` is fire-and-forget on purpose, so `gc` runs
+    // while isomorphic-git is still writing, and the object write failed
+    // with ENOENT under `.git/objects/` — a save lost to housekeeping.
+    const restore = reapFanoutDirs(1);
+    try {
+      await store.write(doc, `${INITIAL}\nWritten while packing.\n`, author, 'update');
+    } finally {
+      restore();
+    }
+
+    expect(store.read(doc)).toContain('Written while packing.');
+    expect((await store.history(doc))[0]?.oid).toBeTruthy();
+  });
+
+  test("and finishes when both of a gc run's sweeps reap the same directory", async () => {
+    // One retry would not be enough: a `gc` run walks the fanout
+    // directories more than once — `repack -d` prunes the objects it
+    // packed, then `prune` goes over them again — so the same directory
+    // can be taken twice while one object is trying to land.
+    const restore = reapFanoutDirs(2);
+    try {
+      await store.write(doc, `${INITIAL}\nWritten across both sweeps.\n`, author, 'update');
+    } finally {
+      restore();
+    }
+
+    expect(store.read(doc)).toContain('Written across both sweeps.');
+  });
+
+  test('a directory that never stays put fails the write instead of retrying forever', async () => {
+    // Retrying is only right because the directory does come back. If it
+    // never does, that is a broken repo and not a race, and the write has
+    // to say so rather than hang the request that is waiting on it.
+    const restore = reapFanoutDirs(Number.POSITIVE_INFINITY);
+    try {
+      await expect(
+        store.write(doc, `${INITIAL}\nNever lands.\n`, author, 'update'),
+      ).rejects.toThrow(/ENOENT/);
+    } finally {
+      restore();
+    }
+  }, 10_000);
+
   test('a repo below the loose-object limit is left alone', async () => {
     // Packing on every check would repack an already-tidy repo for
     // nothing. Well under the default limit, so no pack should appear.
