@@ -63,6 +63,15 @@ import {
 interface Props {
   uid: string;
   threads: Thread[];
+  /**
+   * 'threads' is the full Threads tab: status/kind/replies filters, the
+   * filter chips, and the settled-archive prompts. 'bookmarks' is the
+   * Bookmarks tab — the same cards over a pre-filtered set, but with none
+   * of that narrowing: it shows every bookmarked thread it is handed,
+   * resolved ones included, and drops the chips. Chapter scope still
+   * applies, because the caller hands it an already chapter-filtered set.
+   */
+  variant?: 'threads' | 'bookmarks';
   /** True until the document's first thread read settles. */
   loading?: boolean;
   /** Reports the number of cards left after this tab's filters and search. */
@@ -134,6 +143,7 @@ const SORT_MODE_LABELS: Record<ThreadSortMode, string> = {
 export function InlineCommentsList({
   uid,
   threads,
+  variant = 'threads',
   loading = false,
   onVisibleCountChange,
   resolvedThreadCount = 0,
@@ -225,18 +235,25 @@ export function InlineCommentsList({
   // whoever this browser used to be.
   const viewerClientId = getClientId();
 
+  const bookmarks = variant === 'bookmarks';
+
   // Remembered per browser, so the pane opens the way it was left.
   const [sortMode, setSortMode] = useState<ThreadSortMode>(loadThreadSortMode);
   const [filters, setFilters] = useState<ThreadFilters>(loadThreadFilters);
   const [searchQuery, setSearchQuery] = useState('');
   const searchNeedle = useMemo(() => normalizeThreadSearch(searchQuery), [searchQuery]);
+  // The Bookmarks tab shows every bookmarked thread it is given — the
+  // status/kind/replies narrowing belongs to the Threads tab alone.
+  const effectiveFilters = bookmarks ? ALL_THREAD_FILTERS : filters;
 
   useEffect(() => {
     saveThreadSortMode(sortMode);
   }, [sortMode]);
   useEffect(() => {
-    saveThreadFilters(filters);
-  }, [filters]);
+    // Only the Threads tab owns these filters; the Bookmarks tab never
+    // changes them, so it must not write them back either.
+    if (!bookmarks) saveThreadFilters(filters);
+  }, [filters, bookmarks]);
 
   /*
    * Ask for the archive when the reader asks to see settled work.
@@ -251,8 +268,16 @@ export function InlineCommentsList({
    * resolved threads gets the archive on mount, exactly as before.
    */
   useEffect(() => {
+    // The Bookmarks tab loads the archive unconditionally — a bookmarked
+    // thread that has since been resolved must still show — and its owner
+    // triggers that when the tab opens, so this threads-tab heuristic (only
+    // fetch when the reader left the list showing resolved) does not apply.
+    if (bookmarks) {
+      onNeedResolvedThreads?.();
+      return;
+    }
     if (loadThreadFilters().status === 'all') onNeedResolvedThreads?.();
-  }, [onNeedResolvedThreads]);
+  }, [bookmarks, onNeedResolvedThreads]);
 
   // A search that silently skipped the archive would read as "that comment
   // is gone" rather than "not loaded yet".
@@ -271,10 +296,10 @@ export function InlineCommentsList({
   // see cardMatchesFilters.
   const itemMatches = useCallback(
     (item: ThreadListItem) =>
-      cardMatchesFilters(item, filters, viewerClientId) &&
+      cardMatchesFilters(item, effectiveFilters, viewerClientId) &&
       (threadMatchesSearch(item.thread, searchNeedle) ||
         item.nested.some((n) => threadMatchesSearch(n, searchNeedle))),
-    [filters, searchNeedle, viewerClientId],
+    [effectiveFilters, searchNeedle, viewerClientId],
   );
   const visibleActive = useMemo(
     () => sortedActive.filter(itemMatches),
@@ -380,9 +405,11 @@ export function InlineCommentsList({
     if (!threadIds.includes(focusedThread.threadId)) return;
 
     // Opening a thread from elsewhere (activities, history) wins over the
-    // filters or search that would otherwise hide it.
+    // filters or search that would otherwise hide it. The Bookmarks tab
+    // has no status/kind/replies filters of its own to widen — and those
+    // belong to the Threads tab, so it must not reset them here.
     if (!visibleIds.has(focusedThread.threadId)) {
-      setFilters(ALL_THREAD_FILTERS);
+      if (!bookmarks) setFilters(ALL_THREAD_FILTERS);
       setSearchQuery('');
       return;
     }
@@ -426,7 +453,7 @@ export function InlineCommentsList({
       window.clearTimeout(flashT);
       window.clearTimeout(focusT);
     };
-  }, [focusedThread, threadIds, visibleIds, collapsed, parentOf]);
+  }, [focusedThread, threadIds, visibleIds, collapsed, parentOf, bookmarks]);
 
   const otherSortMode: ThreadSortMode = sortMode === 'document' ? 'latest' : 'document';
 
@@ -558,13 +585,17 @@ export function InlineCommentsList({
       {/* Stay mounted while a filter or search is on, or deletions dropping the
           count to one — or a filter hiding every thread there is — would
           strand the reader with no way to clear it. A document with no
-          threads at all, settled ones included, has nothing to filter. */}
-      {showThreadListControls({
-        totalCards,
-        resolvedCount: resolvedThreadCount,
-        searching: searchQuery !== '',
-        filters,
-      }) && (
+          threads at all, settled ones included, has nothing to filter. The
+          Bookmarks tab has no filter chips to keep reachable, so its row is
+          worth a slot only to sort or search across more than one card. */}
+      {(bookmarks
+        ? totalCards > 1 || searchQuery !== ''
+        : showThreadListControls({
+            totalCards,
+            resolvedCount: resolvedThreadCount,
+            searching: searchQuery !== '',
+            filters,
+          })) && (
         <div className="ic-list-controls">
           {/* No disclosure: the box has a row to itself either way, so a
               magnifier that only uncovers it costs a control and a state to
@@ -651,29 +682,32 @@ export function InlineCommentsList({
             </DropdownMenu.Root>
 
             {/* Compact enough to stay put, so there is no disclosure to open and
-                no dot to say a filter is on: an unlit chip *is* "all". */}
-            {/* biome-ignore lint/a11y/useSemanticElements: <fieldset> is form-only; these are filter switches */}
-            <div className="ic-list-filter-chips" role="group" aria-label="Filter threads">
-              {THREAD_FILTER_TOGGLES.map((filter) => {
-                const on = filter.isOn(filters);
-                return (
-                  <button
-                    key={filter.label}
-                    type="button"
-                    className="ic-list-filter-chip"
-                    aria-pressed={on}
-                    title={on ? `Stop showing only ${filter.label.toLowerCase()}` : filter.hint}
-                    onClick={() => {
-                      const next = filter.toggle(filters);
-                      if (next.status === 'all') onNeedResolvedThreads?.();
-                      setFilters(next);
-                    }}
-                  >
-                    {filter.label}
-                  </button>
-                );
-              })}
-            </div>
+                no dot to say a filter is on: an unlit chip *is* "all". The
+                Bookmarks tab drops them — it deliberately shows everything. */}
+            {!bookmarks && (
+              // biome-ignore lint/a11y/useSemanticElements: <fieldset> is form-only; these are filter switches
+              <div className="ic-list-filter-chips" role="group" aria-label="Filter threads">
+                {THREAD_FILTER_TOGGLES.map((filter) => {
+                  const on = filter.isOn(filters);
+                  return (
+                    <button
+                      key={filter.label}
+                      type="button"
+                      className="ic-list-filter-chip"
+                      aria-pressed={on}
+                      title={on ? `Stop showing only ${filter.label.toLowerCase()}` : filter.hint}
+                      onClick={() => {
+                        const next = filter.toggle(filters);
+                        if (next.status === 'all') onNeedResolvedThreads?.();
+                        setFilters(next);
+                      }}
+                    >
+                      {filter.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -695,14 +729,16 @@ export function InlineCommentsList({
       ) : (
         visibleCount === 0 && (
           <div className="ic-list-empty">
-            {threadListEmptyMessage({
-              totalCards,
-              resolvedCount: resolvedThreadCount,
-              sectionFilterCount,
-              searching: searchNeedle !== '',
-              filters,
-              canComment,
-            })}
+            {bookmarks
+              ? bookmarksEmptyMessage(searchNeedle !== '', sectionFilterCount)
+              : threadListEmptyMessage({
+                  totalCards,
+                  resolvedCount: resolvedThreadCount,
+                  sectionFilterCount,
+                  searching: searchNeedle !== '',
+                  filters,
+                  canComment,
+                })}
           </div>
         )
       )}
@@ -712,6 +748,13 @@ export function InlineCommentsList({
       {win.padBottom > 0 && <div style={{ height: win.padBottom }} aria-hidden="true" />}
     </div>
   );
+}
+
+/** What the Bookmarks tab says when it is showing no cards. */
+function bookmarksEmptyMessage(searching: boolean, sectionFilterCount: number): string {
+  if (searching) return 'No bookmarked threads match this search.';
+  if (sectionFilterCount > 0) return 'No bookmarked threads in the focused sections.';
+  return 'No bookmarked threads.';
 }
 
 function shouldAutoCollapse(t: Thread): boolean {

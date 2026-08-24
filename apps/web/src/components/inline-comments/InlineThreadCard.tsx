@@ -1,4 +1,6 @@
 import {
+  BookmarkFilledIcon,
+  BookmarkIcon,
   ChatBubbleIcon,
   CheckIcon,
   ClipboardCopyIcon,
@@ -21,6 +23,7 @@ import { apiErrorMessage } from '../../lib/apiErrorMessage.js';
 import { reportError } from '../../lib/log.js';
 import { ConflictDialog } from '../ConflictDialog.js';
 import { DiffDialog } from '../DiffDialog.js';
+import { useBookmarkControls } from './bookmarkedThreads.js';
 import { InlineCommentRow } from './InlineCommentRow.js';
 import { InlineComposer, type InlineComposerHandle } from './InlineComposer.js';
 import type { ThreadActionResult } from './inlineUtils.js';
@@ -164,6 +167,9 @@ export function InlineThreadCard({
   onEditProposal,
 }: Props) {
   const composerRef = useRef<InlineComposerHandle>(null);
+  // Null when the card renders outside a document layout — then no toggle.
+  const bookmarks = useBookmarkControls();
+  const bookmarked = bookmarks?.isBookmarked(thread.id) ?? false;
   // The reply composer stays closed until asked for — one textarea per
   // expanded thread crowds the column out of the reading space.
   const [replyOpen, setReplyOpen] = useState(false);
@@ -632,6 +638,18 @@ export function InlineThreadCard({
           >
             {idCopied ? <CheckIcon /> : <ClipboardCopyIcon />}
           </button>
+          {bookmarks && (
+            <button
+              type="button"
+              className={`ic-icon-btn ic-card-bookmark${bookmarked ? ' ic-card-bookmark-on' : ''}`}
+              aria-pressed={bookmarked}
+              onClick={() => bookmarks.toggle(thread.id)}
+              title={bookmarked ? 'Remove bookmark' : 'Bookmark this thread'}
+              aria-label={bookmarked ? 'Remove bookmark' : 'Bookmark this thread'}
+            >
+              {bookmarked ? <BookmarkFilledIcon /> : <BookmarkIcon />}
+            </button>
+          )}
         </div>
         <button
           type="button"
