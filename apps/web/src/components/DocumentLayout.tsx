@@ -2371,7 +2371,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   );
   const hasBookmarks = bookmarkedThreadIds.size > 0;
   const toggleBookmark = useCallback(
-    (threadId: string) => toggleBookmarkedThread(doc.uid, threadId),
+    (threadId: string): void => {
+      toggleBookmarkedThread(doc.uid, threadId);
+    },
     [doc.uid],
   );
   // The Bookmarks tab badge counts the in-scope bookmarks directly, so it
@@ -3223,8 +3225,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                       </Tabs.Trigger>
                       {hasBookmarks && (
                         <Tabs.Trigger value="bookmarks">
-                          <Flex align="center" gap="1">
-                            <BookmarkIcon aria-label="Bookmarks" />
+                          <Flex align="center" gap="2">
+                            <BookmarkIcon aria-hidden />
+                            Bookmarks
                             {bookmarkedThreads.length > 0 && (
                               <Badge size="1" variant="soft" color="gray" radius="full">
                                 {bookmarkedThreads.length}
