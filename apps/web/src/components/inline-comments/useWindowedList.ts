@@ -198,7 +198,9 @@ export function useWindowedList({
     if (lastReset.current === resetToken) return; // first render, or no reset asked
     lastReset.current = resetToken;
     const scroller = scrollParentOf(rootRef.current);
-    if (scroller) scroller.scrollTop = 0;
+    // Guard the write: refining a search bumps the token on every keystroke,
+    // and assigning scrollTop it already holds still queues a scroll event.
+    if (scroller && scroller.scrollTop !== 0) scroller.scrollTop = 0;
     setViewport((v) => (v.top === 0 ? v : { ...v, top: 0 }));
   }, [resetToken, rootRef]);
 
