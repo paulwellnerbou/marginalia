@@ -58,6 +58,15 @@ export interface WindowedListOptions {
    * exactly the code path it has always been on.
    */
   threshold?: number;
+  /**
+   * Change this to scroll the list back to the top and recompute the window
+   * from there. A filter, sort, or search change remakes the list under a
+   * scroll offset earned browsing the old one; left alone, that offset points
+   * into rows that are gone, and the window lands the reader in a full-height
+   * spacer with nothing rendered until they scroll back up. Reset in the
+   * same layout pass so the fresh window paints in place of the stale one.
+   */
+  resetToken?: unknown;
 }
 
 /** Nearest ancestor that actually scrolls, or the document scroller. */
@@ -78,6 +87,7 @@ export function useWindowedList({
   overscanPx = 900,
   pinnedKey = null,
   threshold = 60,
+  resetToken,
 }: WindowedListOptions): WindowedList {
   const heights = useRef(new Map<string, number>());
   const [, bumpMeasured] = useState(0);
@@ -173,6 +183,26 @@ export function useWindowedList({
       ro.disconnect();
     };
   }, [windowed, rootRef, keys.length]);
+
+  /*
+   * Scroll to the top when the caller remakes the list.
+   *
+   * Runs in the layout pass, not off the scroll event that setting
+   * `scrollTop` fires: a programmatic scroll dispatches its `scroll`
+   * asynchronously, so leaning on it would paint the stale window for a
+   * frame first. Setting `viewport.top` here recomputes the range before
+   * paint, and the scroll event that follows only confirms it.
+   */
+  const lastReset = useRef(resetToken);
+  useIsomorphicLayoutEffect(() => {
+    if (lastReset.current === resetToken) return; // first render, or no reset asked
+    lastReset.current = resetToken;
+    const scroller = scrollParentOf(rootRef.current);
+    // Guard the write: refining a search bumps the token on every keystroke,
+    // and assigning scrollTop it already holds still queues a scroll event.
+    if (scroller && scroller.scrollTop !== 0) scroller.scrollTop = 0;
+    setViewport((v) => (v.top === 0 ? v : { ...v, top: 0 }));
+  }, [resetToken, rootRef]);
 
   return useMemo<WindowedList>(() => {
     if (!windowed) {

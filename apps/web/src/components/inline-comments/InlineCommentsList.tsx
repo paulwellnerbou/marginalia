@@ -231,6 +231,13 @@ export function InlineCommentsList({
   const [searchQuery, setSearchQuery] = useState('');
   const searchNeedle = useMemo(() => normalizeThreadSearch(searchQuery), [searchQuery]);
 
+  // Bumped when the reader changes what the list shows, to send the windowed
+  // list back to the top — see the reset note in useWindowedList. Only the
+  // reader's own gestures count; a focus jump widening the filters keeps its
+  // scroll so it can land on the thread it just revealed.
+  const [listResetNonce, setListResetNonce] = useState(0);
+  const resetListScroll = useCallback(() => setListResetNonce((n) => n + 1), []);
+
   useEffect(() => {
     saveThreadSortMode(sortMode);
   }, [sortMode]);
@@ -347,6 +354,7 @@ export function InlineCommentsList({
     pinnedKey: focusedThread
       ? (parentOf.get(focusedThread.threadId) ?? focusedThread.threadId)
       : null,
+    resetToken: listResetNonce,
   });
   const windowedActive = useMemo(
     () => visibleActive.slice(win.start, win.end),
@@ -432,6 +440,7 @@ export function InlineCommentsList({
 
   function clearSearch() {
     setSearchQuery('');
+    resetListScroll();
     searchInputRef.current?.focus({ preventScroll: true });
   }
 
@@ -574,11 +583,15 @@ export function InlineCommentsList({
             size="1"
             type="search"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              resetListScroll();
+            }}
             onKeyDown={(e) => {
               if (e.key !== 'Escape' || !searchQuery) return;
               e.preventDefault();
               setSearchQuery('');
+              resetListScroll();
             }}
             placeholder="Search by id, text, or author"
             aria-label="Search threads by id, text, or author"
@@ -620,7 +633,10 @@ export function InlineCommentsList({
               className="ic-list-sort"
               aria-label={`Sorted by ${SORT_MODE_LABELS[sortMode].toLowerCase()} — switch to ${SORT_MODE_LABELS[otherSortMode].toLowerCase()}`}
               title={`Sort by ${SORT_MODE_LABELS[otherSortMode].toLowerCase()}`}
-              onClick={() => setSortMode(otherSortMode)}
+              onClick={() => {
+                setSortMode(otherSortMode);
+                resetListScroll();
+              }}
             >
               {sortMode === 'document' ? (
                 <TextAlignLeftIcon className="ic-list-sort-icon" aria-hidden />
@@ -667,6 +683,7 @@ export function InlineCommentsList({
                       const next = filter.toggle(filters);
                       if (next.status === 'all') onNeedResolvedThreads?.();
                       setFilters(next);
+                      resetListScroll();
                     }}
                   >
                     {filter.label}
