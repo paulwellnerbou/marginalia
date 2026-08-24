@@ -4475,6 +4475,18 @@ button.primary:disabled {
   flex-shrink: 0;
 }
 
+.ic-card-bookmark {
+  flex-shrink: 0;
+}
+/* A lit star reads as "on". Qualified with .ic-icon-btn so it outweighs the
+   base icon-button colors defined later in this file at equal specificity —
+   otherwise the accent loses the cascade and the star renders muted. The
+   hover pair keeps the accent so it doesn't fall back to the base hover fg. */
+.ic-icon-btn.ic-card-bookmark-on,
+.ic-icon-btn.ic-card-bookmark-on:hover:not(:disabled) {
+  color: var(--ui-accent-strong);
+}
+
 .ic-card-badges {
   display: flex;
   flex-wrap: wrap;
