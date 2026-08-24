@@ -4478,10 +4478,12 @@ button.primary:disabled {
 .ic-card-bookmark {
   flex-shrink: 0;
 }
-/* A lit star reads as "on"; keep the accent through hover so it doesn't
-   fall back to the muted-fg the base icon button hovers to. */
-.ic-card-bookmark-on,
-.ic-card-bookmark-on:hover:not(:disabled) {
+/* A lit star reads as "on". Qualified with .ic-icon-btn so it outweighs the
+   base icon-button colors defined later in this file at equal specificity —
+   otherwise the accent loses the cascade and the star renders muted. The
+   hover pair keeps the accent so it doesn't fall back to the base hover fg. */
+.ic-icon-btn.ic-card-bookmark-on,
+.ic-icon-btn.ic-card-bookmark-on:hover:not(:disabled) {
   color: var(--ui-accent-strong);
 }
 
