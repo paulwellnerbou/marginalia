@@ -9,6 +9,7 @@ import {
   getDiffOverviewViewport,
 } from '../lib/diff-overview.js';
 import { type DiffLine, diffLines } from '../lib/line-diff.js';
+import { renderDiffLineText } from './diffLineText.js';
 
 interface Props {
   before: string;
@@ -259,7 +260,7 @@ export function DiffView({
                 </span>
                 <span className="diff-text">
                   {line
-                    ? renderLineText(line)
+                    ? renderDiffLineText(line)
                     : `${omittedCount} unchanged ${omittedCount === 1 ? 'line' : 'lines'} hidden`}
                 </span>
               </div>
@@ -320,27 +321,6 @@ function execCommandCopy(text: string): boolean {
   } finally {
     textarea.remove();
   }
-}
-
-function renderLineText(line: DiffLine): React.ReactNode {
-  if (!line.text) return ' ';
-  if (!line.segments?.length) return line.text;
-
-  const occurrences = new Map<string, number>();
-  return line.segments.map((segment) => {
-    const signature = `${segment.changed ? '1' : '0'} ${segment.text}`;
-    const occurrence = occurrences.get(signature) ?? 0;
-    occurrences.set(signature, occurrence + 1);
-    const key = `${signature} ${occurrence}`;
-
-    return segment.changed ? (
-      <span key={key} className="diff-inline-change">
-        {segment.text}
-      </span>
-    ) : (
-      <span key={key}>{segment.text}</span>
-    );
-  });
 }
 
 interface RenderableDiffLine {

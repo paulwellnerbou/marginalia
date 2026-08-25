@@ -22,6 +22,14 @@
   --ui-accent-focus: var(--accent-8);
   --ui-danger: var(--red-9);
 
+  /* Diff tints, kept translucent rather than solid: the same green and red
+     have to read as themselves over the dialog, over a conflict side the
+     reader has selected, and over that side's hover state. */
+  --ui-diff-add-bg: rgba(22, 163, 74, 0.12);
+  --ui-diff-add-emphasis: rgba(22, 163, 74, 0.28);
+  --ui-diff-remove-bg: rgba(220, 38, 38, 0.1);
+  --ui-diff-remove-emphasis: rgba(220, 38, 38, 0.2);
+
   /* Blue-grey companion tones derived from the active accent and the app's
      slate gray scale. These keep decorative chrome related to the accent
      without introducing a second unrelated color family. */

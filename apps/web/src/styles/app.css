@@ -3671,20 +3671,20 @@ button.primary:disabled {
   padding: 0 0.08rem;
 }
 .diff-line.diff-add {
-  background: rgba(22, 163, 74, 0.12);
+  background: var(--ui-diff-add-bg);
 }
 .diff-line.diff-add .diff-inline-change {
-  background: rgba(22, 163, 74, 0.28);
+  background: var(--ui-diff-add-emphasis);
 }
 .diff-line.diff-add .diff-marker {
   color: #16a34a;
   opacity: 1;
 }
 .diff-line.diff-remove {
-  background: rgba(220, 38, 38, 0.1);
+  background: var(--ui-diff-remove-bg);
 }
 .diff-line.diff-remove .diff-inline-change {
-  background: rgba(220, 38, 38, 0.2);
+  background: var(--ui-diff-remove-emphasis);
 }
 .diff-line.diff-remove .diff-marker {
   color: #dc2626;
@@ -4337,6 +4337,31 @@ button.primary:disabled {
      column tower over the other. */
   max-height: 11rem;
   overflow: auto;
+  /* Makes the box the offset parent, so the pane can measure where its
+     first highlighted word sits and scroll to it. */
+  position: relative;
+}
+
+/* One block per line, so a line the other side does not have can be tinted
+   across the pane rather than only behind its own words. */
+.cf-side-line {
+  display: block;
+}
+.cf-side-line-unpaired.cf-side-line-add {
+  background: var(--ui-diff-add-bg);
+}
+.cf-side-line-unpaired.cf-side-line-remove {
+  background: var(--ui-diff-remove-bg);
+}
+.cf-side-text .diff-inline-change {
+  border-radius: 3px;
+  padding: 0 0.08rem;
+}
+.cf-side-line-add .diff-inline-change {
+  background: var(--ui-diff-add-emphasis);
+}
+.cf-side-line-remove .diff-inline-change {
+  background: var(--ui-diff-remove-emphasis);
 }
 
 .cf-hunk-editor {
