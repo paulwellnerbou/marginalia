@@ -1,6 +1,14 @@
 import { CheckIcon, Pencil1Icon } from '@radix-ui/react-icons';
 import { Button, Callout, Dialog, Flex, Text, TextArea } from '@radix-ui/themes';
-import { useEffect, useId, useMemo, useState } from 'react';
+import {
+  type RefObject,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { ProposalConflict } from '../lib/api.js';
 import {
   allDecided,
@@ -12,9 +20,12 @@ import {
   textForChoice,
   undecidedCount,
 } from '../lib/conflict-resolution.js';
+import type { DiffLine } from '../lib/line-diff.js';
+import { splitDiffSides } from '../lib/split-diff.js';
 import { DialogLoading } from './DialogLoading.js';
 import { DiffView } from './DiffView.js';
 import { Disclosure } from './Disclosure.js';
+import { renderDiffLineText } from './diffLineText.js';
 
 interface Props {
   open: boolean;
@@ -252,6 +263,43 @@ function ConflictHunkCard({ hunk, index, total, choice, onChoose }: HunkProps) {
   const [editing, setEditing] = useState(false);
   const [baseOpen, setBaseOpen] = useState(false);
   const draft = choice ? textForChoice(hunk, choice) : hunk.current;
+  // The two sides of a hunk are usually the same passage twice over, a few
+  // words apart. Diffing them against each other is what makes the choice a
+  // choice rather than two walls of text to compare by eye.
+  const sides = useMemo(
+    () => splitDiffSides(hunk.current, hunk.proposed),
+    [hunk.current, hunk.proposed],
+  );
+  const currentPane = useRef<HTMLPreElement | null>(null);
+  const proposedPane = useRef<HTMLPreElement | null>(null);
+  const writing = editing && choice?.kind === 'custom';
+
+  // A pane taller than its box opens at the top, which for the case this
+  // view is for — a paragraph reworded near its end — is the half with
+  // nothing in it to see.
+  //
+  // One offset for both, from whichever side has to travel further: they are
+  // read across, and a side the other only *added* words to has no
+  // difference of its own to scroll to. `writing` is a dependency because
+  // leaving the editor mounts the panes afresh, back at the top.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the effect reads the DOM these render, not their values
+  useLayoutEffect(() => {
+    const panes = [currentPane.current, proposedPane.current].filter((pane) => pane !== null);
+    // A pane measuring zero has not been laid out. Scrolling it by a height
+    // it does not have yet would land it at its own bottom and leave it
+    // there once it has one.
+    if (panes.some((pane) => pane.clientHeight === 0)) return;
+
+    let target = 0;
+    for (const pane of panes) {
+      const first = pane.querySelector<HTMLElement>('.diff-inline-change, .cf-side-line-unpaired');
+      if (!first) continue;
+      const overshoot = first.offsetTop + first.offsetHeight - pane.clientHeight;
+      if (overshoot > 0) target = Math.max(target, overshoot + PANE_SCROLL_MARGIN);
+    }
+    if (target === 0) return;
+    for (const pane of panes) pane.scrollTop = target;
+  }, [sides, writing]);
 
   return (
     <section className={`cf-hunk ${choice ? 'cf-hunk-decided' : 'cf-hunk-open'}`}>
@@ -291,7 +339,7 @@ function ConflictHunkCard({ hunk, index, total, choice, onChoose }: HunkProps) {
         </Flex>
       </header>
 
-      {editing && choice?.kind === 'custom' ? (
+      {writing ? (
         <TextArea
           className="cf-hunk-editor"
           value={choice.text}
@@ -305,7 +353,9 @@ function ConflictHunkCard({ hunk, index, total, choice, onChoose }: HunkProps) {
           <SideButton
             label="In the document now"
             description={`Keep the document’s version for conflict ${index + 1}`}
-            text={hunk.current}
+            lines={sides.before}
+            empty={!hunk.current}
+            paneRef={currentPane}
             selected={choice?.kind === 'current'}
             onSelect={() => {
               setEditing(false);
@@ -315,7 +365,9 @@ function ConflictHunkCard({ hunk, index, total, choice, onChoose }: HunkProps) {
           <SideButton
             label="This proposal"
             description={`Take the proposal’s version for conflict ${index + 1}`}
-            text={hunk.proposed}
+            lines={sides.after}
+            empty={!hunk.proposed}
+            paneRef={proposedPane}
             selected={choice?.kind === 'proposed'}
             onSelect={() => {
               setEditing(false);
@@ -352,12 +404,17 @@ interface SideProps {
    * the name of the control, at whatever length the paragraph runs to.
    */
   description: string;
-  text: string;
+  /** The side's text as diff lines, marked against the other side. */
+  lines: DiffLine[];
+  /** Whether this version drops the passage rather than saying something. */
+  empty: boolean;
+  /** Handle on the scrolling box, so the card can line both sides up. */
+  paneRef: RefObject<HTMLPreElement | null>;
   selected: boolean;
   onSelect: () => void;
 }
 
-function SideButton({ label, description, text, selected, onSelect }: SideProps) {
+function SideButton({ label, description, lines, empty, paneRef, selected, onSelect }: SideProps) {
   return (
     <button
       type="button"
@@ -370,7 +427,46 @@ function SideButton({ label, description, text, selected, onSelect }: SideProps)
         {selected && <CheckIcon aria-hidden="true" />}
         {label}
       </span>
-      <pre className="cf-side-text">{text || '(deleted)'}</pre>
+      <pre className="cf-side-text" ref={paneRef}>
+        {empty
+          ? '(deleted)'
+          : keyedLines(lines).map(({ key, line }) => (
+              <span key={key} className={sideLineClass(line)}>
+                {renderDiffLineText(line)}
+              </span>
+            ))}
+      </pre>
     </button>
   );
+}
+
+/** Room left under the first difference, so it lands inside the pane rather
+ *  than against its bottom edge. */
+const PANE_SCROLL_MARGIN = 8;
+
+/**
+ * Only a line the other side has nothing to match is tinted end to end: one
+ * paired with its rewrite has said what changed by highlighting the words
+ * that did, and colouring the rest would paint a paragraph that differs by
+ * three words as a wholly different paragraph.
+ *
+ * `segments` being set is what pairing means, whether or not any of them
+ * changed — a side the other only added words to is the pair with nothing of
+ * its own to highlight, and tinting it for that is the exact opposite of
+ * what happened to it.
+ */
+function sideLineClass(line: DiffLine): string {
+  const base = `cf-side-line cf-side-line-${line.op}`;
+  return line.op === 'equal' || line.segments ? base : `${base} cf-side-line-unpaired`;
+}
+
+/** Keys for repeatable lines: identical text twice over is ordinary prose. */
+function keyedLines(lines: DiffLine[]): Array<{ key: string; line: DiffLine }> {
+  const occurrences = new Map<string, number>();
+  return lines.map((line) => {
+    const signature = `${line.op} ${line.text}`;
+    const occurrence = occurrences.get(signature) ?? 0;
+    occurrences.set(signature, occurrence + 1);
+    return { key: `${signature} ${occurrence}`, line };
+  });
 }
