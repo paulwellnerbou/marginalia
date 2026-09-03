@@ -2213,10 +2213,12 @@ async function recoverLandedAccept(
   proposedText: string,
 ): Promise<PreparedThreadWorkflow | null> {
   if (!row.anchor_block_id) return null;
-  const accept = await deps.store.findAcceptCommit(doc, row.id);
-  if (!accept?.parentOid) return null;
+  // Cheap checks first: this runs for every true orphan too, and the
+  // history walk below is the only expensive part.
   const nextSource = deps.store.read(doc);
   if (proposedText.length === 0 || !nextSource.includes(proposedText)) return null;
+  const accept = await deps.store.findAcceptCommit(doc, row.id);
+  if (!accept?.parentOid) return null;
   let preMergeSource: string;
   try {
     preMergeSource = await deps.store.readAt(doc, accept.parentOid);
