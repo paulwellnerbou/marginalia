@@ -60,12 +60,14 @@ PORT_VALUE="${PORT:-3434}"
 DATA_DIR_VALUE="${MARGINALIA_DATA_DIR:-/app/.data/}"
 WEB_DIR_VALUE="${MARGINALIA_WEB_DIR:-/app/apps/web/dist}"
 # Bun's renderer and proposal/history Git operations have a deliberately
-# bursty working set on long-reviewed documents. The old 512 MiB ceiling was
-# low enough for a post-accept thread refresh to be OOM-killed even though the
-# host had ample memory available. Keep the limits deploy-configurable, but
-# give both instances enough headroom by default.
-MEMORY_LIMIT_VALUE="${MARGINALIA_MEMORY_LIMIT:-1g}"
-MEMORY_RESERVATION_VALUE="${MARGINALIA_MEMORY_RESERVATION:-512m}"
+# bursty working set on long-reviewed documents: accepting one proposal on
+# a 500 KB book with ~1,600 threads peaks 450-500 MiB above the idle
+# baseline inside the request, because JSC does not collect mid-request
+# and sizes its heap from host RAM rather than the cgroup. At 1 GiB that
+# accept is OOM-killed while the host sits mostly idle. Keep the limits
+# deploy-configurable, but give both instances enough headroom by default.
+MEMORY_LIMIT_VALUE="${MARGINALIA_MEMORY_LIMIT:-2g}"
+MEMORY_RESERVATION_VALUE="${MARGINALIA_MEMORY_RESERVATION:-1g}"
 DEFAULT_HOST_PORT=3434
 if [[ "$INSTANCE" == "dev" ]]; then
   DEFAULT_HOST_PORT=3435

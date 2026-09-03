@@ -309,8 +309,11 @@ export class GitStore {
   }
 
   /**
-   * Count a commit towards housekeeping, and every so often pack the
-   * repo if it has accumulated enough loose objects.
+   * Count a write towards housekeeping, and every so often pack the
+   * repo if it has accumulated enough loose objects. Called from every
+   * path that writes objects — saves, proposal branches, accepts,
+   * reverts — because a document that is only ever reviewed never sees
+   * a plain save, and its repo has to pack itself all the same.
    *
    * isomorphic-git only ever writes loose objects and loose refs, and
    * nothing else here packs them, so without this a doc repo grows
@@ -528,6 +531,40 @@ export class GitStore {
     }));
   }
 
+  /**
+   * The newest commit on main that accepted `proposalId`, if there is one
+   * within `depth` commits of the head.
+   *
+   * Every way an accept lands — fast-forward, iso-git's three-way merge
+   * and the native merge-file fallback — puts a commit on main whose
+   * message carries the proposal's `X-Marginalia-Proposal-ID` trailer,
+   * so the trailer is the one signal common to all three. Bounded
+   * because a proposal that never landed would otherwise cost a walk of
+   * the whole history every time someone retries it.
+   */
+  async findAcceptCommit(
+    doc: DocLocator,
+    proposalId: string,
+    depth = 500,
+  ): Promise<{ oid: string; parentOid: string | null } | null> {
+    const dir = this.repoDir(doc.uid);
+    if (!existsSync(join(dir, '.git'))) return null;
+    const trailer = `X-Marginalia-Proposal-ID: ${proposalId}`;
+    let entries: Awaited<ReturnType<typeof git.log>>;
+    try {
+      entries = await git.log({ fs, dir, ref: 'main', depth });
+    } catch {
+      return null;
+    }
+    for (const entry of entries) {
+      const lines = entry.commit.message.split('\n');
+      if (!lines[0]?.startsWith('accept-proposal: ')) continue;
+      if (!lines.some((line) => line.trim() === trailer)) continue;
+      return { oid: entry.oid, parentOid: entry.commit.parent[0] ?? null };
+    }
+    return null;
+  }
+
   async diffAt(doc: DocLocator, oid: string): Promise<{ before: string; after: string } | null> {
     const after = await this.tryReadAt(doc, oid);
     if (after === null) return null;
@@ -610,6 +647,7 @@ export class GitStore {
       }
 
       const oid = await git.resolveRef({ fs, dir, ref: 'main' });
+      this.noteWriteForMaintenance(doc.uid);
       return { ok: true, oid, before, after };
     });
   }
@@ -888,6 +926,7 @@ export class GitStore {
         });
       }
       await git.writeRef({ fs, dir, ref: refName, value: commitOid, force: true });
+      this.noteWriteForMaintenance(doc.uid);
       return { commitOid, refName };
     });
   }
@@ -930,6 +969,7 @@ export class GitStore {
         // iso-git's 3-way merge advances the ref without updating the
         // working tree; checkout so `read()` reflects the merged file.
         await git.checkout({ fs, dir, ref: 'main', force: true });
+        this.noteWriteForMaintenance(doc.uid);
         return { ok: true, oid };
       } catch (err) {
         const e = err as Error & {
@@ -954,6 +994,7 @@ export class GitStore {
             await git.add({ fs, dir, filepath: this.filename(doc.format) });
             const oid = await git.commit({ fs, dir, message, author });
             await git.checkout({ fs, dir, ref: 'main', force: true });
+            this.noteWriteForMaintenance(doc.uid);
             return { ok: true, oid };
           }
           if (nativeMerge.reason === 'unavailable') return { ok: false, reason: 'unavailable' };
@@ -1164,6 +1205,7 @@ export class GitStore {
     const backupRef = `refs/proposals-original/${proposalId}/${tipOid}`;
     await git.writeRef({ fs, dir, ref: backupRef, value: tipOid, force: true });
     await git.writeRef({ fs, dir, ref: refName, value: commitOid, force: true });
+    this.noteWriteForMaintenance(doc.uid);
     return { ok: true, commitOid, baseOid: mainOid, backupRef };
   }
 
