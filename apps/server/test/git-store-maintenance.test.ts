@@ -158,6 +158,38 @@ Para C baseline.
     expect((await tuned.history(busy)).length).toBeGreaterThan(1);
   });
 
+  test('a document that is only ever reviewed packs itself too', async () => {
+    // Proposals and accepts write a blob, a tree and a commit each, and a
+    // review-only document never sees a plain save. If only saves counted
+    // towards packing, such a repo would grow forever — one did, back to
+    // 158 MB ten days after it was last packed.
+    const tuned = new GitStore(dir, { everyWrites: 5, looseObjectLimit: 12 });
+    await tuned.init();
+    const reviewed: DocLocator = { uid: 'doc-reviewed', format: 'markdown' };
+    await tuned.write(reviewed, INITIAL, author, 'upload');
+    for (let i = 0; i < 6; i++) {
+      const baseOid = await tuned.mainOid(reviewed);
+      await tuned.createProposalBranch(
+        reviewed,
+        baseOid,
+        `p-${i}`,
+        `${INITIAL}\nAccepted ${i}.\n`,
+        author,
+      );
+      const merged = await tuned.mergeProposalBranch(reviewed, `p-${i}`, author);
+      expect(merged.ok).toBe(true);
+    }
+    await tuned.whenMaintenanceSettled();
+
+    const after = execFileSync('git', ['count-objects', '-v'], {
+      cwd: tuned.repoDir(reviewed.uid),
+      encoding: 'utf8',
+    });
+    expect(after).toMatch(/^packs: [1-9]/m);
+    expect(tuned.read(reviewed)).toContain('Accepted 5.');
+    expect(await tuned.readProposalTip(reviewed, 'p-0')).toContain('Accepted 0.');
+  });
+
   /**
    * Stand in for `gc` reaping a fanout directory out from under a write.
    *

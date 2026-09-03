@@ -39,4 +39,8 @@ try {
 '
 fi
 
-exec bun --bun /app/apps/server/src/main.ts
+# `--smol` makes JSC collect more often. Accepting a proposal on a
+# long-reviewed document allocates several hundred MB of garbage inside
+# one request, and the default heuristics let that pile up against the
+# container's memory limit before a collection runs.
+exec bun --smol --bun /app/apps/server/src/main.ts

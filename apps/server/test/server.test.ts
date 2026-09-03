@@ -2681,6 +2681,72 @@ describe('documents API', () => {
     expect(await readSource(created)).toBe('# Rewrite\n\ntwo\n');
   });
 
+  test('a retried accept finishes a merge that landed before the process died', async () => {
+    // The merge is committed to git before the DB transaction runs, so a
+    // process killed in between — the OOM kill mid-render on a book-length
+    // document — leaves the change in the document while the row stays
+    // open. The retry then finds the paragraph it was written against
+    // gone, and must recognise its own landed edit rather than orphan it.
+    const source = '# Title\n\nalpha\n\nbeta';
+    const created = await upload(CLIENT_A, { markdown: source });
+    const blockId = [...locateAllBlocks(source).entries()].find(
+      ([, range]) => range.text === 'alpha',
+    )?.[0];
+    expect(blockId).toBeString();
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    const doc = { uid: created.uid, format: 'markdown' as const };
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'alpha' },
+          proposal: { proposed_text: 'alpha, accepted' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = ((await proposeRes.json()) as { thread: { id: string } }).thread;
+
+    // The interrupted attempt: the merge lands, nothing else happens.
+    const merged = await app.store.mergeProposalBranch(doc, proposal.id, {
+      displayName: CLIENT_A.name,
+      clientId: CLIENT_A.id,
+    });
+    expect(merged.ok).toBe(true);
+    const landedOid = merged.ok ? merged.oid : '';
+    expect(app.store.read(doc)).toContain('alpha, accepted');
+
+    const retry = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads/${proposal.id}/respond`, {
+        method: 'POST',
+        headers: adminHeaders,
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(retry.status).toBe(200);
+    const body = (await retry.json()) as {
+      thread: { state: string };
+      document: { source: string } | null;
+    };
+    expect(body.thread.state).toBe('resolved');
+    expect(body.document?.source).toContain('alpha, accepted');
+
+    const row = app.db
+      .prepare('SELECT status, accepted_oid FROM comments_edit_proposals WHERE comment_id = ?')
+      .get(proposal.id) as { status: string; accepted_oid: string | null };
+    expect(row).toEqual({ status: 'accepted', accepted_oid: landedOid });
+
+    // No second merge: the document carries exactly the one accept commit.
+    const historyRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/history`, { headers: adminHeaders }),
+    );
+    expect(historyRes.status).toBe(200);
+    const { history } = (await historyRes.json()) as { history: Array<{ action: string }> };
+    expect(history.filter((entry) => entry.action === 'accept-proposal')).toHaveLength(1);
+  });
+
   test('accept returns 409 proposal-orphaned when the branch ref has vanished (#25)', async () => {
     // Without `proposed_text` in a column anymore the branch tip is the
     // only source of truth, so a missing ref means the proposal can't

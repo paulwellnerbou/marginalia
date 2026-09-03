@@ -2127,6 +2127,17 @@ async function prepareAcceptProposalThread(
     preMergeRange = locateAnchorRange(doc, preMergeSource, blockId, row.anchor_end_block_id);
   }
   if (!preMergeRange) {
+    // The block the proposal was written against is gone. Before calling
+    // that an orphan, check whether this proposal's own accepted edit is
+    // what removed it: the merge is committed to git before the DB
+    // transaction runs, so a process killed in between (an OOM kill
+    // mid-render, say) leaves the change in the document and the row
+    // still open, and the retry lands here. Finishing that accept is
+    // what the retry asked for; orphaning would strand a proposal whose
+    // text is already in.
+    const landed = await recoverLandedAccept(doc, row, deps, identity, proposedText);
+    if (landed) return landed;
+
     const now = Date.now();
     deps.db
       .prepare(
@@ -2168,8 +2179,103 @@ async function prepareAcceptProposalThread(
     }
     throw new ThreadActionError(409, 'proposal-orphaned');
   }
-  const oid = merge.oid;
+  return completeAcceptWorkflow({
+    doc,
+    row,
+    deps,
+    identity,
+    proposedText,
+    preMergeSource,
+    preMergeRange,
+    nextSource: deps.store.read(doc),
+    oid: merge.oid,
+    acceptedOid: merge.oid,
+  });
+}
+
+/**
+ * Finish an accept whose merge already reached main but whose DB side
+ * never ran — see the call site in `prepareAcceptProposalThread`.
+ *
+ * Null unless all of this holds: main carries an accept commit for the
+ * proposal; the proposed text is still in the document (a reopen restores
+ * the previous text, and that accept must not be revived); and the
+ * proposal's anchor resolves in the document as it stood just before that
+ * commit, which is the same thing the original accept had to establish.
+ * The re-anchoring then runs from that pre-accept source to the current
+ * document, exactly as it would have had the first attempt survived.
+ */
+async function recoverLandedAccept(
+  doc: DocumentRow,
+  row: ThreadRow,
+  deps: AppDeps,
+  identity: Identity,
+  proposedText: string,
+): Promise<PreparedThreadWorkflow | null> {
+  if (!row.anchor_block_id) return null;
+  const accept = await deps.store.findAcceptCommit(doc, row.id);
+  if (!accept?.parentOid) return null;
   const nextSource = deps.store.read(doc);
+  if (proposedText.length === 0 || !nextSource.includes(proposedText)) return null;
+  let preMergeSource: string;
+  try {
+    preMergeSource = await deps.store.readAt(doc, accept.parentOid);
+  } catch {
+    return null;
+  }
+  const preMergeRange = locateAnchorRange(
+    doc,
+    preMergeSource,
+    row.anchor_block_id,
+    row.anchor_end_block_id,
+  );
+  if (!preMergeRange) return null;
+  return completeAcceptWorkflow({
+    doc,
+    row,
+    deps,
+    identity,
+    proposedText,
+    preMergeSource,
+    preMergeRange,
+    nextSource,
+    oid: await deps.store.mainOid(doc),
+    acceptedOid: accept.oid,
+  });
+}
+
+/**
+ * The half of an accept that runs once the merge is on main: render the
+ * merged document, re-anchor every thread across the edit, and prepare
+ * the DB writes. `oid` is what the response and the `document.updated`
+ * broadcast carry — the head the returned source corresponds to.
+ * `acceptedOid` is what the proposal row records; it differs from `oid`
+ * only when the merge landed in an earlier, interrupted request.
+ */
+async function completeAcceptWorkflow({
+  doc,
+  row,
+  deps,
+  identity,
+  proposedText,
+  preMergeSource,
+  preMergeRange,
+  nextSource,
+  oid,
+  acceptedOid,
+}: {
+  doc: DocumentRow;
+  row: ThreadRow;
+  deps: AppDeps;
+  identity: Identity;
+  proposedText: string;
+  preMergeSource: string;
+  preMergeRange: BlockSourceRange;
+  nextSource: string;
+  oid: string;
+  acceptedOid: string;
+}): Promise<PreparedThreadWorkflow> {
+  const isWholeDoc = row.is_whole_document === 1;
   const spliceStart = isWholeDoc
     ? 0
     : locatePostMergeSpliceStart(doc, nextSource, proposedText, preMergeRange.start);
@@ -2278,7 +2384,7 @@ async function prepareAcceptProposalThread(
             SET status = 'accepted', accepted_oid = ?
           WHERE comment_id = ?`,
         )
-        .run(oid, row.id);
+        .run(acceptedOid, row.id);
       deps.db
         .prepare(
           `UPDATE comments
