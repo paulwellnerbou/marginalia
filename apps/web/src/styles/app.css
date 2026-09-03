@@ -1401,12 +1401,16 @@ button.primary:disabled {
      code block scroll, and `overflow-x: auto` on the `pre` never got a
      chance. Both axes have to be released, not just the animated one. */
   min-width: 0;
-  /* `clip-path` instead of `overflow: hidden`: vertical clip drives
-     the collapse animation, horizontal slack keeps the `#`
-     heading-anchors (positioned at `left: -0.9em`) from being
-     cropped. Per-axis `overflow` values get coerced to `auto` when
-     one side is `visible`, so this is the cleanest way. */
-  clip-path: inset(0 -2em);
+  /* The vertical clip drives the collapse animation; the horizontal
+     axis stays open so the `#` heading-anchors (at `left: -0.9em`)
+     aren't cropped. `clip`, not `hidden`: `visible` survives beside it
+     instead of being coerced to `auto`, and it makes no scroll
+     container, so multicol can still break the section across pages.
+     Not `clip-path`: Chrome and WebKit hit-test a fragmented element's
+     clip-path against its first fragment only, so in paged mode whatever
+     a section spills onto later pages paints but never gets the pointer. */
+  overflow-x: visible;
+  overflow-y: clip;
   /* Cross-fade staggered behind the height: hides the visual snap
      at the endpoints. */
   opacity: 1;
@@ -1500,7 +1504,7 @@ button.primary:disabled {
   .marginalia .collapse-section > .collapse-section-inner,
   .marginalia .collapse-section.is-collapsed > .collapse-section-inner {
     /* Force-show sections that were closed at print time. */
-    clip-path: none;
+    overflow: visible;
     opacity: 1;
   }
 }
@@ -1711,9 +1715,8 @@ button.primary:disabled {
 }
 
 /* TOC subtree collapse — same height + opacity choreography as the
-   document-view section collapse, just with `overflow: hidden` rather
-   than the heading-anchor `clip-path` since the TOC has no left-side
-   sigils to preserve. */
+   document-view section collapse, just clipped on both axes since the
+   TOC has no left-side sigils to preserve. */
 .toc-collapse-section {
   display: grid;
   grid-template-rows: 1fr;
@@ -4385,8 +4388,8 @@ button.primary:disabled {
 /* ---------- Disclosure ---------- */
 
 /* Same height + opacity choreography as the document-view section
-   collapse and the TOC subtree, with `overflow: hidden` rather than the
-   heading-anchor `clip-path` — nothing here hangs outside the box. */
+   collapse and the TOC subtree, clipped on both axes — nothing here
+   hangs outside the box. */
 .disclosure-summary {
   appearance: none;
   display: flex;

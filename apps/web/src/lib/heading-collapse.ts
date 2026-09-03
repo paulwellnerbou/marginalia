@@ -11,12 +11,11 @@
  * makes deeper sections naturally end up nested inside their
  * ancestor's wrapper.
  *
- * The animation uses `grid-template-rows: 1fr ↔ 0fr`. The inner uses
- * `clip-path: inset(0 -2em)` instead of `overflow: hidden` so
- * heading-anchor `#` sigils (positioned at `left: -0.9em` of each
- * heading) aren't cropped — per-axis overflow values get coerced to
- * `auto` when one side is `visible`, so `clip-path` is the only clean
- * way to keep the vertical clip while allowing horizontal slack.
+ * The animation uses `grid-template-rows: 1fr ↔ 0fr`. The inner clips
+ * the vertical axis only (`overflow-y: clip`) so heading-anchor `#`
+ * sigils (positioned at `left: -0.9em` of each heading) aren't
+ * cropped — see the wrapper's rules in app.css for why not `hidden`
+ * or `clip-path`.
  */
 
 const HEADING_TAGS = new Set(['H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
