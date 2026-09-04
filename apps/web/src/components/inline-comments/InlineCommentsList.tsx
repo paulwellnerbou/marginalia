@@ -9,8 +9,8 @@ import {
 import { Button, DropdownMenu, IconButton, Text, TextField } from '@radix-ui/themes';
 import { ArrowUpDownIcon, FunnelIcon } from 'lucide-react';
 import {
-  type MutableRefObject,
   type ReactNode,
+  type RefObject,
   useCallback,
   useEffect,
   useMemo,
@@ -106,7 +106,7 @@ interface Props {
    * every remount, only a new one. Optional for owners that never
    * unmount the list.
    */
-  handledFocusNonce?: MutableRefObject<number | null>;
+  handledFocusNonce?: RefObject<number | null>;
   displayName: string | null;
   mentionCandidates: string[];
   onReply: (threadId: string, body: string, name?: string) => Promise<void>;
