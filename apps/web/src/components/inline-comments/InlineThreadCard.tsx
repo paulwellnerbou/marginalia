@@ -72,6 +72,8 @@ interface Props {
   canComment: boolean;
   needsName: boolean;
   focused: boolean;
+  /** Listed although the filters or search hide it, because the reader asked for it by id. */
+  revealed?: boolean;
   flashPhase: 'a' | 'b' | null;
   collapsed: boolean;
   mentionCandidates: string[];
@@ -149,6 +151,7 @@ export function InlineThreadCard({
   canComment,
   needsName,
   focused,
+  revealed = false,
   flashPhase,
   collapsed,
   mentionCandidates,
@@ -549,6 +552,11 @@ export function InlineThreadCard({
             )}
             {isConflict && <span className="ic-badge ic-badge-conflict">Conflict</span>}
             {isOrphan && <span className="ic-badge ic-badge-orphan">Orphaned</span>}
+            {revealed && (
+              <Tooltip content="Outside the current filters or search — listed because you opened it. Change a filter or the search to hide it again.">
+                <span className="ic-badge ic-badge-revealed">Outside filters</span>
+              </Tooltip>
+            )}
           </div>
           {proposal && (
             <div className="ic-card-header-actions">

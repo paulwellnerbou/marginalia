@@ -4562,6 +4562,12 @@ button.primary:disabled {
   background: rgba(34, 197, 94, 0.14);
   color: #15803d;
 }
+/* Dashed: an exception to the list's filters, not a state of the thread. */
+.ic-badge-revealed {
+  background: transparent;
+  border: 1px dashed var(--ui-border);
+  color: var(--ui-fg-muted);
+}
 .ic-badge-hidden {
   gap: 0.25rem;
   background: color-mix(in srgb, var(--ui-fg-muted) 12%, transparent);

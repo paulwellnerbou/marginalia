@@ -545,6 +545,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
    */
   const [editingProposal, setEditingProposal] = useState<Thread | null>(null);
   const [focusedThread, setFocusedThread] = useState<ThreadFocusTarget | null>(null);
+  // The request each list last honoured, kept across their remounts —
+  // see InlineCommentsList's handledFocusNonce.
+  const threadsListFocus = useRef<number | null>(null);
+  const bookmarksListFocus = useRef<number | null>(null);
   /** Mirror of `doc.source` and `doc.rendered`, mutated when a proposal is
    *  accepted (auto-merged) so the displayed doc stays fresh without a reload. */
   const [liveSource, setLiveSource] = useState<string>(doc.source);
@@ -3278,6 +3282,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                       blockRanges={blockRanges}
                       canComment={canComment}
                       focusedThread={focusedThread}
+                      handledFocusNonce={threadsListFocus}
                       displayName={effectiveDisplayName}
                       mentionCandidates={mentionCandidates}
                       onReply={onReply}
@@ -3309,6 +3314,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                         blockRanges={blockRanges}
                         canComment={canComment}
                         focusedThread={focusedThread}
+                        handledFocusNonce={bookmarksListFocus}
                         displayName={effectiveDisplayName}
                         mentionCandidates={mentionCandidates}
                         onReply={onReply}
