@@ -8,7 +8,15 @@ import {
 } from '@radix-ui/react-icons';
 import { Button, DropdownMenu, IconButton, Text, TextField } from '@radix-ui/themes';
 import { ArrowUpDownIcon, FunnelIcon } from 'lucide-react';
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import type { Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import { getClientId } from '../../lib/identity.js';
@@ -30,6 +38,7 @@ import {
   threadListEmptyMessage,
   threadMatchesSearch,
 } from './threadFilters.js';
+import { planThreadFocus } from './threadListFocus.js';
 import {
   loadThreadFilters,
   loadThreadSortMode,
@@ -90,6 +99,14 @@ interface Props {
   blockRanges: Map<string, BlockSourceRange>;
   canComment: boolean;
   focusedThread: { threadId: string; nonce: number } | null;
+  /**
+   * Where this list remembers the focus request it last honoured. Held
+   * by the owner because the list unmounts with its tab and pane: a
+   * request the reader made before that must not be honoured again on
+   * every remount, only a new one. Optional for owners that never
+   * unmount the list.
+   */
+  handledFocusNonce?: RefObject<number | null>;
   displayName: string | null;
   mentionCandidates: string[];
   onReply: (threadId: string, body: string, name?: string) => Promise<void>;
@@ -152,6 +169,7 @@ export function InlineCommentsList({
   blockRanges,
   canComment,
   focusedThread,
+  handledFocusNonce,
   displayName,
   mentionCandidates,
   onReply,
@@ -170,7 +188,8 @@ export function InlineCommentsList({
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const lastHandledFocusNonce = useRef<number | null>(null);
+  const ownHandledFocusNonce = useRef<number | null>(null);
+  const lastHandledFocusNonce = handledFocusNonce ?? ownHandledFocusNonce;
 
   /** Document-order rank (by source offset) — same approach as the inline column. */
   const blockOrder = useMemo(() => {
@@ -246,30 +265,35 @@ export function InlineCommentsList({
   // status/kind/replies narrowing belongs to the Threads tab alone.
   const effectiveFilters = bookmarks ? ALL_THREAD_FILTERS : filters;
 
+  /*
+   * The one card listed although the filters or search hide it: the
+   * thread the reader asked for by id. Tied to the request's nonce, so
+   * the next request supersedes it, and dropped when the reader changes
+   * a filter or the search — that is them saying what to list again.
+   */
+  const [revealed, setRevealed] = useState<{ cardId: string; nonce: number } | null>(null);
+  const revealedCardId =
+    revealed && revealed.nonce === focusedThread?.nonce ? revealed.cardId : null;
+
   // Bumped when the reader changes what the list shows, to send the windowed
   // list back to the top — see the reset note in useWindowedList. Only the
-  // reader's own gestures count; a focus jump widening the filters keeps its
-  // scroll so it can land on the thread it just revealed.
+  // reader's own gestures count; a focus jump revealing a hidden thread keeps
+  // its scroll so it can land on that thread.
   const [listResetNonce, setListResetNonce] = useState(0);
   const resetListScroll = useCallback(() => setListResetNonce((n) => n + 1), []);
 
   useEffect(() => {
     saveThreadSortMode(sortMode);
   }, [sortMode]);
-  useEffect(() => {
-    // Only the Threads tab owns these filters; the Bookmarks tab never
-    // changes them, so it must not write them back either.
-    if (!bookmarks) saveThreadFilters(filters);
-  }, [filters, bookmarks]);
 
   /*
    * Ask for the archive when the reader asks to see settled work.
    *
    * Keyed to the request, not to `filters.status`. Focusing a thread that
-   * the filters hide widens them to everything on its own (see the focus
-   * effect below), and that thread is already loaded — reading the whole
-   * archive to satisfy it would spend the entire load-time payload we just
-   * stopped spending, on a deep link to a single open thread.
+   * the filters hide reveals that one card (see the focus effect below),
+   * and that thread is already loaded — reading the whole archive for it
+   * would spend the entire load-time payload we just stopped spending, on
+   * a deep link to a single open thread.
    *
    * Remembered filters still count: a reader who left the list showing
    * resolved threads gets the archive on mount, exactly as before.
@@ -301,12 +325,17 @@ export function InlineCommentsList({
   // A merged card is one unit: search keeps it when the thread or any
   // proposal nested inside it matches, and the filters judge the unit —
   // see cardMatchesFilters.
-  const itemMatches = useCallback(
+  const itemPassesFilters = useCallback(
     (item: ThreadListItem) =>
       cardMatchesFilters(item, effectiveFilters, viewerClientId) &&
       (threadMatchesSearch(item.thread, searchNeedle) ||
         item.nested.some((n) => threadMatchesSearch(n, searchNeedle))),
     [effectiveFilters, searchNeedle, viewerClientId],
+  );
+  // The requested card is listed whatever the filters say — see planThreadFocus.
+  const itemMatches = useCallback(
+    (item: ThreadListItem) => item.id === revealedCardId || itemPassesFilters(item),
+    [itemPassesFilters, revealedCardId],
   );
   const visibleActive = useMemo(
     () => sortedActive.filter(itemMatches),
@@ -406,31 +435,25 @@ export function InlineCommentsList({
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; phase: 'a' | 'b' } | null>(null);
 
-  // Focus animation: scroll into view, flash, uncollapse if needed.
+  // Focus: reveal if hidden, expand if collapsed, then scroll into view and flash.
   useEffect(() => {
     if (!focusedThread) return;
-    if (lastHandledFocusNonce.current === focusedThread.nonce) return;
-    if (!threadIds.includes(focusedThread.threadId)) return;
-
-    // Opening a thread from elsewhere (activities, history) wins over the
-    // filters or search that would otherwise hide it. The Bookmarks tab
-    // has no status/kind/replies filters of its own to widen — and those
-    // belong to the Threads tab, so it must not reset them here.
-    if (!visibleIds.has(focusedThread.threadId)) {
-      if (!bookmarks) setFilters(ALL_THREAD_FILTERS);
-      setSearchQuery('');
+    const step = planThreadFocus({
+      request: focusedThread,
+      handledNonce: lastHandledFocusNonce.current,
+      threadIds,
+      visibleIds,
+      collapsed,
+      parentOf,
+    });
+    if (step.kind === 'ignore') return;
+    if (step.kind === 'reveal') {
+      setRevealed({ cardId: step.cardId, nonce: focusedThread.nonce });
       return;
     }
-
-    // A nested proposal only becomes visible once the card it renders
-    // in is expanded too — expand target and parent together.
-    const parentId = parentOf.get(focusedThread.threadId);
-    const toExpand = [focusedThread.threadId, ...(parentId ? [parentId] : [])].filter((id) =>
-      collapsed.has(id),
-    );
-    if (toExpand.length > 0) {
+    if (step.kind === 'expand') {
       setCollapseState((prev) => {
-        const expand = toExpand.filter((id) => prev.collapsed.has(id));
+        const expand = step.ids.filter((id) => prev.collapsed.has(id));
         if (expand.length === 0) return prev;
         const next = new Set(prev.collapsed);
         for (const id of expand) next.delete(id);
@@ -461,12 +484,13 @@ export function InlineCommentsList({
       window.clearTimeout(flashT);
       window.clearTimeout(focusT);
     };
-  }, [focusedThread, threadIds, visibleIds, collapsed, parentOf, bookmarks]);
+  }, [focusedThread, lastHandledFocusNonce, threadIds, visibleIds, collapsed, parentOf]);
 
   const otherSortMode: ThreadSortMode = sortMode === 'document' ? 'latest' : 'document';
 
   function clearSearch() {
     setSearchQuery('');
+    setRevealed(null);
     resetListScroll();
     searchInputRef.current?.focus({ preventScroll: true });
   }
@@ -519,6 +543,7 @@ export function InlineCommentsList({
     thread: Thread,
     nested: readonly Thread[],
     parentId: string | null,
+    revealed = false,
   ): ReactNode {
     const blockId = thread.anchor.block_id;
     const onJump = blockId
@@ -549,6 +574,7 @@ export function InlineCommentsList({
         canComment={canComment}
         needsName={!displayName}
         focused={focusedId === thread.id}
+        revealed={revealed}
         flashPhase={flash?.id === thread.id ? flash.phase : null}
         collapsed={collapsed.has(thread.id)}
         mentionCandidates={mentionCandidates}
@@ -570,7 +596,10 @@ export function InlineCommentsList({
   }
 
   function renderItem(item: ThreadListItem) {
-    return renderCard(item.thread, item.nested, null);
+    // Badged only while the filters would actually hide it, so the badge
+    // says why the card is here rather than merely that it was opened.
+    const revealed = item.id === revealedCardId && !itemPassesFilters(item);
+    return renderCard(item.thread, item.nested, null, revealed);
   }
 
   return (
@@ -616,12 +645,14 @@ export function InlineCommentsList({
             value={searchQuery}
             onChange={(e) => {
               setSearchQuery(e.target.value);
+              setRevealed(null);
               resetListScroll();
             }}
             onKeyDown={(e) => {
               if (e.key !== 'Escape' || !searchQuery) return;
               e.preventDefault();
               setSearchQuery('');
+              setRevealed(null);
               resetListScroll();
             }}
             placeholder="Search by id, text, or author"
@@ -716,6 +747,11 @@ export function InlineCommentsList({
                         const next = filter.toggle(filters);
                         if (next.status === 'all') onNeedResolvedThreads?.();
                         setFilters(next);
+                        // Saved from the reader's own click and nowhere
+                        // else, so nothing the list does on its own can
+                        // change what the pane opens with next time.
+                        saveThreadFilters(next);
+                        setRevealed(null);
                         resetListScroll();
                       }}
                     >
