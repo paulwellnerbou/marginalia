@@ -4,6 +4,7 @@ import {
   ChatBubbleIcon,
   CheckIcon,
   ClipboardCopyIcon,
+  Cross2Icon,
   FileTextIcon,
   Pencil1Icon,
   PilcrowIcon,
@@ -72,8 +73,12 @@ interface Props {
   canComment: boolean;
   needsName: boolean;
   focused: boolean;
-  /** Listed although the filters or search hide it, because the reader asked for it by id. */
-  revealed?: boolean;
+  /**
+   * Set while the card is listed although the filters or search hide it,
+   * because the reader asked for it by id. The badge saying so calls it
+   * to hide the card again.
+   */
+  onDismissRevealed?: (() => void) | undefined;
   flashPhase: 'a' | 'b' | null;
   collapsed: boolean;
   mentionCandidates: string[];
@@ -151,7 +156,7 @@ export function InlineThreadCard({
   canComment,
   needsName,
   focused,
-  revealed = false,
+  onDismissRevealed,
   flashPhase,
   collapsed,
   mentionCandidates,
@@ -552,9 +557,17 @@ export function InlineThreadCard({
             )}
             {isConflict && <span className="ic-badge ic-badge-conflict">Conflict</span>}
             {isOrphan && <span className="ic-badge ic-badge-orphan">Orphaned</span>}
-            {revealed && (
-              <Tooltip content="Outside the current filters or search — listed because you opened it. Change a filter or the search to hide it again.">
-                <span className="ic-badge ic-badge-revealed">Outside filters</span>
+            {onDismissRevealed && (
+              <Tooltip content="Outside the current filters or search — listed because you opened it. Click to hide it again.">
+                <button
+                  type="button"
+                  className="ic-badge ic-badge-revealed"
+                  onClick={onDismissRevealed}
+                  aria-label="Outside filters — hide this thread again"
+                >
+                  Outside filters
+                  <Cross2Icon className="ic-badge-icon" aria-hidden="true" />
+                </button>
               </Tooltip>
             )}
           </div>

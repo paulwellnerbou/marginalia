@@ -4562,11 +4562,24 @@ button.primary:disabled {
   background: rgba(34, 197, 94, 0.14);
   color: #15803d;
 }
-/* Dashed: an exception to the list's filters, not a state of the thread. */
+/* Dashed: an exception to the list's filters, not a state of the thread.
+   A button: clicking it is the quickest way to hide the card again. */
 .ic-badge-revealed {
+  appearance: none;
+  gap: 0.25rem;
   background: transparent;
   border: 1px dashed var(--ui-border);
   color: var(--ui-fg-muted);
+  font-family: inherit;
+  cursor: pointer;
+}
+.ic-badge-revealed:hover {
+  border-color: var(--gray-8);
+  color: var(--ui-fg);
+}
+.ic-badge-revealed:focus-visible {
+  outline: 2px solid var(--ui-accent-focus);
+  outline-offset: 1px;
 }
 .ic-badge-hidden {
   gap: 0.25rem;
