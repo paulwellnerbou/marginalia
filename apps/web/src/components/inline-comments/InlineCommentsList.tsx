@@ -269,11 +269,13 @@ export function InlineCommentsList({
    * The one card listed although the filters or search hide it: the
    * thread the reader asked for by id. Tied to the request's nonce, so
    * the next request supersedes it, and dropped when the reader changes
-   * a filter or the search — that is them saying what to list again.
+   * a filter or the search — that is them saying what to list again —
+   * or clicks the badge on the card itself.
    */
   const [revealed, setRevealed] = useState<{ cardId: string; nonce: number } | null>(null);
   const revealedCardId =
     revealed && revealed.nonce === focusedThread?.nonce ? revealed.cardId : null;
+  const dismissRevealed = useCallback(() => setRevealed(null), []);
 
   // Bumped when the reader changes what the list shows, to send the windowed
   // list back to the top — see the reset note in useWindowedList. Only the
@@ -574,7 +576,7 @@ export function InlineCommentsList({
         canComment={canComment}
         needsName={!displayName}
         focused={focusedId === thread.id}
-        revealed={revealed}
+        onDismissRevealed={revealed ? dismissRevealed : undefined}
         flashPhase={flash?.id === thread.id ? flash.phase : null}
         collapsed={collapsed.has(thread.id)}
         mentionCandidates={mentionCandidates}
