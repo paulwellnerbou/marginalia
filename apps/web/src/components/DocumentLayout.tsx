@@ -108,6 +108,7 @@ import {
 import {
   mergeArchiveThreads,
   mergeOpenThreads,
+  staleOpenThreads,
   threadContainingComment,
   threadIdOfComment,
 } from '../lib/thread-reconcile.js';
@@ -711,6 +712,44 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   }, []);
 
   /**
+   * Re-read the open threads a fresh open read no longer listed.
+   *
+   * Broadcasts skip the acting client, and the client id is shared by
+   * every tab of this author and by their paired devices, so an accept or
+   * a resolve made in another tab reaches this one only as a thread that
+   * vanished from the next open read. The merge has dropped that copy
+   * already; reading the thread back lands it in its settled state. An
+   * accept also rewrote the document, which this client was not told
+   * about either, so the text is re-read along with it.
+   */
+  const reconcileStaleThreads = useCallback(
+    (stale: readonly Thread[]) => {
+      if (stale.length === 0) return;
+      void Promise.all(
+        stale.map((s) => {
+          archiveMergeGuard.current?.add(s.id);
+          return fetchThread(doc.uid, s.id).then(
+            (thread) => {
+              if (thread) landThread(thread);
+              return thread;
+            },
+            (err) => {
+              reportError('DocumentLayout.reconcileStaleThreads', err, {
+                uid: doc.uid,
+                threadId: s.id,
+              });
+              return null;
+            },
+          );
+        }),
+      ).then((threads) => {
+        if (threads.some((t) => t?.resolution?.kind === 'accept')) void refreshDoc();
+      });
+    },
+    [doc.uid, landThread, refreshDoc],
+  );
+
+  /**
    * Re-read threads the server resolved as a side effect of a mutation.
    *
    * Accepting a proposal also resolves the plain comment threads it
@@ -813,6 +852,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       // Without the archive the fresh open set is not the whole document,
       // so it is merged rather than swapped in — a resolved thread pulled
       // in on its own, by a deep link or a mutation, has to survive.
+      const stale = withArchive ? [] : staleOpenThreads(threadsRef.current, res.threads);
       setThreads((prev) => (withArchive ? res.threads : mergeOpenThreads(prev, res.threads)));
       setResolvedThreadCount(res.counts?.resolved ?? 0);
       // This read was the whole document, so the archive is present again
@@ -821,11 +861,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       if (withArchive) archiveLoad.current = Promise.resolve();
       setMentionCandidates(res.mention_candidates);
       threadsLoaded.current = true;
+      reconcileStaleThreads(stale);
     } catch (err) {
       if (requestId !== threadSnapshotRequestRef.current) return;
       reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
     }
-  }, [doc.uid]);
+  }, [doc.uid, reconcileStaleThreads]);
 
   /*
    * The read a mutation triggers: the open threads only.
@@ -843,15 +884,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         listThreads(doc.uid, { state: 'open', consumeMentions: false, fresh: true }),
       );
       if (requestId !== threadSnapshotRequestRef.current) return;
+      const stale = staleOpenThreads(threadsRef.current, res.threads);
       setThreads((prev) => mergeOpenThreads(prev, res.threads));
       setResolvedThreadCount(res.counts?.resolved ?? 0);
       setMentionCandidates(res.mention_candidates);
       threadsLoaded.current = true;
+      reconcileStaleThreads(stale);
     } catch (err) {
       if (requestId !== threadSnapshotRequestRef.current) return;
       reportError('DocumentLayout.reconcileOpenThreads', err, { uid: doc.uid });
     }
-  }, [doc.uid]);
+  }, [doc.uid, reconcileStaleThreads]);
   useEffect(() => {
     reconcileOpenThreadsRef.current = reconcileOpenThreads;
   }, [reconcileOpenThreads]);
