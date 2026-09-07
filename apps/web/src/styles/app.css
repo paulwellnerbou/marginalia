@@ -2724,6 +2724,13 @@ button.primary:disabled {
   font-size: calc(0.85rem * var(--ui-scale, 1));
 }
 
+/* Include row spacing in the virtualizer's measured height. The rows own
+   their coordinate origin, below the controls and orphaned discussions. */
+.ic-list-row {
+  display: flow-root;
+  padding-bottom: 0.6rem;
+}
+
 /* One-line note that the TOC's section filter is narrowing this list. */
 .ic-list-section-filter-note {
   display: flex;
