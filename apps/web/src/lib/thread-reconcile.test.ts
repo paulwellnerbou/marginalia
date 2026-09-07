@@ -5,13 +5,20 @@ import type { Thread } from './api.js';
 import {
   mergeArchiveThreads,
   mergeOpenThreads,
+  staleOpenThreads,
   threadContainingComment,
   threadIdOfComment,
 } from './thread-reconcile.js';
 
-function thread(id: string, createdAt: number, replyIds: string[] = []): Thread {
+function thread(
+  id: string,
+  createdAt: number,
+  replyIds: string[] = [],
+  state?: 'open' | 'resolved',
+): Thread {
   return {
     id,
+    state,
     comments: [
       { id: `${id}-root`, created_at: createdAt },
       ...replyIds.map((rid) => ({ id: rid, created_at: createdAt + 1 })),
@@ -159,5 +166,33 @@ describe('mergeOpenThreads', () => {
     const merged = mergeOpenThreads([thread('x', 1), thread('y', 2)], [thread('x', 1)]);
 
     expect(merged.map((t) => t.id)).toEqual(['x', 'y']);
+  });
+
+  test('drops a local open thread the read no longer lists', () => {
+    // Accepted in another tab of the same author: that tab is the acting
+    // client for the broadcast, so this one only sees the thread vanish.
+    const settled = thread('done', 1, [], 'resolved');
+    const gone = thread('accepted-elsewhere', 2, [], 'open');
+    const still = thread('still-open', 3, [], 'open');
+
+    const merged = mergeOpenThreads([settled, gone, still], [still]);
+
+    expect(merged.map((t) => t.id)).toEqual(['done', 'still-open']);
+  });
+});
+
+describe('staleOpenThreads', () => {
+  test('names the local open threads missing from the read', () => {
+    const settled = thread('done', 1, [], 'resolved');
+    const gone = thread('gone', 2, [], 'open');
+    const still = thread('still', 3, [], 'open');
+
+    const stale = staleOpenThreads([settled, gone, still], [still]);
+
+    expect(stale.map((t) => t.id)).toEqual(['gone']);
+  });
+
+  test('a settled thread is never stale, however empty the read', () => {
+    expect(staleOpenThreads([thread('done', 1, [], 'resolved')], [])).toEqual([]);
   });
 });

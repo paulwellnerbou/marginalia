@@ -72,6 +72,22 @@ export function mergeArchiveThreads(
 }
 
 /**
+ * Local open threads a fresh read of the open set no longer lists.
+ *
+ * Every mutation is broadcast to every subscriber except the client that
+ * made it, and the client id is shared by every tab of one browser and by
+ * every paired device. So an accept or a resolve made in another tab of
+ * the same author reaches this one only through the next open read, where
+ * the thread has simply gone missing. These are the threads to re-read one
+ * by one, so an accepted proposal lands as resolved rather than lingering
+ * as an open one that paints its whole block.
+ */
+export function staleOpenThreads(local: readonly Thread[], open: readonly Thread[]): Thread[] {
+  const fresh = new Set(open.map((t) => t.id));
+  return local.filter((t) => t.state === 'open' && !fresh.has(t.id));
+}
+
+/**
  * Fold a read of the open threads into the list already on screen.
  *
  * Reconciling after a mutation used to re-read every thread in the
@@ -81,22 +97,18 @@ export function mergeArchiveThreads(
  * work that cannot have changed. The same document answers `state=open`
  * with 34 threads and 32 KB.
  *
- * So the open set is re-read and the rest is kept. What that gives up is
- * an archived thread changing without this client hearing about it —
- * and it does hear: a resolve, a delete or an edit elsewhere arrives as
- * a realtime event and is reconciled thread by thread. The gap is only
- * while the socket is down, and coming back up triggers a full read
- * precisely because events were missed then.
- *
- * The one change a client makes that it does not hear back this way is
- * accepting a proposal, which resolves the threads that proposal answers
- * without broadcasting to the accepter. Those threads leave the open set,
- * so this keeps the stale copies; the accept handler names them from the
- * mutation response and lands them itself before calling for a reconcile.
+ * So the open set is re-read and the settled threads are kept: a
+ * resolved thread pulled in on its own, by a deep link or a mutation,
+ * cannot be in the open read and must survive it. A local *open* thread
+ * the read no longer lists is the opposite case — it was settled or
+ * deleted somewhere this client did not hear about (see
+ * `staleOpenThreads`) — and keeping that copy would show a thread, and
+ * paint a highlight, that no longer exists. It is dropped here and the
+ * caller re-reads it.
  */
 export function mergeOpenThreads(local: readonly Thread[], open: readonly Thread[]): Thread[] {
   const fresh = new Set(open.map((t) => t.id));
-  const merged = [...open, ...local.filter((t) => !fresh.has(t.id))];
+  const merged = [...open, ...local.filter((t) => !fresh.has(t.id) && t.state !== 'open')];
   merged.sort((a, b) => a.comments[0].created_at - b.comments[0].created_at);
   return merged;
 }
