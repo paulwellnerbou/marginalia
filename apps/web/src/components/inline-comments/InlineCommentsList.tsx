@@ -187,6 +187,7 @@ export function InlineCommentsList({
   onNeedResolvedThreads,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const ownHandledFocusNonce = useRef<number | null>(null);
   const lastHandledFocusNonce = handledFocusNonce ?? ownHandledFocusNonce;
@@ -396,7 +397,7 @@ export function InlineCommentsList({
   const win = useWindowedList({
     keys: activeKeys,
     estimateHeight: DEFAULT_ROW_ESTIMATE,
-    rootRef,
+    rootRef: rowsRef,
     /*
      * Whatever the focus effect below is about to scroll to has to exist
      * in the DOM for it to find, however far down the list it sits.
@@ -407,9 +408,10 @@ export function InlineCommentsList({
      * would then query for an element that was never mounted, and the
      * scroll and flash would silently not happen.
      */
-    pinnedKey: focusedThread
-      ? (parentOf.get(focusedThread.threadId) ?? focusedThread.threadId)
-      : null,
+    pinnedKey:
+      focusedThread && lastHandledFocusNonce.current !== focusedThread.nonce
+        ? (parentOf.get(focusedThread.threadId) ?? focusedThread.threadId)
+        : null,
     resetToken: listResetNonce,
   });
   const windowedActive = useMemo(
@@ -417,28 +419,11 @@ export function InlineCommentsList({
     [visibleActive, win.start, win.end],
   );
 
-  /*
-   * Record what the rendered cards actually measure, so the spacers above
-   * and below them stand for real heights rather than the estimate. Read
-   * off the DOM after commit rather than through a ref on each card: the
-   * card owns its own root element, and threading a measuring ref through
-   * it (and through the nested cards it renders) would put layout
-   * plumbing in a component that has no other reason to know about it.
-   */
-  useIsomorphicLayoutEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    for (const el of root.querySelectorAll<HTMLElement>(':scope > [data-comment-thread-id]')) {
-      const id = el.getAttribute('data-comment-thread-id');
-      if (id) win.measure(id)(el);
-    }
-  });
-
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [flash, setFlash] = useState<{ id: string; phase: 'a' | 'b' } | null>(null);
 
-  // Focus: reveal if hidden, expand if collapsed, then scroll into view and flash.
-  useEffect(() => {
+  // Finish the jump before releasing the temporary virtual row pin.
+  useIsomorphicLayoutEffect(() => {
     if (!focusedThread) return;
     const step = planThreadFocus({
       request: focusedThread,
@@ -469,24 +454,24 @@ export function InlineCommentsList({
     setFocusedId(focusedThread.threadId);
     setFlash({ id: focusedThread.threadId, phase });
 
-    const raf = window.requestAnimationFrame(() => {
-      const el = rootRef.current?.querySelector<HTMLElement>(
-        `[data-comment-thread-id="${CSS.escape(focusedThread.threadId)}"]`,
-      );
-      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
-    const flashT = window.setTimeout(() => {
-      setFlash((cur) => (cur?.id === focusedThread.threadId && cur.phase === phase ? null : cur));
-    }, FOCUS_FLASH_MS);
-    const focusT = window.setTimeout(() => {
-      setFocusedId((cur) => (cur === focusedThread.threadId ? null : cur));
-    }, FOCUS_HIGHLIGHT_MS);
-    return () => {
-      window.cancelAnimationFrame(raf);
-      window.clearTimeout(flashT);
-      window.clearTimeout(focusT);
-    };
+    const el = rootRef.current?.querySelector<HTMLElement>(
+      `[data-comment-thread-id="${CSS.escape(focusedThread.threadId)}"]`,
+    );
+    el?.scrollIntoView({ behavior: 'instant', block: 'center' });
   }, [focusedThread, lastHandledFocusNonce, threadIds, visibleIds, collapsed, parentOf]);
+
+  useEffect(() => {
+    if (!flash) return;
+    const timer = window.setTimeout(() => setFlash(null), FOCUS_FLASH_MS);
+    return () => window.clearTimeout(timer);
+  }, [flash]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: repeat focus requests restart the highlight even for the same id.
+  useEffect(() => {
+    if (!focusedId) return;
+    const timer = window.setTimeout(() => setFocusedId(null), FOCUS_HIGHLIGHT_MS);
+    return () => window.clearTimeout(timer);
+  }, [focusedId, focusedThread?.nonce]);
 
   const otherSortMode: ThreadSortMode = sortMode === 'document' ? 'latest' : 'document';
 
@@ -798,9 +783,15 @@ export function InlineCommentsList({
         )
       )}
 
-      {win.padTop > 0 && <div style={{ height: win.padTop }} aria-hidden="true" />}
-      {windowedActive.map(renderItem)}
-      {win.padBottom > 0 && <div style={{ height: win.padBottom }} aria-hidden="true" />}
+      <div ref={rowsRef} className="ic-list-rows">
+        {win.padTop > 0 && <div style={{ height: win.padTop }} aria-hidden="true" />}
+        {windowedActive.map((item) => (
+          <div key={item.id} ref={win.measure(item.id)} className="ic-list-row">
+            {renderItem(item)}
+          </div>
+        ))}
+        {win.padBottom > 0 && <div style={{ height: win.padBottom }} aria-hidden="true" />}
+      </div>
     </div>
   );
 }

@@ -69,11 +69,11 @@ export interface WindowedListOptions {
   resetToken?: unknown;
 }
 
-/** Nearest ancestor that actually scrolls, or the document scroller. */
+/** Nearest scroll container, even before its content overflows. */
 function scrollParentOf(el: HTMLElement | null): HTMLElement | null {
   for (let node = el?.parentElement ?? null; node; node = node.parentElement) {
     const { overflowY } = getComputedStyle(node);
-    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) {
+    if (overflowY === 'auto' || overflowY === 'scroll') {
       return node;
     }
   }
@@ -90,9 +90,12 @@ export function useWindowedList({
   resetToken,
 }: WindowedListOptions): WindowedList {
   const heights = useRef(new Map<string, number>());
-  const [, bumpMeasured] = useState(0);
+  const [measurementVersion, bumpMeasured] = useState(0);
+  const elements = useRef(new Map<string, HTMLElement>());
+  const rowObserver = useRef<ResizeObserver | null>(null);
   const [viewport, setViewport] = useState({ top: 0, height: 0 });
   const windowed = keys.length > threshold;
+  const syncViewport = useRef<(() => void) | null>(null);
 
   // Coalesce measurements taken during one commit into a single re-render;
   // without it, a screenful of rows reporting their heights would each
@@ -114,10 +117,37 @@ export function useWindowedList({
 
   const measure = useCallback(
     (key: string) => (el: HTMLElement | null) => {
-      if (el) noteHeight(key, el.offsetHeight);
+      const previous = elements.current.get(key);
+      if (previous && previous !== el) rowObserver.current?.unobserve(previous);
+      if (el) {
+        elements.current.set(key, el);
+        rowObserver.current?.observe(el);
+        noteHeight(key, el.getBoundingClientRect().height);
+      } else {
+        elements.current.delete(key);
+      }
     },
     [noteHeight],
   );
+
+  // Replies, expanded bodies and asynchronously rendered diffs can resize a
+  // card without re-rendering the list that owns it.
+  useIsomorphicLayoutEffect(() => {
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const el = entry.target as HTMLElement;
+        for (const [key, current] of elements.current) {
+          if (current === el) noteHeight(key, el.getBoundingClientRect().height);
+        }
+      }
+    });
+    rowObserver.current = observer;
+    for (const el of elements.current.values()) observer.observe(el);
+    return () => {
+      observer.disconnect();
+      rowObserver.current = null;
+    };
+  }, [noteHeight]);
 
   /*
    * Track the scrolling ancestor's position.
@@ -130,11 +160,10 @@ export function useWindowedList({
    * one cheap property read, so it can simply run on the event.
    *
    * The list's offset inside the scroller is measured separately, on
-   * mount and on resize, so scrolling itself reads `scrollTop` alone and
+   * commit and on resize, so scrolling itself reads `scrollTop` alone and
    * never forces layout.
    */
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keys.length is the re-attach trigger — the scrolling ancestor only exists, and only becomes scrollable, once the list has rows.
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     if (!windowed) return;
     const root = rootRef.current;
     const scroller = scrollParentOf(root);
@@ -162,7 +191,7 @@ export function useWindowedList({
       if (Math.abs(top - lastTop) < 8 && height === lastHeight) return;
       lastTop = top;
       lastHeight = height;
-      setViewport({ top, height });
+      setViewport((prev) => (prev.top === top && prev.height === height ? prev : { top, height }));
     };
     const onResize = () => {
       measureOffset();
@@ -170,6 +199,7 @@ export function useWindowedList({
       read();
     };
 
+    syncViewport.current = onResize;
     measureOffset();
     read();
     scroller.addEventListener('scroll', read, { passive: true });
@@ -177,12 +207,20 @@ export function useWindowedList({
     const ro = new ResizeObserver(onResize);
     ro.observe(scroller);
     ro.observe(root);
+    if (root.parentElement) ro.observe(root.parentElement);
     return () => {
+      syncViewport.current = null;
       scroller.removeEventListener('scroll', read);
       window.removeEventListener('resize', onResize);
       ro.disconnect();
     };
   }, [windowed, rootRef, keys.length]);
+
+  // A background update can move the rows below a taller orphan section,
+  // clamp scrollTop, or complete a focus jump without a scroll event yet.
+  useIsomorphicLayoutEffect(() => {
+    syncViewport.current?.();
+  });
 
   /*
    * Scroll to the top when the caller remakes the list.
@@ -204,6 +242,7 @@ export function useWindowedList({
     setViewport((v) => (v.top === 0 ? v : { ...v, top: 0 }));
   }, [resetToken, rootRef]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measurementVersion tracks the mutable height cache.
   return useMemo<WindowedList>(() => {
     if (!windowed) {
       return { start: 0, end: keys.length, padTop: 0, padBottom: 0, measure };
@@ -218,9 +257,16 @@ export function useWindowedList({
       pinnedKey,
     });
     return { ...range, measure };
-    // `heights.current` is a ref; `bumpMeasured` is what re-runs this after
-    // a measuring pass, so it is deliberately not a dependency.
-  }, [windowed, keys, estimateHeight, viewport, overscanPx, pinnedKey, measure]);
+  }, [
+    windowed,
+    keys,
+    estimateHeight,
+    viewport,
+    overscanPx,
+    pinnedKey,
+    measure,
+    measurementVersion,
+  ]);
 }
 
 /** Re-export for tests that need the same fallback the hook uses. */
