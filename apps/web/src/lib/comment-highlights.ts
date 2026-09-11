@@ -6,6 +6,7 @@
  * every mark it emits is both a visual marker and a click target.
  */
 
+import type { AnchorSection } from './anchor-target.js';
 import {
   type CommentAnchor,
   isProposal,
@@ -14,6 +15,15 @@ import {
   type ThreadState,
 } from './api.js';
 import { highlightRange } from './block-span.js';
+
+/** The section an anchor was made in, and nothing else of it. */
+function sectionOf(anchor: AnchorSection): AnchorSection {
+  return {
+    heading_path: anchor.heading_path ?? null,
+    section_index: anchor.section_index ?? null,
+    section_index_path: anchor.section_index_path ?? null,
+  };
+}
 
 export interface CommentHighlight {
   scope: 'range' | 'block';
@@ -24,6 +34,8 @@ export interface CommentHighlight {
   startOffset: number;
   endOffset: number;
   state?: ThreadState;
+  /** Which of several elements carrying `blockId` is meant — see `findAnchorBlock`. */
+  section?: AnchorSection | null;
 }
 
 export interface CommentHighlightOptions {
@@ -70,6 +82,7 @@ export function buildCommentHighlights(
           quote: thread.anchor.quote,
           ...range,
           state: thread.state,
+          section: sectionOf(thread.anchor),
         });
       }
     } else if (thread.state === 'open') {
@@ -87,6 +100,7 @@ export function buildCommentHighlights(
         startOffset: 0,
         endOffset: thread.anchor.quote.length,
         state: thread.state,
+        section: sectionOf(thread.anchor),
       });
     }
   }
@@ -99,6 +113,7 @@ export function buildCommentHighlights(
       endBlockId: pendingAnchor.end_block_id ?? null,
       quote: pendingAnchor.quote,
       ...pendingRange,
+      section: sectionOf(pendingAnchor),
     });
   }
 

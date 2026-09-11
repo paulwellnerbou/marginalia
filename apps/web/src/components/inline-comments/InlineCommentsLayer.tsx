@@ -10,7 +10,7 @@ import {
   useState,
 } from 'react';
 import { formatAnchorQuote } from '../../lib/anchor-quote.js';
-import { resolveThreadScrollTarget } from '../../lib/anchor-target.js';
+import { type AnchorSection, resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { isProposal, proposalStatus } from '../../lib/api.js';
 import {
@@ -93,6 +93,7 @@ interface Props {
     quote?: string | null,
     threadId?: string,
     scrollOffset?: number,
+    section?: AnchorSection | null,
   ) => void;
 }
 
@@ -107,6 +108,7 @@ interface RenderItem {
   id: string;
   blockId: string | null;
   quote?: string | null;
+  section?: AnchorSection | null;
 }
 
 const PENDING_ID = '__pending__';
@@ -293,6 +295,7 @@ export function InlineCommentsLayer({
       id: s.thread.id,
       blockId: s.thread.anchor.block_id,
       quote: s.thread.anchor.quote,
+      section: s.thread.anchor,
     }));
     if (canComment && pendingAnchor) {
       const pendingBlockIndex = pendingAnchor.block_id
@@ -308,6 +311,7 @@ export function InlineCommentsLayer({
         id: PENDING_ID,
         blockId: pendingAnchor.block_id,
         quote: pendingAnchor.quote,
+        section: pendingAnchor,
       };
       if (insertAt === -1) items.push(pendingItem);
       else items.splice(insertAt, 0, pendingItem);
@@ -330,9 +334,15 @@ export function InlineCommentsLayer({
    * the same clearance below the toolbar as in stacking mode.
    */
   const scrollToAnchorWithOffset = useCallback(
-    (blockId: string, quote?: string | null, threadId?: string) => {
+    (
+      blockId: string,
+      quote?: string | null,
+      threadId?: string,
+      _scrollOffset?: number,
+      section?: AnchorSection | null,
+    ) => {
       if (threadId) lastNavThreadRef.current = threadId;
-      onScrollToAnchor(blockId, quote, threadId, stackingEnabled ? 0 : stickyTopPad);
+      onScrollToAnchor(blockId, quote, threadId, stackingEnabled ? 0 : stickyTopPad, section);
     },
     [onScrollToAnchor, stackingEnabled, stickyTopPad],
   );
@@ -340,7 +350,9 @@ export function InlineCommentsLayer({
   const focusLinked = useCallback(
     (target: Thread) => {
       const blockId = target.anchor.block_id;
-      if (blockId) scrollToAnchorWithOffset(blockId, target.anchor.quote, target.id);
+      if (blockId) {
+        scrollToAnchorWithOffset(blockId, target.anchor.quote, target.id, undefined, target.anchor);
+      }
     },
     [scrollToAnchorWithOffset],
   );
@@ -518,7 +530,7 @@ export function InlineCommentsLayer({
         // well below the block's top, and anchoring the card to the
         // block instead would leave it that far above the highlight the
         // jump just parked at the top edge — clipped by the toolbar.
-        const el = resolveThreadScrollTarget(doc, item.blockId, item.quote, item.id);
+        const el = resolveThreadScrollTarget(doc, item.blockId, item.quote, item.id, item.section);
         if (el) {
           nat = el.getBoundingClientRect().top - scrollRect.top + scrollTop;
         }
@@ -941,7 +953,14 @@ export function InlineCommentsLayer({
   ): ReactNode {
     const blockId = thread.anchor.block_id;
     const onJump = blockId
-      ? () => scrollToAnchorWithOffset(blockId, thread.anchor.quote, thread.id)
+      ? () =>
+          scrollToAnchorWithOffset(
+            blockId,
+            thread.anchor.quote,
+            thread.id,
+            undefined,
+            thread.anchor,
+          )
       : undefined;
     const rawLinks = threadLinks(thread, byId);
     // Proposals rendered inside this card need no "See proposed change"

@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { resolveThreadScrollTarget } from '../../lib/anchor-target.js';
+import { type AnchorSection, resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import type { CommentAnchor, Thread } from '../../lib/api.js';
 import { FloatingCardGrip } from './FloatingCardGrip.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
@@ -58,7 +58,13 @@ interface Props {
   onReact: (commentId: string, emoji: string) => Promise<void>;
   onCreateProposal?: ((thread: Thread) => void) | undefined;
   onEditProposal?: ((thread: Thread) => void) | undefined;
-  onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
+  onScrollToAnchor: (
+    blockId: string,
+    quote?: string | null,
+    threadId?: string,
+    scrollOffset?: number,
+    section?: AnchorSection | null,
+  ) => void;
 }
 
 /** Pointer travel beyond this is a scroll/drag, not a dismissing tap. */
@@ -142,7 +148,9 @@ export function FloatingCommentsLayer({
   const focusLinked = useCallback(
     (target: Thread) => {
       const blockId = target.anchor.block_id;
-      if (blockId) onScrollToAnchor(blockId, target.anchor.quote, target.id);
+      if (blockId) {
+        onScrollToAnchor(blockId, target.anchor.quote, target.id, undefined, target.anchor);
+      }
       setOpenId(cardIdFor(target.id));
     },
     [onScrollToAnchor, cardIdFor],
@@ -215,7 +223,13 @@ export function FloatingCommentsLayer({
     // so this always agrees with where the jump itself landed.
     const thread = byId.get(openId);
     if (thread?.anchor.block_id) {
-      return resolveThreadScrollTarget(doc, thread.anchor.block_id, thread.anchor.quote, openId);
+      return resolveThreadScrollTarget(
+        doc,
+        thread.anchor.block_id,
+        thread.anchor.quote,
+        openId,
+        thread.anchor,
+      );
     }
     return null;
   }, [docElementRef, openId, byId]);
@@ -363,7 +377,7 @@ export function FloatingCommentsLayer({
   ): ReactNode {
     const blockId = thread.anchor.block_id;
     const onJump = blockId
-      ? () => onScrollToAnchor(blockId, thread.anchor.quote, thread.id)
+      ? () => onScrollToAnchor(blockId, thread.anchor.quote, thread.id, undefined, thread.anchor)
       : undefined;
     const rawLinks = threadLinks(thread, byId);
     // Proposals rendered inside this card need no "See proposed change"

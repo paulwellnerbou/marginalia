@@ -63,7 +63,7 @@ export function PendingCommentPopover({
       'mark[data-comment-highlight]:not([data-comment-thread-ids])',
     );
     if (mark) return mark;
-    if (anchor.block_id) return resolveAnchorElement(doc, anchor.block_id, anchor.quote);
+    if (anchor.block_id) return resolveAnchorElement(doc, anchor.block_id, anchor.quote, anchor);
     return null;
   }, [docElementRef, anchor]);
 

@@ -79,6 +79,7 @@ test('an open comment paints its quoted range', () => {
       startOffset: 0,
       endOffset: QUOTE.length,
       state: 'open',
+      section: { heading_path: null, section_index: null, section_index_path: null },
     },
   ]);
 });
@@ -141,6 +142,27 @@ test('the anchor being composed paints without a thread id', () => {
       quote: 'fresh selection',
       startOffset: 3,
       endOffset: 18,
+      section: { heading_path: null, section_index: null, section_index_path: null },
     },
   ]);
+});
+
+test('a highlight carries the section its anchor was made in', () => {
+  // A block id is a hash of the block's text, so a heading the document
+  // repeats is one id on several elements; the section is what says which
+  // of them this highlight belongs on.
+  const t = thread('A', {
+    anchor: {
+      ...thread('A').anchor,
+      heading_path: ['Crestwood', 'Chapter 5', 'Elias'],
+      section_index: 0,
+      section_index_path: [526, 526, 1, 0],
+    },
+  });
+  const [highlight] = buildCommentHighlights([t], { hideResolved: true });
+  expect(highlight?.section).toEqual({
+    heading_path: ['Crestwood', 'Chapter 5', 'Elias'],
+    section_index: 0,
+    section_index_path: [526, 526, 1, 0],
+  });
 });

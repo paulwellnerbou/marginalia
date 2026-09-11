@@ -128,7 +128,13 @@ export function FloatingCommentsToolbar({
     for (const thread of visibleThreads) {
       const blockId = thread.anchor.block_id;
       if (!blockId) continue;
-      const el = resolveThreadScrollTarget(doc, blockId, thread.anchor.quote, thread.id);
+      const el = resolveThreadScrollTarget(
+        doc,
+        blockId,
+        thread.anchor.quote,
+        thread.id,
+        thread.anchor,
+      );
       if (!el) continue;
       entries.push({
         id: thread.id,
