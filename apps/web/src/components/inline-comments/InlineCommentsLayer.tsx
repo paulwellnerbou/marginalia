@@ -64,13 +64,14 @@ interface Props {
   displayName: string | null;
   mentionCandidates: string[];
   onCancelPending: () => void;
+  /** These three resolve `false` when the post failed; the composer keeps its draft. */
   onCreate: (payload: {
     anchor: CommentAnchor;
     body: string;
     display_name?: string;
-  }) => Promise<void>;
-  onReply: (threadId: string, body: string, name?: string) => Promise<void>;
-  onEdit: (id: string, body: string) => Promise<void>;
+  }) => Promise<boolean | void>;
+  onReply: (threadId: string, body: string, name?: string) => Promise<boolean | void>;
+  onEdit: (id: string, body: string) => Promise<boolean | void>;
   onSetHidden: (id: string, hidden: boolean) => Promise<void>;
   onDeleteNode: (id: string) => Promise<void>;
   onDeleteThread: (id: string) => Promise<void>;

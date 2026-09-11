@@ -17,11 +17,12 @@ interface Props {
   displayName: string | null;
   mentionCandidates: string[];
   onCancel: () => void;
+  /** Resolves `false` when the post failed; the composer keeps its draft. */
   onCreate: (payload: {
     anchor: CommentAnchor;
     body: string;
     display_name?: string;
-  }) => Promise<void>;
+  }) => Promise<boolean | void>;
 }
 
 /**

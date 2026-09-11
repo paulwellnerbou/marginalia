@@ -109,8 +109,9 @@ interface Props {
   handledFocusNonce?: RefObject<number | null>;
   displayName: string | null;
   mentionCandidates: string[];
-  onReply: (threadId: string, body: string, name?: string) => Promise<void>;
-  onEdit: (id: string, body: string) => Promise<void>;
+  /** Both resolve `false` when the post failed; the composer keeps its draft. */
+  onReply: (threadId: string, body: string, name?: string) => Promise<boolean | void>;
+  onEdit: (id: string, body: string) => Promise<boolean | void>;
   onSetHidden: (id: string, hidden: boolean) => Promise<void>;
   onDeleteNode: (id: string) => Promise<void>;
   onDeleteThread: (id: string) => Promise<void>;
