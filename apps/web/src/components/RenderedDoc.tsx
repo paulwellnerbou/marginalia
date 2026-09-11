@@ -1,6 +1,7 @@
 import { splitSpanQuote } from '@marginalia/renderer/anchor-span';
 import type { RenderResult } from '@marginalia/renderer/types';
 import { type RefObject, useEffect, useRef, useState } from 'react';
+import { type AnchorSection, resolveAnchorElement } from '../lib/anchor-target.js';
 import type { ThreadState } from '../lib/api.js';
 import { spanElements } from '../lib/block-span.js';
 import { isInjectedChromeText } from '../lib/block-text.js';
@@ -42,6 +43,7 @@ interface RenderedDocProps {
     quote: string;
     startOffset: number;
     endOffset: number;
+    section?: AnchorSection | null;
   }>;
   /** Plain-text query to highlight inside the rendered document. */
   searchQuery?: string;
@@ -809,6 +811,8 @@ function planCommentHighlights(
     startOffset: number;
     endOffset: number;
     state?: ThreadState;
+    /** Which of several elements carrying `blockId` the anchor means. */
+    section?: AnchorSection | null;
   }>,
 ): Map<HTMLElement, BlockHighlightPlan> {
   const rangesByBlock = new Map<HTMLElement, HighlightRange[]>();
@@ -826,10 +830,13 @@ function planCommentHighlights(
     const head = fragments[0] ?? '';
     const tail = fragments[fragments.length - 1] ?? '';
 
-    const startBlock = findHighlightBlock(root, highlight.blockId, head);
+    const startBlock = resolveAnchorElement(root, highlight.blockId, head, highlight.section);
     if (!startBlock) continue;
+    // The end block is the first of its id after the start: an end id is
+    // repeated as readily as a start id, and the stored section describes
+    // the start alone.
     const endBlock = highlight.endBlockId
-      ? findHighlightBlock(root, highlight.endBlockId, tail)
+      ? resolveAnchorElement(root, highlight.endBlockId, tail, null, startBlock)
       : null;
     // A span whose far end no longer resolves degrades to its first
     // block rather than dropping the highlight entirely.
@@ -1085,34 +1092,6 @@ function buildBlockTextMap(block: HTMLElement): {
   }
 
   return { normalizedText, normalizedToRaw, rawLength: rawText.length };
-}
-
-function findHighlightBlock(
-  root: HTMLElement,
-  blockId: string,
-  quote?: string | null,
-): HTMLElement | null {
-  const escaped = CSS.escape(blockId);
-  const block = root.querySelector<HTMLElement>(
-    `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-  );
-  if (!block || !quote || block.dataset.subblock) return block;
-  // Recovery for comments anchored before sub-block-aware capture
-  // landed: their stored block_id points at the enclosing top-level
-  // block (a list, table, …) rather than the specific sub-block they
-  // were on. If the quote uniquely identifies one descendant
-  // sub-block, narrow to it so the highlight + click-flash hit the
-  // right element instead of the whole container.
-  const subEls = block.querySelectorAll<HTMLElement>('[data-subblock]');
-  let narrowed: HTMLElement | null = null;
-  for (const sub of subEls) {
-    const text = (sub.textContent ?? '').replace(/\s+/gu, ' ').trim();
-    if (text.includes(quote)) {
-      if (narrowed) return block; // quote appears in multiple sub-blocks — leave on the parent
-      narrowed = sub;
-    }
-  }
-  return narrowed ?? block;
 }
 
 function collectTextNodes(

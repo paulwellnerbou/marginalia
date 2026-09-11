@@ -8,7 +8,7 @@ import {
 } from '@radix-ui/react-icons';
 import { DropdownMenu, IconButton } from '@radix-ui/themes';
 import { type RefObject, useCallback, useEffect, useMemo, useState } from 'react';
-import { resolveThreadScrollTarget } from '../../lib/anchor-target.js';
+import { type AnchorSection, resolveThreadScrollTarget } from '../../lib/anchor-target.js';
 import type { Thread } from '../../lib/api.js';
 import {
   AT_THREAD_TOLERANCE_PX,
@@ -47,7 +47,13 @@ interface Props {
   /** Switch the comment presentation from the margin column to floating cards. */
   onSwitchToFloating: () => void;
   /** Reuse the existing scrollToAnchor flow so jumps share the flash animation. */
-  onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
+  onScrollToAnchor: (
+    blockId: string,
+    quote?: string | null,
+    threadId?: string,
+    scrollOffset?: number,
+    section?: AnchorSection | null,
+  ) => void;
   /** Receives the toolbar's outer element so the layer can measure its height. */
   rootRef: RefObject<HTMLDivElement | null>;
 }
@@ -85,7 +91,7 @@ export function InlineCommentsToolbar({
       // Name the destination straight away: the scroll animates over
       // several frames and the readout would otherwise trail the press.
       setCurrentId(thread.id);
-      onScrollToAnchor(blockId, thread.anchor.quote, thread.id);
+      onScrollToAnchor(blockId, thread.anchor.quote, thread.id, undefined, thread.anchor);
     },
     [onScrollToAnchor, lastNavThreadRef],
   );
@@ -111,7 +117,13 @@ export function InlineCommentsToolbar({
     for (const thread of sortedThreads) {
       const blockId = thread.anchor.block_id;
       if (!blockId) continue;
-      const target = resolveThreadScrollTarget(doc, blockId, thread.anchor.quote, thread.id);
+      const target = resolveThreadScrollTarget(
+        doc,
+        blockId,
+        thread.anchor.quote,
+        thread.id,
+        thread.anchor,
+      );
       if (!target) continue;
       // Clamped like the scroll itself, so a thread it can get no closer
       // to reads as one the reader is already standing on.

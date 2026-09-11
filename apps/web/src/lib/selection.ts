@@ -1,4 +1,5 @@
 import { joinSpanQuote } from '@marginalia/renderer/anchor-span';
+import type { SectionContext } from '@marginalia/renderer/section-score';
 import type { CommentAnchor } from './api.js';
 import { anchorIdOf, elementsIntersectingRange } from './block-span.js';
 import { blockTextOf, isInjectedChromeText, normalizeWs } from './block-text.js';
@@ -71,9 +72,7 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
   // even when the comment is anchored to a sub-block — heading path /
   // section index are properties of the section the block lives in.
   const sectionTarget = first.el.dataset.block ? first.el : closestTopBlock(first.el);
-  const section = sectionTarget
-    ? computeSectionContext(root, sectionTarget)
-    : { headingPath: [] as string[], sectionIndex: 0, sectionIndexPath: [0] };
+  const section = sectionTarget ? computeSectionContext(root, sectionTarget) : ROOT_SECTION;
   return {
     block_id: first.blockId,
     end_block_id: slices.length > 1 ? last.blockId : null,
@@ -160,17 +159,31 @@ function selectedTextOf(el: HTMLElement, range: Range): string {
   return out;
 }
 
+/** A block's section as the DOM walk reads it; mutable arrays, since the
+ *  anchor is posted straight from one. */
+export interface BlockSection extends SectionContext {
+  headingPath: string[];
+  sectionIndexPath: number[];
+}
+
+/** Before any heading: the root section, nothing in it yet. */
+const ROOT_SECTION: BlockSection = { headingPath: [], sectionIndex: 0, sectionIndexPath: [0] };
+
+function computeSectionContext(root: HTMLElement, target: HTMLElement): BlockSection {
+  return sectionContextsOf(root, new Set([target])).get(target) ?? ROOT_SECTION;
+}
+
 /**
- * Replay the server-side block-ids walk in the DOM: iterate sibling blocks
- * up to (and including) `target`, maintaining a heading stack and a
- * per-section-path counter. Returns the path + index for `target`.
+ * Replay the server-side block-ids walk in the DOM for the given top-level
+ * blocks: iterate sibling blocks maintaining a heading stack and a
+ * per-section-path counter, and stop once every target has its context.
  *
  * Kept in sync with packages/renderer/src/plugins/block-ids.ts.
  */
-function computeSectionContext(
+export function sectionContextsOf(
   root: HTMLElement,
-  target: HTMLElement,
-): { headingPath: string[]; sectionIndex: number; sectionIndexPath: number[] } {
+  targets: ReadonlySet<HTMLElement>,
+): Map<HTMLElement, BlockSection> {
   // Block-IDs plugin only annotates top-level mdast children, which render as
   // direct descendants of the rendered container. Nested [data-block] would
   // throw off the stack, so scope to direct children — `collectTopLevelBlocks`
@@ -178,14 +191,14 @@ function computeSectionContext(
   const blocks = collectTopLevelBlocks(root);
   const stack: Array<{ level: number; text: string }> = [];
   const counts = new Map<string, number>();
-  let result = { headingPath: [] as string[], sectionIndex: 0, sectionIndexPath: [0] };
+  const out = new Map<HTMLElement, BlockSection>();
   for (const el of blocks) {
-    const text = blockTextOf(el);
+    if (out.size === targets.size) break;
     const headingMatch = /^H([1-6])$/.exec(el.tagName);
     if (headingMatch) {
       const depth = Number(headingMatch[1]);
       while (stack.length && stack[stack.length - 1]!.level >= depth) stack.pop();
-      stack.push({ level: depth, text });
+      stack.push({ level: depth, text: blockTextOf(el) });
     }
     const headingPath = stack.map((s) => s.text);
     const sectionIndexPath: number[] = [];
@@ -195,13 +208,12 @@ function computeSectionContext(
       sectionIndexPath.push(n);
       counts.set(key, n + 1);
     }
-    const sectionIndex = sectionIndexPath[sectionIndexPath.length - 1]!;
-    if (el === target) {
-      result = { headingPath, sectionIndex, sectionIndexPath };
-      break;
+    if (targets.has(el)) {
+      const sectionIndex = sectionIndexPath[sectionIndexPath.length - 1]!;
+      out.set(el, { headingPath, sectionIndex, sectionIndexPath });
     }
   }
-  return result;
+  return out;
 }
 
 /** `[data-block]` descendants in document order, treating known
@@ -262,7 +274,7 @@ function closestBlock(node: Node): HTMLElement | null {
   return null;
 }
 
-function closestTopBlock(node: Node): HTMLElement | null {
+export function closestTopBlock(node: Node): HTMLElement | null {
   let n: Node | null = node;
   while (n) {
     if (n instanceof HTMLElement && n.dataset.block) return n;

@@ -33,7 +33,7 @@ import {
   useState,
 } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { resolveThreadScrollTarget } from '../lib/anchor-target.js';
+import { type AnchorSection, resolveThreadScrollTarget } from '../lib/anchor-target.js';
 import type {
   CommentAnchor,
   Document,
@@ -968,12 +968,18 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   }, [doc.uid]);
 
   const scrollToAnchor = useCallback(
-    (blockId: string, quote?: string | null, threadId?: string, scrollOffset = 0): boolean => {
+    (
+      blockId: string,
+      quote?: string | null,
+      threadId?: string,
+      scrollOffset = 0,
+      section?: AnchorSection | null,
+    ): boolean => {
       const root = docRef.current;
       const scroll = docScrollRef.current;
       if (!root || !scroll) return false;
 
-      const target = resolveThreadScrollTarget(root, blockId, quote, threadId);
+      const target = resolveThreadScrollTarget(root, blockId, quote, threadId, section);
       if (!target) return false;
 
       // Every navigation to a thread also marks its card, so the reader
@@ -1520,7 +1526,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     // the column is stacked at the top on load. Threads whose anchor no
     // longer resolves fall back to centering the card itself.
     const blockId = thread.anchor.block_id;
-    const jumped = blockId ? scrollToAnchor(blockId, thread.anchor.quote, thread.id) : false;
+    const jumped = blockId
+      ? scrollToAnchor(blockId, thread.anchor.quote, thread.id, 0, thread.anchor)
+      : false;
     if (!jumped) {
       setFocusedThread((prev) => ({
         threadId: thread.id,
@@ -2585,7 +2593,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         const thread = threads.find((t) => t.id === threadId);
         const blockId = thread?.anchor.block_id;
         if (thread && blockId) {
-          scrollToAnchor(blockId, thread.anchor.quote, thread.id);
+          scrollToAnchor(blockId, thread.anchor.quote, thread.id, 0, thread.anchor);
         }
       }
 

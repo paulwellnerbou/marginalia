@@ -13,6 +13,7 @@
     "./locate-block": "./src/locate-block.ts",
     "./locate-block-asciidoc": "./src/locate-block-asciidoc.ts",
     "./render": "./src/render.ts",
+    "./section-score": "./src/section-score.ts",
     "./types": "./src/types.ts"
   },
   "scripts": {
