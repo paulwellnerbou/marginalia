@@ -25,7 +25,8 @@ interface Props {
   canQuote: boolean;
   /** Resolves thread ids mentioned in the body into links. */
   threadRefs: ThreadRefApi;
-  onEdit: (id: string, body: string) => Promise<void> | void;
+  /** Resolves `false` when the save failed; the row stays in edit mode. */
+  onEdit: (id: string, body: string) => Promise<boolean | void> | boolean | void;
   onSetHidden: (id: string, hidden: boolean) => Promise<void> | void;
   onDelete: (id: string) => Promise<void> | void;
   onQuote?: ((text: string) => void) | undefined;
@@ -80,8 +81,8 @@ export function InlineCommentRow({
     if (!next) return;
     setSaving(true);
     try {
-      await onEdit(node.id, next);
-      setEditing(false);
+      const ok = await onEdit(node.id, next);
+      if (ok !== false) setEditing(false);
     } finally {
       setSaving(false);
     }

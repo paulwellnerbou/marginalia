@@ -1743,15 +1743,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   );
 
   const onCreate = useCallback(
-    async (payload: { anchor: CommentAnchor; body: string; display_name?: string }) => {
+    async (payload: {
+      anchor: CommentAnchor;
+      body: string;
+      display_name?: string;
+    }): Promise<boolean> => {
       if (!canComment) {
         reportFailure('You have read-only access to this document.');
-        return;
+        return false;
       }
       const identity = resolveIdentity(payload.display_name);
       if (!identity) {
         reportFailure('Please set your display name first.');
-        return;
+        return false;
       }
       try {
         const created = await apiCreate(
@@ -1777,9 +1781,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
           clearSectionFilter();
         }
         reconcileThreadsSoon();
+        return true;
       } catch (err) {
         reportError('DocumentLayout.createComment', err, { uid: doc.uid });
         reportFailure(apiErrorMessage(err, 'Could not post that comment'));
+        return false;
       }
     },
     [
@@ -1796,16 +1802,21 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   );
 
   const onReply = useCallback(
-    async (threadId: string, body: string, name?: string) => {
+    async (threadId: string, body: string, name?: string): Promise<boolean> => {
       const identity = resolveIdentity(name);
-      if (!identity) return;
+      if (!identity) {
+        reportFailure('Please set your display name first.');
+        return false;
+      }
       try {
         const updated = await apiCreate(doc.uid, { parent_id: threadId, body }, identity);
         landThread(updated);
         reconcileThreadsSoon();
+        return true;
       } catch (err) {
         reportError('DocumentLayout.replyToThread', err, { uid: doc.uid, threadId });
         reportFailure(apiErrorMessage(err, 'Could not post that reply'));
+        return false;
       }
     },
     [doc.uid, landThread, resolveIdentity, reconcileThreadsSoon],
@@ -1951,16 +1962,22 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   );
 
   const onEdit = useCallback(
-    async (id: string, body: string) => {
+    async (id: string, body: string): Promise<boolean> => {
       const identity = resolveIdentity();
-      if (!identity) return;
+      if (!identity) {
+        reportFailure('Please set your display name first.');
+        return false;
+      }
       try {
         const updated = await apiUpdate(doc.uid, id, body, identity);
         // The response is the thread. Editing a body changes nothing
         // else, so there is nothing to reconcile against.
         landThread(updated);
+        return true;
       } catch (err) {
         reportError('DocumentLayout.editComment', err, { commentId: id });
+        reportFailure(apiErrorMessage(err, 'Could not save that edit'));
+        return false;
       }
     },
     [doc.uid, landThread, resolveIdentity],

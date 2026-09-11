@@ -63,7 +63,12 @@ interface Props {
    */
   autoFocus?: boolean;
   onCancel?: () => void;
-  onSubmit: (body: string, name?: string) => Promise<void> | void;
+  /**
+   * Resolve `false` when the post failed (after telling the user why);
+   * the composer then keeps the draft so a retry needs no retyping.
+   * Anything else clears it.
+   */
+  onSubmit: (body: string, name?: string) => Promise<boolean | void> | boolean | void;
   /** Rendered on the left of the action row, before Cancel/Submit. */
   leftActions?: ((ctx: InlineComposerLeftActionsContext) => ReactNode) | undefined;
 }
@@ -177,9 +182,11 @@ export const InlineComposer = forwardRef<InlineComposerHandle, Props>(function I
     if (!ready) return;
     setSubmitting('reply');
     try {
-      await onSubmit(body, needsName ? displayName : undefined);
-      setValue('');
-      setCaret(0);
+      const ok = await onSubmit(body, needsName ? displayName : undefined);
+      if (ok !== false) {
+        setValue('');
+        setCaret(0);
+      }
     } finally {
       setSubmitting(false);
     }

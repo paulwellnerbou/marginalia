@@ -84,8 +84,9 @@ interface Props {
   mentionCandidates: string[];
   onToggleCollapsed: () => void;
   onJump?: (() => void) | undefined;
-  onReply: (threadId: string, body: string, name?: string) => Promise<void>;
-  onEdit: (id: string, body: string) => Promise<void>;
+  /** Both resolve `false` when the post failed; the composer keeps its draft. */
+  onReply: (threadId: string, body: string, name?: string) => Promise<boolean | void>;
+  onEdit: (id: string, body: string) => Promise<boolean | void>;
   onSetHidden: (id: string, hidden: boolean) => Promise<void>;
   onDeleteNode: (id: string) => Promise<void>;
   onDeleteThread: (id: string) => Promise<void>;
@@ -726,8 +727,9 @@ export function InlineThreadCard({
               autoFocus
               onCancel={closeReply}
               onSubmit={async (body, name) => {
-                await onReply(thread.id, body, name);
-                closeReply();
+                const ok = await onReply(thread.id, body, name);
+                if (ok !== false) closeReply();
+                return ok;
               }}
               leftActions={
                 canAccept || canReject || canResolve || canReopen || canCreateProposal
