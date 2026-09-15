@@ -1,5 +1,10 @@
 import type { Database } from 'bun:sqlite';
-import type { BlockInfo, BlockOccurrence, BlockSourceRange } from '@marginalia/renderer';
+import type {
+  BlockInfo,
+  BlockOccurrence,
+  BlockSourceRange,
+  SectionContext,
+} from '@marginalia/renderer';
 import { canMergeMultiBlock, scoreSectionMatch } from '@marginalia/renderer';
 import { parseHeadingPath, parseIntArray } from '../anchoring.js';
 import {
@@ -221,8 +226,20 @@ function chooseOccurrence(
   candidates: readonly BlockOccurrence[] | undefined,
   section: AnchorSection | null,
 ): BlockOccurrence | null {
-  if (!candidates || candidates.length === 0) return null;
-  const first = candidates[0]!;
+  return chooseBySection(candidates ?? [], section);
+}
+
+/**
+ * The candidate whose section ranks highest against `section`, ties to
+ * the first. Without a stored section the first is all that can be
+ * answered — which is also what a lone candidate gets.
+ */
+export function chooseBySection<T extends SectionContext>(
+  candidates: readonly T[],
+  section: AnchorSection | null,
+): T | null {
+  const first = candidates[0];
+  if (first === undefined) return null;
   if (candidates.length === 1 || !section?.headingPath) return first;
   let best = first;
   let bestScore = Number.NEGATIVE_INFINITY;
@@ -261,15 +278,31 @@ export function locateDocumentBlocks(
   return locateDocumentBlocksCached(doc.format, source);
 }
 
-export function findBlockBySourceSpan(
-  blocks: ReadonlyMap<string, BlockSourceRange>,
+/**
+ * Every copy of every block, as `(id, occurrence)` pairs in document
+ * order — for a search by source position, where the later copies of a
+ * repeated block are as real as the first.
+ */
+export function locateDocumentBlockOccurrences(
+  doc: DocumentRow,
+  source: string,
+): Array<readonly [string, BlockOccurrence]> {
+  const pairs: Array<readonly [string, BlockOccurrence]> = [];
+  for (const copies of locateDocumentBlockOccurrencesCached(doc.format, source).values()) {
+    for (const copy of copies) pairs.push([copy.id, copy]);
+  }
+  return pairs.sort((a, b) => a[1].start - b[1].start);
+}
+
+export function findBlockBySourceSpan<R extends BlockSourceRange>(
+  blocks: Iterable<readonly [string, R]>,
   start: number,
   end: number,
-): { id: string; range: BlockSourceRange; confidence: 'linked' | 'low-confidence' } | null {
-  let exact: { id: string; range: BlockSourceRange } | null = null;
-  let sameStart: { id: string; range: BlockSourceRange } | null = null;
-  let container: { id: string; range: BlockSourceRange } | null = null;
-  let overlap: { id: string; range: BlockSourceRange; amount: number; span: number } | null = null;
+): { id: string; range: R; confidence: 'linked' | 'low-confidence' } | null {
+  let exact: { id: string; range: R } | null = null;
+  let sameStart: { id: string; range: R } | null = null;
+  let container: { id: string; range: R } | null = null;
+  let overlap: { id: string; range: R; amount: number; span: number } | null = null;
 
   for (const [id, range] of blocks) {
     if (range.start === start && range.end === end) {

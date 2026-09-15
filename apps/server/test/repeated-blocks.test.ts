@@ -100,17 +100,40 @@ describe('proposals on a repeated block', () => {
     uid: string,
     token: string,
     anchor: Record<string, unknown>,
+    proposedText = REPLACEMENT,
   ): Promise<string> {
     const res = await app.hono.fetch(
       new Request(`http://test/api/documents/${uid}/threads`, {
         method: 'POST',
         headers: headers(token),
-        body: JSON.stringify({ anchor, proposal: { proposed_text: REPLACEMENT } }),
+        body: JSON.stringify({ anchor, proposal: { proposed_text: proposedText } }),
       }),
     );
     expect(res.status).toBe(201);
     const { thread } = (await res.json()) as { thread: { id: string } };
     return thread.id;
+  }
+
+  async function accept(uid: string, token: string, proposalId: string): Promise<void> {
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposalId}/respond`, {
+        method: 'POST',
+        headers: headers(token),
+        body: JSON.stringify({ action: 'accept' }),
+      }),
+    );
+    expect(res.status).toBe(200);
+  }
+
+  /** What the viewer stores as the anchor for the copy the selection was made in. */
+  function anchorOn(block: RenderedBlock, quote: string): Record<string, unknown> {
+    return {
+      block_id: block.id,
+      quote,
+      heading_path: block.headingPath,
+      section_index: block.sectionIndex,
+      section_index_path: block.sectionIndexPath,
+    };
   }
 
   test('a proposal anchored in chapter seven changes chapter seven, not the first copy', async () => {
@@ -120,13 +143,7 @@ describe('proposals on a repeated block', () => {
 
     // What the viewer sends for a selection in chapter seven: the shared
     // id plus the section the selection was made in.
-    const proposalId = await propose(uid, token, {
-      block_id: seventh.id,
-      quote: '"Go on."',
-      heading_path: seventh.headingPath,
-      section_index: seventh.sectionIndex,
-      section_index_path: seventh.sectionIndexPath,
-    });
+    const proposalId = await propose(uid, token, anchorOn(seventh, '"Go on."'));
     const expected = SOURCE.replace(
       'Prose in chapter seven.\n\n"Go on."',
       `Prose in chapter seven.\n\n${REPLACEMENT}`,
@@ -144,15 +161,46 @@ describe('proposals on a repeated block', () => {
     // accepted source below are what show which copy that block was.
     expect(await diff.json()).toMatchObject({ before: '"Go on."', after: REPLACEMENT });
 
-    const accept = await app.hono.fetch(
-      new Request(`http://test/api/documents/${uid}/threads/${proposalId}/respond`, {
-        method: 'POST',
+    await accept(uid, token, proposalId);
+    expect(app.store.read(doc)).toBe(expected);
+  });
+
+  test('an accepted rewrite that now repeats an earlier paragraph stays where it landed', async () => {
+    const { uid, token } = await upload();
+    const seventh = (await copiesOf(uid, token))[1]!;
+    // Chapter seven's line becomes a copy of chapter two's prose, so the
+    // paragraph the accept produced shares its id with an earlier one.
+    const proposalId = await propose(
+      uid,
+      token,
+      anchorOn(seventh, '"Go on."'),
+      'Prose in chapter two.',
+    );
+    await accept(uid, token, proposalId);
+    expect(app.store.read({ uid, format: 'markdown' })).toBe(
+      SOURCE.replace(
+        'Prose in chapter seven.\n\n"Go on."',
+        'Prose in chapter seven.\n\nProse in chapter two.',
+      ),
+    );
+
+    // The accepted proposal describes the paragraph it produced, in the
+    // chapter it was accepted in — not the first paragraph reading the same.
+    const listed = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?thread_id=${proposalId}`, {
         headers: headers(token),
-        body: JSON.stringify({ action: 'accept' }),
       }),
     );
-    expect(accept.status).toBe(200);
-    expect(app.store.read(doc)).toBe(expected);
+    expect(listed.status).toBe(200);
+    const { threads } = (await listed.json()) as {
+      threads: Array<{
+        id: string;
+        anchor: { quote: string | null; heading_path: string[] | null };
+      }>;
+    };
+    const accepted = threads.find((t) => t.id === proposalId);
+    expect(accepted?.anchor.quote).toBe('Prose in chapter two.');
+    expect(accepted?.anchor.heading_path).toEqual(['Book', 'Chapter 7']);
   });
 
   test('an anchor that stored no section still takes the first copy', async () => {

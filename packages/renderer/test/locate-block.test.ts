@@ -236,8 +236,19 @@ More prose.
   test('gives every rendered block the section context the renderer gave it', async () => {
     // Repeated headings, items, cells and breaks, before and after a
     // heading, so every counter the two walks keep is exercised on a
-    // duplicate.
-    const source = `Preamble before any heading.
+    // duplicate. Frontmatter, raw HTML, a reference definition, a
+    // footnote and a mermaid fence are the blocks the render pipeline
+    // treats specially after the id walk; each has to count the same
+    // here as there or every block after it would be off by one.
+    const source = `---
+title: Book
+---
+
+Preamble before any heading.[^1]
+
+<div class="raw">html</div>
+
+[ref]: https://example.test
 
 # Book
 
@@ -248,10 +259,15 @@ More prose.
 - item
 - item
 - other
+  - nested
 
 | a | b |
 |---|---|
 | x | x |
+
+\`\`\`mermaid
+graph TD; A-->B;
+\`\`\`
 
 ---
 
@@ -266,6 +282,8 @@ More prose.
 > quoted
 
 ---
+
+[^1]: A footnote.
 `;
     const rendered = await render(source);
     const located = locateBlocks(source);

@@ -1,6 +1,11 @@
 import type { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import type { BlockInfo, BlockSourceRange, RenderResult } from '@marginalia/renderer';
+import type {
+  BlockInfo,
+  BlockOccurrence,
+  BlockSourceRange,
+  RenderResult,
+} from '@marginalia/renderer';
 import { rewriteAssetReferences } from '@marginalia/renderer';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
@@ -47,9 +52,11 @@ import { toWire as toLegacyCommentWire } from './comments.js';
 import type { AppDeps } from './documents.js';
 import {
   anchorSectionOf,
+  chooseBySection,
   findBlockBySourceSpan,
   loadProposalRow,
   locateAnchorRange,
+  locateDocumentBlockOccurrences,
   locateDocumentBlocks,
   locateProposalAnchorBySourceSpan,
   readProposalContent,
@@ -2333,7 +2340,7 @@ async function completeAcceptWorkflow({
   }));
 
   const acceptedAnchor = locateAcceptedProposalAnchor(
-    presentBlocks,
+    locateDocumentBlockOccurrences(doc, nextSource),
     rendered.blocks,
     spliceStart,
     spliceStart + proposedText.length,
@@ -3083,7 +3090,10 @@ function locatePostMergeSpliceStart(
   if (proposedText.length === 0) return baselineStart;
   let bestStart: number | null = null;
   let bestDist = Number.POSITIVE_INFINITY;
-  for (const range of locateDocumentBlocks(doc, nextSource).values()) {
+  // Every copy, not one per id: the accepted text may now read like an
+  // earlier paragraph, and of the two the copy nearest the baseline is
+  // the one this accept produced.
+  for (const [, range] of locateDocumentBlockOccurrences(doc, nextSource)) {
     // Require an exact range match — a prefix-only match could pick an
     // unrelated block that just happens to start with proposedText.
     if (nextSource.slice(range.start, range.end) !== proposedText) continue;
@@ -3097,14 +3107,21 @@ function locatePostMergeSpliceStart(
 }
 
 function locateAcceptedProposalAnchor(
-  blocks: ReadonlyMap<string, BlockSourceRange>,
+  blocks: Iterable<readonly [string, BlockOccurrence]>,
   renderedBlocks: BlockInfo[],
   start: number,
   end: number,
 ): { block: BlockInfo; linkStatus: 'linked' | 'low-confidence' } | null {
   const located = findBlockBySourceSpan(blocks, start, end);
   if (!located) return null;
-  const rendered = renderedBlocks.find((block) => block.id === located.id);
+  // The accepted paragraph may share its id with an earlier one; the
+  // spliced copy's own section says which rendered copy is it, so the
+  // anchor stays with the text the accept produced rather than moving to
+  // the first paragraph that reads the same.
+  const rendered = chooseBySection(
+    renderedBlocks.filter((block) => block.id === located.id),
+    { headingPath: located.range.headingPath, sectionIndexPath: located.range.sectionIndexPath },
+  );
   if (!rendered) return null;
   return { block: rendered, linkStatus: located.confidence };
 }
