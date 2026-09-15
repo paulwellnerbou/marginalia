@@ -81,6 +81,8 @@ export const rehypeAsciidocBlockIds: Plugin<[AsciidocBlockIdsOptions], Root> = (
             heading.properties ??= {};
             heading.properties['data-block'] = info.id;
             delete props['data-block'];
+            const headingId = heading.properties.id;
+            if (typeof headingId === 'string' && headingId.length > 0) info.headingId = headingId;
           }
         }
       }

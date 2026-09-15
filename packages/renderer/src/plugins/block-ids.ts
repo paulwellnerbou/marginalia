@@ -60,6 +60,10 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
         // made it onto an element.
         anchorable: false,
       };
+      if (node.type === 'heading') {
+        const headingId = slugOf(node);
+        if (headingId) info.headingId = headingId;
+      }
       blocks.push(info);
 
       attachDataAttr(node, 'data-block', id);
@@ -95,6 +99,13 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
     data.footnoteBlockOffsets = footnoteBlockOffsets;
   };
 };
+
+/** The `id` `remarkSlugger` left on the heading's hProperties, if any. */
+function slugOf(node: RootContent): string | null {
+  const data = (node as { data?: { hProperties?: Record<string, unknown> } }).data;
+  const id = data?.hProperties?.['id'];
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
 
 function attachDataAttr(node: RootContent, attr: 'data-block' | 'data-subblock', id: string): void {
   const nodeWithData = node as unknown as {

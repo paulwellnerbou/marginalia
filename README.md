@@ -456,6 +456,29 @@ protected document into an open one. Only the hash is stored, so the
 password itself can't come along — the copy gets a freshly generated one,
 shown once, exactly like a new upload's.
 
+## Document statistics
+
+The bar-chart button in the document toolbar opens word counts for the
+whole document and for each chapter: words, characters, sentences,
+paragraphs, an estimated page count and a reading time. The two
+conversions behind the estimates are adjustable and remembered per
+browser — pages default to 250 words each (a printed novel page holds
+roughly 250–300, and 250 is the manuscript convention), reading time to
+240 words a minute.
+
+Counts come from the rendered block map, so they describe what is on
+the page: accepted proposals are in, frontmatter is out, and code blocks
+and diagrams are left out of every number. A chapter is what the chapter
+export calls one — a lone `# Book title` over `## Chapter` headings
+unwraps to the chapters, with the title and any introduction shown as
+"Before the first chapter"; otherwise the top-level headings are the
+chapters. Each chapter expands to its subsections, and every title is a
+link into the document.
+
+The counting itself is the renderer's `computeDocumentStats`, a pure
+function over `RenderResult`, so the CLI and MCP server can report the
+same numbers if they ever need to.
+
 ## JSON Bundles
 
 Documents can be exported and imported as versioned JSON bundles through the
