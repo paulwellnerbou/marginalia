@@ -4,8 +4,33 @@
  * to the browser.
  */
 
+interface NumberFormats {
+  integer: Intl.NumberFormat;
+  oneDecimal: Intl.NumberFormat;
+}
+
+/**
+ * Constructing a formatter is the expensive part, and the chapter table
+ * formats every cell on every re-render, so instances are kept per
+ * locale — one entry for the browser's own, one per locale a test names.
+ */
+const formatsByLocale = new Map<string, NumberFormats>();
+
+function numberFormats(locale?: string): NumberFormats {
+  const key = locale ?? '';
+  let formats = formatsByLocale.get(key);
+  if (!formats) {
+    formats = {
+      integer: new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }),
+      oneDecimal: new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }),
+    };
+    formatsByLocale.set(key, formats);
+  }
+  return formats;
+}
+
 export function formatCount(n: number, locale?: string): string {
-  return new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(n);
+  return numberFormats(locale).integer.format(n);
 }
 
 /**
@@ -16,10 +41,8 @@ export function formatPages(words: number, wordsPerPage: number, locale?: string
   if (words === 0) return '0';
   const pages = words / wordsPerPage;
   if (pages < 0.05) return '< 0.1';
-  if (pages < 10) {
-    return new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(pages);
-  }
-  return formatCount(pages, locale);
+  const formats = numberFormats(locale);
+  return pages < 10 ? formats.oneDecimal.format(pages) : formats.integer.format(pages);
 }
 
 /** Minutes at `wordsPerMinute`, as `< 1 min`, `12 min`, `1 h 5 min` or `2 h`. */
