@@ -1,5 +1,6 @@
-import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
-import { locateAllBlocks } from '@marginalia/renderer/locate-block';
+import type { BlockOccurrence, LocatedBlocks } from '@marginalia/renderer/locate-block';
+import { locateBlocks } from '@marginalia/renderer/locate-block';
+import { scoreSectionMatch } from '@marginalia/renderer/section-score';
 import type { BlockInfoWire, DocumentFormat, DocumentWire } from './api-types.js';
 
 /**
@@ -26,6 +27,14 @@ export interface DocumentBlock {
   headingPath: string[];
   sectionIndex: number;
   sectionIndexPath: number[];
+  /**
+   * 1-based position among the blocks sharing this id, and how many
+   * there are. Top-level ids are content hashes, so a line the document
+   * repeats is one id on several blocks, and this is what tells them
+   * apart to a tool that takes a `block_id`.
+   */
+  occurrence: number;
+  occurrences: number;
   /** Verbatim source for this block, or null if the local walk could not place it. */
   source: string | null;
   start: number | null;
@@ -81,18 +90,26 @@ const ANCHOR_CONTEXT_LEN = 32;
 const MAX_ANCHOR_QUOTE_LENGTH = 60000;
 
 export async function buildBlockMap(doc: DocumentWire): Promise<DocumentBlockMap> {
-  const ranges = await locateBlocks(doc.source, doc.format);
+  const located = await locateSourceBlocks(doc.source, doc.format);
   // One forward scan for the whole document, then a binary search per
   // lookup. Counting newlines from the start for each of a book's few
   // thousand blocks is quadratic in the source length, and every tool
   // call that loads a document pays it.
   const lines = lineStarts(doc.source);
   const unresolved: string[] = [];
+  // The server's map and the local walk both list a repeated block once
+  // per copy, in document order, so the n-th listed copy of an id is the
+  // n-th located one — the only pairing that gives each copy its own
+  // source range rather than the first copy's.
+  const seen = new Map<string, number>();
   const blocks = doc.rendered.blocks.map((block, index) => {
-    const range = ranges.get(block.id);
+    const nth = seen.get(block.id) ?? 0;
+    seen.set(block.id, nth + 1);
+    const range = located.occurrences.get(block.id)?.[nth];
     if (!range) unresolved.push(block.id);
-    return toDocumentBlock(block, index, range, doc.source, lines);
+    return toDocumentBlock(block, index, nth + 1, range, doc.source, lines);
   });
+  for (const block of blocks) block.occurrences = seen.get(block.id) ?? 1;
   return { blocks, sections: buildSections(blocks, doc, lines), source: doc.source, unresolved };
 }
 
@@ -313,22 +330,20 @@ export function anchorNeighbourhood(
   };
 }
 
-async function locateBlocks(
-  source: string,
-  format: DocumentFormat,
-): Promise<Map<string, BlockSourceRange>> {
+async function locateSourceBlocks(source: string, format: DocumentFormat): Promise<LocatedBlocks> {
   if (format === 'asciidoc') {
     // Asciidoctor is a heavy import; only pay for it on asciidoc docs.
-    const { locateAllBlocksAsciidoc } = await import('@marginalia/renderer/locate-block-asciidoc');
-    return locateAllBlocksAsciidoc(source);
+    const { locateBlocksAsciidoc } = await import('@marginalia/renderer/locate-block-asciidoc');
+    return locateBlocksAsciidoc(source);
   }
-  return locateAllBlocks(source);
+  return locateBlocks(source);
 }
 
 function toDocumentBlock(
   block: BlockInfoWire,
   index: number,
-  range: BlockSourceRange | undefined,
+  occurrence: number,
+  range: BlockOccurrence | undefined,
   source: string,
   lines: number[],
 ): DocumentBlock {
@@ -340,6 +355,9 @@ function toDocumentBlock(
     headingPath: block.headingPath ?? [],
     sectionIndex: block.sectionIndex ?? 0,
     sectionIndexPath: block.sectionIndexPath ?? [0],
+    occurrence,
+    // Counted once every block is listed; see `buildBlockMap`.
+    occurrences: 1,
     source: range ? source.slice(range.start, range.end) : null,
     start: range?.start ?? null,
     end: range?.end ?? null,
@@ -432,27 +450,49 @@ export class BlockLookupError extends Error {}
 /**
  * Resolve the caller's idea of "this part of the document" to a block.
  *
- * `block_id` is exact. `anchor_text` is the friendlier path: it matches
- * against both the block's source and its normalized text, so a snippet
- * copied from either representation works. Ambiguity across genuinely
- * different places in the document is an error rather than a silent
- * first-match — picking the wrong one would attach a comment to the
- * wrong paragraph.
+ * `block_id` is exact, up to the copies of a repeated block, which share
+ * an id: those need `occurrence` as well, and asking for one without it
+ * is an error listing the copies rather than a silent first-match.
+ * `anchor_text` is the friendlier path: it matches against both the
+ * block's source and its normalized text, so a snippet copied from either
+ * representation works. Ambiguity across genuinely different places in
+ * the document is likewise an error — picking the wrong one would attach
+ * a comment to the wrong paragraph.
  */
 export function resolveBlock(
   map: DocumentBlockMap,
-  selector: { blockId?: string | undefined; anchorText?: string | undefined },
+  selector: {
+    blockId?: string | undefined;
+    anchorText?: string | undefined;
+    occurrence?: number | undefined;
+  },
   label = 'block',
 ): DocumentBlock {
   if (selector.blockId) {
-    const found = map.blocks.find((b) => b.id === selector.blockId);
-    if (!found) {
+    const copies = map.blocks.filter((b) => b.id === selector.blockId);
+    if (copies.length === 0) throw new BlockLookupError(missingBlock(label, selector.blockId));
+    if (selector.occurrence !== undefined) {
+      const copy = copies.find((b) => b.occurrence === selector.occurrence);
+      if (copy) return copy;
       throw new BlockLookupError(
-        `No ${label} with id "${selector.blockId}" in this document. The document may have ` +
-          'changed — call list_blocks again for current ids.',
+        `Block ${selector.blockId} has no occurrence ${selector.occurrence}; ` +
+          `${copies.length === 1 ? 'only one block carries' : `${copies.length} blocks carry`} ` +
+          `this id:\n${occurrenceList(copies)}`,
       );
     }
-    return found;
+    if (copies.length > 1) {
+      throw new BlockLookupError(
+        `${copies.length} blocks share the id ${selector.blockId} — identical text hashes to ` +
+          `one id — so the ${label} is ambiguous. Pass \`occurrence\` to say which:\n` +
+          occurrenceList(copies),
+      );
+    }
+    return copies[0] as DocumentBlock;
+  }
+  if (selector.occurrence !== undefined) {
+    throw new BlockLookupError(
+      '`occurrence` picks between blocks sharing a block_id; pass block_id along with it.',
+    );
   }
 
   const needle = selector.anchorText?.trim();
@@ -470,14 +510,113 @@ export function resolveBlock(
   if (matches.length > 1) {
     const candidates = matches
       .slice(0, 8)
-      .map((b) => `  ${b.id}  (${b.kind}, line ${b.startLine ?? '?'}) ${clip(b.text, 60)}`)
+      .map(
+        (b) =>
+          `  ${b.id}${b.occurrences > 1 ? `  occurrence=${b.occurrence}` : ''}  ` +
+          `(${b.kind}, line ${b.startLine ?? '?'}) ${clip(b.text, 60)}`,
+      )
       .join('\n');
     throw new BlockLookupError(
       `${matches.length} blocks contain that text, so the target is ambiguous. Pass one of these ` +
-        `block_id values instead:\n${candidates}`,
+        `block_id values instead, with its \`occurrence\` where several blocks share an id:\n` +
+        candidates,
     );
   }
   return matches[0] as DocumentBlock;
+}
+
+/**
+ * The last block of a span. When its id is repeated, the copy nearest the
+ * start block on the far side of it — how the browser resolves a span's
+ * end — or, failing one after it, the nearest before, since the two ids
+ * may be given in either order.
+ */
+export function resolveEndBlock(
+  map: DocumentBlockMap,
+  endId: string,
+  start: DocumentBlock,
+): DocumentBlock {
+  const copies = map.blocks.filter((b) => b.id === endId);
+  const end = spanEnd(copies, start);
+  if (!end) throw new BlockLookupError(missingBlock('end block', endId));
+  return end;
+}
+
+function missingBlock(label: string, id: string): string {
+  return (
+    `No ${label} with id "${id}" in this document. The document may have changed — call ` +
+    'list_blocks again for current ids.'
+  );
+}
+
+function occurrenceList(copies: DocumentBlock[]): string {
+  return copies
+    .map(
+      (b) =>
+        `  occurrence=${b.occurrence}  ${b.kind}, ${
+          b.startLine !== null ? `lines ${b.startLine}-${b.endLine}` : 'source range unknown'
+        }, ${b.headingPath.length > 0 ? b.headingPath.join(' › ') : '(document root)'}`,
+    )
+    .join('\n');
+}
+
+/** The fields of a thread anchor that place it in the document. */
+export interface AnchorLocation {
+  block_id: string | null;
+  end_block_id: string | null;
+  heading_path: string[] | null;
+  section_index_path: number[] | null;
+}
+
+/**
+ * The blocks a thread's anchor points at.
+ *
+ * An id names every copy of a repeated block, and the anchor's stored
+ * section says which the comment was written on — ranked as the server
+ * ranks candidates when it re-anchors, and as the browser picks the
+ * element to highlight, so all three name the same copy. A span's end
+ * is the first block of its id after the start.
+ */
+export function anchorBlocks(
+  map: DocumentBlockMap,
+  anchor: AnchorLocation,
+): { block: DocumentBlock | null; endBlock: DocumentBlock | null } {
+  const block = anchor.block_id
+    ? chooseCopy(
+        map.blocks.filter((b) => b.id === anchor.block_id),
+        anchor,
+      )
+    : null;
+  const endId =
+    anchor.end_block_id && anchor.end_block_id !== anchor.block_id ? anchor.end_block_id : null;
+  const endBlock =
+    block && endId
+      ? spanEnd(
+          map.blocks.filter((b) => b.id === endId),
+          block,
+        )
+      : null;
+  return { block, endBlock };
+}
+
+function chooseCopy(copies: DocumentBlock[], anchor: AnchorLocation): DocumentBlock | null {
+  const first = copies[0];
+  if (!first) return null;
+  if (copies.length === 1 || !anchor.heading_path) return first;
+  let best = first;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const copy of copies) {
+    const score = scoreSectionMatch(copy, anchor.heading_path, anchor.section_index_path);
+    if (score > bestScore) {
+      best = copy;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function spanEnd(copies: DocumentBlock[], start: DocumentBlock): DocumentBlock | null {
+  return copies.find((b) => b.index > start.index) ?? copies[copies.length - 1] ?? null;
 }
 
 /** Blocks whose source or normalized text contains `needle`. */

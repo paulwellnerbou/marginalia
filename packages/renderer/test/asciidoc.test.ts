@@ -3,6 +3,7 @@ import {
   isDocumentFormat,
   locateAllBlocksAsciidoc,
   locateBlockRangeAsciidoc,
+  locateBlocksAsciidoc,
   renderAsciidoc,
   renderDocument,
 } from '../src/index.js';
@@ -242,6 +243,83 @@ const x = 1;
     expect(isDocumentFormat('asciidoc')).toBe(true);
     expect(isDocumentFormat('txt')).toBe(false);
     expect(isDocumentFormat(null)).toBe(false);
+  });
+});
+
+describe('locateBlocksAsciidoc', () => {
+  test('records every copy of a repeated paragraph with its own range and section', async () => {
+    const src = `= Doc
+
+== Chapter 2
+
+Go on.
+
+Some prose.
+
+== Chapter 7
+
+More prose.
+
+Go on.
+`;
+    const r = await renderAsciidoc(src);
+    const copies = r.blocks.filter((b) => b.text === 'Go on.');
+    expect(copies.length).toBe(2);
+    expect(copies[1]!.id).toBe(copies[0]!.id);
+
+    const occurrences = locateBlocksAsciidoc(src).occurrences.get(copies[0]!.id)!;
+    expect(occurrences.length).toBe(2);
+    expect(occurrences.map((o) => src.slice(o.start, o.end).trim())).toEqual(['Go on.', 'Go on.']);
+    expect(occurrences[0]!.start).toBeLessThan(occurrences[1]!.start);
+    expect(occurrences.map((o) => o.headingPath)).toEqual(copies.map((b) => b.headingPath));
+    expect(occurrences[0]!.headingPath).not.toEqual(occurrences[1]!.headingPath);
+  });
+
+  test('gives every rendered block the section context the renderer gave it', async () => {
+    const src = `= Doc
+
+Preamble.
+
+== Chapter 2
+
+=== Scene
+
+* item
+* item
+* other
+
+[NOTE]
+====
+Inside a note.
+
+* nested
+====
+
+'''
+
+Go on.
+
+== Chapter 7
+
+=== Scene
+
+Go on.
+
+'''
+`;
+    const r = await renderAsciidoc(src);
+    const located = locateBlocksAsciidoc(src);
+    const seen = new Map<string, number>();
+    for (const block of r.blocks) {
+      const nth = seen.get(block.id) ?? 0;
+      seen.set(block.id, nth + 1);
+      const occurrence = located.occurrences.get(block.id)?.[nth];
+      expect(occurrence).toBeDefined();
+      expect(occurrence!.headingPath).toEqual(block.headingPath);
+      expect(occurrence!.sectionIndex).toBe(block.sectionIndex);
+      expect(occurrence!.sectionIndexPath).toEqual(block.sectionIndexPath);
+    }
+    expect([...seen.values()].filter((n) => n === 2).length).toBe(3);
   });
 });
 

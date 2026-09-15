@@ -15,14 +15,19 @@ export type {
 } from './export-docx.js';
 export { exportDocx } from './export-docx.js';
 export { extractDocumentTitle, sanitizeDocumentFilename } from './extract-title.js';
-export type { BlockSourceRange } from './locate-block.js';
+export type { BlockOccurrence, BlockSourceRange, LocatedBlocks } from './locate-block.js';
 export {
   canMergeMultiBlock,
   locateAllBlocks,
   locateBlockRange,
   locateBlockSource,
+  locateBlocks,
 } from './locate-block.js';
-export { locateAllBlocksAsciidoc, locateBlockRangeAsciidoc } from './locate-block-asciidoc.js';
+export {
+  locateAllBlocksAsciidoc,
+  locateBlockRangeAsciidoc,
+  locateBlocksAsciidoc,
+} from './locate-block-asciidoc.js';
 export type { DocumentFormat } from './render.js';
 export { isDocumentFormat, render, renderDocument } from './render.js';
 export { renderAsciidoc } from './render-asciidoc.js';

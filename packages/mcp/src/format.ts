@@ -1,6 +1,7 @@
 import { createPatch } from 'diff';
 import type { DocumentWire, ThreadWire } from './api-types.js';
 import {
+  anchorBlocks,
   anchorNeighbourhood,
   clip,
   type DocumentBlock,
@@ -167,7 +168,7 @@ export function blockList(
     const heading =
       block.headingPath.length > 0 ? block.headingPath.join(' › ') : '(document root)';
     const head =
-      `#${block.index} block_id=${block.id}\n` +
+      `#${block.index} block_id=${block.id}${occurrenceTag(block)}\n` +
       `  kind: ${block.kind}  ${location}\n` +
       `  section: ${heading}`;
     if (!options.includeSource) return `${head}\n  text: ${clip(block.text, 160)}`;
@@ -180,7 +181,16 @@ export function blockList(
         : block.source;
     return `${head}\n  source:\n${gutter(source)}`;
   });
-  return `${blocks.length} of ${total} blocks\n\n${parts.join('\n\n')}`;
+  const shared = blocks.some((b) => b.occurrences > 1)
+    ? '\nnote: an id marked occurrence=n of m is carried by m identical blocks. Pass ' +
+      '`occurrence` with such a block_id to create_comment or create_proposal to say which copy.'
+    : '';
+  return `${blocks.length} of ${total} blocks${shared}\n\n${parts.join('\n\n')}`;
+}
+
+/** ` occurrence=2 of 3` for a block whose id is shared, nothing for one that owns its id. */
+export function occurrenceTag(block: DocumentBlock): string {
+  return block.occurrences > 1 ? ` occurrence=${block.occurrence} of ${block.occurrences}` : '';
 }
 
 /**
@@ -246,9 +256,11 @@ export function threadDetail(
   lines.push(`url: ${commentUrl(options.ref, thread.id)}`);
 
   const anchor = thread.anchor;
-  const findBlock = (id: string | null): DocumentBlock | null =>
-    id ? (options.blockMap?.blocks.find((b) => b.id === id) ?? null) : null;
-  const block = findBlock(anchor.block_id);
+  // An id names every copy of a repeated block, and the anchor's stored
+  // section says which one this thread was written on.
+  const { block, endBlock } = options.blockMap
+    ? anchorBlocks(options.blockMap, anchor)
+    : { block: null, endBlock: null };
   // A comment can cover several blocks, and the anchor records only its
   // two endpoints. Showing the first alone would present a fragment of
   // the quote as the whole of it.
@@ -259,7 +271,6 @@ export function threadDetail(
   // truncated.
   const spanEndId =
     anchor.end_block_id && anchor.end_block_id !== anchor.block_id ? anchor.end_block_id : null;
-  const endBlock = spanEndId ? findBlock(spanEndId) : null;
   const where = block
     ? `${blockSpan(block, endBlock, spanEndId !== null)}, section ${
         block.headingPath.length > 0 ? block.headingPath.join(' › ') : '(document root)'
@@ -268,7 +279,7 @@ export function threadDetail(
       ? `section ${anchor.heading_path.join(' › ')}`
       : 'unknown location';
   lines.push(
-    `anchor: block_id=${anchor.block_id ?? 'none'}${
+    `anchor: block_id=${anchor.block_id ?? 'none'}${block ? occurrenceTag(block) : ''}${
       spanEndId ? ` end_block_id=${spanEndId}` : ''
     } (${where}) link_status=${thread.link_status}`,
   );

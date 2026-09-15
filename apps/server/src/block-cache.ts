@@ -1,5 +1,5 @@
-import type { BlockSourceRange } from '@marginalia/renderer';
-import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
+import type { BlockOccurrence, BlockSourceRange, LocatedBlocks } from '@marginalia/renderer';
+import { locateBlocks, locateBlocksAsciidoc } from '@marginalia/renderer';
 import type { DocumentFormat } from './db.js';
 
 /**
@@ -32,7 +32,7 @@ import type { DocumentFormat } from './db.js';
 const MAX_ENTRIES = 16;
 
 /** Insertion order is the LRU order; a hit re-inserts to move to the back. */
-const entries = new Map<string, ReadonlyMap<string, BlockSourceRange>>();
+const entries = new Map<string, LocatedBlocks>();
 
 let hits = 0;
 let misses = 0;
@@ -47,7 +47,7 @@ function keyFor(source: string, format: DocumentFormat): string {
 }
 
 /**
- * Block ranges for a document source.
+ * Block ranges for a document source, one per id.
  *
  * The returned map is shared with every other holder of the same key and
  * must not be mutated — callers only ever read it, which is what makes
@@ -57,6 +57,22 @@ export function locateDocumentBlocksCached(
   format: DocumentFormat,
   source: string,
 ): ReadonlyMap<string, BlockSourceRange> {
+  return located(format, source).byId;
+}
+
+/**
+ * Every block carrying each id, in document order, with the section it
+ * sits in. Same cache entry as `locateDocumentBlocksCached`, so asking
+ * for both costs one parse.
+ */
+export function locateDocumentBlockOccurrencesCached(
+  format: DocumentFormat,
+  source: string,
+): ReadonlyMap<string, readonly BlockOccurrence[]> {
+  return located(format, source).occurrences;
+}
+
+function located(format: DocumentFormat, source: string): LocatedBlocks {
   const key = keyFor(source, format);
   const hit = entries.get(key);
   if (hit) {
@@ -67,7 +83,7 @@ export function locateDocumentBlocksCached(
   }
 
   misses += 1;
-  const blocks = format === 'asciidoc' ? locateAllBlocksAsciidoc(source) : locateAllBlocks(source);
+  const blocks = format === 'asciidoc' ? locateBlocksAsciidoc(source) : locateBlocks(source);
   entries.set(key, blocks);
   if (entries.size > MAX_ENTRIES) {
     const oldest = entries.keys().next().value;
