@@ -751,7 +751,7 @@ function noop(comment: CommentRow): AnchorUpdate {
   };
 }
 
-function parseHeadingPath(raw: string | null): string[] | null {
+export function parseHeadingPath(raw: string | null): string[] | null {
   if (!raw) return null;
   try {
     const v = JSON.parse(raw);
@@ -761,7 +761,7 @@ function parseHeadingPath(raw: string | null): string[] | null {
   }
 }
 
-function parseIntArray(raw: string | null): number[] | null {
+export function parseIntArray(raw: string | null): number[] | null {
   if (!raw) return null;
   try {
     const v = JSON.parse(raw);

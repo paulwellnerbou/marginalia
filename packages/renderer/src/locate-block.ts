@@ -5,7 +5,13 @@ import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
-import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
+import {
+  type BlockSection,
+  computeSubBlockId,
+  hashBlock,
+  normalizeBlockText,
+  SectionTracker,
+} from './block-ids-shared.js';
 
 /**
  * Locate a top-level block OR a sub-block (list item / table cell) in
@@ -42,70 +48,130 @@ export interface BlockSourceRange {
   parentStart?: number;
 }
 
-/** Build a map of every top-level block's id → source range. Use this when
- *  resolving many blocks against the same document — callers that resolve a
- *  single id may use `locateBlockSource` instead. */
+/** One block carrying an id: its source range and the section it sits in. */
+export interface BlockOccurrence extends BlockSourceRange, BlockSection {
+  id: string;
+}
+
+/**
+ * Every block of a document, addressable two ways.
+ *
+ * Top-level ids are content hashes, so a line a document repeats — the
+ * same one-word reply in several chapters — is one id on several blocks.
+ * `byId` keeps the first of them, which is all a caller with nothing but
+ * an id can be given. `occurrences` keeps them all, in document order,
+ * each with the section context an anchor stores, so a caller holding an
+ * anchor can pick the copy it was written on.
+ */
+export interface LocatedBlocks {
+  byId: Map<string, BlockSourceRange>;
+  occurrences: Map<string, BlockOccurrence[]>;
+}
+
+/** Record one block in both views of `located`; the first of an id claims `byId`. */
+export function addOccurrence(
+  located: LocatedBlocks,
+  id: string,
+  range: BlockSourceRange,
+  section: BlockSection,
+): void {
+  const occurrence: BlockOccurrence = {
+    ...range,
+    id,
+    headingPath: [...section.headingPath],
+    sectionIndex: section.sectionIndex,
+    sectionIndexPath: [...section.sectionIndexPath],
+  };
+  const list = located.occurrences.get(id);
+  if (list) list.push(occurrence);
+  else located.occurrences.set(id, [occurrence]);
+  if (!located.byId.has(id)) located.byId.set(id, range);
+}
+
+/** Every block's id → source range, first occurrence winning. See `locateBlocks`. */
 export function locateAllBlocks(markdown: string): Map<string, BlockSourceRange> {
+  return locateBlocks(markdown).byId;
+}
+
+/**
+ * Walk the source the way `remarkBlockIds` walks the tree and record
+ * every block it would give an id. Use this when resolving many blocks
+ * against the same document — callers that resolve a single id may use
+ * `locateBlockSource` instead.
+ */
+export function locateBlocks(markdown: string): LocatedBlocks {
   const tree = unified()
     .use(remarkParse)
     .use(remarkGfm)
     .use(remarkFrontmatter, ['yaml'])
     .parse(markdown) as Root;
 
-  const out = new Map<string, BlockSourceRange>();
+  const out: LocatedBlocks = { byId: new Map(), occurrences: new Map() };
+  const sections = new SectionTracker();
+  // The counts map MUST stay in sync with the plugin's walk (same tree,
+  // same visit order) so the plugin's emitted `data-subblock` ids can be
+  // round-tripped back to their own source range — including
+  // duplicate-content siblings, each of which gets its own `#n` suffix
+  // via computeSubBlockId.
+  const subBlockCounts = new Map<string, number>();
 
-  // Top-level blocks — match remark-block-ids' top-level walk.
   for (const node of tree.children) {
     const text = normalizeBlockText(mdastToString(node));
     if (!text && node.type !== 'thematicBreak') continue;
+    // Counted before the position check: the plugin numbers this block
+    // whether or not it can be placed, and every block after it must
+    // land on the same number here as there.
+    if (node.type === 'heading') sections.enterHeading(node.depth, text);
+    const section = sections.next();
     const pos = (node as RootContent).position;
-    if (!pos || pos.start.offset === undefined || pos.end.offset === undefined) continue;
-    const id = hashBlock(node.type, text);
-    // First occurrence wins — same block text hashed identically would shadow.
-    if (!out.has(id)) {
-      out.set(id, { start: pos.start.offset, end: pos.end.offset, kind: node.type, text });
+    if (pos && pos.start.offset !== undefined && pos.end.offset !== undefined) {
+      addOccurrence(
+        out,
+        hashBlock(node.type, text),
+        { start: pos.start.offset, end: pos.end.offset, kind: node.type, text },
+        section,
+      );
     }
-  }
 
-  // Sub-blocks: list items and table cells. The counts map MUST stay in
-  // sync with the plugin's walk (same tree, same visit order) so the
-  // plugin's emitted `data-subblock` ids can be round-tripped back to
-  // their own source range — including duplicate-content siblings, each
-  // of which gets its own `#n` suffix via computeSubBlockId.
-  const subBlockCounts = new Map<string, number>();
-  visit(tree, (node, _index, parent) => {
-    if (node.type !== 'listItem' && node.type !== 'tableCell') return;
-    const text = normalizeBlockText(mdastToString(node));
-    if (!text) return;
-    const pos = node.position;
-    if (!pos || pos.start.offset === undefined || pos.end.offset === undefined) return;
-    const range = narrowedRange(node, pos.start.offset, pos.end.offset);
-    const id = computeSubBlockId(node.type, text, subBlockCounts);
-    // Parent identifier: the enclosing `list` / `table` node's start
-    // offset. Two sub-blocks with the same `parentStart` are siblings;
-    // different values mean different parents (different lists,
-    // different tables, or different nesting depths for nested lists).
-    //
-    // Gate to column-1 parents: a list at indent > 0 (nested under a
-    // listItem, blockquote, etc.) has items whose mdast position
-    // starts at the bullet, so a min/max splice between sibling items
-    // would drop the indent / `>` prefix on every line after the
-    // first. Leave `parentStart` unset in that case so
-    // `canMergeMultiBlock` rejects multi-block on those items.
-    const parentStart = parent?.position?.start?.offset;
-    const parentAtColumnOne =
-      parentStart !== undefined &&
-      (parentStart === 0 || markdown.charCodeAt(parentStart - 1) === 0x0a);
-    // Unique per occurrence, so no `has` guard — every duplicate gets its
-    // own entry pointing at its own source range.
-    out.set(id, {
-      start: range.start,
-      end: range.end,
-      kind: node.type,
-      text,
-      ...(parentAtColumnOne ? { parentStart } : {}),
+    // Sub-blocks: list items and table cells, visited under their
+    // top-level block as the plugin does, so they inherit its section.
+    visit(node, (sub, _index, parent) => {
+      if (sub.type !== 'listItem' && sub.type !== 'tableCell') return;
+      const subText = normalizeBlockText(mdastToString(sub));
+      if (!subText) return;
+      const subPos = sub.position;
+      if (!subPos || subPos.start.offset === undefined || subPos.end.offset === undefined) return;
+      const range = narrowedRange(sub, subPos.start.offset, subPos.end.offset);
+      const id = computeSubBlockId(sub.type, subText, subBlockCounts);
+      // Parent identifier: the enclosing `list` / `table` node's start
+      // offset. Two sub-blocks with the same `parentStart` are siblings;
+      // different values mean different parents (different lists,
+      // different tables, or different nesting depths for nested lists).
+      //
+      // Gate to column-1 parents: a list at indent > 0 (nested under a
+      // listItem, blockquote, etc.) has items whose mdast position
+      // starts at the bullet, so a min/max splice between sibling items
+      // would drop the indent / `>` prefix on every line after the
+      // first. Leave `parentStart` unset in that case so
+      // `canMergeMultiBlock` rejects multi-block on those items.
+      const parentStart = parent?.position?.start?.offset;
+      const parentAtColumnOne =
+        parentStart !== undefined &&
+        (parentStart === 0 || markdown.charCodeAt(parentStart - 1) === 0x0a);
+      addOccurrence(
+        out,
+        id,
+        {
+          start: range.start,
+          end: range.end,
+          kind: sub.type,
+          text: subText,
+          ...(parentAtColumnOne ? { parentStart } : {}),
+        },
+        section,
+      );
     });
-  });
+  }
 
   return out;
 }

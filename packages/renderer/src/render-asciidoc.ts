@@ -10,7 +10,12 @@ import {
   MARGINALIA_SUBBLOCK_MARKER_PREFIX,
   type SubBlockEntry,
 } from './asciidoc-markers.js';
-import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
+import {
+  computeSubBlockId,
+  hashBlock,
+  normalizeBlockText,
+  SectionTracker,
+} from './block-ids-shared.js';
 import { rehypeAsciidocAnchorsToc } from './plugins/asciidoc-anchors-toc.js';
 import { rehypeAsciidocAssetCollector } from './plugins/asciidoc-asset-collector.js';
 import { rehypeAsciidocBlockIds } from './plugins/asciidoc-block-ids.js';
@@ -145,8 +150,7 @@ interface WalkState {
    */
   blocks: BlockMap;
   counter: number;
-  headingStack: Array<{ level: number; text: string }>;
-  sectionCounts: Map<string, number>;
+  sections: SectionTracker;
   subBlockCounts: Map<string, number>;
   subBlockCounter: number;
   subBlockEntries: SubBlockEntry[];
@@ -181,8 +185,7 @@ function walkBlocks(doc: AsciidoctorAbstractBlock): {
   const state: WalkState = {
     blocks: [],
     counter: 0,
-    headingStack: [],
-    sectionCounts: new Map(),
+    sections: new SectionTracker(),
     subBlockCounts: new Map(),
     subBlockCounter: 0,
     subBlockEntries: [],
@@ -288,15 +291,7 @@ function emitSectionHeading(block: AsciidoctorAbstractBlock, state: WalkState): 
   const level = getLevel(block);
   const title = getTitle(block) ?? '';
   const text = normalizeBlockText(title);
-  // Keep the heading stack in mdast-parity: pop everything at-or-deeper
-  // before pushing so `headingPath` reads root → current.
-  while (
-    state.headingStack.length > 0 &&
-    state.headingStack[state.headingStack.length - 1]!.level >= level
-  ) {
-    state.headingStack.pop();
-  }
-  state.headingStack.push({ level, text });
+  state.sections.enterHeading(level, text);
 
   void recordBlock(block, 'heading', text, state);
 }
@@ -343,21 +338,12 @@ function emitLeafBlock(block: AsciidoctorAbstractBlock, ctx: string, state: Walk
 
 /**
  * Build a transient BlockInfo that carries the current section
- * context without mutating sectionCounts. Used as the inherited
+ * context without taking a position in it. Used as the inherited
  * parent for sub-blocks of a list whose own text couldn't be
  * extracted (and therefore wasn't recorded as a top-level block).
  */
 function synthesizeParent(state: WalkState, kind: string): BlockInfo {
-  const headingPath = state.headingStack.map((s) => s.text);
-  const sectionIndexPath: number[] = [];
-  for (let k = 0; k <= headingPath.length; k++) {
-    // Same delimiter as recordBlock (NUL) so sectionCounts lookups
-    // actually hit. A different separator here would silently miss
-    // and force every entry to 0.
-    const prefixKey = headingPath.slice(0, k).join('\u0000');
-    sectionIndexPath.push(state.sectionCounts.get(prefixKey) ?? 0);
-  }
-  const sectionIndex = sectionIndexPath[sectionIndexPath.length - 1] ?? 0;
+  const { headingPath, sectionIndex, sectionIndexPath } = state.sections.peek();
   return { id: '', kind, text: '', headingPath, sectionIndex, sectionIndexPath, anchorable: false };
 }
 
@@ -373,15 +359,7 @@ function recordBlock(
   text: string,
   state: WalkState,
 ): BlockInfo {
-  const headingPath = state.headingStack.map((s) => s.text);
-  const sectionIndexPath: number[] = [];
-  for (let k = 0; k <= headingPath.length; k++) {
-    const prefixKey = headingPath.slice(0, k).join('\u0000');
-    const n = state.sectionCounts.get(prefixKey) ?? 0;
-    sectionIndexPath.push(n);
-    state.sectionCounts.set(prefixKey, n + 1);
-  }
-  const sectionIndex = sectionIndexPath[sectionIndexPath.length - 1]!;
+  const { headingPath, sectionIndex, sectionIndexPath } = state.sections.next();
   const id = hashBlock(kind, text);
 
   const info: BlockInfo = {

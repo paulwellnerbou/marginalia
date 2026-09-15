@@ -2,7 +2,12 @@ import type { Root, RootContent } from 'mdast';
 import { toString as mdastToString } from 'mdast-util-to-string';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
-import { computeSubBlockId, hashBlock, normalizeBlockText } from '../block-ids-shared.js';
+import {
+  computeSubBlockId,
+  hashBlock,
+  normalizeBlockText,
+  SectionTracker,
+} from '../block-ids-shared.js';
 import type { BlockInfo, BlockMap } from '../types.js';
 import type { BlockOffsets } from './block-elements.js';
 
@@ -28,11 +33,10 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
     // keeps their source position but not their hProperties, so their ids
     // travel to `rehypeFootnoteBlockIds` out of band, keyed by offset.
     const footnoteBlockOffsets: BlockOffsets = new Map();
-    const stack: Array<{ level: number; text: string }> = [];
-    const sectionCounts = new Map<string, number>();
+    const sections = new SectionTracker();
     // Sub-block ids share one doc-wide counter so duplicate-content
     // siblings (two cells reading "Yes", for instance) get distinct
-    // ids. `locateAllBlocks` walks the same tree in the same order
+    // ids. `locateBlocks` walks the same tree in the same order
     // and uses the same counter, so the ids round-trip back to source
     // ranges. Otherwise selections inside a later duplicate would
     // walk past the cell and resolve up to the enclosing table.
@@ -41,26 +45,8 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
       const text = normalizeBlockText(mdastToString(node));
       if (!text && node.type !== 'thematicBreak') continue;
 
-      if (node.type === 'heading') {
-        while (stack.length && stack[stack.length - 1]!.level >= node.depth) {
-          stack.pop();
-        }
-        stack.push({ level: node.depth, text });
-      }
-
-      const headingPath = stack.map((s) => s.text);
-      // Counters for every ancestor prefix (including the empty root prefix).
-      // sectionIndexPath[k] is this block's position within the section
-      // rooted at headingPath[0..k-1]; sectionIndexPath[last] is the
-      // innermost-section position.
-      const sectionIndexPath: number[] = [];
-      for (let k = 0; k <= headingPath.length; k++) {
-        const prefixKey = headingPath.slice(0, k).join('\u0000');
-        const n = sectionCounts.get(prefixKey) ?? 0;
-        sectionIndexPath.push(n);
-        sectionCounts.set(prefixKey, n + 1);
-      }
-      const sectionIndex = sectionIndexPath[sectionIndexPath.length - 1]!;
+      if (node.type === 'heading') sections.enterHeading(node.depth, text);
+      const { headingPath, sectionIndex, sectionIndexPath } = sections.next();
 
       const id = hashBlock(node.type, text);
       const info: BlockInfo = {

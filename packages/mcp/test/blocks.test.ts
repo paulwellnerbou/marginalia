@@ -2,11 +2,13 @@ import { describe, expect, test } from 'bun:test';
 import { renderDocument } from '@marginalia/renderer';
 import type { DocumentWire } from '../src/api-types.js';
 import {
+  anchorBlocks,
   anchorNeighbourhood,
   buildAnchor,
   buildBlockMap,
   type DocumentBlock,
   resolveBlock,
+  resolveEndBlock,
   resolveSection,
   sectionContains,
 } from '../src/blocks.js';
@@ -182,6 +184,88 @@ describe('resolveBlock', () => {
   test('requires some selector', async () => {
     const map = await buildBlockMap(await documentFrom(SOURCE));
     expect(() => resolveBlock(map, {})).toThrow(/block_id or anchor_text/);
+  });
+});
+
+describe('repeated blocks', () => {
+  // The same one-line reply in two chapters: one content-hash id, two
+  // blocks. The bug this guards against put every comment and proposal
+  // on the first copy (#203).
+  const REPEATED = `# Book
+
+## Chapter 2
+
+"Go on."
+
+Prose two.
+
+## Chapter 7
+
+Prose seven.
+
+"Go on."
+`;
+
+  async function repeatedMap() {
+    const map = await buildBlockMap(await documentFrom(REPEATED));
+    const copies = map.blocks.filter((b) => b.text === '"Go on."');
+    expect(copies.length).toBe(2);
+    return { map, first: copies[0] as DocumentBlock, second: copies[1] as DocumentBlock };
+  }
+
+  test('each copy gets its own source range and an occurrence number', async () => {
+    const { map, first, second } = await repeatedMap();
+    expect(map.unresolved).toEqual([]);
+    expect([first.occurrence, first.occurrences, first.startLine]).toEqual([1, 2, 5]);
+    expect([second.occurrence, second.occurrences, second.startLine]).toEqual([2, 2, 13]);
+    const prose = map.blocks.find((b) => b.text === 'Prose two.') as DocumentBlock;
+    expect([prose.occurrence, prose.occurrences]).toEqual([1, 1]);
+  });
+
+  test('a shared block_id is refused until occurrence says which copy', async () => {
+    const { map, first, second } = await repeatedMap();
+    expect(() => resolveBlock(map, { blockId: first.id })).toThrow(/Pass `occurrence`/);
+    expect(() => resolveBlock(map, { blockId: first.id })).toThrow(/Book › Chapter 7/);
+    expect(resolveBlock(map, { blockId: first.id, occurrence: 2 })).toBe(second);
+    expect(() => resolveBlock(map, { blockId: first.id, occurrence: 3 })).toThrow(
+      /no occurrence 3/,
+    );
+    expect(() => resolveBlock(map, { anchorText: 'Prose two', occurrence: 1 })).toThrow(
+      /pass block_id/,
+    );
+  });
+
+  test('an ambiguous snippet names the occurrence of each copy', async () => {
+    const { map } = await repeatedMap();
+    expect(() => resolveBlock(map, { anchorText: 'Go on' })).toThrow(/occurrence=2/);
+  });
+
+  test('a thread anchor resolves to the copy its section names', async () => {
+    const { map, first, second } = await repeatedMap();
+    const stored = {
+      block_id: second.id,
+      end_block_id: null,
+      heading_path: ['Book', 'Chapter 7'],
+      section_index_path: second.sectionIndexPath,
+    };
+    expect(anchorBlocks(map, stored).block).toBe(second);
+    // An anchor that stored no section can only be given the first copy.
+    expect(
+      anchorBlocks(map, { ...stored, heading_path: null, section_index_path: null }).block,
+    ).toBe(first);
+  });
+
+  test('a span ends at the first copy of its end id after the start', async () => {
+    const { map, first, second } = await repeatedMap();
+    const proseSeven = map.blocks.find((b) => b.text === 'Prose seven.') as DocumentBlock;
+    expect(resolveEndBlock(map, first.id, proseSeven)).toBe(second);
+    const { endBlock } = anchorBlocks(map, {
+      block_id: proseSeven.id,
+      end_block_id: first.id,
+      heading_path: null,
+      section_index_path: null,
+    });
+    expect(endBlock).toBe(second);
   });
 });
 

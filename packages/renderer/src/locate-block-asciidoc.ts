@@ -1,6 +1,17 @@
 import Asciidoctor from '@asciidoctor/core';
-import { computeSubBlockId, hashBlock, normalizeBlockText } from './block-ids-shared.js';
-import { type BlockSourceRange, canMergeMultiBlock } from './locate-block.js';
+import {
+  type BlockSection,
+  computeSubBlockId,
+  hashBlock,
+  normalizeBlockText,
+  SectionTracker,
+} from './block-ids-shared.js';
+import {
+  addOccurrence,
+  type BlockSourceRange,
+  canMergeMultiBlock,
+  type LocatedBlocks,
+} from './locate-block.js';
 
 declare global {
   var __asciidoctor: ReturnType<typeof Asciidoctor> | undefined;
@@ -10,22 +21,33 @@ const asciidoctor = globalThis.__asciidoctor ?? Asciidoctor();
 globalThis.__asciidoctor = asciidoctor;
 
 /**
- * AsciiDoc twin of `locateAllBlocks` — resolve block IDs back to source
+ * AsciiDoc twin of `locateBlocks` — resolve block IDs back to source
  * ranges so the server can apply edit proposals. IDs must match what
  * `renderAsciidoc`'s walk produces, so both paths go through the same
- * `hashBlock(kind, normalizedText)` recipe on the same AST.
+ * `hashBlock(kind, normalizedText)` recipe on the same AST, and both
+ * number blocks through the same `SectionTracker` so each copy of a
+ * repeated block carries the section context the renderer gave it.
  */
-export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSourceRange> {
+export function locateBlocksAsciidoc(source: string): LocatedBlocks {
   const doc = asciidoctor.load(source, {
     safe: 'safe',
     standalone: false,
     sourcemap: true,
   });
 
-  const out = new Map<string, BlockSourceRange>();
-  walkTopLevel(doc, source, out);
-  walkSubBlocks(doc, source, out);
-  return out;
+  const state: WalkState = {
+    source,
+    out: { byId: new Map(), occurrences: new Map() },
+    sections: new SectionTracker(),
+    subBlockCounts: new Map(),
+  };
+  walkTopLevel(doc, state);
+  return state.out;
+}
+
+/** Every block's id → source range, first occurrence winning. See `locateBlocksAsciidoc`. */
+export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSourceRange> {
+  return locateBlocksAsciidoc(source).byId;
 }
 
 /**
@@ -61,58 +83,112 @@ export function locateBlockRangeAsciidoc(
   return { start, end, kind: 'multi', text: '' };
 }
 
-/**
- * Mirror `walkSubBlocks` in render-asciidoc.ts: walk ulist/olist items
- * in document order and map their content-hash IDs back to source
- * ranges. IDs use `computeSubBlockId('listItem', text, counts)` with a
- * fresh counts Map, matching the renderer's state exactly.
- */
-function walkSubBlocks(block: Any, source: string, out: Map<string, BlockSourceRange>): void {
-  const counts = new Map<string, number>();
-  visit(block);
+type Any = unknown;
 
-  function visit(b: Any): void {
-    const ctx = (b as { getContext?: () => string | undefined }).getContext?.();
-    if (ctx === 'ulist' || ctx === 'olist') {
-      const items = (b as { getItems?: () => Any[] | undefined }).getItems?.() ?? [];
-      for (const item of items) {
-        recordSubBlockRange(item, source, counts, out);
-        visit(item);
-      }
-      return;
-    }
-    for (const child of getChildren(b)) {
-      if (!child || typeof (child as { getContext?: unknown }).getContext !== 'function') continue;
-      visit(child);
-    }
+interface WalkState {
+  source: string;
+  out: LocatedBlocks;
+  sections: SectionTracker;
+  /**
+   * One counts map for the whole document, as the renderer keeps, so
+   * `computeSubBlockId` suffixes duplicate items identically here.
+   */
+  subBlockCounts: Map<string, number>;
+}
+
+/**
+ * Mirror `walkTopLevel` in render-asciidoc.ts: sections open a heading
+ * and recurse, everything else is a leaf that is recorded and then
+ * searched for list items, which inherit its section context.
+ */
+function walkTopLevel(block: Any, state: WalkState): void {
+  const ctx = getContext(block) ?? '';
+  if (ctx === 'document' || ctx === 'preamble') {
+    for (const child of getChildren(block)) walkTopLevel(child, state);
+    return;
+  }
+  if (ctx === 'section') {
+    recordHeading(block, state);
+    for (const child of getChildren(block)) walkTopLevel(child, state);
+    return;
+  }
+  recordLeaf(block, ctx, state);
+}
+
+function recordHeading(block: Any, state: WalkState): void {
+  const text = normalizeBlockText(getTitle(block) ?? '');
+  state.sections.enterHeading(getLevel(block), text);
+  const section = state.sections.next();
+  const range = sourceRange(block, state.source, /* titleOnly */ true);
+  if (!range) return;
+  addOccurrence(
+    state.out,
+    hashBlock('heading', text),
+    { ...range, kind: 'heading', text },
+    section,
+  );
+}
+
+function recordLeaf(block: Any, ctx: string, state: WalkState): void {
+  if (ctx === 'thematic_break' || ctx === 'page_break') {
+    const section = state.sections.next();
+    const range = sourceRange(block, state.source, false);
+    if (range)
+      addOccurrence(state.out, hashBlock(ctx, ''), { ...range, kind: ctx, text: '' }, section);
+    return;
+  }
+  const text = normalizeBlockText(extractBlockText(block));
+  // The renderer records, and so numbers, a leaf only when it has text; a
+  // textless list still lends its items the position it stands at.
+  const section = text ? state.sections.next() : state.sections.peek();
+  if (text) {
+    const range = sourceRange(block, state.source, false);
+    if (range)
+      addOccurrence(state.out, hashBlock(ctx, text), { ...range, kind: ctx, text }, section);
+  }
+  if (ctx === 'ulist' || ctx === 'olist') recordListItems(block, section, state);
+  else recordNestedLists(block, section, state);
+}
+
+/**
+ * Mirror `emitListSubBlocks` / `descendForNestedLists` in
+ * render-asciidoc.ts: ulist/olist items in document order, each recorded
+ * and then searched for nested lists. Same visit order and the same
+ * counts map, so every item's id matches the renderer's.
+ */
+function recordListItems(list: Any, section: BlockSection, state: WalkState): void {
+  for (const item of getItems(list)) {
+    recordListItem(item, section, state);
+    recordNestedLists(item, section, state);
   }
 }
 
-function recordSubBlockRange(
-  item: Any,
-  source: string,
-  counts: Map<string, number>,
-  out: Map<string, BlockSourceRange>,
-): void {
+function recordNestedLists(block: Any, section: BlockSection, state: WalkState): void {
+  for (const child of getChildren(block)) {
+    const ctx = getContext(child);
+    if (ctx === undefined) continue;
+    if (ctx === 'ulist' || ctx === 'olist') recordListItems(child, section, state);
+    else recordNestedLists(child, section, state);
+  }
+}
+
+function recordListItem(item: Any, section: BlockSection, state: WalkState): void {
   // Mirror the renderer: pull the item's own text from getText()
   // (getContent() yields nested-block HTML and is empty for leaf items).
   const fn = (item as { getText?: () => string | undefined }).getText;
   const raw = typeof fn === 'function' ? (fn.call(item) ?? '') : '';
   const text = normalizeBlockText(stripTags(raw));
   if (!text) return;
-  const id = computeSubBlockId('listItem', text, counts);
-  const range = listItemSourceRange(item, source);
+  const id = computeSubBlockId('listItem', text, state.subBlockCounts);
+  const range = listItemSourceRange(item, state.source);
   if (!range) return;
-  // Every occurrence gets its own entry — counts suffixes duplicates
-  // with `#2`, `#3`, …, so ids remain unique.
-  //
   // Intentionally NOT setting `parentStart`: the multi-listItem path
   // is unsafe in asciidoc (best-effort `listItemSourceRange` doesn't
   // cover continuation lines), and `canMergeMultiBlock` rejects
   // asciidoc listItems explicitly via its `format` argument. Don't
   // start populating `parentStart` here without first making
   // continuation ranges accurate.
-  out.set(id, { ...range, kind: 'listItem', text });
+  addOccurrence(state.out, id, { ...range, kind: 'listItem', text }, section);
 }
 
 /**
@@ -142,8 +218,6 @@ function listItemSourceRange(item: Any, source: string): { start: number; end: n
   return { start: startOffset, end: endOffset };
 }
 
-type Any = unknown;
-
 interface LineIndex {
   // 1-based line N → byte offset of start of that line in source
   readonly starts: readonly number[];
@@ -166,46 +240,26 @@ function getLineIndex(source: string): LineIndex {
   return idx;
 }
 
-function walkTopLevel(block: Any, source: string, out: Map<string, BlockSourceRange>): void {
-  const ctx = (block as { getContext(): string }).getContext?.();
-  if (ctx === 'document' || ctx === 'preamble') {
-    for (const child of getChildren(block)) walkTopLevel(child, source, out);
-    return;
-  }
-  if (ctx === 'section') {
-    recordHeading(block, source, out);
-    for (const child of getChildren(block)) walkTopLevel(child, source, out);
-    return;
-  }
-  recordLeaf(block, ctx ?? '', source, out);
-}
-
-function recordHeading(block: Any, source: string, out: Map<string, BlockSourceRange>): void {
-  const title = getTitle(block) ?? '';
-  const text = normalizeBlockText(title);
-  const range = sourceRange(block, source, /* titleOnly */ true);
-  const id = hashBlock('heading', text);
-  if (!out.has(id) && range) out.set(id, { ...range, kind: 'heading', text });
-}
-
-function recordLeaf(
-  block: Any,
-  ctx: string,
-  source: string,
-  out: Map<string, BlockSourceRange>,
-): void {
-  const text = normalizeBlockText(extractBlockText(block));
-  if (!text && ctx !== 'thematic_break' && ctx !== 'page_break') return;
-  const range = sourceRange(block, source, false);
-  if (!range) return;
-  const id = hashBlock(ctx, text);
-  if (!out.has(id)) out.set(id, { ...range, kind: ctx, text });
+function getContext(block: Any): string | undefined {
+  const fn = (block as { getContext?: () => string | undefined } | null)?.getContext;
+  return typeof fn === 'function' ? fn.call(block) : undefined;
 }
 
 function getChildren(block: Any): Any[] {
   const fn = (block as { getBlocks?: () => Any[] }).getBlocks;
   if (typeof fn !== 'function') return [];
   return fn.call(block) ?? [];
+}
+
+function getItems(list: Any): Any[] {
+  const fn = (list as { getItems?: () => Any[] | undefined }).getItems;
+  if (typeof fn !== 'function') return [];
+  return fn.call(list) ?? [];
+}
+
+function getLevel(block: Any): number {
+  const fn = (block as { getLevel?: () => number }).getLevel;
+  return typeof fn === 'function' ? fn.call(block) : 1;
 }
 
 function getTitle(block: Any): string | null {

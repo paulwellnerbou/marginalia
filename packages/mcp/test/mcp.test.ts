@@ -125,6 +125,8 @@ describe('marginalia MCP server', () => {
     quote: string,
     body: string,
     endBlockId?: string,
+    /** The section context the viewer stores alongside the ids. */
+    section: Record<string, unknown> = {},
   ): Promise<string> {
     const res = await fetch(`${baseUrl}/api/documents/${uid}/threads`, {
       method: 'POST',
@@ -135,7 +137,12 @@ describe('marginalia MCP server', () => {
         'x-marginalia-invite': token,
       },
       body: JSON.stringify({
-        anchor: { block_id: blockId, quote, ...(endBlockId ? { end_block_id: endBlockId } : {}) },
+        anchor: {
+          block_id: blockId,
+          quote,
+          ...(endBlockId ? { end_block_id: endBlockId } : {}),
+          ...section,
+        },
         body,
       }),
     });
@@ -491,6 +498,127 @@ describe('marginalia MCP server', () => {
     });
     expect(message).toContain('ambiguous');
     expect(message).toMatch(/block_id/);
+  });
+
+  test('keeps the copies of a repeated line apart, from the thread list to the proposal', async () => {
+    // One short reply in two chapters: identical text, one block id.
+    const source = `# Two Chapters
+
+## Chapter 2
+
+"Go on."
+
+Prose in chapter two.
+
+## Chapter 7
+
+Prose in chapter seven.
+
+"Go on."
+`;
+    const { adminUrl, uid } = await seedBook(source);
+    const invite = await call('create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+      display_name: REVIEWER.displayName,
+    });
+    const token = new URL(/(http\S+)/.exec(invite)?.[1] as string).pathname.split('/')[3] as string;
+
+    // Both copies are listed with their own line range and marked as
+    // sharing an id.
+    const listed = await call('list_blocks', { document: adminUrl, query: 'Go on' });
+    expect(listed).toContain('occurrence=1 of 2');
+    expect(listed).toContain('occurrence=2 of 2');
+    expect(listed).toContain('lines 5-5');
+    expect(listed).toContain('lines 13-13');
+    expect(listed).toContain('Pass `occurrence`');
+    const blockId = /block_id=([0-9a-f]{16})/.exec(listed)?.[1] as string;
+
+    // The reviewer comments on the chapter-seven copy. Like the viewer,
+    // they store the section the selection was made in beside the id.
+    const docRes = await fetch(`${baseUrl}/api/documents/${uid}`, {
+      headers: {
+        'x-marginalia-client': REVIEWER.clientId,
+        'x-marginalia-client-name': REVIEWER.displayName,
+        'x-marginalia-invite': token,
+      },
+    });
+    const doc = (await docRes.json()) as {
+      rendered: {
+        blocks: Array<{
+          id: string;
+          headingPath: string[];
+          sectionIndex: number;
+          sectionIndexPath: number[];
+        }>;
+      };
+    };
+    const seventh = doc.rendered.blocks.filter((b) => b.id === blockId)[1]!;
+    expect(seventh.headingPath).toEqual(['Two Chapters', 'Chapter 7']);
+    const threadId = await reviewerComments(
+      uid,
+      token,
+      blockId,
+      'Go on.',
+      'Add a beat here.',
+      undefined,
+      {
+        heading_path: seventh.headingPath,
+        section_index: seventh.sectionIndex,
+        section_index_path: seventh.sectionIndexPath,
+      },
+    );
+
+    // The thread is reported where the reviewer wrote it, not on the
+    // first copy of the line.
+    const threads = await call('list_threads', { document: adminUrl });
+    expect(threads).toContain(`block_id=${blockId} occurrence=2 of 2`);
+    expect(threads).toContain('lines 13-13, section Two Chapters › Chapter 7');
+    expect(threads).not.toContain('lines 5-5');
+    const inSeven = await call('list_threads', { document: adminUrl, section: 'Chapter 7' });
+    expect(inSeven).toContain(threadId);
+    const inTwo = await call('list_threads', { document: adminUrl, section: 'Chapter 2' });
+    expect(inTwo).toContain('No threads matched.');
+
+    // The shared id alone does not say which copy, so the proposal is
+    // refused with the copies listed rather than landing in chapter two.
+    const refused = await callExpectingError('create_proposal', {
+      document: adminUrl,
+      block_id: blockId,
+      proposed_text: '"Go on. Another one?"',
+      rationale: 'Adds the beat.',
+      answers_thread_ids: [threadId],
+    });
+    expect(refused).toContain('Pass `occurrence`');
+    expect(refused).toContain('occurrence=2  paragraph, lines 13-13, Two Chapters › Chapter 7');
+    const none = await call('list_threads', { document: adminUrl, kind: 'proposals' });
+    expect(none).toContain('No threads matched.');
+
+    // Naming the copy lands the proposal in chapter seven, and accepting
+    // it changes that copy only.
+    const created = await call('create_proposal', {
+      document: adminUrl,
+      block_id: blockId,
+      occurrence: 2,
+      proposed_text: '"Go on. Another one?"',
+      rationale: 'Adds the beat.',
+      answers_thread_ids: [threadId],
+    });
+    expect(created).toContain(`on block ${blockId} occurrence=2 of 2 (lines 13-13)`);
+    const proposalId = /^thread_id: (\S+)/m.exec(created)?.[1] as string;
+
+    const diff = await call('get_proposal_diff', { document: adminUrl, thread_id: proposalId });
+    expect(diff).toContain('-"Go on."');
+    expect(diff).toContain('+"Go on. Another one?"');
+
+    await call('respond_to_thread', {
+      document: adminUrl,
+      thread_id: proposalId,
+      action: 'accept',
+    });
+    const after = await call('get_document', { document: adminUrl });
+    expect(after).toContain('Prose in chapter seven.\n\n"Go on. Another one?"');
+    expect(after).toContain('## Chapter 2\n\n"Go on."\n');
   });
 
   test('reports shareable comment links without the invite token', async () => {

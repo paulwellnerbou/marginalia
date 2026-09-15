@@ -1,7 +1,16 @@
 import type { Database } from 'bun:sqlite';
-import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
-import { canMergeMultiBlock } from '@marginalia/renderer';
-import { locateDocumentBlocksCached } from '../block-cache.js';
+import type {
+  BlockInfo,
+  BlockOccurrence,
+  BlockSourceRange,
+  SectionContext,
+} from '@marginalia/renderer';
+import { canMergeMultiBlock, scoreSectionMatch } from '@marginalia/renderer';
+import { parseHeadingPath, parseIntArray } from '../anchoring.js';
+import {
+  locateDocumentBlockOccurrencesCached,
+  locateDocumentBlocksCached,
+} from '../block-cache.js';
 import {
   type DocumentRow,
   type EditProposalThreadRow,
@@ -139,10 +148,35 @@ export function reopenAcceptedProposal(
 }
 
 /**
+ * What an anchor remembers of the section it was made in. A block id is
+ * a content hash, so a line the document repeats carries one id on
+ * several blocks, and this is what says which of them the anchor means.
+ */
+export interface AnchorSection {
+  headingPath: readonly string[] | null;
+  sectionIndexPath: readonly number[] | null;
+}
+
+/** The section context a stored comment row carries. */
+export function anchorSectionOf(row: {
+  anchor_heading_path: string | null;
+  anchor_section_index_path: string | null;
+}): AnchorSection {
+  return {
+    headingPath: parseHeadingPath(row.anchor_heading_path),
+    sectionIndexPath: parseIntArray(row.anchor_section_index_path),
+  };
+}
+
+/**
  * Resolve a proposal anchor (single-block or multi-block) to a source
  * range in the given document source. Centralizes the format dispatch
  * and the multi-block endpoint validation so accept, diff, and orphan
  * paths can't drift apart.
+ *
+ * `section` picks between copies of a repeated block. Without it the
+ * first copy is taken, which is all an anchor that stored no section
+ * can be given.
  *
  * Validation goes through the renderer's `canMergeMultiBlock`:
  *   - `tableCell` endpoints are always rejected (would slice across
@@ -165,12 +199,13 @@ export function locateAnchorRange(
   source: string,
   blockId: string,
   endBlockId: string | null,
+  section: AnchorSection | null = null,
 ): BlockSourceRange | null {
-  const blocks = locateDocumentBlocks(doc, source);
-  const startBlock = blocks.get(blockId);
+  const occurrences = locateDocumentBlockOccurrencesCached(doc.format, source);
+  const startBlock = chooseOccurrence(occurrences.get(blockId), section);
   if (!startBlock) return null;
   if (!endBlockId || endBlockId === blockId) return startBlock;
-  const endBlock = blocks.get(endBlockId);
+  const endBlock = chooseSpanEnd(occurrences.get(endBlockId), startBlock);
   if (!endBlock) return null;
   if (!canMergeMultiBlock(startBlock, endBlock, doc.format)) return null;
   return {
@@ -179,6 +214,57 @@ export function locateAnchorRange(
     kind: 'multi',
     text: '',
   };
+}
+
+/**
+ * The copy of a repeated block an anchor means: the one whose section
+ * ranks highest against what the anchor stored — the same ranking the
+ * browser uses to pick the element it highlights, so the text a proposal
+ * splices is the text its card sits next to.
+ */
+function chooseOccurrence(
+  candidates: readonly BlockOccurrence[] | undefined,
+  section: AnchorSection | null,
+): BlockOccurrence | null {
+  return chooseBySection(candidates ?? [], section);
+}
+
+/**
+ * The candidate whose section ranks highest against `section`, ties to
+ * the first. Without a stored section the first is all that can be
+ * answered — which is also what a lone candidate gets.
+ */
+export function chooseBySection<T extends SectionContext>(
+  candidates: readonly T[],
+  section: AnchorSection | null,
+): T | null {
+  const first = candidates[0];
+  if (first === undefined) return null;
+  if (candidates.length === 1 || !section?.headingPath) return first;
+  let best = first;
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const candidate of candidates) {
+    const score = scoreSectionMatch(candidate, section.headingPath, section.sectionIndexPath);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/**
+ * The end of a span whose end id is repeated: the first copy after the
+ * start block, as the browser resolves it. Failing that the last copy
+ * before it — the endpoints may arrive in either order, and the min/max
+ * merge above reads them either way.
+ */
+function chooseSpanEnd(
+  candidates: readonly BlockOccurrence[] | undefined,
+  start: BlockOccurrence,
+): BlockOccurrence | null {
+  if (!candidates || candidates.length === 0) return null;
+  return candidates.find((c) => c.start >= start.end) ?? candidates[candidates.length - 1]!;
 }
 
 /**
@@ -192,15 +278,31 @@ export function locateDocumentBlocks(
   return locateDocumentBlocksCached(doc.format, source);
 }
 
-export function findBlockBySourceSpan(
-  blocks: ReadonlyMap<string, BlockSourceRange>,
+/**
+ * Every copy of every block, as `(id, occurrence)` pairs in document
+ * order — for a search by source position, where the later copies of a
+ * repeated block are as real as the first.
+ */
+export function locateDocumentBlockOccurrences(
+  doc: DocumentRow,
+  source: string,
+): Array<readonly [string, BlockOccurrence]> {
+  const pairs: Array<readonly [string, BlockOccurrence]> = [];
+  for (const copies of locateDocumentBlockOccurrencesCached(doc.format, source).values()) {
+    for (const copy of copies) pairs.push([copy.id, copy]);
+  }
+  return pairs.sort((a, b) => a[1].start - b[1].start);
+}
+
+export function findBlockBySourceSpan<R extends BlockSourceRange>(
+  blocks: Iterable<readonly [string, R]>,
   start: number,
   end: number,
-): { id: string; range: BlockSourceRange; confidence: 'linked' | 'low-confidence' } | null {
-  let exact: { id: string; range: BlockSourceRange } | null = null;
-  let sameStart: { id: string; range: BlockSourceRange } | null = null;
-  let container: { id: string; range: BlockSourceRange } | null = null;
-  let overlap: { id: string; range: BlockSourceRange; amount: number; span: number } | null = null;
+): { id: string; range: R; confidence: 'linked' | 'low-confidence' } | null {
+  let exact: { id: string; range: R } | null = null;
+  let sameStart: { id: string; range: R } | null = null;
+  let container: { id: string; range: R } | null = null;
+  let overlap: { id: string; range: R; amount: number; span: number } | null = null;
 
   for (const [id, range] of blocks) {
     if (range.start === start && range.end === end) {
