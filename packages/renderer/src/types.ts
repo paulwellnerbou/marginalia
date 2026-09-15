@@ -129,6 +129,14 @@ export interface BlockInfo {
    * flag with it instead of drifting away from the truth.
    */
   anchorable: boolean;
+  /**
+   * For a heading block: the slug the heading element carries as its
+   * `id`, i.e. the matching `Anchor.id`. Statistics roll block counts up
+   * to TOC entries through it, where matching on `headingPath` text would
+   * conflate two same-named headings under one parent. Absent on every
+   * other block, and on a heading that reached no element.
+   */
+  headingId?: string;
 }
 
 /** Ordered list of top-level blocks, by document order. */

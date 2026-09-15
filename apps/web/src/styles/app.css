@@ -1236,6 +1236,101 @@ button.primary:disabled {
   margin-inline-start: var(--space-1);
 }
 
+/* Statistics dialog: a tile per headline number, the two conversions it
+   rests on, then a chapter table. */
+.doc-stats-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.doc-stats-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--gray-a5);
+  border-radius: var(--radius-3);
+  background: var(--gray-a2);
+}
+.doc-stats-value {
+  font-variant-numeric: tabular-nums;
+}
+.doc-stats-note {
+  margin: var(--space-2) 0 0;
+}
+.doc-stats-empty {
+  margin: var(--space-4) 0 0;
+}
+/* The five columns don't fit a phone. The table scrolls sideways on its
+   own; without the min-width release on Radix's scroll-padding flex item
+   its min-content width would widen the whole dialog past the viewport
+   instead. */
+.rt-DialogScrollPadding:has(> .doc-stats-dialog) {
+  min-width: 0;
+}
+.doc-stats-table {
+  margin-top: var(--space-4);
+  max-width: 100%;
+  overflow-x: auto;
+}
+.doc-stats-num {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* Subsections indent under their chapter; the chevron column keeps the
+   titles aligned whether or not a row can expand. */
+.doc-stats-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding-inline-start: calc(var(--doc-stats-depth, 0) * var(--space-4));
+}
+.doc-stats-heading a {
+  color: inherit;
+  text-decoration: none;
+}
+.doc-stats-heading a:hover {
+  text-decoration: underline;
+}
+.doc-stats-toggle {
+  margin: 0;
+}
+.doc-stats-toggle svg {
+  transition: transform 160ms ease;
+}
+.doc-stats-toggle[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+.doc-stats-toggle-spacer {
+  display: inline-block;
+  flex: none;
+  width: var(--space-5);
+  height: var(--space-5);
+}
+.doc-stats-share {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+.doc-stats-bar {
+  display: inline-block;
+  width: 3.5rem;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--gray-a4);
+}
+.doc-stats-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-9);
+}
+
 .right-tabs {
   display: flex;
   flex-direction: column;

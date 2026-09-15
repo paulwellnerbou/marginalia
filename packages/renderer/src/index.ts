@@ -30,6 +30,8 @@ export type { SectionContext } from './section-score.js';
 export { headingSegmentsMatch, scoreSectionMatch } from './section-score.js';
 export type { MarkdownChapter } from './split-markdown-chapters.js';
 export { splitMarkdownChapters } from './split-markdown-chapters.js';
+export type { DocumentStats, SectionStats, StatsInput, TextCounts } from './stats.js';
+export { computeDocumentStats, countSentences, countWords } from './stats.js';
 export type {
   Anchor,
   AssetRef,

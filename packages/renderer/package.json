@@ -14,6 +14,7 @@
     "./locate-block-asciidoc": "./src/locate-block-asciidoc.ts",
     "./render": "./src/render.ts",
     "./section-score": "./src/section-score.ts",
+    "./stats": "./src/stats.ts",
     "./types": "./src/types.ts"
   },
   "scripts": {

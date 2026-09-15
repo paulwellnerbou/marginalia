@@ -136,6 +136,7 @@ import {
   DocumentSearchResultsPane,
 } from './DocumentSearchResultsPane.js';
 import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
+import { DocumentStatsDialog } from './DocumentStatsDialog.js';
 import { DownloadMenu } from './DownloadMenu.js';
 import { HistoryList } from './HistoryList.js';
 import {
@@ -2931,6 +2932,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                 </Popover.Content>
               </Popover.Root>
               <span className="spacer" />
+              <DocumentStatsDialog rendered={liveRendered} />
               {/* Download is available to any reader — unlike settings /
                 access control which are admin-only. Sits next to the
                 gear so the whole toolbar cluster reads as a single set
