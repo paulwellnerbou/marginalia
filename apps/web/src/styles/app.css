@@ -1263,17 +1263,15 @@ button.primary:disabled {
 .doc-stats-empty {
   margin: var(--space-4) 0 0;
 }
-/* The five columns don't fit a phone. The table scrolls sideways on its
-   own; without the min-width release on Radix's scroll-padding flex item
-   its min-content width would widen the whole dialog past the viewport
-   instead. */
-.rt-DialogScrollPadding:has(> .doc-stats-dialog) {
-  min-width: 0;
-}
+/* The five columns don't fit a phone. Radix sizes a dialog by its
+   content, so left alone the table's min-content width would widen the
+   whole dialog past the viewport; `width: 0` takes the table out of that
+   measurement and `min-width: 100%` then fills whatever the dialog got.
+   The table scrolls sideways inside its own ScrollArea. */
 .doc-stats-table {
   margin-top: var(--space-4);
-  max-width: 100%;
-  overflow-x: auto;
+  width: 0;
+  min-width: 100%;
 }
 .doc-stats-num {
   font-variant-numeric: tabular-nums;
