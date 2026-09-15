@@ -336,7 +336,7 @@ function buildRenderableLines(lines: DiffLine[], startLine = 1): RenderableDiffL
   let oldLine = startLine;
   let newLine = startLine;
   return lines.map((line, index) => {
-    const signature = `${line.op} ${line.text}`;
+    const signature = `${line.op}\u0000${line.text}`;
     const occurrence = occurrences.get(signature) ?? 0;
     occurrences.set(signature, occurrence + 1);
     const oldLineNumber = line.op === 'add' ? null : oldLine;
@@ -344,7 +344,7 @@ function buildRenderableLines(lines: DiffLine[], startLine = 1): RenderableDiffL
     if (line.op !== 'add') oldLine++;
     if (line.op !== 'remove') newLine++;
     return {
-      key: `${index} ${signature} ${occurrence}`,
+      key: `${index}\u0000${signature}\u0000${occurrence}`,
       line,
       oldLineNumber,
       newLineNumber,
@@ -394,7 +394,7 @@ function compactRenderableLines(
 
 function omittedLine(startIndex: number, endIndex: number): RenderableDiffLine {
   return {
-    key: `omitted ${startIndex} ${endIndex}`,
+    key: `omitted\u0000${startIndex}\u0000${endIndex}`,
     line: null,
     oldLineNumber: null,
     newLineNumber: null,
