@@ -242,9 +242,11 @@ export function registerDocumentTools(
         'source. Block ids are what comments and edit proposals anchor to, and a proposal ' +
         'replaces a block’s entire source range — so read the block here before proposing a ' +
         'replacement for it. List items and table cells appear as their own blocks in addition ' +
-        'to the enclosing list or table, so either granularity can be targeted. On a long ' +
-        'document always narrow with `section` or `query` — unfiltered, this returns the whole ' +
-        'source one block at a time.',
+        'to the enclosing list or table, so either granularity can be targeted. Identical ' +
+        'blocks share one id: such ids are marked `occurrence=n of m`, and the comment and ' +
+        'proposal tools take `occurrence` to say which copy. On a long document always narrow ' +
+        'with `section` or `query` — unfiltered, this returns the whole source one block at a ' +
+        'time.',
       inputSchema: {
         document: documentArg,
         query: z

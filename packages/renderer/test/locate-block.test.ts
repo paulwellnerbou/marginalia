@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import { locateAllBlocks, locateBlockRange, locateBlockSource, render } from '../src/index.js';
+import {
+  locateAllBlocks,
+  locateBlockRange,
+  locateBlockSource,
+  locateBlocks,
+  render,
+} from '../src/index.js';
 
 describe('locateBlockSource', () => {
   test('returns ranges that slice back to exact block sources — round-trips with remarkBlockIds', async () => {
@@ -188,6 +194,94 @@ Real paragraph.
 
     const rewritten = md.slice(0, second.start) + 'NO' + md.slice(second.end);
     expect(rewritten).toBe(`| A | B |\n|---|---|\n| Yes | NO |\n`);
+  });
+});
+
+describe('locateBlocks', () => {
+  // A line of dialogue a manuscript repeats: one content-hash id on two
+  // paragraphs, chapters apart.
+  const md = `# Book
+
+## Chapter 2
+
+"Go on."
+
+Some prose.
+
+## Chapter 7
+
+More prose.
+
+"Go on."
+`;
+
+  test('records every copy of a repeated block with its own range and section', async () => {
+    const rendered = await render(md);
+    const copies = rendered.blocks.filter((b) => b.text === '"Go on."');
+    expect(copies.length).toBe(2);
+    const id = copies[0]!.id;
+    expect(copies[1]!.id).toBe(id);
+
+    const located = locateBlocks(md);
+    const occurrences = located.occurrences.get(id)!;
+    expect(occurrences.length).toBe(2);
+    expect(occurrences.map((o) => md.slice(o.start, o.end))).toEqual(['"Go on."', '"Go on."']);
+    expect(occurrences[0]!.start).toBeLessThan(occurrences[1]!.start);
+    expect(occurrences[0]!.headingPath).toEqual(['Book', 'Chapter 2']);
+    expect(occurrences[1]!.headingPath).toEqual(['Book', 'Chapter 7']);
+    // The flat map still answers with the first copy.
+    expect(located.byId.get(id)?.start).toBe(occurrences[0]!.start);
+  });
+
+  test('gives every rendered block the section context the renderer gave it', async () => {
+    // Repeated headings, items, cells and breaks, before and after a
+    // heading, so every counter the two walks keep is exercised on a
+    // duplicate.
+    const source = `Preamble before any heading.
+
+# Book
+
+## Chapter 2
+
+### Scene
+
+- item
+- item
+- other
+
+| a | b |
+|---|---|
+| x | x |
+
+---
+
+"Go on."
+
+## Chapter 7
+
+### Scene
+
+"Go on."
+
+> quoted
+
+---
+`;
+    const rendered = await render(source);
+    const located = locateBlocks(source);
+    const seen = new Map<string, number>();
+    for (const block of rendered.blocks) {
+      const nth = seen.get(block.id) ?? 0;
+      seen.set(block.id, nth + 1);
+      const occurrence = located.occurrences.get(block.id)?.[nth];
+      expect(occurrence).toBeDefined();
+      expect(occurrence!.kind).toBe(block.kind);
+      expect(occurrence!.headingPath).toEqual(block.headingPath);
+      expect(occurrence!.sectionIndex).toBe(block.sectionIndex);
+      expect(occurrence!.sectionIndexPath).toEqual(block.sectionIndexPath);
+    }
+    // The duplicates really were there to be told apart.
+    expect([...seen.values()].filter((n) => n === 2).length).toBe(3);
   });
 });
 

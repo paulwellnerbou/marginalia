@@ -46,6 +46,7 @@ import { listAttached } from './assets.js';
 import { toWire as toLegacyCommentWire } from './comments.js';
 import type { AppDeps } from './documents.js';
 import {
+  anchorSectionOf,
   findBlockBySourceSpan,
   loadProposalRow,
   locateAnchorRange,
@@ -355,7 +356,10 @@ async function createThread(c: Context, deps: AppDeps) {
     if (proposal.wholeDocument) {
       blockRange = { start: 0, end: currentSource.length, kind: 'multi', text: '' };
     } else {
-      blockRange = locateAnchorRange(doc, currentSource, anchor.blockId, anchor.endBlockId);
+      blockRange = locateAnchorRange(doc, currentSource, anchor.blockId, anchor.endBlockId, {
+        headingPath: anchor.headingPath,
+        sectionIndexPath: anchor.sectionIndexPath,
+      });
       if (!blockRange) return c.json({ error: 'anchor-block-not-found' }, 400);
     }
     const nextSource =
@@ -1057,7 +1061,13 @@ async function readProposalRebaseTarget(
   if (row.is_whole_document === 1 || !anchorBlockId) {
     blockRange = { start: 0, end: currentSource.length, kind: 'multi', text: '' };
   } else {
-    blockRange = locateAnchorRange(doc, currentSource, anchorBlockId, row.anchor_end_block_id);
+    blockRange = locateAnchorRange(
+      doc,
+      currentSource,
+      anchorBlockId,
+      row.anchor_end_block_id,
+      anchorSectionOf(row),
+    );
   }
   if (!blockRange) {
     // The anchor died since the last orphan sweep; record that (as the
@@ -1122,7 +1132,13 @@ async function readProposalConflictSides(
     if (row.link_status === 'orphaned' || !anchorBlockId) {
       return { ok: false, status: 409, error: 'proposal-orphaned' };
     }
-    const range = locateAnchorRange(doc, currentSource, anchorBlockId, row.anchor_end_block_id);
+    const range = locateAnchorRange(
+      doc,
+      currentSource,
+      anchorBlockId,
+      row.anchor_end_block_id,
+      anchorSectionOf(row),
+    );
     if (!range) return { ok: false, status: 409, error: 'proposal-orphaned' };
     current = currentSource.slice(range.start, range.end);
   }
@@ -2124,7 +2140,13 @@ async function prepareAcceptProposalThread(
     // Guard above ensures anchor_block_id is non-null in this branch.
     const blockId = row.anchor_block_id;
     if (!blockId) throw new ThreadActionError(409, 'proposal-orphaned');
-    preMergeRange = locateAnchorRange(doc, preMergeSource, blockId, row.anchor_end_block_id);
+    preMergeRange = locateAnchorRange(
+      doc,
+      preMergeSource,
+      blockId,
+      row.anchor_end_block_id,
+      anchorSectionOf(row),
+    );
   }
   if (!preMergeRange) {
     // The block the proposal was written against is gone. Before calling
@@ -2230,6 +2252,7 @@ async function recoverLandedAccept(
     preMergeSource,
     row.anchor_block_id,
     row.anchor_end_block_id,
+    anchorSectionOf(row),
   );
   if (!preMergeRange) return null;
   return completeAcceptWorkflow({

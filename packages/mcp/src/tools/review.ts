@@ -2,14 +2,23 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ListThreadsWire, ProposalDiffWire, ThreadWire } from '../api-types.js';
 import {
+  anchorBlocks,
   buildAnchor,
   type DocumentBlock,
   resolveBlock,
+  resolveEndBlock,
   resolveSection,
   sectionContains,
 } from '../blocks.js';
 import { commentUrl } from '../document-ref.js';
-import { type ContextScope, lineDiff, threadDetail, threadList, threadStatus } from '../format.js';
+import {
+  type ContextScope,
+  lineDiff,
+  occurrenceTag,
+  threadDetail,
+  threadList,
+  threadStatus,
+} from '../format.js';
 import {
   blockDriftNote,
   documentArg,
@@ -41,6 +50,18 @@ const anchorTextArg = z
   .describe(
     'Instead of block_id: a verbatim snippet from the document that occurs in exactly one ' +
       'block. Matched against both the raw source and the rendered text.',
+  );
+
+const occurrenceArg = z
+  .number()
+  .int()
+  .min(1)
+  .optional()
+  .describe(
+    'Which block, when several share `block_id`: identical text hashes to one id, so a line ' +
+      'the document repeats is one id on several blocks. 1 is the first copy in the document; ' +
+      'list_blocks and list_threads print `occurrence=n of m` next to such ids. Required for ' +
+      'a shared id, and only meaningful together with block_id.',
   );
 
 export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
@@ -163,17 +184,18 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           );
         }
         if (section) {
-          const inSection = new Set(
-            loaded.blocks.blocks.filter((b) => sectionContains(section, b)).map((b) => b.id),
-          );
-          // An orphaned thread has no block id left, so fall back to the
-          // heading path it was captured under — otherwise a chapter's
-          // orphans would silently vanish from its own review queue.
-          threads = threads.filter((t) =>
-            t.anchor.block_id
-              ? inSection.has(t.anchor.block_id)
-              : startsWithPath(t.anchor.heading_path, section.path),
-          );
+          // Resolved per thread rather than by id membership: a repeated
+          // block's id is in every section that repeats it, and only the
+          // anchor's section says which copy the thread sits on. An
+          // orphaned thread has no block left, so fall back to the heading
+          // path it was captured under — otherwise a chapter's orphans
+          // would silently vanish from its own review queue.
+          threads = threads.filter((t) => {
+            const { block } = anchorBlocks(loaded.blocks, t.anchor);
+            return block
+              ? sectionContains(section, block)
+              : startsWithPath(t.anchor.heading_path, section.path);
+          });
         }
         if (args.kind === 'comments') threads = threads.filter((t) => t.proposal === null);
         if (args.kind === 'proposals') threads = threads.filter((t) => t.proposal !== null);
@@ -259,6 +281,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .string()
           .describe('The comment. Markdown is fine; @Name mentions notify that participant.'),
         block_id: blockIdArg,
+        occurrence: occurrenceArg,
         anchor_text: anchorTextArg,
         quote: z
           .string()
@@ -276,6 +299,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         const block = resolveBlock(loaded.blocks, {
           blockId: args.block_id,
           anchorText: args.anchor_text,
+          occurrence: args.occurrence,
         });
         const anchor = buildAnchor(block, args.quote ?? args.anchor_text);
         const { thread } = await ctx.client.json<ThreadMutationWire>(
@@ -284,7 +308,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           { method: 'POST', body: { anchor, body: args.body } },
         );
         return text(
-          `Commented as "${ctx.client.displayName}" on block ${block.id} (${block.kind}, lines ${block.startLine}-${block.endLine}).`,
+          `Commented as "${ctx.client.displayName}" on block ${block.id}${occurrenceTag(block)} (${block.kind}, lines ${block.startLine}-${block.endLine}).`,
           `thread_id: ${thread.id}`,
           `url: ${commentUrl(loaded.ref, thread.id)}`,
           `highlighted: ${JSON.stringify(anchor.quote.slice(0, 200))}`,
@@ -318,13 +342,15 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .string()
           .describe('Why the change is proposed. Shown as the proposal’s opening comment.'),
         block_id: blockIdArg,
+        occurrence: occurrenceArg,
         anchor_text: anchorTextArg,
         end_block_id: z
           .string()
           .optional()
           .describe(
             'Last block of a multi-block span, to replace several consecutive blocks at once. ' +
-              'Only valid for structurally compatible endpoints (e.g. two items of the same list).',
+              'Only valid for structurally compatible endpoints (e.g. two items of the same list). ' +
+              'A shared id here means the first copy after the start block.',
           ),
         whole_document: z
           .boolean()
@@ -368,9 +394,10 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           block = resolveBlock(loaded.blocks, {
             blockId: args.block_id,
             anchorText: args.anchor_text,
+            occurrence: args.occurrence,
           });
           endBlock = args.end_block_id
-            ? resolveBlock(loaded.blocks, { blockId: args.end_block_id }, 'end block')
+            ? resolveEndBlock(loaded.blocks, args.end_block_id, block)
             : null;
         }
 
@@ -447,7 +474,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         return text(
           args.whole_document
             ? 'Created a whole-document edit proposal.'
-            : `Created an edit proposal on block ${block.id}${endBlock ? `…${endBlock.id}` : ''} (lines ${block.startLine}-${(endBlock ?? block).endLine}).`,
+            : `Created an edit proposal on block ${block.id}${occurrenceTag(block)}${endBlock ? `…${endBlock.id}` : ''} (lines ${block.startLine}-${(endBlock ?? block).endLine}).`,
           `thread_id: ${thread.id}  status: open`,
           `url: ${commentUrl(loaded.ref, thread.id)}`,
           notice,

@@ -216,7 +216,7 @@ when no password is set.
 | Tool | |
 | --- | --- |
 | `list_threads` | Comments and edit proposals with their discussion and anchored text. Open threads only, unless `thread_id` names one or `state` asks for more. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter. A targeted thread includes one surrounding block on each side by default; `context` overrides that with a block count, `"section"` for the whole enclosing section, or `"none"`. |
-| `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet). |
+| `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet; `occurrence` picks between identical blocks sharing an id). |
 | `create_proposal` | A suggested replacement. `answers_thread_ids` links it to the comments it answers — every one the edit settles, not just the one that prompted it. |
 | `update_proposal` | Revise an open proposal you authored, or any open proposal as document admin — new text, same thread, discussion intact. Rebuilds it against the current source, so it also refreshes a stale or conflicted proposal. `comment` posts a revision note in the discussion alongside the change. |
 | `reply_to_thread` | Answer a comment thread or an edit proposal. |
@@ -374,6 +374,13 @@ Tools that take an anchor accept either an exact `block_id` or an
 `anchor_text` snippet. A snippet matching two unrelated blocks is
 reported as ambiguous with the candidate ids, rather than guessed at. A
 snippet inside a list item resolves to the item, not the enclosing list.
+
+Identical blocks share an id — a one-word line of dialogue repeated in
+three chapters is one `block_id` on three blocks. `list_blocks` and
+`list_threads` mark such ids with `occurrence=n of m`, and
+`create_comment` / `create_proposal` take `occurrence` to say which copy
+is meant; a shared id without it is refused with the copies listed, so a
+proposal never lands two chapters away from the comment it answers.
 
 ## Downloads
 
