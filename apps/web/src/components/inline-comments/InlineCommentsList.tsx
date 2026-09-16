@@ -18,13 +18,14 @@ import {
   useState,
 } from 'react';
 import type { Thread } from '../../lib/api.js';
-import { isProposal, proposalStatus } from '../../lib/api.js';
+import { isBookmark, isProposal, proposalStatus } from '../../lib/api.js';
 import { getClientId } from '../../lib/identity.js';
 import {
   buildThreadCollapseState,
   reconcileThreadCollapseState,
   type ThreadCollapseState,
 } from '../threadCollapseState.js';
+import { BookmarkCard } from './BookmarkCard.js';
 import { InlineThreadCard } from './InlineThreadCard.js';
 import { type ThreadActionResult, threadLinks, threadsById } from './inlineUtils.js';
 import {
@@ -537,6 +538,18 @@ export function InlineCommentsList({
     const onJump = blockId
       ? () => onScrollToAnchor(blockId, thread.anchor.quote, thread.id)
       : undefined;
+    if (isBookmark(thread)) {
+      return (
+        <BookmarkCard
+          key={thread.id}
+          thread={thread}
+          focused={focusedId === thread.id}
+          flashPhase={flash?.id === thread.id ? flash.phase : null}
+          onJump={onJump}
+          onRemove={onDeleteThread}
+        />
+      );
+    }
     const rawLinks = threadLinks(thread, byId);
     // Proposals rendered inside this card need no "See proposed change"
     // link on top — the card itself is right below. A nested proposal
@@ -755,9 +768,13 @@ export function InlineCommentsList({
 
       {visibleOrphans.length > 0 && (
         <section className="ic-list-orphans">
-          <h4 className="ic-list-section-title">Orphaned discussions</h4>
+          <h4 className="ic-list-section-title">
+            {bookmarks ? 'Orphaned bookmarks' : 'Orphaned discussions'}
+          </h4>
           <p className="ic-list-section-note">
-            These comments or proposed changes could not be matched to the current document.
+            {bookmarks
+              ? 'The passages these point to could not be matched to the current document.'
+              : 'These comments or proposed changes could not be matched to the current document.'}
           </p>
           {visibleOrphans.map(renderItem)}
         </section>
@@ -799,9 +816,9 @@ export function InlineCommentsList({
 
 /** What the Bookmarks tab says when it is showing no cards. */
 function bookmarksEmptyMessage(searching: boolean, sectionFilterCount: number): string {
-  if (searching) return 'No bookmarked threads match this search.';
-  if (sectionFilterCount > 0) return 'No bookmarked threads in the focused sections.';
-  return 'No bookmarked threads.';
+  if (searching) return 'No bookmarks match this search.';
+  if (sectionFilterCount > 0) return 'No bookmarks in the focused sections.';
+  return 'No bookmarks.';
 }
 
 function shouldAutoCollapse(t: Thread): boolean {

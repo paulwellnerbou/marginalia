@@ -54,6 +54,7 @@ function comment(anchor: Partial<CommentRow>): CommentRow {
     author_display_name: 'Author',
     body: 'body',
     is_hidden: 0,
+    is_bookmark: 0,
     link_status: 'linked',
     resolved_at: null,
     resolved_by_name: null,

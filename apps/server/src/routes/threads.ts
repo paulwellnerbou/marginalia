@@ -145,6 +145,8 @@ export function threadsRouter(deps: AppDeps): Hono {
   r.delete('/:uid/threads/:tid/comments/:cid', async (c) => deleteThreadReply(c, deps));
   r.post('/:uid/threads/:tid/respond', async (c) => respondToThread(c, deps));
   r.post('/:uid/threads/:tid/comments/:cid/reactions', async (c) => toggleCommentReaction(c, deps));
+  r.put('/:uid/threads/:tid/bookmark', async (c) => setThreadBookmark(c, deps, true));
+  r.delete('/:uid/threads/:tid/bookmark', async (c) => setThreadBookmark(c, deps, false));
 
   return r;
 }
@@ -261,6 +263,9 @@ async function listThreads(c: Context, deps: AppDeps) {
     // looking at all visible threads. Private threads do not contribute
     // to another viewer's totals.
     counts: countThreadsByState(db, doc.uid, viewerId || null),
+    // Also for the whole document: the Bookmarks tab lists resolved
+    // threads the open-only read did not bring.
+    bookmarked_thread_ids: viewerId ? listBookmarkedThreadIds(db, doc.uid, viewerId) : [],
     mention_candidates: listMentionCandidates(db, doc.uid),
     pending_mentions:
       c.req.query('consume_mentions') === 'false'
@@ -289,6 +294,7 @@ function countThreadsByState(
           AND c.parent_id IS NULL
           AND c.parent_proposal_id IS NULL
           AND c.deleted_at IS NULL
+          AND c.is_bookmark = 0
           AND (c.is_hidden = 0 OR c.author_client_id = ?)`,
     )
     .get(docUid, viewerId ?? '') as { total: number; open: number | null };
@@ -327,13 +333,24 @@ async function createThread(c: Context, deps: AppDeps) {
   if (body.hidden !== undefined && typeof body.hidden !== 'boolean') {
     return c.json({ error: 'invalid-hidden' }, 400);
   }
-  const hidden = body.hidden === true;
+  if (body.bookmark !== undefined && typeof body.bookmark !== 'boolean') {
+    return c.json({ error: 'invalid-bookmark' }, 400);
+  }
+  const bookmark = body.bookmark === true;
+  if (bookmark && proposal) return c.json({ error: 'bookmark-proposal-forbidden' }, 400);
+  if (bookmark && rootBody.body) return c.json({ error: 'bookmark-body-forbidden' }, 400);
+  // A bookmark is a place a reader marked, not something they said, and it
+  // is private whatever the request asked for — nobody else's pane, feed or
+  // realtime channel has any use for it.
+  const hidden = bookmark || body.hidden === true;
   if (hidden && proposal) return c.json({ error: 'hidden-proposal-forbidden' }, 400);
-  const storedRootBody = proposal ? (rootBody.body ?? DEFAULT_PROPOSAL_BODY) : rootBody.body;
+  const storedRootBody = proposal
+    ? (rootBody.body ?? DEFAULT_PROPOSAL_BODY)
+    : (rootBody.body ?? '');
 
   if (!proposal) {
     if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
-    if (!rootBody.body) return c.json({ error: 'body-required' }, 400);
+    if (!bookmark && !rootBody.body) return c.json({ error: 'body-required' }, 400);
   } else {
     if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
     for (const answeredId of proposal.answersThreadIds) {
@@ -400,9 +417,9 @@ async function createThread(c: Context, deps: AppDeps) {
           anchor_start_offset, anchor_end_offset,
           anchor_heading_path, anchor_section_index, anchor_section_index_path,
           author_client_id, author_display_name,
-          body, is_hidden, link_status, resolved_at, resolved_by_name,
+          body, is_hidden, is_bookmark, link_status, resolved_at, resolved_by_name,
           created_at, updated_at, deleted_at)
-       VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'linked', NULL, NULL, ?, ?, NULL)`,
+       VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'linked', NULL, NULL, ?, ?, NULL)`,
     ).run(
       id,
       doc.uid,
@@ -420,6 +437,7 @@ async function createThread(c: Context, deps: AppDeps) {
       identity.displayName,
       storedRootBody,
       hidden ? 1 : 0,
+      bookmark ? 1 : 0,
       now,
       now,
     );
@@ -783,6 +801,10 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
     typeof body.hidden === 'boolean' ? body.hidden : undefined;
   if (nextHidden !== undefined && isProposalRow(row)) {
     return c.json({ error: 'hidden-proposal-forbidden' }, 400);
+  }
+  if (row.is_bookmark === 1) {
+    if (nextHidden !== undefined) return c.json({ error: 'bookmark-always-hidden' }, 400);
+    if (next.body) return c.json({ error: 'bookmark-body-forbidden' }, 400);
   }
   if (nextHidden !== undefined && !isAuthor) return c.json({ error: 'forbidden' }, 403);
   const parsedComment = parseOptionalBody(body.comment);
@@ -1668,6 +1690,67 @@ async function deleteThreadReply(c: Context, deps: AppDeps) {
  * Body: `{ emoji: string }`. If the viewer already reacted with this
  * emoji it's removed; otherwise it's added. Returns the updated thread.
  */
+/**
+ * `PUT` / `DELETE /:uid/threads/:tid/bookmark`
+ *
+ * Bookmarks a thread for the viewer, or takes the bookmark off. Answers
+ * with every thread the viewer has bookmarked in the document, so the
+ * caller also picks up what their other devices changed.
+ *
+ * Open to readers: a bookmark is the viewer's own reading aid and says
+ * nothing to anyone else. Idempotent both ways, and taking one off needs
+ * no visible thread — its thread may have been deleted or made private
+ * since.
+ */
+async function setThreadBookmark(c: Context, deps: AppDeps, bookmarked: boolean) {
+  const { db } = deps;
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  const clientId = decision.identity.clientId;
+
+  const tid = c.req.param('tid');
+  if (!tid) return c.json({ error: 'not-found' }, 404);
+
+  if (bookmarked) {
+    const row = loadThreadRow(db, tid, doc.uid);
+    if (!row || !canViewThread(row, decision.identity)) {
+      return c.json({ error: 'not-found' }, 404);
+    }
+    db.prepare(
+      `INSERT OR IGNORE INTO thread_bookmarks (doc_uid, client_id, thread_id, created_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run(doc.uid, clientId, tid, Date.now());
+  } else {
+    db.prepare(
+      'DELETE FROM thread_bookmarks WHERE doc_uid = ? AND client_id = ? AND thread_id = ?',
+    ).run(doc.uid, clientId, tid);
+  }
+  return c.json({ bookmarked_thread_ids: listBookmarkedThreadIds(db, doc.uid, clientId) });
+}
+
+/** The live, visible threads `clientId` has bookmarked, oldest bookmark first. */
+function listBookmarkedThreadIds(db: Database, docUid: string, clientId: string): string[] {
+  const rows = db
+    .prepare(
+      `SELECT b.thread_id
+         FROM thread_bookmarks b
+         JOIN comments c ON c.id = b.thread_id AND c.doc_uid = b.doc_uid
+        WHERE b.doc_uid = ?
+          AND b.client_id = ?
+          AND c.parent_id IS NULL
+          AND c.parent_proposal_id IS NULL
+          AND c.deleted_at IS NULL
+          AND (c.is_hidden = 0 OR c.author_client_id = ?)
+        ORDER BY b.created_at ASC, b.thread_id ASC`,
+    )
+    .all(docUid, clientId, clientId) as Array<{ thread_id: string }>;
+  return rows.map((r) => r.thread_id);
+}
+
 async function toggleCommentReaction(c: Context, deps: AppDeps) {
   const { db, realtime, store } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
@@ -2866,6 +2949,7 @@ async function toThreadWire(
      * thread, which is not itself a request.
      */
     answered_by_thread_ids: answeredBy ?? [],
+    bookmark: row.is_bookmark === 1,
     proposal: proposalRow
       ? {
           ...(proposalContent ?? {
@@ -2892,7 +2976,7 @@ async function toThreadWire(
         capabilities: {
           edit: canRootEdit,
           delete: row.proposal_status === 'accepted' ? isAdmin : canRootDelete,
-          hide: !proposal && isRootAuthor,
+          hide: !proposal && row.is_bookmark === 0 && isRootAuthor,
           react: canReply,
         },
         reactions: reactionsByComment.get(row.id) ?? [],

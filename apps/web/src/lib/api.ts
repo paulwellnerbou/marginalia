@@ -55,6 +55,7 @@ export interface ExportedComment {
   author_display_name: string;
   body: string;
   is_hidden?: boolean;
+  is_bookmark?: boolean;
   link_status: string;
   resolved_at: number | null;
   resolved_by_name: string | null;
@@ -1428,6 +1429,11 @@ export interface Thread {
    * empty for a proposal thread — a proposal is not itself a request.
    */
   answered_by_thread_ids: string[];
+  /**
+   * A passage bookmark rather than a comment: it has no text, and the
+   * server only ever returns it to the reader who made it.
+   */
+  bookmark?: boolean;
   proposal: ThreadProposalData | null;
 }
 
@@ -1435,6 +1441,11 @@ export interface ListThreadsResponse {
   threads: Thread[];
   /** Whole-document totals, unaffected by any filter on the request. */
   counts?: { total: number; open: number; resolved: number };
+  /**
+   * Every thread the viewer has bookmarked in the document, also regardless
+   * of the filter. Absent from a server that predates synced bookmarks.
+   */
+  bookmarked_thread_ids?: string[];
   mention_candidates: string[];
   pending_mentions: string[];
 }
@@ -1447,6 +1458,10 @@ export function isProposal(t: Thread): t is Thread & { proposal: ThreadProposalD
 
 export function isComment(t: Thread): boolean {
   return t.proposal === null;
+}
+
+export function isBookmark(t: Thread): boolean {
+  return t.bookmark === true;
 }
 
 export type ProposalStatus = 'open' | 'accepted' | 'rejected';
@@ -1705,6 +1720,40 @@ export function createComment(
       anchor: payload.anchor,
       body: payload.body,
     }),
+    identity,
+    docUid: uid,
+  }).then((res) => {
+    rememberThread(uid, res.thread);
+    return res.thread;
+  });
+}
+
+/**
+ * Bookmark a thread for the viewer, or take the bookmark off. Resolves to
+ * every thread the viewer has bookmarked in the document, which includes
+ * whatever their other devices changed since this one last read.
+ */
+export function setThreadBookmarked(
+  uid: string,
+  threadId: string,
+  bookmarked: boolean,
+  identity: Identity,
+): Promise<string[]> {
+  return request<{ bookmarked_thread_ids: string[] }>(
+    `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(threadId)}/bookmark`,
+    { method: bookmarked ? 'PUT' : 'DELETE', identity, docUid: uid },
+  ).then((res) => res.bookmarked_thread_ids);
+}
+
+/** Marks a place in the document: an anchored thread with no text, private to its author. */
+export function createBookmark(
+  uid: string,
+  anchor: CommentAnchor,
+  identity: Identity,
+): Promise<Thread> {
+  return request<ThreadMutationResponse>(`/api/documents/${encodeURIComponent(uid)}/threads`, {
+    method: 'POST',
+    body: JSON.stringify({ anchor, bookmark: true }),
     identity,
     docUid: uid,
   }).then((res) => {

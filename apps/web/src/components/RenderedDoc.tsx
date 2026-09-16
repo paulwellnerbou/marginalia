@@ -5,6 +5,7 @@ import { type AnchorSection, resolveAnchorElement } from '../lib/anchor-target.j
 import type { ThreadState } from '../lib/api.js';
 import { spanElements } from '../lib/block-span.js';
 import { isInjectedChromeText } from '../lib/block-text.js';
+import { type BookmarkMarkerSpec, syncBookmarkMarkers } from '../lib/bookmark-markers.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { revealElement } from '../lib/paged-reading.js';
@@ -45,6 +46,8 @@ interface RenderedDocProps {
     endOffset: number;
     section?: AnchorSection | null;
   }>;
+  /** The reader's bookmarks, each drawn as a ribbon beside its block. */
+  bookmarks?: readonly BookmarkMarkerSpec[];
   /** Plain-text query to highlight inside the rendered document. */
   searchQuery?: string;
   /** Matching rules for document search. */
@@ -64,6 +67,9 @@ interface RenderedDocProps {
    */
   onMissingAssetUpload?: ((refName: string, file: File) => void | Promise<void>) | undefined;
 }
+
+/** Default for `bookmarks`, held so the sync effect doesn't re-run on every render. */
+const NO_BOOKMARKS: readonly BookmarkMarkerSpec[] = [];
 
 /**
  * Drops sanitized server/client-rendered HTML into an
@@ -89,6 +95,7 @@ export function RenderedDoc({
   maxWidthCh,
   textZoom,
   highlights = [],
+  bookmarks = NO_BOOKMARKS,
   searchQuery = '',
   searchOptions = { caseSensitive: false, wholeWords: false },
   activeSearchResultId = null,
@@ -206,6 +213,13 @@ export function RenderedDoc({
     if (!el) return;
     highlightedBlocks.current = syncCommentHighlights(el, highlights, highlightedBlocks.current);
   }, [highlights, rendered.html, ref]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: rendered.html is the re-attach trigger — a rewrite or a spliced-in block drops the markers along with the elements that carried them.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    syncBookmarkMarkers(el, bookmarks);
+  }, [bookmarks, rendered.html, ref]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: rendered.html re-runs after innerHTML rewrites; highlights re-runs so search highlights are re-applied after comment highlights swap mark elements in/out.
   useEffect(() => {

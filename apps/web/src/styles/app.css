@@ -3486,6 +3486,55 @@ button.primary:disabled {
   border-color: var(--ui-accent);
   color: var(--ui-accent);
 }
+.block-actions-btn:has(.block-actions-icon) {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.block-actions-icon {
+  width: 0.75rem;
+  height: 0.75rem;
+  flex-shrink: 0;
+}
+.block-actions-btn.block-actions-btn-on {
+  color: var(--ui-accent-strong);
+}
+
+/* A reader's bookmark on a block (see lib/bookmark-markers.ts). Sits in the
+   right-hand gutter level with the first line: the left gutter is where a
+   heading shows its `#` permalink on hover. Rem-sized so a heading's mark
+   is no bigger than a paragraph's. */
+.marginalia [data-bookmarked] {
+  position: relative;
+}
+.marginalia .bookmark-marker {
+  position: absolute;
+  right: -1.2rem;
+  top: calc((1lh - 0.85rem) / 2);
+  display: block;
+  width: 0.85rem;
+  height: 0.85rem;
+  pointer-events: none;
+  user-select: none;
+}
+.marginalia .bookmark-marker svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: var(--md-color-accent);
+}
+/* Inside the corner instead: a code block scrolls sideways, which clips
+   anything outside its box, and a cell's gutter is the next cell. */
+.marginalia pre[data-bookmarked] > .bookmark-marker,
+.marginalia :is(td, th)[data-bookmarked] > .bookmark-marker {
+  top: 0.3rem;
+  right: 0.3rem;
+}
+@media print {
+  .marginalia .bookmark-marker {
+    display: none;
+  }
+}
 
 /* ============================================================
  * Edit proposals
@@ -4605,6 +4654,34 @@ button.primary:disabled {
 
 .ic-card-bookmark {
   flex-shrink: 0;
+}
+
+/* A bookmark's own card in the Bookmarks tab: one row, no header. */
+.ic-card-bookmark-only {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.55rem 0.6rem 0.55rem 0.75rem;
+}
+.ic-bookmark-card-icon {
+  flex-shrink: 0;
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-top: 0.1rem;
+  color: var(--ui-accent-strong);
+}
+.ic-bookmark-card-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.ic-bookmark-card-quote {
+  overflow-wrap: anywhere;
+}
+span.ic-bookmark-card-quote {
+  cursor: default;
 }
 /* A lit star reads as "on". Qualified with .ic-icon-btn so it outweighs the
    base icon-button colors defined later in this file at equal specificity —
