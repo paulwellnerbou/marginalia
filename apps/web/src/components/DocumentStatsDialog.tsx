@@ -72,7 +72,7 @@ export function DocumentStatsDialog({ rendered }: { rendered: RenderedDocument }
       </Dialog.Trigger>
       <Dialog.Content
         size="3"
-        maxWidth="760px"
+        maxWidth="900px"
         className="doc-stats-dialog dialog-content--fixed-footer"
       >
         <div className="dialog-scroll-body">
