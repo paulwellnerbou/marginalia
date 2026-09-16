@@ -867,12 +867,13 @@ function planCommentHighlights(
             : (previous?.threadId ?? highlight.threadId ?? null),
           interactive: hasOpen || previous?.interactive === true,
         });
-        // Wrapping a settled proposal's whole block in transparent
-        // <mark>s adds DOM bloat with no visible effect, and it is not a
-        // click target either way. Flash falls back to [data-block].
-        if (!hasOpen) continue;
-        rawStart = 0;
-        rawEnd = map.rawLength;
+        // The block carries the tint and the click target itself; no
+        // <mark> is wrapped around its text. One spanning the whole block
+        // would merge with every comment range inside it and paint the
+        // comment's own quote away, leaving a note on one sentence looking
+        // like a note on the paragraph. Scroll and flash fall back to
+        // [data-block] / [data-subblock].
+        continue;
       } else if (isFirst || isLast) {
         // Endpoints keep their exact sub-block-text range; the stored
         // offsets index the first block from its start and the last
