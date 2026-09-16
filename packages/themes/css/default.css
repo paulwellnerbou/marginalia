@@ -198,10 +198,6 @@
   cursor: pointer;
 }
 
-.marginalia .comment-highlight-block mark.comment-highlight {
-  text-decoration-thickness: 0.1em;
-}
-
 .marginalia .comment-highlight-block[data-comment-thread-id]:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 2px;
