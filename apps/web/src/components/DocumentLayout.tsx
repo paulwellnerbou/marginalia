@@ -301,6 +301,8 @@ type PendingDraft =
   | { mode: 'comment'; anchor: CommentAnchor }
   | { mode: 'proposal'; target: ProposalTarget; answersThreadIds?: string[] };
 
+const NO_THREAD_IDS: ReadonlySet<string> = new Set();
+
 /**
  * Failures used to land in a text slot in the document toolbar, which is
  * a horizontally scrolling row with a hidden scrollbar — on a narrow doc
@@ -313,8 +315,6 @@ type PendingDraft =
  * Module scope on purpose: nothing here closes over render state, so it
  * never has to appear in a hook dependency list.
  */
-const NO_THREAD_IDS: ReadonlySet<string> = new Set();
-
 function reportFailure(message: string): void {
   showErrorToast('That didn’t work', message);
 }

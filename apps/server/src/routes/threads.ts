@@ -1707,13 +1707,6 @@ async function deleteThreadReply(c: Context, deps: AppDeps) {
 }
 
 /**
- * `POST /:uid/threads/:tid/comments/:cid/reactions`
- *
- * Toggle the requesting viewer's emoji reaction on a single comment node.
- * Body: `{ emoji: string }`. If the viewer already reacted with this
- * emoji it's removed; otherwise it's added. Returns the updated thread.
- */
-/**
  * `PUT` / `DELETE /:uid/threads/:tid/bookmark`
  *
  * Bookmarks a thread for the viewer, or takes the bookmark off. Answers
@@ -1776,6 +1769,13 @@ function listBookmarkedThreadIds(db: Database, docUid: string, clientId: string)
   return rows.map((r) => r.thread_id);
 }
 
+/**
+ * `POST /:uid/threads/:tid/comments/:cid/reactions`
+ *
+ * Toggle the requesting viewer's emoji reaction on a single comment node.
+ * Body: `{ emoji: string }`. If the viewer already reacted with this
+ * emoji it's removed; otherwise it's added. Returns the updated thread.
+ */
 async function toggleCommentReaction(c: Context, deps: AppDeps) {
   const { db, realtime, store } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
