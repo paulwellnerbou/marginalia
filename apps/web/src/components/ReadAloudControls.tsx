@@ -14,7 +14,7 @@ import { createPortal } from 'react-dom';
 import { detectLanguage } from '../lib/read-aloud/detect-language.js';
 import { sampleText } from '../lib/read-aloud/segment.js';
 import { nextRate, useReadAloud } from '../lib/read-aloud/useReadAloud.js';
-import { primaryLanguage, resolveDocLang, withRegion } from '../lib/read-aloud/voices.js';
+import { primaryLanguage, regionOf, resolveDocLang, withRegion } from '../lib/read-aloud/voices.js';
 import { APP_ACCENT_COLOR } from '../styles/theme.js';
 
 interface Props {
@@ -56,7 +56,6 @@ export function ReadAloudControls({
   // document, what the author declared, what the text looks like, and
   // only then the reader's own language. The page's `<html lang>` is the
   // UI's language and says nothing about the document.
-  const [detectedLang, setDetectedLang] = useState<string | null>(null);
   const [chosenLangs, setChosenLangs] = useState<Record<string, string | null>>({});
   const chosenLang = useMemo(
     () =>
@@ -65,6 +64,10 @@ export function ReadAloudControls({
         : localStorage.getItem(`${LANG_KEY}.${docUid}`),
     [chosenLangs, docUid],
   );
+  // Kept with the document it was detected in, so another document
+  // never starts out in this one's language.
+  const [detected, setDetected] = useState<{ docUid: string; lang: string | null } | null>(null);
+  const detectedLang = detected?.docUid === docUid ? detected.lang : null;
   const autoLang = useMemo(
     () => resolveDocLang(frontmatter, detectedLang ?? navigator.language ?? 'en'),
     [frontmatter, detectedLang],
@@ -77,15 +80,15 @@ export function ReadAloudControls({
       ),
     [chosenLang, autoLang],
   );
+  const reader = useReadAloud({ rootRef, htmlKey, lang });
   const setLanguage = (value: string) => {
     const key = `${LANG_KEY}.${docUid}`;
     const chosen = value === AUTO_LANG ? null : value;
     if (chosen) localStorage.setItem(key, chosen);
     else localStorage.removeItem(key);
+    reader.expectVoiceChange();
     setChosenLangs((current) => ({ ...current, [docUid]: chosen }));
   };
-
-  const reader = useReadAloud({ rootRef, htmlKey, lang });
   const languageOptions = useMemo(
     () =>
       reader.languages
@@ -93,6 +96,16 @@ export function ReadAloudControls({
         .sort((a, b) => a.name.localeCompare(b.name)),
     [reader.languages],
   );
+  const langName = useMemo(() => languageName(primaryLanguage(lang)), [lang]);
+  /** Region names for the voice list, when the voices on offer differ in
+   *  region; otherwise the name alone says it. */
+  const voiceRegions = useMemo(() => {
+    const regions = reader.voices.map((voice) => regionOf(voice.lang));
+    if (new Set(regions).size < 2) return null;
+    return new Map(
+      reader.voices.map((voice, i) => [voice.voiceURI, regionName(regions[i] ?? null)]),
+    );
+  }, [reader.voices]);
 
   const { status, stop } = reader;
   const playing = status === 'playing';
@@ -105,10 +118,11 @@ export function ReadAloudControls({
     if (!open) return;
     const timer = window.setTimeout(() => {
       const root = rootRef.current;
-      if (root) setDetectedLang(detectLanguage(sampleText(root, DETECT_SAMPLE_CHARS)));
+      if (!root) return;
+      setDetected({ docUid, lang: detectLanguage(sampleText(root, DETECT_SAMPLE_CHARS)) });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [open, htmlKey, rootRef]);
+  }, [open, htmlKey, rootRef, docUid]);
 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -175,9 +189,6 @@ export function ReadAloudControls({
     if (playing) reader.pause();
     else reader.resume();
   };
-
-  const langName = languageName(primaryLanguage(lang));
-  const showRegions = new Set(reader.voices.map((voice) => regionOf(voice.lang))).size > 1;
 
   const hint =
     reader.error ??
@@ -347,12 +358,19 @@ export function ReadAloudControls({
                   </Select.Trigger>
                   <Select.Content position="popper" style={{ maxHeight: 360 }}>
                     {reader.voices.map((voice) => (
-                      <Select.Item key={voice.voiceURI} value={voice.voiceURI}>
+                      <Select.Item
+                        key={voice.voiceURI}
+                        value={voice.voiceURI}
+                        textValue={voice.name}
+                      >
                         {voice.name}
-                        {showRegions && regionOf(voice.lang) && (
-                          <span className="read-aloud-voice-region">
-                            {regionName(regionOf(voice.lang))}
-                          </span>
+                        {voiceRegions?.get(voice.voiceURI) && (
+                          <>
+                            {' '}
+                            <span className="read-aloud-voice-region">
+                              {voiceRegions.get(voice.voiceURI)}
+                            </span>
+                          </>
                         )}
                       </Select.Item>
                     ))}
@@ -399,16 +417,19 @@ function languageName(code: string): string {
   return code;
 }
 
-function regionOf(tag: string): string {
-  const region = tag
-    .split(/[-_]/)
-    .find((part, index) => index > 0 && /^([a-z]{2}|\d{3})$/i.test(part));
-  return region?.toUpperCase() ?? '';
-}
+let regionNames: Intl.DisplayNames | null | undefined;
 
-function regionName(region: string): string {
+function regionName(region: string | null): string {
+  if (!region) return '';
+  if (regionNames === undefined) {
+    try {
+      regionNames = new Intl.DisplayNames(undefined, { type: 'region' });
+    } catch {
+      regionNames = null;
+    }
+  }
   try {
-    return new Intl.DisplayNames(undefined, { type: 'region' }).of(region) ?? region;
+    return regionNames?.of(region) ?? region;
   } catch {
     return region;
   }

@@ -4,6 +4,7 @@ import {
   pickVoice,
   primaryLanguage,
   rankVoices,
+  regionOf,
   resolveDocLang,
   selectVoices,
   VOICE_TIER,
@@ -220,5 +221,21 @@ describe('withRegion', () => {
 
   test('ignores a bare reader language with no region to lend', () => {
     expect(withRegion('en', ['en'])).toBe('en-US');
+  });
+});
+
+describe('regionOf', () => {
+  test('reads the region whatever the separator and case', () => {
+    expect(regionOf('en-GB')).toBe('GB');
+    expect(regionOf('de_AT')).toBe('AT');
+    expect(regionOf('en-us')).toBe('US');
+    expect(regionOf('sr_Latn_RS')).toBe('RS');
+    expect(regionOf('ar-001')).toBe('001');
+  });
+
+  test('is null when there is no region, or no valid tag', () => {
+    expect(regionOf('de')).toBeNull();
+    expect(regionOf('zh-Hant')).toBeNull();
+    expect(regionOf('not a tag')).toBeNull();
   });
 });

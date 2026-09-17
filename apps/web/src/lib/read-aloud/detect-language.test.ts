@@ -39,6 +39,18 @@ describe('detectLanguage', () => {
     expect(detectLanguage('42 — 17')).toBeNull();
   });
 
+  test('is not outvoted by English names inside a Japanese text', () => {
+    // One kana or kanji carries about as much as a Latin word.
+    const text =
+      'このガイドでは React と TypeScript と Vite を使った Marginalia の development setup を説明します。bun install の後で bun run dev を実行してください。';
+    expect(detectLanguage(text)).toBe('ja');
+  });
+
+  test('matches Turkish function words written with a capital İ', () => {
+    // 'İ'.toLowerCase() is 'i' plus a combining dot above.
+    expect(detectLanguage('İçin İle. İçin İle.')).toBe('tr');
+  });
+
   test('is not thrown by English terms inside a German text', () => {
     const text =
       'Wir haben das Feature im Backend deployed. Der Pull Request ist gemerged, und die Tests laufen auf der Pipeline, aber das Monitoring fehlt noch.';

@@ -114,6 +114,15 @@ export function withRegion(lang: string, readerLanguages: readonly string[]): st
   }
 }
 
+/** Region subtag (`GB`, `001`), or null when the tag names none. */
+export function regionOf(tag: string): string | null {
+  try {
+    return new Intl.Locale(hyphenate(tag)).region ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * POSIX-style tags (`de_DE`, `sr_Latn_RS`) show up in OS voice lists
  * while documents and the Web Speech API use hyphens. Unify on hyphens,

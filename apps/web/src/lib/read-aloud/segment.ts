@@ -99,15 +99,21 @@ export function collectSegments(root: HTMLElement, lang: string): ReadAloudSegme
  * language the document is in without walking a whole book.
  */
 export function sampleText(root: HTMLElement, maxChars: number): string {
-  const parts: string[] = [];
-  let length = 0;
+  let text = '';
+  let group: HTMLElement | null = null;
   for (const node of walkTextNodes(root)) {
-    parts.push(node.data);
-    length += node.data.length + 1;
-    if (length >= maxChars) break;
+    // Adjacent blocks' text carries no whitespace between them, so blocks
+    // get a space; text within one block doesn't, or a comment highlight
+    // across part of a word would split the word.
+    const el = nearestGroupElement(node, root);
+    if (el !== group) {
+      if (text) text += ' ';
+      group = el;
+    }
+    text += node.data;
+    if (text.length >= maxChars) break;
   }
-  // Adjacent blocks' text nodes carry no whitespace between them.
-  return parts.join(' ');
+  return text;
 }
 
 /**

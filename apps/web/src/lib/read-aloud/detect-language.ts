@@ -85,6 +85,14 @@ function buildWeights(lists: Record<string, string>): WordWeights {
 let latinWeights: WordWeights | null = null;
 let cyrillicWeights: WordWeights | null = null;
 
+/**
+ * A Chinese, Japanese or Korean character carries about as much as a
+ * short word in an alphabet. Counted one-for-one, the English product
+ * names in a Japanese technical text would outvote the Japanese.
+ */
+const DENSE_SCRIPT_WEIGHT = 3;
+const DENSE_SCRIPTS = new Set(['ja', 'zh', 'ko']);
+
 /** Below this many weighted hits the text is too short to call. */
 const MIN_SCORE = 2;
 /** The winner must clear the runner-up by this factor. */
@@ -95,7 +103,13 @@ const MAX_SAMPLE_CHARS = 20_000;
 
 /** Primary language subtag of `text`, or null when it can't be told. */
 export function detectLanguage(text: string): string | null {
-  const sample = text.slice(0, MAX_SAMPLE_CHARS).normalize('NFC').toLowerCase();
+  const sample = text
+    .slice(0, MAX_SAMPLE_CHARS)
+    .normalize('NFC')
+    .toLowerCase()
+    // Turkish İ lowercases to i plus a combining dot, which would keep
+    // "İçin" from ever matching "için".
+    .replace(/i\u0307/g, 'i');
 
   const script = dominantScript(sample);
   if (!script) return null;
@@ -144,7 +158,8 @@ function dominantScript(sample: string): string | null {
 
   let best: string | null = null;
   let bestCount = 0;
-  for (const [key, count] of counts) {
+  for (const [key, raw] of counts) {
+    const count = DENSE_SCRIPTS.has(key) ? raw * DENSE_SCRIPT_WEIGHT : raw;
     if (count > bestCount) {
       best = key;
       bestCount = count;

@@ -1764,7 +1764,6 @@ button.primary:disabled {
   color: var(--gray-11);
 }
 .read-aloud-voice-region {
-  margin-left: 0.5em;
   opacity: 0.65;
 }
 
@@ -1795,6 +1794,33 @@ button.primary:disabled {
   }
   .read-aloud-panel .read-aloud-transport > .read-aloud-play {
     --base-button-height: 44px;
+  }
+}
+
+/* The smallest phones leave the pane between its rails too narrow for
+   the transport above (320px wide → a 238px pane). */
+@container read-aloud (max-width: 18rem) {
+  .read-aloud-panel {
+    padding-inline: 0.5rem;
+  }
+  .read-aloud-main {
+    grid-template-columns: 2.5rem auto 2.5rem;
+    column-gap: 0.25rem;
+  }
+  .read-aloud-transport {
+    gap: 0.25rem;
+  }
+  .read-aloud-rate {
+    width: 2.5rem;
+  }
+  .read-aloud-panel :is(.read-aloud-transport, .read-aloud-main) > .rt-IconButton {
+    --base-button-height: 36px;
+  }
+  .read-aloud-panel .read-aloud-transport > .read-aloud-play {
+    --base-button-height: 40px;
+  }
+  .read-aloud-select-value svg {
+    display: none;
   }
 }
 
@@ -1862,7 +1888,7 @@ button.primary:disabled {
     backdrop-filter: none;
   }
   /* A wide bar keeps its two rows together in the middle. */
-  @container read-aloud (width < 50rem) {
+  @container read-aloud (max-width: 49.99rem) {
     .read-aloud-panel > :is(.read-aloud-settings, .read-aloud-hint) {
       width: 100%;
       max-width: 26rem;
