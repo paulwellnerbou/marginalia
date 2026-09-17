@@ -15,7 +15,7 @@ import {
   Separator,
   Text,
 } from '@radix-ui/themes';
-import { useEffect, useState } from 'react';
+import { useEffect, useImperativeHandle, useState } from 'react';
 import type { Document } from '../lib/api.js';
 import {
   type DocumentSettingsResponse,
@@ -24,6 +24,7 @@ import {
 } from '../lib/api.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
+import { type FoldableDialogProps, returnFocusTo } from './foldedDialog.js';
 import { InvitesPanel } from './InvitesPanel.js';
 import { PasswordDisclosureCard } from './PasswordDisclosureCard.js';
 
@@ -38,11 +39,14 @@ import { PasswordDisclosureCard } from './PasswordDisclosureCard.js';
 export function AccessControlDialog({
   doc,
   onChange,
+  ref,
+  foldedInto,
 }: {
   doc: Document;
   onChange: (uid: string, s: Partial<DocumentSettingsResponse>) => void;
-}) {
+} & FoldableDialogProps) {
   const [open, setOpen] = useState(false);
+  useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), []);
   const [passwordProtected, setPasswordProtected] = useState(doc.password_protected);
   const [inviteOnly, setInviteOnly] = useState(doc.invite_only);
   const [saving, setSaving] = useState(false);
@@ -192,12 +196,19 @@ export function AccessControlDialog({
         }
       }}
     >
-      <Dialog.Trigger>
-        <IconButton variant="soft" size="2" aria-label="Access control" title="Access control">
-          <Share2Icon />
-        </IconButton>
-      </Dialog.Trigger>
-      <Dialog.Content size="3" maxWidth="780px" className="dialog-content--fixed-footer">
+      {!foldedInto && (
+        <Dialog.Trigger>
+          <IconButton variant="soft" size="2" aria-label="Access control" title="Access control">
+            <Share2Icon />
+          </IconButton>
+        </Dialog.Trigger>
+      )}
+      <Dialog.Content
+        size="3"
+        maxWidth="780px"
+        className="dialog-content--fixed-footer"
+        onCloseAutoFocus={returnFocusTo(foldedInto)}
+      >
         <div className="dialog-scroll-body">
           <Dialog.Title>Access control</Dialog.Title>
           <Dialog.Description size="2" color="gray" mb="4">

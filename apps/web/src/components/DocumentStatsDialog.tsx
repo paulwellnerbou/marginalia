@@ -6,10 +6,11 @@ import {
 } from '@marginalia/renderer/stats';
 import { BarChartIcon, ChevronRightIcon } from '@radix-ui/react-icons';
 import { Button, Dialog, Flex, IconButton, Table, Text } from '@radix-ui/themes';
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useImperativeHandle, useMemo, useState } from 'react';
 import type { RenderedDocument } from '../lib/api.js';
 import { formatCount, formatPages, formatReadingTime, formatShare } from '../lib/stats-format.js';
 import { DisplayStepper } from './DisplayStepper.js';
+import { type FoldableDialogProps, returnFocusTo } from './foldedDialog.js';
 
 interface Assumption {
   key: string;
@@ -50,8 +51,13 @@ function readAssumption({ key, min, max, defaultValue }: Assumption): number {
  * document and for every chapter. Counted from the rendered block map,
  * so it reflects what is on the page — proposals accepted, code left out.
  */
-export function DocumentStatsDialog({ rendered }: { rendered: RenderedDocument }) {
+export function DocumentStatsDialog({
+  rendered,
+  ref,
+  foldedInto,
+}: { rendered: RenderedDocument } & FoldableDialogProps) {
   const [open, setOpen] = useState(false);
+  useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), []);
   const [wordsPerPage, setWordsPerPage] = useState(() => readAssumption(WORDS_PER_PAGE));
   const [readingSpeed, setReadingSpeed] = useState(() => readAssumption(READING_SPEED));
   // Only while open: the count walks every block, and the document can
@@ -60,20 +66,23 @@ export function DocumentStatsDialog({ rendered }: { rendered: RenderedDocument }
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger>
-        <IconButton
-          variant="soft"
-          size="2"
-          aria-label="Document statistics"
-          title="Document statistics"
-        >
-          <BarChartIcon />
-        </IconButton>
-      </Dialog.Trigger>
+      {!foldedInto && (
+        <Dialog.Trigger>
+          <IconButton
+            variant="soft"
+            size="2"
+            aria-label="Document statistics"
+            title="Document statistics"
+          >
+            <BarChartIcon />
+          </IconButton>
+        </Dialog.Trigger>
+      )}
       <Dialog.Content
         size="3"
         maxWidth="900px"
         className="doc-stats-dialog dialog-content--fixed-footer"
+        onCloseAutoFocus={returnFocusTo(foldedInto)}
       >
         <div className="dialog-scroll-body">
           <Dialog.Title>Statistics</Dialog.Title>

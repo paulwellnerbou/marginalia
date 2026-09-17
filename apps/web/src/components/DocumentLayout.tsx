@@ -6,14 +6,11 @@ import {
   Cross2Icon,
   LetterCaseToggleIcon,
   MagnifyingGlassIcon,
-  MixerHorizontalIcon,
 } from '@radix-ui/react-icons';
 import {
   Badge,
-  Button,
   Flex,
   IconButton,
-  Popover,
   SegmentedControl,
   Select,
   Tabs,
@@ -134,20 +131,15 @@ import {
 } from '../lib/ui-scale.js';
 import { useMediaQuery } from '../lib/useMediaQuery.js';
 import { usePagedReading } from '../lib/usePagedReading.js';
-import { APP_ACCENT_COLOR } from '../styles/theme.js';
-import { AccessControlDialog } from './AccessControlDialog.js';
 import { ActivityList } from './ActivityList.js';
 import { AppBar } from './AppBar.js';
 import { BlockActions } from './BlockActions.js';
-import { CopyDocumentDialog } from './CopyDocumentDialog.js';
 import { DisplayStepper } from './DisplayStepper.js';
 import {
   type DocumentSearchResult,
   DocumentSearchResultsPane,
 } from './DocumentSearchResultsPane.js';
-import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
-import { DocumentStatsDialog } from './DocumentStatsDialog.js';
-import { DownloadMenu } from './DownloadMenu.js';
+import { DocumentToolbar } from './DocumentToolbar.js';
 import { HistoryList } from './HistoryList.js';
 import {
   BookmarkControlsProvider,
@@ -162,7 +154,6 @@ import { COMMENT_FLASH_MS, type ThreadActionResult } from './inline-comments/inl
 import { PendingCommentPopover } from './inline-comments/PendingCommentPopover.js';
 import { McpPanel } from './McpPanel.js';
 import { PageJump } from './PageJump.js';
-import { ReadAloudControls } from './ReadAloudControls.js';
 import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
@@ -2914,6 +2905,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     setRightTab((prev) => (prev === 'search' ? 'comments' : prev));
   }, []);
 
+  const toggleDocumentSearch = useCallback(() => {
+    if (docSearchOpen) closeDocumentSearch();
+    else setDocSearchOpen(true);
+  }, [docSearchOpen, closeDocumentSearch]);
+
   const activeSearchIndex = activeSearchTarget
     ? searchResults.findIndex((result) => result.id === activeSearchTarget.id)
     : -1;
@@ -3137,68 +3133,27 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
           <main className="pane pane-doc" ref={docPaneRef}>
             {/* Document-specific toolbar lives inside the doc pane so it sits
               only over the document column, not above the side panes. */}
-            <Flex align="center" gap="3" px="3" py="2" className="doc-chrome">
-              {/* Always a menu, however much room the toolbar has: these are
-                set-and-forget reading preferences, and spreading five of
-                them across the bar pushed the per-document actions off the
-                end of it on anything but a wide screen. */}
-              <Popover.Root>
-                <Popover.Trigger>
-                  <Button variant="soft" size="2" className="doc-view-trigger">
-                    <MixerHorizontalIcon />
-                    View
-                  </Button>
-                </Popover.Trigger>
-                <Popover.Content size="1" align="start" className="doc-view-popover">
-                  {displayControls}
-                </Popover.Content>
-              </Popover.Root>
-              <span className="spacer" />
-              <DocumentStatsDialog rendered={liveRendered} />
-              {/* Download is available to any reader — unlike settings /
-                access control which are admin-only. Sits next to the
-                gear so the whole toolbar cluster reads as a single set
-                of per-document actions. */}
-              <DownloadMenu
-                doc={doc}
-                source={liveSource}
-                theme={theme}
-                reviewExportEnabled={inlineCommentsOpen || floatingComments}
-              />
+            <DocumentToolbar
+              doc={doc}
+              rendered={liveRendered}
+              source={liveSource}
+              theme={theme}
+              reviewExportEnabled={inlineCommentsOpen || floatingComments}
+              onDocSettingsChanged={onDocSettingsChanged}
+              viewControls={displayControls}
+              readAloud={{
+                rootRef: docRef,
+                htmlKey: liveRendered.html,
+                frontmatter: liveRendered.frontmatter,
+                inlineCommentsOffset: inlineCommentsColumnWidth,
+                dock: readAloudDock,
+              }}
+              searchOpen={docSearchOpen}
+              onToggleSearch={toggleDocumentSearch}
+              uiScale={uiScale}
+            >
               {children}
-              {doc.role === 'admin' && onDocSettingsChanged && (
-                <>
-                  <CopyDocumentDialog doc={doc} />
-                  <DocumentSettingsDialog doc={doc} onChange={onDocSettingsChanged} />
-                  <AccessControlDialog doc={doc} onChange={onDocSettingsChanged} />
-                </>
-              )}
-              <ReadAloudControls
-                rootRef={docRef}
-                htmlKey={liveRendered.html}
-                frontmatter={liveRendered.frontmatter}
-                inlineCommentsOffset={inlineCommentsColumnWidth}
-                dock={readAloudDock}
-              />
-              <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
-                <IconButton
-                  variant="soft"
-                  color={APP_ACCENT_COLOR}
-                  size="2"
-                  className={`doc-search-trigger ${docSearchOpen ? 'active' : ''}`}
-                  onClick={() => {
-                    if (docSearchOpen) {
-                      closeDocumentSearch();
-                      return;
-                    }
-                    setDocSearchOpen(true);
-                  }}
-                  aria-label={docSearchOpen ? 'Close document search' : 'Search document'}
-                >
-                  <MagnifyingGlassIcon />
-                </IconButton>
-              </Tooltip>
-            </Flex>
+            </DocumentToolbar>
             {docSearchOpen && (
               <div
                 className="doc-search-popover"
