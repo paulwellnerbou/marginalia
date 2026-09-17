@@ -1,8 +1,11 @@
 import { Link2Icon } from '@radix-ui/react-icons';
-import { Box, Button, Flex, Text, TextField } from '@radix-ui/themes';
+import { Box, Button, Flex, IconButton, Text, TextField, Tooltip } from '@radix-ui/themes';
+import { ScanLineIcon } from 'lucide-react';
 import { type FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { parseDocumentLink } from '../lib/document-link.js';
+import { canScanQr, routeForScannedCode } from '../lib/qr-scan.js';
+import { QrScanDialog } from './QrScanDialog.js';
 
 /**
  * Opens a document from a link the user pastes in.
@@ -12,11 +15,30 @@ import { parseDocumentLink } from '../lib/document-link.js';
  * even to someone with plenty of documents, and no link the browser can
  * offer will hand them over. Re-pasting the invite URL is the way across,
  * and the server keeps invite rows alive so that re-claim succeeds.
+ *
+ * Scanning covers the same gap when the link is on another screen: the
+ * access-link dialog shows it as a QR code, and a phone with an empty
+ * list has no clipboard to paste it from.
  */
 export function OpenByLink() {
   const navigate = useNavigate();
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [scanOpen, setScanOpen] = useState(false);
+  // Read once: support does not change while the page is open.
+  const [canScan] = useState(canScanQr);
+
+  function scanned(text: string): string | null {
+    const result = routeForScannedCode(text, window.location.host);
+    if (result.ok) {
+      setError(null);
+      navigate(result.path);
+      return null;
+    }
+    return result.reason === 'other-site'
+      ? `That code is for ${result.host}, a different Marginalia.`
+      : 'That is not a Marginalia link. Try the QR code from an access link.';
+  }
 
   function submit(event: FormEvent) {
     event.preventDefault();
@@ -56,6 +78,21 @@ export function OpenByLink() {
               <TextField.Slot>
                 <Link2Icon />
               </TextField.Slot>
+              {canScan && (
+                <TextField.Slot side="right">
+                  <Tooltip content="Scan a QR code">
+                    <IconButton
+                      type="button"
+                      size="1"
+                      variant="ghost"
+                      aria-label="Scan a QR code"
+                      onClick={() => setScanOpen(true)}
+                    >
+                      <ScanLineIcon size={15} />
+                    </IconButton>
+                  </Tooltip>
+                </TextField.Slot>
+              )}
             </TextField.Root>
           </Box>
           <Button type="submit">Open</Button>
@@ -66,6 +103,7 @@ export function OpenByLink() {
           {error}
         </Text>
       )}
+      {canScan && <QrScanDialog open={scanOpen} onOpenChange={setScanOpen} onScan={scanned} />}
     </Box>
   );
 }

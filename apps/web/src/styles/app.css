@@ -2251,6 +2251,28 @@ button.primary:disabled {
   transform: scale(1.15);
 }
 
+/* Square viewfinder: QR codes are square, and a fixed box keeps the
+   dialog from jumping when the stream's aspect ratio arrives. */
+.qr-scan-viewfinder {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: var(--radius-3);
+  background: var(--gray-3);
+}
+
+.qr-scan-viewfinder video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.qr-scan-overlay {
+  position: absolute;
+  inset: 0;
+}
+
 /* Access URLs are for copying, not reading. Keep document/token pairs on one
    compact line in the Access control dialog, beside the QR and copy actions. */
 .copyable-access-link {
