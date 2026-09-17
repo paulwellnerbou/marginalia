@@ -471,7 +471,12 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
           Paste some Markdown and you'll get a shareable URL with beautiful typography in one click.
           Already been invited to one? Open it with its link above.
         </Text>
-        <Button size={{ initial: '2', xs: '3' }} onClick={onCreate} mt="2" className="landing-empty-cta">
+        <Button
+          size={{ initial: '2', xs: '3' }}
+          onClick={onCreate}
+          mt="2"
+          className="landing-empty-cta"
+        >
           <PlusIcon />
           Create your first document
         </Button>
