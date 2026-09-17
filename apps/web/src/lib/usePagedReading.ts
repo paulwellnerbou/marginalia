@@ -346,6 +346,10 @@ export function usePagedReading(
    * meaningless, and the reading width is authored in `ch`, which would
    * resolve against the wrong font anywhere outside the article.
    */
+  /** The current publisher, for the remeasure effect: a height change it
+   *  observes has to re-derive the page box before the pages are
+   *  counted, or the count is taken under the old geometry. */
+  const publishRef = useRef<(() => void) | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: remeasureKey is a pure trigger — reading width, zoom, theme and pane widths all move the page box.
   useEffect(() => {
     const leavingPagedMode = wasEnabled.current && !enabled;
@@ -398,7 +402,12 @@ export function usePagedReading(
         // quietly shrink the page every time they enlarged the text.
         const rootFontSize = parseFloat(window.getComputedStyle(document.documentElement).fontSize);
         const margin = Number.isFinite(rootFontSize) ? rootFontSize * 2 : 0;
-        const available = viewport.clientHeight - margin * 2;
+        // The viewport's own padding is the clearance for the floating
+        // toolbar rows; `clientHeight` includes it.
+        const viewportStyle = window.getComputedStyle(viewport);
+        const padding =
+          parseFloat(viewportStyle.paddingTop) + parseFloat(viewportStyle.paddingBottom);
+        const available = viewport.clientHeight - padding - margin * 2;
         const block =
           Number.isFinite(lineHeight) && lineHeight > 0
             ? Math.max(lineHeight, Math.floor(available / lineHeight) * lineHeight)
@@ -435,8 +444,10 @@ export function usePagedReading(
       set(viewport, '--doc-page-gutter', `${Math.max(0, Math.round(gutter))}px`);
     };
     publish();
+    publishRef.current = publish;
     window.addEventListener('resize', publish);
     return () => {
+      publishRef.current = null;
       window.removeEventListener('resize', publish);
       scroll.style.removeProperty('--doc-page-height');
       scroll.style.removeProperty('--doc-page-block');
@@ -458,6 +469,7 @@ export function usePagedReading(
     let timer = 0;
 
     const remeasure = () => {
+      publishRef.current?.();
       const metrics = measurePages(scroll);
       setPageCount(metrics.pageCount);
 
@@ -515,6 +527,14 @@ export function usePagedReading(
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(schedule);
       ro.observe(scroll);
+      // The scroller's box is not the whole story: a bar docking at the
+      // foot of the pane shrinks the viewport around it, and toolbar
+      // clearance arrives as padding on the viewport or the column,
+      // which moves their content boxes and nothing else.
+      const viewport = gestureSurfaceOf(scroll);
+      if (viewport && viewport !== scroll) ro.observe(viewport);
+      const column = scroll.querySelector<HTMLElement>('.doc-body');
+      if (column) ro.observe(column);
       observers.push(ro);
     }
     if (typeof MutationObserver !== 'undefined') {

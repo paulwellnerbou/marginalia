@@ -17,6 +17,20 @@ const RATE_KEY = 'marginalia.readAloud.rate';
 export const MIN_RATE = 0.5;
 export const MAX_RATE = 2;
 
+const RATE_RESTART_DELAY_MS = 300;
+
+/** The speeds the one-button speed control cycles through. */
+export const RATE_STEPS = [0.5, 0.8, 1, 1.2, 1.5, 2] as const;
+
+/**
+ * The step after `rate`, wrapping to the slowest past the fastest. A
+ * saved rate from between the steps rounds up to the next one rather
+ * than jamming the control.
+ */
+export function nextRate(rate: number): number {
+  return RATE_STEPS.find((step) => step > rate + 1e-9) ?? RATE_STEPS[0];
+}
+
 export type ReadAloudStatus = 'idle' | 'playing' | 'paused';
 
 export interface ReadAloudController {
@@ -81,6 +95,10 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
   const genRef = useRef(0);
   const rateRef = useRef(rate);
   rateRef.current = rate;
+  const indexRef = useRef(index);
+  indexRef.current = index;
+  const statusRef = useRef(status);
+  statusRef.current = status;
 
   // `getVoices()` is empty until the engine has enumerated them, and
   // Chrome only fires `voiceschanged` once that finishes.
@@ -224,13 +242,37 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
     [index, speakFrom, status],
   );
 
+  /** Pending restart after a rate change. Speech can't change rate
+   *  mid-utterance, so applying it means cancelling and re-speaking
+   *  the sentence; a burst of taps on the cycling speed button should
+   *  do that once, at the final rate, not once per tap. */
+  const rateRestartRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setRate = useCallback(
     (next: number) => {
       localStorage.setItem(RATE_KEY, String(next));
       setRateState(next);
-      if (status !== 'idle' && index >= 0) speakFrom(index);
+      if (rateRestartRef.current) clearTimeout(rateRestartRef.current);
+      if (status === 'idle' || index < 0) return;
+      const gen = genRef.current;
+      rateRestartRef.current = setTimeout(() => {
+        rateRestartRef.current = null;
+        // Any other transport action in the meantime supersedes this
+        // restart: a jump, stop or voice change bumps the generation,
+        // pause and resume flip the status. A sentence advancing on its
+        // own does neither, so restart wherever the reader is now
+        // rather than where the tap happened.
+        if (genRef.current !== gen || statusRef.current !== status) return;
+        const current = indexRef.current;
+        if (current >= 0) speakFrom(current);
+      }, RATE_RESTART_DELAY_MS);
     },
     [index, speakFrom, status],
+  );
+  useEffect(
+    () => () => {
+      if (rateRestartRef.current) clearTimeout(rateRestartRef.current);
+    },
+    [],
   );
 
   // The document can be rewritten under us: a collaborator saves, or a

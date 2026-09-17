@@ -1060,6 +1060,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
 
   const docRef = useRef<HTMLElement>(null);
   const docPaneRef = useRef<HTMLElement>(null);
+  /** Slot at the foot of the doc pane the read-aloud transport renders
+   *  into. State, not a ref, so the controls re-render once it exists. */
+  const [readAloudDock, setReadAloudDock] = useState<HTMLDivElement | null>(null);
   const docScrollRef = useRef<HTMLDivElement>(null);
   const docSearchInputRef = useRef<HTMLInputElement>(null);
   const [inlineCommentsColumnWidth, setInlineCommentsColumnWidth] = useState(0);
@@ -3175,6 +3178,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                 htmlKey={liveRendered.html}
                 frontmatter={liveRendered.frontmatter}
                 inlineCommentsOffset={inlineCommentsColumnWidth}
+                dock={readAloudDock}
               />
               <Tooltip content={docSearchOpen ? 'Close document search' : 'Search document'}>
                 <IconButton
@@ -3449,6 +3453,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                 </>
               )}
             </div>
+            {/* Where the read-aloud transport lives. Empty until it opens;
+              the stylesheet decides whether it then floats over the top of
+              the document or sits here, in flow, as a bar above the pager. */}
+            <div className="read-aloud-dock" ref={setReadAloudDock} />
             {paged && (
               <Flex className="doc-pager" align="center" gap="2">
                 <IconButton
