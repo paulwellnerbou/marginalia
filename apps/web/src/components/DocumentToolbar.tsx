@@ -8,11 +8,13 @@ import {
   GearIcon,
   MagnifyingGlassIcon,
   MixerHorizontalIcon,
+  Pencil1Icon,
   Share2Icon,
   SpeakerLoudIcon,
 } from '@radix-ui/react-icons';
 import { Button, DropdownMenu, Flex, IconButton, Popover, Tooltip } from '@radix-ui/themes';
 import { type ReactNode, type RefObject, useLayoutEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { Document, DocumentSettingsResponse, RenderedDocument } from '../lib/api.js';
 import { useToolbarFit } from '../lib/useToolbarFit.js';
 import { APP_ACCENT_COLOR } from '../styles/theme.js';
@@ -29,18 +31,24 @@ import {
 } from './ReadAloudControls.js';
 
 /**
- * How far the bar has folded to fit its pane. Search and the page's own
- * actions (Edit) stay on the bar at every stage: search is the quick
- * lookup a reader reaches for repeatedly, and Edit is the page's primary
- * action. Everything folded is occasional — statistics, downloads, the
- * admin dialogs — or, like read aloud, started once and then driven from
- * its own transport, which docks at the foot of a narrow pane anyway.
+ * How far the bar has folded to fit its pane. Search is the last thing to
+ * go and never does: it is the quick lookup a reader reaches for over and
+ * over. What folds first is occasional — statistics, downloads, the admin
+ * dialogs — or, like read aloud, started once and then driven from its own
+ * transport, which docks at the foot of a narrow pane anyway.
  */
 const FIT_FULL = 0;
 /** Occasional actions go behind "More"; the bar tightens its spacing. */
 const FIT_FOLDED = 1;
 /** The View button drops its label. */
 const FIT_TIGHT = 2;
+/**
+ * Edit follows the rest into the menu. Last, because it is the one action
+ * an editor came for, but ahead of leaving the row to scroll sideways: the
+ * "More" button is its last child, so an overflowing row hides the very
+ * button every folded action is behind.
+ */
+const FIT_EDIT_FOLDED = 3;
 
 interface Props {
   doc: Document;
@@ -52,8 +60,8 @@ interface Props {
   onDocSettingsChanged?: ((uid: string, s: Partial<DocumentSettingsResponse>) => void) | undefined;
   /** Reading preferences, shown in the View popover. */
   viewControls: ReactNode;
-  /** Actions supplied by the page, such as Edit. Never folded. */
-  children?: ReactNode;
+  /** Where Edit leads, for readers allowed to edit. */
+  editHref?: string | undefined;
   readAloud: {
     docUid: string;
     rootRef: RefObject<HTMLElement | null>;
@@ -85,7 +93,7 @@ export function DocumentToolbar({
   reviewExportEnabled,
   onDocSettingsChanged,
   viewControls,
-  children,
+  editHref,
   readAloud,
   searchOpen,
   onToggleSearch,
@@ -146,7 +154,11 @@ export function DocumentToolbar({
   };
 
   const onAdminChange = doc.role === 'admin' ? onDocSettingsChanged : undefined;
-  const fit = useToolbarFit(rowRef, FIT_TIGHT, `${doc.role}:${!!onAdminChange}:${uiScale}`);
+  const fit = useToolbarFit(
+    rowRef,
+    FIT_EDIT_FOLDED,
+    `${doc.role}:${!!onAdminChange}:${!!editHref}:${uiScale}`,
+  );
   const folded = fit >= FIT_FOLDED;
   const foldedInto = folded ? moreRef : undefined;
 
@@ -170,7 +182,7 @@ export function DocumentToolbar({
       ref={rowRef}
       align="center"
       gap={fit === FIT_FULL ? '3' : '2'}
-      px="3"
+      px={fit >= FIT_TIGHT ? '2' : '3'}
       py="2"
       className="doc-chrome"
     >
@@ -180,7 +192,7 @@ export function DocumentToolbar({
         end of it on anything but a wide screen. */}
       <Popover.Root>
         <Popover.Trigger>
-          {fit === FIT_TIGHT ? (
+          {fit >= FIT_TIGHT ? (
             <IconButton
               variant="soft"
               size="2"
@@ -209,7 +221,11 @@ export function DocumentToolbar({
         of per-document actions. */}
       {!folded && <DownloadMenu downloads={downloads} triggerRef={downloadRef} />}
       {downloads.dialog}
-      {children}
+      {editHref && fit < FIT_EDIT_FOLDED && (
+        <Button variant="soft" asChild>
+          <Link to={editHref}>Edit</Link>
+        </Button>
+      )}
       {onAdminChange && (
         <>
           <CopyDocumentDialog ref={copyRef} doc={doc} foldedInto={foldedInto} />
@@ -308,6 +324,17 @@ export function DocumentToolbar({
               </>
             ) : (
               <>
+                {editHref && fit >= FIT_EDIT_FOLDED && (
+                  <>
+                    <DropdownMenu.Item asChild>
+                      <Link to={editHref}>
+                        <Pencil1Icon />
+                        Edit
+                      </Link>
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Separator />
+                  </>
+                )}
                 {readAloudState.supported && (
                   <DropdownMenu.CheckboxItem
                     checked={readAloudState.open}

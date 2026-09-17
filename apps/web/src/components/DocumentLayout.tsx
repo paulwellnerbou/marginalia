@@ -20,7 +20,6 @@ import {
 } from '@radix-ui/themes';
 import { WholeWordIcon } from 'lucide-react';
 import {
-  type ReactNode,
   useCallback,
   useDeferredValue,
   useEffect,
@@ -249,7 +248,9 @@ interface Props {
   doc: Document;
   /** Called by admin settings when the server-side settings change. */
   onDocSettingsChanged?: (uid: string, s: Partial<DocumentSettingsResponse>) => void;
-  children?: ReactNode;
+  /** Where Edit leads, for readers allowed to edit. The toolbar shows it
+   *  as a button, or as a menu entry on a pane with no room for one. */
+  editHref?: string | undefined;
   /** Another document is on its way in and this one is only still here
    *  to keep the shell standing. Dimmed and made inert: it belongs to
    *  the tab the reader has already left. */
@@ -321,7 +322,7 @@ function whenIdle(fn: () => void): void {
   else window.setTimeout(fn, 0);
 }
 
-export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }: Props) {
+export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }: Props) {
   const navigate = useNavigate();
   const canComment = doc.role !== 'reader';
   const [compactViewport] = useState(isCompactViewport);
@@ -3152,9 +3153,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
               searchOpen={docSearchOpen}
               onToggleSearch={toggleDocumentSearch}
               uiScale={uiScale}
-            >
-              {children}
-            </DocumentToolbar>
+              editHref={editHref}
+            />
             {docSearchOpen && (
               <div
                 className="doc-search-popover"

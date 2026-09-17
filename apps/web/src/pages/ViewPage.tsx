@@ -208,13 +208,10 @@ export function ViewPage() {
         doc={doc}
         pending={pending}
         onDocSettingsChanged={handleSettingsChanged}
-      >
-        {(doc.role === 'admin' || doc.role === 'editor') && (
-          <Button variant="soft" asChild>
-            <Link to={`/d/${doc.uid}/edit`}>Edit</Link>
-          </Button>
-        )}
-      </DocumentLayout>
+        {...(doc.role === 'admin' || doc.role === 'editor'
+          ? { editHref: `/d/${doc.uid}/edit` }
+          : {})}
+      />
     </>
   );
 }

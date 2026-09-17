@@ -15,6 +15,12 @@ test('folds one stage when the bar overflows', () => {
   expect(nextFitStage(1, [554, 300], 292, LAST)).toBe(2);
 });
 
+test('keeps folding through every stage it is given', () => {
+  // The bar's own stages: full, folded, folded with a shorter View,
+  // folded with the page's Edit gone too.
+  expect(nextFitStage(2, [554, 300, 250], 200, 3)).toBe(3);
+});
+
 test('stops at the last stage even if that still overflows', () => {
   expect(nextFitStage(2, [554, 300, 250], 200, LAST)).toBe(2);
 });
