@@ -9,8 +9,11 @@ import {
 } from '../paged-reading.js';
 import { clearHighlight, paintSegment } from './highlight.js';
 import { collectSegments, type ReadAloudSegment, resolveSegmentRange } from './segment.js';
-import { needsBetterVoice, selectVoices } from './voices.js';
+import { needsBetterVoice, primaryLanguage, selectVoices, voiceLanguages } from './voices.js';
 
+/** Suffixed with the primary language: a reader who listens in two
+ *  languages picks a voice for each. The bare key is the older,
+ *  language-blind choice, still honoured where it fits. */
 const VOICE_KEY = 'marginalia.readAloud.voice';
 const RATE_KEY = 'marginalia.readAloud.rate';
 
@@ -40,10 +43,16 @@ export interface ReadAloudController {
   /** 0-based position in the segment list; -1 when idle. */
   index: number;
   total: number;
+  /** Primary subtags with at least one installed voice. */
+  languages: string[];
   /** Voices offered in the picker, best first. */
   voices: SpeechSynthesisVoice[];
   voice: SpeechSynthesisVoice | null;
   setVoiceUri: (uri: string) => void;
+  /** Call alongside a change the reader asked for that may resolve a
+   *  different voice (a language pick), so the sentence in progress is
+   *  spoken again in it. */
+  expectVoiceChange: () => void;
   rate: number;
   setRate: (rate: number) => void;
   /** No installed voice matches the document's language. */
@@ -77,8 +86,14 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
   const [total, setTotal] = useState(0);
   const [allVoices, setAllVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [voiceUri, setVoiceUriState] = useState<string | null>(
-    () => localStorage.getItem(VOICE_KEY) ?? null,
+  const primary = primaryLanguage(lang);
+  const [chosenVoices, setChosenVoices] = useState<Record<string, string>>({});
+  const voiceUri = useMemo(
+    () =>
+      chosenVoices[primary] ??
+      localStorage.getItem(`${VOICE_KEY}.${primary}`) ??
+      localStorage.getItem(VOICE_KEY),
+    [chosenVoices, primary],
   );
   const [rate, setRateState] = useState<number>(() => {
     const saved = Number(localStorage.getItem(RATE_KEY));
@@ -99,6 +114,10 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
   indexRef.current = index;
   const statusRef = useRef(status);
   statusRef.current = status;
+  /** Set when a voice or rate change lands while paused: resuming the
+   *  queued utterance would finish the sentence the old way, so resume
+   *  speaks it again instead. */
+  const restartOnResumeRef = useRef(false);
 
   // `getVoices()` is empty until the engine has enumerated them, and
   // Chrome only fires `voiceschanged` once that finishes.
@@ -117,9 +136,11 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
   const { offered: voices, active: voice, missingLanguage: missingLanguageVoice } = selection;
   const voiceRef = useRef(voice);
   voiceRef.current = voice;
+  const languages = useMemo(() => voiceLanguages(allVoices), [allVoices]);
 
   const stop = useCallback(() => {
     genRef.current++;
+    restartOnResumeRef.current = false;
     synth?.cancel();
     clearHighlight();
     setStatus('idle');
@@ -144,6 +165,7 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
 
       const segments = segmentsRef.current;
       const gen = ++genRef.current;
+      restartOnResumeRef.current = false;
       const wasActive = synth.speaking || synth.pending;
       synth.cancel();
 
@@ -215,8 +237,20 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
   const resume = useCallback(() => {
     if (!synth) return;
     synth.resume();
+    if (restartOnResumeRef.current && indexRef.current >= 0) {
+      speakFrom(indexRef.current);
+      return;
+    }
     setStatus('playing');
-  }, [synth]);
+  }, [speakFrom, synth]);
+
+  /** Re-speak the current sentence with the voice and rate as they are
+   *  now — or, while paused, once the reader resumes. */
+  const respeakCurrent = useCallback(() => {
+    if (statusRef.current === 'idle' || indexRef.current < 0) return;
+    if (statusRef.current === 'paused') restartOnResumeRef.current = true;
+    else speakFrom(indexRef.current);
+  }, [speakFrom]);
 
   const jump = useCallback(
     (delta: number) => {
@@ -231,16 +265,36 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
   const next = useCallback(() => jump(1), [jump]);
   const previous = useCallback(() => jump(-1), [jump]);
 
+  /** Bumped by reader actions that may resolve a different voice. The
+   *  bump renders together with the change it announces, so the effect
+   *  below can tell a requested change from one nobody asked for. */
+  const [voiceRequest, setVoiceRequest] = useState(0);
+  const expectVoiceChange = useCallback(() => setVoiceRequest((n) => n + 1), []);
+
   const setVoiceUri = useCallback(
     (uri: string) => {
-      localStorage.setItem(VOICE_KEY, uri);
-      setVoiceUriState(uri);
-      // Apply immediately: an utterance's voice is fixed once queued,
-      // so the current sentence has to be spoken again.
-      if (status !== 'idle' && index >= 0) speakFrom(index);
+      localStorage.setItem(`${VOICE_KEY}.${primary}`, uri);
+      setVoiceRequest((n) => n + 1);
+      setChosenVoices((chosen) => ({ ...chosen, [primary]: uri }));
     },
-    [index, speakFrom, status],
+    [primary],
   );
+
+  // An utterance's voice is fixed once queued, so a voice the reader
+  // picked (directly, or through the language) means speaking the
+  // current sentence again. Changes nobody asked for — voices arriving
+  // late, detection settling — take effect from the next sentence
+  // instead of cutting one off.
+  const voiceUriInUse = voice?.voiceURI ?? null;
+  const lastVoiceUri = useRef(voiceUriInUse);
+  const handledVoiceRequest = useRef(voiceRequest);
+  useEffect(() => {
+    const changed = lastVoiceUri.current !== voiceUriInUse;
+    const requested = handledVoiceRequest.current !== voiceRequest;
+    lastVoiceUri.current = voiceUriInUse;
+    handledVoiceRequest.current = voiceRequest;
+    if (changed && requested) respeakCurrent();
+  }, [voiceUriInUse, voiceRequest, respeakCurrent]);
 
   /** Pending restart after a rate change. Speech can't change rate
    *  mid-utterance, so applying it means cancelling and re-speaking
@@ -262,11 +316,10 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
         // own does neither, so restart wherever the reader is now
         // rather than where the tap happened.
         if (genRef.current !== gen || statusRef.current !== status) return;
-        const current = indexRef.current;
-        if (current >= 0) speakFrom(current);
+        respeakCurrent();
       }, RATE_RESTART_DELAY_MS);
     },
-    [index, speakFrom, status],
+    [index, respeakCurrent, status],
   );
   useEffect(
     () => () => {
@@ -296,6 +349,16 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
       stop();
       return;
     }
+    if (status === 'paused') {
+      // Stay paused. The queued utterance belongs to the old DOM, so its
+      // callbacks are cut loose and resume speaks the sentence afresh.
+      genRef.current++;
+      setIndex(resumeAt);
+      const segment = segments[resumeAt];
+      if (segment) reveal(root, segment);
+      restartOnResumeRef.current = true;
+      return;
+    }
     speakFrom(resumeAt);
   }, [htmlKey]);
 
@@ -317,9 +380,11 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
     status,
     index,
     total,
+    languages,
     voices,
     voice,
     setVoiceUri,
+    expectVoiceChange,
     rate,
     setRate,
     missingLanguageVoice,

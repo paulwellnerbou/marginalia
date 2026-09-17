@@ -3174,6 +3174,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                 </>
               )}
               <ReadAloudControls
+                docUid={doc.uid}
                 rootRef={docRef}
                 htmlKey={liveRendered.html}
                 frontmatter={liveRendered.frontmatter}

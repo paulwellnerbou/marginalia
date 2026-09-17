@@ -70,8 +70,10 @@ const NOVELTY_VOICES = new Set(
 
 export function voiceTier(voice: VoiceLike): number {
   const name = voice.name.toLowerCase();
-  if (/\(premium\)/.test(name)) return VOICE_TIER.premium;
-  if (/\(enhanced\)/.test(name)) return VOICE_TIER.enhanced;
+  // Safari on iOS leaves the quality out of the name; Apple's voice URIs
+  // carry it (`com.apple.voice.super-compact.de-DE.Anna`).
+  if (/\(premium\)/.test(name) || /\.premium\./.test(voice.voiceURI)) return VOICE_TIER.premium;
+  if (/\(enhanced\)/.test(name) || /\.enhanced\./.test(voice.voiceURI)) return VOICE_TIER.enhanced;
   // Names arrive as "Eddy (German (Germany))" — match the leading part.
   const bare = (name.split('(')[0] ?? name).trim();
   if (NOVELTY_VOICES.has(bare)) return VOICE_TIER.novelty;
@@ -82,6 +84,43 @@ export function voiceTier(voice: VoiceLike): number {
 /** Primary subtag, lowercased: `de-DE` → `de`. */
 export function primaryLanguage(tag: string): string {
   return (tag.split(/[-_]/)[0] ?? '').toLowerCase();
+}
+
+/** Primary subtags that have at least one voice, for the language picker. */
+export function voiceLanguages(voices: readonly VoiceLike[]): string[] {
+  return [...new Set(voices.map((voice) => primaryLanguage(voice.lang)))].filter(Boolean);
+}
+
+/**
+ * `lang` with a region, so voice ranking can prefer the regional voice
+ * a reader expects: their own region when they speak the language
+ * (`en` → `en-GB` for a British reader), else the language's most
+ * likely one (`de` → `de-DE`, `pt` → `pt-BR`). A tag that already
+ * names a region is the author's choice and stays.
+ */
+export function withRegion(lang: string, readerLanguages: readonly string[]): string {
+  const tag = hyphenate(lang);
+  if (tag.includes('-')) return tag;
+  const primary = tag.toLowerCase();
+  const own = readerLanguages.find(
+    (candidate) => primaryLanguage(candidate) === primary && /[-_]/.test(candidate),
+  );
+  if (own) return hyphenate(own);
+  try {
+    const region = new Intl.Locale(primary).maximize().region;
+    return region ? `${primary}-${region}` : primary;
+  } catch {
+    return primary;
+  }
+}
+
+/** Region subtag (`GB`, `001`), or null when the tag names none. */
+export function regionOf(tag: string): string | null {
+  try {
+    return new Intl.Locale(hyphenate(tag)).region ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -195,8 +234,7 @@ export function needsBetterVoice(best: VoiceLike | null): boolean {
 const LANG_TAG = /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i;
 
 /**
- * Language to read the document in. Frontmatter wins — it is the only
- * place the author can state it — then whatever the page/browser says.
+ * Language the author declared in frontmatter, else `fallback`.
  */
 export function resolveDocLang(
   frontmatter: Record<string, unknown> | undefined,
