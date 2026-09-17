@@ -8,7 +8,7 @@ import {
   TrackPreviousIcon,
 } from '@radix-ui/react-icons';
 import { Button, Flex, IconButton, Select, Text, Tooltip } from '@radix-ui/themes';
-import { type RefObject, useEffect, useMemo, useRef, useState } from 'react';
+import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { nextRate, useReadAloud } from '../lib/read-aloud/useReadAloud.js';
 import { resolveDocLang } from '../lib/read-aloud/voices.js';
@@ -51,25 +51,46 @@ export function ReadAloudControls({
   const playing = status === 'playing';
   const active = status !== 'idle';
 
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  /** Set around a programmatic focus of the trigger. Radix opens a
+   *  tooltip on any focus not preceded by a pointerdown on that same
+   *  trigger, and handing focus back should not raise a balloon. */
+  const quietFocus = useRef(false);
+
+  /** Close, returning focus to the trigger if it was inside the panel:
+   *  the panel unmounts, and focus left on a removed element falls to
+   *  the body, far from where the keyboard user was. */
+  const close = useCallback(() => {
+    const active = document.activeElement;
+    if (active && dock?.contains(active)) {
+      quietFocus.current = true;
+      triggerRef.current?.focus({ preventScroll: true });
+      quietFocus.current = false;
+    }
+    setOpen(false);
+  }, [dock]);
+
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       // An Escape the voice dropdown already consumed must not also
       // take the panel with it.
-      if (event.key === 'Escape' && !event.defaultPrevented) setOpen(false);
+      if (event.key === 'Escape' && !event.defaultPrevented) close();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [open]);
+  }, [open, close]);
 
   /** The panel lives at the foot of the pane, after the whole document,
-   *  so Tab from the trigger would never reach it: hand focus to Play
-   *  on open, the way document search hands it to its field. */
-  const playRef = useRef<HTMLButtonElement>(null);
+   *  so Tab from the trigger would never reach it: hand focus to the
+   *  panel on open, the way document search hands it to its field. The
+   *  wrapper rather than Play itself, whose tooltip would open on focus
+   *  and then eat the first Escape. */
   useEffect(() => {
     if (!open) return;
     const frame = window.requestAnimationFrame(() =>
-      playRef.current?.focus({ preventScroll: true }),
+      popoverRef.current?.focus({ preventScroll: true }),
     );
     return () => window.cancelAnimationFrame(frame);
   }, [open]);
@@ -100,11 +121,15 @@ export function ReadAloudControls({
     <>
       <Tooltip content={active ? 'Read-aloud controls' : 'Read this document aloud'}>
         <IconButton
+          ref={triggerRef}
           variant="soft"
           color={APP_ACCENT_COLOR}
           size="2"
           className={`doc-search-trigger read-aloud-trigger ${open || active ? 'active' : ''}`}
-          onClick={() => setOpen((prev) => !prev)}
+          onClick={() => (open ? close() : setOpen(true))}
+          onFocus={(event) => {
+            if (quietFocus.current) event.preventDefault();
+          }}
           aria-label={active ? 'Read-aloud controls' : 'Read this document aloud'}
           aria-pressed={open}
         >
@@ -116,6 +141,8 @@ export function ReadAloudControls({
         dock &&
         createPortal(
           <div
+            ref={popoverRef}
+            tabIndex={-1}
             className="read-aloud-popover"
             style={
               inlineCommentsOffset > 0
@@ -131,7 +158,6 @@ export function ReadAloudControls({
                   content={playing ? 'Pause' : status === 'paused' ? 'Continue' : 'Read aloud'}
                 >
                   <IconButton
-                    ref={playRef}
                     size="1"
                     variant="soft"
                     color={APP_ACCENT_COLOR}
@@ -221,7 +247,7 @@ export function ReadAloudControls({
                   color="gray"
                   className="read-aloud-close"
                   aria-label="Close read-aloud controls"
-                  onClick={() => setOpen(false)}
+                  onClick={close}
                 >
                   <Cross2Icon />
                 </IconButton>

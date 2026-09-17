@@ -10,6 +10,10 @@
   --ui-control-line-height: 1.4;
   --doc-floating-toolbar-height: 38px;
   --doc-floating-toolbar-radius: var(--ui-control-radius);
+  /* One row of floating chrome under the doc toolbar: the popovers' top
+     padding plus a toolbar. Paged clearance and the search popover's
+     offset are both counted in these. */
+  --doc-float-row: calc(0.5rem + var(--doc-floating-toolbar-height));
 
   --app-bar-height: 48px;
   --doc-chrome-height: 44px;
@@ -822,6 +826,9 @@ button.primary:disabled {
      a right-aligned popover fit side by side. */
   container-type: inline-size;
   container-name: doc-pane;
+  /* Rows of floating chrome the document has to clear; the comment
+     pill is the first. Raised where search has to drop below it. */
+  --doc-float-rows: 1;
 }
 .pane-doc .doc-scroll {
   flex: 1;
@@ -903,10 +910,10 @@ button.primary:disabled {
   /* The page's top and bottom margins belong to the column container:
      block padding on the article itself lands on its first and last
      fragment only, leaving every page in between flush to the edge.
-     The top also has to clear the floating comment toolbar, which paged
-     mode always shows: it hovers at a fixed spot, so unlike in scroll
-     mode the reader can never move the text out from under it. */
-  padding-top: calc(var(--page-margin-block) + 0.5rem + var(--doc-floating-toolbar-height));
+     The top also has to clear the floating chrome, which paged mode
+     always shows: it hovers at a fixed spot, so unlike in scroll mode
+     the reader can never move the text out from under it. */
+  padding-top: calc(var(--page-margin-block) + var(--doc-float-rows) * var(--doc-float-row));
   padding-bottom: var(--page-margin-block);
   /* One column per page, exactly as wide as the scrollport. The gap has
      to be zero: at a single column the used width grows to fill the
@@ -1011,6 +1018,13 @@ button.primary:disabled {
      the other one. Left at `auto` the browser takes a drag as a pan of
      its own and cancels the pointer stream mid-gesture. */
   touch-action: pan-x;
+}
+/* Vertical pages carry no block padding of their own (the pitch is the
+   border box), so the floating chrome is cleared one level up: the
+   scrollport centres in what the viewport's padding leaves, and the
+   paging hook takes the padding off the page height it publishes. */
+.doc-viewport:has(> .doc-scroll.doc-paged-y) {
+  padding-top: calc(var(--doc-float-rows) * var(--doc-float-row));
 }
 .doc-paged-y .doc-row {
   display: block;
@@ -1355,13 +1369,16 @@ button.primary:disabled {
 
 .doc-search-popover {
   position: absolute;
-  top: calc(var(--doc-chrome-height));
+  /* Row one, unless the pane has pushed it below the comment pill. */
+  top: calc(var(--doc-chrome-height) + (var(--doc-float-rows) - 1) * var(--doc-float-row));
   right: calc(var(--doc-search-inline-comments-offset, 0px) + 0.25rem);
   left: 0;
   display: flex;
   justify-content: flex-end;
   padding: 0.5rem 1rem 0;
-  z-index: 3;
+  /* Above the read-aloud popover, which shares its corner: a lookup
+     opened while listening has to land on top of the transport. */
+  z-index: 4;
   pointer-events: none;
 }
 
@@ -1627,6 +1644,9 @@ button.primary:disabled {
   padding: 0.5rem 1rem 0;
   z-index: 3;
   pointer-events: none;
+  /* Takes focus on open so Tab reaches the transport; the box itself is
+     invisible, so a ring around it would mean nothing. */
+  outline: none;
 }
 
 .read-aloud-panel {
@@ -1651,23 +1671,17 @@ button.primary:disabled {
    the text it is reading; its slot is a sibling of the scrollport, so
    the pages above it shrink to fit rather than slide under it. Search
    keeps floating (a lookup is brief) and drops one row below the pill
-   instead, when the pill is there. Both rules share one gate on
-   purpose: a floating transport with no push-down would overlap the
-   pill again. */
+   instead, when the pill is there. Both share one gate on purpose: a
+   floating transport with no push-down would overlap the pill again. */
 .read-aloud-dock {
   flex-shrink: 0;
 }
 @container doc-pane (max-width: 860px) {
-  /* The pill's height is fixed, so the offset is exact; the popover's
-     own top padding is the gap. */
-  .pane-doc:has(> .ic-float-toolbar-popover) .doc-search-popover {
-    top: calc(var(--doc-chrome-height) + 0.5rem + var(--doc-floating-toolbar-height));
-  }
-  /* Paged mode pads every page for one toolbar row; while search sits
-     on a second row it needs two, or the bar covers each page's first
-     line and the reader can't scroll it clear. */
-  .pane-doc:has(> .ic-float-toolbar-popover):has(> .doc-search-popover) .doc-paged .doc-body {
-    padding-top: calc(var(--page-margin-block) + 2 * (0.5rem + var(--doc-floating-toolbar-height)));
+  /* Search on row two, and paged pages padded for both rows, from the
+     one count. Set on the pane's children, not the pane: a container
+     can't answer a query about itself. */
+  .pane-doc:has(> .ic-float-toolbar-popover):has(> .doc-search-popover) > * {
+    --doc-float-rows: 2;
   }
 
   .read-aloud-popover {
@@ -1691,6 +1705,9 @@ button.primary:disabled {
     /* Room for the pinned close button, so the last control to wrap
        never lands under it. */
     padding-right: 28px;
+  }
+  .read-aloud-hint {
+    max-width: none;
   }
   /* The close button leaves the wrapping row: as its last item it
      would drop onto a line of its own the moment the row is one control
@@ -1747,6 +1764,9 @@ button.primary:disabled {
 .read-aloud-hint {
   padding: 0.1rem 0.35rem 0.25rem;
   line-height: 1.35;
+  /* The panel is as wide as its widest line. Unwrapped, the voice hint
+     would carry it back across the comment pill on a mid-sized pane. */
+  max-width: 28rem;
 }
 
 /* The sentence currently being spoken. `::highlight()` only honours a
@@ -4183,8 +4203,8 @@ button.primary:disabled {
 .ic-float-card {
   position: absolute;
   pointer-events: auto;
-  /* Above static doc content, but below the floating chrome (search /
-     read-aloud / pill popovers at 3, selection toolbar at 10) — the
+  /* Above static doc content, but below the floating chrome (read-aloud
+     and pill popovers at 3, search at 4, selection toolbar at 10) — the
      card is content and scrolls under the chrome. */
   z-index: 2;
   width: min(400px, calc(100cqw - 24px));
