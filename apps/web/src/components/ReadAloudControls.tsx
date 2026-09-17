@@ -1,5 +1,6 @@
 import {
   Cross2Icon,
+  GlobeIcon,
   PauseIcon,
   PlayIcon,
   SpeakerLoudIcon,
@@ -7,14 +8,18 @@ import {
   TrackNextIcon,
   TrackPreviousIcon,
 } from '@radix-ui/react-icons';
-import { Button, Flex, IconButton, Select, Text, Tooltip } from '@radix-ui/themes';
+import { Button, IconButton, Select, Text, Tooltip } from '@radix-ui/themes';
 import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { detectLanguage } from '../lib/read-aloud/detect-language.js';
+import { sampleText } from '../lib/read-aloud/segment.js';
 import { nextRate, useReadAloud } from '../lib/read-aloud/useReadAloud.js';
-import { resolveDocLang } from '../lib/read-aloud/voices.js';
+import { primaryLanguage, resolveDocLang, withRegion } from '../lib/read-aloud/voices.js';
 import { APP_ACCENT_COLOR } from '../styles/theme.js';
 
 interface Props {
+  /** Keys the reader's language choice, which belongs to the document. */
+  docUid: string;
   /** The `<article>` holding the rendered document. */
   rootRef: RefObject<HTMLElement | null>;
   /** Rendered HTML; changes invalidate captured segments. */
@@ -27,6 +32,10 @@ interface Props {
   dock: HTMLElement | null;
 }
 
+const LANG_KEY = 'marginalia.readAloud.lang';
+const AUTO_LANG = 'auto';
+const DETECT_SAMPLE_CHARS = 20_000;
+
 /**
  * Read-aloud ("Vorlesen") transport, sitting next to document search in
  * the doc toolbar. Speech runs on the browser's own synthesis engine,
@@ -34,6 +43,7 @@ interface Props {
  * the voice picker and the hint when only a compact default is present.
  */
 export function ReadAloudControls({
+  docUid,
   rootRef,
   htmlKey,
   frontmatter,
@@ -41,15 +51,64 @@ export function ReadAloudControls({
   dock,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const lang = useMemo(
-    () => resolveDocLang(frontmatter, document.documentElement.lang || navigator.language || 'en'),
-    [frontmatter],
+
+  // Language, most specific first: what the reader picked for this
+  // document, what the author declared, what the text looks like, and
+  // only then the reader's own language. The page's `<html lang>` is the
+  // UI's language and says nothing about the document.
+  const [detectedLang, setDetectedLang] = useState<string | null>(null);
+  const [chosenLangs, setChosenLangs] = useState<Record<string, string | null>>({});
+  const chosenLang = useMemo(
+    () =>
+      docUid in chosenLangs
+        ? (chosenLangs[docUid] ?? null)
+        : localStorage.getItem(`${LANG_KEY}.${docUid}`),
+    [chosenLangs, docUid],
   );
+  const autoLang = useMemo(
+    () => resolveDocLang(frontmatter, detectedLang ?? navigator.language ?? 'en'),
+    [frontmatter, detectedLang],
+  );
+  const lang = useMemo(
+    () =>
+      withRegion(
+        chosenLang ?? autoLang,
+        navigator.languages?.length ? navigator.languages : [navigator.language],
+      ),
+    [chosenLang, autoLang],
+  );
+  const setLanguage = (value: string) => {
+    const key = `${LANG_KEY}.${docUid}`;
+    const chosen = value === AUTO_LANG ? null : value;
+    if (chosen) localStorage.setItem(key, chosen);
+    else localStorage.removeItem(key);
+    setChosenLangs((current) => ({ ...current, [docUid]: chosen }));
+  };
+
   const reader = useReadAloud({ rootRef, htmlKey, lang });
+  const languageOptions = useMemo(
+    () =>
+      reader.languages
+        .map((code) => ({ code, name: languageName(code) }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [reader.languages],
+  );
 
   const { status, stop } = reader;
   const playing = status === 'playing';
   const active = status !== 'idle';
+
+  // Deferred a task: RenderedDoc writes the new HTML in its own effect,
+  // which may run after this one.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: htmlKey is the re-detect trigger; the text is read from the DOM.
+  useEffect(() => {
+    if (!open) return;
+    const timer = window.setTimeout(() => {
+      const root = rootRef.current;
+      if (root) setDetectedLang(detectLanguage(sampleText(root, DETECT_SAMPLE_CHARS)));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [open, htmlKey, rootRef]);
 
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -74,8 +133,8 @@ export function ReadAloudControls({
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      // An Escape the voice dropdown already consumed must not also
-      // take the panel with it.
+      // An Escape a dropdown already consumed must not also take the
+      // panel with it.
       if (event.key === 'Escape' && !event.defaultPrevented) close();
     };
     window.addEventListener('keydown', onKeyDown);
@@ -117,6 +176,20 @@ export function ReadAloudControls({
     else reader.resume();
   };
 
+  const langName = languageName(primaryLanguage(lang));
+  const showRegions = new Set(reader.voices.map((voice) => regionOf(voice.lang))).size > 1;
+
+  const hint =
+    reader.error ??
+    (reader.missingLanguageVoice
+      ? `No ${langName} voice on this device. Voices can be added in ${voiceSettings()}.`
+      : // Advice for before listening, not a caption to read along with.
+        reader.showVoiceHint && !active
+        ? `Basic system voice. Better ones can be downloaded in ${voiceSettings()}.`
+        : null);
+
+  const progress = active && reader.total > 0 ? (reader.index + 1) / reader.total : 0;
+
   return (
     <>
       <Tooltip content={active ? 'Read-aloud controls' : 'Read this document aloud'}>
@@ -152,85 +225,15 @@ export function ReadAloudControls({
                 : undefined
             }
           >
-            <Flex direction="column" gap="1" className="read-aloud-panel">
-              <Flex align="center" gap="2" className="read-aloud-toolbar">
-                <Tooltip
-                  content={playing ? 'Pause' : status === 'paused' ? 'Continue' : 'Read aloud'}
-                >
-                  <IconButton
-                    size="1"
-                    variant="soft"
-                    color={APP_ACCENT_COLOR}
-                    onClick={toggle}
-                    aria-label={transportLabel}
-                  >
-                    {playing ? <PauseIcon /> : <PlayIcon />}
-                  </IconButton>
-                </Tooltip>
-                <IconButton
-                  size="1"
-                  variant="ghost"
-                  color="gray"
-                  className="doc-toolbar-toggle"
-                  aria-label="Previous sentence"
-                  onClick={reader.previous}
-                  disabled={!active}
-                >
-                  <TrackPreviousIcon />
-                </IconButton>
-                <IconButton
-                  size="1"
-                  variant="ghost"
-                  color="gray"
-                  className="doc-toolbar-toggle"
-                  aria-label="Next sentence"
-                  onClick={reader.next}
-                  disabled={!active}
-                >
-                  <TrackNextIcon />
-                </IconButton>
-                <IconButton
-                  size="1"
-                  variant="ghost"
-                  color="gray"
-                  className="doc-toolbar-toggle"
-                  aria-label="Stop reading"
-                  onClick={stop}
-                  disabled={!active}
-                >
-                  <StopIcon />
-                </IconButton>
-
-                {/* Always mounted: its width is reserved while idle so the
-                    transport doesn't shift under the finger that just
-                    pressed Play. */}
-                <Text size="1" color="gray" className="read-aloud-progress">
-                  {active ? `${reader.index + 1} / ${reader.total}` : ''}
-                </Text>
-
-                <Select.Root
-                  size="1"
-                  value={reader.voice?.voiceURI ?? ''}
-                  onValueChange={reader.setVoiceUri}
-                >
-                  <Select.Trigger
-                    variant="soft"
-                    className="read-aloud-voice"
-                    aria-label="Voice"
-                    placeholder="Voice"
-                  />
-                  <Select.Content position="popper" style={{ maxHeight: 360 }}>
-                    {reader.voices.map((voice) => (
-                      <Select.Item key={voice.voiceURI} value={voice.voiceURI}>
-                        {voice.name}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select.Root>
-
+            <section
+              className="read-aloud-panel"
+              aria-label="Read aloud"
+              style={{ '--read-aloud-progress': progress } as React.CSSProperties}
+            >
+              <div className="read-aloud-main">
                 <Tooltip content="Reading speed">
                   <Button
-                    size="1"
+                    size="2"
                     variant="soft"
                     color="gray"
                     className="read-aloud-rate"
@@ -241,8 +244,126 @@ export function ReadAloudControls({
                   </Button>
                 </Tooltip>
 
+                <div className="read-aloud-transport">
+                  <Tooltip content="Previous sentence">
+                    <IconButton
+                      size="2"
+                      variant="ghost"
+                      color="gray"
+                      aria-label="Previous sentence"
+                      onClick={reader.previous}
+                      disabled={!active}
+                    >
+                      <TrackPreviousIcon />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip
+                    content={playing ? 'Pause' : status === 'paused' ? 'Continue' : 'Read aloud'}
+                  >
+                    <IconButton
+                      size="3"
+                      variant="solid"
+                      radius="full"
+                      color={APP_ACCENT_COLOR}
+                      className="read-aloud-play"
+                      onClick={toggle}
+                      aria-label={transportLabel}
+                    >
+                      {playing ? <PauseIcon /> : <PlayIcon />}
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip content="Next sentence">
+                    <IconButton
+                      size="2"
+                      variant="ghost"
+                      color="gray"
+                      aria-label="Next sentence"
+                      onClick={reader.next}
+                      disabled={!active}
+                    >
+                      <TrackNextIcon />
+                    </IconButton>
+                  </Tooltip>
+                </div>
+
+                <Tooltip content="Stop">
+                  <IconButton
+                    size="2"
+                    variant="ghost"
+                    color="gray"
+                    className="read-aloud-stop"
+                    aria-label="Stop reading"
+                    onClick={stop}
+                    disabled={!active}
+                  >
+                    <StopIcon />
+                  </IconButton>
+                </Tooltip>
+              </div>
+
+              <div className="read-aloud-settings">
+                <Select.Root
+                  size="2"
+                  value={chosenLang ? primaryLanguage(chosenLang) : AUTO_LANG}
+                  onValueChange={setLanguage}
+                >
+                  <Select.Trigger
+                    variant="soft"
+                    color="gray"
+                    className="read-aloud-language"
+                    aria-label={`Reading language: ${langName}`}
+                  >
+                    <span className="read-aloud-select-value">
+                      <GlobeIcon aria-hidden />
+                      <span>{langName}</span>
+                    </span>
+                  </Select.Trigger>
+                  <Select.Content position="popper" style={{ maxHeight: 360 }}>
+                    <Select.Item value={AUTO_LANG}>
+                      Automatic ({languageName(primaryLanguage(autoLang))})
+                    </Select.Item>
+                    <Select.Separator />
+                    {languageOptions.map(({ code, name }) => (
+                      <Select.Item key={code} value={code}>
+                        {name}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+
+                <Select.Root
+                  size="2"
+                  value={reader.voice?.voiceURI ?? ''}
+                  onValueChange={reader.setVoiceUri}
+                >
+                  <Select.Trigger
+                    variant="soft"
+                    color="gray"
+                    className="read-aloud-voice"
+                    aria-label="Voice"
+                    placeholder="Voice"
+                  >
+                    {reader.voice?.name}
+                  </Select.Trigger>
+                  <Select.Content position="popper" style={{ maxHeight: 360 }}>
+                    {reader.voices.map((voice) => (
+                      <Select.Item key={voice.voiceURI} value={voice.voiceURI}>
+                        {voice.name}
+                        {showRegions && regionOf(voice.lang) && (
+                          <span className="read-aloud-voice-region">
+                            {regionName(regionOf(voice.lang))}
+                          </span>
+                        )}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+
+                <Text size="1" color="gray" className="read-aloud-position">
+                  {active && reader.total > 0 ? `${reader.index + 1} / ${reader.total}` : ''}
+                </Text>
                 <IconButton
-                  size="1"
+                  size="2"
                   variant="ghost"
                   color="gray"
                   className="read-aloud-close"
@@ -251,17 +372,14 @@ export function ReadAloudControls({
                 >
                   <Cross2Icon />
                 </IconButton>
-              </Flex>
+              </div>
 
-              {(reader.error || reader.missingLanguageVoice || reader.showVoiceHint) && (
+              {hint && (
                 <Text size="1" color={reader.error ? 'red' : 'gray'} className="read-aloud-hint">
-                  {reader.error ??
-                    (reader.missingLanguageVoice
-                      ? `No voice installed for "${lang}" — pick another or install one in your system speech settings.`
-                      : voiceHint())}
+                  {hint}
                 </Text>
               )}
-            </Flex>
+            </section>
           </div>,
           dock,
         )}
@@ -269,15 +387,47 @@ export function ReadAloudControls({
   );
 }
 
+/** A language's name in that language — "Deutsch", "Français" — so
+ *  readers find theirs whatever language the app is in. */
+function languageName(code: string): string {
+  try {
+    const name = new Intl.DisplayNames([code], { type: 'language' }).of(code);
+    if (name && name !== code) return name.charAt(0).toLocaleUpperCase(code) + name.slice(1);
+  } catch {
+    // Not a tag Intl knows.
+  }
+  return code;
+}
+
+function regionOf(tag: string): string {
+  const region = tag
+    .split(/[-_]/)
+    .find((part, index) => index > 0 && /^([a-z]{2}|\d{3})$/i.test(part));
+  return region?.toUpperCase() ?? '';
+}
+
+function regionName(region: string): string {
+  try {
+    return new Intl.DisplayNames(undefined, { type: 'region' }).of(region) ?? region;
+  } catch {
+    return region;
+  }
+}
+
 /**
- * The stock voices (macOS `Anna` / `Samantha`, and their equivalents
- * elsewhere) are compact engines that get tiring over a long document.
- * Better ones ship with the OS but have to be downloaded, so point at
- * where — the exact path only exists on macOS.
+ * Where to get more voices. The stock ones (Anna, Samantha, and their
+ * equivalents elsewhere) are compact engines that get tiring over a long
+ * document; better ones ship with the OS but have to be downloaded, and
+ * only Apple's platforms have a single place to name.
  */
-function voiceHint(): string {
-  const isMac = /mac/i.test(navigator.platform || navigator.userAgent);
-  return isMac
-    ? 'Basic system voice. For much better quality install a Premium voice under System Settings → Accessibility → Spoken Content → System Voice → Manage Voices.'
-    : 'Basic system voice. Installing an enhanced or premium voice in your operating system’s speech settings improves quality considerably.';
+function voiceSettings(): string {
+  const platform = navigator.platform || '';
+  // iPadOS reports itself as a Mac; the touch screen gives it away.
+  const isIOS =
+    /iPhone|iPad|iPod/.test(platform) || (platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (isIOS) return 'Settings → Accessibility → Spoken Content → Voices';
+  if (/Mac/.test(platform)) {
+    return 'System Settings → Accessibility → Spoken Content → System Voice → Manage Voices';
+  }
+  return 'your system’s speech settings';
 }

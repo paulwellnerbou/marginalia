@@ -95,6 +95,22 @@ export function collectSegments(root: HTMLElement, lang: string): ReadAloudSegme
 }
 
 /**
+ * The first `maxChars` or so of speakable text, for telling which
+ * language the document is in without walking a whole book.
+ */
+export function sampleText(root: HTMLElement, maxChars: number): string {
+  const parts: string[] = [];
+  let length = 0;
+  for (const node of walkTextNodes(root)) {
+    parts.push(node.data);
+    length += node.data.length + 1;
+    if (length >= maxChars) break;
+  }
+  // Adjacent blocks' text nodes carry no whitespace between them.
+  return parts.join(' ');
+}
+
+/**
  * Rebuild a live `Range` for `segment` from the current DOM. Returns
  * null when the block is gone (document edited underneath us) or the
  * offsets no longer fit — callers treat that as "skip this segment".

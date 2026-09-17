@@ -9,8 +9,11 @@ import {
 } from '../paged-reading.js';
 import { clearHighlight, paintSegment } from './highlight.js';
 import { collectSegments, type ReadAloudSegment, resolveSegmentRange } from './segment.js';
-import { needsBetterVoice, selectVoices } from './voices.js';
+import { needsBetterVoice, primaryLanguage, selectVoices, voiceLanguages } from './voices.js';
 
+/** Suffixed with the primary language: a reader who listens in two
+ *  languages picks a voice for each. The bare key is the older,
+ *  language-blind choice, still honoured where it fits. */
 const VOICE_KEY = 'marginalia.readAloud.voice';
 const RATE_KEY = 'marginalia.readAloud.rate';
 
@@ -40,6 +43,8 @@ export interface ReadAloudController {
   /** 0-based position in the segment list; -1 when idle. */
   index: number;
   total: number;
+  /** Primary subtags with at least one installed voice. */
+  languages: string[];
   /** Voices offered in the picker, best first. */
   voices: SpeechSynthesisVoice[];
   voice: SpeechSynthesisVoice | null;
@@ -77,8 +82,14 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
   const [total, setTotal] = useState(0);
   const [allVoices, setAllVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [voiceUri, setVoiceUriState] = useState<string | null>(
-    () => localStorage.getItem(VOICE_KEY) ?? null,
+  const primary = primaryLanguage(lang);
+  const [chosenVoices, setChosenVoices] = useState<Record<string, string>>({});
+  const voiceUri = useMemo(
+    () =>
+      chosenVoices[primary] ??
+      localStorage.getItem(`${VOICE_KEY}.${primary}`) ??
+      localStorage.getItem(VOICE_KEY),
+    [chosenVoices, primary],
   );
   const [rate, setRateState] = useState<number>(() => {
     const saved = Number(localStorage.getItem(RATE_KEY));
@@ -117,6 +128,7 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
   const { offered: voices, active: voice, missingLanguage: missingLanguageVoice } = selection;
   const voiceRef = useRef(voice);
   voiceRef.current = voice;
+  const languages = useMemo(() => voiceLanguages(allVoices), [allVoices]);
 
   const stop = useCallback(() => {
     genRef.current++;
@@ -233,14 +245,22 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
 
   const setVoiceUri = useCallback(
     (uri: string) => {
-      localStorage.setItem(VOICE_KEY, uri);
-      setVoiceUriState(uri);
-      // Apply immediately: an utterance's voice is fixed once queued,
-      // so the current sentence has to be spoken again.
-      if (status !== 'idle' && index >= 0) speakFrom(index);
+      localStorage.setItem(`${VOICE_KEY}.${primary}`, uri);
+      setChosenVoices((chosen) => ({ ...chosen, [primary]: uri }));
     },
-    [index, speakFrom, status],
+    [primary],
   );
+
+  // Picking a voice and switching the language both land here. Apply
+  // immediately: an utterance's voice is fixed once queued, so the
+  // current sentence has to be spoken again.
+  const voiceUriInUse = voice?.voiceURI ?? null;
+  const lastVoiceUri = useRef(voiceUriInUse);
+  useEffect(() => {
+    if (lastVoiceUri.current === voiceUriInUse) return;
+    lastVoiceUri.current = voiceUriInUse;
+    if (statusRef.current !== 'idle' && indexRef.current >= 0) speakFrom(indexRef.current);
+  }, [voiceUriInUse, speakFrom]);
 
   /** Pending restart after a rate change. Speech can't change rate
    *  mid-utterance, so applying it means cancelling and re-speaking
@@ -317,6 +337,7 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
     status,
     index,
     total,
+    languages,
     voices,
     voice,
     setVoiceUri,
