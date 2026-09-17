@@ -31,6 +31,45 @@ bun run build
 bun run start
 ```
 
+### Verifying in an automated browser or the simulator
+
+Notes for anyone (or any agent) driving the app from the Claude Code
+browser pane or the iOS Simulator. They are about how to check things;
+user-facing behaviour is documented where the feature is.
+
+**Check a browser capability on the target engine, not from memory.** The
+iOS Simulator runs the real WebKit with the same JavaScript surface as a
+device; only the hardware differs. Serve a probe page from a scratch
+directory (`python3 -m http.server 5199`), open it with `xcrun simctl
+openurl <udid> http://localhost:5199/probe.html`, and read the result.
+Established so far: WebKit does not ship `BarcodeDetector` (it sits behind
+an experimental flag), which is why the QR scanner bundles `qr-scanner`;
+and on a device with no camera WebKit rejects `getUserMedia` with an
+`OverconstrainedError`, which per spec is its own class rather than a
+`DOMException`, so read `.name` off whatever was thrown.
+
+**The browser pane's script tool runs in an isolated world.** It shares
+the DOM with the page but not the page's JavaScript globals, so patching
+`navigator.mediaDevices.getUserMedia`, a prototype, or `window.__x` there
+is invisible to app code, which silently keeps calling the real API. Stub
+a browser API by injecting a `<script>` element into the page —
+`textContent` for a short stub, `src` pointing at a served file for
+anything longer — and pass results back through
+`document.documentElement.dataset.*`, which both worlds read.
+
+**Faking a camera.** `canvas.captureStream()` stands in for
+`getUserMedia`, but it only emits frames while the canvas changes: toggle
+a pixel on an interval, or `video.readyState` stays at 0 and `play()`
+never resolves. Draw only same-origin or `data:` images into that canvas;
+a cross-origin image taints it and `captureStream` throws. The simulator
+has no camera at all, so a camera flow can be checked up to its
+permission or "no camera" state there, not through a real scan.
+
+**Simulator screenshots.** The simulator control tool's `screenshot` can
+fail with `captureFailed`; `xcrun simctl io <udid> screenshot <path>`
+works every time. Device points are screenshot pixels divided by the
+device's scale factor.
+
 ## Installable app (PWA)
 
 The viewer installs as a standalone app. `apps/web/public` holds the
@@ -61,6 +100,15 @@ invite row so the same link can be re-claimed from another browser, which
 is exactly what the installed app looks like. So the home page has an
 **Open from a link** field that takes a pasted invite URL — full URL, bare
 path, or just a document id — and routes to it.
+
+When the link is on someone else's screen there is nothing to paste, so
+the same field has a **scan** button that reads the QR code the Access
+control dialog shows for every link (a pairing QR is accepted there too
+and lands on the pair page). Decoding uses the browser's `BarcodeDetector`
+where it exists and a bundled decoder (`qr-scanner`) where it does not —
+which is every WebKit browser, so on iOS the fallback is the only path.
+The button shows wherever the camera API exists; without it the field is
+unchanged.
 
 Since `ViewPage` strips the token from the address bar on arrival, the
 link cannot be recovered from the URL later. **Copy access link** — on
