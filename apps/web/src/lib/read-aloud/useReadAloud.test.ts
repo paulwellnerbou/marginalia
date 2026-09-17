@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type { ReadAloudSegment } from './segment.js';
-import { findResumeIndex } from './useReadAloud.js';
+import { findResumeIndex, nextRate } from './useReadAloud.js';
 
 function segment(text: string, blockId: string | null, start = 0): ReadAloudSegment {
   return {
@@ -46,5 +46,18 @@ describe('findResumeIndex', () => {
   test('reports no match when the sentence is gone', () => {
     const segments = [segment('Etwas anderes.', 'block-a')];
     expect(findResumeIndex(segments, segment('Gelöschter Satz.', 'block-b'))).toBe(-1);
+  });
+});
+
+describe('nextRate', () => {
+  test('steps up through the fixed speeds and wraps at the top', () => {
+    expect(nextRate(1)).toBe(1.2);
+    expect(nextRate(1.5)).toBe(2);
+    expect(nextRate(2)).toBe(0.5);
+  });
+
+  test('rounds a rate from between the steps up to the next one', () => {
+    expect(nextRate(0.9)).toBe(1);
+    expect(nextRate(1.7)).toBe(2);
   });
 });

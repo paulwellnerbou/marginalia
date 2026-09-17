@@ -817,6 +817,11 @@ button.primary:disabled {
   flex-direction: column;
   overflow: hidden;
   position: relative;
+  /* Query container for the floating chrome that hangs off this pane:
+     its width, not the viewport's, decides whether the comment pill and
+     a right-aligned popover fit side by side. */
+  container-type: inline-size;
+  container-name: doc-pane;
 }
 .pane-doc .doc-scroll {
   flex: 1;
@@ -854,6 +859,14 @@ button.primary:disabled {
      column that has to clear them need to read it, and the zones are
      siblings of the scrollport, not descendants. */
   --page-edge-zone: 72px;
+}
+/* A phone has no width to spare: two 72px zones would leave the text a
+   column a few words wide. A thumb still lands in a 28px strip, and
+   the zone grows into whatever gutter the reading width leaves. */
+@container doc-pane (max-width: 480px) {
+  .doc-viewport {
+    --page-edge-zone: 28px;
+  }
 }
 
 /* ============================================================
@@ -1631,6 +1644,75 @@ button.primary:disabled {
   backdrop-filter: blur(14px);
 }
 
+/* Narrow panes: the floating comment pill (left) and the right-aligned
+   popovers no longer fit in one row. Below this width the read-aloud
+   transport docks at the foot of the pane, in flow — listening runs for
+   minutes, and a panel hovering over the heading for that long hides
+   the text it is reading; its slot is a sibling of the scrollport, so
+   the pages above it shrink to fit rather than slide under it. Search
+   keeps floating (a lookup is brief) and drops one row below the pill
+   instead, when the pill is there. Both rules share one gate on
+   purpose: a floating transport with no push-down would overlap the
+   pill again. */
+.read-aloud-dock {
+  flex-shrink: 0;
+}
+@container doc-pane (max-width: 860px) {
+  /* The pill's height is fixed, so the offset is exact; the popover's
+     own top padding is the gap. */
+  .pane-doc:has(> .ic-float-toolbar-popover) .doc-search-popover {
+    top: calc(var(--doc-chrome-height) + 0.5rem + var(--doc-floating-toolbar-height));
+  }
+  /* Paged mode pads every page for one toolbar row; while search sits
+     on a second row it needs two, or the bar covers each page's first
+     line and the reader can't scroll it clear. */
+  .pane-doc:has(> .ic-float-toolbar-popover):has(> .doc-search-popover) .doc-paged .doc-body {
+    padding-top: calc(var(--page-margin-block) + 2 * (0.5rem + var(--doc-floating-toolbar-height)));
+  }
+
+  .read-aloud-popover {
+    position: static;
+    padding: 0;
+    justify-content: stretch;
+  }
+  .read-aloud-panel {
+    flex: 1;
+    max-width: none;
+    border: 0;
+    border-top: 1px solid var(--ui-border);
+    border-radius: 0;
+    background: var(--ui-bg);
+    box-shadow: none;
+    backdrop-filter: none;
+    padding-inline: 0.75rem;
+  }
+  .read-aloud-toolbar {
+    justify-content: center;
+    /* Room for the pinned close button, so the last control to wrap
+       never lands under it. */
+    padding-right: 28px;
+  }
+  /* The close button leaves the wrapping row: as its last item it
+     would drop onto a line of its own the moment the row is one control
+     too wide, centred and orphaned. Pinned in the corner it reads as
+     the bar's dismiss, wherever the transport wraps. */
+  .read-aloud-panel {
+    position: relative;
+  }
+  .read-aloud-close {
+    position: absolute;
+    top: 0.35rem;
+    right: 0.5rem;
+  }
+  /* Clear the home indicator when the bar is the pane's bottom edge —
+     with the pager below it, the pager already does. */
+  @media (pointer: coarse) {
+    .read-aloud-dock:last-child .read-aloud-panel {
+      padding-bottom: calc(0.35rem + env(safe-area-inset-bottom, 0px) + 1.25rem);
+    }
+  }
+}
+
 /* Wraps rather than overflowing: the transport, voice picker and speed
    control together are wider than the document column once both side
    panes are open, and `.pane-doc` clips its overflow. */
@@ -1656,8 +1738,10 @@ button.primary:disabled {
   max-width: 11rem;
 }
 
-.read-aloud-rate-value {
-  min-width: 2.4rem;
+.read-aloud-rate {
+  /* Tabular so 0.8× and 1.0× don't shift the row when cycling. */
+  min-width: 3.2rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .read-aloud-hint {
@@ -4201,8 +4285,8 @@ button.primary:disabled {
 }
 
 /* Pill toolbar for floating mode — same vertical placement as
-   .doc-search-popover / .read-aloud-popover but LEFT-aligned, so it
-   never collides with those right-aligned panels. */
+   .doc-search-popover / .read-aloud-popover but LEFT-aligned, so on a
+   wide pane it sits beside those right-aligned panels. */
 .ic-float-toolbar-popover {
   position: absolute;
   top: var(--doc-chrome-height);

@@ -17,6 +17,20 @@ const RATE_KEY = 'marginalia.readAloud.rate';
 export const MIN_RATE = 0.5;
 export const MAX_RATE = 2;
 
+const RATE_RESTART_DELAY_MS = 300;
+
+/** The speeds the one-button speed control cycles through. */
+export const RATE_STEPS = [0.5, 0.8, 1, 1.2, 1.5, 2] as const;
+
+/**
+ * The step after `rate`, wrapping to the slowest past the fastest. A
+ * saved rate from between the steps rounds up to the next one rather
+ * than jamming the control.
+ */
+export function nextRate(rate: number): number {
+  return RATE_STEPS.find((step) => step > rate + 1e-9) ?? RATE_STEPS[0];
+}
+
 export type ReadAloudStatus = 'idle' | 'playing' | 'paused';
 
 export interface ReadAloudController {
@@ -224,13 +238,29 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
     [index, speakFrom, status],
   );
 
+  /** Pending restart after a rate change. Speech can't change rate
+   *  mid-utterance, so applying it means cancelling and re-speaking
+   *  the sentence; a burst of taps on the cycling speed button should
+   *  do that once, at the final rate, not once per tap. */
+  const rateRestartRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setRate = useCallback(
     (next: number) => {
       localStorage.setItem(RATE_KEY, String(next));
       setRateState(next);
-      if (status !== 'idle' && index >= 0) speakFrom(index);
+      if (rateRestartRef.current) clearTimeout(rateRestartRef.current);
+      if (status === 'idle' || index < 0) return;
+      rateRestartRef.current = setTimeout(() => {
+        rateRestartRef.current = null;
+        speakFrom(index);
+      }, RATE_RESTART_DELAY_MS);
     },
     [index, speakFrom, status],
+  );
+  useEffect(
+    () => () => {
+      if (rateRestartRef.current) clearTimeout(rateRestartRef.current);
+    },
+    [],
   );
 
   // The document can be rewritten under us: a collaborator saves, or a

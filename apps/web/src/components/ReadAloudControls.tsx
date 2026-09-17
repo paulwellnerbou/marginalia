@@ -7,9 +7,10 @@ import {
   TrackNextIcon,
   TrackPreviousIcon,
 } from '@radix-ui/react-icons';
-import { Flex, IconButton, Select, Slider, Text, Tooltip } from '@radix-ui/themes';
-import { type RefObject, useEffect, useMemo, useState } from 'react';
-import { MAX_RATE, MIN_RATE, useReadAloud } from '../lib/read-aloud/useReadAloud.js';
+import { Button, Flex, IconButton, Select, Text, Tooltip } from '@radix-ui/themes';
+import { type RefObject, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { nextRate, useReadAloud } from '../lib/read-aloud/useReadAloud.js';
 import { resolveDocLang } from '../lib/read-aloud/voices.js';
 import { APP_ACCENT_COLOR } from '../styles/theme.js';
 
@@ -22,6 +23,8 @@ interface Props {
   frontmatter: Record<string, unknown>;
   /** Width of the inline comments column, so the popover clears it. */
   inlineCommentsOffset: number;
+  /** Element at the foot of the doc pane the transport renders into. */
+  dock: HTMLElement | null;
 }
 
 /**
@@ -30,7 +33,13 @@ interface Props {
  * so quality depends entirely on the voices the reader's OS has — hence
  * the voice picker and the hint when only a compact default is present.
  */
-export function ReadAloudControls({ rootRef, htmlKey, frontmatter, inlineCommentsOffset }: Props) {
+export function ReadAloudControls({
+  rootRef,
+  htmlKey,
+  frontmatter,
+  inlineCommentsOffset,
+  dock,
+}: Props) {
   const [open, setOpen] = useState(false);
   const lang = useMemo(
     () => resolveDocLang(frontmatter, document.documentElement.lang || navigator.language || 'en'),
@@ -45,10 +54,24 @@ export function ReadAloudControls({ rootRef, htmlKey, frontmatter, inlineComment
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false);
+      // An Escape the voice dropdown already consumed must not also
+      // take the panel with it.
+      if (event.key === 'Escape' && !event.defaultPrevented) setOpen(false);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open]);
+
+  /** The panel lives at the foot of the pane, after the whole document,
+   *  so Tab from the trigger would never reach it: hand focus to Play
+   *  on open, the way document search hands it to its field. */
+  const playRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const frame = window.requestAnimationFrame(() =>
+      playRef.current?.focus({ preventScroll: true }),
+    );
+    return () => window.cancelAnimationFrame(frame);
   }, [open]);
 
   // A browser without speech synthesis gets no control at all rather
@@ -89,131 +112,133 @@ export function ReadAloudControls({ rootRef, htmlKey, frontmatter, inlineComment
         </IconButton>
       </Tooltip>
 
-      {open && (
-        <div
-          className="read-aloud-popover"
-          style={
-            inlineCommentsOffset > 0
-              ? ({
-                  '--doc-search-inline-comments-offset': `${inlineCommentsOffset}px`,
-                } as React.CSSProperties)
-              : undefined
-          }
-        >
-          <Flex direction="column" gap="1" className="read-aloud-panel">
-            <Flex align="center" gap="2" className="read-aloud-toolbar">
-              <Tooltip
-                content={playing ? 'Pause' : status === 'paused' ? 'Continue' : 'Read aloud'}
-              >
+      {open &&
+        dock &&
+        createPortal(
+          <div
+            className="read-aloud-popover"
+            style={
+              inlineCommentsOffset > 0
+                ? ({
+                    '--doc-search-inline-comments-offset': `${inlineCommentsOffset}px`,
+                  } as React.CSSProperties)
+                : undefined
+            }
+          >
+            <Flex direction="column" gap="1" className="read-aloud-panel">
+              <Flex align="center" gap="2" className="read-aloud-toolbar">
+                <Tooltip
+                  content={playing ? 'Pause' : status === 'paused' ? 'Continue' : 'Read aloud'}
+                >
+                  <IconButton
+                    ref={playRef}
+                    size="1"
+                    variant="soft"
+                    color={APP_ACCENT_COLOR}
+                    onClick={toggle}
+                    aria-label={transportLabel}
+                  >
+                    {playing ? <PauseIcon /> : <PlayIcon />}
+                  </IconButton>
+                </Tooltip>
                 <IconButton
                   size="1"
-                  variant="soft"
-                  color={APP_ACCENT_COLOR}
-                  onClick={toggle}
-                  aria-label={transportLabel}
+                  variant="ghost"
+                  color="gray"
+                  className="doc-toolbar-toggle"
+                  aria-label="Previous sentence"
+                  onClick={reader.previous}
+                  disabled={!active}
                 >
-                  {playing ? <PauseIcon /> : <PlayIcon />}
+                  <TrackPreviousIcon />
                 </IconButton>
-              </Tooltip>
-              <IconButton
-                size="1"
-                variant="ghost"
-                color="gray"
-                className="doc-toolbar-toggle"
-                aria-label="Previous sentence"
-                onClick={reader.previous}
-                disabled={!active}
-              >
-                <TrackPreviousIcon />
-              </IconButton>
-              <IconButton
-                size="1"
-                variant="ghost"
-                color="gray"
-                className="doc-toolbar-toggle"
-                aria-label="Next sentence"
-                onClick={reader.next}
-                disabled={!active}
-              >
-                <TrackNextIcon />
-              </IconButton>
-              <IconButton
-                size="1"
-                variant="ghost"
-                color="gray"
-                className="doc-toolbar-toggle"
-                aria-label="Stop reading"
-                onClick={stop}
-                disabled={!active}
-              >
-                <StopIcon />
-              </IconButton>
-
-              <Text size="1" color="gray" className="read-aloud-progress">
-                {active ? `${reader.index + 1} / ${reader.total}` : '–'}
-              </Text>
-
-              <Select.Root
-                size="1"
-                value={reader.voice?.voiceURI ?? ''}
-                onValueChange={reader.setVoiceUri}
-              >
-                <Select.Trigger
-                  variant="soft"
-                  className="read-aloud-voice"
-                  aria-label="Voice"
-                  placeholder="Voice"
-                />
-                <Select.Content position="popper" style={{ maxHeight: 360 }}>
-                  {reader.voices.map((voice) => (
-                    <Select.Item key={voice.voiceURI} value={voice.voiceURI}>
-                      {voice.name}
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select.Root>
-
-              <Flex align="center" gap="2" className="read-aloud-rate">
-                <Text size="1" color="gray">
-                  Speed
-                </Text>
-                <Slider
+                <IconButton
                   size="1"
-                  style={{ width: 72 }}
-                  min={MIN_RATE}
-                  max={MAX_RATE}
-                  step={0.1}
-                  value={[reader.rate]}
-                  onValueChange={(value) => reader.setRate(value[0] ?? reader.rate)}
-                  aria-label="Reading speed"
-                />
-                <Text size="1" color="gray" className="read-aloud-rate-value">
-                  {reader.rate.toFixed(1)}×
+                  variant="ghost"
+                  color="gray"
+                  className="doc-toolbar-toggle"
+                  aria-label="Next sentence"
+                  onClick={reader.next}
+                  disabled={!active}
+                >
+                  <TrackNextIcon />
+                </IconButton>
+                <IconButton
+                  size="1"
+                  variant="ghost"
+                  color="gray"
+                  className="doc-toolbar-toggle"
+                  aria-label="Stop reading"
+                  onClick={stop}
+                  disabled={!active}
+                >
+                  <StopIcon />
+                </IconButton>
+
+                {/* Always mounted: its width is reserved while idle so the
+                    transport doesn't shift under the finger that just
+                    pressed Play. */}
+                <Text size="1" color="gray" className="read-aloud-progress">
+                  {active ? `${reader.index + 1} / ${reader.total}` : ''}
                 </Text>
+
+                <Select.Root
+                  size="1"
+                  value={reader.voice?.voiceURI ?? ''}
+                  onValueChange={reader.setVoiceUri}
+                >
+                  <Select.Trigger
+                    variant="soft"
+                    className="read-aloud-voice"
+                    aria-label="Voice"
+                    placeholder="Voice"
+                  />
+                  <Select.Content position="popper" style={{ maxHeight: 360 }}>
+                    {reader.voices.map((voice) => (
+                      <Select.Item key={voice.voiceURI} value={voice.voiceURI}>
+                        {voice.name}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+
+                <Tooltip content="Reading speed">
+                  <Button
+                    size="1"
+                    variant="soft"
+                    color="gray"
+                    className="read-aloud-rate"
+                    onClick={() => reader.setRate(nextRate(reader.rate))}
+                    aria-label={`Reading speed ${reader.rate.toFixed(1)}×, change`}
+                  >
+                    {reader.rate.toFixed(1)}×
+                  </Button>
+                </Tooltip>
+
+                <IconButton
+                  size="1"
+                  variant="ghost"
+                  color="gray"
+                  className="read-aloud-close"
+                  aria-label="Close read-aloud controls"
+                  onClick={() => setOpen(false)}
+                >
+                  <Cross2Icon />
+                </IconButton>
               </Flex>
 
-              <IconButton
-                size="1"
-                variant="ghost"
-                color="gray"
-                aria-label="Close read-aloud controls"
-                onClick={() => setOpen(false)}
-              >
-                <Cross2Icon />
-              </IconButton>
+              {(reader.error || reader.missingLanguageVoice || reader.showVoiceHint) && (
+                <Text size="1" color={reader.error ? 'red' : 'gray'} className="read-aloud-hint">
+                  {reader.error ??
+                    (reader.missingLanguageVoice
+                      ? `No voice installed for "${lang}" — pick another or install one in your system speech settings.`
+                      : voiceHint())}
+                </Text>
+              )}
             </Flex>
-
-            {(reader.error || reader.missingLanguageVoice || reader.showVoiceHint) && (
-              <Text size="1" color={reader.error ? 'red' : 'gray'} className="read-aloud-hint">
-                {reader.error ??
-                  (reader.missingLanguageVoice
-                    ? `No voice installed for "${lang}" — pick another or install one in your system speech settings.`
-                    : voiceHint())}
-              </Text>
-            )}
-          </Flex>
-        </div>
-      )}
+          </div>,
+          dock,
+        )}
     </>
   );
 }
