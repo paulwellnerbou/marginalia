@@ -445,6 +445,58 @@ describe('threads API', () => {
     expect(((await bob.json()) as { thread: ThreadShape }).thread.id).not.toBe(thread.id);
   });
 
+  test('each copy of a line repeated under the same headings takes its own bookmark', async () => {
+    const uid = await newDoc(
+      '# Guide\n\n## Summary\n\nRead this first.\n\n## Summary\n\nRead this first.\n',
+    );
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const { rendered } = (await res.json()) as {
+      rendered: {
+        blocks: Array<{
+          id: string;
+          text: string;
+          headingPath: string[];
+          sectionIndex: number;
+          sectionIndexPath: number[];
+        }>;
+      };
+    };
+    const copies = rendered.blocks.filter((b) => b.text === 'Read this first.');
+    expect(copies).toHaveLength(2);
+    expect(copies[1]!.id).toBe(copies[0]!.id);
+    expect(copies[1]!.headingPath).toEqual(copies[0]!.headingPath);
+
+    // The anchor the viewer sends for a block: its id plus the section it sits in.
+    const bookmark = async (copy: (typeof copies)[number]) => {
+      const created = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: headersFor(ALICE),
+          body: JSON.stringify({
+            anchor: {
+              block_id: copy.id,
+              quote: copy.text,
+              heading_path: copy.headingPath,
+              section_index: copy.sectionIndex,
+              section_index_path: copy.sectionIndexPath,
+            },
+            bookmark: true,
+          }),
+        }),
+      );
+      const { thread } = (await created.json()) as { thread: ThreadShape };
+      return { status: created.status, id: thread.id };
+    };
+
+    const first = await bookmark(copies[0]!);
+    const second = await bookmark(copies[1]!);
+    expect([first.status, second.status]).toEqual([201, 201]);
+    expect(second.id).not.toBe(first.id);
+    expect(await bookmark(copies[1]!)).toEqual({ status: 200, id: second.id });
+  });
+
   test('a bookmark takes no replies, resolution, reactions or answering proposals', async () => {
     const uid = await newDoc('# Title\n\nA paragraph.\n');
     const blockId = await firstBlockId(uid);

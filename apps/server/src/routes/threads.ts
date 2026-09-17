@@ -363,11 +363,14 @@ async function createThread(c: Context, deps: AppDeps) {
   if (bookmark) {
     // One bookmark per passage per reader: a tab that hasn't yet read a
     // bookmark made elsewhere still offers to add it, and gets that one back.
+    // A line repeated under the same headings is one id on several blocks,
+    // and only the section index path tells those copies apart.
     const existing = db
       .prepare(
         `SELECT id FROM comments
           WHERE doc_uid = ? AND author_client_id = ? AND is_bookmark = 1
             AND deleted_at IS NULL AND anchor_block_id = ? AND anchor_heading_path IS ?
+            AND anchor_section_index_path IS ?
           LIMIT 1`,
       )
       .get(
@@ -375,6 +378,7 @@ async function createThread(c: Context, deps: AppDeps) {
         identity.clientId,
         anchor.blockId,
         anchor.headingPath ? JSON.stringify(anchor.headingPath) : null,
+        anchor.sectionIndexPath ? JSON.stringify(anchor.sectionIndexPath) : null,
       ) as { id: string } | undefined;
     const existingRow = existing ? loadThreadRow(db, existing.id, doc.uid) : undefined;
     if (existingRow) {
