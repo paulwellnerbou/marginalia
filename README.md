@@ -62,6 +62,15 @@ is exactly what the installed app looks like. So the home page has an
 **Open from a link** field that takes a pasted invite URL — full URL, bare
 path, or just a document id — and routes to it.
 
+When the link is on someone else's screen there is nothing to paste, so
+the same field has a **scan** button that reads the QR code the Access
+control dialog shows for every link (a pairing QR is accepted there too
+and lands on the pair page). Decoding uses the browser's `BarcodeDetector`
+where it exists and a bundled decoder (`qr-scanner`) where it does not —
+which is every WebKit browser, so on iOS the fallback is the only path.
+The button shows wherever the camera API exists; without it the field is
+unchanged.
+
 Since `ViewPage` strips the token from the address bar on arrival, the
 link cannot be recovered from the URL later. **Copy access link** — on
 each document card and in the per-document user menu — hands it back. It
