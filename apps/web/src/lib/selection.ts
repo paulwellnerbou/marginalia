@@ -96,6 +96,15 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
 const BLOCK_QUOTE_LIMIT = 2000;
 
 /**
+ * Whether a block can carry a bookmark. A rendered diagram can't: its text
+ * is the SVG mermaid drew, stylesheet first, which never matches the block's
+ * text again, and mermaid replaces the element's children once it has drawn.
+ */
+export function isBookmarkableBlock(el: HTMLElement): boolean {
+  return !el.classList.contains('mermaid');
+}
+
+/**
  * Anchor covering a whole block — what a bookmark marks, where a comment
  * marks a selection. `el` is a `[data-block]` / `[data-subblock]`
  * element; the quote is its normalized text, so re-anchoring and the
@@ -107,7 +116,7 @@ const BLOCK_QUOTE_LIMIT = 2000;
  */
 export function captureBlockAnchor(root: HTMLElement, el: HTMLElement): CommentAnchor | null {
   const blockId = anchorIdOf(el);
-  if (!blockId) return null;
+  if (!blockId || !isBookmarkableBlock(el)) return null;
   const blockText = blockTextOf(el);
   const quote = blockText.slice(0, BLOCK_QUOTE_LIMIT);
   if (!quote) return null;

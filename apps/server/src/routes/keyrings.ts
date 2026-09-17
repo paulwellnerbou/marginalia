@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
-import { readIdentity } from '../auth.js';
+import { readClientId, readIdentity } from '../auth.js';
 import type { ServerConfig } from '../config.js';
 import { COVER_THUMBNAIL_REF } from '../cover.js';
 import type { DocumentFormat, InviteRole, KeyringRow } from '../db.js';
@@ -443,6 +443,14 @@ async function redeemPairing(c: Context, { db, config }: KeyringDeps, limits: Li
     | undefined;
   if (!ring) return fail(404, 'invalid-code');
 
+  // The device leaves its own client id for the ring's. Thread bookmarks are
+  // kept per client id, so the ones it set before pairing come along rather
+  // than staying behind under an id nothing sends any more.
+  const previousClientId = readClientId(c.req.raw.headers);
+  if (previousClientId && previousClientId !== ring.client_id) {
+    moveThreadBookmarks(db, previousClientId, ring.client_id);
+  }
+
   c.header('Cache-Control', 'no-store');
   return c.json({
     token: ring.token,
@@ -453,6 +461,16 @@ async function redeemPairing(c: Context, { db, config }: KeyringDeps, limits: Li
 }
 
 // --- helpers ---------------------------------------------------------
+
+function moveThreadBookmarks(db: Database, from: string, to: string): void {
+  db.transaction(() => {
+    db.prepare(
+      `INSERT OR IGNORE INTO thread_bookmarks (doc_uid, client_id, thread_id, created_at)
+       SELECT doc_uid, ?, thread_id, created_at FROM thread_bookmarks WHERE client_id = ?`,
+    ).run(to, from);
+    db.prepare('DELETE FROM thread_bookmarks WHERE client_id = ?').run(from);
+  })();
+}
 
 /** Erase one ring and everything hanging off it. */
 function purgeKeyring(db: Database, token: string): void {

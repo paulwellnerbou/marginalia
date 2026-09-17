@@ -420,6 +420,85 @@ describe('threads API', () => {
     expect(res.status).toBe(403);
   });
 
+  test('bookmarking the same passage again gives back the bookmark already there', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const post = (who: Headers) =>
+      app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: who,
+          body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, bookmark: true }),
+        }),
+      );
+
+    const first = await post(headersFor(ALICE));
+    expect(first.status).toBe(201);
+    const { thread } = (await first.json()) as { thread: ThreadShape };
+    const again = await post(headersFor(ALICE));
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { thread: ThreadShape }).thread.id).toBe(thread.id);
+
+    // Another reader's bookmark on the same passage is a bookmark of their own.
+    const bob = await post(headersFor(BOB));
+    expect(bob.status).toBe(201);
+    expect(((await bob.json()) as { thread: ThreadShape }).thread.id).not.toBe(thread.id);
+  });
+
+  test('a bookmark takes no replies, resolution, reactions or answering proposals', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const created = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, bookmark: true }),
+      }),
+    );
+    const { thread } = (await created.json()) as { thread: ThreadShape };
+    expect(thread.capabilities.reply).toBe(false);
+    expect(thread.capabilities.resolve).toBe(false);
+    expect(thread.comments[0].capabilities).toMatchObject({
+      edit: false,
+      delete: true,
+      react: false,
+    });
+
+    const refused = async (res: Response) => {
+      expect(res.status).toBe(400);
+      return ((await res.json()) as { error: string }).error;
+    };
+    for (const payload of [{ action: 'resolve' }, { body: 'A reply' }]) {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${thread.id}/respond`, {
+          method: 'POST',
+          headers: headersFor(ALICE),
+          body: JSON.stringify(payload),
+        }),
+      );
+      expect(await refused(res)).toBe('bookmark-discussion-forbidden');
+    }
+    const react = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${uid}/threads/${thread.id}/comments/${thread.id}/reactions`,
+        { method: 'POST', headers: headersFor(ALICE), body: JSON.stringify({ emoji: '👍' }) },
+      ),
+    );
+    expect(await refused(react)).toBe('bookmark-discussion-forbidden');
+
+    const answer = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          proposal: { proposed_text: '# Other title', answers_thread_ids: [thread.id] },
+        }),
+      }),
+    );
+    expect(await refused(answer)).toBe('answers-thread-not-found');
+  });
+
   test('a thread bookmark belongs to the reader who set it, on every device of theirs', async () => {
     const uid = await newDoc('# Title\n\nA paragraph.\n');
     const blockId = await firstBlockId(uid);
@@ -2483,12 +2562,19 @@ describe('threads API', () => {
     expect(created.status).toBe(201);
 
     const { bundle } = await roundTrip(uid);
-    const rows = bundle.comments as Array<{ is_bookmark?: boolean; is_hidden?: boolean }>;
+    const rows = bundle.comments as Array<{
+      is_bookmark?: boolean;
+      is_hidden?: boolean;
+      body?: string;
+      edit_proposal?: unknown;
+    }>;
     expect(rows.map((r) => [r.is_bookmark, r.is_hidden])).toEqual([[true, true]]);
 
-    // A hand-edited bundle cannot publish a bookmark: the flag brings its
-    // privacy with it.
+    // A hand-edited bundle cannot turn a bookmark into something else: the
+    // flag brings its privacy with it, and leaves text and proposal behind.
     rows[0]!.is_hidden = false;
+    rows[0]!.body = 'Smuggled text';
+    rows[0]!.edit_proposal = { proposed_text: '# Other title', status: 'open' };
     const importRes = await app.hono.fetch(
       new Request('http://test/api/documents/import', {
         method: 'POST',
@@ -2504,7 +2590,9 @@ describe('threads API', () => {
       new Request(`http://test/api/documents/${imported.uid}/threads`, { headers }),
     );
     const { threads } = (await listRes.json()) as { threads: ThreadShape[] };
-    expect(threads.map((t) => [t.bookmark, t.comments[0].hidden])).toEqual([[true, true]]);
+    expect(
+      threads.map((t) => [t.bookmark, t.comments[0].hidden, t.comments[0].body, t.proposal]),
+    ).toEqual([[true, true, '', null]]);
   });
 
   /**

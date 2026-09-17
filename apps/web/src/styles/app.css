@@ -3507,17 +3507,20 @@ button.primary:disabled {
 .marginalia [data-bookmarked] {
   position: relative;
 }
-.marginalia .bookmark-marker {
+.marginalia [data-bookmarked] > marginalia-bookmark {
   position: absolute;
   right: -1.2rem;
   top: calc((1lh - 0.85rem) / 2);
   display: block;
   width: 0.85rem;
   height: 0.85rem;
+  /* Theme spacing like `blockquote > * + *` would push it off the first
+     line; the attribute in the selector lets this outrank it. */
+  margin: 0;
   pointer-events: none;
   user-select: none;
 }
-.marginalia .bookmark-marker svg {
+.marginalia marginalia-bookmark svg {
   display: block;
   width: 100%;
   height: 100%;
@@ -3525,13 +3528,13 @@ button.primary:disabled {
 }
 /* Inside the corner instead: a code block scrolls sideways, which clips
    anything outside its box, and a cell's gutter is the next cell. */
-.marginalia pre[data-bookmarked] > .bookmark-marker,
-.marginalia :is(td, th)[data-bookmarked] > .bookmark-marker {
+.marginalia pre[data-bookmarked] > marginalia-bookmark,
+.marginalia :is(td, th)[data-bookmarked] > marginalia-bookmark {
   top: 0.3rem;
   right: 0.3rem;
 }
 @media print {
-  .marginalia .bookmark-marker {
+  .marginalia [data-bookmarked] > marginalia-bookmark {
     display: none;
   }
 }

@@ -529,6 +529,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   const bookmarkWrites = useRef(0);
   /** Whether a read has shown this server keeps bookmarks, which gates uploading local ones. */
   const [bookmarksOnServer, setBookmarksOnServer] = useState(false);
+  /** This browser's locally kept bookmarks for the document, until they're uploaded. */
+  const [localBookmarksPending, setLocalBookmarksPending] = useState(
+    () => legacyBookmarkedThreadIds(doc.uid).length > 0,
+  );
   const acceptBookmarkedThreadIds = useCallback(
     (ids: string[] | undefined, writesBefore: number) => {
       if (!ids) return;
@@ -2200,8 +2204,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       if (!identity) return;
       try {
         await apiDeleteThread(doc.uid, threadId, identity);
-        threadSnapshotRequestRef.current += 1;
-        setThreads((prev) => prev.filter((t) => t.id !== threadId));
+        dropThread(threadId);
         reconcileThreadsSoon();
       } catch (err) {
         reportError('DocumentLayout.deleteThread', err, { threadId });
@@ -2209,7 +2212,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         reconcileThreadsSoon();
       }
     },
-    [doc.uid, resolveIdentity, reconcileThreadsSoon],
+    [doc.uid, resolveIdentity, reconcileThreadsSoon, dropThread],
   );
 
   const onDeleteNode = useCallback(
@@ -2509,9 +2512,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     sectionFilter,
   ]);
   const hasBookmarks = bookmarkedThreadIds.size > 0 || bookmarkThreads.length > 0;
-  // A reload that remembered the tab has no bookmark threads until the
-  // first read lands; holding the tab open meanwhile keeps the reader on it.
-  const showBookmarksTab = hasBookmarks || (threadsLoading && rightTab === 'bookmarks');
+  // "No bookmarks" is only known once a read has answered and this browser's
+  // local ones are uploaded; until then a remembered tab stays put rather
+  // than being switched away, and that choice saved, for good.
+  const bookmarksKnown = bookmarksOnServer && !localBookmarksPending;
+  const showBookmarksTab = hasBookmarks || (rightTab === 'bookmarks' && !bookmarksKnown);
 
   // Serialized so the ribbons re-sync when one would move, not on every
   // thread update — a reply elsewhere must not touch the document's DOM.
@@ -2564,6 +2569,23 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     },
     [bookmarkMarkers, doc.uid, landThread, onDeleteThread, reconcileThreadsSoon, resolveIdentity],
   );
+  // Other tabs of this browser share its client id, so neither the server
+  // nor the realtime channel tells them that a thread bookmark changed.
+  const bookmarksChannel = useRef<BroadcastChannel | null>(null);
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return;
+    const channel = new BroadcastChannel('marginalia:thread-bookmarks');
+    bookmarksChannel.current = channel;
+    channel.onmessage = (e: MessageEvent<{ uid?: unknown; ids?: unknown }>) => {
+      const { uid, ids } = e.data ?? {};
+      if (uid !== doc.uid || !Array.isArray(ids)) return;
+      setBookmarkedThreadIds(new Set(ids.filter((id): id is string => typeof id === 'string')));
+    };
+    return () => {
+      channel.close();
+      if (bookmarksChannel.current === channel) bookmarksChannel.current = null;
+    };
+  }, [doc.uid]);
   const toggleBookmark = useCallback(
     (threadId: string): void => {
       const identity = resolveIdentity();
@@ -2579,6 +2601,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       setBookmarkedThreadIds(flipped(bookmarked));
       apiSetThreadBookmarked(doc.uid, threadId, bookmarked, identity).then(
         (ids) => {
+          bookmarksChannel.current?.postMessage({ uid: doc.uid, ids });
           if (write === bookmarkWrites.current) setBookmarkedThreadIds(new Set(ids));
         },
         (err) => {
@@ -2590,10 +2613,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
             ),
           );
           if (write === bookmarkWrites.current) setBookmarkedThreadIds(flipped(!bookmarked));
+          // An earlier toggle still out may fail too, after this one's revert;
+          // a fresh read settles every thread on what the server holds.
+          reconcileThreadsSoon();
         },
       );
     },
-    [bookmarkedThreadIds, doc.uid, resolveIdentity],
+    [bookmarkedThreadIds, doc.uid, resolveIdentity, reconcileThreadsSoon],
   );
 
   // Bookmarks this browser set while they were kept locally. Sent up once a
@@ -2603,29 +2629,37 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     if (!bookmarksOnServer) return;
     const uid = doc.uid;
     const legacy = legacyBookmarkedThreadIds(uid);
-    if (legacy.length === 0) return;
+    if (legacy.length === 0) {
+      setLocalBookmarksPending(false);
+      return;
+    }
     const identity = resolveIdentity();
     if (!identity) return;
     let cancelled = false;
     const writesBefore = bookmarkWrites.current;
     void (async () => {
-      let ids: string[] | null = null;
-      for (const threadId of legacy) {
-        try {
-          ids = await apiSetThreadBookmarked(uid, threadId, true, identity);
-        } catch (err) {
-          // Deleted, or no longer visible: nothing left to keep.
-          if (err instanceof ApiError && err.status === 404) continue;
-          // Anything else gets another try on the next visit.
-          reportError('DocumentLayout.uploadLocalBookmarks', err, { uid });
-          return;
+      try {
+        let ids: string[] | null = null;
+        for (const threadId of legacy) {
+          try {
+            ids = await apiSetThreadBookmarked(uid, threadId, true, identity);
+          } catch (err) {
+            // Deleted, or no longer visible: nothing left to keep.
+            if (err instanceof ApiError && err.status === 404) continue;
+            // Anything else gets another try on the next visit.
+            reportError('DocumentLayout.uploadLocalBookmarks', err, { uid });
+            return;
+          }
         }
+        forgetLegacyBookmarkedThreadIds(uid);
+        if (ids) bookmarksChannel.current?.postMessage({ uid, ids });
+        // A toggle made meanwhile answers with a newer set of its own.
+        if (cancelled || !ids || writesBefore !== bookmarkWrites.current) return;
+        bookmarkWrites.current += 1;
+        setBookmarkedThreadIds(new Set(ids));
+      } finally {
+        if (!cancelled) setLocalBookmarksPending(false);
       }
-      forgetLegacyBookmarkedThreadIds(uid);
-      // A toggle made meanwhile answers with a newer set of its own.
-      if (cancelled || !ids || writesBefore !== bookmarkWrites.current) return;
-      bookmarkWrites.current += 1;
-      setBookmarkedThreadIds(new Set(ids));
     })();
     return () => {
       cancelled = true;

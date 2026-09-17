@@ -360,6 +360,29 @@ async function createThread(c: Context, deps: AppDeps) {
     }
   }
 
+  if (bookmark) {
+    // One bookmark per passage per reader: a tab that hasn't yet read a
+    // bookmark made elsewhere still offers to add it, and gets that one back.
+    const existing = db
+      .prepare(
+        `SELECT id FROM comments
+          WHERE doc_uid = ? AND author_client_id = ? AND is_bookmark = 1
+            AND deleted_at IS NULL AND anchor_block_id = ? AND anchor_heading_path IS ?
+          LIMIT 1`,
+      )
+      .get(
+        doc.uid,
+        identity.clientId,
+        anchor.blockId,
+        anchor.headingPath ? JSON.stringify(anchor.headingPath) : null,
+      ) as { id: string } | undefined;
+    const existingRow = existing ? loadThreadRow(db, existing.id, doc.uid) : undefined;
+    if (existingRow) {
+      const thread = await toThreadWire(db, store, doc, existingRow, [], decision, new Set());
+      return c.json({ thread }, 200);
+    }
+  }
+
   const id = newCommentId();
 
   let blockRange: BlockSourceRange | null = null;
@@ -1734,11 +1757,13 @@ async function setThreadBookmark(c: Context, deps: AppDeps, bookmarked: boolean)
 
 /** The live, visible threads `clientId` has bookmarked, oldest bookmark first. */
 function listBookmarkedThreadIds(db: Database, docUid: string, clientId: string): string[] {
+  // CROSS JOIN fixes the loop order: left to itself SQLite walks every
+  // comment of the document and probes for a bookmark on each.
   const rows = db
     .prepare(
       `SELECT b.thread_id
          FROM thread_bookmarks b
-         JOIN comments c ON c.id = b.thread_id AND c.doc_uid = b.doc_uid
+         CROSS JOIN comments c ON c.id = b.thread_id AND c.doc_uid = b.doc_uid
         WHERE b.doc_uid = ?
           AND b.client_id = ?
           AND c.parent_id IS NULL
@@ -1771,6 +1796,7 @@ async function toggleCommentReaction(c: Context, deps: AppDeps) {
   const thread = loadThreadRow(db, tid, doc.uid);
   if (!thread) return c.json({ error: 'not-found' }, 404);
   if (!canViewThread(thread, identity)) return c.json({ error: 'not-found' }, 404);
+  if (thread.is_bookmark === 1) return c.json({ error: 'bookmark-discussion-forbidden' }, 400);
   const target = loadThreadNode(db, doc.uid, tid, cid);
   if (!target) return c.json({ error: 'not-found' }, 404);
   if (!canViewComment(target, identity)) return c.json({ error: 'not-found' }, 404);
@@ -1912,6 +1938,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
   const row = loadThreadRow(db, tid, doc.uid);
   if (!row) return c.json({ error: 'not-found' }, 404);
   if (!canViewThread(row, identity)) return c.json({ error: 'not-found' }, 404);
+  if (row.is_bookmark === 1) return c.json({ error: 'bookmark-discussion-forbidden' }, 400);
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
@@ -2838,7 +2865,7 @@ async function toThreadWire(
   const isAdmin = decision.ok && decision.role === 'admin';
   const proposalRow: EditProposalThreadRow | null = isProposalRow(row) ? row : null;
   const proposal = proposalRow !== null;
-  const canReply = decision.ok && canComment(decision.role);
+  const canReply = decision.ok && canComment(decision.role) && row.is_bookmark === 0;
   const canRootEdit = viewerId !== null && viewerId === row.author_client_id;
   const canRootDelete = canRootEdit || isAdmin;
   const visibleReplies = replies.filter((reply) =>
@@ -2888,7 +2915,7 @@ async function toThreadWire(
     },
     capabilities: {
       reply: canReply,
-      resolve: !proposal && state === 'open' && (isRootAuthor || isAdmin),
+      resolve: !proposal && row.is_bookmark === 0 && state === 'open' && (isRootAuthor || isAdmin),
       accept:
         proposal &&
         state === 'open' &&
@@ -2974,7 +3001,7 @@ async function toThreadWire(
           display_name: row.author_display_name,
         },
         capabilities: {
-          edit: canRootEdit,
+          edit: canRootEdit && row.is_bookmark === 0,
           delete: row.proposal_status === 'accepted' ? isAdmin : canRootDelete,
           hide: !proposal && row.is_bookmark === 0 && isRootAuthor,
           react: canReply,
@@ -3524,9 +3551,9 @@ function asProposalUpdate(
 
 /**
  * A proposal may name the root threads it answers. Only root threads
- * qualify — a reply is not a request in its own right — and they must
- * live in this document, so a token for one document can't be used to
- * probe ids in another.
+ * qualify — a reply is not a request in its own right, nor is a bookmark —
+ * and they must live in this document, so a token for one document can't
+ * be used to probe ids in another.
  */
 function isAnswerableThread(
   db: Database,
@@ -3539,7 +3566,7 @@ function isAnswerableThread(
       `SELECT 1 FROM comments
         WHERE id = ? AND doc_uid = ?
           AND parent_id IS NULL AND parent_proposal_id IS NULL
-          AND deleted_at IS NULL
+          AND deleted_at IS NULL AND is_bookmark = 0
           AND (is_hidden = 0 OR author_client_id = ?)
         LIMIT 1`,
     )

@@ -17,6 +17,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import type { AnchorSection } from '../../lib/anchor-target.js';
 import type { Thread } from '../../lib/api.js';
 import { isBookmark, isProposal, proposalStatus } from '../../lib/api.js';
 import { getClientId } from '../../lib/identity.js';
@@ -130,7 +131,13 @@ interface Props {
   onReact: (commentId: string, emoji: string) => Promise<void>;
   onCreateProposal?: ((thread: Thread) => void) | undefined;
   onEditProposal?: ((thread: Thread) => void) | undefined;
-  onScrollToAnchor: (blockId: string, quote?: string | null, threadId?: string) => void;
+  onScrollToAnchor: (
+    blockId: string,
+    quote?: string | null,
+    threadId?: string,
+    scrollOffset?: number,
+    section?: AnchorSection | null,
+  ) => void;
   /**
    * Called when this list needs threads the document may not have fetched.
    * Opening a document reads only the open threads, so showing resolved
@@ -535,8 +542,10 @@ export function InlineCommentsList({
     revealed = false,
   ): ReactNode {
     const blockId = thread.anchor.block_id;
+    // The section picks the copy of a repeated block; a bookmark has no
+    // highlight mark to land on instead.
     const onJump = blockId
-      ? () => onScrollToAnchor(blockId, thread.anchor.quote, thread.id)
+      ? () => onScrollToAnchor(blockId, thread.anchor.quote, thread.id, 0, thread.anchor)
       : undefined;
     if (isBookmark(thread)) {
       return (

@@ -1,5 +1,6 @@
 import { BookmarkFilledIcon, BookmarkIcon } from '@radix-ui/react-icons';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { isBookmarkableBlock } from '../lib/selection.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
 interface Props {
@@ -46,11 +47,13 @@ export function BlockActions({
 }: Props) {
   const [hoveredTarget, setHoveredTarget] = useState<{
     blockId: string;
+    el: HTMLElement;
     rect: DOMRect;
     isHeading: boolean;
   } | null>(null);
   const [renderedTarget, setRenderedTarget] = useState<{
     blockId: string;
+    el: HTMLElement;
     rect: DOMRect;
     isHeading: boolean;
   } | null>(null);
@@ -96,9 +99,11 @@ export function BlockActions({
       const blockId = block.dataset.subblock ?? block.dataset.block;
       if (!blockId) return;
       setHoveredTarget((prev) => {
-        if (prev && prev.blockId === blockId) return prev;
+        // By element, not id: a block the document repeats shares its id.
+        if (prev && prev.el === block) return prev;
         return {
           blockId,
+          el: block,
           rect: block.getBoundingClientRect(),
           isHeading: /^H[1-6]$/.test(block.tagName),
         };
@@ -174,12 +179,7 @@ export function BlockActions({
   if (!renderedTarget) return null;
 
   function targetElement(): HTMLElement | null {
-    const root = rootRef.current;
-    if (!root || !renderedTarget) return null;
-    const escaped = CSS.escape(renderedTarget.blockId);
-    return root.querySelector<HTMLElement>(
-      `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-    );
+    return renderedTarget?.el.isConnected ? renderedTarget.el : null;
   }
 
   function propose() {
@@ -232,7 +232,7 @@ export function BlockActions({
       >
         ✎ Propose edit
       </button>
-      {onToggleBookmark && (
+      {onToggleBookmark && targetEl && isBookmarkableBlock(targetEl) && (
         <button
           type="button"
           className={`block-actions-btn${bookmarked ? ' block-actions-btn-on' : ''}`}

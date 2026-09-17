@@ -4544,25 +4544,35 @@ describe('documents API', () => {
       );
       expect(res.status).toBe(201);
     };
-    await post({
-      anchor: { block_id: firstParaId, quote: 'First paragraph.' },
-      body: 'OPEN_DISCUSSION',
-    });
-    // Made by the client that exports, so privacy does not keep it out:
-    // the exporter's rule that an empty body gets no balloon does.
+    const exportParts = async () => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/export.docx?review=both`, {
+          headers: adminHeaders,
+        }),
+      );
+      expect(res.status).toBe(200);
+      const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+      return {
+        settings: (await zip.file('word/settings.xml')?.async('string')) ?? '',
+        comments: (await zip.file('word/comments.xml')?.async('string')) ?? '',
+      };
+    };
+
+    // Made by the client that exports, so privacy does not keep it out.
     await post({
       anchor: { block_id: secondParaId, quote: 'Second paragraph.' },
       bookmark: true,
     });
+    // On its own it is not a review, so Word must not open in Track Changes.
+    const bookmarkOnly = await exportParts();
+    expect(bookmarkOnly.settings).not.toContain('trackRevisions');
+    expect(bookmarkOnly.comments).not.toContain('<w:comment ');
 
-    const res = await app.hono.fetch(
-      new Request(`http://test/api/documents/${created.uid}/export.docx?review=both`, {
-        headers: adminHeaders,
-      }),
-    );
-    expect(res.status).toBe(200);
-    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
-    const comments = (await zip.file('word/comments.xml')?.async('string')) ?? '';
+    await post({
+      anchor: { block_id: firstParaId, quote: 'First paragraph.' },
+      body: 'OPEN_DISCUSSION',
+    });
+    const { comments } = await exportParts();
     expect(comments).toContain('OPEN_DISCUSSION');
     expect(comments.match(/<w:comment /g) ?? []).toHaveLength(1);
   });

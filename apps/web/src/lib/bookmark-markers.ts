@@ -15,7 +15,12 @@ import { type AnchorSection, resolveAnchorElement } from './anchor-target.js';
 import { isBookmark, type Thread } from './api.js';
 import { closestTopBlock } from './selection.js';
 
-const BOOKMARK_MARKER_CLASS = 'bookmark-marker';
+/**
+ * An element of its own rather than a classed span: the sanitizer strips
+ * unknown tags from documents, so nothing an author writes can be taken for
+ * a marker, removed as one, or styled as one.
+ */
+const BOOKMARK_MARKER_TAG = 'marginalia-bookmark';
 
 /** Set on a block carrying a marker, so the stylesheet can position it. */
 const BOOKMARKED_ATTR = 'data-bookmarked';
@@ -70,8 +75,7 @@ export function bookmarkMarking(
 }
 
 // No whitespace between tags: a text node would make the marker part of
-// the block's textContent. No fill either — the stylesheet sets it on the
-// svg, since code-block themes recolour every span, this one included.
+// the block's textContent.
 const RIBBON_SVG =
   '<svg viewBox="0 0 15 15" aria-hidden="true" focusable="false"><path d="M3.5 1.5h8v12L7.5 10.6 3.5 13.5z"/></svg>';
 
@@ -92,9 +96,7 @@ export function syncBookmarkMarkers(
   }
 
   const marked = new Set<HTMLElement>();
-  for (const marker of Array.from(
-    root.querySelectorAll<HTMLElement>(`.${BOOKMARK_MARKER_CLASS}`),
-  )) {
+  for (const marker of Array.from(root.querySelectorAll<HTMLElement>(BOOKMARK_MARKER_TAG))) {
     const host = marker.parentElement;
     if (host && wanted.has(host) && !marked.has(host)) {
       marked.add(host);
@@ -106,8 +108,7 @@ export function syncBookmarkMarkers(
 
   for (const host of wanted) {
     if (marked.has(host)) continue;
-    const marker = document.createElement('span');
-    marker.className = BOOKMARK_MARKER_CLASS;
+    const marker = document.createElement(BOOKMARK_MARKER_TAG);
     marker.setAttribute('aria-hidden', 'true');
     marker.innerHTML = RIBBON_SVG;
     host.setAttribute(BOOKMARKED_ATTR, 'true');
