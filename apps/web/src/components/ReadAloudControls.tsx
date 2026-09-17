@@ -62,8 +62,8 @@ export function ReadAloudControls({
    *  the panel unmounts, and focus left on a removed element falls to
    *  the body, far from where the keyboard user was. */
   const close = useCallback(() => {
-    const active = document.activeElement;
-    if (active && dock?.contains(active)) {
+    const focused = document.activeElement;
+    if (focused && dock?.contains(focused)) {
       quietFocus.current = true;
       triggerRef.current?.focus({ preventScroll: true });
       quietFocus.current = false;
