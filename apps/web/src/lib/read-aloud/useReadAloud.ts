@@ -349,6 +349,16 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
       stop();
       return;
     }
+    if (status === 'paused') {
+      // Stay paused. The queued utterance belongs to the old DOM, so its
+      // callbacks are cut loose and resume speaks the sentence afresh.
+      genRef.current++;
+      setIndex(resumeAt);
+      const segment = segments[resumeAt];
+      if (segment) reveal(root, segment);
+      restartOnResumeRef.current = true;
+      return;
+    }
     speakFrom(resumeAt);
   }, [htmlKey]);
 

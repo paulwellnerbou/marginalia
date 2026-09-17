@@ -200,7 +200,7 @@ describe('voiceLanguages', () => {
       voice('Daniel', 'en-GB'),
       voice('Thomas', 'fr-FR'),
     ];
-    expect(voiceLanguages(voices)).toEqual(['de', 'en', 'fr']);
+    expect(voiceLanguages(voices)).toEqual(['en', 'de', 'fr']);
   });
 });
 

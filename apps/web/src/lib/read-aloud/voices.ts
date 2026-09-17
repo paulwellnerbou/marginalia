@@ -88,7 +88,7 @@ export function primaryLanguage(tag: string): string {
 
 /** Primary subtags that have at least one voice, for the language picker. */
 export function voiceLanguages(voices: readonly VoiceLike[]): string[] {
-  return [...new Set(voices.map((voice) => primaryLanguage(voice.lang)))].filter(Boolean).sort();
+  return [...new Set(voices.map((voice) => primaryLanguage(voice.lang)))].filter(Boolean);
 }
 
 /**
