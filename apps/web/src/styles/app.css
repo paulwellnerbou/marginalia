@@ -2628,6 +2628,13 @@ button.primary:disabled {
   text-align: center;
 }
 
+/* A Radix button has a fixed height, so a wrapped label spills out of it.
+   A 320px phone leaves ~240px inside the card, which only the size-2
+   button fits on one line. */
+.landing-empty-cta {
+  white-space: nowrap;
+}
+
 /* The device-sync panel sits inside the already-tinted "Your documents"
    band, so it needs its own surface to separate from — hence a solid
    panel colour rather than another alpha tint over the same background. */
