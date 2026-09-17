@@ -55,6 +55,7 @@ interface Props {
   /** Actions supplied by the page, such as Edit. Never folded. */
   children?: ReactNode;
   readAloud: {
+    docUid: string;
     rootRef: RefObject<HTMLElement | null>;
     htmlKey: string;
     frontmatter: Record<string, unknown>;

@@ -4,11 +4,14 @@ import {
   pickVoice,
   primaryLanguage,
   rankVoices,
+  regionOf,
   resolveDocLang,
   selectVoices,
   VOICE_TIER,
   type VoiceLike,
+  voiceLanguages,
   voiceTier,
+  withRegion,
 } from './voices.js';
 
 function voice(name: string, lang: string, localService = true): VoiceLike {
@@ -28,6 +31,18 @@ describe('voiceTier', () => {
     expect(voiceTier(petraPremium)).toBe(VOICE_TIER.premium);
     expect(voiceTier(annaEnhanced)).toBe(VOICE_TIER.enhanced);
     expect(voiceTier(anna)).toBe(VOICE_TIER.compact);
+  });
+
+  test('reads the quality from the URI where WebKit leaves it out of the name', () => {
+    const enhanced = { ...voice('Anna', 'de-DE'), voiceURI: 'com.apple.voice.enhanced.de-DE.Anna' };
+    const premium = { ...voice('Anna', 'de-DE'), voiceURI: 'com.apple.voice.premium.de-DE.Anna' };
+    const stock = {
+      ...voice('Anna', 'de-DE'),
+      voiceURI: 'com.apple.voice.super-compact.de-DE.Anna',
+    };
+    expect(voiceTier(enhanced)).toBe(VOICE_TIER.enhanced);
+    expect(voiceTier(premium)).toBe(VOICE_TIER.premium);
+    expect(voiceTier(stock)).toBe(VOICE_TIER.compact);
   });
 
   test('treats a non-local voice as network tier', () => {
@@ -173,5 +188,54 @@ describe('primaryLanguage', () => {
     expect(primaryLanguage('de-DE')).toBe('de');
     expect(primaryLanguage('de_DE')).toBe('de');
     expect(primaryLanguage('DE')).toBe('de');
+  });
+});
+
+describe('voiceLanguages', () => {
+  test('lists each language once, whatever its regions and separators', () => {
+    const voices = [
+      samantha,
+      anna,
+      petraPremium,
+      voice('Daniel', 'en-GB'),
+      voice('Thomas', 'fr-FR'),
+    ];
+    expect(voiceLanguages(voices)).toEqual(['en', 'de', 'fr']);
+  });
+});
+
+describe('withRegion', () => {
+  test('keeps a region the tag already names', () => {
+    expect(withRegion('de-AT', ['en-US'])).toBe('de-AT');
+    expect(withRegion('fr_CA', ['en-US'])).toBe('fr-CA');
+  });
+
+  test("uses the reader's own region for a language they speak", () => {
+    expect(withRegion('en', ['de-DE', 'en-GB'])).toBe('en-GB');
+  });
+
+  test("falls back to the language's most likely region", () => {
+    expect(withRegion('de', ['en-US'])).toBe('de-DE');
+    expect(withRegion('pt', ['en-US'])).toBe('pt-BR');
+  });
+
+  test('ignores a bare reader language with no region to lend', () => {
+    expect(withRegion('en', ['en'])).toBe('en-US');
+  });
+});
+
+describe('regionOf', () => {
+  test('reads the region whatever the separator and case', () => {
+    expect(regionOf('en-GB')).toBe('GB');
+    expect(regionOf('de_AT')).toBe('AT');
+    expect(regionOf('en-us')).toBe('US');
+    expect(regionOf('sr_Latn_RS')).toBe('RS');
+    expect(regionOf('ar-001')).toBe('001');
+  });
+
+  test('is null when there is no region, or no valid tag', () => {
+    expect(regionOf('de')).toBeNull();
+    expect(regionOf('zh-Hant')).toBeNull();
+    expect(regionOf('not a tag')).toBeNull();
   });
 });

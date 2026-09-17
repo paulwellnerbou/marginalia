@@ -3142,6 +3142,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
               onDocSettingsChanged={onDocSettingsChanged}
               viewControls={displayControls}
               readAloud={{
+                docUid: doc.uid,
                 rootRef: docRef,
                 htmlKey: liveRendered.html,
                 frontmatter: liveRendered.frontmatter,
