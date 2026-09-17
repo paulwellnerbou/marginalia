@@ -9,6 +9,12 @@
  * paints from a `Range` and mutates nothing, so the layers cannot
  * interfere with each other at all.
  *
+ * One highlight object stays registered and has its range swapped.
+ * WebKit repaints a registered highlight that is cleared or changed, but
+ * not one removed from the registry, even with a new one registered in
+ * its place: the sentence before keeps its tint, and after the last one
+ * everything read stays marked.
+ *
  * Where the API is missing (Safari before 17.2), the enclosing block is
  * tinted instead — coarser, but still mutation-free.
  */
@@ -16,12 +22,17 @@
 const HIGHLIGHT_NAME = 'marginalia-read-aloud';
 const BLOCK_ATTR = 'data-read-aloud-block';
 
-interface HighlightRegistry {
-  set(name: string, highlight: object): void;
-  delete(name: string): void;
+interface HighlightLike {
+  add(range: Range): void;
+  clear(): void;
 }
 
-type HighlightCtor = new (...ranges: Range[]) => object;
+interface HighlightRegistry {
+  get(name: string): HighlightLike | undefined;
+  set(name: string, highlight: HighlightLike): void;
+}
+
+type HighlightCtor = new (...ranges: Range[]) => HighlightLike;
 
 function registry(): HighlightRegistry | null {
   return (globalThis as { CSS?: { highlights?: HighlightRegistry } }).CSS?.highlights ?? null;
@@ -34,13 +45,17 @@ function highlightCtor(): HighlightCtor | null {
 /** Tracks the fallback-tinted block so it can be cleaned up later. */
 let tintedBlock: HTMLElement | null = null;
 
+let highlight: HighlightLike | null = null;
+
 export function paintSegment(range: Range | null, blockEl: HTMLElement | null): void {
   clearHighlight();
 
   const highlights = registry();
   const Ctor = highlightCtor();
   if (range && highlights && Ctor) {
-    highlights.set(HIGHLIGHT_NAME, new Ctor(range));
+    highlight ??= new Ctor();
+    if (highlights.get(HIGHLIGHT_NAME) !== highlight) highlights.set(HIGHLIGHT_NAME, highlight);
+    highlight.add(range);
     return;
   }
 
@@ -51,7 +66,7 @@ export function paintSegment(range: Range | null, blockEl: HTMLElement | null): 
 }
 
 export function clearHighlight(): void {
-  registry()?.delete(HIGHLIGHT_NAME);
+  highlight?.clear();
   tintedBlock?.removeAttribute(BLOCK_ATTR);
   tintedBlock = null;
 }
