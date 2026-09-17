@@ -2601,8 +2601,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       setBookmarkedThreadIds(flipped(bookmarked));
       apiSetThreadBookmarked(doc.uid, threadId, bookmarked, identity).then(
         (ids) => {
+          // A superseded answer can land after the newer one, and other tabs
+          // keep whichever set reaches them last.
+          if (write !== bookmarkWrites.current) return;
+          setBookmarkedThreadIds(new Set(ids));
           bookmarksChannel.current?.postMessage({ uid: doc.uid, ids });
-          if (write === bookmarkWrites.current) setBookmarkedThreadIds(new Set(ids));
         },
         (err) => {
           reportError('DocumentLayout.setThreadBookmarked', err, { uid: doc.uid, threadId });
@@ -2652,11 +2655,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
           }
         }
         forgetLegacyBookmarkedThreadIds(uid);
-        if (ids) bookmarksChannel.current?.postMessage({ uid, ids });
         // A toggle made meanwhile answers with a newer set of its own.
         if (cancelled || !ids || writesBefore !== bookmarkWrites.current) return;
         bookmarkWrites.current += 1;
         setBookmarkedThreadIds(new Set(ids));
+        bookmarksChannel.current?.postMessage({ uid, ids });
       } finally {
         if (!cancelled) setLocalBookmarksPending(false);
       }
