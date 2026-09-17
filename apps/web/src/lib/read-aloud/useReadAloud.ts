@@ -95,6 +95,8 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
   const genRef = useRef(0);
   const rateRef = useRef(rate);
   rateRef.current = rate;
+  const indexRef = useRef(index);
+  indexRef.current = index;
 
   // `getVoices()` is empty until the engine has enumerated them, and
   // Chrome only fires `voiceschanged` once that finishes.
@@ -251,7 +253,11 @@ export function useReadAloud({ rootRef, htmlKey, lang }: Options): ReadAloudCont
       if (status === 'idle' || index < 0) return;
       rateRestartRef.current = setTimeout(() => {
         rateRestartRef.current = null;
-        speakFrom(index);
+        // The sentence may have advanced, or playback stopped, while
+        // the timer ran: restart wherever the reader is now, or not at
+        // all, rather than rewinding to where the tap happened.
+        const current = indexRef.current;
+        if (current >= 0) speakFrom(current);
       }, RATE_RESTART_DELAY_MS);
     },
     [index, speakFrom, status],
