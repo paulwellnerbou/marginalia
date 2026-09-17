@@ -1,7 +1,7 @@
 import { Button, Dialog, Flex, Text } from '@radix-ui/themes';
 import { useEffect, useRef, useState } from 'react';
 import { reportError } from '../lib/log.js';
-import { createQrDetector } from '../lib/qr-scan.js';
+import { createQrDetector, type QrDetector } from '../lib/qr-scan.js';
 
 type Status =
   | { phase: 'starting' }
@@ -41,6 +41,7 @@ export function QrScanDialog({
 
     let cancelled = false;
     let stream: MediaStream | null = null;
+    let detector: QrDetector | null = null;
     let timer: ReturnType<typeof setInterval> | undefined;
     // Detection can outlast one poll tick; never run two at once.
     let detecting = false;
@@ -52,10 +53,18 @@ export function QrScanDialog({
     setStatus({ phase: 'starting' });
 
     (async () => {
-      const detector = await createQrDetector();
-      if (cancelled) return;
-      if (!detector) {
-        setStatus({ phase: 'failed', message: 'This browser cannot read QR codes.' });
+      let decoder: QrDetector;
+      try {
+        decoder = await createQrDetector();
+      } catch (err) {
+        if (cancelled) return;
+        reportError('qr-scan decoder', err);
+        setStatus({ phase: 'failed', message: 'The QR decoder could not be loaded.' });
+        return;
+      }
+      detector = decoder;
+      if (cancelled) {
+        decoder.close();
         return;
       }
       try {
@@ -86,9 +95,8 @@ export function QrScanDialog({
         if (detecting || cancelled || video.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA) return;
         detecting = true;
         try {
-          const codes = await detector.detect(video);
+          const text = await decoder.detect(video);
           if (cancelled) return;
-          const text = codes[0]?.rawValue;
           if (!text || text === lastRejected) return;
           const rejection = onScanRef.current(text);
           if (rejection === null) {
@@ -100,7 +108,13 @@ export function QrScanDialog({
             setStatus({ phase: 'scanning', hint: rejection });
           }
         } catch (err) {
+          // A decoder that throws once will throw every tick; stop rather
+          // than log it seven times a second.
+          if (cancelled) return;
+          cancelled = true;
+          clearInterval(timer);
           reportError('qr-scan detect', err);
+          setStatus({ phase: 'failed', message: 'The QR decoder failed. Paste the link instead.' });
         } finally {
           detecting = false;
         }
@@ -111,6 +125,7 @@ export function QrScanDialog({
       cancelled = true;
       if (timer !== undefined) clearInterval(timer);
       stopStream(stream);
+      detector?.close();
       video.srcObject = null;
     };
   }, [open, video]);
@@ -163,7 +178,9 @@ function stopStream(stream: MediaStream | null) {
 }
 
 function cameraErrorMessage(err: unknown): string {
-  const name = err instanceof DOMException ? err.name : '';
+  // Not narrowed to DOMException: OverconstrainedError is its own class,
+  // and WebKit reports a device with no camera as exactly that.
+  const name = typeof err === 'object' && err !== null && 'name' in err ? String(err.name) : '';
   switch (name) {
     case 'NotAllowedError':
     case 'SecurityError':
