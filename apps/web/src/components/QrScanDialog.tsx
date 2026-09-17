@@ -76,9 +76,8 @@ export function QrScanDialog({
       try {
         await video.play();
       } catch (err) {
-        // Autoplay policy only concerns media with sound; a muted, inline
-        // camera feed plays, so a failure here is worth knowing about.
-        reportError('qr-scan play', err);
+        // Closing the dialog mid-start aborts play(); that is not a fault.
+        if (!cancelled) reportError('qr-scan play', err);
       }
       if (cancelled) return;
       setStatus({ phase: 'scanning', hint: null });
@@ -93,6 +92,8 @@ export function QrScanDialog({
           if (!text || text === lastRejected) return;
           const rejection = onScanRef.current(text);
           if (rejection === null) {
+            // Accepted once; the parent may take a render to unmount us.
+            cancelled = true;
             onOpenChangeRef.current(false);
           } else {
             lastRejected = text;
@@ -133,18 +134,20 @@ export function QrScanDialog({
             </Flex>
           )}
         </div>
-        <Text
-          size="1"
-          color={status.phase === 'scanning' && status.hint ? 'red' : 'gray'}
-          as="p"
-          mt="2"
-          role="status"
-          aria-live="polite"
-        >
-          {status.phase === 'scanning' && status.hint
-            ? status.hint
-            : 'The code is read as soon as it is in view.'}
-        </Text>
+        {status.phase !== 'failed' && (
+          <Text
+            size="1"
+            color={status.phase === 'scanning' && status.hint ? 'red' : 'gray'}
+            as="p"
+            mt="2"
+            role="status"
+            aria-live="polite"
+          >
+            {status.phase === 'scanning' && status.hint
+              ? status.hint
+              : 'The code is read as soon as it is in view.'}
+          </Text>
+        )}
         <Flex justify="end" mt="4">
           <Dialog.Close>
             <Button variant="soft">Cancel</Button>
