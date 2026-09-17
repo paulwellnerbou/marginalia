@@ -1129,6 +1129,38 @@ describe('documents API', () => {
     expect(((await threadsRes.json()) as { threads: unknown[] }).threads).toHaveLength(0);
   });
 
+  test('copy full: bookmarks come across, on the copied threads', async () => {
+    const { created, adminHeaders, threadId } = await docWithDiscussion();
+    const bookmark = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads/${threadId}/bookmark`, {
+        method: 'PUT',
+        headers: adminHeaders,
+      }),
+    );
+    expect(bookmark.status).toBe(200);
+
+    const bookmarksIn = async (uid: string, headers: Headers) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads?state=all`, { headers }),
+      );
+      const body = (await res.json()) as {
+        threads: Array<{ id: string; comments: Array<{ body: string }> }>;
+        bookmarked_thread_ids: string[];
+      };
+      return body.bookmarked_thread_ids.map(
+        (id) => body.threads.find((t) => t.id === id)?.comments[0]?.body,
+      );
+    };
+
+    const full = await copyDocument(created.uid, adminHeaders, { name: 'C', mode: 'full' });
+    const fullHeaders = withInvite(headersFor(CLIENT_A), full.admin_invite.token);
+    expect(await bookmarksIn(full.uid, fullHeaders)).toEqual(['a plain note']);
+
+    const clean = await copyDocument(created.uid, adminHeaders, { name: 'C', mode: 'clean' });
+    const cleanHeaders = withInvite(headersFor(CLIENT_A), clean.admin_invite.token);
+    expect(await bookmarksIn(clean.uid, cleanHeaders)).toEqual([]);
+  });
+
   test('copy: an unrecognised mode falls back to the clean copy', async () => {
     const { created, adminHeaders } = await docWithDiscussion();
     const copy = await copyDocument(created.uid, adminHeaders, { name: 'C', mode: 'everything' });
@@ -3196,6 +3228,12 @@ describe('documents API', () => {
       ),
     );
     await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads/${thread.thread.id}/bookmark`, {
+        method: 'PUT',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    await app.hono.fetch(
       new Request(`http://test/api/documents/${created.uid}/threads`, {
         method: 'POST',
         headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
@@ -3260,6 +3298,7 @@ describe('documents API', () => {
     expect(countBefore('comments_edit_proposals')).toBeGreaterThan(0);
     expect(countBefore('comments')).toBeGreaterThan(0);
     expect(countBefore('comment_reactions')).toBeGreaterThan(0);
+    expect(countBefore('thread_bookmarks')).toBeGreaterThan(0);
     expect(countBefore('invites')).toBeGreaterThan(0);
     expect(countBefore('document_assets')).toBeGreaterThan(0);
     expect(countBefore('keyring_docs')).toBeGreaterThan(0);
@@ -3299,6 +3338,7 @@ describe('documents API', () => {
       'comments_edit_proposals',
       'comment_mentions',
       'comment_reactions',
+      'thread_bookmarks',
       'doc_users',
       'invites',
       'sessions',
@@ -4484,6 +4524,57 @@ describe('documents API', () => {
     const docText = await exportReviewDocx(created.uid, created.admin_invite.token);
     expect(docText).toContain('OPEN_DISCUSSION');
     expect(docText).not.toContain('CLOSED_DISCUSSION');
+  });
+
+  test("GET /:uid/export.docx?review=both leaves the exporting reader's bookmarks out", async () => {
+    const source = '# Doc\n\nFirst paragraph.\n\nSecond paragraph.\n';
+    const created = await upload(CLIENT_A, { markdown: source, name: 'Bookmark fixture' });
+    const blocks = [...locateAllBlocks(source).entries()];
+    const firstParaId = blocks.find(([, r]) => r.text === 'First paragraph.')![0];
+    const secondParaId = blocks.find(([, r]) => r.text === 'Second paragraph.')![0];
+    const adminHeaders = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+
+    const post = async (payload: Record<string, unknown>) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/threads`, {
+          method: 'POST',
+          headers: adminHeaders,
+          body: JSON.stringify(payload),
+        }),
+      );
+      expect(res.status).toBe(201);
+    };
+    const exportParts = async () => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/export.docx?review=both`, {
+          headers: adminHeaders,
+        }),
+      );
+      expect(res.status).toBe(200);
+      const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+      return {
+        settings: (await zip.file('word/settings.xml')?.async('string')) ?? '',
+        comments: (await zip.file('word/comments.xml')?.async('string')) ?? '',
+      };
+    };
+
+    // Made by the client that exports, so privacy does not keep it out.
+    await post({
+      anchor: { block_id: secondParaId, quote: 'Second paragraph.' },
+      bookmark: true,
+    });
+    // On its own it is not a review, so Word must not open in Track Changes.
+    const bookmarkOnly = await exportParts();
+    expect(bookmarkOnly.settings).not.toContain('trackRevisions');
+    expect(bookmarkOnly.comments).not.toContain('<w:comment ');
+
+    await post({
+      anchor: { block_id: firstParaId, quote: 'First paragraph.' },
+      body: 'OPEN_DISCUSSION',
+    });
+    const { comments } = await exportParts();
+    expect(comments).toContain('OPEN_DISCUSSION');
+    expect(comments.match(/<w:comment /g) ?? []).toHaveLength(1);
   });
 
   test('GET /:uid/export.docx?review=both excludes accepted edit proposals', async () => {

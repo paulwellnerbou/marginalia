@@ -1,10 +1,16 @@
+import { BookmarkFilledIcon, BookmarkIcon } from '@radix-ui/react-icons';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { isBookmarkableBlock } from '../lib/selection.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
 interface Props {
   rootRef: React.RefObject<HTMLElement | null>;
   onPropose: (target: ProposalTarget) => void;
   onEditChapter?: (headingBlockId: string) => void;
+  /** Whether this block element already carries one of the reader's bookmarks. */
+  isBookmarked?: (el: HTMLElement) => boolean;
+  /** Adds the reader's bookmark to the block, or removes it. */
+  onToggleBookmark?: (el: HTMLElement) => void;
 }
 
 const BLOCK_ACTIONS_FADE_OUT_MS = 260;
@@ -32,14 +38,22 @@ const BLOCK_ACTIONS_FADE_OUT_MS = 260;
  * a nested pane, not the viewport — `getBoundingClientRect()` already
  * yields viewport coordinates.
  */
-export function BlockActions({ rootRef, onPropose, onEditChapter }: Props) {
+export function BlockActions({
+  rootRef,
+  onPropose,
+  onEditChapter,
+  isBookmarked,
+  onToggleBookmark,
+}: Props) {
   const [hoveredTarget, setHoveredTarget] = useState<{
     blockId: string;
+    el: HTMLElement;
     rect: DOMRect;
     isHeading: boolean;
   } | null>(null);
   const [renderedTarget, setRenderedTarget] = useState<{
     blockId: string;
+    el: HTMLElement;
     rect: DOMRect;
     isHeading: boolean;
   } | null>(null);
@@ -85,9 +99,11 @@ export function BlockActions({ rootRef, onPropose, onEditChapter }: Props) {
       const blockId = block.dataset.subblock ?? block.dataset.block;
       if (!blockId) return;
       setHoveredTarget((prev) => {
-        if (prev && prev.blockId === blockId) return prev;
+        // By element, not id: a block the document repeats shares its id.
+        if (prev && prev.el === block) return prev;
         return {
           blockId,
+          el: block,
           rect: block.getBoundingClientRect(),
           isHeading: /^H[1-6]$/.test(block.tagName),
         };
@@ -162,17 +178,23 @@ export function BlockActions({ rootRef, onPropose, onEditChapter }: Props) {
 
   if (!renderedTarget) return null;
 
+  function targetElement(): HTMLElement | null {
+    return renderedTarget?.el.isConnected ? renderedTarget.el : null;
+  }
+
   function propose() {
-    const root = rootRef.current;
-    if (!root || !renderedTarget) return;
-    const escaped = CSS.escape(renderedTarget.blockId);
-    const el = root.querySelector<HTMLElement>(
-      `[data-block="${escaped}"], [data-subblock="${escaped}"]`,
-    );
-    if (!el) return;
+    const el = targetElement();
+    if (!el || !renderedTarget) return;
     const blockText = (el.textContent ?? '').replace(/\s+/gu, ' ').trim();
     onPropose({ block_id: renderedTarget.blockId, block_text: blockText, block_count: 1 });
     setHoveredTarget(null);
+  }
+
+  function toggleBookmark() {
+    const el = targetElement();
+    // Opens nothing, so the row stays: the label flips under the cursor
+    // and a second click takes the bookmark back off.
+    if (el) onToggleBookmark?.(el);
   }
 
   function editChapter() {
@@ -185,7 +207,10 @@ export function BlockActions({ rootRef, onPropose, onEditChapter }: Props) {
   // Keep the button just above the block instead of hanging out in the
   // right gutter. That matches the user's cursor path better, especially
   // on paragraphs whose box stretches wider than the visible text.
-  const buttonWidth = buttonSize.width || (renderedTarget.isHeading ? 230 : 124);
+  const targetEl = onToggleBookmark ? targetElement() : null;
+  const bookmarked = targetEl ? (isBookmarked?.(targetEl) ?? false) : false;
+  const buttonWidth =
+    buttonSize.width || (renderedTarget.isHeading ? 230 : 124) + (onToggleBookmark ? 106 : 0);
   const buttonHeight = buttonSize.height || 28;
   const style: React.CSSProperties = {
     top: Math.max(4, renderedTarget.rect.top - buttonHeight + 6),
@@ -207,6 +232,27 @@ export function BlockActions({ rootRef, onPropose, onEditChapter }: Props) {
       >
         ✎ Propose edit
       </button>
+      {onToggleBookmark && targetEl && isBookmarkableBlock(targetEl) && (
+        <button
+          type="button"
+          className={`block-actions-btn${bookmarked ? ' block-actions-btn-on' : ''}`}
+          aria-pressed={bookmarked}
+          onClick={toggleBookmark}
+          title={
+            bookmarked
+              ? 'Remove your bookmark from this block'
+              : 'Bookmark this block — only you can see it'
+          }
+          aria-label={bookmarked ? 'Remove bookmark' : 'Add bookmark'}
+        >
+          {bookmarked ? (
+            <BookmarkFilledIcon className="block-actions-icon" aria-hidden />
+          ) : (
+            <BookmarkIcon className="block-actions-icon" aria-hidden />
+          )}
+          {bookmarked ? 'Bookmarked' : 'Bookmark'}
+        </button>
+      )}
       {renderedTarget.isHeading && onEditChapter && (
         <button
           type="button"

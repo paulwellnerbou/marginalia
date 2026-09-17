@@ -88,6 +88,56 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
 }
 
 /**
+ * Longest quote a whole-block anchor carries. The server takes far more,
+ * but a bookmark on a chapter-length block has no use for it: the quote
+ * exists to re-find the block after an edit and to title the card, and a
+ * couple of thousand characters already pin a block uniquely.
+ */
+const BLOCK_QUOTE_LIMIT = 2000;
+
+/**
+ * Whether a block can carry a bookmark. A rendered diagram can't: its text
+ * is the SVG mermaid drew, stylesheet first, which never matches the block's
+ * text again, and mermaid replaces the element's children once it has drawn.
+ */
+export function isBookmarkableBlock(el: HTMLElement): boolean {
+  return !el.classList.contains('mermaid');
+}
+
+/**
+ * Anchor covering a whole block — what a bookmark marks, where a comment
+ * marks a selection. `el` is a `[data-block]` / `[data-subblock]`
+ * element; the quote is its normalized text, so re-anchoring and the
+ * section context behave exactly as they do for a comment someone made
+ * by sweeping the entire paragraph.
+ *
+ * Returns null for a block with no text of its own (an image, an empty
+ * cell): there would be nothing to re-find it by.
+ */
+export function captureBlockAnchor(root: HTMLElement, el: HTMLElement): CommentAnchor | null {
+  const blockId = anchorIdOf(el);
+  if (!blockId || !isBookmarkableBlock(el)) return null;
+  const blockText = blockTextOf(el);
+  const quote = blockText.slice(0, BLOCK_QUOTE_LIMIT);
+  if (!quote) return null;
+
+  const sectionTarget = el.dataset.block ? el : closestTopBlock(el);
+  const section = sectionTarget ? computeSectionContext(root, sectionTarget) : ROOT_SECTION;
+  return {
+    block_id: blockId,
+    end_block_id: null,
+    quote,
+    prefix: '',
+    suffix: blockText.slice(quote.length, quote.length + CONTEXT_LEN),
+    start_offset: 0,
+    end_offset: quote.length,
+    heading_path: section.headingPath,
+    section_index: section.sectionIndex,
+    section_index_path: section.sectionIndexPath,
+  };
+}
+
+/**
  * Clamp `range` to `el` and describe what it selects there. Returns null
  * when the clamped range is empty — either because the two are disjoint
  * or because they only meet at a boundary.

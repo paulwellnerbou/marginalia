@@ -1,27 +1,25 @@
 /**
- * Bookmarked threads — a per-document set of thread ids the reader has
- * starred, kept in localStorage so the Bookmarks tab survives a reload.
+ * Thread bookmarks — the toggle on a thread card. The server keeps them per
+ * reader, so they follow the reader to every paired device and to the app;
+ * the document layout holds the current set and hands it to the cards.
  *
- * Scoped by document uid, unlike the threads-tab sort/filter prefs in
- * threadListPrefs (which are global to the browser): a bookmark names one
- * thread, and a thread belongs to one document. The storage shape and the
- * in-app change channel follow open-tabs — the one other place that keeps
- * a reader-curated set in localStorage and needs the live view to react.
+ * Before that, each browser kept its own set in localStorage. Whatever a
+ * browser still holds there is uploaded once and then dropped, which is all
+ * the storage helpers below exist for.
  */
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext } from 'react';
 
-const KEY = 'marginalia.bookmarkedThreads';
-const CHANGE_EVENT = 'marginalia:bookmarked-threads';
+const LEGACY_KEY = 'marginalia.bookmarkedThreads';
 
 /** uid → the thread ids bookmarked in that document. */
-type Store = Record<string, string[]>;
+type LegacyStore = Record<string, string[]>;
 
-function loadStore(): Store {
+function loadLegacyStore(): LegacyStore {
   try {
-    const parsed = JSON.parse(localStorage.getItem(KEY) ?? '{}') as unknown;
+    const parsed = JSON.parse(localStorage.getItem(LEGACY_KEY) ?? '{}') as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-    const store: Store = {};
+    const store: LegacyStore = {};
     for (const [uid, ids] of Object.entries(parsed as Record<string, unknown>)) {
       if (Array.isArray(ids)) store[uid] = ids.filter((id): id is string => typeof id === 'string');
     }
@@ -31,60 +29,22 @@ function loadStore(): Store {
   }
 }
 
-function saveStore(store: Store): void {
+/** The threads this browser bookmarked in `uid` while bookmarks were kept locally. */
+export function legacyBookmarkedThreadIds(uid: string): string[] {
+  return loadLegacyStore()[uid] ?? [];
+}
+
+/** Drop `uid`'s locally kept bookmarks once the server has them. */
+export function forgetLegacyBookmarkedThreadIds(uid: string): void {
+  const store = loadLegacyStore();
+  if (!(uid in store)) return;
+  delete store[uid];
   try {
-    localStorage.setItem(KEY, JSON.stringify(store));
+    if (Object.keys(store).length === 0) localStorage.removeItem(LEGACY_KEY);
+    else localStorage.setItem(LEGACY_KEY, JSON.stringify(store));
   } catch {
-    /* quota exceeded — best-effort, matches open-tabs */
+    /* best-effort: a later visit uploads the same ids again, harmlessly */
   }
-  // The native `storage` event fires only in *other* tabs, so this in-app
-  // channel is what refreshes the current one after a toggle.
-  window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
-}
-
-export function loadBookmarkedThreadIds(uid: string): ReadonlySet<string> {
-  return new Set(loadStore()[uid] ?? []);
-}
-
-/** Flip a thread's bookmark and persist. Returns the document's new set. */
-export function toggleBookmarkedThread(uid: string, threadId: string): ReadonlySet<string> {
-  const store = loadStore();
-  const ids = new Set(store[uid] ?? []);
-  if (ids.has(threadId)) ids.delete(threadId);
-  else ids.add(threadId);
-  // Drop the key entirely once its last bookmark is gone, so an emptied
-  // document leaves nothing behind in storage.
-  if (ids.size === 0) delete store[uid];
-  else store[uid] = [...ids];
-  saveStore(store);
-  return ids;
-}
-
-/** Subscribe to changes for one document — this tab's toggles and other tabs' writes. */
-export function onBookmarkedThreadsChange(
-  uid: string,
-  fn: (ids: ReadonlySet<string>) => void,
-): () => void {
-  const inApp = () => fn(loadBookmarkedThreadIds(uid));
-  const crossTab = (e: StorageEvent) => {
-    if (e.key === KEY) fn(loadBookmarkedThreadIds(uid));
-  };
-  window.addEventListener(CHANGE_EVENT, inApp);
-  window.addEventListener('storage', crossTab);
-  return () => {
-    window.removeEventListener(CHANGE_EVENT, inApp);
-    window.removeEventListener('storage', crossTab);
-  };
-}
-
-/** Reactive view of one document's bookmarks, in sync with toggles made anywhere. */
-export function useBookmarkedThreads(uid: string): ReadonlySet<string> {
-  const [ids, setIds] = useState<ReadonlySet<string>>(() => loadBookmarkedThreadIds(uid));
-  useEffect(() => {
-    setIds(loadBookmarkedThreadIds(uid));
-    return onBookmarkedThreadsChange(uid, setIds);
-  }, [uid]);
-  return ids;
 }
 
 /**

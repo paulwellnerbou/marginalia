@@ -42,8 +42,10 @@ import type {
   TocNode,
 } from '../lib/api.js';
 import {
+  ApiError,
   acceptEditProposal as apiAcceptProposal,
   createComment as apiCreate,
+  createBookmark as apiCreateBookmark,
   createEditProposal as apiCreateProposal,
   deleteComment as apiDelete,
   deleteThread as apiDeleteThread,
@@ -54,6 +56,7 @@ import {
   restoreHistoryVersion as apiRestoreHistoryVersion,
   revertHistoryVersion as apiRevertHistoryVersion,
   setCommentHidden as apiSetCommentHidden,
+  setThreadBookmarked as apiSetThreadBookmarked,
   toggleCommentReaction as apiToggleReaction,
   updateComment as apiUpdate,
   updateEditProposal as apiUpdateProposal,
@@ -62,12 +65,18 @@ import {
   getDocument,
   getHistoryDiff,
   type HistoryEntry,
+  isBookmark,
   isResolved,
   listThreads,
   uploadAsset,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { loadBlockRanges } from '../lib/block-range-loader.js';
+import {
+  type BookmarkMarkerSpec,
+  bookmarkMarkerSpecs,
+  bookmarkMarking,
+} from '../lib/bookmark-markers.js';
 import { buildCommentHighlights } from '../lib/comment-highlights.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
@@ -99,6 +108,7 @@ import {
   reassertSectionFilterOnDocument,
   threadTouchesSections,
 } from '../lib/section-filter.js';
+import { captureBlockAnchor } from '../lib/selection.js';
 import {
   applyTheme,
   BUILT_IN_THEMES,
@@ -141,8 +151,8 @@ import { DownloadMenu } from './DownloadMenu.js';
 import { HistoryList } from './HistoryList.js';
 import {
   BookmarkControlsProvider,
-  toggleBookmarkedThread,
-  useBookmarkedThreads,
+  forgetLegacyBookmarkedThreadIds,
+  legacyBookmarkedThreadIds,
 } from './inline-comments/bookmarkedThreads.js';
 import { FloatingCommentsLayer } from './inline-comments/FloatingCommentsLayer.js';
 import { FloatingCommentsToolbar } from './inline-comments/FloatingCommentsToolbar.js';
@@ -290,6 +300,8 @@ function isRememberedRightTab(value: string | null): value is Exclude<RightTab, 
 type PendingDraft =
   | { mode: 'comment'; anchor: CommentAnchor }
   | { mode: 'proposal'; target: ProposalTarget; answersThreadIds?: string[] };
+
+const NO_THREAD_IDS: ReadonlySet<string> = new Set();
 
 /**
  * Failures used to land in a text slot in the document toolbar, which is
@@ -503,8 +515,32 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
    * in the archive, so it is absent until that read lands.
    */
   const [archiveLoading, setArchiveLoading] = useState(false);
-  /** Thread ids the reader has bookmarked in this document (localStorage-backed). */
-  const bookmarkedThreadIds = useBookmarkedThreads(doc.uid);
+  /**
+   * Threads the reader has bookmarked in this document, as the server keeps
+   * them. Every thread read brings the whole set; a toggle shows at once and
+   * then settles on what its own request answers.
+   */
+  const [bookmarkedThreadIds, setBookmarkedThreadIds] =
+    useState<ReadonlySet<string>>(NO_THREAD_IDS);
+  /**
+   * Bumped by every bookmark write and by a switch of document. A read that
+   * began before one carries the set as it was then, and must not undo it.
+   */
+  const bookmarkWrites = useRef(0);
+  /** Whether a read has shown this server keeps bookmarks, which gates uploading local ones. */
+  const [bookmarksOnServer, setBookmarksOnServer] = useState(false);
+  /** This browser's locally kept bookmarks for the document, until they're uploaded. */
+  const [localBookmarksPending, setLocalBookmarksPending] = useState(
+    () => legacyBookmarkedThreadIds(doc.uid).length > 0,
+  );
+  const acceptBookmarkedThreadIds = useCallback(
+    (ids: string[] | undefined, writesBefore: number) => {
+      if (!ids) return;
+      setBookmarksOnServer(true);
+      if (writesBefore === bookmarkWrites.current) setBookmarkedThreadIds(new Set(ids));
+    },
+    [],
+  );
   /**
    * Full thread/document reads are authoritative snapshots, but the network
    * does not preserve their freshness order. Only the newest read that was
@@ -840,6 +876,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     // read failed, as the only one it never runs for.
     const withArchive = archiveWanted.current;
     const requestId = ++threadSnapshotRequestRef.current;
+    const bookmarkWritesBefore = bookmarkWrites.current;
     try {
       const res = await retryRequest(() =>
         listThreads(
@@ -856,6 +893,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       const stale = withArchive ? [] : staleOpenThreads(threadsRef.current, res.threads);
       setThreads((prev) => (withArchive ? res.threads : mergeOpenThreads(prev, res.threads)));
       setResolvedThreadCount(res.counts?.resolved ?? 0);
+      acceptBookmarkedThreadIds(res.bookmarked_thread_ids, bookmarkWritesBefore);
       // This read was the whole document, so the archive is present again
       // however the last attempt at it ended. Latch it so the next trigger
       // does not fetch it a second time.
@@ -867,7 +905,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       if (requestId !== threadSnapshotRequestRef.current) return;
       reportError('DocumentLayout.refreshThreads', err, { uid: doc.uid });
     }
-  }, [doc.uid, reconcileStaleThreads]);
+  }, [doc.uid, reconcileStaleThreads, acceptBookmarkedThreadIds]);
 
   /*
    * The read a mutation triggers: the open threads only.
@@ -880,6 +918,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
    */
   const reconcileOpenThreads = useCallback(async () => {
     const requestId = ++threadSnapshotRequestRef.current;
+    const bookmarkWritesBefore = bookmarkWrites.current;
     try {
       const res = await retryRequest(() =>
         listThreads(doc.uid, { state: 'open', consumeMentions: false, fresh: true }),
@@ -888,6 +927,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       const stale = staleOpenThreads(threadsRef.current, res.threads);
       setThreads((prev) => mergeOpenThreads(prev, res.threads));
       setResolvedThreadCount(res.counts?.resolved ?? 0);
+      acceptBookmarkedThreadIds(res.bookmarked_thread_ids, bookmarkWritesBefore);
       setMentionCandidates(res.mention_candidates);
       threadsLoaded.current = true;
       reconcileStaleThreads(stale);
@@ -895,7 +935,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       if (requestId !== threadSnapshotRequestRef.current) return;
       reportError('DocumentLayout.reconcileOpenThreads', err, { uid: doc.uid });
     }
-  }, [doc.uid, reconcileStaleThreads]);
+  }, [doc.uid, reconcileStaleThreads, acceptBookmarkedThreadIds]);
   useEffect(() => {
     reconcileOpenThreadsRef.current = reconcileOpenThreads;
   }, [reconcileOpenThreads]);
@@ -939,6 +979,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       if (uid === archiveUidRef.current) setArchiveLoading(false);
     };
     setArchiveLoading(true);
+    const bookmarkWritesBefore = bookmarkWrites.current;
     const run = retryRequest(() =>
       listThreads(uid, { state: 'all', consumeMentions: false, fresh: true }),
     ).then(
@@ -947,6 +988,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         if (uid !== archiveUidRef.current) return;
         setMentionCandidates(r.mention_candidates);
         setResolvedThreadCount(r.counts?.resolved ?? 0);
+        acceptBookmarkedThreadIds(r.bookmarked_thread_ids, bookmarkWritesBefore);
         setThreads((prev) => mergeArchiveThreads(prev, r.threads, mutatedDuringArchiveRead));
         releaseGuard();
       },
@@ -966,7 +1008,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     );
     archiveLoad.current = run;
     return run;
-  }, [doc.uid]);
+  }, [doc.uid, acceptBookmarkedThreadIds]);
 
   const scrollToAnchor = useCallback(
     (
@@ -1421,6 +1463,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     threadsLoaded.current = false;
     setThreadsLoading(true);
     setResolvedThreadCount(0);
+    // A new epoch: an answer about the previous document's bookmarks must
+    // not land in this one's.
+    const bookmarkWritesBefore = ++bookmarkWrites.current;
+    setBookmarkedThreadIds(NO_THREAD_IDS);
+    setBookmarksOnServer(false);
     const requestId = ++threadSnapshotRequestRef.current;
     archiveUidRef.current = doc.uid;
     archiveLoad.current = null;
@@ -1436,6 +1483,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         if (requestId === threadSnapshotRequestRef.current) {
           setThreads(r.threads);
           setResolvedThreadCount(r.counts?.resolved ?? 0);
+          acceptBookmarkedThreadIds(r.bookmarked_thread_ids, bookmarkWritesBefore);
           threadsLoaded.current = true;
         }
         setMentionCandidates(r.mention_candidates);
@@ -1465,7 +1513,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
     return () => {
       cancelled = true;
     };
-  }, [doc.uid, ensureArchive]);
+  }, [doc.uid, ensureArchive, acceptBookmarkedThreadIds]);
 
   // Show resolved threads anywhere and the archive has to be there.
   useEffect(() => {
@@ -1665,6 +1713,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
           }
           case 'mention.created': {
             const requestId = ++threadSnapshotRequestRef.current;
+            const bookmarkWritesBefore = bookmarkWrites.current;
             void listThreads(doc.uid)
               .then((res) => {
                 if (cancelled) return;
@@ -1672,6 +1721,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                 if (requestId !== threadSnapshotRequestRef.current) return;
                 setThreads(res.threads);
                 setResolvedThreadCount(res.counts?.resolved ?? 0);
+                acceptBookmarkedThreadIds(res.bookmarked_thread_ids, bookmarkWritesBefore);
                 setMentionCandidates(res.mention_candidates);
               })
               .catch((err) => {
@@ -1725,7 +1775,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       pending.clear();
       sub.close();
     };
-  }, [doc.uid, refreshThreads, landThread, dropThread]);
+  }, [doc.uid, refreshThreads, landThread, dropThread, acceptBookmarkedThreadIds]);
 
   // Memoized so downstream useCallbacks can list it as a single dep instead
   // of mirroring [displayName, effectiveDisplayName] each time.
@@ -2154,8 +2204,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
       if (!identity) return;
       try {
         await apiDeleteThread(doc.uid, threadId, identity);
-        threadSnapshotRequestRef.current += 1;
-        setThreads((prev) => prev.filter((t) => t.id !== threadId));
+        dropThread(threadId);
         reconcileThreadsSoon();
       } catch (err) {
         reportError('DocumentLayout.deleteThread', err, { threadId });
@@ -2163,7 +2212,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
         reconcileThreadsSoon();
       }
     },
-    [doc.uid, resolveIdentity, reconcileThreadsSoon],
+    [doc.uid, resolveIdentity, reconcileThreadsSoon, dropThread],
   );
 
   const onDeleteNode = useCallback(
@@ -2404,6 +2453,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   const title = documentTitle(doc);
 
   /**
+   * The reader's bookmarks arrive as threads, but nothing that lists
+   * discussion shows them: they belong to the Bookmarks tab and to the
+   * ribbons beside the text alone.
+   */
+  const commentThreads = useMemo(() => threads.filter((t) => !isBookmark(t)), [threads]);
+  const bookmarkThreads = useMemo(() => threads.filter(isBookmark), [threads]);
+
+  /**
    * Threads inside the focused sections — every thread while no filter
    * is set. Feeds the inline column, the Threads tab, and its badge.
    * Activities and the in-document highlights keep the full list: the
@@ -2411,9 +2468,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
    * anyway.
    */
   const sectionVisibleThreads = useMemo(() => {
-    if (!sectionFilterActive || !blockSectionIds) return threads;
-    return threads.filter((t) => threadTouchesSections(t, blockSectionIds, sectionFilter));
-  }, [threads, sectionFilterActive, blockSectionIds, sectionFilter]);
+    if (!sectionFilterActive || !blockSectionIds) return commentThreads;
+    return commentThreads.filter((t) => threadTouchesSections(t, blockSectionIds, sectionFilter));
+  }, [commentThreads, sectionFilterActive, blockSectionIds, sectionFilter]);
   const threadCount =
     threadTabVisibleCount?.docUid === doc.uid &&
     threadTabVisibleCount.sourceThreads === sectionVisibleThreads
@@ -2437,18 +2494,180 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
 
   // Bookmarks answer to the chapter filter but not the resolved/status
   // filters, so they start from the section-visible set — resolved ones
-  // and all — and keep only what the reader has starred.
-  const bookmarkedThreads = useMemo(
-    () => sectionVisibleThreads.filter((t) => bookmarkedThreadIds.has(t.id)),
-    [sectionVisibleThreads, bookmarkedThreadIds],
+  // and all — and keep only what the reader has starred, beside the
+  // passages they bookmarked outright.
+  const bookmarkedThreads = useMemo(() => {
+    const starred = sectionVisibleThreads.filter((t) => bookmarkedThreadIds.has(t.id));
+    const marked =
+      sectionFilterActive && blockSectionIds
+        ? bookmarkThreads.filter((t) => threadTouchesSections(t, blockSectionIds, sectionFilter))
+        : bookmarkThreads;
+    return [...starred, ...marked];
+  }, [
+    sectionVisibleThreads,
+    bookmarkedThreadIds,
+    bookmarkThreads,
+    sectionFilterActive,
+    blockSectionIds,
+    sectionFilter,
+  ]);
+  const hasBookmarks = bookmarkedThreadIds.size > 0 || bookmarkThreads.length > 0;
+  // "No bookmarks" is only known once a read has answered and this browser's
+  // local ones are uploaded; until then a remembered tab stays put rather
+  // than being switched away, and that choice saved, for good.
+  const bookmarksKnown = bookmarksOnServer && !localBookmarksPending;
+  const showBookmarksTab = hasBookmarks || (rightTab === 'bookmarks' && !bookmarksKnown);
+
+  // Serialized so the ribbons re-sync when one would move, not on every
+  // thread update — a reply elsewhere must not touch the document's DOM.
+  const bookmarkMarkersKey = useMemo(
+    () => JSON.stringify(bookmarkMarkerSpecs(bookmarkThreads)),
+    [bookmarkThreads],
   );
-  const hasBookmarks = bookmarkedThreadIds.size > 0;
+  const bookmarkMarkers = useMemo(
+    () => JSON.parse(bookmarkMarkersKey) as BookmarkMarkerSpec[],
+    [bookmarkMarkersKey],
+  );
+  const isBlockBookmarked = useCallback(
+    (el: HTMLElement): boolean => {
+      const root = docRef.current;
+      return root ? bookmarkMarking(root, el, bookmarkMarkers) !== null : false;
+    },
+    [bookmarkMarkers],
+  );
+  // Blocks with a bookmark request still out: the hover button stays under
+  // the cursor, and a second click before the first lands would post twice.
+  const bookmarkRequests = useRef(new Set<HTMLElement>());
+  const onToggleBlockBookmark = useCallback(
+    async (el: HTMLElement) => {
+      const root = docRef.current;
+      if (!root || bookmarkRequests.current.has(el)) return;
+      bookmarkRequests.current.add(el);
+      try {
+        const existing = bookmarkMarking(root, el, bookmarkMarkers);
+        if (existing) {
+          await onDeleteThread(existing.threadId);
+          return;
+        }
+        const anchor = captureBlockAnchor(root, el);
+        if (!anchor) {
+          reportFailure('There is no text in this block to bookmark.');
+          return;
+        }
+        const identity = resolveIdentity();
+        if (!identity) return;
+        try {
+          landThread(await apiCreateBookmark(doc.uid, anchor, identity));
+          reconcileThreadsSoon();
+        } catch (err) {
+          reportError('DocumentLayout.createBookmark', err, { uid: doc.uid });
+          reportFailure(apiErrorMessage(err, 'Could not add that bookmark'));
+        }
+      } finally {
+        bookmarkRequests.current.delete(el);
+      }
+    },
+    [bookmarkMarkers, doc.uid, landThread, onDeleteThread, reconcileThreadsSoon, resolveIdentity],
+  );
+  // Other tabs of this browser share its client id, so neither the server
+  // nor the realtime channel tells them that a thread bookmark changed.
+  const bookmarksChannel = useRef<BroadcastChannel | null>(null);
+  useEffect(() => {
+    if (typeof BroadcastChannel === 'undefined') return;
+    const channel = new BroadcastChannel('marginalia:thread-bookmarks');
+    bookmarksChannel.current = channel;
+    channel.onmessage = (e: MessageEvent<{ uid?: unknown; ids?: unknown }>) => {
+      const { uid, ids } = e.data ?? {};
+      if (uid !== doc.uid || !Array.isArray(ids)) return;
+      setBookmarkedThreadIds(new Set(ids.filter((id): id is string => typeof id === 'string')));
+    };
+    return () => {
+      channel.close();
+      if (bookmarksChannel.current === channel) bookmarksChannel.current = null;
+    };
+  }, [doc.uid]);
   const toggleBookmark = useCallback(
     (threadId: string): void => {
-      toggleBookmarkedThread(doc.uid, threadId);
+      const identity = resolveIdentity();
+      if (!identity) return;
+      const bookmarked = !bookmarkedThreadIds.has(threadId);
+      const write = ++bookmarkWrites.current;
+      const flipped = (on: boolean) => (prev: ReadonlySet<string>) => {
+        const next = new Set(prev);
+        if (on) next.add(threadId);
+        else next.delete(threadId);
+        return next;
+      };
+      setBookmarkedThreadIds(flipped(bookmarked));
+      apiSetThreadBookmarked(doc.uid, threadId, bookmarked, identity).then(
+        (ids) => {
+          // A superseded answer can land after the newer one, and other tabs
+          // keep whichever set reaches them last.
+          if (write !== bookmarkWrites.current) return;
+          setBookmarkedThreadIds(new Set(ids));
+          bookmarksChannel.current?.postMessage({ uid: doc.uid, ids });
+        },
+        (err) => {
+          reportError('DocumentLayout.setThreadBookmarked', err, { uid: doc.uid, threadId });
+          reportFailure(
+            apiErrorMessage(
+              err,
+              bookmarked ? 'Could not bookmark that thread' : 'Could not remove that bookmark',
+            ),
+          );
+          if (write === bookmarkWrites.current) setBookmarkedThreadIds(flipped(!bookmarked));
+          // An earlier toggle still out may fail too, after this one's revert;
+          // a fresh read settles every thread on what the server holds.
+          reconcileThreadsSoon();
+        },
+      );
     },
-    [doc.uid],
+    [bookmarkedThreadIds, doc.uid, resolveIdentity, reconcileThreadsSoon],
   );
+
+  // Bookmarks this browser set while they were kept locally. Sent up once a
+  // read has shown the server keeps them, then dropped here — so one taken
+  // off on another device is never put back by this browser later.
+  useEffect(() => {
+    if (!bookmarksOnServer) return;
+    const uid = doc.uid;
+    const legacy = legacyBookmarkedThreadIds(uid);
+    if (legacy.length === 0) {
+      setLocalBookmarksPending(false);
+      return;
+    }
+    const identity = resolveIdentity();
+    if (!identity) return;
+    let cancelled = false;
+    const writesBefore = bookmarkWrites.current;
+    void (async () => {
+      try {
+        let ids: string[] | null = null;
+        for (const threadId of legacy) {
+          try {
+            ids = await apiSetThreadBookmarked(uid, threadId, true, identity);
+          } catch (err) {
+            // Deleted, or no longer visible: nothing left to keep.
+            if (err instanceof ApiError && err.status === 404) continue;
+            // Anything else gets another try on the next visit.
+            reportError('DocumentLayout.uploadLocalBookmarks', err, { uid });
+            return;
+          }
+        }
+        forgetLegacyBookmarkedThreadIds(uid);
+        // A toggle made meanwhile answers with a newer set of its own.
+        if (cancelled || !ids || writesBefore !== bookmarkWrites.current) return;
+        bookmarkWrites.current += 1;
+        setBookmarkedThreadIds(new Set(ids));
+        bookmarksChannel.current?.postMessage({ uid, ids });
+      } finally {
+        if (!cancelled) setLocalBookmarksPending(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [bookmarksOnServer, doc.uid, resolveIdentity]);
   // The Bookmarks tab badge counts the in-scope bookmarks directly, so it
   // has no use for the list's search-filtered count.
   const ignoreVisibleCount = useCallback(() => {}, []);
@@ -2471,8 +2690,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
   // an empty panel. Also covers a reload that remembered 'bookmarks' for a
   // document whose bookmarks have all been cleared elsewhere.
   useEffect(() => {
-    if (rightTab === 'bookmarks' && !hasBookmarks) setRightTab('comments');
-  }, [rightTab, hasBookmarks]);
+    if (rightTab === 'bookmarks' && !showBookmarksTab) setRightTab('comments');
+  }, [rightTab, showBookmarksTab]);
 
   /**
    * Threads that get a card: the section filter, then the
@@ -2497,11 +2716,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
    */
   const commentHighlights = useMemo(
     () =>
-      buildCommentHighlights(threads, {
+      buildCommentHighlights(commentThreads, {
         hideResolved: inlineCommentsHideResolved,
         pendingAnchor: canComment ? pendingAnchor : null,
       }),
-    [canComment, threads, pendingAnchor, inlineCommentsHideResolved],
+    [canComment, commentThreads, pendingAnchor, inlineCommentsHideResolved],
   );
 
   /**
@@ -3132,6 +3351,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                       maxWidthCh={maxWidth}
                       textZoom={textZoom / 100}
                       highlights={commentHighlights}
+                      bookmarks={bookmarkMarkers}
                       searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}
                       searchOptions={docSearchOptions}
                       activeSearchResultId={activeSearchTarget?.id ?? null}
@@ -3155,6 +3375,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                       <BlockActions
                         rootRef={docRef}
                         onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+                        isBookmarked={isBlockBookmarked}
+                        onToggleBookmark={(el) => void onToggleBlockBookmark(el)}
                         onEditChapter={(headingBlockId) =>
                           navigate(
                             `/d/${doc.uid}/edit?chapter=${encodeURIComponent(headingBlockId)}`,
@@ -3297,7 +3519,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                           )}
                         </Flex>
                       </Tabs.Trigger>
-                      {hasBookmarks && (
+                      {showBookmarksTab && (
                         <Tabs.Trigger value="bookmarks">
                           <Flex align="center" gap="2">
                             <BookmarkIcon aria-hidden />
@@ -3334,7 +3556,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                     <ActivityList
                       uid={doc.uid}
                       version={historyVersion}
-                      threads={threads}
+                      threads={commentThreads}
                       onOpenThread={openCommentThread}
                       canRevert={canEdit}
                       onRevertEdit={onRevertHistoryEdit}
@@ -3370,7 +3592,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, children, pending }:
                       onNeedResolvedThreads={ensureArchive}
                     />
                   </Tabs.Content>
-                  {hasBookmarks && (
+                  {showBookmarksTab && (
                     <Tabs.Content value="bookmarks" className="right-tab-panel">
                       <InlineCommentsList
                         uid={doc.uid}

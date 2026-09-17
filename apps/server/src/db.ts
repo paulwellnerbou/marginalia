@@ -90,6 +90,9 @@ CREATE TABLE IF NOT EXISTS comments (
   -- 1 -> this comment is private to its author. If a root comment is hidden,
   -- the entire thread becomes private to the root author.
   is_hidden             INTEGER NOT NULL DEFAULT 0,
+  -- 1 -> this root is a bookmark: a passage its author marked, with no text.
+  -- Always hidden as well.
+  is_bookmark           INTEGER NOT NULL DEFAULT 0,
   link_status           TEXT NOT NULL DEFAULT 'linked',
   resolved_at           INTEGER,
   resolved_by_name      TEXT,
@@ -174,6 +177,20 @@ CREATE TABLE IF NOT EXISTS comment_reactions (
 -- separate single-column indexes around.
 CREATE INDEX IF NOT EXISTS idx_comment_reactions_doc_comment_created
   ON comment_reactions(doc_uid, comment_id, created_at);
+
+-- A reader's bookmark on a thread — the toggle on a thread card, as
+-- opposed to a passage bookmark, which is a thread of its own
+-- (comments.is_bookmark). Keyed by client_id, the identity paired devices
+-- share, so it follows the reader rather than the browser that set it.
+-- Private: nothing but the owner's own thread reads ever return it.
+-- Rows for a deleted thread stay put and are filtered out on read.
+CREATE TABLE IF NOT EXISTS thread_bookmarks (
+  doc_uid     TEXT NOT NULL,
+  client_id   TEXT NOT NULL,
+  thread_id   TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  PRIMARY KEY (doc_uid, client_id, thread_id)
+);
 
 -- Per-document user registry. authorize() upserts on every request; a
 -- display_name change for the same (doc_uid, client_id) fans out to
@@ -451,6 +468,8 @@ export interface CommentRow {
   body: string;
   /** 1 when this root thread is visible only to its author. */
   is_hidden: number;
+  /** 1 when this root is a bookmark rather than a comment — see the schema. */
+  is_bookmark: number;
   link_status: CommentLinkStatus;
   resolved_at: number | null;
   resolved_by_name: string | null;
@@ -579,6 +598,7 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'comments', 'parent_proposal_id', 'TEXT');
   ensureColumn(db, 'comments', 'anchor_end_block_id', 'TEXT');
   ensureColumn(db, 'comments', 'is_hidden', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'comments', 'is_bookmark', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'documents', 'format', "TEXT NOT NULL DEFAULT 'markdown'");
   ensureColumn(db, 'documents', 'password_recovery_ciphertext', 'TEXT');
   ensureColumn(db, 'documents', 'password_recovery_iv', 'TEXT');

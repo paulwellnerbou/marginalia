@@ -196,6 +196,50 @@ describe('keyrings API', () => {
     expect(second.status).toBe(404);
   });
 
+  test("pairing brings the device's thread bookmarks along to the ring's identity", async () => {
+    const doc = await upload(LAPTOP, { markdown: '# Hi\n\nA paragraph.\n' });
+    const admin = headersFor(LAPTOP, { [INVITE_HEADER]: doc.admin_invite.token });
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}`, { headers: admin }),
+    );
+    const { rendered } = (await docRes.json()) as { rendered: { blocks: Array<{ id: string }> } };
+    const threadRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/threads`, {
+        method: 'POST',
+        headers: admin,
+        body: JSON.stringify({
+          anchor: { block_id: rendered.blocks[0]!.id, quote: 'Hi' },
+          body: 'A note',
+        }),
+      }),
+    );
+    const threadId = ((await threadRes.json()) as { thread: { id: string } }).thread.id;
+
+    // Bookmarked on the phone, under its own id, before it joined the ring.
+    const put = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/threads/${threadId}/bookmark`, {
+        method: 'PUT',
+        headers: headersFor(PHONE),
+      }),
+    );
+    expect(put.status).toBe(200);
+
+    const ring = await createKeyring(LAPTOP);
+    const { code } = await mintPairing(ring.token);
+    expect((await redeem(code)).status).toBe(200);
+
+    const bookmarkedFor = async (client: typeof LAPTOP) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${doc.uid}/threads`, {
+          headers: headersFor(client),
+        }),
+      );
+      return ((await res.json()) as { bookmarked_thread_ids: string[] }).bookmarked_thread_ids;
+    };
+    expect(await bookmarkedFor(LAPTOP)).toEqual([threadId]);
+    expect(await bookmarkedFor(PHONE)).toEqual([]);
+  });
+
   test('pairing codes are accepted in whatever shape they are retyped', async () => {
     const ring = await createKeyring(LAPTOP);
     const { code } = await mintPairing(ring.token);

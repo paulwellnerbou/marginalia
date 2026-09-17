@@ -537,6 +537,7 @@ interface DiscussionCopy {
   answers: Record<string, unknown>[];
   mentions: Record<string, unknown>[];
   reactions: Record<string, unknown>[];
+  bookmarks: Record<string, unknown>[];
 }
 
 function readDiscussion(db: Database, srcUid: string): DiscussionCopy {
@@ -576,8 +577,11 @@ function readDiscussion(db: Database, srcUid: string): DiscussionCopy {
   const reactions = db
     .prepare('SELECT * FROM comment_reactions WHERE doc_uid = ?')
     .all(srcUid) as Record<string, unknown>[];
+  const bookmarks = db
+    .prepare('SELECT * FROM thread_bookmarks WHERE doc_uid = ?')
+    .all(srcUid) as Record<string, unknown>[];
 
-  return { ids, proposalIds, comments, proposals, answers, mentions, reactions };
+  return { ids, proposalIds, comments, proposals, answers, mentions, reactions, bookmarks };
 }
 
 /**
@@ -636,6 +640,12 @@ function writeDiscussion(db: Database, uid: string, discussion: DiscussionCopy):
     ...row,
     doc_uid: uid,
     comment_id: mapId(row.comment_id),
+  }));
+
+  insertRows(db, 'thread_bookmarks', discussion.bookmarks, (row) => ({
+    ...row,
+    doc_uid: uid,
+    thread_id: mapId(row.thread_id),
   }));
 }
 
@@ -970,6 +980,7 @@ async function deleteDocument(c: Context, deps: AppDeps) {
   db.prepare('DELETE FROM comments WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM comment_mentions WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM comment_reactions WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM thread_bookmarks WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM doc_users WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
@@ -1213,6 +1224,7 @@ async function loadReviewThreadsForExport(
           AND c.parent_id IS NULL
           AND c.parent_proposal_id IS NULL
           AND c.deleted_at IS NULL
+          AND c.is_bookmark = 0
           AND (c.is_hidden = 0 OR c.author_client_id = ?)
         ORDER BY c.created_at ASC`,
     )
@@ -1995,10 +2007,10 @@ async function importDocument(c: Context, deps: AppDeps) {
         anchor_block_id, anchor_quote, anchor_prefix, anchor_suffix,
         anchor_start_offset, anchor_end_offset,
         anchor_heading_path, anchor_section_index, anchor_section_index_path,
-        author_client_id, author_display_name, body, is_hidden, link_status,
+        author_client_id, author_display_name, body, is_hidden, is_bookmark, link_status,
         resolved_at, resolved_by_name,
         created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertEditProposal = db.prepare(
     `INSERT INTO comments_edit_proposals
@@ -2041,6 +2053,10 @@ async function importDocument(c: Context, deps: AppDeps) {
       typeof row.parent_proposal_id === 'string' ? row.parent_proposal_id : null;
     if (parentOldId && parentProposalOldId) continue;
     const isRootComment = !parentOldId && !parentProposalOldId;
+    // Only a root can be a bookmark, and a bookmark is always private, with
+    // no text and no proposal — a hand-edited bundle doesn't get to say
+    // otherwise.
+    const isBookmark = isRootComment && row.is_bookmark === true;
     const newParentId = parentOldId ? (idMap.get(parentOldId) ?? null) : null;
     const newParentProposalId = parentProposalOldId
       ? (idMap.get(parentProposalOldId) ?? null)
@@ -2061,8 +2077,9 @@ async function importDocument(c: Context, deps: AppDeps) {
       normalizeNumberArrayJson(row.anchor_section_index_path),
       row.author_client_id,
       row.author_display_name,
-      row.body,
-      row.is_hidden === true ? 1 : 0,
+      isBookmark ? '' : row.body,
+      row.is_hidden === true || isBookmark ? 1 : 0,
+      isBookmark ? 1 : 0,
       normalizeImportedLinkStatus(
         typeof row.link_status === 'string'
           ? row.link_status
@@ -2082,7 +2099,7 @@ async function importDocument(c: Context, deps: AppDeps) {
       row.edit_proposal && typeof row.edit_proposal === 'object'
         ? (row.edit_proposal as Record<string, unknown>)
         : null;
-    if (isRootComment && proposal && typeof proposal.proposed_text === 'string') {
+    if (isRootComment && !isBookmark && proposal && typeof proposal.proposed_text === 'string') {
       const status = normalizeImportedProposalStatus(
         typeof proposal.status === 'string' ? proposal.status : null,
       );
@@ -2378,6 +2395,7 @@ async function mapBundleComments(
     author_display_name: row.author_display_name,
     body: row.body,
     is_hidden: row.is_hidden === 1,
+    is_bookmark: row.is_bookmark === 1,
     link_status: row.link_status,
     resolved_at: row.resolved_at,
     resolved_by_name: row.resolved_by_name,

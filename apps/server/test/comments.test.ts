@@ -58,6 +58,7 @@ interface ThreadShape {
   };
   comments: [ThreadCommentNodeShape, ...ThreadCommentNodeShape[]];
   answered_by_thread_ids: string[];
+  bookmark?: boolean;
   proposal: { whole_document?: boolean; answers_thread_ids?: string[] } | null;
 }
 
@@ -286,6 +287,365 @@ describe('threads API', () => {
     expect(comments).toHaveLength(2);
     expect(comments[1]!.parent_id).toBe(top.id);
     expect(comments[1]!.anchor).toBeNull();
+  });
+
+  test('a bookmark is a flagged, private thread with no body, kept out of the thread counts', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        // `hidden: false` is ignored: a bookmark is its author's alone.
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          bookmark: true,
+          hidden: false,
+        }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const { thread } = (await res.json()) as { thread: ThreadShape };
+    expect(thread.bookmark).toBe(true);
+    expect(thread.proposal).toBeNull();
+    expect(thread.comments).toHaveLength(1);
+    expect(thread.comments[0].body).toBe('');
+    expect(thread.comments[0].hidden).toBe(true);
+    // Nothing to offer: a bookmark cannot be made public.
+    expect(thread.comments[0].capabilities.hide).toBe(false);
+
+    const aliceList = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+        headers: headersFor(ALICE),
+      }),
+    );
+    const aliceBody = (await aliceList.json()) as {
+      threads: ThreadShape[];
+      counts: { total: number; open: number; resolved: number };
+    };
+    expect(aliceBody.threads.map((t) => t.id)).toEqual([thread.id]);
+    expect(aliceBody.counts).toEqual({ total: 0, open: 0, resolved: 0 });
+
+    const bobList = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+        headers: asAdmin(BOB),
+      }),
+    );
+    expect(((await bobList.json()) as { threads: ThreadShape[] }).threads).toHaveLength(0);
+
+    const removed = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${thread.id}`, {
+        method: 'DELETE',
+        headers: headersFor(ALICE),
+      }),
+    );
+    expect(removed.status).toBeLessThan(300);
+    expect(await list(uid, ALICE)).toHaveLength(0);
+  });
+
+  test('a bookmark takes no text and cannot be a proposal, and a comment still needs a body', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const post = (payload: Record<string, unknown>) =>
+      app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: headersFor(ALICE),
+          body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, ...payload }),
+        }),
+      );
+
+    const asProposal = await post({ bookmark: true, proposal: { proposed_text: '# Other' } });
+    expect(asProposal.status).toBe(400);
+    expect(((await asProposal.json()) as { error: string }).error).toBe(
+      'bookmark-proposal-forbidden',
+    );
+
+    const withText = await post({ bookmark: true, body: 'A label' });
+    expect(withText.status).toBe(400);
+    expect(((await withText.json()) as { error: string }).error).toBe('bookmark-body-forbidden');
+
+    const notBoolean = await post({ bookmark: 'yes' });
+    expect(notBoolean.status).toBe(400);
+    expect(((await notBoolean.json()) as { error: string }).error).toBe('invalid-bookmark');
+
+    const emptyComment = await post({ body: '   ' });
+    expect(emptyComment.status).toBe(400);
+    expect(((await emptyComment.json()) as { error: string }).error).toBe('body-required');
+
+    const comment = await post({ body: 'A remark' });
+    expect(((await comment.json()) as { thread: ThreadShape }).thread.bookmark).toBe(false);
+  });
+
+  test('editing a bookmark cannot make it public or give it text', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const created = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, bookmark: true }),
+      }),
+    );
+    const { thread } = (await created.json()) as { thread: ThreadShape };
+    const patch = (payload: Record<string, unknown>) =>
+      app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${thread.id}`, {
+          method: 'PATCH',
+          headers: headersFor(ALICE),
+          body: JSON.stringify(payload),
+        }),
+      );
+
+    const unhide = await patch({ hidden: false });
+    expect(unhide.status).toBe(400);
+    expect(((await unhide.json()) as { error: string }).error).toBe('bookmark-always-hidden');
+
+    const label = await patch({ body: 'A label' });
+    expect(label.status).toBe(400);
+    expect(((await label.json()) as { error: string }).error).toBe('bookmark-body-forbidden');
+  });
+
+  test('a reader cannot bookmark, for the same reason they cannot comment', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: rawHeadersFor(CAROL),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, bookmark: true }),
+      }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  test('bookmarking the same passage again gives back the bookmark already there', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const post = (who: Headers) =>
+      app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: who,
+          body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, bookmark: true }),
+        }),
+      );
+
+    const first = await post(headersFor(ALICE));
+    expect(first.status).toBe(201);
+    const { thread } = (await first.json()) as { thread: ThreadShape };
+    const again = await post(headersFor(ALICE));
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { thread: ThreadShape }).thread.id).toBe(thread.id);
+
+    // Another reader's bookmark on the same passage is a bookmark of their own.
+    const bob = await post(headersFor(BOB));
+    expect(bob.status).toBe(201);
+    expect(((await bob.json()) as { thread: ThreadShape }).thread.id).not.toBe(thread.id);
+  });
+
+  test('each copy of a line repeated under the same headings takes its own bookmark', async () => {
+    const uid = await newDoc(
+      '# Guide\n\n## Summary\n\nRead this first.\n\n## Summary\n\nRead this first.\n',
+    );
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headersFor(ALICE) }),
+    );
+    const { rendered } = (await res.json()) as {
+      rendered: {
+        blocks: Array<{
+          id: string;
+          text: string;
+          headingPath: string[];
+          sectionIndex: number;
+          sectionIndexPath: number[];
+        }>;
+      };
+    };
+    const copies = rendered.blocks.filter((b) => b.text === 'Read this first.');
+    expect(copies).toHaveLength(2);
+    expect(copies[1]!.id).toBe(copies[0]!.id);
+    expect(copies[1]!.headingPath).toEqual(copies[0]!.headingPath);
+
+    // The anchor the viewer sends for a block: its id plus the section it sits in.
+    const bookmark = async (copy: (typeof copies)[number]) => {
+      const created = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, {
+          method: 'POST',
+          headers: headersFor(ALICE),
+          body: JSON.stringify({
+            anchor: {
+              block_id: copy.id,
+              quote: copy.text,
+              heading_path: copy.headingPath,
+              section_index: copy.sectionIndex,
+              section_index_path: copy.sectionIndexPath,
+            },
+            bookmark: true,
+          }),
+        }),
+      );
+      const { thread } = (await created.json()) as { thread: ThreadShape };
+      return { status: created.status, id: thread.id };
+    };
+
+    const first = await bookmark(copies[0]!);
+    const second = await bookmark(copies[1]!);
+    expect([first.status, second.status]).toEqual([201, 201]);
+    expect(second.id).not.toBe(first.id);
+    expect(await bookmark(copies[1]!)).toEqual({ status: 200, id: second.id });
+  });
+
+  test('a bookmark takes no replies, resolution, reactions or answering proposals', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const created = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, bookmark: true }),
+      }),
+    );
+    const { thread } = (await created.json()) as { thread: ThreadShape };
+    expect(thread.capabilities.reply).toBe(false);
+    expect(thread.capabilities.resolve).toBe(false);
+    expect(thread.comments[0].capabilities).toMatchObject({
+      edit: false,
+      delete: true,
+      react: false,
+    });
+
+    const refused = async (res: Response) => {
+      expect(res.status).toBe(400);
+      return ((await res.json()) as { error: string }).error;
+    };
+    for (const payload of [{ action: 'resolve' }, { body: 'A reply' }]) {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${thread.id}/respond`, {
+          method: 'POST',
+          headers: headersFor(ALICE),
+          body: JSON.stringify(payload),
+        }),
+      );
+      expect(await refused(res)).toBe('bookmark-discussion-forbidden');
+    }
+    const react = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${uid}/threads/${thread.id}/comments/${thread.id}/reactions`,
+        { method: 'POST', headers: headersFor(ALICE), body: JSON.stringify({ emoji: '👍' }) },
+      ),
+    );
+    expect(await refused(react)).toBe('bookmark-discussion-forbidden');
+
+    const answer = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          proposal: { proposed_text: '# Other title', answers_thread_ids: [thread.id] },
+        }),
+      }),
+    );
+    expect(await refused(answer)).toBe('answers-thread-not-found');
+  });
+
+  test('a thread bookmark belongs to the reader who set it, on every device of theirs', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const created = await addComment(uid, BOB, { block_id: blockId, quote: 'Title' }, 'Hi');
+    const threadId = (created.body.comment as { id: string }).id;
+
+    const setBookmark = (who: Headers, method: 'PUT' | 'DELETE', tid = threadId) =>
+      app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${tid}/bookmark`, {
+          method,
+          headers: who,
+        }),
+      );
+    const bookmarkedIds = async (who: Headers) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads?state=all`, { headers: who }),
+      );
+      return ((await res.json()) as { bookmarked_thread_ids: string[] }).bookmarked_thread_ids;
+    };
+
+    const put = await setBookmark(headersFor(ALICE), 'PUT');
+    expect(put.status).toBe(200);
+    expect(await put.json()).toEqual({ bookmarked_thread_ids: [threadId] });
+    // Idempotent: a second device repeating the same tap changes nothing.
+    expect(await (await setBookmark(headersFor(ALICE), 'PUT')).json()).toEqual({
+      bookmarked_thread_ids: [threadId],
+    });
+
+    // Another device of Alice's is the same client id, with or without an invite of its own.
+    expect(await bookmarkedIds(rawHeadersFor(ALICE))).toEqual([threadId]);
+    expect(await bookmarkedIds(headersFor(BOB))).toEqual([]);
+
+    // A reader can keep bookmarks too.
+    const readerPut = await setBookmark(rawHeadersFor(CAROL), 'PUT');
+    expect(readerPut.status).toBe(200);
+    expect(await bookmarkedIds(rawHeadersFor(CAROL))).toEqual([threadId]);
+
+    const removed = await setBookmark(headersFor(ALICE), 'DELETE');
+    expect(removed.status).toBe(200);
+    expect(await removed.json()).toEqual({ bookmarked_thread_ids: [] });
+    expect((await setBookmark(headersFor(ALICE), 'DELETE')).status).toBe(200);
+    expect(await bookmarkedIds(rawHeadersFor(CAROL))).toEqual([threadId]);
+  });
+
+  test('a thread bookmark needs a thread the reader can see, and goes when the thread does', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const created = await addComment(uid, BOB, { block_id: blockId, quote: 'Title' }, 'Hi');
+    const threadId = (created.body.comment as { id: string }).id;
+    const reply = await addReply(uid, BOB, threadId, 'More');
+    const replyId = (reply.body.comment as { id: string }).id;
+
+    const setBookmark = (who: Headers, method: 'PUT' | 'DELETE', tid: string) =>
+      app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${tid}/bookmark`, {
+          method,
+          headers: who,
+        }),
+      );
+    const bookmarkedIds = async (who: Headers) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads`, { headers: who }),
+      );
+      return ((await res.json()) as { bookmarked_thread_ids: string[] }).bookmarked_thread_ids;
+    };
+
+    expect((await setBookmark(headersFor(ALICE), 'PUT', 'no-such-thread')).status).toBe(404);
+    expect((await setBookmark(headersFor(ALICE), 'PUT', replyId)).status).toBe(404);
+
+    expect((await setBookmark(headersFor(ALICE), 'PUT', threadId)).status).toBe(200);
+    // Made private by its author: no longer Alice's to see, so no longer listed.
+    const hide = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'PATCH',
+        headers: headersFor(BOB),
+        body: JSON.stringify({ hidden: true }),
+      }),
+    );
+    expect(hide.status).toBe(200);
+    expect(await bookmarkedIds(headersFor(ALICE))).toEqual([]);
+    expect((await setBookmark(headersFor(ALICE), 'PUT', threadId)).status).toBe(404);
+
+    // Bob's own bookmark on it survives the privacy change, but not the delete.
+    expect((await setBookmark(headersFor(BOB), 'PUT', threadId)).status).toBe(200);
+    expect(await bookmarkedIds(headersFor(BOB))).toEqual([threadId]);
+    const deleted = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+        method: 'DELETE',
+        headers: headersFor(BOB),
+      }),
+    );
+    expect(deleted.status).toBeLessThan(300);
+    expect(await bookmarkedIds(headersFor(BOB))).toEqual([]);
+    // Taking a bookmark off a thread that is gone still succeeds.
+    expect((await setBookmark(headersFor(BOB), 'DELETE', threadId)).status).toBe(200);
   });
 
   test('hidden comments are visible only to their author and can be unhidden', async () => {
@@ -2240,6 +2600,52 @@ describe('threads API', () => {
     headers.set(INVITE_HEADER, imported.admin_invite.token);
     return { bundle, serialized, imported, headers };
   }
+
+  test('a bookmark comes back from an export and import as a private bookmark', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const created = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: asAdmin(),
+        body: JSON.stringify({ anchor: { block_id: blockId, quote: 'Title' }, bookmark: true }),
+      }),
+    );
+    expect(created.status).toBe(201);
+
+    const { bundle } = await roundTrip(uid);
+    const rows = bundle.comments as Array<{
+      is_bookmark?: boolean;
+      is_hidden?: boolean;
+      body?: string;
+      edit_proposal?: unknown;
+    }>;
+    expect(rows.map((r) => [r.is_bookmark, r.is_hidden])).toEqual([[true, true]]);
+
+    // A hand-edited bundle cannot turn a bookmark into something else: the
+    // flag brings its privacy with it, and leaves text and proposal behind.
+    rows[0]!.is_hidden = false;
+    rows[0]!.body = 'Smuggled text';
+    rows[0]!.edit_proposal = { proposed_text: '# Other title', status: 'open' };
+    const importRes = await app.hono.fetch(
+      new Request('http://test/api/documents/import', {
+        method: 'POST',
+        headers: rawHeadersFor(ALICE),
+        body: JSON.stringify(bundle),
+      }),
+    );
+    expect(importRes.status).toBe(201);
+    const imported = (await importRes.json()) as { uid: string; admin_invite: { token: string } };
+    const headers = rawHeadersFor(ALICE);
+    headers.set(INVITE_HEADER, imported.admin_invite.token);
+    const listRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/threads`, { headers }),
+    );
+    const { threads } = (await listRes.json()) as { threads: ThreadShape[] };
+    expect(
+      threads.map((t) => [t.bookmark, t.comments[0].hidden, t.comments[0].body, t.proposal]),
+    ).toEqual([[true, true, '', null]]);
+  });
 
   /**
    * The bundle is emitted as JSON fragments around a streamed packfile
