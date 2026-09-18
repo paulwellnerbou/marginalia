@@ -194,8 +194,9 @@ export function ReadAloudControls({
     reader.error ??
     (reader.missingLanguageVoice
       ? `No ${langName} voice on this device. Voices can be added in ${voiceSettings()}.`
-      : // Advice for before listening, not a caption to read along with.
-        reader.showVoiceHint && !active
+      : // Advice for before listening, not a caption to read along with —
+        // but still reachable by pausing, not just before the first play.
+        reader.showVoiceHint && !playing
         ? `Basic system voice. Better ones can be downloaded in ${voiceSettings()}.`
         : null);
 
@@ -438,8 +439,9 @@ function regionName(region: string | null): string {
 /**
  * Where to get more voices. The stock ones (Anna, Samantha, and their
  * equivalents elsewhere) are compact engines that get tiring over a long
- * document; better ones ship with the OS but have to be downloaded, and
- * only Apple's platforms have a single place to name.
+ * document; better ones ship with the OS but have to be downloaded.
+ * Apple's platforms have one exact place to name; Android's moves per
+ * OEM skin, so the name is Google's own path and merely usually right.
  */
 function voiceSettings(): string {
   const platform = navigator.platform || '';
@@ -450,5 +452,10 @@ function voiceSettings(): string {
   if (/Mac/.test(platform)) {
     return 'System Settings → Accessibility → Spoken Content → System Voice → Manage Voices';
   }
+  // navigator.platform is ambiguous here (Android and desktop Linux both
+  // report a "Linux ..." string), but the UA keeps "Android" through
+  // Chrome's User-Agent Reduction, unlike the version details it drops.
+  if (/Android/.test(navigator.userAgent))
+    return 'Settings → Accessibility → Text-to-speech output';
   return 'your system’s speech settings';
 }
