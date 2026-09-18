@@ -1420,10 +1420,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     return () => window.cancelAnimationFrame(frame);
   }, [docSearchOpen]);
 
+  // Beside the document the results list is a bonus. Overlaid it would
+  // slide over the search field it belongs to, and the scrim over the
+  // matches: there the reader opens it when they want the list.
   useEffect(() => {
-    if (!docSearchOpen) return;
+    if (!docSearchOpen || overlayPanes) return;
     openComments(true);
-  }, [docSearchOpen, openComments]);
+  }, [docSearchOpen, overlayPanes, openComments]);
 
   useEffect(() => {
     if (!docSearchOpen || deferredDocSearchQuery.trim()) return;
@@ -2453,6 +2456,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    * ribbons beside the text alone.
    */
   const commentThreads = useMemo(() => threads.filter((t) => !isBookmark(t)), [threads]);
+  /**
+   * Whether the floating pill has anything to offer. Counted before the
+   * resolved and section filters, not after: with every thread resolved
+   * the pill is where "Show resolved" lives, and hiding it on an empty
+   * count would lock the reader out of them.
+   */
+  const hasAnyThread = commentThreads.length > 0 || resolvedThreadCount > 0;
   const bookmarkThreads = useMemo(() => threads.filter(isBookmark), [threads]);
 
   /**
@@ -2874,11 +2884,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
 
   const focusSearchResult = useCallback(
     (id: string) => {
-      openComments(true);
+      // Overlaid, the list the result was picked from covers the match.
+      if (overlayPanes) closeOverlayPanes();
+      else openComments(true);
       setRightTab('search');
       setActiveSearchTarget((prev) => ({ id, nonce: (prev?.nonce ?? 0) + 1 }));
     },
-    [openComments],
+    [overlayPanes, closeOverlayPanes, openComments],
   );
 
   const navigateSearchResult = useCallback(
@@ -3272,7 +3284,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                 </Flex>
               </div>
             )}
-            {floatingComments && (
+            {floatingComments && hasAnyThread && (
               <FloatingCommentsToolbar
                 threads={commentSurfaceThreads}
                 hideResolved={inlineCommentsHideResolved}

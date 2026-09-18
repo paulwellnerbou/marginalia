@@ -445,6 +445,10 @@ button.primary:disabled {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+  /* Contains the tabs' absolutely placed screen-reader labels. Loose,
+     they sit past the strip's scrolled-off end and widen the whole page,
+     which a focus or a scroll-into-view then slides sideways. */
+  position: relative;
 }
 .doc-tabs::-webkit-scrollbar {
   display: none;
@@ -826,8 +830,12 @@ button.primary:disabled {
      a right-aligned popover fit side by side. */
   container-type: inline-size;
   container-name: doc-pane;
-  /* Rows of floating chrome the document has to clear; the comment
-     pill is the first. Raised where search has to drop below it. */
+  /* Rows of floating chrome the document has to clear. None on a
+     document without threads, whose comment pill stays away, until
+     search opens; more where search has to drop below the pill. */
+  --doc-float-rows: 0;
+}
+.pane-doc:has(> :is(.ic-float-toolbar-popover, .doc-search-popover)) > * {
   --doc-float-rows: 1;
 }
 .pane-doc .doc-scroll {
@@ -910,9 +918,9 @@ button.primary:disabled {
   /* The page's top and bottom margins belong to the column container:
      block padding on the article itself lands on its first and last
      fragment only, leaving every page in between flush to the edge.
-     The top also has to clear the floating chrome, which paged mode
-     always shows: it hovers at a fixed spot, so unlike in scroll mode
-     the reader can never move the text out from under it. */
+     The top also has to clear the floating chrome: it hovers at a
+     fixed spot, so unlike in scroll mode the reader can never move the
+     text out from under it. */
   padding-top: calc(var(--page-margin-block) + var(--doc-float-rows) * var(--doc-float-row));
   padding-bottom: var(--page-margin-block);
   /* One column per page, exactly as wide as the scrollport. The gap has
@@ -1369,9 +1377,16 @@ button.primary:disabled {
 }
 
 .doc-search-popover {
+  /* Rows of floating chrome search itself takes. */
+  --doc-search-rows: 1;
   position: absolute;
-  /* Row one, unless the pane has pushed it below the comment pill. */
-  top: calc(var(--doc-chrome-height) + (var(--doc-float-rows) - 1) * var(--doc-float-row));
+  /* The last rows: the first, unless the pane has pushed it below the
+     comment pill. */
+  top: calc(
+    var(--doc-chrome-height) +
+    (var(--doc-float-rows) - var(--doc-search-rows)) *
+    var(--doc-float-row)
+  );
   right: calc(var(--doc-search-inline-comments-offset, 0px) + 0.25rem);
   left: 0;
   display: flex;
@@ -1385,6 +1400,7 @@ button.primary:disabled {
 
 .doc-search-toolbar {
   pointer-events: auto;
+  max-width: 100%;
   height: var(--doc-floating-toolbar-height);
   padding: 0.35rem 0.4rem;
   /* Match the 3px gap between toggle edges and bar edges, so spacing is
@@ -1404,8 +1420,12 @@ button.primary:disabled {
   margin-inline: 0;
 }
 
+/* Gives way to the pane rather than to the viewport: beside two open
+   side panes the document column is far narrower than the window. */
 .doc-search-field {
-  min-width: min(22rem, 45vw);
+  width: 22rem;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .doc-search-trigger {
@@ -1414,23 +1434,6 @@ button.primary:disabled {
 
 .doc-search-trigger.active {
   color: var(--accent-12);
-}
-
-/* Read aloud keeps going with its panel closed, and on a narrow pane its
-   speaker button is folded into the overflow menu: the dot is the one
-   sign left on the bar that speech is running. */
-.doc-more-trigger {
-  position: relative;
-}
-.doc-more-indicator {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent-9);
-  box-shadow: 0 0 0 1.5px var(--ui-doc-chrome-bg);
 }
 
 /* The overflow menu opens on phones, where the longest download entries
@@ -1932,6 +1935,41 @@ button.primary:disabled {
     .read-aloud-dock:last-child .read-aloud-panel {
       padding-bottom: calc(0.6rem + env(safe-area-inset-bottom, 0px) + 1.25rem);
     }
+  }
+}
+
+/* A phone's pane can't hold search on one line with a field worth typing
+   in: the field takes a row of its own, across the pane, and the
+   controls go under it. Two rows of chrome, so the counts follow. */
+@container doc-pane (max-width: 480px) {
+  .pane-doc:has(> .doc-search-popover) > * {
+    --doc-float-rows: 2;
+  }
+  .pane-doc:has(> .ic-float-toolbar-popover):has(> .doc-search-popover) > * {
+    --doc-float-rows: 3;
+  }
+  .pane-doc > .doc-search-popover {
+    --doc-search-rows: 2;
+    left: 0.25rem;
+    padding-inline: 0.5rem;
+  }
+  .doc-search-toolbar {
+    flex-wrap: wrap;
+    width: 100%;
+    height: auto;
+    row-gap: 0.35rem;
+  }
+  .doc-search-field {
+    flex: 1 1 100%;
+  }
+  /* Takes the slack between the toggles and the arrows. A zero basis
+     keeps a long count from wrapping the row: it shrinks instead. */
+  .doc-search-count {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 }
 
