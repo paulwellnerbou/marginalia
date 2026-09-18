@@ -11,7 +11,7 @@ import {
   Text,
   TextField,
 } from '@radix-ui/themes';
-import { useState } from 'react';
+import { useImperativeHandle, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { CopyDocumentResponse, CopyMode, Document } from '../lib/api.js';
 import { copyDocument } from '../lib/api.js';
@@ -23,6 +23,7 @@ import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { recordVisit } from '../lib/recent-docs.js';
 import { Copyable } from './Copyable.js';
+import { type FoldableDialogProps, returnFocusTo } from './foldedDialog.js';
 import { PasswordDisclosureCard } from './PasswordDisclosureCard.js';
 
 /**
@@ -33,9 +34,14 @@ import { PasswordDisclosureCard } from './PasswordDisclosureCard.js';
  * Admin-only, like the gear and Access control it sits beside, because
  * the roster is copyable from here.
  */
-export function CopyDocumentDialog({ doc }: { doc: Document }) {
+export function CopyDocumentDialog({
+  doc,
+  ref,
+  foldedInto,
+}: { doc: Document } & FoldableDialogProps) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), []);
   const [name, setName] = useState('');
   const [includeAccess, setIncludeAccess] = useState(false);
   const [mode, setMode] = useState<CopyMode>('full');
@@ -109,12 +115,19 @@ export function CopyDocumentDialog({ doc }: { doc: Document }) {
         if (!next && !copying) reset();
       }}
     >
-      <Dialog.Trigger>
-        <IconButton variant="soft" size="2" aria-label="Copy document" title="Copy document">
-          <CopyIcon />
-        </IconButton>
-      </Dialog.Trigger>
-      <Dialog.Content size="3" maxWidth="640px" className="dialog-content--fixed-footer">
+      {!foldedInto && (
+        <Dialog.Trigger>
+          <IconButton variant="soft" size="2" aria-label="Copy document" title="Copy document">
+            <CopyIcon />
+          </IconButton>
+        </Dialog.Trigger>
+      )}
+      <Dialog.Content
+        size="3"
+        maxWidth="640px"
+        className="dialog-content--fixed-footer"
+        onCloseAutoFocus={returnFocusTo(foldedInto)}
+      >
         {created ? (
           <>
             <div className="dialog-scroll-body">

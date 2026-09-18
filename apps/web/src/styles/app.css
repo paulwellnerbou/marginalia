@@ -1209,11 +1209,12 @@ button.primary:disabled {
   border-bottom: 1px solid var(--gray-a5);
   background: var(--ui-doc-chrome-bg);
   height: var(--doc-chrome-height);
-  /* Keep an overflowing toolbar's scroll inside itself. `.pane-doc` is
-     `overflow: hidden`, which still scrolls programmatically — so
-     focusing a control past the right edge (search, read-aloud) used to
-     drag the entire document pane sideways. Scrollbar hidden: the row is
-     44px tall and the controls stay reachable by wheel / trackpad. */
+  /* Last resort: DocumentToolbar folds its controls into a menu before
+     the row overflows, but at a large interface size a very narrow pane
+     can still run out. Keep that scroll inside the row: `.pane-doc` is
+     `overflow: hidden`, which still scrolls programmatically, so focusing
+     a control past the right edge would drag the whole pane sideways.
+     Scrollbar hidden: the row is 44px tall. */
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -1413,6 +1414,37 @@ button.primary:disabled {
 
 .doc-search-trigger.active {
   color: var(--accent-12);
+}
+
+/* Read aloud keeps going with its panel closed, and on a narrow pane its
+   speaker button is folded into the overflow menu: the dot is the one
+   sign left on the bar that speech is running. */
+.doc-more-trigger {
+  position: relative;
+}
+.doc-more-indicator {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-9);
+  box-shadow: 0 0 0 1.5px var(--ui-doc-chrome-bg);
+}
+
+/* The overflow menu opens on phones, where the longest download entries
+   are wider than the screen: let them wrap instead of running off it. */
+.doc-more-menu {
+  max-width: min(var(--radix-dropdown-menu-content-available-width), calc(100vw - 16px));
+}
+.doc-more-menu .rt-BaseMenuItem {
+  height: auto;
+  min-height: var(--base-menu-item-height);
+  padding-block: var(--space-1);
+}
+.doc-more-menu-forward {
+  margin-left: auto;
 }
 
 /* Trigger for the inline-comments view-options dropdown. Keeps the

@@ -9,7 +9,16 @@ import {
   TrackPreviousIcon,
 } from '@radix-ui/react-icons';
 import { Button, IconButton, Select, Text, Tooltip } from '@radix-ui/themes';
-import { type RefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type Ref,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { detectLanguage } from '../lib/read-aloud/detect-language.js';
 import { sampleText } from '../lib/read-aloud/segment.js';
@@ -30,6 +39,26 @@ interface Props {
   inlineCommentsOffset: number;
   /** Element at the foot of the doc pane the transport renders into. */
   dock: HTMLElement | null;
+  ref?: Ref<ReadAloudHandle> | undefined;
+  /**
+   * The overflow button the trigger is folded into. While set, no trigger
+   * renders and closing the panel returns focus here instead.
+   */
+  foldedInto?: RefObject<HTMLElement | null> | undefined;
+  /** What an overflow menu needs to stand in for the trigger. */
+  onStateChange?: ((state: ReadAloudState) => void) | undefined;
+}
+
+export interface ReadAloudHandle {
+  toggle(): void;
+}
+
+export interface ReadAloudState {
+  supported: boolean;
+  /** The transport panel is showing. */
+  open: boolean;
+  /** Reading or paused: a session is under way, panel or not. */
+  active: boolean;
 }
 
 const LANG_KEY = 'marginalia.readAloud.lang';
@@ -49,6 +78,9 @@ export function ReadAloudControls({
   frontmatter,
   inlineCommentsOffset,
   dock,
+  ref,
+  foldedInto,
+  onStateChange,
 }: Props) {
   const [open, setOpen] = useState(false);
 
@@ -138,11 +170,21 @@ export function ReadAloudControls({
     const focused = document.activeElement;
     if (focused && dock?.contains(focused)) {
       quietFocus.current = true;
-      triggerRef.current?.focus({ preventScroll: true });
+      (foldedInto ?? triggerRef).current?.focus({ preventScroll: true });
       quietFocus.current = false;
     }
     setOpen(false);
-  }, [dock]);
+  }, [dock, foldedInto]);
+
+  useImperativeHandle(ref, () => ({ toggle: () => (open ? close() : setOpen(true)) }), [
+    open,
+    close,
+  ]);
+
+  const { supported } = reader;
+  useEffect(() => {
+    onStateChange?.({ supported, open, active });
+  }, [onStateChange, supported, open, active]);
 
   useEffect(() => {
     if (!open) return;
@@ -170,7 +212,7 @@ export function ReadAloudControls({
 
   // A browser without speech synthesis gets no control at all rather
   // than a button that silently does nothing.
-  if (!reader.supported) return null;
+  if (!supported) return null;
 
   // Three states, not two: without the paused case a screen reader
   // announces "Start reading aloud" on a control that will resume.
@@ -203,23 +245,25 @@ export function ReadAloudControls({
 
   return (
     <>
-      <Tooltip content={active ? 'Read-aloud controls' : 'Read this document aloud'}>
-        <IconButton
-          ref={triggerRef}
-          variant="soft"
-          color={APP_ACCENT_COLOR}
-          size="2"
-          className={`doc-search-trigger read-aloud-trigger ${open || active ? 'active' : ''}`}
-          onClick={() => (open ? close() : setOpen(true))}
-          onFocus={(event) => {
-            if (quietFocus.current) event.preventDefault();
-          }}
-          aria-label={active ? 'Read-aloud controls' : 'Read this document aloud'}
-          aria-pressed={open}
-        >
-          <SpeakerLoudIcon />
-        </IconButton>
-      </Tooltip>
+      {!foldedInto && (
+        <Tooltip content={active ? 'Read-aloud controls' : 'Read this document aloud'}>
+          <IconButton
+            ref={triggerRef}
+            variant="soft"
+            color={APP_ACCENT_COLOR}
+            size="2"
+            className={`doc-search-trigger read-aloud-trigger ${open || active ? 'active' : ''}`}
+            onClick={() => (open ? close() : setOpen(true))}
+            onFocus={(event) => {
+              if (quietFocus.current) event.preventDefault();
+            }}
+            aria-label={active ? 'Read-aloud controls' : 'Read this document aloud'}
+            aria-pressed={open}
+          >
+            <SpeakerLoudIcon />
+          </IconButton>
+        </Tooltip>
+      )}
 
       {open &&
         dock &&

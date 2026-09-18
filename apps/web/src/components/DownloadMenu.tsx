@@ -1,7 +1,7 @@
 import { extractDocumentTitle, sanitizeDocumentFilename } from '@marginalia/renderer/extract-title';
 import { DownloadIcon } from '@radix-ui/react-icons';
 import { Button, Callout, Dialog, DropdownMenu, Flex, IconButton, Text } from '@radix-ui/themes';
-import { useLayoutEffect, useState } from 'react';
+import { type ReactNode, type RefObject, useLayoutEffect, useState } from 'react';
 import type { Document, DocumentCover } from '../lib/api.js';
 import {
   ApiError,
@@ -20,6 +20,7 @@ import { reportError } from '../lib/log.js';
 import { showToast } from '../lib/notifications.js';
 import { updateRecentDocCover } from '../lib/recent-docs.js';
 import { FileDropZone } from './FileDropZone.js';
+import { returnFocusTo } from './foldedDialog.js';
 
 /**
  * Download affordance in the document toolbar. Opens a small menu with
@@ -37,10 +38,58 @@ import { FileDropZone } from './FileDropZone.js';
  * paths producing the same filenames.
  */
 export function DownloadMenu({
+  downloads,
+  triggerRef,
+}: {
+  downloads: DocumentDownloads;
+  /** Pass the same ref as the hook's `returnFocus` while this menu is on screen. */
+  triggerRef: RefObject<HTMLButtonElement | null>;
+}) {
+  return (
+    <DropdownMenu.Root>
+      {/* Radix Tooltip wraps would break the DropdownMenu.Trigger, so
+        fall back to the plain HTML `title` attribute on the icon. */}
+      <DropdownMenu.Trigger>
+        <IconButton
+          ref={triggerRef}
+          variant="soft"
+          size="2"
+          aria-label="Download document"
+          title="Download document"
+          disabled={downloads.busy}
+        >
+          <DownloadIcon />
+        </IconButton>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="end">{downloads.items}</DropdownMenu.Content>
+    </DropdownMenu.Root>
+  );
+}
+
+export interface DocumentDownloads {
+  /** An export is running; every entry waits for it to finish. */
+  busy: boolean;
+  /** The menu entries, for inside a `DropdownMenu.Content`. */
+  items: ReactNode;
+  /** The EPUB dialog. Rendered outside any menu, which unmounts its
+   *  content as it closes and would take the dialog with it. */
+  dialog: ReactNode;
+  dialogOpen: boolean;
+}
+
+/**
+ * The download entries and the state behind them, held by the toolbar
+ * rather than by one menu: the entries show in the Download button's own
+ * menu or, on a narrow pane, inside the toolbar's overflow menu, and an
+ * export or an open EPUB dialog must survive the toolbar switching
+ * between the two.
+ */
+export function useDocumentDownloads({
   doc,
   source,
   theme,
   reviewExportEnabled,
+  returnFocus,
 }: {
   doc: Document;
   /** Live source — may differ from doc.source after an applied edit proposal. */
@@ -54,8 +103,10 @@ export function DownloadMenu({
    * mode. Closed (resolved / accepted / rejected) threads are never
    * included; only open ones make it into the export.
    */
-  reviewExportEnabled?: boolean;
-}) {
+  reviewExportEnabled?: boolean | undefined;
+  /** Where the EPUB dialog returns focus: whichever menu opened it. */
+  returnFocus: RefObject<HTMLElement | null>;
+}): DocumentDownloads {
   const [busy, setBusy] = useState<
     | null
     | 'source'
@@ -374,181 +425,173 @@ export function DownloadMenu({
     }
   }
 
-  return (
+  const items = (
     <>
-      <DropdownMenu.Root>
-        {/* Radix Tooltip wraps would break the DropdownMenu.Trigger, so
-          fall back to the plain HTML `title` attribute on the icon. */}
-        <DropdownMenu.Trigger>
-          <IconButton
-            variant="soft"
-            size="2"
-            aria-label="Download document"
-            title="Download document"
-            disabled={busy !== null}
-          >
-            <DownloadIcon />
-          </IconButton>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Content align="end">
-          <DropdownMenu.Item onSelect={downloadSource} disabled={busy !== null}>
-            {sourceLabel} (.{sourceExt})
+      <DropdownMenu.Item onSelect={downloadSource} disabled={busy !== null}>
+        {sourceLabel} (.{sourceExt})
+      </DropdownMenu.Item>
+      <DropdownMenu.Item onSelect={downloadAcceptedSource} disabled={busy !== null}>
+        {acceptedSourceLabel} (.{sourceExt})
+      </DropdownMenu.Item>
+      {doc.format === 'markdown' && (
+        <>
+          <DropdownMenu.Item onSelect={() => downloadChapters(false)} disabled={busy !== null}>
+            Markdown chapters (.zip)
           </DropdownMenu.Item>
-          <DropdownMenu.Item onSelect={downloadAcceptedSource} disabled={busy !== null}>
-            {acceptedSourceLabel} (.{sourceExt})
+          <DropdownMenu.Item onSelect={() => downloadChapters(true)} disabled={busy !== null}>
+            Markdown chapters with proposals accepted
           </DropdownMenu.Item>
-          {doc.format === 'markdown' && (
-            <>
-              <DropdownMenu.Item onSelect={() => downloadChapters(false)} disabled={busy !== null}>
-                Markdown chapters (.zip)
-              </DropdownMenu.Item>
-              <DropdownMenu.Item onSelect={() => downloadChapters(true)} disabled={busy !== null}>
-                Markdown chapters with proposals accepted
-              </DropdownMenu.Item>
-            </>
-          )}
-          {/* Word entries grouped between separators so the toolbar
-            visually pairs them as one feature. */}
-          <DropdownMenu.Separator />
-          <DropdownMenu.Item onSelect={() => downloadDocx(false)} disabled={busy !== null}>
-            Word document (.docx)
-          </DropdownMenu.Item>
-          <DropdownMenu.Item onSelect={downloadAcceptedDocx} disabled={busy !== null}>
-            Word document with proposals accepted
-          </DropdownMenu.Item>
-          {reviewExportEnabled && (
-            <DropdownMenu.Item onSelect={() => downloadDocx(true)} disabled={busy !== null}>
-              Word document with comments &amp; change proposals
-            </DropdownMenu.Item>
-          )}
-          <DropdownMenu.Separator />
-          <DropdownMenu.Item onSelect={() => openEpubDialog('current')} disabled={busy !== null}>
-            EPUB book (.epub)
-          </DropdownMenu.Item>
-          <DropdownMenu.Item onSelect={() => openEpubDialog('accepted')} disabled={busy !== null}>
-            EPUB book with proposals accepted
-          </DropdownMenu.Item>
-          <DropdownMenu.Separator />
-          <DropdownMenu.Item onSelect={downloadPdf} disabled={busy !== null}>
-            PDF document (.pdf)
-          </DropdownMenu.Item>
-          {doc.mermaid_renderer === 'chromium' && (
-            <DropdownMenu.Label>Diagrams: Chromium (high fidelity, slower)</DropdownMenu.Label>
-          )}
-        </DropdownMenu.Content>
-      </DropdownMenu.Root>
-
-      <Dialog.Root open={epubMode !== null} onOpenChange={(open) => !open && closeEpubDialog()}>
-        <Dialog.Content size="2" maxWidth="520px" className="dialog-content--fixed-footer">
-          <div className="dialog-scroll-body">
-            <Dialog.Title>Download EPUB</Dialog.Title>
-            <Dialog.Description size="2" color="gray" mb="4">
-              {epubMode === 'accepted'
-                ? 'Open edit proposals will be applied to a temporary export copy.'
-                : 'The EPUB will use the current document text.'}
-            </Dialog.Description>
-            <Flex direction="column" gap="3">
-              <Flex gap="3" align="start">
-                {thumbSrc && (
-                  <Flex direction="column" gap="1" align="center" flexShrink="0">
-                    <img
-                      className="cover-thumb cover-thumb--dialog"
-                      src={thumbSrc}
-                      alt={coverPreview ? 'Selected cover' : 'Current cover'}
-                    />
-                    <Text size="1" color="gray" align="center">
-                      {thumbCaption}
-                    </Text>
-                  </Flex>
-                )}
-                <Flex direction="column" gap="2" flexGrow="1">
-                  <Text size="2" weight="medium">
-                    Cover image (optional)
-                  </Text>
-                  <Text size="1" color="gray">
-                    PNG, JPEG, GIF, or WebP, up to 10 MB.{' '}
-                    {canStoreCover
-                      ? 'Saved with the document, so every later export and the document list use it.'
-                      : 'Used for this download only — saving a cover on the document needs edit rights.'}{' '}
-                    {storedCover
-                      ? 'Pick a file to replace the current cover.'
-                      : 'Without one, a cover is generated from the document title.'}
-                  </Text>
-                  <FileDropZone
-                    accept="image/png,image/jpeg,image/gif,image/webp"
-                    acceptFile={isCoverImageFile}
-                    onFile={(file) => {
-                      setCover(file);
-                      setCoverNotice(null);
-                    }}
-                    disabled={busy === 'epub' || savingCover}
-                    label={
-                      cover ? `Selected: ${cover.name}` : 'Drop a cover image — or click to browse'
-                    }
-                  />
-                  {canStoreCover && (cover || storedCover) && (
-                    <Flex gap="2" mt="1" wrap="wrap">
-                      {cover && (
-                        <Button
-                          type="button"
-                          size="1"
-                          variant="soft"
-                          onClick={() => void saveCoverOnly()}
-                          disabled={savingCover || removingCover || busy === 'epub'}
-                        >
-                          {savingCover ? 'Saving…' : 'Save cover'}
-                        </Button>
-                      )}
-                      {storedCover && (
-                        <Button
-                          type="button"
-                          size="1"
-                          variant="soft"
-                          color="gray"
-                          onClick={() => void removeStoredCover()}
-                          disabled={removingCover || savingCover || busy === 'epub'}
-                        >
-                          {removingCover ? 'Removing…' : 'Remove saved cover'}
-                        </Button>
-                      )}
-                    </Flex>
-                  )}
-                  {coverNotice && (
-                    <Text size="1" color="green">
-                      {coverNotice}
-                    </Text>
-                  )}
-                </Flex>
-              </Flex>
-              {epubError && (
-                <Callout.Root color="red" size="1">
-                  <Callout.Text>{epubError}</Callout.Text>
-                </Callout.Root>
-              )}
-            </Flex>
-          </div>
-          <Flex className="dialog-footer" justify="end" gap="2" mt="3">
-            <Button
-              type="button"
-              variant="soft"
-              color="gray"
-              onClick={closeEpubDialog}
-              disabled={busy === 'epub' || savingCover}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              onClick={() => void downloadEpub()}
-              disabled={busy === 'epub' || savingCover}
-            >
-              {busy === 'epub' ? 'Creating EPUB…' : 'Download EPUB'}
-            </Button>
-          </Flex>
-        </Dialog.Content>
-      </Dialog.Root>
+        </>
+      )}
+      {/* Word entries grouped between separators so the toolbar
+        visually pairs them as one feature. */}
+      <DropdownMenu.Separator />
+      <DropdownMenu.Item onSelect={() => downloadDocx(false)} disabled={busy !== null}>
+        Word document (.docx)
+      </DropdownMenu.Item>
+      <DropdownMenu.Item onSelect={downloadAcceptedDocx} disabled={busy !== null}>
+        Word document with proposals accepted
+      </DropdownMenu.Item>
+      {reviewExportEnabled && (
+        <DropdownMenu.Item onSelect={() => downloadDocx(true)} disabled={busy !== null}>
+          Word document with comments &amp; change proposals
+        </DropdownMenu.Item>
+      )}
+      <DropdownMenu.Separator />
+      <DropdownMenu.Item onSelect={() => openEpubDialog('current')} disabled={busy !== null}>
+        EPUB book (.epub)
+      </DropdownMenu.Item>
+      <DropdownMenu.Item onSelect={() => openEpubDialog('accepted')} disabled={busy !== null}>
+        EPUB book with proposals accepted
+      </DropdownMenu.Item>
+      <DropdownMenu.Separator />
+      <DropdownMenu.Item onSelect={downloadPdf} disabled={busy !== null}>
+        PDF document (.pdf)
+      </DropdownMenu.Item>
+      {doc.mermaid_renderer === 'chromium' && (
+        <DropdownMenu.Label>Diagrams: Chromium (high fidelity, slower)</DropdownMenu.Label>
+      )}
     </>
   );
+
+  const dialog = (
+    <Dialog.Root open={epubMode !== null} onOpenChange={(open) => !open && closeEpubDialog()}>
+      <Dialog.Content
+        size="2"
+        maxWidth="520px"
+        className="dialog-content--fixed-footer"
+        onCloseAutoFocus={returnFocusTo(returnFocus)}
+      >
+        <div className="dialog-scroll-body">
+          <Dialog.Title>Download EPUB</Dialog.Title>
+          <Dialog.Description size="2" color="gray" mb="4">
+            {epubMode === 'accepted'
+              ? 'Open edit proposals will be applied to a temporary export copy.'
+              : 'The EPUB will use the current document text.'}
+          </Dialog.Description>
+          <Flex direction="column" gap="3">
+            <Flex gap="3" align="start">
+              {thumbSrc && (
+                <Flex direction="column" gap="1" align="center" flexShrink="0">
+                  <img
+                    className="cover-thumb cover-thumb--dialog"
+                    src={thumbSrc}
+                    alt={coverPreview ? 'Selected cover' : 'Current cover'}
+                  />
+                  <Text size="1" color="gray" align="center">
+                    {thumbCaption}
+                  </Text>
+                </Flex>
+              )}
+              <Flex direction="column" gap="2" flexGrow="1">
+                <Text size="2" weight="medium">
+                  Cover image (optional)
+                </Text>
+                <Text size="1" color="gray">
+                  PNG, JPEG, GIF, or WebP, up to 10 MB.{' '}
+                  {canStoreCover
+                    ? 'Saved with the document, so every later export and the document list use it.'
+                    : 'Used for this download only — saving a cover on the document needs edit rights.'}{' '}
+                  {storedCover
+                    ? 'Pick a file to replace the current cover.'
+                    : 'Without one, a cover is generated from the document title.'}
+                </Text>
+                <FileDropZone
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  acceptFile={isCoverImageFile}
+                  onFile={(file) => {
+                    setCover(file);
+                    setCoverNotice(null);
+                  }}
+                  disabled={busy === 'epub' || savingCover}
+                  label={
+                    cover ? `Selected: ${cover.name}` : 'Drop a cover image — or click to browse'
+                  }
+                />
+                {canStoreCover && (cover || storedCover) && (
+                  <Flex gap="2" mt="1" wrap="wrap">
+                    {cover && (
+                      <Button
+                        type="button"
+                        size="1"
+                        variant="soft"
+                        onClick={() => void saveCoverOnly()}
+                        disabled={savingCover || removingCover || busy === 'epub'}
+                      >
+                        {savingCover ? 'Saving…' : 'Save cover'}
+                      </Button>
+                    )}
+                    {storedCover && (
+                      <Button
+                        type="button"
+                        size="1"
+                        variant="soft"
+                        color="gray"
+                        onClick={() => void removeStoredCover()}
+                        disabled={removingCover || savingCover || busy === 'epub'}
+                      >
+                        {removingCover ? 'Removing…' : 'Remove saved cover'}
+                      </Button>
+                    )}
+                  </Flex>
+                )}
+                {coverNotice && (
+                  <Text size="1" color="green">
+                    {coverNotice}
+                  </Text>
+                )}
+              </Flex>
+            </Flex>
+            {epubError && (
+              <Callout.Root color="red" size="1">
+                <Callout.Text>{epubError}</Callout.Text>
+              </Callout.Root>
+            )}
+          </Flex>
+        </div>
+        <Flex className="dialog-footer" justify="end" gap="2" mt="3">
+          <Button
+            type="button"
+            variant="soft"
+            color="gray"
+            onClick={closeEpubDialog}
+            disabled={busy === 'epub' || savingCover}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={() => void downloadEpub()}
+            disabled={busy === 'epub' || savingCover}
+          >
+            {busy === 'epub' ? 'Creating EPUB…' : 'Download EPUB'}
+          </Button>
+        </Flex>
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+
+  return { busy: busy !== null, items, dialog, dialogOpen: epubMode !== null };
 }
 
 /**

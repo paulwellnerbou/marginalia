@@ -10,7 +10,7 @@ import {
   Text,
   TextField,
 } from '@radix-ui/themes';
-import { useState } from 'react';
+import { useImperativeHandle, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Document, MermaidRenderer } from '../lib/api.js';
 import {
@@ -25,6 +25,7 @@ import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { BUILT_IN_THEMES } from '../lib/themes.js';
 import { ArmedButton } from './ArmedButton.js';
+import { type FoldableDialogProps, returnFocusTo } from './foldedDialog.js';
 
 /**
  * "Document Settings" — non-permission concerns. Splits cleanly from
@@ -38,10 +39,12 @@ import { ArmedButton } from './ArmedButton.js';
 export function DocumentSettingsDialog({
   doc,
   onChange,
+  ref,
+  foldedInto,
 }: {
   doc: Document;
   onChange: (uid: string, s: Partial<DocumentSettingsResponse>) => void;
-}) {
+} & FoldableDialogProps) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [docName, setDocName] = useState(doc.name ?? '');
@@ -142,33 +145,41 @@ export function DocumentSettingsDialog({
     // No `finally`: on success this component unmounts with the route.
   }
 
+  function onOpenChange(next: boolean) {
+    if (next) {
+      // The component stays mounted between openings. Seed from the
+      // latest parent snapshot rather than an earlier visit's draft.
+      setDocName(doc.name ?? '');
+      setDefaultTheme(doc.default_theme);
+      setMermaidChoice(doc.mermaid_renderer ?? DEFAULT_RENDERER_VALUE);
+      setError(null);
+      setDeleting(false);
+    }
+    setOpen(next);
+  }
+
+  useImperativeHandle(ref, () => ({ open: () => onOpenChange(true) }));
+
   return (
-    <Dialog.Root
-      open={open}
-      onOpenChange={(next) => {
-        if (next) {
-          // The component stays mounted between openings. Seed from the
-          // latest parent snapshot rather than an earlier visit's draft.
-          setDocName(doc.name ?? '');
-          setDefaultTheme(doc.default_theme);
-          setMermaidChoice(doc.mermaid_renderer ?? DEFAULT_RENDERER_VALUE);
-          setError(null);
-          setDeleting(false);
-        }
-        setOpen(next);
-      }}
-    >
-      <Dialog.Trigger>
-        <IconButton
-          variant="soft"
-          size="2"
-          aria-label="Document settings"
-          title="Document settings"
-        >
-          <GearIcon />
-        </IconButton>
-      </Dialog.Trigger>
-      <Dialog.Content size="3" maxWidth="640px" className="dialog-content--fixed-footer">
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      {!foldedInto && (
+        <Dialog.Trigger>
+          <IconButton
+            variant="soft"
+            size="2"
+            aria-label="Document settings"
+            title="Document settings"
+          >
+            <GearIcon />
+          </IconButton>
+        </Dialog.Trigger>
+      )}
+      <Dialog.Content
+        size="3"
+        maxWidth="640px"
+        className="dialog-content--fixed-footer"
+        onCloseAutoFocus={returnFocusTo(foldedInto)}
+      >
         <div className="dialog-scroll-body">
           <Dialog.Title>Document settings</Dialog.Title>
           <Dialog.Description size="2" color="gray" mb="4">
