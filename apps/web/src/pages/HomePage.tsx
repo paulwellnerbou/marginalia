@@ -321,7 +321,8 @@ function GitHubMark() {
   );
 }
 
-const IMPRINT_MD = import.meta.env.VITE_IMPRINT_MD as string | undefined;
+// Only a .env file expands `\n`; a Docker build-arg delivers it literally.
+const IMPRINT_MD = (import.meta.env.VITE_IMPRINT_MD as string | undefined)?.replace(/\\n/g, '\n');
 
 function LandingFooter() {
   return (
