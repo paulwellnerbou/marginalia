@@ -781,17 +781,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   /**
    * Re-read threads the server resolved as a side effect of a mutation.
    *
-   * Accepting a proposal also resolves the plain comment threads it
+   * Deciding a proposal can also resolve the plain comment threads it
    * answers. Every other client hears about those through `comment.updated`;
    * the acting client is deliberately excluded from that broadcast, and the
    * reconcile behind it reads only the open set — where a thread that has
-   * just been resolved no longer appears. So without this the accepting
+   * just been resolved no longer appears. So without this the deciding
    * user's own list keeps showing them open until a full refresh.
    *
    * The response names them but not their new shape, so read each one back
    * rather than reconstructing it here: the server decides `capabilities`
    * and `resolution`, which are what the card renders. Never rejects — this
-   * corrects what the reader cannot see yet and must not fail the accept.
+   * corrects what the reader cannot see yet and must not fail the decision.
    */
   const landAnsweredThreads = useCallback(
     async (threadIds: readonly string[]) => {
@@ -1922,9 +1922,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
           // would throw away the very reconcile they precede.
           void landAnsweredThreads(resolvedAnsweredThreadIds).then(reconcileThreadsSoon);
         } else {
-          const updated = await apiRejectProposal(doc.uid, id, identity, body);
+          const { thread: updated, resolvedAnsweredThreadIds } = await apiRejectProposal(
+            doc.uid,
+            id,
+            identity,
+            body,
+          );
           landThread(updated);
-          reconcileThreadsSoon();
+          void landAnsweredThreads(resolvedAnsweredThreadIds).then(reconcileThreadsSoon);
         }
         return { ok: true };
       } catch (err) {

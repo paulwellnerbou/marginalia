@@ -349,9 +349,12 @@ proposal with several links, not the same edit proposed once per comment. It the
 inside each of those threads' cards.
 
 Links are many-to-many: one comment can also collect several proposals, because a first
-attempt you reject and its replacement both point back at the same request. When the
-feedback is *"almost — change one thing"*, don't open a second proposal: `update_proposal`
-swaps in new text while the thread, its links and the discussion stay put.
+attempt you reject and its replacement both point back at the same request. While more than
+one is open, accepting one leaves the comment open — the others are still waiting on a
+decision inside its card — and it resolves once the last of them is decided, as long as one
+was accepted. When the feedback is *"almost — change one thing"*, don't open a second
+proposal: `update_proposal` swaps in new text while the thread, its links and the discussion
+stay put.
 
 `list_threads` with `needs_proposal: true` is the resulting backlog — open comment threads
 that no proposal answers yet. It differs from `awaiting_my_response` in the case that

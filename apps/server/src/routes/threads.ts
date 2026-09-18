@@ -1508,13 +1508,31 @@ async function deleteThread(c: Context, deps: AppDeps) {
   }
 
   const now = Date.now();
-  db.prepare(
-    `UPDATE comments
-        SET deleted_at = ?, updated_at = ?
-      WHERE doc_uid = ?
-        AND deleted_at IS NULL
-        AND (id = ? OR parent_id = ? OR parent_proposal_id = ?)`,
-  ).run(now, now, doc.uid, tid, tid, tid);
+  let resolvedAnsweredThreadIds: string[] = [];
+  db.exec('BEGIN');
+  try {
+    db.prepare(
+      `UPDATE comments
+          SET deleted_at = ?, updated_at = ?
+        WHERE doc_uid = ?
+          AND deleted_at IS NULL
+          AND (id = ? OR parent_id = ? OR parent_proposal_id = ?)`,
+    ).run(now, now, doc.uid, tid, tid, tid);
+    // The comments it answers may have been waiting only on this one.
+    if (row.proposal_status === 'open') {
+      resolvedAnsweredThreadIds = resolveAnsweredThreads(
+        db,
+        doc.uid,
+        row,
+        decision.identity,
+        false,
+      );
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
   if (isProposalRow(row)) {
     // Keep the branch ref for accepted proposals: history summaries may
     // still read the tip, and for a 3-way accept the ref is the only
@@ -1534,6 +1552,7 @@ async function deleteThread(c: Context, deps: AppDeps) {
       decision.identity.clientId,
     );
   }
+  broadcastAnsweredThreads(deps, doc.uid, resolvedAnsweredThreadIds, decision.identity);
   return c.body(null, 204);
 }
 
@@ -1994,7 +2013,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
   }
 
   let documentOid: string | null = null;
-  // Filled when accepting a proposal also closes the comment threads it
+  // Filled when deciding a proposal also closes the comment threads it
   // was written to answer.
   let resolvedAnsweredThreadIds: string[] = [];
   let preparedWorkflow: PreparedThreadWorkflow | null = null;
@@ -2037,11 +2056,12 @@ async function respondToThread(c: Context, deps: AppDeps) {
             SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
           WHERE id = ?`,
       ).run(now, identity.displayName, now, tid);
+      resolvedAnsweredThreadIds = resolveAnsweredThreads(db, doc.uid, row, identity, false);
     } else if (action === 'accept') {
       if (!preparedWorkflow) throw new ThreadActionError(409, 'proposal-orphaned');
       documentOid = preparedWorkflow.oid;
       reanchoredProposalUpdates = preparedWorkflow.applyDb();
-      resolvedAnsweredThreadIds = resolveAnsweredThreads(db, doc.uid, row, identity);
+      resolvedAnsweredThreadIds = resolveAnsweredThreads(db, doc.uid, row, identity, true);
     } else if (action === 'reopen') {
       const now = Date.now();
       if (!isProposal) {
@@ -2138,16 +2158,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
     );
   }
 
-  for (const answeredId of resolvedAnsweredThreadIds) {
-    const answered = loadThreadRow(db, answeredId, doc.uid);
-    if (answered && answered.is_hidden === 0) {
-      realtime.broadcast(
-        doc.uid,
-        { type: 'comment.updated', comment: toLegacyCommentWire(answered) },
-        identity.clientId,
-      );
-    }
-  }
+  broadcastAnsweredThreads(deps, doc.uid, resolvedAnsweredThreadIds, identity);
 
   // Accepting rewrites the document, and the client used to learn the new
   // text only by re-fetching and re-rendering the whole thing. Both are
@@ -2191,6 +2202,16 @@ async function respondToThread(c: Context, deps: AppDeps) {
  * whose fix has already landed. An edit usually rewrites a whole
  * paragraph, so it can settle several of them at once.
  *
+ * Not while another proposal answering the comment is still undecided,
+ * though: that proposal renders inside the comment's card, and closing
+ * the comment would put the card away with a decision still pending in
+ * it. The comment closes with the last of its proposals instead: when
+ * that one is accepted, or when it is rejected or deleted after another
+ * proposal for the comment was accepted while it was open — the accept
+ * it held back. An accept from before it existed doesn't count: the
+ * comment is only open again because someone reopened it after that
+ * accept, and turning down a later attempt doesn't settle it.
+ *
  * Only plain comment threads are closed. A proposal thread has its own
  * accepted/rejected lifecycle in `comments_edit_proposals.status`, and
  * setting `resolved_at` on one without touching that would leave the two
@@ -2204,6 +2225,7 @@ function resolveAnsweredThreads(
   docUid: string,
   proposal: ThreadRow,
   identity: Identity,
+  accepted: boolean,
 ): string[] {
   const resolved: string[] = [];
   const now = Date.now();
@@ -2212,16 +2234,52 @@ function resolveAnsweredThreads(
         SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
       WHERE id = ? AND doc_uid = ?`,
   );
+  // An accepted proposal's `resolved_at` is when it was accepted.
+  const otherAnswers = db.prepare(
+    `SELECT COALESCE(SUM(cep.status = 'open'), 0) AS undecided,
+            COALESCE(SUM(cep.status = 'accepted' AND p.resolved_at >= ?), 0) AS accepted_since
+       FROM comments_edit_proposal_answers a
+       JOIN comments p ON p.id = a.proposal_comment_id
+       JOIN comments_edit_proposals cep ON cep.comment_id = p.id
+      WHERE a.answered_comment_id = ?
+        AND a.proposal_comment_id <> ?
+        AND p.deleted_at IS NULL`,
+  );
   for (const answeredId of parseAnswerIds(proposal.answers_comment_ids)) {
     const answered = loadThreadRow(db, answeredId, docUid);
     if (!answered) continue;
     if (!canViewThread(answered, identity)) continue;
     if (answered.proposal_status !== null) continue;
     if (answered.resolved_at !== null) continue;
+    const others = otherAnswers.get(proposal.created_at, answeredId, proposal.id) as {
+      undecided: number;
+      accepted_since: number;
+    };
+    if (others.undecided > 0) continue;
+    if (!accepted && others.accepted_since === 0) continue;
     close.run(now, identity.displayName, now, answeredId, docUid);
     resolved.push(answeredId);
   }
   return resolved;
+}
+
+/** Tell other viewers about the comments `resolveAnsweredThreads` closed. */
+function broadcastAnsweredThreads(
+  deps: AppDeps,
+  docUid: string,
+  threadIds: readonly string[],
+  identity: Identity,
+): void {
+  for (const answeredId of threadIds) {
+    const answered = loadThreadRow(deps.db, answeredId, docUid);
+    if (answered && answered.is_hidden === 0) {
+      deps.realtime.broadcast(
+        docUid,
+        { type: 'comment.updated', comment: toLegacyCommentWire(answered) },
+        identity.clientId,
+      );
+    }
+  }
 }
 
 async function prepareAcceptProposalThread(
