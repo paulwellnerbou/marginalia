@@ -3,10 +3,22 @@ import type {
   BlockInfo,
   BlockOccurrence,
   BlockSourceRange,
+  RenderResult,
   SectionContext,
 } from '@marginalia/renderer';
 import { canMergeMultiBlock, scoreSectionMatch } from '@marginalia/renderer';
-import { parseHeadingPath, parseIntArray } from '../anchoring.js';
+import {
+  anchorUnchanged,
+  parseHeadingPath,
+  parseIntArray,
+  prepareBlockReplacements,
+  REANCHOR_COMMENT_SQL,
+  reanchor,
+  reanchorParams,
+  TOP_LEVEL_COMMENTS_SQL,
+  type TopLevelCommentRow,
+} from '../anchoring.js';
+import type { Identity } from '../auth.js';
 import {
   locateDocumentBlockOccurrencesCached,
   locateDocumentBlocksCached,
@@ -18,6 +30,7 @@ import {
   parseAnswerIds,
 } from '../db.js';
 import type { GitStore } from '../git-store.js';
+import { renderDocumentCached } from '../render-cache.js';
 import { toWire as toCommentWire } from './comments.js';
 
 /**
@@ -416,6 +429,201 @@ export function locateProposalAnchorBySourceSpan(
     endBlock: null,
     quote: source.slice(start, end) || located.range.text,
     linkStatus: located.confidence,
+  };
+}
+
+interface PostAcceptAnchorSnapshot {
+  blockId: string;
+  quote: string;
+  startOffset: number;
+  endOffset: number;
+  headingPath: string;
+  sectionIndex: number;
+  sectionIndexPath: string;
+  linkStatus: 'linked' | 'low-confidence';
+}
+
+/**
+ * Turn the paragraph produced by an accepted proposal into a complete new
+ * anchor. Keeping the old quote with the new content-hash block id makes the
+ * very next document save treat that id as stale and orphan the proposal.
+ * Accepted history is recovered from git, so the anchor can (and should)
+ * describe the current paragraph instead of doubling as the old snapshot.
+ */
+export function snapshotPostAcceptAnchor({
+  block,
+  linkStatus,
+}: {
+  block: BlockInfo;
+  linkStatus: 'linked' | 'low-confidence';
+}): PostAcceptAnchorSnapshot {
+  return {
+    blockId: block.id,
+    quote: block.text,
+    startOffset: 0,
+    endOffset: block.text.length,
+    headingPath: JSON.stringify(block.headingPath),
+    sectionIndex: block.sectionIndex,
+    sectionIndexPath: JSON.stringify(block.sectionIndexPath),
+    linkStatus,
+  };
+}
+
+export interface AcceptUndo {
+  /** The restore commit. */
+  oid: string;
+  rendered: RenderResult;
+  /**
+   * The DB side, synchronous so it can run inside a transaction.
+   * `reopened` is false when the proposal was deleted or is no longer
+   * accepted; `orphaned` are the open proposals the restore orphaned.
+   */
+  applyDb: () => { reopened: boolean; orphaned: EditProposalThreadRow[] };
+}
+
+/**
+ * Undo an accept — the thread's Reopen and the History revert alike:
+ * restore the source its commit replaced, re-anchor every thread across
+ * the change, and reopen the proposal on the span it was written against.
+ * `accept` is that commit's diff, `restoredFromOid` its parent.
+ */
+export async function prepareAcceptUndo(
+  { db, store }: { db: Database; store: GitStore },
+  doc: DocumentRow,
+  proposalId: string,
+  accept: { before: string; after: string },
+  restoredFromOid: string,
+  identity: Identity,
+): Promise<AcceptUndo> {
+  const { oid } = await store.write(doc, accept.before, identity, 'restore', {
+    restoredFromOid,
+  });
+
+  const rendered = await renderDocumentCached(accept.before, doc.format);
+  const previousBlocks = locateDocumentBlocks(doc, accept.after);
+  const knownBlocks = locateDocumentBlocks(doc, accept.before);
+  const blockReplacements = prepareBlockReplacements({
+    before: previousBlocks,
+    after: knownBlocks,
+  });
+  const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
+  const commentAnchorUpdates = topLevel.flatMap((comment) => {
+    const upd = reanchor(comment, rendered.blocks, {
+      isEditProposal: comment.is_edit_proposal === 1,
+      blockReplacements,
+    });
+    // Skip the rows that did not move — see `anchorUnchanged`.
+    if (anchorUnchanged(comment, upd)) return [];
+    return [{ commentId: comment.id, ...upd }];
+  });
+
+  const proposal = loadProposalRow(db, proposalId, doc.uid);
+  const restoredProposalAnchor =
+    proposal && proposal.base_block_start !== null && proposal.base_block_end !== null
+      ? locateProposalAnchorBySourceSpan(
+          knownBlocks,
+          rendered.blocks,
+          accept.before,
+          proposal.base_block_start,
+          proposal.base_block_end,
+          doc.format,
+        )
+      : null;
+  // The accept carried the comments it answered onto its paragraph, which
+  // left them sharing the proposal's anchor; they go back with it, rather
+  // than keep quoting text the restore just removed. Matched against the
+  // rows read above, before `applyDb` re-anchors them.
+  const carriedBack =
+    !proposal || proposal.is_whole_document === 1 || !proposal.anchor_block_id
+      ? []
+      : parseAnswerIds(proposal.answers_comment_ids).filter((id) => {
+          const comment = topLevel.find((c) => c.id === id);
+          return (
+            comment?.anchor_block_id === proposal.anchor_block_id &&
+            comment.anchor_quote === proposal.anchor_quote
+          );
+        });
+
+  return {
+    oid,
+    rendered,
+    applyDb: () => {
+      const now = Date.now();
+      db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
+
+      const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
+      for (const upd of commentAnchorUpdates) {
+        updateStmt.run(...reanchorParams(upd, now, upd.commentId));
+      }
+
+      const reopened = reopenAcceptedProposal(db, doc.uid, proposalId, now) !== null;
+      if (reopened && restoredProposalAnchor) {
+        db.prepare(
+          `UPDATE comments
+              SET anchor_block_id = ?,
+                  anchor_end_block_id = ?,
+                  anchor_quote = ?,
+                  anchor_prefix = '',
+                  anchor_suffix = '',
+                  anchor_start_offset = NULL,
+                  anchor_end_offset = NULL,
+                  anchor_heading_path = ?,
+                  anchor_section_index = ?,
+                  anchor_section_index_path = ?,
+                  link_status = ?,
+                  updated_at = ?
+            WHERE id = ?`,
+        ).run(
+          restoredProposalAnchor.block.id,
+          restoredProposalAnchor.endBlock?.id ?? null,
+          restoredProposalAnchor.quote,
+          JSON.stringify(restoredProposalAnchor.block.headingPath),
+          restoredProposalAnchor.block.sectionIndex,
+          JSON.stringify(restoredProposalAnchor.block.sectionIndexPath),
+          restoredProposalAnchor.linkStatus,
+          now,
+          proposalId,
+        );
+
+        // The same whole-paragraph anchor the accept gave them, now on the
+        // restored paragraph — not the proposal's own, which quotes source
+        // where a comment quotes rendered text.
+        const home = snapshotPostAcceptAnchor(restoredProposalAnchor);
+        const carryBack = db.prepare(
+          `UPDATE comments
+              SET anchor_block_id = ?,
+                  anchor_end_block_id = NULL,
+                  anchor_quote = ?,
+                  anchor_prefix = '',
+                  anchor_suffix = '',
+                  anchor_start_offset = ?,
+                  anchor_end_offset = ?,
+                  anchor_heading_path = ?,
+                  anchor_section_index = ?,
+                  anchor_section_index_path = ?,
+                  link_status = ?,
+                  updated_at = ?
+            WHERE id = ?`,
+        );
+        for (const id of carriedBack) {
+          carryBack.run(
+            home.blockId,
+            home.quote,
+            home.startOffset,
+            home.endOffset,
+            home.headingPath,
+            home.sectionIndex,
+            home.sectionIndexPath,
+            home.linkStatus,
+            now,
+            id,
+          );
+        }
+      }
+
+      const orphaned = reanchorProposals(db, doc.uid, knownBlocks, doc.format, now);
+      return { reopened, orphaned };
+    },
   };
 }
 
