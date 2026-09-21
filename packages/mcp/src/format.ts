@@ -297,7 +297,7 @@ export function threadDetail(
   if (answers.length > 0) {
     lines.push(
       `answers comment thread${answers.length === 1 ? '' : 's'}: ${answers.join(', ')}` +
-        ' (all resolved on accept)',
+        ' (each resolved on accept unless another proposal for it is still open)',
     );
   }
   if (thread.answered_by_thread_ids.length > 0) {

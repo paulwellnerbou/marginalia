@@ -365,9 +365,10 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .describe(
             'The comment threads this proposal answers. Records a real link both ways — each ' +
               'reviewer sees "Proposed change" on their comment — and posts a reply in every ' +
-              'one. Accepting the proposal then resolves all of them automatically. Name every ' +
-              'comment the edit settles, not just the one that prompted it: rewriting a ' +
-              'paragraph usually answers each open comment anchored in it.',
+              'one. Accepting the proposal then resolves them automatically, except one that ' +
+              'another open proposal also answers. Name every comment the edit settles, not ' +
+              'just the one that prompted it: rewriting a paragraph usually answers each open ' +
+              'comment anchored in it.',
           ),
         answers_thread_id: z
           .string()
@@ -441,8 +442,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         if (answered.length > 0) {
           notice =
             answered.length === 1
-              ? `Linked to thread ${answered[0]}: it now shows this proposal, and accepting the proposal will resolve it.`
-              : `Linked to ${answered.length} threads (${answered.join(', ')}): each now shows this proposal, and accepting it will resolve all of them.`;
+              ? `Linked to thread ${answered[0]}: it now shows this proposal, and accepting the proposal will resolve it unless another proposal for it is still open.`
+              : `Linked to ${answered.length} threads (${answered.join(', ')}): each now shows this proposal, and accepting it will resolve each one no other open proposal also answers.`;
           const replyFailures: string[] = [];
           for (const answeredId of answered) {
             try {

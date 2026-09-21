@@ -3778,11 +3778,11 @@ describe('threads API', () => {
       return { status: res.status, body: (await res.json()) as Record<string, unknown> };
     }
 
-    // `state=all`: these cases follow a comment and the proposal
-    // answering it through acceptance, which resolves both.
-    async function threadsOf(uid: string): Promise<ThreadShape[]> {
+    // `state=all` by default: these cases follow a comment and the
+    // proposal answering it through acceptance, which resolves both.
+    async function threadsOf(uid: string, state: 'all' | 'open' = 'all'): Promise<ThreadShape[]> {
       const res = await app.hono.fetch(
-        new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+        new Request(`http://test/api/documents/${uid}/threads?state=${state}`, {
           headers: headersFor(ALICE),
         }),
       );
@@ -4163,6 +4163,27 @@ describe('threads API', () => {
         return { uid, commentId, first, second };
       }
 
+      async function remove(uid: string, threadId: string): Promise<number> {
+        const res = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/threads/${threadId}`, {
+            method: 'DELETE',
+            headers: asAdmin(),
+          }),
+        );
+        return res.status;
+      }
+
+      async function save(uid: string, markdown: string): Promise<void> {
+        const res = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}`, {
+            method: 'PUT',
+            headers: asAdmin(),
+            body: JSON.stringify({ markdown }),
+          }),
+        );
+        expect(res.status).toBe(200);
+      }
+
       test('accepting one leaves the comment open', async () => {
         const { uid, commentId, first, second } = await seedAlternatives();
 
@@ -4173,20 +4194,34 @@ describe('threads API', () => {
         // The open read is what the viewer renders from: a resolved
         // comment would take its card, and the undecided proposal inside
         // it, off the page.
-        const res = await app.hono.fetch(
-          new Request(`http://test/api/documents/${uid}/threads`, { headers: headersFor(ALICE) }),
-        );
-        const open = ((await res.json()) as { threads: ThreadShape[] }).threads;
+        const open = await threadsOf(uid, 'open');
         expect(open.map((t) => t.id)).toEqual([commentId, second]);
+
+        // The rewrite orphaned the other proposal, so the comment's anchor
+        // is all that still places the card: it moves onto the accepted
+        // text just as a resolved one would.
+        const comment = open.find((t) => t.id === commentId)!;
+        const accepted = (await threadsOf(uid)).find((t) => t.id === first)!;
+        expect(comment.link_status).toBe('linked');
+        expect(comment.anchor.block_id).toBe(accepted.anchor.block_id);
+        expect(comment.anchor.quote).toBe('One');
       });
 
       test('turning the other one down afterwards still leaves it open', async () => {
         const { uid, commentId, first, second } = await seedAlternatives();
-        await respond(uid, first, 'accept');
+        expect((await respond(uid, first, 'accept')).body.resolved_answered_thread_ids).toEqual([]);
 
         const reject = await respond(uid, second, 'reject');
         expect(reject.status).toBe(200);
         expect(reject.body.resolved_answered_thread_ids).toEqual([]);
+        expect((await threadsOf(uid)).find((t) => t.id === commentId)!.state).toBe('open');
+      });
+
+      test('deleting the other one afterwards still leaves it open', async () => {
+        const { uid, commentId, first, second } = await seedAlternatives();
+        expect((await respond(uid, first, 'accept')).body.resolved_answered_thread_ids).toEqual([]);
+
+        expect(await remove(uid, second)).toBe(204);
         expect((await threadsOf(uid)).find((t) => t.id === commentId)!.state).toBe('open');
       });
 
@@ -4224,16 +4259,111 @@ describe('threads API', () => {
 
       test('a deleted one no longer holds the comment open', async () => {
         const { uid, commentId, first, second } = await seedAlternatives();
-        const del = await app.hono.fetch(
-          new Request(`http://test/api/documents/${uid}/threads/${second}`, {
-            method: 'DELETE',
-            headers: asAdmin(),
-          }),
-        );
-        expect(del.status).toBe(204);
+        expect(await remove(uid, second)).toBe(204);
 
         const accept = await respond(uid, first, 'accept');
         expect(accept.body.resolved_answered_thread_ids).toEqual([commentId]);
+      });
+
+      test('the comment stays on a block the accept did not touch', async () => {
+        const uid = await newDoc('# Title\n\nThe cat sat on the mat.\n');
+        const commentId = (
+          (
+            await addComment(
+              uid,
+              ALICE,
+              {
+                block_id: await blockIdOf(uid, 'The cat sat on the mat.'),
+                quote: 'The cat sat on the mat.',
+              },
+              'please fix',
+            )
+          ).body.comment as { id: string }
+        ).id;
+        // Rewording the paragraph leaves the comment low-confidence on it.
+        await save(uid, '# Title\n\nThe cat sat on the mat, purring.\n');
+        const paragraphId = await blockIdOf(uid, 'The cat sat on the mat, purring.');
+        const title = await propose(
+          uid,
+          ALICE,
+          await firstBlockId(uid),
+          '# Better title',
+          commentId,
+        );
+        await propose(
+          uid,
+          ALICE,
+          paragraphId,
+          'The dog sat on the mat.',
+          commentId,
+          'The cat sat on the mat, purring.',
+        );
+
+        expect((await respond(uid, title.id as string, 'accept')).status).toBe(200);
+
+        const comment = (await threadsOf(uid)).find((t) => t.id === commentId)!;
+        expect(comment.state).toBe('open');
+        expect(comment.anchor.block_id).toBe(paragraphId);
+      });
+
+      test('a whole-document accept leaves the comment where re-anchoring puts it', async () => {
+        const uid = await newDoc('# Title\n\nPara one.\n\nPara two.\n');
+        const commentId = (
+          (
+            await addComment(
+              uid,
+              ALICE,
+              { block_id: await blockIdOf(uid, 'Para two.'), quote: 'Para two.' },
+              'please fix',
+            )
+          ).body.comment as { id: string }
+        ).id;
+        const whole = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/threads`, {
+            method: 'POST',
+            headers: headersFor(ALICE),
+            body: JSON.stringify({
+              anchor: { block_id: await firstBlockId(uid), quote: 'Title' },
+              body: 'rationale',
+              proposal: {
+                proposed_text: '# Title\n\nPara one.\n\nPara two, improved.\n',
+                whole_document: true,
+                answers_thread_ids: [commentId],
+              },
+            }),
+          }),
+        );
+        const wholeId = ((await whole.json()) as { thread: ThreadShape }).thread.id;
+        await propose(
+          uid,
+          ALICE,
+          await blockIdOf(uid, 'Para two.'),
+          'Para two, reworded.',
+          commentId,
+          'Para two.',
+        );
+
+        expect((await respond(uid, wholeId, 'accept')).status).toBe(200);
+
+        // Not carried to the first block, which is all a whole-document
+        // span resolves to.
+        const comment = (await threadsOf(uid)).find((t) => t.id === commentId)!;
+        expect(comment.state).toBe('open');
+        expect(comment.anchor.block_id).toBe(await blockIdOf(uid, 'Para two, improved.'));
+      });
+
+      test('undoing the accept takes the comment back with the proposal', async () => {
+        const { uid, commentId, first } = await seedAlternatives();
+        await respond(uid, first, 'accept');
+
+        expect((await respond(uid, first, 'reopen')).status).toBe(200);
+
+        const threads = await threadsOf(uid);
+        const comment = threads.find((t) => t.id === commentId)!;
+        const reopened = threads.find((t) => t.id === first)!;
+        expect(comment.anchor.block_id).toBe(reopened.anchor.block_id);
+        expect(comment.anchor.quote).toBe('Title');
+        expect(comment.link_status).toBe('linked');
       });
     });
   });

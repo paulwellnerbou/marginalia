@@ -1399,8 +1399,8 @@ export interface ThreadProposalData {
    * Root comment threads this proposal was written to answer, oldest
    * first; empty if it stands on its own. Several because one edit
    * usually rewrites a paragraph that carries several comments, and
-   * accepting it resolves all of them. The reverse direction is
-   * `Thread.answered_by_thread_ids`.
+   * accepting it resolves all of them — except one another open proposal
+   * also answers. The reverse direction is `Thread.answered_by_thread_ids`.
    */
   answers_thread_ids: string[];
   /**
@@ -1856,7 +1856,10 @@ export function createEditProposal(
     anchor_quote: string;
     proposed_text: string;
     rationale?: string | null;
-    /** Comment threads this proposal answers; accepting it resolves them all. */
+    /**
+     * Comment threads this proposal answers; accepting it resolves each one
+     * no other open proposal also answers.
+     */
     answers_thread_ids?: string[];
   },
   identity: Identity,

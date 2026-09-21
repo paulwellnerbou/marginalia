@@ -220,7 +220,7 @@ when no password is set.
 | `create_proposal` | A suggested replacement. `answers_thread_ids` links it to the comments it answers — every one the edit settles, not just the one that prompted it. |
 | `update_proposal` | Revise an open proposal you authored, or any open proposal as document admin — new text, same thread, discussion intact. Rebuilds it against the current source, so it also refreshes a stale or conflicted proposal. `comment` posts a revision note in the discussion alongside the change. |
 | `reply_to_thread` | Answer a comment thread or an edit proposal. |
-| `respond_to_thread` | `resolve` / `accept` / `reject` / `reopen`, with an optional reply. Accepting a linked proposal also resolves every comment it answers. |
+| `respond_to_thread` | `resolve` / `accept` / `reject` / `reopen`, with an optional reply. Accepting a linked proposal also resolves the comments it answers, except one another open proposal also answers. |
 | `react_to_comment` | Toggle an emoji on any message — a comment, a proposal's rationale, or a reply. |
 | `get_proposal_diff` | Before/after, plus whether it still applies cleanly. |
 | `repair_proposal_anchor` | Re-attach a proposal orphaned by an earlier accept. |

@@ -154,7 +154,7 @@ test('fetchThread reports a vanished thread as null', async () => {
 });
 
 /**
- * Accepting a proposal also resolves the plain comment threads it answers.
+ * Accepting a proposal can also resolve the plain comment threads it answers.
  * The acting client is excluded from the broadcast that tells everyone
  * else, and the reconcile that follows reads only the open set — where a
  * just-resolved thread no longer appears. So this response is the only
