@@ -15,8 +15,6 @@ import {
   REANCHOR_COMMENT_SQL,
   reanchor,
   reanchorParams,
-  TOP_LEVEL_COMMENTS_SQL,
-  type TopLevelCommentRow,
 } from '../anchoring.js';
 import {
   authorize,
@@ -59,10 +57,11 @@ import {
   locateDocumentBlockOccurrences,
   locateDocumentBlocks,
   locateProposalAnchorBySourceSpan,
+  prepareAcceptUndo,
   readProposalContent,
   readProposalFullContent,
   reanchorProposals,
-  reopenAcceptedProposal,
+  snapshotPostAcceptAnchor,
   toWire as toProposalWire,
   windowProposalDiff,
 } from './edit-proposals.js';
@@ -2620,135 +2619,15 @@ async function prepareReopenAcceptedProposalThread(
   const diff = await deps.store.diffAt(doc, row.accepted_oid);
   if (!diff) throw new ThreadActionError(409, 'not-reopenable');
 
-  const { oid } = await deps.store.write(doc, diff.before, identity, 'restore', {
-    restoredFromOid: parent.oid,
-  });
-
-  const rendered = await renderDocumentCached(diff.before, doc.format);
-  const previousBlocks = locateDocumentBlocks(doc, diff.after);
-  const knownBlocks = locateDocumentBlocks(doc, diff.before);
-  const blockReplacements = prepareBlockReplacements({
-    before: previousBlocks,
-    after: knownBlocks,
-  });
-  const topLevel = deps.db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
-  const commentAnchorUpdates = topLevel.flatMap((comment) => {
-    const upd = reanchor(comment, rendered.blocks, {
-      isEditProposal: comment.is_edit_proposal === 1,
-      blockReplacements,
-    });
-    // Skip the rows that did not move — see `anchorUnchanged`.
-    if (anchorUnchanged(comment, upd)) return [];
-    return [{ commentId: comment.id, ...upd }];
-  });
-
-  const restoredProposalAnchor =
-    row.base_block_start !== null && row.base_block_end !== null
-      ? locateProposalAnchorBySourceSpan(
-          knownBlocks,
-          rendered.blocks,
-          diff.before,
-          row.base_block_start,
-          row.base_block_end,
-          doc.format,
-        )
-      : null;
-  // The accept carried the comments it answered onto its paragraph, which
-  // left them sharing the proposal's anchor; they go back with it, rather
-  // than keep quoting text the restore just removed.
-  const carriedBack =
-    row.is_whole_document === 1 || !row.anchor_block_id
-      ? []
-      : parseAnswerIds(row.answers_comment_ids).filter((id) => {
-          const comment = topLevel.find((c) => c.id === id);
-          return (
-            comment?.anchor_block_id === row.anchor_block_id &&
-            comment.anchor_quote === row.anchor_quote
-          );
-        });
+  const undo = await prepareAcceptUndo(deps, doc, row.id, diff, parent.oid, identity);
   return {
-    oid,
+    oid: undo.oid,
     nextSource: diff.before,
-    rendered,
+    rendered: undo.rendered,
     applyDb: () => {
-      const now = Date.now();
-      deps.db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
-
-      const updateStmt = deps.db.prepare(REANCHOR_COMMENT_SQL);
-      for (const upd of commentAnchorUpdates) {
-        updateStmt.run(...reanchorParams(upd, now, upd.commentId));
-      }
-
-      if (restoredProposalAnchor) {
-        deps.db
-          .prepare(
-            `UPDATE comments
-                SET anchor_block_id = ?,
-                    anchor_end_block_id = ?,
-                    anchor_quote = ?,
-                    anchor_prefix = '',
-                    anchor_suffix = '',
-                    anchor_start_offset = NULL,
-                    anchor_end_offset = NULL,
-                    anchor_heading_path = ?,
-                    anchor_section_index = ?,
-                    anchor_section_index_path = ?,
-                    link_status = ?,
-                    updated_at = ?
-              WHERE id = ?`,
-          )
-          .run(
-            restoredProposalAnchor.block.id,
-            restoredProposalAnchor.endBlock?.id ?? null,
-            restoredProposalAnchor.quote,
-            JSON.stringify(restoredProposalAnchor.block.headingPath),
-            restoredProposalAnchor.block.sectionIndex,
-            JSON.stringify(restoredProposalAnchor.block.sectionIndexPath),
-            restoredProposalAnchor.linkStatus,
-            now,
-            row.id,
-          );
-
-        // The same whole-paragraph anchor the accept gave them, now on the
-        // restored paragraph — not the proposal's own, which quotes source
-        // where a comment quotes rendered text.
-        const home = snapshotPostAcceptAnchor(restoredProposalAnchor);
-        const carryBack = deps.db.prepare(
-          `UPDATE comments
-              SET anchor_block_id = ?,
-                  anchor_end_block_id = NULL,
-                  anchor_quote = ?,
-                  anchor_prefix = '',
-                  anchor_suffix = '',
-                  anchor_start_offset = ?,
-                  anchor_end_offset = ?,
-                  anchor_heading_path = ?,
-                  anchor_section_index = ?,
-                  anchor_section_index_path = ?,
-                  link_status = ?,
-                  updated_at = ?
-            WHERE id = ?`,
-        );
-        for (const id of carriedBack) {
-          carryBack.run(
-            home.blockId,
-            home.quote,
-            home.startOffset,
-            home.endOffset,
-            home.headingPath,
-            home.sectionIndex,
-            home.sectionIndexPath,
-            home.linkStatus,
-            now,
-            id,
-          );
-        }
-      }
-
-      const reopened = reopenAcceptedProposal(deps.db, doc.uid, row.id, now);
+      const { reopened, orphaned } = undo.applyDb();
       if (!reopened) throw new ThreadActionError(409, 'not-reopenable');
-
-      return reanchorProposals(deps.db, doc.uid, knownBlocks, doc.format, now);
+      return orphaned;
     },
   };
 }
@@ -3318,43 +3197,6 @@ function locateAcceptedProposalAnchor(
   );
   if (!rendered) return null;
   return { block: rendered, linkStatus: located.confidence };
-}
-
-interface PostAcceptAnchorSnapshot {
-  blockId: string;
-  quote: string;
-  startOffset: number;
-  endOffset: number;
-  headingPath: string;
-  sectionIndex: number;
-  sectionIndexPath: string;
-  linkStatus: 'linked' | 'low-confidence';
-}
-
-/**
- * Turn the paragraph produced by an accepted proposal into a complete new
- * anchor. Keeping the old quote with the new content-hash block id makes the
- * very next document save treat that id as stale and orphan the proposal.
- * Accepted history is recovered from git, so the anchor can (and should)
- * describe the current paragraph instead of doubling as the old snapshot.
- */
-function snapshotPostAcceptAnchor({
-  block,
-  linkStatus,
-}: {
-  block: BlockInfo;
-  linkStatus: 'linked' | 'low-confidence';
-}): PostAcceptAnchorSnapshot {
-  return {
-    blockId: block.id,
-    quote: block.text,
-    startOffset: 0,
-    endOffset: block.text.length,
-    headingPath: JSON.stringify(block.headingPath),
-    sectionIndex: block.sectionIndex,
-    sectionIndexPath: JSON.stringify(block.sectionIndexPath),
-    linkStatus,
-  };
 }
 
 function changedSpan(

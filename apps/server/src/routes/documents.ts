@@ -93,10 +93,9 @@ import { listDocUserNameMap, upsertDocUser } from '../users.js';
 import { gcAssetIfOrphan, listAttached } from './assets.js';
 import {
   loadProposalRow,
-  locateProposalAnchorBySourceSpan,
+  prepareAcceptUndo,
   readProposalContent,
   reanchorProposals,
-  reopenAcceptedProposal,
   toWire as toEditProposalWire,
 } from './edit-proposals.js';
 
@@ -2615,9 +2614,7 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
   const meta = parseHistoryMetadata(target);
 
   let oid: string;
-  let previousSource: string;
-  let revertedSource: string;
-  let reopenedProposal: ReturnType<typeof reopenAcceptedProposal> = null;
+  let reopenedProposalId: string | null = null;
 
   if (meta.action === 'update') {
     const reverted = await store.revertCommit(doc, targetOid, decision.identity);
@@ -2628,8 +2625,34 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
       return c.json({ error: 'git-unavailable' }, 503);
     }
     oid = reverted.oid;
-    previousSource = reverted.before;
-    revertedSource = reverted.after;
+    const now = Date.now();
+    db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
+
+    const rendered = await renderDocumentCached(reverted.after, doc.format);
+    const previousBlocks =
+      doc.format === 'asciidoc'
+        ? locateAllBlocksAsciidoc(reverted.before)
+        : locateAllBlocks(reverted.before);
+    const knownBlocks =
+      doc.format === 'asciidoc'
+        ? locateAllBlocksAsciidoc(reverted.after)
+        : locateAllBlocks(reverted.after);
+    const blockReplacements = prepareBlockReplacements({
+      before: previousBlocks,
+      after: knownBlocks,
+    });
+    const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
+    const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
+    for (const comment of topLevel) {
+      const upd = reanchor(comment, rendered.blocks, {
+        isEditProposal: comment.is_edit_proposal === 1,
+        blockReplacements,
+      });
+      // Skip the rows that did not move — see `anchorUnchanged`.
+      if (anchorUnchanged(comment, upd)) continue;
+      updateStmt.run(...reanchorParams(upd, now, comment.id));
+    }
+    reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
   } else if (meta.action === 'accept-proposal' && meta.proposalId) {
     // Proposal rollback retains its existing latest-only semantics because it
     // must reopen discussion state alongside the source change. It is not the
@@ -2640,89 +2663,27 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
     if (!parent) return c.json({ error: 'no-parent' }, 409);
     const diff = await store.diffAt(doc, targetOid);
     if (!diff) return c.json({ error: 'not-found' }, 404);
-    ({ oid } = await store.write(doc, diff.before, decision.identity, 'restore', {
-      restoredFromOid: parent.oid,
-    }));
-    previousSource = diff.after;
-    revertedSource = diff.before;
+    const undo = await prepareAcceptUndo(
+      deps,
+      doc,
+      meta.proposalId,
+      diff,
+      parent.oid,
+      decision.identity,
+    );
+    oid = undo.oid;
+    const { reopened, orphaned } = undo.applyDb();
+    if (reopened) reopenedProposalId = meta.proposalId;
+    for (const row of orphaned) {
+      realtime.broadcast(
+        doc.uid,
+        { type: 'edit_proposal.updated', edit_proposal: toEditProposalWire(row) },
+        decision.identity.clientId,
+      );
+    }
   } else {
     return c.json({ error: 'plain-edit-required' }, 409);
   }
-  const now = Date.now();
-  db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
-
-  const rendered = await renderDocumentCached(revertedSource, doc.format);
-  const previousBlocks =
-    doc.format === 'asciidoc'
-      ? locateAllBlocksAsciidoc(previousSource)
-      : locateAllBlocks(previousSource);
-  const knownBlocks =
-    doc.format === 'asciidoc'
-      ? locateAllBlocksAsciidoc(revertedSource)
-      : locateAllBlocks(revertedSource);
-  const blockReplacements = prepareBlockReplacements({
-    before: previousBlocks,
-    after: knownBlocks,
-  });
-  const topLevel = db.prepare(TOP_LEVEL_COMMENTS_SQL).all(doc.uid) as TopLevelCommentRow[];
-  const updateStmt = db.prepare(REANCHOR_COMMENT_SQL);
-  for (const comment of topLevel) {
-    const upd = reanchor(comment, rendered.blocks, {
-      isEditProposal: comment.is_edit_proposal === 1,
-      blockReplacements,
-    });
-    // Skip the rows that did not move — see `anchorUnchanged`.
-    if (anchorUnchanged(comment, upd)) continue;
-    updateStmt.run(...reanchorParams(upd, now, comment.id));
-  }
-
-  if (meta.action === 'accept-proposal' && meta.proposalId) {
-    reopenedProposal = reopenAcceptedProposal(db, doc.uid, meta.proposalId, now);
-  }
-  const reopenedProposalId = reopenedProposal?.id ?? null;
-  if (
-    reopenedProposal &&
-    reopenedProposal.base_block_start !== null &&
-    reopenedProposal.base_block_end !== null
-  ) {
-    const restoredAnchor = locateProposalAnchorBySourceSpan(
-      knownBlocks,
-      rendered.blocks,
-      revertedSource,
-      reopenedProposal.base_block_start,
-      reopenedProposal.base_block_end,
-      doc.format,
-    );
-    if (restoredAnchor) {
-      db.prepare(
-        `UPDATE comments
-            SET anchor_block_id = ?,
-                anchor_end_block_id = ?,
-                anchor_quote = ?,
-                anchor_prefix = '',
-                anchor_suffix = '',
-                anchor_start_offset = NULL,
-                anchor_end_offset = NULL,
-                anchor_heading_path = ?,
-                anchor_section_index = ?,
-                anchor_section_index_path = ?,
-                link_status = ?,
-                updated_at = ?
-          WHERE id = ?`,
-      ).run(
-        restoredAnchor.block.id,
-        restoredAnchor.endBlock?.id ?? null,
-        restoredAnchor.quote,
-        JSON.stringify(restoredAnchor.block.headingPath),
-        restoredAnchor.block.sectionIndex,
-        JSON.stringify(restoredAnchor.block.sectionIndexPath),
-        restoredAnchor.linkStatus,
-        now,
-        reopenedProposal.id,
-      );
-    }
-  }
-  reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
 
   if (reopenedProposalId) {
     const reopened = loadProposalRow(db, reopenedProposalId, doc.uid);
