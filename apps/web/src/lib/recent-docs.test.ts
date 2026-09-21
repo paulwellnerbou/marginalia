@@ -3,11 +3,13 @@
 import { beforeEach, expect, test } from 'bun:test';
 import type { KeyringDocEntry } from './api.js';
 import {
+  groupRecentDocs,
   loadRecentDocs,
   mergeKeyringDocs,
   type RecentDoc,
   recordVisit,
   removeFromRecent,
+  updateRecentDocToken,
 } from './recent-docs.js';
 
 const KEY = 'marginalia.recentDocs';
@@ -170,4 +172,44 @@ test('updated_at takes whichever side is fresher', () => {
   recordVisit(local({ updated_at: 5_000 }));
   expect(mergeKeyringDocs([entry({ updated_at: 1_000 })])[0]?.updated_at).toBe(5_000);
   expect(mergeKeyringDocs([entry({ updated_at: 9_000 })])[0]?.updated_at).toBe(9_000);
+});
+
+test('a folder document goes on its main document card, which sits where the latest of them would', () => {
+  const docs = [
+    local({ uid: 'outline', title: 'OUTLINE', folder_uid: 'story', visited_at: 9 }),
+    local({ uid: 'other', title: 'Other', visited_at: 8 }),
+    local({ uid: 'story', title: 'The Story', visited_at: 7 }),
+    local({ uid: 'background', title: 'BACKGROUND', folder_uid: 'story', visited_at: 6 }),
+  ];
+  expect(groupRecentDocs(docs).map((g) => [g.doc.uid, g.companions.map((c) => c.uid)])).toEqual([
+    ['story', ['background', 'outline']],
+    ['other', []],
+  ]);
+});
+
+test('a folder document whose main document is not listed keeps its own card', () => {
+  const docs = [local({ uid: 'outline', title: 'OUTLINE', folder_uid: 'story' })];
+  expect(groupRecentDocs(docs).map((g) => g.doc.uid)).toEqual(['outline']);
+});
+
+test('the keyring says which folder a document is in, and an older server leaves it be', () => {
+  recordVisit(local({ uid: 'a', folder_uid: 'story' }));
+  recordVisit(local({ uid: 'b', folder_uid: 'story' }));
+  const merged = mergeKeyringDocs([
+    entry({ doc_uid: 'a', folder_uid: null }),
+    entry({ doc_uid: 'b' }),
+    entry({ doc_uid: 'c', folder_uid: 'story' }),
+  ]);
+  const folderOf = (uid: string) => merged.find((d) => d.uid === uid)?.folder_uid;
+  expect(folderOf('a')).toBeUndefined();
+  expect(folderOf('b')).toBe('story');
+  expect(folderOf('c')).toBe('story');
+  expect(loadRecentDocs().find((d) => d.uid === 'c')?.folder_uid).toBe('story');
+});
+
+test('a rotated token replaces the one a card would re-open with', () => {
+  recordVisit(local({ invite_token: 'old' }));
+  updateRecentDocToken('doc-1', 'new');
+  updateRecentDocToken('never-opened', 'new');
+  expect(loadRecentDocs().map((d) => [d.uid, d.invite_token])).toEqual([['doc-1', 'new']]);
 });

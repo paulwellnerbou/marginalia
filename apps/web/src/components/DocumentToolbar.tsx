@@ -5,6 +5,7 @@ import {
   CopyIcon,
   DotsHorizontalIcon,
   DownloadIcon,
+  FilePlusIcon,
   GearIcon,
   MagnifyingGlassIcon,
   MixerHorizontalIcon,
@@ -23,6 +24,7 @@ import { DocumentSettingsDialog } from './DocumentSettingsDialog.js';
 import { DocumentStatsDialog } from './DocumentStatsDialog.js';
 import { DownloadMenu, useDocumentDownloads } from './DownloadMenu.js';
 import type { FoldedDialogHandle } from './foldedDialog.js';
+import { NewFolderDocumentDialog } from './NewFolderDocumentDialog.js';
 import { ReadAloudControls } from './ReadAloudControls.js';
 
 /**
@@ -69,6 +71,8 @@ interface Props {
   onToggleSearch: () => void;
   /** Interface size: it resizes every control, folded ones included. */
   uiScale: number;
+  /** Opens "Add a document" — also reached from the folder list. */
+  newDocumentRef: RefObject<FoldedDialogHandle | null>;
 }
 
 /**
@@ -92,6 +96,7 @@ export function DocumentToolbar({
   searchOpen,
   onToggleSearch,
   uiScale,
+  newDocumentRef,
 }: Props) {
   const rowRef = useRef<HTMLDivElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
@@ -142,6 +147,7 @@ export function DocumentToolbar({
   };
 
   const onAdminChange = doc.role === 'admin' ? onDocSettingsChanged : undefined;
+  const canAddDocument = doc.role === 'admin' || doc.role === 'editor';
   const fit = useToolbarFit(
     rowRef,
     FIT_EDIT_FOLDED,
@@ -211,6 +217,9 @@ export function DocumentToolbar({
         <Button variant="soft" asChild>
           <Link to={editHref}>Edit</Link>
         </Button>
+      )}
+      {canAddDocument && (
+        <NewFolderDocumentDialog ref={newDocumentRef} doc={doc} foldedInto={foldedInto} />
       )}
       {onAdminChange && (
         <>
@@ -332,9 +341,19 @@ export function DocumentToolbar({
                   Download
                   <ChevronRightIcon className="doc-more-menu-forward" />
                 </DropdownMenu.Item>
-                {onAdminChange && (
+                {canAddDocument && (
                   <>
                     <DropdownMenu.Separator />
+                    <DropdownMenu.Item onSelect={() => openFromMenu(newDocumentRef)}>
+                      <FilePlusIcon />
+                      Add a document
+                    </DropdownMenu.Item>
+                  </>
+                )}
+                {/* Admins can add documents too, so the separator above
+                    already starts this group. */}
+                {onAdminChange && (
+                  <>
                     <DropdownMenu.Item onSelect={() => openFromMenu(copyRef)}>
                       <CopyIcon />
                       Copy document

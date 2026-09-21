@@ -16,12 +16,14 @@ import {
   Text,
 } from '@radix-ui/themes';
 import { useEffect, useImperativeHandle, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { Document } from '../lib/api.js';
 import {
   type DocumentSettingsResponse,
   recoverCurrentPassword,
   updateDocumentSettings,
 } from '../lib/api.js';
+import { listTitles, otherFolderUids } from '../lib/folder.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { type FoldableDialogProps, returnFocusTo } from './foldedDialog.js';
@@ -55,6 +57,15 @@ export function AccessControlDialog({
     label: string;
     value: string;
   } | null>(null);
+
+  // In a folder, all of this is the main document's: its links, password
+  // and restriction open the others too. The link list is shared and
+  // managed from any of them; the two switches only from the main one.
+  const folderMain = doc.folder?.documents.find((d) => d.main && d.uid !== doc.uid) ?? null;
+  const companionTitles =
+    doc.folder && !folderMain
+      ? doc.folder.documents.filter((d) => !d.main).map((d) => d.title ?? 'Untitled')
+      : [];
 
   function messageForError(err: unknown, fallback: string): string {
     if (err instanceof Error && err.message === 'password-unavailable') {
@@ -217,102 +228,131 @@ export function AccessControlDialog({
           </Dialog.Description>
 
           <Flex direction="column" gap="4">
-            {/* No anyone-can-edit toggle: non-reader rights come only from
-              invite links below. */}
-            <Flex direction="column" gap="2">
-              <Text as="label" size="2">
-                <Flex align="center" gap="2">
-                  <Checkbox
-                    checked={inviteOnly}
-                    disabled={saving}
-                    onCheckedChange={(c) => void setInviteOnlyAccess(c === true)}
-                  />
-                  <EyeClosedIcon />
-                  Restrict this document to access links
-                </Flex>
-              </Text>
-              <Flex pl="6">
-                <Text size="1" color="gray">
-                  {/* The password below is a gate of its own, so what the URL
-                    alone is worth depends on both settings. */}
-                  {inviteOnly
-                    ? 'Only the access links below open this document. Anyone else holding the URL without its access token is turned away.'
-                    : passwordProtected
-                      ? 'Anyone with the document URL can read it, once they enter the password. Access links additionally grant comment or edit rights.'
-                      : 'Anyone with the document URL can read it. Access links additionally grant comment or edit rights.'}
-                </Text>
-              </Flex>
-            </Flex>
-
-            <Flex direction="column" gap="2">
-              <Text as="label" size="2">
-                <Flex align="center" gap="2">
-                  <Checkbox
-                    checked={passwordProtected}
-                    disabled={saving}
-                    onCheckedChange={(c) => void setPasswordProtection(c === true)}
-                  />
-                  <LockClosedIcon />
-                  Password-protect this document
-                </Flex>
-              </Text>
-              {passwordProtected && doc.password_protected && (
-                <Flex align="center" gap="2" pl="6">
-                  <Text size="1" color="gray">
-                    Password is set. Rotate invalidates existing sessions; the admin link can reveal
-                    the current password later without rotating it.
+            {companionTitles.length > 0 && (
+              <Callout.Root color="blue" size="1">
+                <Callout.Text>
+                  Everything here also covers {listTitles(companionTitles)}, which belong with this
+                  document: the same links open them, with the same roles.
+                </Callout.Text>
+              </Callout.Root>
+            )}
+            {folderMain ? (
+              <Callout.Root color="blue" size="1">
+                <Callout.Text>
+                  This document belongs with{' '}
+                  <Link to={`/d/${folderMain.uid}`}>{folderMain.title ?? 'its main document'}</Link>{' '}
+                  and opens with its links and password. Restricting to access links and the
+                  password are set there; the links below are the same list.
+                </Callout.Text>
+              </Callout.Root>
+            ) : (
+              <>
+                {/* No anyone-can-edit toggle: non-reader rights come only from
+                  invite links below. */}
+                <Flex direction="column" gap="2">
+                  <Text as="label" size="2">
+                    <Flex align="center" gap="2">
+                      <Checkbox
+                        checked={inviteOnly}
+                        disabled={saving}
+                        onCheckedChange={(c) => void setInviteOnlyAccess(c === true)}
+                      />
+                      <EyeClosedIcon />
+                      Restrict this document to access links
+                    </Flex>
                   </Text>
-                  <Button size="1" variant="soft" disabled={saving} onClick={revealCurrentPassword}>
-                    Reveal current password
-                  </Button>
-                  {/* Destructive + unrecoverable: always confirm. */}
-                  <AlertDialog.Root>
-                    <AlertDialog.Trigger>
-                      <Button size="1" variant="soft" color="amber" disabled={saving}>
-                        Rotate password
+                  <Flex pl="6">
+                    <Text size="1" color="gray">
+                      {/* The password below is a gate of its own, so what the URL
+                        alone is worth depends on both settings. */}
+                      {inviteOnly
+                        ? 'Only the access links below open this document. Anyone else holding the URL without its access token is turned away.'
+                        : passwordProtected
+                          ? 'Anyone with the document URL can read it, once they enter the password. Access links additionally grant comment or edit rights.'
+                          : 'Anyone with the document URL can read it. Access links additionally grant comment or edit rights.'}
+                    </Text>
+                  </Flex>
+                </Flex>
+
+                <Flex direction="column" gap="2">
+                  <Text as="label" size="2">
+                    <Flex align="center" gap="2">
+                      <Checkbox
+                        checked={passwordProtected}
+                        disabled={saving}
+                        onCheckedChange={(c) => void setPasswordProtection(c === true)}
+                      />
+                      <LockClosedIcon />
+                      Password-protect this document
+                    </Flex>
+                  </Text>
+                  {passwordProtected && doc.password_protected && (
+                    <Flex align="center" gap="2" pl="6">
+                      <Text size="1" color="gray">
+                        Password is set. Rotate invalidates existing sessions; the admin link can
+                        reveal the current password later without rotating it.
+                      </Text>
+                      <Button
+                        size="1"
+                        variant="soft"
+                        disabled={saving}
+                        onClick={revealCurrentPassword}
+                      >
+                        Reveal current password
                       </Button>
-                    </AlertDialog.Trigger>
-                    <AlertDialog.Content maxWidth="480px" className="dialog-content--fixed-footer">
-                      <div className="dialog-scroll-body">
-                        <AlertDialog.Title>
-                          <Flex align="center" gap="2">
-                            <ExclamationTriangleIcon /> Rotate the document password?
-                          </Flex>
-                        </AlertDialog.Title>
-                        <AlertDialog.Description size="2" mb="3">
-                          Rotating generates a brand-new password and invalidates every existing
-                          session on this document.
-                        </AlertDialog.Description>
-                        <Flex direction="column" gap="2">
-                          <Text size="2" as="p">
-                            <b>Everyone</b> who has the current password — including users who
-                            already had this document open — will be prompted to re-enter it before
-                            they can read or write anything.
-                          </Text>
-                          <Text size="2" as="p">
-                            The admin link can reveal the current password later, but everyone else
-                            still needs the <b>new password</b> shared out of band before they can
-                            get back in.
-                          </Text>
-                        </Flex>
-                      </div>
-                      <Flex className="dialog-footer" gap="2" justify="end" mt="4">
-                        <AlertDialog.Cancel>
-                          <Button variant="soft" color="gray">
-                            Cancel
-                          </Button>
-                        </AlertDialog.Cancel>
-                        <AlertDialog.Action>
-                          <Button color="amber" onClick={rotate}>
+                      {/* Destructive + unrecoverable: always confirm. */}
+                      <AlertDialog.Root>
+                        <AlertDialog.Trigger>
+                          <Button size="1" variant="soft" color="amber" disabled={saving}>
                             Rotate password
                           </Button>
-                        </AlertDialog.Action>
-                      </Flex>
-                    </AlertDialog.Content>
-                  </AlertDialog.Root>
+                        </AlertDialog.Trigger>
+                        <AlertDialog.Content
+                          maxWidth="480px"
+                          className="dialog-content--fixed-footer"
+                        >
+                          <div className="dialog-scroll-body">
+                            <AlertDialog.Title>
+                              <Flex align="center" gap="2">
+                                <ExclamationTriangleIcon /> Rotate the document password?
+                              </Flex>
+                            </AlertDialog.Title>
+                            <AlertDialog.Description size="2" mb="3">
+                              Rotating generates a brand-new password and invalidates every existing
+                              session on this document.
+                            </AlertDialog.Description>
+                            <Flex direction="column" gap="2">
+                              <Text size="2" as="p">
+                                <b>Everyone</b> who has the current password — including users who
+                                already had this document open — will be prompted to re-enter it
+                                before they can read or write anything.
+                              </Text>
+                              <Text size="2" as="p">
+                                The admin link can reveal the current password later, but everyone
+                                else still needs the <b>new password</b> shared out of band before
+                                they can get back in.
+                              </Text>
+                            </Flex>
+                          </div>
+                          <Flex className="dialog-footer" gap="2" justify="end" mt="4">
+                            <AlertDialog.Cancel>
+                              <Button variant="soft" color="gray">
+                                Cancel
+                              </Button>
+                            </AlertDialog.Cancel>
+                            <AlertDialog.Action>
+                              <Button color="amber" onClick={rotate}>
+                                Rotate password
+                              </Button>
+                            </AlertDialog.Action>
+                          </Flex>
+                        </AlertDialog.Content>
+                      </AlertDialog.Root>
+                    </Flex>
+                  )}
                 </Flex>
-              )}
-            </Flex>
+              </>
+            )}
 
             {disclosedPassword && (
               <PasswordDisclosureCard
@@ -325,7 +365,7 @@ export function AccessControlDialog({
 
             <Separator size="4" />
 
-            <InvitesPanel uid={doc.uid} />
+            <InvitesPanel uid={doc.uid} sharedWith={otherFolderUids(doc.folder, doc.uid)} />
 
             {error && (
               <Callout.Root color="red" size="1">

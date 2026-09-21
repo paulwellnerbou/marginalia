@@ -76,6 +76,7 @@ import {
 import { buildCommentHighlights } from '../lib/comment-highlights.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
+import { shareFolderToken } from '../lib/folder.js';
 import { expandAncestors } from '../lib/heading-collapse.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
@@ -139,6 +140,8 @@ import {
   DocumentSearchResultsPane,
 } from './DocumentSearchResultsPane.js';
 import { DocumentToolbar } from './DocumentToolbar.js';
+import { FolderDocuments } from './FolderDocuments.js';
+import type { FoldedDialogHandle } from './foldedDialog.js';
 import { HistoryList } from './HistoryList.js';
 import {
   BookmarkControlsProvider,
@@ -1060,6 +1063,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
 
   const docRef = useRef<HTMLElement>(null);
   const docPaneRef = useRef<HTMLElement>(null);
+  const newDocumentRef = useRef<FoldedDialogHandle>(null);
+
+  // Links between the documents of a folder carry no token, so each needs
+  // the one this document was opened with stored under its own uid.
+  useEffect(() => {
+    shareFolderToken(doc.folder, doc.uid);
+  }, [doc.folder, doc.uid]);
   /** Slot at the foot of the doc pane the read-aloud transport renders
    *  into. State, not a ref, so the controls re-render once it exists. */
   const [readAloudDock, setReadAloudDock] = useState<HTMLDivElement | null>(null);
@@ -3154,6 +3164,18 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
               /* Held at the open width so the headings don't re-wrap their
                way through the collapse; the pane clips what won't fit. */
               <div className="pane-body" style={{ width: tocWidth }} inert={!tocOpen}>
+                {doc.folder && (
+                  <FolderDocuments
+                    folder={doc.folder}
+                    currentUid={doc.uid}
+                    currentTitle={title}
+                    onAdd={
+                      doc.role === 'admin' || doc.role === 'editor'
+                        ? () => newDocumentRef.current?.open()
+                        : undefined
+                    }
+                  />
+                )}
                 <Toc
                   nodes={liveRendered.toc}
                   activeId={activeHeadingId}
@@ -3176,6 +3198,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
               theme={theme}
               reviewExportEnabled={inlineCommentsOpen || floatingComments}
               onDocSettingsChanged={onDocSettingsChanged}
+              newDocumentRef={newDocumentRef}
               viewControls={displayControls}
               readAloud={{
                 docUid: doc.uid,

@@ -167,8 +167,41 @@ export interface Document {
   role: Role;
   /** Server-forced display name (from the invite), or null if no invite. */
   display_name: string | null;
+  /**
+   * The documents this one belongs with, or null when it stands alone.
+   * Optional because a server that predates folders omits it.
+   */
+  folder?: DocumentFolder | null;
   created_at: number;
   updated_at: number;
+}
+
+/**
+ * Documents that share one set of access: the main document's links,
+ * password and sessions open every one of them.
+ */
+export interface DocumentFolder {
+  main_uid: string;
+  /** Main document first, then the rest in the order they were added. */
+  documents: FolderDocument[];
+}
+
+export interface FolderDocument {
+  uid: string;
+  name: string | null;
+  /** `name`, else the title the content gives itself, else null. */
+  title: string | null;
+  format: DocumentFormat;
+  main: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface FolderDocumentCreated {
+  uid: string;
+  name: string;
+  folder_uid: string;
+  format: DocumentFormat;
 }
 
 export interface HistoryEntry {
@@ -582,6 +615,25 @@ export function uploadDocument(opts: UploadOptions, identity: Identity): Promise
 }
 
 /**
+ * Add a document alongside `besideUid` — to the main document's folder,
+ * whichever document of it `besideUid` is. It opens with the same links as
+ * the rest, so the response carries none; the caller's token is the one
+ * this request authorizes with.
+ */
+export function createFolderDocument(
+  besideUid: string,
+  opts: { name: string; source: string; format: DocumentFormat },
+  identity: Identity,
+): Promise<FolderDocumentCreated> {
+  return request<FolderDocumentCreated>('/api/documents', {
+    method: 'POST',
+    body: JSON.stringify({ ...opts, folder: besideUid }),
+    identity,
+    docUid: besideUid,
+  });
+}
+
+/**
  * 'full' carries the document's whole working life — revision history,
  * threads, comments, edit proposals. 'clean' takes only the text as it
  * stands, with the history cut and the discussion left behind.
@@ -823,8 +875,17 @@ export function updateDocument(
  * leftovers. Must run *before* those are cleared: the invite token
  * still in localStorage is what authorizes the request.
  */
-export function deleteDocument(uid: string, identity: Identity): Promise<void> {
-  return request<void>(`/api/documents/${encodeURIComponent(uid)}`, {
+/**
+ * `withFolder` is required to delete a main document that others belong
+ * with; they go with it, since its access is theirs.
+ */
+export function deleteDocument(
+  uid: string,
+  identity: Identity,
+  opts: { withFolder?: boolean } = {},
+): Promise<void> {
+  const query = opts.withFolder ? '?with_members=1' : '';
+  return request<void>(`/api/documents/${encodeURIComponent(uid)}${query}`, {
     method: 'DELETE',
     identity,
     docUid: uid,
@@ -1211,6 +1272,8 @@ export interface KeyringDocEntry {
   role: Role | null;
   format: DocumentFormat;
   password_protected: boolean;
+  /** The main document this one belongs with. Absent from older servers. */
+  folder_uid?: string | null;
   updated_at: number;
   added_at: number;
   cover: DocumentCover | null;

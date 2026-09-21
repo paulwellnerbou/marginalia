@@ -25,10 +25,13 @@ import {
   updateInvite,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
+import { replaceFolderToken } from '../lib/folder.js';
 import { getClientId, getDisplayName, useDisplayName } from '../lib/identity.js';
-import { saveInviteToken } from '../lib/invite.js';
+import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
 import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
+import { updateOpenTabToken } from '../lib/open-tabs.js';
+import { updateRecentDocToken } from '../lib/recent-docs.js';
 import { appInviteKindColor, appRoleColor } from '../styles/theme.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import { Copyable } from './Copyable.js';
@@ -137,7 +140,17 @@ function roleLabel(role: Role): string {
   }
 }
 
-export function InvitesPanel({ uid }: { uid: string }) {
+/**
+ * `sharedWith`: the other documents of this one's folder, which open with
+ * the same links — a rotated admin token has to reach them too.
+ */
+export function InvitesPanel({
+  uid,
+  sharedWith = [],
+}: {
+  uid: string;
+  sharedWith?: readonly string[];
+}) {
   const displayName = useDisplayName();
   const [invites, setInvites] = useState<Invite[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -297,6 +310,7 @@ export function InvitesPanel({ uid }: { uid: string }) {
     }
     const identity = { clientId: getClientId(), displayName: identityName };
     setRotating(true);
+    const oldToken = loadInviteToken(uid);
     try {
       const { admin_invite } = await rotateAdminInvite(uid, identity);
       // Critical: persist the NEW admin token before any further API call.
@@ -308,7 +322,12 @@ export function InvitesPanel({ uid }: { uid: string }) {
       // the replacement before anything else can fail — a rotation that
       // syncs only to this browser locks the rest out of their own
       // document, which is a worse outcome than the leak being rotated.
-      keyringPushDoc(uid, admin_invite.token);
+      const rotated = [uid, ...replaceFolderToken(sharedWith, oldToken, admin_invite.token)];
+      for (const each of rotated) {
+        keyringPushDoc(each, admin_invite.token);
+        updateRecentDocToken(each, admin_invite.token);
+        updateOpenTabToken(each, admin_invite.token);
+      }
       refreshRequestRef.current += 1;
       setInvites((current) =>
         current
