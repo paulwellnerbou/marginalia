@@ -101,12 +101,6 @@ export function recordVisit(doc: RecentDoc): void {
 }
 
 /**
- * Patch the cover on an already-recorded entry. Called right after a
- * cover upload/removal so the landing page reflects it without waiting
- * for the document to be re-opened. No-op for a doc that isn't in the
- * list.
- */
-/**
  * Swap in a rotated invite token. The card re-opens with the token it
  * holds, and opening stores that token — an entry left holding the revoked
  * one would overwrite the working token on the next click.
@@ -123,6 +117,12 @@ export function updateRecentDocToken(uid: string, token: string): void {
   }
 }
 
+/**
+ * Patch the cover on an already-recorded entry. Called right after a
+ * cover upload/removal so the landing page reflects it without waiting
+ * for the document to be re-opened. No-op for a doc that isn't in the
+ * list.
+ */
 export function updateRecentDocCover(uid: string, cover: DocumentCover | null): void {
   const list = loadRecentDocs();
   const entry = list.find((d) => d.uid === uid);
