@@ -4180,58 +4180,23 @@ describe('threads API', () => {
         expect(open.map((t) => t.id)).toEqual([commentId, second]);
       });
 
-      test('rejecting the other one then resolves the comment', async () => {
+      test('turning the other one down afterwards still leaves it open', async () => {
         const { uid, commentId, first, second } = await seedAlternatives();
-        expect((await respond(uid, first, 'accept')).body.resolved_answered_thread_ids).toEqual([]);
+        await respond(uid, first, 'accept');
 
         const reject = await respond(uid, second, 'reject');
         expect(reject.status).toBe(200);
-        expect(reject.body.resolved_answered_thread_ids).toEqual([commentId]);
-
-        const comment = (await threadsOf(uid)).find((t) => t.id === commentId)!;
-        expect(comment.state).toBe('resolved');
-        expect(comment.resolution?.kind).toBe('resolve');
-      });
-
-      test('deleting the other one then resolves the comment', async () => {
-        const { uid, commentId, first, second } = await seedAlternatives();
-        expect((await respond(uid, first, 'accept')).body.resolved_answered_thread_ids).toEqual([]);
-
-        const del = await app.hono.fetch(
-          new Request(`http://test/api/documents/${uid}/threads/${second}`, {
-            method: 'DELETE',
-            headers: asAdmin(),
-          }),
-        );
-        expect(del.status).toBe(204);
-
-        expect((await threadsOf(uid)).find((t) => t.id === commentId)!.state).toBe('resolved');
-      });
-
-      test('the same decisions in the other order resolve it too', async () => {
-        const { uid, commentId, first, second } = await seedAlternatives();
-
-        const reject = await respond(uid, second, 'reject');
-        expect(reject.body.resolved_answered_thread_ids).toEqual([]);
-        const accept = await respond(uid, first, 'accept');
-        expect(accept.body.resolved_answered_thread_ids).toEqual([commentId]);
-      });
-
-      test('rejecting both leaves the comment open', async () => {
-        const { uid, commentId, first, second } = await seedAlternatives();
-
-        await respond(uid, first, 'reject');
-        const reject = await respond(uid, second, 'reject');
         expect(reject.body.resolved_answered_thread_ids).toEqual([]);
         expect((await threadsOf(uid)).find((t) => t.id === commentId)!.state).toBe('open');
       });
 
-      test('accepting the last of two complementary edits resolves the comment', async () => {
+      test('accepting the other one too resolves it', async () => {
+        // Two halves of one request on different blocks, so the second
+        // still merges once the first has landed.
         const uid = await newDoc('# Title\n\nA paragraph.\n');
         const titleId = await firstBlockId(uid);
         const paragraphId = await blockIdOf(uid, 'A paragraph.');
         const commentId = await seedComment(uid, titleId);
-        // Different blocks, so the second still merges once the first has landed.
         const title = await propose(uid, ALICE, titleId, '# Better title', commentId);
         const paragraph = await propose(
           uid,
@@ -4249,27 +4214,26 @@ describe('threads API', () => {
         expect(second.body.resolved_answered_thread_ids).toEqual([commentId]);
       });
 
-      test('a comment reopened after an accept stays open when a later proposal is rejected', async () => {
-        const uid = await newDoc('# Title\n');
-        const blockId = await firstBlockId(uid);
-        const commentId = await seedComment(uid, blockId);
-        const proposal = await propose(uid, ALICE, blockId, '# Fixed', commentId);
-        await respond(uid, proposal.id as string, 'accept');
-        // The reviewer says the change that landed doesn't settle it.
-        await respond(uid, commentId, 'reopen');
+      test('a rejected one no longer holds the comment open', async () => {
+        const { uid, commentId, first, second } = await seedAlternatives();
+        await respond(uid, second, 'reject');
 
-        const retry = await propose(
-          uid,
-          ALICE,
-          await firstBlockId(uid),
-          '# Fixed properly',
-          commentId,
-          'Fixed',
+        const accept = await respond(uid, first, 'accept');
+        expect(accept.body.resolved_answered_thread_ids).toEqual([commentId]);
+      });
+
+      test('a deleted one no longer holds the comment open', async () => {
+        const { uid, commentId, first, second } = await seedAlternatives();
+        const del = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/threads/${second}`, {
+            method: 'DELETE',
+            headers: asAdmin(),
+          }),
         );
-        expect(retry.status).toBe(201);
-        const reject = await respond(uid, retry.id as string, 'reject');
-        expect(reject.body.resolved_answered_thread_ids).toEqual([]);
-        expect((await threadsOf(uid)).find((t) => t.id === commentId)!.state).toBe('open');
+        expect(del.status).toBe(204);
+
+        const accept = await respond(uid, first, 'accept');
+        expect(accept.body.resolved_answered_thread_ids).toEqual([commentId]);
       });
     });
   });

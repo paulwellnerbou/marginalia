@@ -1622,7 +1622,7 @@ interface ThreadMutationResponse {
   /** Present when the action rewrote the document (accept / reopen-accept). */
   document?: AcceptedDocument | null;
   /**
-   * Plain comment threads the decided proposal answered, which the server
+   * Plain comment threads the accepted proposal answered, which the server
    * resolved along with it. Their `comment.updated` broadcasts deliberately
    * skip the acting client, so this response is the only place that client
    * hears about them.
@@ -2005,7 +2005,7 @@ export function rejectEditProposal(
   pid: string,
   identity: Identity,
   body?: string,
-): Promise<{ thread: Thread; resolvedAnsweredThreadIds: string[] }> {
+): Promise<Thread> {
   const replyBody = body?.trim();
   return request<ThreadMutationResponse>(
     `/api/documents/${encodeURIComponent(uid)}/threads/${encodeURIComponent(pid)}/respond`,
@@ -2020,10 +2020,7 @@ export function rejectEditProposal(
     },
   ).then((res) => {
     rememberThread(uid, res.thread);
-    return {
-      thread: res.thread,
-      resolvedAnsweredThreadIds: res.resolved_answered_thread_ids ?? [],
-    };
+    return res.thread;
   });
 }
 

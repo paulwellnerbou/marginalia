@@ -594,9 +594,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         '  reject  — decline an edit proposal\n' +
         '  reopen  — undo a resolve/accept/reject\n\n' +
         'Accepting a proposal that names `answers_thread_ids` also resolves those comments — ' +
-        'their requests have been carried out. Rejecting leaves them open. A comment that ' +
-        'other open proposals also answer waits for the last of them, and resolves once none ' +
-        'is left undecided and one was accepted.\n\n' +
+        'their requests have been carried out — except any that another proposal still ' +
+        'waiting on a decision also answers. Rejecting leaves them open.\n\n' +
         'Accepting rewrites the document, which can orphan other open proposals that touched ' +
         'the same text; re-check list_threads afterwards.',
       inputSchema: {

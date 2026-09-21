@@ -195,40 +195,6 @@ test('an accept that answered nothing reports an empty list, not undefined', asy
 });
 
 /**
- * Rejecting the last open proposal on a comment resolves that comment when
- * another of its proposals was accepted meanwhile — the same blind spot as
- * the accept above.
- */
-test('rejectEditProposal surfaces the threads the reject also resolved', async () => {
-  installLocalStorage();
-  const { rejectEditProposal } = await import('./api.js');
-  recordUrls(() =>
-    json({ thread: thread('proposal-3'), resolved_answered_thread_ids: ['answered-c'] }),
-  );
-
-  const res = await rejectEditProposal('doc-reject', 'proposal-3', {
-    clientId: 'c1',
-    displayName: 'Ruth',
-  });
-
-  expect(res.thread.id).toBe('proposal-3');
-  expect(res.resolvedAnsweredThreadIds).toEqual(['answered-c']);
-});
-
-test('a reject from a server that omits the field reports an empty list', async () => {
-  installLocalStorage();
-  const { rejectEditProposal } = await import('./api.js');
-  recordUrls(() => json({ thread: thread('proposal-4') }));
-
-  const res = await rejectEditProposal('doc-reject', 'proposal-4', {
-    clientId: 'c1',
-    displayName: 'Ruth',
-  });
-
-  expect(res.resolvedAnsweredThreadIds).toEqual([]);
-});
-
-/**
  * Opening a document now reads only the open threads, and mention
  * consumption rides on that read — it is a server-side side effect that
  * happens once, so it cannot sit on the archive read, which may never be
