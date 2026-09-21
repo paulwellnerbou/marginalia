@@ -863,12 +863,23 @@ export function restoreHistoryVersion(
   );
 }
 
+interface RevertHistoryResponse {
+  oid: string;
+  /** The proposal whose accept the revert undid, open again. */
+  reopened_proposal_id: string | null;
+  /**
+   * Comment threads that accept had resolved, reopened with the proposal.
+   * Their `comment.updated` broadcasts skip the acting client.
+   */
+  reopened_answered_thread_ids?: string[] | null;
+}
+
 export function revertHistoryVersion(
   uid: string,
   oid: string,
   identity: Identity,
-): Promise<{ oid: string; reopened_proposal_id: string | null }> {
-  return request<{ oid: string; reopened_proposal_id: string | null }>(
+): Promise<RevertHistoryResponse> {
+  return request<RevertHistoryResponse>(
     `/api/documents/${encodeURIComponent(uid)}/history/${encodeURIComponent(oid)}/revert`,
     {
       method: 'POST',
@@ -1628,6 +1639,12 @@ interface ThreadMutationResponse {
    * hears about them.
    */
   resolved_answered_thread_ids?: string[] | null;
+  /**
+   * Comment threads the reopened proposal answers that an accept had
+   * resolved, which the server reopened along with it. Only this response
+   * tells the acting client, as with `resolved_answered_thread_ids`.
+   */
+  reopened_answered_thread_ids?: string[] | null;
 }
 
 /** The post-accept document, so callers need not re-fetch it. */
