@@ -60,6 +60,7 @@ import {
   prepareAcceptUndo,
   readProposalContent,
   readProposalFullContent,
+  reanchorProposal,
   reanchorProposals,
   snapshotPostAcceptAnchor,
   toWire as toProposalWire,
@@ -2001,12 +2002,16 @@ async function respondToThread(c: Context, deps: AppDeps) {
   let createdReply: CommentRow | null = null;
   let createdReplyMentionTargets: string[] = [];
   let reanchoredProposalUpdates: EditProposalThreadRow[] = [];
+  // The current document's blocks, for a rejected proposal being reopened.
+  let reopenBlocks: ReadonlyMap<string, BlockSourceRange> | null = null;
 
   try {
     if (action === 'accept') {
       preparedWorkflow = await prepareAcceptProposalThread(doc, row, deps, identity);
     } else if (action === 'reopen' && resolution?.kind === 'accept') {
       preparedWorkflow = await prepareReopenAcceptedProposalThread(doc, row, deps, identity);
+    } else if (action === 'reopen' && resolution?.kind === 'reject') {
+      reopenBlocks = locateDocumentBlocks(doc, deps.store.read(doc));
     }
   } catch (err) {
     if (err instanceof ThreadActionError) {
@@ -2060,6 +2065,12 @@ async function respondToThread(c: Context, deps: AppDeps) {
               SET resolved_at = NULL, resolved_by_name = NULL, updated_at = ?
             WHERE id = ?`,
         ).run(now, tid);
+        // Edits check only open proposals for a lost anchor, so this
+        // one's block may have gone while it was rejected.
+        const reopened = loadProposalRow(db, tid, doc.uid);
+        if (reopened && reopenBlocks) {
+          reanchorProposal(db, doc.uid, reopened, reopenBlocks, doc.format, now);
+        }
       } else if (resolution?.kind === 'accept') {
         if (!preparedWorkflow) throw new ThreadActionError(409, 'not-reopenable');
         documentOid = preparedWorkflow.oid;
