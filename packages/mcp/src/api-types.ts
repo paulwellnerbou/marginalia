@@ -66,8 +66,25 @@ export interface DocumentWire {
   invite_only?: boolean;
   role: Role;
   display_name: string | null;
+  /**
+   * The documents this one shares its access with, main document first;
+   * null when it stands alone. Absent from instances without folders.
+   */
+  folder?: FolderWire | null;
   created_at: number;
   updated_at: number;
+}
+
+export interface FolderWire {
+  main_uid: string;
+  documents: Array<{
+    uid: string;
+    name: string | null;
+    /** `name`, else the title the content gives itself, else null. */
+    title: string | null;
+    format: DocumentFormat;
+    main: boolean;
+  }>;
 }
 
 export interface ThreadCommentWire {
@@ -169,6 +186,16 @@ export interface UploadResponseWire {
    */
   invite_only?: boolean;
   password?: string;
+}
+
+/** POST /api/documents with `folder`: no link of its own, the folder's open it. */
+export interface FolderDocumentCreatedWire {
+  uid: string;
+  name: string;
+  folder_uid: string;
+  format: DocumentFormat;
+  invite_only: boolean;
+  password_protected: boolean;
 }
 
 export interface HistoryEntryWire {

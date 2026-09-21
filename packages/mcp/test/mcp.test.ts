@@ -1592,4 +1592,105 @@ Prose in chapter seven.
     });
     expect(message).toContain('does not exist');
   });
+
+  describe('folders', () => {
+    /** A second MCP session that has been told nothing yet. */
+    async function freshSession(): Promise<{ session: Client; dir: string }> {
+      const dir = mkdtempSync(join(tmpdir(), 'mcp-state-folder-'));
+      const { server } = createMarginaliaMcpServer({
+        baseUrl,
+        displayName: 'Claude',
+        clientId: 'folder-fresh-client-id',
+        allowedHosts: [],
+        password: null,
+        defaultToken: null,
+        stateDir: dir,
+        downloadDir,
+      });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const session = new Client({ name: 'folder-harness', version: '0' });
+      await Promise.all([server.connect(serverTransport), session.connect(clientTransport)]);
+      return { session, dir };
+    }
+
+    async function callOn(
+      session: Client,
+      name: string,
+      args: Record<string, unknown>,
+    ): Promise<{ body: string; isError: boolean }> {
+      const result = (await session.callTool({ name, arguments: args })) as {
+        content: Array<{ text?: string }>;
+        isError?: boolean;
+      };
+      return {
+        body: result.content.map((c) => c.text ?? '').join('\n'),
+        isError: !!result.isError,
+      };
+    }
+
+    async function addOutline(beside: string): Promise<string> {
+      const added = await call('create_document', {
+        source: '# Outline\n\n1. Leave before dawn.\n',
+        name: 'OUTLINE',
+        folder: beside,
+      });
+      const uid = /^uid: (\S+)$/m.exec(added)?.[1];
+      expect(uid).toBeTruthy();
+      return uid as string;
+    }
+
+    test('adds a document beside another, with no link of its own', async () => {
+      const { adminUrl, uid } = await seedBook();
+      const added = await call('create_document', {
+        source: '# Outline\n',
+        name: 'OUTLINE',
+        folder: adminUrl,
+        password_protected: true,
+      });
+      expect(added).toContain(`to the folder of ${uid}`);
+      expect(added).not.toContain('admin link');
+      expect(added).toContain('note: password_protected ignored');
+    });
+
+    test('every document in the folder lists the rest, main document first', async () => {
+      const { adminUrl, uid } = await seedBook();
+      const outline = await addOutline(adminUrl);
+      const story = await call('get_document', { document: adminUrl, include_source: false });
+      expect(story).toContain('folder: 2 documents that open with the same links and roles');
+      expect(story).toContain(`${uid}  The Salt Road  (main document, this one)`);
+      expect(story).toContain(`${outline}  OUTLINE`);
+      const fromOutline = await call('get_document', { document: outline, include_source: false });
+      expect(fromOutline).toContain(`${outline}  OUTLINE  (this one)`);
+    });
+
+    test('a session that reads one folder document can open the rest by bare uid', async () => {
+      const { adminUrl, uid } = await seedBook();
+      const outline = await addOutline(uid);
+      const { session, dir } = await freshSession();
+      try {
+        // Told nothing yet, and the folder is invite-only.
+        const before = await callOn(session, 'get_document', { document: outline });
+        expect(before.isError).toBe(true);
+        expect(before.body).toContain('reading any document of that folder with its link');
+
+        await callOn(session, 'get_document', { document: adminUrl, include_source: false });
+        const after = await callOn(session, 'get_document', { document: outline });
+        expect(after.isError).toBe(false);
+        expect(after.body).toContain('Leave before dawn');
+        expect(after.body).toContain('your role: admin');
+      } finally {
+        await session.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    test('asks for a name, which the folder lists its documents by', async () => {
+      const { adminUrl } = await seedBook();
+      const message = await callExpectingError('create_document', {
+        source: '# Notes\n',
+        folder: adminUrl,
+      });
+      expect(message).toContain('`name`');
+    });
+  });
 });

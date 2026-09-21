@@ -35,8 +35,22 @@ export async function loadDocument(ctx: ToolContext, documentRef: string): Promi
     ref,
     `/api/documents/${encodeURIComponent(ref.uid)}`,
   );
+  rememberFolder(ctx, ref, doc);
   const blocks = await buildBlockMap(doc);
   return { ref, doc, blocks };
+}
+
+/**
+ * The token that just opened a folder document opens every other one in
+ * it, so file it under each: a bare uid from the header's folder list then
+ * works in any tool. It replaces what was remembered for them — this one
+ * has just been proven good, and an older one may have been rotated away.
+ */
+function rememberFolder(ctx: ToolContext, ref: DocumentRef, doc: DocumentWire): void {
+  if (!ref.token || !doc.folder) return;
+  for (const other of doc.folder.documents) {
+    if (other.uid !== ref.uid) ctx.client.rememberDocument({ ...ref, uid: other.uid });
+  }
 }
 
 export function text(...parts: Array<string | null | undefined>): CallToolResult {

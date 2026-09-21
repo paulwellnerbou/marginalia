@@ -44,8 +44,11 @@ export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: Documen
   const shareHint = doc.invite_only
     ? 'token-free, but this document is invite-only — it opens only for someone who already has their own access link'
     : 'token-free — use this when telling a person where something is';
+  // Only a folder's listing carries a derived title; elsewhere a document
+  // without a name stays untitled here.
+  const title = doc.name ?? doc.folder?.documents.find((d) => d.uid === doc.uid)?.title;
   const lines = [
-    `document: ${doc.name ?? '(untitled)'}`,
+    `document: ${title ?? '(untitled)'}`,
     `uid: ${doc.uid}`,
     // When the ref carries a token the two links differ, and the
     // difference matters: opening the tokened one claims this agent's
@@ -64,6 +67,7 @@ export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: Documen
     ...(doc.invite_only
       ? ['access: invite-only — only people with their own access link can open this document']
       : []),
+    ...folderLines(doc),
     `updated: ${timestamp(doc.updated_at)}`,
     `whole document: ${size(doc.source)}`,
     `blocks: ${map.blocks.length}, sections: ${map.sections.length}`,
@@ -80,6 +84,31 @@ export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: Documen
     );
   }
   return lines.join('\n');
+}
+
+/** Past this the list costs more context than it saves lookups. */
+const FOLDER_LISTED = 12;
+
+/**
+ * The documents that share this one's access, so an agent working on a
+ * story finds its outline without being told the outline exists. Their
+ * uids are enough: the link that opened this document opens them too.
+ */
+function folderLines(doc: DocumentWire): string[] {
+  const documents = doc.folder?.documents ?? [];
+  if (documents.length === 0) return [];
+  const listed = documents.slice(0, FOLDER_LISTED).map((d) => {
+    const notes = [d.main ? 'main document' : null, d.uid === doc.uid ? 'this one' : null].filter(
+      (n) => n !== null,
+    );
+    return `  ${d.uid}  ${d.title ?? '(untitled)'}${notes.length > 0 ? `  (${notes.join(', ')})` : ''}`;
+  });
+  const more = documents.length - listed.length;
+  return [
+    `folder: ${documents.length} documents that open with the same links and roles — pass any uid below to the tools`,
+    ...listed,
+    ...(more > 0 ? [`  … and ${more} more`] : []),
+  ];
 }
 
 function roleHint(role: string): string {

@@ -259,6 +259,12 @@ function describeApiError(status: number, code: string, ref: DocumentRef): strin
   switch (code) {
     case 'not-found':
       return `Document ${ref.uid} does not exist on ${ref.baseUrl} (or the id is wrong).`;
+    case 'invite-required':
+      return (
+        `Document ${ref.uid} opens only with an access link (invite-required), and this ` +
+        'session has none for it. Pass its full URL. If it belongs to a folder, reading any ' +
+        'document of that folder with its link opens this one too.'
+      );
     case 'password-required':
       return `Document ${ref.uid} is password protected. Call authenticate first, or set MARGINALIA_PASSWORD.`;
     case 'wrong-password':
@@ -272,6 +278,10 @@ function describeApiError(status: number, code: string, ref: DocumentRef): strin
       );
     case 'identity-required':
       return 'The server needs a display name. Set MARGINALIA_DISPLAY_NAME.';
+    case 'folder-not-found':
+      return `There is no document ${ref.uid} on ${ref.baseUrl} to add this beside. Check the uid, or pass the document's full URL.`;
+    case 'name-required':
+      return 'A document added to a folder needs a `name` — the folder lists its documents by it.';
     case 'anchor-block-not-found':
       return (
         'The anchor block id is not present in the current document source. Re-read the block ' +
