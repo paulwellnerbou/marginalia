@@ -2751,10 +2751,9 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
       );
     }
   }
+  const loadComment = db.prepare('SELECT * FROM comments WHERE id = ?');
   for (const id of reopenedAnsweredThreadIds) {
-    const answered = db.prepare('SELECT * FROM comments WHERE id = ?').get(id) as
-      | CommentRow
-      | undefined;
+    const answered = loadComment.get(id) as CommentRow | undefined;
     if (answered && answered.is_hidden === 0) {
       realtime.broadcast(
         doc.uid,
