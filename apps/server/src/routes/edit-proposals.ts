@@ -69,45 +69,58 @@ export function reanchorProposals(
        WHERE c.doc_uid = ? AND cep.status = 'open' AND c.deleted_at IS NULL`,
     )
     .all(docUid) as EditProposalThreadRow[];
-  const markComment = db.prepare(
+  const orphaned: EditProposalThreadRow[] = [];
+  for (const p of open) {
+    const fresh = reanchorProposal(db, docUid, p, blocks, format, now);
+    if (fresh) {
+      orphaned.push(fresh);
+      if (broadcast) broadcast(fresh);
+    }
+  }
+  return orphaned;
+}
+
+/**
+ * `reanchorProposals` for one proposal: orphan it if `blocks` no longer
+ * hold its anchor. Returns the orphaned row, null if the anchor holds.
+ */
+export function reanchorProposal(
+  db: Database,
+  docUid: string,
+  p: EditProposalThreadRow,
+  blocks: ReadonlyMap<string, BlockSourceRange>,
+  format: 'markdown' | 'asciidoc',
+  now: number,
+): EditProposalThreadRow | null {
+  // Whole-document proposals replace the entire source — there's no
+  // anchor block whose disappearance should orphan them.
+  if (p.is_whole_document === 1) return null;
+  const startBlock = p.anchor_block_id ? blocks.get(p.anchor_block_id) : undefined;
+  const startMissing = !p.anchor_block_id || !startBlock;
+  let endMissing = false;
+  let structurallyInvalid = false;
+  if (!startMissing && p.anchor_end_block_id != null) {
+    const endBlock = blocks.get(p.anchor_end_block_id);
+    if (!endBlock) {
+      endMissing = true;
+    } else if (!canMergeMultiBlock(startBlock!, endBlock, format)) {
+      // Both endpoint IDs still resolve, but the multi-block span
+      // is no longer structurally safe (e.g. an upstream edit moved
+      // one item into a different list depth, or what was a
+      // top-level list is now nested/quoted). Orphan so the
+      // proposal doesn't sit "linked" until someone tries to
+      // diff or accept it.
+      structurallyInvalid = true;
+    }
+  }
+  if (!startMissing && !endMissing && !structurallyInvalid) return null;
+  db.prepare(
     `UPDATE comments
         SET link_status = 'orphaned', anchor_block_id = NULL, anchor_end_block_id = NULL,
             updated_at = ?
       WHERE id = ?`,
-  );
-  const orphaned: EditProposalThreadRow[] = [];
-  for (const p of open) {
-    // Whole-document proposals replace the entire source — there's no
-    // anchor block whose disappearance should orphan them.
-    if (p.is_whole_document === 1) continue;
-    const startBlock = p.anchor_block_id ? blocks.get(p.anchor_block_id) : undefined;
-    const startMissing = !p.anchor_block_id || !startBlock;
-    let endMissing = false;
-    let structurallyInvalid = false;
-    if (!startMissing && p.anchor_end_block_id != null) {
-      const endBlock = blocks.get(p.anchor_end_block_id);
-      if (!endBlock) {
-        endMissing = true;
-      } else if (!canMergeMultiBlock(startBlock!, endBlock, format)) {
-        // Both endpoint IDs still resolve, but the multi-block span
-        // is no longer structurally safe (e.g. an upstream edit moved
-        // one item into a different list depth, or what was a
-        // top-level list is now nested/quoted). Orphan so the
-        // proposal doesn't sit "linked" until someone tries to
-        // diff or accept it.
-        structurallyInvalid = true;
-      }
-    }
-    if (startMissing || endMissing || structurallyInvalid) {
-      markComment.run(now, p.id);
-      const fresh = loadProposalRow(db, p.id, docUid);
-      if (fresh) {
-        orphaned.push(fresh);
-        if (broadcast) broadcast(fresh);
-      }
-    }
-  }
-  return orphaned;
+  ).run(now, p.id);
+  return loadProposalRow(db, p.id, docUid) ?? null;
 }
 
 export function loadProposalRow(

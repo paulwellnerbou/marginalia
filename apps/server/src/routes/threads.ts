@@ -61,6 +61,7 @@ import {
   locateProposalAnchorBySourceSpan,
   readProposalContent,
   readProposalFullContent,
+  reanchorProposal,
   reanchorProposals,
   reopenAcceptedProposal,
   toWire as toProposalWire,
@@ -2061,6 +2062,13 @@ async function respondToThread(c: Context, deps: AppDeps) {
               SET resolved_at = NULL, resolved_by_name = NULL, updated_at = ?
             WHERE id = ?`,
         ).run(now, tid);
+        // Edits check only open proposals for a lost anchor, so this
+        // one's block may have gone while it was rejected.
+        const reopened = loadProposalRow(db, tid, doc.uid);
+        if (reopened) {
+          const blocks = locateDocumentBlocks(doc, deps.store.read(doc));
+          reanchorProposal(db, doc.uid, reopened, blocks, doc.format, now);
+        }
       } else if (resolution?.kind === 'accept') {
         if (!preparedWorkflow) throw new ThreadActionError(409, 'not-reopenable');
         documentOid = preparedWorkflow.oid;

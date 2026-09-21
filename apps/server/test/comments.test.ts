@@ -4123,6 +4123,26 @@ describe('threads API', () => {
       expect(threads.find((t) => t.id === commentId)!.state).toBe('open');
     });
 
+    test('reopening a rejected proposal orphans it if an accept took its block', async () => {
+      const uid = await newDoc('# Title\n');
+      const blockId = await firstBlockId(uid);
+      const commentId = await seedComment(uid, blockId);
+      const first = (await propose(uid, ALICE, blockId, '# One', commentId)).id as string;
+      const second = (await propose(uid, ALICE, blockId, '# Two', commentId)).id as string;
+      await respond(uid, second, 'reject');
+      expect((await respond(uid, first, 'accept')).status).toBe(200);
+
+      const reopen = await respond(uid, second, 'reopen');
+      expect(reopen.status).toBe(200);
+      const reopened = reopen.body.thread as ThreadShape;
+      expect(reopened.state).toBe('open');
+      expect(reopened.link_status).toBe('orphaned');
+      expect(reopened.anchor.block_id).toBeNull();
+      // Offered a repair, not an accept that can only fail.
+      expect(reopened.capabilities.accept).toBe(false);
+      expect(reopened.capabilities.repair).toBe(true);
+    });
+
     test('accepting leaves an already-resolved comment credited to its resolver', async () => {
       const uid = await newDoc('# Title\n');
       const blockId = await firstBlockId(uid);
