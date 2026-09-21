@@ -233,8 +233,44 @@ when no password is set.
 | `edit_document` | Search-and-replace edits saved as a revision. `dry_run` shows the diff first. |
 | `update_document` | Replace the whole source — or, with `section`, just one chapter. |
 | `export_document` | Write `source`, `bundle`, `docx`, `pdf` to disk — `formats: ["all"]` for everything. **stdio only.** |
-| `create_document` | Upload markdown/AsciiDoc and get links back. `source_path` reads a local file — **stdio only**. |
+| `create_document` | Upload markdown/AsciiDoc and get links back. `source_path` reads a local file — **stdio only**. With `folder`, add it beside an existing document instead (see [Folders](#folders)). |
 | `create_invite`, `list_invites`, `authenticate` | Access management. |
+
+## Folders
+
+Documents that belong together — a story, its OUTLINE, its BACKGROUND —
+can share one set of access as a **folder**. The link that opens one opens
+them all, with the same role, so the agent never needs to be handed a
+second link.
+
+Every tool that prints a document header lists its folder, main document
+first:
+
+```
+folder: 3 documents that open with the same links and roles — pass any uid below to the tools
+  4YPS-gzQmX2XIiNGeWqVYQ  The Lighthouse Keeper  (main document, this one)
+  TbKAGDcA7Oh6TCzrENknzw  OUTLINE
+  Non8OHqxHwX6EDVj-rsZqg  BACKGROUND
+```
+
+Reading any document of a folder files the link it was read with under
+all the others, so their bare uids work from then on — in a fresh session
+too, once one document of the folder has been read with its link. A
+password-protected folder needs one `authenticate`, not one per document:
+the server's session covers the whole folder, so the login is filed
+under the rest the same way. The list stops after twelve and says how
+many it left out.
+
+To start one, or add to it:
+
+```
+create_document  folder=<the story's URL or uid>  name=OUTLINE  source=…
+```
+
+It needs admin or editor on the folder, and a `name` — the folder lists
+its documents by it. There is no new link in the answer: the folder's
+links already open it. `password_protected`, `invite_only` and
+`base_url` do not apply, since the folder decides all three.
 
 ## Reading a chapter at a time
 

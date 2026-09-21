@@ -1,8 +1,14 @@
 import { readFile } from 'node:fs/promises';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import type { HistoryEntryWire, InviteWire, UploadResponseWire } from '../api-types.js';
+import type {
+  FolderDocumentCreatedWire,
+  HistoryEntryWire,
+  InviteWire,
+  UploadResponseWire,
+} from '../api-types.js';
 import { clip, matchBlocks, resolveSection, sectionContains } from '../blocks.js';
+import { documentUrl, viewerUrl } from '../document-ref.js';
 import {
   blockList,
   documentHeader,
@@ -71,7 +77,9 @@ export function registerDocumentTools(
       description:
         'Create a new Marginalia document from markdown or AsciiDoc so it can be reviewed in ' +
         'the browser. Returns the admin link (keep private) and instructions for sharing a ' +
-        `reviewer link. ${allowLocalFiles ? 'Pass either `source` or `source_path`.' : 'Pass the text as `source`.'}`,
+        `reviewer link. ${allowLocalFiles ? 'Pass either `source` or `source_path`.' : 'Pass the text as `source`.'}\n\n` +
+        'With `folder`, it is added beside an existing document instead — an outline or ' +
+        'background notes for a story — and opens with that document’s links and roles.',
       inputSchema: {
         source: z.string().optional().describe('The document text.'),
         // Reading a local file is only meaningful when this server runs
@@ -109,6 +117,15 @@ export function registerDocumentTools(
           .string()
           .optional()
           .describe('Marginalia instance to create it on. Defaults to the configured one.'),
+        folder: z
+          .string()
+          .optional()
+          .describe(
+            'Add it beside this document (URL or uid): it joins that document’s folder, and ' +
+              'the same links, roles and password open it, so no new link is made. Needs ' +
+              'admin or editor there, and a `name`. password_protected, invite_only and ' +
+              'base_url do not apply — the folder decides them.',
+          ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -138,6 +155,44 @@ export function registerDocumentTools(
           (allowLocalFiles && args.source_path && /\.adoc$|\.asciidoc$/i.test(args.source_path)
             ? 'asciidoc'
             : 'markdown');
+
+        if (args.folder) {
+          const name = args.name?.trim();
+          if (!name) {
+            return failure(
+              'Pass a `name` too: the folder lists its documents by name, e.g. "OUTLINE".',
+            );
+          }
+          const beside = ctx.client.resolve(args.folder);
+          const added = await ctx.client.json<FolderDocumentCreatedWire>(beside, '/api/documents', {
+            method: 'POST',
+            body: { source, format, name, folder: beside.uid },
+          });
+          const ref = { ...beside, uid: added.uid, commentId: null };
+          ctx.client.rememberDocument(ref);
+          ctx.client.shareSession(beside, added.uid);
+          const ignored = [
+            args.password_protected !== undefined ? 'password_protected' : null,
+            args.invite_only !== undefined ? 'invite_only' : null,
+            args.base_url !== undefined ? 'base_url' : null,
+          ].filter((p) => p !== null);
+          return text(
+            [
+              `Added "${added.name}" (${added.format}) to the folder of ${added.folder_uid}.`,
+              `uid: ${added.uid}`,
+              ...(ref.token
+                ? [
+                    `url: ${documentUrl(ref)} (carries your invite token — pass to tools, never show to people)`,
+                  ]
+                : []),
+              `share url: ${viewerUrl(ref)} — opens for everyone who can open the folder, with the role they have there`,
+              `access: the folder's — ${added.password_protected ? 'password-protected' : 'no password gate'}, ${added.invite_only ? 'invite-only' : 'readable by URL'}`,
+            ].join('\n'),
+            ignored.length > 0
+              ? `note: ${ignored.join(', ')} ignored — a folder document takes its access and instance from the folder.`
+              : null,
+          );
+        }
 
         const base = ctx.client.createBaseRef(args.base_url);
         const created = await ctx.client.json<UploadResponseWire>(base, '/api/documents', {

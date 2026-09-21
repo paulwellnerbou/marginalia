@@ -326,3 +326,45 @@ describe('documentHeader access guidance', () => {
     expect(out).toContain('access: invite-only');
   });
 });
+
+describe('documentHeader folder list', () => {
+  const ref = { baseUrl: 'https://marginalia.test', uid: 'outline-uid', token: 'tok' };
+
+  function folderOf(count: number) {
+    return {
+      main_uid: 'doc-0',
+      documents: Array.from({ length: count }, (_, i) => ({
+        uid: i === 1 ? 'outline-uid' : `doc-${i}`,
+        name: i === 0 ? null : `DOC ${i}`,
+        title: i === 0 ? 'The Story' : `DOC ${i}`,
+        format: 'markdown' as const,
+        main: i === 0,
+      })),
+    };
+  }
+
+  test('lists the folder with the main document and this one marked', async () => {
+    // Unnamed, so the header takes the title the folder listing derived.
+    const doc = await documentWire({ uid: 'outline-uid', name: null, folder: folderOf(3) });
+    const out = documentHeader(doc, ref, await blockMap());
+    expect(out).toContain('folder: 3 documents that open with the same links and roles');
+    expect(out).toContain('  doc-0  The Story  (main document)');
+    expect(out).toContain('document: DOC 1');
+    expect(out).toContain('  outline-uid  DOC 1  (this one)');
+    expect(out).toContain('  doc-2  DOC 2');
+  });
+
+  test('stops listing past twelve, and says how many it left out', async () => {
+    const doc = await documentWire({ uid: 'outline-uid', folder: folderOf(15) });
+    const out = documentHeader(doc, ref, await blockMap());
+    expect(out).toContain('folder: 15 documents');
+    expect(out).toContain('doc-11');
+    expect(out).not.toContain('doc-12');
+    expect(out).toContain('… and 3 more');
+  });
+
+  test('says nothing about folders for a document that stands alone', async () => {
+    const out = documentHeader(await documentWire({ folder: null }), ref, await blockMap());
+    expect(out).not.toContain('folder:');
+  });
+});

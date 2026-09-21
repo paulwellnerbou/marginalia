@@ -518,6 +518,12 @@ its `title` (its name, or the title its content gives itself). It is
 document in the folder can open them all, so the listing reveals nothing
 new. Keyring pulls carry `folder_uid`, so a device can group its list.
 
+The MCP server lists the folder in every document header and remembers
+the link that opened one document for all the others, so an agent that
+has read the story can open its outline by uid without being told it
+exists. `create_document` takes `folder` to add one — see the
+[MCP README](packages/mcp/README.md#folders).
+
 ## Document statistics
 
 The bar-chart button in the document toolbar opens word counts for the
