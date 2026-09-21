@@ -24,11 +24,13 @@ import {
   type TopLevelCommentRow,
 } from '../anchoring.js';
 import {
+  accessDocument,
   authorize,
   canEdit,
   createSession,
   deleteSession,
   hashPassword,
+  type Identity,
   INVITE_HEADER,
   INVITE_SESSION_COOKIE,
   inviteTokenCookie,
@@ -220,7 +222,8 @@ export function documentsRouter(deps: AppDeps): Hono {
 
 // --- POST /api/documents ---------------------------------------------
 
-async function createDocument(c: Context, { db, store }: AppDeps) {
+async function createDocument(c: Context, deps: AppDeps) {
+  const { db, store } = deps;
   const identity = readIdentity(c.req.raw.headers);
   if (!identity) return c.json({ error: 'identity-required' }, 400);
 
@@ -234,6 +237,18 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
     return c.json({ error: 'source-required' }, 400);
   }
   const format: DocumentFormat = isDocumentFormat(body.format) ? body.format : 'markdown';
+
+  if (body.folder !== undefined) {
+    if (typeof body.folder !== 'string' || body.folder.length === 0) {
+      return c.json({ error: 'invalid-folder' }, 400);
+    }
+    return createFolderDocument(c, deps, body, {
+      folderRef: body.folder,
+      source: sourceRaw,
+      format,
+      fallbackIdentity: identity,
+    });
+  }
 
   const uid = newDocumentUid();
   const now = Date.now();
@@ -310,6 +325,84 @@ async function createDocument(c: Context, { db, store }: AppDeps) {
   return c.json(response, 201);
 }
 
+/**
+ * POST /api/documents with `folder`: add a document to the folder that
+ * `folderRef` belongs to. Any document in the folder names it, and a new
+ * document always joins the main document's folder, so folders stay one
+ * level deep.
+ *
+ * Nothing about access is created. The main document's password, invites
+ * and sessions decide it (see `authorize`), so every link into the folder
+ * opens the new document too, and the response carries no link of its own.
+ * Editors may add one, since it is content, not access.
+ */
+async function createFolderDocument(
+  c: Context,
+  deps: AppDeps,
+  body: Record<string, unknown>,
+  opts: { folderRef: string; source: string; format: DocumentFormat; fallbackIdentity: Identity },
+) {
+  const { db, store } = deps;
+  const target = loadDoc(db, opts.folderRef);
+  const main = target ? accessDocument(db, target) : null;
+  if (!main) return c.json({ error: 'folder-not-found' }, 404);
+
+  const decision = authorizeRequest(c, deps, main);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
+  const identity = decision.identity ?? opts.fallbackIdentity;
+
+  // The name is what the folder lists it by; its content may not have a
+  // title yet, and "OUTLINE" is how a person would pick it out anyway.
+  const docName = typeof body.name === 'string' ? body.name.trim().slice(0, 200) : '';
+  if (!docName) return c.json({ error: 'name-required' }, 400);
+
+  const theme = typeof body.default_theme === 'string' ? body.default_theme : main.default_theme;
+  const uid = newDocumentUid();
+  const now = Date.now();
+
+  await store.write({ uid, format: opts.format }, opts.source, identity, 'upload');
+
+  const created = db.transaction(() => {
+    // The folder may have been deleted while the write above was pending,
+    // and a row pointing at a missing main document could never be opened
+    // or deleted again.
+    if (!db.prepare('SELECT 1 FROM documents WHERE uid = ?').get(main.uid)) return false;
+    // invite_only = 1 is inert while folder_uid is set; it only keeps this
+    // row on the closed side if anything ever reads it directly.
+    db.prepare(
+      `INSERT INTO documents
+         (uid, repo_dir, name, password_hash, editable_by_anyone, invite_only, default_theme,
+          format, mermaid_renderer, folder_uid, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, 0, 1, ?, ?, ?, ?, ?, ?)`,
+    ).run(uid, uid, docName, theme, opts.format, main.mermaid_renderer, main.uid, now, now);
+    // The folder's people, so author names and @mentions resolve here
+    // before each of them has visited.
+    copyDocUsers(db, main.uid, uid);
+    upsertDocUser(db, uid, identity);
+    return true;
+  })();
+  if (!created) {
+    await store.destroyDocRepo(uid).catch(() => undefined);
+    return c.json({ error: 'folder-not-found' }, 404);
+  }
+
+  return c.json(
+    {
+      uid,
+      name: docName,
+      folder_uid: main.uid,
+      url: `/d/${uid}`,
+      default_theme: theme,
+      mermaid_renderer: main.mermaid_renderer,
+      format: opts.format,
+      invite_only: main.invite_only === 1,
+      password_protected: main.password_hash !== null,
+    },
+    201,
+  );
+}
+
 // --- POST /api/documents/:uid/copy -----------------------------------
 
 interface CopiedInviteRow {
@@ -352,6 +445,9 @@ async function copyDocument(c: Context, deps: AppDeps) {
   if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
   const identity = decision.identity;
   if (!identity) return c.json({ error: 'identity-required' }, 400);
+  // A folder document's access lives on its main document; the copy is
+  // standalone and takes that access as its own.
+  const gate = accessDocument(db, doc) ?? doc;
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
@@ -381,14 +477,14 @@ async function copyDocument(c: Context, deps: AppDeps) {
   // copy gets a fresh one, returned once like a new upload's.
   let passwordHash: string | null = null;
   let plaintextPassword: string | null = null;
-  if (doc.password_hash !== null) {
+  if (gate.password_hash !== null) {
     plaintextPassword = generatePassword();
     passwordHash = await hashPassword(plaintextPassword);
   }
 
   // invite_only only relaxes when the roster comes along; a copy nobody
   // else has been let into starts closed however open the source was.
-  const inviteOnly = includeAccess ? doc.invite_only === 1 : true;
+  const inviteOnly = includeAccess ? gate.invite_only === 1 : true;
 
   if (discussion) {
     // Whole-repository copy, so every commit oid the discussion refers
@@ -460,7 +556,7 @@ async function copyDocument(c: Context, deps: AppDeps) {
             WHERE doc_uid = ? AND kind != 'admin' AND role != 'admin'
             ORDER BY created_at`,
         )
-        .all(doc.uid) as CopiedInviteRow[];
+        .all(gate.uid) as CopiedInviteRow[];
       for (const inv of invites) {
         createInviteRow(db, {
           docUid: uid,
@@ -734,6 +830,7 @@ async function getDocument(c: Context, deps: AppDeps) {
     (decision.invite && decision.invite.kind !== 'generic') || decision.isInviteSession
       ? (decision.identity?.displayName ?? null)
       : null;
+  const gate = accessDocument(db, doc) ?? doc;
   return c.json({
     uid: doc.uid,
     name: doc.name,
@@ -744,13 +841,60 @@ async function getDocument(c: Context, deps: AppDeps) {
     format: doc.format,
     default_theme: doc.default_theme,
     mermaid_renderer: doc.mermaid_renderer,
-    password_protected: doc.password_hash !== null,
-    invite_only: doc.invite_only === 1,
+    password_protected: gate.password_hash !== null,
+    invite_only: gate.invite_only === 1,
+    folder: folderListing(db, store, doc),
     role: decision.role,
     display_name: forcedDisplayName,
     created_at: doc.created_at,
     updated_at: doc.updated_at,
   });
+}
+
+interface FolderEntryWire {
+  uid: string;
+  name: string | null;
+  /** `name`, else the title the content gives itself, else null. */
+  title: string | null;
+  format: DocumentFormat;
+  main: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+/**
+ * The folder `doc` is in, main document first, or null for a document
+ * that is not in one. Everyone who can open `doc` can open all of these,
+ * so listing them reveals nothing the caller could not reach anyway.
+ */
+function folderListing(
+  db: Database,
+  store: GitStore,
+  doc: DocumentRow,
+): { main_uid: string; documents: FolderEntryWire[] } | null {
+  const mainUid = doc.folder_uid ?? doc.uid;
+  const rows = db
+    .prepare(
+      `SELECT * FROM documents
+        WHERE uid = ? OR folder_uid = ?
+        ORDER BY uid != ?, created_at, uid`,
+    )
+    .all(mainUid, mainUid, mainUid) as DocumentRow[];
+  if (rows.length < 2) return null;
+  return {
+    main_uid: mainUid,
+    documents: rows.map((row) => ({
+      uid: row.uid,
+      name: row.name,
+      // Folder documents are created with a name, so this usually reads
+      // only the main document's file.
+      title: row.name ?? extractDocumentTitle(store.read(row), row.format),
+      format: row.format,
+      main: row.uid === mainUid,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    })),
+  };
 }
 
 // --- PUT /api/documents/:uid -----------------------------------------
@@ -863,6 +1007,12 @@ async function updateSettings(c: Context, deps: AppDeps) {
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
 
+  // Nothing reads a folder document's own gates, so accepting a change here
+  // would report a setting that has no effect.
+  if (doc.folder_uid && ('invite_only' in body || 'password' in body)) {
+    return c.json({ error: 'access-managed-by-folder', folder_uid: doc.folder_uid }, 409);
+  }
+
   type Bind = string | number | null;
   const updates: Array<[string, Bind]> = [];
   let plaintextPassword: string | null = null;
@@ -928,12 +1078,13 @@ async function updateSettings(c: Context, deps: AppDeps) {
 
   const fresh = loadDoc(db, doc.uid);
   if (!fresh) return c.json({ error: 'not-found' }, 404);
+  const gate = accessDocument(db, fresh) ?? fresh;
   const response: Record<string, unknown> = {
     name: fresh.name,
     default_theme: fresh.default_theme,
     mermaid_renderer: fresh.mermaid_renderer,
-    password_protected: fresh.password_hash !== null,
-    invite_only: fresh.invite_only === 1,
+    password_protected: gate.password_hash !== null,
+    invite_only: gate.invite_only === 1,
   };
   if (plaintextPassword) {
     response.password = plaintextPassword;
@@ -950,7 +1101,7 @@ async function updateSettings(c: Context, deps: AppDeps) {
 // --- DELETE /api/documents/:uid (admin only) -------------------------
 
 async function deleteDocument(c: Context, deps: AppDeps) {
-  const { db, store, blobs } = deps;
+  const { db } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
@@ -959,6 +1110,36 @@ async function deleteDocument(c: Context, deps: AppDeps) {
   if (decision.role !== 'admin') return c.json({ error: 'forbidden' }, 403);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
 
+  // A main document takes the folder's access with it, which would leave
+  // the rest of the folder with no way in, so it only goes together with
+  // them — and only when asked, so a client that means "this document"
+  // cannot empty a folder by accident.
+  let members = folderMembers(db, doc);
+  const withMembers = c.req.query('with_members');
+  if (members.length > 0 && withMembers !== '1' && withMembers !== 'true') {
+    return c.json({ error: 'folder-not-empty', documents: members.map((m) => m.uid) }, 409);
+  }
+
+  // Members first: stopping partway must not strand one without its gate.
+  // Re-read after each round so a document added meanwhile goes too; the
+  // last read and the main document's rows go without an await between.
+  while (members.length > 0) {
+    for (const member of members) await purgeDocument(deps, member);
+    members = folderMembers(db, doc);
+  }
+  await purgeDocument(deps, doc);
+  return c.body(null, 204);
+}
+
+/** The other documents in `doc`'s folder when `doc` is its main document. */
+function folderMembers(db: Database, doc: DocumentRow): DocumentRow[] {
+  if (doc.folder_uid) return [];
+  return db.prepare('SELECT * FROM documents WHERE folder_uid = ?').all(doc.uid) as DocumentRow[];
+}
+
+/** Drop every row, blob reference and repository a document owns. */
+async function purgeDocument(deps: AppDeps, doc: DocumentRow): Promise<void> {
+  const { db, store, blobs } = deps;
   // Capture the asset ids about to be detached so we can GC the blobs
   // afterwards if no other doc still references them.
   const attachedAssetIds = (
@@ -1002,8 +1183,6 @@ async function deleteDocument(c: Context, deps: AppDeps) {
   } catch {
     /* repo already gone — fine */
   }
-
-  return c.body(null, 204);
 }
 
 // --- GET /api/documents/:uid/export (portable bundle) ----------------
@@ -2741,7 +2920,7 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
 
 async function authenticate(c: Context, deps: AppDeps) {
   const { db, config } = deps;
-  const doc = loadDoc(db, c.req.param('uid'));
+  const doc = loadAccessDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
   if (doc.password_hash === null) {
     return c.json({ error: 'not-password-protected' }, 400);
@@ -2771,7 +2950,7 @@ async function logout(c: Context, deps: AppDeps) {
 }
 
 async function recoverCurrentPassword(c: Context, deps: AppDeps) {
-  const doc = loadDoc(deps.db, c.req.param('uid'));
+  const doc = loadAccessDoc(deps.db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
   if (doc.password_hash === null) {
     return c.json({ error: 'not-password-protected' }, 400);
@@ -2816,7 +2995,7 @@ function clearSessionCookie(c: Context): void {
 
 async function listInvites(c: Context, deps: AppDeps) {
   const { db } = deps;
-  const doc = loadDoc(db, c.req.param('uid'));
+  const doc = loadAccessDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
   const decision = authorizeRequest(c, deps, doc);
@@ -2831,7 +3010,7 @@ async function listInvites(c: Context, deps: AppDeps) {
 
 async function createInvite(c: Context, deps: AppDeps) {
   const { db } = deps;
-  const doc = loadDoc(db, c.req.param('uid'));
+  const doc = loadAccessDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
   const decision = authorizeRequest(c, deps, doc);
@@ -2883,7 +3062,7 @@ async function createInvite(c: Context, deps: AppDeps) {
 
 async function deleteInvite(c: Context, deps: AppDeps) {
   const { db } = deps;
-  const doc = loadDoc(db, c.req.param('uid'));
+  const doc = loadAccessDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
   const decision = authorizeRequest(c, deps, doc);
@@ -2923,7 +3102,7 @@ async function deleteInvite(c: Context, deps: AppDeps) {
  */
 async function updateInvite(c: Context, deps: AppDeps) {
   const { db } = deps;
-  const doc = loadDoc(db, c.req.param('uid'));
+  const doc = loadAccessDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
   const decision = authorizeRequest(c, deps, doc);
@@ -2967,7 +3146,7 @@ async function updateInvite(c: Context, deps: AppDeps) {
  */
 async function claimInvite(c: Context, deps: AppDeps) {
   const { db, config } = deps;
-  const doc = loadDoc(db, c.req.param('uid'));
+  const doc = loadAccessDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
   // Password-protected docs: the password gate would reject an invite session
@@ -3011,7 +3190,7 @@ async function claimInvite(c: Context, deps: AppDeps) {
  */
 async function rotateAdminInvite(c: Context, deps: AppDeps) {
   const { db } = deps;
-  const doc = loadDoc(db, c.req.param('uid'));
+  const doc = loadAccessDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
   const decision = authorizeRequest(c, deps, doc);
@@ -3313,6 +3492,16 @@ function loadDoc(db: Database, uid: string | undefined): DocumentRow | null {
     | DocumentRow
     | undefined;
   return row ?? null;
+}
+
+/**
+ * The document that owns access for `uid` — see `accessDocument`. The
+ * password and invite routes act on this one, so reaching them through a
+ * folder document manages the folder rather than a list nothing reads.
+ */
+function loadAccessDoc(db: Database, uid: string | undefined): DocumentRow | null {
+  const doc = loadDoc(db, uid);
+  return doc ? accessDocument(db, doc) : null;
 }
 
 function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
