@@ -117,7 +117,8 @@ export interface ThreadWire {
     /**
      * Root threads this proposal answers, oldest first; empty if it
      * stands alone. Accepting it resolves each one no other open
-     * proposal also answers.
+     * proposal also answers. Reopening it reopens those an accept
+     * resolved.
      */
     answers_thread_ids: string[];
   } | null;

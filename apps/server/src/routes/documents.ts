@@ -91,11 +91,13 @@ import type { Realtime } from '../realtime.js';
 import { renderDocumentCached, renderDocumentCopy } from '../render-cache.js';
 import { listDocUserNameMap, upsertDocUser } from '../users.js';
 import { gcAssetIfOrphan, listAttached } from './assets.js';
+import { toWire as toCommentWire } from './comments.js';
 import {
   loadProposalRow,
   prepareAcceptUndo,
   readProposalContent,
   reanchorProposals,
+  reopenAnsweredThreads,
   toWire as toEditProposalWire,
 } from './edit-proposals.js';
 
@@ -2007,9 +2009,9 @@ async function importDocument(c: Context, deps: AppDeps) {
         anchor_start_offset, anchor_end_offset,
         anchor_heading_path, anchor_section_index, anchor_section_index_path,
         author_client_id, author_display_name, body, is_hidden, is_bookmark, link_status,
-        resolved_at, resolved_by_name,
+        resolved_at, resolved_by_name, resolved_by_accept,
         created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertEditProposal = db.prepare(
     `INSERT INTO comments_edit_proposals
@@ -2088,6 +2090,7 @@ async function importDocument(c: Context, deps: AppDeps) {
       ),
       typeof row.resolved_at === 'number' ? row.resolved_at : null,
       typeof row.resolved_by_name === 'string' ? row.resolved_by_name : null,
+      typeof row.resolved_at === 'number' && row.resolved_by_accept === true ? 1 : 0,
       typeof row.created_at === 'number' ? row.created_at : now,
       typeof row.updated_at === 'number' ? row.updated_at : now,
       deletedAt,
@@ -2398,6 +2401,7 @@ async function mapBundleComments(
     link_status: row.link_status,
     resolved_at: row.resolved_at,
     resolved_by_name: row.resolved_by_name,
+    resolved_by_accept: row.resolved_by_accept === 1,
     created_at: row.created_at,
     updated_at: row.updated_at,
     // Set only for the accepted-proposal tombstones the export keeps for
@@ -2615,6 +2619,7 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
 
   let oid: string;
   let reopenedProposalId: string | null = null;
+  let reopenedAnsweredThreadIds: string[] = [];
 
   if (meta.action === 'update') {
     const reverted = await store.revertCommit(doc, targetOid, decision.identity);
@@ -2673,7 +2678,16 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
     );
     oid = undo.oid;
     const { reopened, orphaned } = undo.applyDb();
-    if (reopened) reopenedProposalId = meta.proposalId;
+    if (reopened) {
+      reopenedProposalId = meta.proposalId;
+      reopenedAnsweredThreadIds = reopenAnsweredThreads(
+        db,
+        doc.uid,
+        meta.proposalId,
+        decision.identity.clientId,
+        Date.now(),
+      );
+    }
     for (const row of orphaned) {
       realtime.broadcast(
         doc.uid,
@@ -2698,6 +2712,17 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
       );
     }
   }
+  const loadComment = db.prepare('SELECT * FROM comments WHERE id = ?');
+  for (const id of reopenedAnsweredThreadIds) {
+    const answered = loadComment.get(id) as CommentRow | undefined;
+    if (answered && answered.is_hidden === 0) {
+      realtime.broadcast(
+        doc.uid,
+        { type: 'comment.updated', comment: toCommentWire(answered) },
+        decision.identity.clientId,
+      );
+    }
+  }
 
   realtime.broadcast(
     doc.uid,
@@ -2705,7 +2730,11 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
     decision.identity.clientId,
   );
 
-  return c.json({ oid, reopened_proposal_id: reopenedProposalId });
+  return c.json({
+    oid,
+    reopened_proposal_id: reopenedProposalId,
+    reopened_answered_thread_ids: reopenedAnsweredThreadIds,
+  });
 }
 
 // --- POST /api/documents/:uid/auth -----------------------------------

@@ -58,6 +58,7 @@ function comment(anchor: Partial<CommentRow>): CommentRow {
     link_status: 'linked',
     resolved_at: null,
     resolved_by_name: null,
+    resolved_by_accept: 0,
     created_at: 0,
     updated_at: 0,
     deleted_at: null,

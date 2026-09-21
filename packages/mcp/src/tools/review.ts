@@ -37,6 +37,8 @@ interface ThreadMutationWire {
   created_reply_id?: string | null;
   /** Filled when accepting a proposal also closed the comments it answered. */
   resolved_answered_thread_ids?: string[] | null;
+  /** Filled when reopening a proposal also reopened comments an accept had closed. */
+  reopened_answered_thread_ids?: string[] | null;
 }
 
 const blockIdArg = z
@@ -596,7 +598,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         '  reopen  — undo a resolve/accept/reject\n\n' +
         'Accepting a proposal that names `answers_thread_ids` also resolves those comments — ' +
         'their requests have been carried out — except any that another proposal still ' +
-        'waiting on a decision also answers. Rejecting leaves them open.\n\n' +
+        'waiting on a decision also answers. Rejecting leaves them open. Reopening a ' +
+        'proposal reopens the ones an accept resolved, but not one a person resolved.\n\n' +
         'Accepting rewrites the document, which can orphan other open proposals that touched ' +
         'the same text; re-check list_threads afterwards.',
       inputSchema: {
@@ -625,6 +628,9 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           `url: ${commentUrl(ref, args.thread_id)}`,
           res.resolved_answered_thread_ids?.length
             ? `Also resolved comment thread${res.resolved_answered_thread_ids.length === 1 ? '' : 's'} ${res.resolved_answered_thread_ids.join(', ')}, which this proposal answered.`
+            : null,
+          res.reopened_answered_thread_ids?.length
+            ? `Also reopened comment thread${res.reopened_answered_thread_ids.length === 1 ? '' : 's'} ${res.reopened_answered_thread_ids.join(', ')}, which an accept had resolved.`
             : null,
           args.action === 'accept'
             ? 'The document source changed. Other open proposals may now be orphaned or conflicting — re-run list_threads.'

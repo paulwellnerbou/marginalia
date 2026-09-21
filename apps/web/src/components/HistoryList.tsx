@@ -474,7 +474,7 @@ export function HistoryList({
               <>
                 The document will return to its state before proposal{' '}
                 <Code size="1">{shortOid(revertTarget.oid)}</Code> was accepted, and that proposal
-                will be reopened.
+                will be reopened, along with the comments its accept resolved.
               </>
             ) : (
               <>

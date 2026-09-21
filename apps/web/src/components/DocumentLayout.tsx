@@ -791,6 +791,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    * them open until a full refresh, and a thread held open keeps pointing
    * at a block the accept replaced until the reconcile lands.
    *
+   * Reverting an accept from History goes the other way: the proposal and
+   * the comments its accept resolved reopen, and until the reconcile the
+   * reverting user's list keeps showing them settled.
+   *
    * The response names the resolved ones and the accepted thread lists
    * the rest, but neither carries their new shape, so read each one back
    * rather than reconstructing it here: the server decides `capabilities`
@@ -2870,7 +2874,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       }
       try {
         const res = await apiRevertHistoryVersion(doc.uid, entry.oid, identity);
-        reconcileThreadsSoon();
+        const reopened = res.reopened_proposal_id
+          ? [res.reopened_proposal_id, ...(res.reopened_answered_thread_ids ?? [])]
+          : [];
+        if (reopened.length > 0) void landAnsweredThreads(reopened).then(reconcileThreadsSoon);
+        else reconcileThreadsSoon();
         void refreshDoc();
         setHistoryVersion((v) => v + 1);
         if (res.reopened_proposal_id) openCommentThread(res.reopened_proposal_id);
@@ -2883,7 +2891,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         throw err;
       }
     },
-    [doc.uid, resolveIdentity, openCommentThread, refreshDoc, reconcileThreadsSoon],
+    [
+      doc.uid,
+      resolveIdentity,
+      openCommentThread,
+      refreshDoc,
+      reconcileThreadsSoon,
+      landAnsweredThreads,
+    ],
   );
 
   const updateSearchResults = useCallback((results: DocumentSearchResult[]) => {
