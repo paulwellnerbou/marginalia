@@ -84,6 +84,20 @@ function decodeHeaderValue(s: string): string {
   }
 }
 
+/**
+ * The document whose password, invite_only flag, invites and sessions
+ * decide access to `doc`: its folder's main document, or `doc` itself.
+ * Null when the main document is gone, which must lock the folder
+ * document rather than leave it with no gate at all.
+ */
+export function accessDocument(db: Database, doc: DocumentRow): DocumentRow | null {
+  if (!doc.folder_uid) return doc;
+  const main = db.prepare('SELECT * FROM documents WHERE uid = ?').get(doc.folder_uid) as
+    | DocumentRow
+    | undefined;
+  return main ?? null;
+}
+
 /** Fetch the invite referenced by the `x-marginalia-invite` header, if any. */
 export function readInvite(db: Database, headers: Headers, docUid: string): InviteRow | null {
   const token = headers.get(INVITE_HEADER);
@@ -232,6 +246,11 @@ export function headersWithInviteCookie(req: Request): Headers {
  *                       fallback entirely. Both gates are independent: a
  *                       password-protected invite_only doc needs both.
  *
+ * Every gate above is read off the access document (`accessDocument`): for
+ * a document in a folder that is the folder's main document, so one link,
+ * one password and one session open the whole folder. The identity is still
+ * recorded against `doc` itself.
+ *
  * Returns one resolved identity so callers don't re-derive authorship.
  */
 export function authorize(
@@ -241,22 +260,25 @@ export function authorize(
   sessionToken: string | null,
   inviteSessionToken?: string | null,
 ): AuthDecision {
+  const gate = accessDocument(db, doc);
+  if (!gate) return { ok: false, reason: 'forbidden' };
+
   const passwordSession = sessionToken ? readSession(db, sessionToken) : null;
-  const validPasswordSession = passwordSession?.doc_uid === doc.uid ? passwordSession : null;
+  const validPasswordSession = passwordSession?.doc_uid === gate.uid ? passwordSession : null;
 
   const invSession = inviteSessionToken ? readSession(db, inviteSessionToken) : null;
-  const validInviteSession = invSession?.doc_uid === doc.uid ? invSession : null;
+  const validInviteSession = invSession?.doc_uid === gate.uid ? invSession : null;
   const isInviteSession = !!validInviteSession?.invite_role;
 
   // Password gate is unconditional — invites (including admin) and invite
   // sessions never bypass it. Only a password-type session satisfies it.
-  if (doc.password_hash !== null) {
+  if (gate.password_hash !== null) {
     if (!validPasswordSession) {
       return { ok: false, reason: 'password-required' };
     }
   }
 
-  const invite = readInvite(db, headers, doc.uid);
+  const invite = readInvite(db, headers, gate.uid);
   const clientId = readClientId(headers);
   const base = readIdentity(headers);
 
@@ -340,7 +362,7 @@ export function authorize(
   // anonymous role to fall back to. Every path that could have granted
   // one — admin/named/generic invite header, claimed invite session —
   // has already returned above.
-  if (doc.invite_only === 1) {
+  if (gate.invite_only === 1) {
     return { ok: false, reason: 'invite-required' };
   }
 

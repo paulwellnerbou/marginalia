@@ -465,6 +465,40 @@ protected document into an open one. Only the hash is stored, so the
 password itself can't come along — the copy gets a freshly generated one,
 shown once, exactly like a new upload's.
 
+## Folders
+
+A **folder** keeps documents that belong together — a story, its
+OUTLINE and its BACKGROUND — under one set of access links. One document
+is the folder's **main document**, its entry point; the others are added
+to it with `POST /api/documents` and a `folder` field naming any document
+already in the folder, plus a required `name`. Admins and editors may add
+one. A document added through another folder document joins the same
+folder: folders are one level deep.
+
+A folder document has no access of its own. Its password, invite-only
+flag, invites and sessions are the main document's — `authorize()` reads
+every gate off the main document and records only the visitor's identity
+against the document itself. So the links people already hold for the
+main document open the whole folder, an invite created later reaches
+every document in it, and revoking one closes all of them. One password
+session covers the folder too. That is the difference from **Copy with
+access**, which re-mints links nobody holds yet: a folder shares the ones
+that already exist.
+
+It follows that a leaked link is the whole folder, not one document, and
+that the access routes act on the main document whichever folder
+document they are reached through. `GET /api/documents/:uid/invites` on
+OUTLINE lists the story's invites, and a password or `invite_only` change
+sent to a folder document is refused with `409 access-managed-by-folder`
+rather than stored where nothing reads it.
+
+`GET /api/documents/:uid` carries the listing as `folder` — the main
+document's uid and every document in the folder, main first, each with
+its `title` (its name, or the title its content gives itself). It is
+`null` for a document that is not in a folder. Anyone who can open one
+document in the folder can open them all, so the listing reveals nothing
+new. Keyring pulls carry `folder_uid`, so a device can group its list.
+
 ## Document statistics
 
 The bar-chart button in the document toolbar opens word counts for the
@@ -604,6 +638,13 @@ longer exists.
 The browser that issued the delete also drops its own leftovers: the
 recent-documents entry, the invite token, any saved password, and the
 per-document theme override.
+
+A [folder](#folders)'s main document holds the access for the whole
+folder, so deleting it deletes the folder. The server refuses with
+`409 folder-not-empty` (listing the other documents) unless the request
+says `?with_members=1`, so a client that means one document cannot empty
+a folder by accident. Deleting any other folder document removes only
+that document.
 
 There is no undo and no backup. Export a JSON bundle first if the content
 might be wanted later.

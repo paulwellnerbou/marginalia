@@ -66,6 +66,8 @@ interface KeyringDocWire {
   role: InviteRole | null;
   format: DocumentFormat;
   password_protected: boolean;
+  /** The folder's main document, so a device can group the ring by folder. */
+  folder_uid: string | null;
   updated_at: number;
   added_at: number;
   cover: {
@@ -519,7 +521,7 @@ function listKeyringDocs(db: Database, keyringToken: string): KeyringDocWire[] {
   const rows = db
     .prepare(
       `SELECT kd.doc_uid, kd.invite_token, kd.title, kd.added_at,
-              d.format, d.updated_at, d.password_hash, d.cover_ref,
+              d.format, d.updated_at, d.folder_uid, gate.password_hash, d.cover_ref,
               i.role AS role,
               da.ref_name AS cover_ref_name, da.asset_id AS cover_asset_id,
               da.mime AS cover_mime,
@@ -528,7 +530,9 @@ function listKeyringDocs(db: Database, keyringToken: string): KeyringDocWire[] {
               thumb.mime AS thumbnail_mime
          FROM keyring_docs kd
          JOIN documents d ON d.uid = kd.doc_uid
-         LEFT JOIN invites i ON i.token = kd.invite_token AND i.doc_uid = kd.doc_uid
+         -- A folder document's role and password are its main document's.
+         JOIN documents gate ON gate.uid = COALESCE(d.folder_uid, d.uid)
+         LEFT JOIN invites i ON i.token = kd.invite_token AND i.doc_uid = gate.uid
          LEFT JOIN document_assets da
                 ON da.doc_uid = d.uid AND da.ref_name = d.cover_ref
          LEFT JOIN document_assets thumb
@@ -543,6 +547,7 @@ function listKeyringDocs(db: Database, keyringToken: string): KeyringDocWire[] {
     added_at: number;
     format: DocumentFormat;
     updated_at: number;
+    folder_uid: string | null;
     password_hash: string | null;
     cover_ref: string | null;
     role: InviteRole | null;
@@ -564,6 +569,7 @@ function listKeyringDocs(db: Database, keyringToken: string): KeyringDocWire[] {
     role: row.role,
     format: row.format,
     password_protected: row.password_hash !== null,
+    folder_uid: row.folder_uid,
     updated_at: row.updated_at,
     added_at: row.added_at,
     cover:
@@ -585,10 +591,15 @@ function listKeyringDocs(db: Database, keyringToken: string): KeyringDocWire[] {
   }));
 }
 
+/** A folder document's invites are its main document's. */
 function inviteMatchesDoc(db: Database, docUid: string, inviteToken: string): boolean {
   const row = db
-    .prepare('SELECT 1 FROM invites WHERE token = ? AND doc_uid = ?')
-    .get(inviteToken, docUid);
+    .prepare(
+      `SELECT 1 FROM invites i
+         JOIN documents d ON d.uid = ?
+        WHERE i.token = ? AND i.doc_uid = COALESCE(d.folder_uid, d.uid)`,
+    )
+    .get(docUid, inviteToken);
   return !!row;
 }
 

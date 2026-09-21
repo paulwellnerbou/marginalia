@@ -98,11 +98,13 @@ export function listDocUserNames(db: Database, docUid: string): string[] {
     .all(docUid) as Array<{ display_name: string }>;
   for (const row of users) addName(out, seen, row.display_name);
 
-  // Generic invites have display_name NULL; admin + named carry one.
+  // Generic invites have display_name NULL; admin + named carry one. A
+  // folder document's invites are its main document's.
   const invited = db
     .prepare(
       `SELECT display_name FROM invites
-         WHERE doc_uid = ? AND display_name IS NOT NULL
+         WHERE doc_uid = (SELECT COALESCE(folder_uid, uid) FROM documents WHERE uid = ?)
+           AND display_name IS NOT NULL
          ORDER BY created_at ASC`,
     )
     .all(docUid) as Array<{ display_name: string | null }>;

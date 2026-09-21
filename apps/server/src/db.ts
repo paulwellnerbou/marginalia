@@ -41,6 +41,13 @@ CREATE TABLE IF NOT EXISTS documents (
   -- The ref is an ordinary name, so a source image called cover.png and
   -- the cover are the same asset — uploading one replaces the other.
   cover_ref            TEXT,
+  -- uid of the folder's main document, or NULL for a standalone document
+  -- and for a main document itself. One level only: it always names a row
+  -- whose own folder_uid is NULL. A folder document has no access of its
+  -- own — authorize() decides it against the main document's password,
+  -- invite_only flag, invites and sessions, so the main's links open the
+  -- whole folder. This row's password_hash and invite_only are inert.
+  folder_uid           TEXT,
   created_at           INTEGER NOT NULL,
   updated_at           INTEGER NOT NULL
 );
@@ -345,6 +352,8 @@ export interface DocumentRow {
   mermaid_renderer: MermaidRenderer | null;
   /** `document_assets.ref_name` of this document's cover image, or NULL. */
   cover_ref: string | null;
+  /** The folder's main document; see the schema comment. */
+  folder_uid: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -612,6 +621,9 @@ export function openDatabase(path: string): Database {
   ensureColumn(db, 'documents', 'password_recovery_iv', 'TEXT');
   ensureColumn(db, 'documents', 'mermaid_renderer', 'TEXT');
   ensureColumn(db, 'documents', 'cover_ref', 'TEXT');
+  ensureColumn(db, 'documents', 'folder_uid', 'TEXT');
+  // After the column, for the same reason as idx_sessions_invite below.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_documents_folder ON documents(folder_uid)');
   // Existing docs keep their current reach — defaulting to 1 would lock
   // readers out of every document on upgrade.
   ensureColumn(db, 'documents', 'invite_only', 'INTEGER NOT NULL DEFAULT 0');
