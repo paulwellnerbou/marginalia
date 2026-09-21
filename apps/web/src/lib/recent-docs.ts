@@ -33,11 +33,46 @@ export interface RecentDoc {
    * visit; a stale one 404s and the card falls back to no thumbnail.
    */
   cover?: DocumentCover;
+  /**
+   * The main document this one belongs with, when it is not that main
+   * document itself. The landing page lists it on the main document's card.
+   */
+  folder_uid?: string;
 }
 
 /** Build the URL we should navigate to when re-opening a recent doc. */
 export function openUrlFor(doc: RecentDoc): string {
   return doc.invite_token ? `/d/${doc.uid}/${doc.invite_token}` : `/d/${doc.uid}`;
+}
+
+export interface RecentGroup {
+  doc: RecentDoc;
+  /** Documents that belong with `doc`, by title. */
+  companions: RecentDoc[];
+}
+
+/**
+ * One card per main document, with the documents that belong with it
+ * listed on it rather than as cards of their own. A card sits where its
+ * most recently opened document would have, so working on an outline
+ * keeps its story near the top. A document whose main document is not in
+ * the list keeps a card of its own — nothing opened here disappears.
+ */
+export function groupRecentDocs(docs: readonly RecentDoc[]): RecentGroup[] {
+  const listed = new Set(docs.map((d) => d.uid));
+  // Insertion order is each group's first appearance, which places its card.
+  const groups = new Map<string, { doc?: RecentDoc; companions: RecentDoc[] }>();
+  for (const d of docs) {
+    const lead =
+      d.folder_uid && d.folder_uid !== d.uid && listed.has(d.folder_uid) ? d.folder_uid : d.uid;
+    const group = groups.get(lead) ?? { companions: [] };
+    if (lead === d.uid) group.doc = d;
+    else group.companions.push(d);
+    groups.set(lead, group);
+  }
+  return [...groups.values()].flatMap(({ doc, companions }) =>
+    doc ? [{ doc, companions: companions.sort((a, b) => a.title.localeCompare(b.title)) }] : [],
+  );
 }
 
 export function loadRecentDocs(): RecentDoc[] {
@@ -71,6 +106,23 @@ export function recordVisit(doc: RecentDoc): void {
  * for the document to be re-opened. No-op for a doc that isn't in the
  * list.
  */
+/**
+ * Swap in a rotated invite token. The card re-opens with the token it
+ * holds, and opening stores that token — an entry left holding the revoked
+ * one would overwrite the working token on the next click.
+ */
+export function updateRecentDocToken(uid: string, token: string): void {
+  const list = loadRecentDocs();
+  const entry = list.find((d) => d.uid === uid);
+  if (!entry || entry.invite_token === token) return;
+  entry.invite_token = token;
+  try {
+    localStorage.setItem(KEY, JSON.stringify(list));
+  } catch {
+    /* quota exceeded — best-effort */
+  }
+}
+
 export function updateRecentDocCover(uid: string, cover: DocumentCover | null): void {
   const list = loadRecentDocs();
   const entry = list.find((d) => d.uid === uid);
@@ -148,6 +200,15 @@ export function mergeKeyringDocs(incoming: KeyringDocEntry[]): RecentDoc[] {
       updated_at: Math.max(entry.updated_at, local?.updated_at ?? 0),
       invite_token: entry.invite_token,
       ...(cover ? { cover } : {}),
+      // The server's answer when it gives one (null: stands alone); an
+      // older server says nothing, and then this browser's is all there is.
+      ...(entry.folder_uid !== undefined
+        ? entry.folder_uid
+          ? { folder_uid: entry.folder_uid }
+          : {}
+        : local?.folder_uid
+          ? { folder_uid: local.folder_uid }
+          : {}),
     };
     byUid.set(entry.doc_uid, merged);
   }
@@ -217,6 +278,7 @@ function coerceRecentDoc(v: unknown): RecentDoc[] {
     updated_at: r.updated_at,
     ...(typeof r.invite_token === 'string' ? { invite_token: r.invite_token } : {}),
     ...(cover ? { cover } : {}),
+    ...(typeof r.folder_uid === 'string' ? { folder_uid: r.folder_uid } : {}),
   };
   return [out];
 }

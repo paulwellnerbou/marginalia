@@ -64,6 +64,7 @@ import {
 } from '../lib/new-document-draft.js';
 import { closeTab } from '../lib/open-tabs.js';
 import {
+  groupRecentDocs,
   loadRecentDocs,
   openUrlFor,
   type RecentDoc,
@@ -231,10 +232,11 @@ export function HomePage() {
 
   const docList = hasDocs ? (
     <Grid key="list" columns={{ initial: '1', xs: '2', md: '3' }} gap="3" mb="5">
-      {recent.map((r) => (
+      {groupRecentDocs(recent).map(({ doc: r, companions }) => (
         <RecentCard
           key={r.uid}
           doc={r}
+          companions={companions}
           onRemove={() => {
             removeFromRecent(r.uid);
             // A document dropped from the list can't stay in the tab
@@ -486,7 +488,16 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
   );
 }
 
-function RecentCard({ doc, onRemove }: { doc: RecentDoc; onRemove: () => void }) {
+function RecentCard({
+  doc,
+  companions,
+  onRemove,
+}: {
+  doc: RecentDoc;
+  /** Documents that belong with this one, listed here instead of as cards. */
+  companions: RecentDoc[];
+  onRemove: () => void;
+}) {
   const updatedSinceVisit = doc.updated_at > doc.visited_at;
   const url = openUrlFor(doc);
   return (
@@ -548,6 +559,21 @@ function RecentCard({ doc, onRemove }: { doc: RecentDoc; onRemove: () => void })
               </Badge>
             )}
           </Flex>
+          {companions.length > 0 && (
+            <ul
+              className="recent-card-companions"
+              aria-label={`Documents that belong with ${doc.title}`}
+            >
+              {companions.map((c) => (
+                <li key={c.uid}>
+                  <Link to={openUrlFor(c)} className="recent-card-companion">
+                    <FileTextIcon aria-hidden />
+                    {c.title}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
           <Text size="1" color="gray" mt="3" as="div" title={formatTimestampLong(doc.visited_at)}>
             Last opened {formatRelative(doc.visited_at)}
           </Text>

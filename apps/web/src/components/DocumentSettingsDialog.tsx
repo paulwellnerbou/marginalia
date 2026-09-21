@@ -20,6 +20,7 @@ import {
   updateDocumentSettings,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
+import { listTitles } from '../lib/folder.js';
 import { forgetDocumentLocally } from '../lib/forget-doc.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
@@ -58,6 +59,10 @@ export function DocumentSettingsDialog({
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // A main document's access is its folder's, so deleting it takes the rest
+  // with it; deleting any other document of the folder takes only that one.
+  const folderMain = doc.folder?.documents.find((d) => d.main && d.uid !== doc.uid) ?? null;
+  const companions = doc.folder && !folderMain ? doc.folder.documents.filter((d) => !d.main) : [];
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
@@ -131,12 +136,18 @@ export function DocumentSettingsDialog({
     try {
       // Server first: the invite token this request authorizes with is
       // one of the things forgetDocumentLocally clears.
-      await deleteDocument(doc.uid, { clientId: getClientId(), displayName: name });
+      await deleteDocument(
+        doc.uid,
+        { clientId: getClientId(), displayName: name },
+        { withFolder: companions.length > 0 },
+      );
       forgetDocumentLocally(doc.uid);
-      // Straight home rather than closing the dialog — the page behind it
-      // is rendering a document that no longer exists, and every control
-      // on it would now 404. `replace` keeps Back from returning to it.
-      navigate('/', { replace: true });
+      for (const companion of companions) forgetDocumentLocally(companion.uid);
+      // Away rather than closing the dialog — the page behind it is
+      // rendering a document that no longer exists, and every control on
+      // it would now 404. `replace` keeps Back from returning to it. The
+      // rest of a folder is still there, so that is where to go.
+      navigate(folderMain ? `/d/${folderMain.uid}` : '/', { replace: true });
     } catch (err) {
       reportError('DocumentSettings.delete', err, { uid: doc.uid });
       setError(apiErrorMessage(err, 'Could not delete this document'));
@@ -284,6 +295,13 @@ export function DocumentSettingsDialog({
                 This browser's copy of the link and password go too. There is no undo and no backup
                 — export the JSON bundle above first if you might want it back.
               </Text>
+              {companions.length > 0 && (
+                <Text size="1" color="red">
+                  {listTitles(companions.map((d) => d.title ?? 'Untitled'))}{' '}
+                  {companions.length === 1 ? 'belongs' : 'belong'} with this document and open with
+                  its links, so {companions.length === 1 ? 'it is' : 'they are'} deleted with it.
+                </Text>
+              )}
               <Flex>
                 <ArmedButton
                   label={deleting ? 'Deleting…' : 'Delete document'}
