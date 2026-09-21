@@ -1684,6 +1684,36 @@ Prose in chapter seven.
       }
     });
 
+    test('one password login opens every document of a protected folder', async () => {
+      const created = await call('create_document', {
+        source: '# Secret story\n\nOnce.\n',
+        name: 'Secret story',
+        password_protected: true,
+      });
+      const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+      const password = /^password[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+      await call('authenticate', { document: adminUrl, password });
+      // The document just added opens on the login that added it.
+      const outline = await addOutline(adminUrl);
+      expect(await call('get_document', { document: outline })).toContain('Leave before dawn');
+
+      // Told only the story's link and password, a session needs no second
+      // authenticate once it has read the story.
+      const { session, dir } = await freshSession();
+      try {
+        expect(
+          (await callOn(session, 'authenticate', { document: adminUrl, password })).isError,
+        ).toBe(false);
+        await callOn(session, 'get_document', { document: adminUrl, include_source: false });
+        const read = await callOn(session, 'get_document', { document: outline });
+        expect(read.isError).toBe(false);
+        expect(read.body).toContain('Leave before dawn');
+      } finally {
+        await session.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     test('asks for a name, which the folder lists its documents by', async () => {
       const { adminUrl } = await seedBook();
       const message = await callExpectingError('create_document', {

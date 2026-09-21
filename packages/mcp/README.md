@@ -255,8 +255,11 @@ folder: 3 documents that open with the same links and roles — pass any uid bel
 
 Reading any document of a folder files the link it was read with under
 all the others, so their bare uids work from then on — in a fresh session
-too, once one document of the folder has been read with its link. The
-list stops after twelve and says how many it left out.
+too, once one document of the folder has been read with its link. A
+password-protected folder needs one `authenticate`, not one per document:
+the server's session covers the whole folder, so the login is filed
+under the rest the same way. The list stops after twelve and says how
+many it left out.
 
 To start one, or add to it:
 

@@ -41,15 +41,20 @@ export async function loadDocument(ctx: ToolContext, documentRef: string): Promi
 }
 
 /**
- * The token that just opened a folder document opens every other one in
- * it, so file it under each: a bare uid from the header's folder list then
- * works in any tool. It replaces what was remembered for them — this one
- * has just been proven good, and an older one may have been rotated away.
+ * The token and password session that just opened a folder document open
+ * every other one in it, so file them under each: a bare uid from the
+ * header's folder list then works in any tool. The token replaces what was
+ * remembered for them — this one has just been proven good, and an older
+ * one may have been rotated away.
  */
 function rememberFolder(ctx: ToolContext, ref: DocumentRef, doc: DocumentWire): void {
-  if (!ref.token || !doc.folder) return;
+  if (!doc.folder) return;
   for (const other of doc.folder.documents) {
-    if (other.uid !== ref.uid) ctx.client.rememberDocument({ ...ref, uid: other.uid });
+    if (other.uid === ref.uid) continue;
+    // Without a token this still records the instance, and keeps any
+    // token remembered for it there.
+    ctx.client.rememberDocument({ ...ref, uid: other.uid });
+    ctx.client.shareSession(ref, other.uid);
   }
 }
 

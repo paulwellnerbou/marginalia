@@ -170,6 +170,7 @@ export function registerDocumentTools(
           });
           const ref = { ...beside, uid: added.uid, commentId: null };
           ctx.client.rememberDocument(ref);
+          ctx.client.shareSession(beside, added.uid);
           const ignored = [
             args.password_protected !== undefined ? 'password_protected' : null,
             args.invite_only !== undefined ? 'invite_only' : null,

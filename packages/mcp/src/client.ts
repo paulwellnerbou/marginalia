@@ -150,6 +150,17 @@ export class MarginaliaClient {
     this.state.remember(ref.uid, { baseUrl: ref.baseUrl, token: ref.token });
   }
 
+  /**
+   * Replay the password session `from` holds for another document of its
+   * folder. The server's session is the folder's, so without this every
+   * document of a protected folder would need its own `authenticate`. The
+   * key carries the origin, so it never reaches another instance.
+   */
+  shareSession(from: DocumentRef, uid: string): void {
+    const session = this.sessions.get(sessionKey(from));
+    if (session) this.sessions.set(sessionKey({ ...from, uid }), session);
+  }
+
   private async send(
     ref: DocumentRef,
     path: string,
