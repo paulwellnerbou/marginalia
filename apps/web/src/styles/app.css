@@ -2213,6 +2213,77 @@ button.primary:disabled {
   padding: 1rem;
 }
 
+/* Documents that belong together, above the open one's contents. Rows
+   borrow the TOC's look so the pane reads as one navigation column; the
+   list scrolls on its own so a long folder cannot push the contents out. */
+.folder-docs {
+  flex: none;
+  max-height: 40%;
+  overflow-y: auto;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--ui-border);
+  font-size: 0.9rem;
+}
+.folder-docs-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.folder-docs-companions {
+  padding-left: 0.9rem;
+}
+.folder-docs-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  margin-top: 0.15rem;
+  padding: 0.28rem 0.5rem 0.28rem 0.3rem;
+  border: 0;
+  border-radius: 0.35rem;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 1.25;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+}
+.folder-docs-row > svg {
+  flex: none;
+  color: var(--gray-10);
+}
+.folder-docs-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-docs-main {
+  font-weight: 600;
+}
+.folder-docs-row:hover,
+.folder-docs-row:focus-visible {
+  color: var(--ui-toc-active);
+  background: var(--ui-toc-hover-bg);
+}
+.folder-docs-row.active {
+  font-weight: 700;
+  color: var(--ui-toc-active);
+  background: var(--ui-toc-active-bg);
+  box-shadow: inset 0 0 0 1px var(--ui-toc-active-border);
+}
+.folder-docs-row.active > svg {
+  color: inherit;
+}
+.folder-docs-add {
+  color: var(--gray-11);
+}
+
 /* Section filter (funnel buttons in the TOC). The button is kept in
    layout but invisible until the row is hovered or focused, so titles
    don't jump; an active funnel always shows. */
@@ -3071,6 +3142,32 @@ button.primary:disabled {
 .recent-card-action {
   position: relative;
   z-index: 2;
+}
+/* The documents that belong with the card's own: links of their own, so
+   they sit above the card's overlay like its buttons. */
+.recent-card-companions {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  font-size: var(--font-size-1);
+}
+.recent-card-companion {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--gray-11);
+  text-decoration: none;
+  border-radius: 0.25rem;
+}
+.recent-card-companion:hover,
+.recent-card-companion:focus-visible {
+  color: var(--accent-11);
+  text-decoration: underline;
 }
 
 /* ============================================================

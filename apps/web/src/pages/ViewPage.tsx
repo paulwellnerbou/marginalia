@@ -110,6 +110,7 @@ export function ViewPage() {
       updated_at: doc.updated_at,
       ...(stored ? { invite_token: stored } : {}),
       ...(doc.cover ? { cover: doc.cover } : {}),
+      ...(doc.folder && doc.folder.main_uid !== doc.uid ? { folder_uid: doc.folder.main_uid } : {}),
     });
     openTab({
       uid: doc.uid,

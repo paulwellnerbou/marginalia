@@ -52,6 +52,15 @@ export function openTab(tab: OpenTab): OpenTab[] {
   return save(list.slice(-MAX));
 }
 
+/** Swap in a rotated invite token, for the reason `updateRecentDocToken` gives. */
+export function updateOpenTabToken(uid: string, token: string): void {
+  const list = loadOpenTabs();
+  const tab = list.find((t) => t.uid === uid);
+  if (!tab || tab.invite_token === token) return;
+  tab.invite_token = token;
+  save(list);
+}
+
 export function closeTab(uid: string): OpenTab[] {
   return save(loadOpenTabs().filter((t) => t.uid !== uid));
 }

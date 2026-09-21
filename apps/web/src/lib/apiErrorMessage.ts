@@ -56,6 +56,12 @@ const MESSAGES: Record<string, string> = {
   'admin-invite-not-deletable':
     'The admin link cannot be revoked — rotate it instead if it has leaked.',
   'role-required': 'Pick a role first.',
+  'access-managed-by-folder':
+    'This document opens with its main document’s links and password. Change them there.',
+  'folder-not-empty':
+    'Other documents belong with this one and would lose their access. Delete them together, or delete them first.',
+  'folder-not-found': 'The document this was meant to go with no longer exists.',
+  'name-required': 'Give the document a name first.',
 
   // Content
   'body-required': 'Write something first.',

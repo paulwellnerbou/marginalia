@@ -475,6 +475,16 @@ already in the folder, plus a required `name`. Admins and editors may add
 one. A document added through another folder document joins the same
 folder: folders are one level deep.
 
+The viewer never says "folder". A document in one lists it at the top of
+the left pane, above its contents: the main document first, the others
+beneath it, the open one highlighted. **Add a document** — at the foot
+of that list, and as an icon in the document toolbar for admins and
+editors, where it starts a folder from a document that stands alone —
+asks for a name and opens the new document in the editor, starting from
+that name as a heading. The home page gives a folder one card, the main
+document's, with the others listed on it; one whose main document this
+browser has never opened keeps a card of its own.
+
 A folder document has no access of its own. Its password, invite-only
 flag, invites and sessions are the main document's — `authorize()` reads
 every gate off the main document and records only the visitor's identity
@@ -490,7 +500,16 @@ that the access routes act on the main document whichever folder
 document they are reached through. `GET /api/documents/:uid/invites` on
 OUTLINE lists the story's invites, and a password or `invite_only` change
 sent to a folder document is refused with `409 access-managed-by-folder`
-rather than stored where nothing reads it.
+rather than stored where nothing reads it. Access control there shows the
+shared link list and points to the main document for the rest; on the
+main document it names the documents its settings also cover.
+
+The browser stores an invite token per document, so opening a folder
+document stores the token it came with under the rest of the folder
+(where none is stored yet), and the links between them work without one
+in the URL. Rotating the admin link swaps the new token in everywhere
+the old one was stored, or the rest of the folder would stop opening on
+this device and every device its keyring reaches.
 
 `GET /api/documents/:uid` carries the listing as `folder` — the main
 document's uid and every document in the folder, main first, each with
@@ -650,7 +669,9 @@ folder, so deleting it deletes the folder. The server refuses with
 `409 folder-not-empty` (listing the other documents) unless the request
 says `?with_members=1`, so a client that means one document cannot empty
 a folder by accident. Deleting any other folder document removes only
-that document.
+that document. Document settings names the documents that go with a
+main document before it deletes them, and after deleting any other one
+it lands on the main document instead of the home page.
 
 There is no undo and no backup. Export a JSON bundle first if the content
 might be wanted later.

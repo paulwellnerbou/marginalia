@@ -1,7 +1,15 @@
 /// <reference types="bun" />
 
 import { beforeEach, expect, test } from 'bun:test';
-import { closeTab, loadOpenTabs, neighbourOf, type OpenTab, openTab, tabUrl } from './open-tabs.js';
+import {
+  closeTab,
+  loadOpenTabs,
+  neighbourOf,
+  type OpenTab,
+  openTab,
+  tabUrl,
+  updateOpenTabToken,
+} from './open-tabs.js';
 
 const KEY = 'marginalia.openTabs';
 const store = new Map<string, string>();
@@ -104,4 +112,11 @@ test('garbage entries are dropped rather than rendered as tabs', () => {
 test('a corrupt strip reads as empty instead of throwing', () => {
   store.set(KEY, '{not json');
   expect(loadOpenTabs()).toEqual([]);
+});
+
+test('a rotated token replaces the one a tab would re-open with', () => {
+  openTab(tab({ invite_token: 'old' }));
+  updateOpenTabToken('doc-1', 'new');
+  updateOpenTabToken('not-open', 'new');
+  expect(loadOpenTabs().map(tabUrl)).toEqual(['/d/doc-1/new']);
 });
