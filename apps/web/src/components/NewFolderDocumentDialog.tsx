@@ -1,24 +1,19 @@
 import { FilePlusIcon } from '@radix-ui/react-icons';
-import {
-  Button,
-  Callout,
-  Dialog,
-  Flex,
-  IconButton,
-  SegmentedControl,
-  Text,
-  TextField,
-} from '@radix-ui/themes';
+import { Button, Callout, Dialog, Flex, IconButton } from '@radix-ui/themes';
 import { useImperativeHandle, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Document, DocumentFormat } from '../lib/api.js';
 import { createFolderDocument } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
-import { getClientId, getDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
 import { reportError } from '../lib/log.js';
 import { type FoldableDialogProps, returnFocusTo } from './foldedDialog.js';
+import {
+  DISPLAY_NAME_REQUIRED,
+  NewDocumentFields,
+  useNewDocumentFields,
+} from './NewDocumentFields.js';
 
 /**
  * Start a document that belongs with this one — an outline beside a story.
@@ -35,8 +30,8 @@ export function NewFolderDocumentDialog({
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), []);
-  const [name, setName] = useState('');
-  const [format, setFormat] = useState<DocumentFormat>(doc.format);
+  const fields = useNewDocumentFields({ source: '', format: doc.format });
+  const { format } = fields;
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -45,31 +40,35 @@ export function NewFolderDocumentDialog({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const trimmed = name.trim();
-    if (!trimmed) {
-      setError('Give the document a name first.');
+    // The folder lists its documents by name, so the detected title is
+    // sent as one rather than left for the server to derive.
+    const name = fields.effectiveDocName;
+    if (!name) {
+      setError('Give the document a name, or content with a title of its own.');
       return;
     }
-    const displayName = getDisplayName();
-    if (!displayName) {
-      setError('Please set your display name first.');
+    const identity = fields.identityForSubmit();
+    if (!identity) {
+      setError(DISPLAY_NAME_REQUIRED);
       return;
     }
+    const written = fields.source.trim().length > 0;
     setCreating(true);
     setError(null);
     try {
       const res = await createFolderDocument(
         doc.uid,
-        { name: trimmed, format, source: starterSource(trimmed, format) },
-        { clientId: getClientId(), displayName },
+        { name, format, source: written ? fields.source : starterSource(name, format) },
+        identity,
       );
       // The token that opened this document opens the new one too; stored
-      // under its uid so the editor it lands in sends it.
+      // under its uid so the page it lands on sends it.
       const token = loadInviteToken(doc.uid);
       if (token) saveInviteToken(res.uid, token);
       setOpen(false);
       reset();
-      navigate(`/d/${res.uid}/edit`);
+      // Nothing written yet: straight into the editor to write it.
+      navigate(written ? `/d/${res.uid}` : `/d/${res.uid}/edit`);
     } catch (err) {
       reportError('NewFolderDocumentDialog.create', err, { uid: doc.uid });
       setError(apiErrorMessage(err, 'Could not add the document'));
@@ -78,8 +77,7 @@ export function NewFolderDocumentDialog({
   }
 
   function reset() {
-    setName('');
-    setFormat(doc.format);
+    fields.reset();
     setCreating(false);
     setError(null);
   }
@@ -102,7 +100,7 @@ export function NewFolderDocumentDialog({
       )}
       <Dialog.Content
         size="3"
-        maxWidth="520px"
+        maxWidth="860px"
         className="dialog-content--fixed-footer"
         onCloseAutoFocus={returnFocusTo(foldedInto)}
       >
@@ -115,36 +113,11 @@ export function NewFolderDocumentDialog({
               there is nothing new to share.
             </Dialog.Description>
 
-            <Flex direction="column" gap="4">
-              <Flex direction="column" gap="1">
-                <Text as="label" size="2" weight="medium" htmlFor="folder-doc-name">
-                  Name
-                </Text>
-                <TextField.Root
-                  id="folder-doc-name"
-                  size="2"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. OUTLINE"
-                  maxLength={200}
-                  autoFocus
-                />
-              </Flex>
-
-              <Flex direction="column" gap="1">
-                <Text as="div" size="2" weight="medium">
-                  Format
-                </Text>
-                <SegmentedControl.Root
-                  size="1"
-                  value={format}
-                  onValueChange={(v) => setFormat(v as DocumentFormat)}
-                  aria-label="Format"
-                >
-                  <SegmentedControl.Item value="markdown">Markdown</SegmentedControl.Item>
-                  <SegmentedControl.Item value="asciidoc">AsciiDoc</SegmentedControl.Item>
-                </SegmentedControl.Root>
-              </Flex>
+            <Flex direction="column" gap="3">
+              <NewDocumentFields
+                fields={fields}
+                sourcePlaceholder="Paste or drop the content — or leave this empty and start from a heading with the name."
+              />
 
               {error && (
                 <Callout.Root color="red" size="1">
@@ -160,7 +133,7 @@ export function NewFolderDocumentDialog({
               </Button>
             </Dialog.Close>
             <Button type="submit" disabled={creating}>
-              {creating ? 'Adding…' : 'Add and edit'}
+              {creating ? 'Adding…' : fields.source.trim() ? 'Add document' : 'Add and edit'}
             </Button>
           </Flex>
         </form>

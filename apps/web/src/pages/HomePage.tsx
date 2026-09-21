@@ -25,8 +25,6 @@ import {
   IconButton,
   Separator,
   Text,
-  TextArea,
-  TextField,
   Tooltip,
 } from '@radix-ui/themes';
 import { Fragment, useEffect, useRef, useState } from 'react';
@@ -36,8 +34,12 @@ import { AppBar } from '../components/AppBar.js';
 import { CopyAccessLinkButton } from '../components/CopyAccessLinkButton.js';
 import { Copyable } from '../components/Copyable.js';
 import { DeviceSyncPanel } from '../components/DeviceSyncPanel.js';
-import { FileDropZone } from '../components/FileDropZone.js';
 import { FormatBadge } from '../components/FormatBadge.js';
+import {
+  DISPLAY_NAME_REQUIRED,
+  NewDocumentFields,
+  useNewDocumentFields,
+} from '../components/NewDocumentFields.js';
 import { OpenByLink } from '../components/OpenByLink.js';
 import { PasswordDisclosureCard } from '../components/PasswordDisclosureCard.js';
 import {
@@ -50,7 +52,6 @@ import {
   uploadDocument,
 } from '../lib/api.js';
 import { formatTimestampLong } from '../lib/format-time.js';
-import { deriveDisplayName, getClientId, getDisplayName, setDisplayName } from '../lib/identity.js';
 import { saveInviteToken } from '../lib/invite.js';
 import {
   pushDoc as keyringPushDoc,
@@ -616,18 +617,8 @@ function UploadDialog({
   draft: PendingNewDocumentDraft | null;
   onUploaded: (d: RecentDoc & { token?: string }) => void;
 }) {
-  const [source, setSource] = useState(SAMPLE);
-  // Format is inferred from the dropped/selected file's extension. Pastes
-  // default to markdown. The server enforces a `source` + `format` pair,
-  // so whatever is in state is what gets sent.
-  const [format, setFormat] = useState<DocumentFormat>('markdown');
-  /**
-   * `docName` is the DOCUMENT's name (what to call the file). Empty →
-   * auto-derive from the source's title / first heading at display time.
-   * Entirely unrelated to the user's own display name (which lives in the
-   * app bar UserMenu and is required for commits/comments).
-   */
-  const [docName, setDocName] = useState('');
+  const fields = useNewDocumentFields({ source: SAMPLE, format: 'markdown' });
+  const { source, format, docName, effectiveDocName, userDisplayName } = fields;
   const [passwordProtected, setPasswordProtected] = useState(false);
   // Matches the server default. Unticking it is the deliberate act of
   // putting the document on the open web.
@@ -652,46 +643,16 @@ function UploadDialog({
   const [createdFormat, setCreatedFormat] = useState<DocumentFormat>('markdown');
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
-  // If the user already set a display name globally we use it silently.
-  // Otherwise this dialog offers an inline field to set one right here —
-  // no need to send them off to find another control.
-  const [userDisplayName, setUserDisplayNameState] = useState<string | null>(() =>
-    getDisplayName(),
-  );
-  // `deriveDisplayName` only recognises markdown heading syntax; for
-  // AsciiDoc we fall back to the first non-empty line stripped of its
-  // leading `= ` if present — good enough for the common case of a doc
-  // with a title line.
-  const derivedTitle =
-    format === 'asciidoc' ? deriveAsciidocTitle(source) : deriveDisplayName(source);
-  const effectiveDocName = docName.trim() || derivedTitle;
-
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset is a render-local function declaration — adding it would re-fire on every render. Triggers below cover the only state changes that warrant a re-seed.
   useEffect(() => {
     if (!open || !draft || createdAdminUrl) return;
     reset(draft);
   }, [createdAdminUrl, draft, open]);
 
-  async function handleFile(file: File) {
-    if (isBundleFile(file)) {
-      await importBundleFile(file);
-      return;
-    }
-    const text = await file.text();
-    setSource(text);
-    setFormat(formatFromFilename(file.name));
-  }
-
   function loadIdentityForSubmit() {
-    const user = (userDisplayName ?? '').trim();
-    if (!user) {
-      setError(
-        'Please set your display name first. It is the name shown on your edits and comments.',
-      );
-      return null;
-    }
-    setDisplayName(user);
-    return { clientId: getClientId(), displayName: user.slice(0, 80) };
+    const identity = fields.identityForSubmit();
+    if (!identity) setError(DISPLAY_NAME_REQUIRED);
+    return identity;
   }
 
   async function importBundleFile(file: File) {
@@ -781,9 +742,7 @@ function UploadDialog({
   }
 
   function reset(nextDraft: PendingNewDocumentDraft | null = null) {
-    setSource(nextDraft?.source ?? SAMPLE);
-    setFormat(nextDraft?.format ?? 'markdown');
-    setDocName(nextDraft?.docName ?? '');
+    fields.reset(nextDraft);
     setPasswordProtected(false);
     setInviteOnly(true);
     setSubmitting(false);
@@ -871,66 +830,7 @@ function UploadDialog({
               </Dialog.Description>
 
               <Flex direction="column" gap="3">
-                {!getDisplayName() && (
-                  <Box className="callout-soft">
-                    <Text size="2" color="gray" as="p" mb="2">
-                      Please set your display name first. It is the name shown on your edits and
-                      comments.
-                    </Text>
-                    <TextField.Root
-                      size="2"
-                      value={userDisplayName ?? ''}
-                      onChange={(e) => setUserDisplayNameState(e.target.value)}
-                      placeholder="Your display name (e.g. Alex Cho)"
-                      maxLength={80}
-                      autoFocus
-                    />
-                  </Box>
-                )}
-
-                <Box>
-                  <Text as="label" size="2" htmlFor="doc-name">
-                    Document name
-                    <Text as="span" size="1" color="gray">
-                      {' '}
-                      (optional
-                      {docName.trim() ? '' : derivedTitle ? ` — will use “${derivedTitle}”` : ''})
-                    </Text>
-                  </Text>
-                  <TextField.Root
-                    id="doc-name"
-                    value={docName}
-                    onChange={(e) => setDocName(e.target.value)}
-                    placeholder="Leave blank to use the document's title"
-                    maxLength={200}
-                    mt="1"
-                    autoFocus={!!getDisplayName()}
-                  />
-                </Box>
-
-                <Box>
-                  <Text as="label" size="2" htmlFor="markdown-source">
-                    {format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source'}
-                  </Text>
-                  <MarkdownDropZone onFile={handleFile}>
-                    <TextArea
-                      id="markdown-source"
-                      value={source}
-                      onChange={(e) => setSource(e.target.value)}
-                      rows={14}
-                      spellCheck={false}
-                      className="markdown-textarea"
-                      mt="1"
-                    />
-                  </MarkdownDropZone>
-                </Box>
-
-                <FileDropZone
-                  accept=".md,.markdown,.mdx,.adoc,.asciidoc,.json,text/markdown,application/json"
-                  acceptFile={isAcceptedUploadFile}
-                  onFile={handleFile}
-                  label="Drop a Markdown, AsciiDoc, or JSON bundle file — or click to browse"
-                />
+                <NewDocumentFields fields={fields} onBundleFile={importBundleFile} />
 
                 <Flex align="center" gap="2">
                   <input
@@ -1016,119 +916,6 @@ function UploadDialog({
       </Dialog.Content>
     </Dialog.Root>
   );
-}
-
-/**
- * Extension/MIME check shared by the two drop zones. The browser's
- * `accept` attribute only gates the native file picker — it doesn't
- * help with drag-and-drop, where any file the user drops reaches the
- * onDrop handler. Keep the filter in one place so MarkdownDropZone
- * (wrapping the textarea) and FileDropZone (the visible panel) can't
- * drift and end up accepting different file types.
- */
-function isAcceptedUploadFile(file: File): boolean {
-  if (file.type === 'text/markdown') return true;
-  const n = file.name.toLowerCase();
-  return (
-    n.endsWith('.md') ||
-    n.endsWith('.markdown') ||
-    n.endsWith('.mdx') ||
-    n.endsWith('.adoc') ||
-    n.endsWith('.asciidoc') ||
-    n.endsWith('.json')
-  );
-}
-
-/**
- * Wraps a child with drag/drop handlers that accept a markdown file or a
- * previously exported JSON bundle and call `onFile` with it. Shows a subtle overlay while a file is
- * being dragged over. Children are untouched by the drop (the drop just
- * fires onFile, doesn't mess with the child's own state).
- */
-function MarkdownDropZone({
-  children,
-  onFile,
-}: {
-  children: React.ReactNode;
-  onFile: (file: File) => void | Promise<void>;
-}) {
-  const [over, setOver] = useState(false);
-  const depth = useRef(0);
-
-  return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: drop-target wrapper around an editable textarea; not a clickable element
-    <div
-      className={`drop-zone ${over ? 'drop-zone--over' : ''}`}
-      onDragEnter={(e) => {
-        if (e.dataTransfer.types.includes('Files')) {
-          e.preventDefault();
-          depth.current += 1;
-          setOver(true);
-        }
-      }}
-      onDragOver={(e) => {
-        if (e.dataTransfer.types.includes('Files')) {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = 'copy';
-        }
-      }}
-      onDragLeave={() => {
-        depth.current -= 1;
-        if (depth.current <= 0) {
-          depth.current = 0;
-          setOver(false);
-        }
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        depth.current = 0;
-        setOver(false);
-        const file = e.dataTransfer.files?.[0];
-        if (file && isAcceptedUploadFile(file)) void onFile(file);
-      }}
-    >
-      {children}
-      {over && (
-        <div className="drop-zone-overlay">
-          <Text size="3" weight="medium">
-            Drop Markdown, AsciiDoc, or a JSON bundle to load it
-          </Text>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function isBundleFile(file: File): boolean {
-  return file.type === 'application/json' || file.name.toLowerCase().endsWith('.json');
-}
-
-function formatFromFilename(name: string): DocumentFormat {
-  const n = name.toLowerCase();
-  if (n.endsWith('.adoc') || n.endsWith('.asciidoc')) return 'asciidoc';
-  return 'markdown';
-}
-
-/**
- * Pull a plausible title out of AsciiDoc source. Preference order:
- *   1. The document title line `= Title` (attribute-entry style)
- *   2. The first non-blank, non-attribute line
- *
- * Matches `deriveDisplayName`'s role for markdown: a client-side fallback
- * when the user leaves the name field blank at upload time. The server
- * later derives its own title from the rendered frontmatter.
- */
-function deriveAsciidocTitle(source: string): string {
-  const lines = source.split(/\r?\n/);
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-    const titleMatch = /^=\s+(.+)$/.exec(line);
-    if (titleMatch) return titleMatch[1]!.trim();
-    if (line.startsWith(':') || line.startsWith('//')) continue;
-    return line.slice(0, 80);
-  }
-  return '';
 }
 
 function formatRelative(ts: number): string {
