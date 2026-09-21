@@ -2191,6 +2191,14 @@ async function respondToThread(c: Context, deps: AppDeps) {
  * whose fix has already landed. An edit usually rewrites a whole
  * paragraph, so it can settle several of them at once.
  *
+ * Not while another proposal answering the comment is still undecided,
+ * though: that proposal renders inside the comment's card, and closing
+ * the comment would put the card away with a decision still pending in
+ * it. The accept that leaves none of them open closes it. A reject or a
+ * delete never does — it is a verdict on one proposal, not on the
+ * request — so when the last one is turned down, resolving the comment
+ * is left to a person.
+ *
  * Only plain comment threads are closed. A proposal thread has its own
  * accepted/rejected lifecycle in `comments_edit_proposals.status`, and
  * setting `resolved_at` on one without touching that would leave the two
@@ -2212,12 +2220,25 @@ function resolveAnsweredThreads(
         SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
       WHERE id = ? AND doc_uid = ?`,
   );
+  // Deleting a proposal leaves its status at 'open'.
+  const otherUndecided = db.prepare(
+    `SELECT 1
+       FROM comments_edit_proposal_answers a
+       JOIN comments p ON p.id = a.proposal_comment_id
+       JOIN comments_edit_proposals cep ON cep.comment_id = p.id
+      WHERE a.answered_comment_id = ?
+        AND a.proposal_comment_id <> ?
+        AND cep.status = 'open'
+        AND p.deleted_at IS NULL
+      LIMIT 1`,
+  );
   for (const answeredId of parseAnswerIds(proposal.answers_comment_ids)) {
     const answered = loadThreadRow(db, answeredId, docUid);
     if (!answered) continue;
     if (!canViewThread(answered, identity)) continue;
     if (answered.proposal_status !== null) continue;
     if (answered.resolved_at !== null) continue;
+    if (otherUndecided.get(answeredId, proposal.id)) continue;
     close.run(now, identity.displayName, now, answeredId, docUid);
     resolved.push(answeredId);
   }
@@ -2464,15 +2485,24 @@ async function completeAcceptWorkflow({
   // A proposal can be the answer to a comment whose entire quoted text it
   // replaces. Ordinary quote re-anchoring has no evidence left in that
   // case, even though the proposal gives us an exact old-span -> new-span
-  // mapping. Carry the resolved comment onto the resulting paragraph. If
-  // its quote survived and stayed fully linked, leave the more precise
-  // selection alone; the generic block-transition fallback is deliberately
-  // low-confidence, so this exact proposal mapping supersedes it.
+  // mapping. Carry the comment onto the resulting paragraph — also one
+  // that another undecided proposal holds open, whose card would otherwise
+  // be left without a place. If its quote survived and stayed fully
+  // linked, leave the more precise selection alone; the generic
+  // block-transition fallback is deliberately low-confidence, so this
+  // exact proposal mapping supersedes it.
+  //
+  // Only a comment whose block the edit replaced, or that had none left:
+  // one on a block that survived is where re-anchoring put it. A
+  // whole-document proposal has no resulting paragraph to carry it to.
   const relocatedAnsweredComments: string[] = [];
-  if (postAcceptAnchor) {
+  if (postAcceptAnchor && !isWholeDoc) {
     for (const answeredId of parseAnswerIds(row.answers_comment_ids)) {
-      const upd = anchorCandidates.find((c) => c.comment.id === answeredId)?.upd;
-      if (!upd || upd.linkStatus === 'linked') continue;
+      const candidate = anchorCandidates.find((c) => c.comment.id === answeredId);
+      if (!candidate || candidate.upd.linkStatus === 'linked') continue;
+      const formerBlockId = candidate.comment.anchor_block_id;
+      if (formerBlockId && presentBlocks.has(formerBlockId)) continue;
+      const upd = candidate.upd;
       upd.linkStatus = postAcceptAnchor.linkStatus;
       upd.blockId = postAcceptAnchor.blockId;
       upd.endBlockId = null;
@@ -2623,6 +2653,19 @@ async function prepareReopenAcceptedProposalThread(
           doc.format,
         )
       : null;
+  // The accept carried the comments it answered onto its paragraph, which
+  // left them sharing the proposal's anchor; they go back with it, rather
+  // than keep quoting text the restore just removed.
+  const carriedBack =
+    row.is_whole_document === 1 || !row.anchor_block_id
+      ? []
+      : parseAnswerIds(row.answers_comment_ids).filter((id) => {
+          const comment = topLevel.find((c) => c.id === id);
+          return (
+            comment?.anchor_block_id === row.anchor_block_id &&
+            comment.anchor_quote === row.anchor_quote
+          );
+        });
   return {
     oid,
     nextSource: diff.before,
@@ -2665,6 +2708,41 @@ async function prepareReopenAcceptedProposalThread(
             now,
             row.id,
           );
+
+        // The same whole-paragraph anchor the accept gave them, now on the
+        // restored paragraph — not the proposal's own, which quotes source
+        // where a comment quotes rendered text.
+        const home = snapshotPostAcceptAnchor(restoredProposalAnchor);
+        const carryBack = deps.db.prepare(
+          `UPDATE comments
+              SET anchor_block_id = ?,
+                  anchor_end_block_id = NULL,
+                  anchor_quote = ?,
+                  anchor_prefix = '',
+                  anchor_suffix = '',
+                  anchor_start_offset = ?,
+                  anchor_end_offset = ?,
+                  anchor_heading_path = ?,
+                  anchor_section_index = ?,
+                  anchor_section_index_path = ?,
+                  link_status = ?,
+                  updated_at = ?
+            WHERE id = ?`,
+        );
+        for (const id of carriedBack) {
+          carryBack.run(
+            home.blockId,
+            home.quote,
+            home.startOffset,
+            home.endOffset,
+            home.headingPath,
+            home.sectionIndex,
+            home.sectionIndexPath,
+            home.linkStatus,
+            now,
+            id,
+          );
+        }
       }
 
       const reopened = reopenAcceptedProposal(deps.db, doc.uid, row.id, now);
@@ -2990,7 +3068,8 @@ async function toThreadWire(
           whole_document: proposalRow.is_whole_document === 1,
           /**
            * Root threads this proposal answers, oldest first; empty if
-           * it stands alone. Accepting it resolves all of them.
+           * it stands alone. Accepting it resolves each one no other open
+           * proposal also answers.
            */
           answers_thread_ids: answersThreadIds,
         }

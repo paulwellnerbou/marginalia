@@ -779,16 +779,20 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   );
 
   /**
-   * Re-read threads the server resolved as a side effect of a mutation.
+   * Re-read the comment threads an accept changed as a side effect.
    *
-   * Accepting a proposal also resolves the plain comment threads it
-   * answers. Every other client hears about those through `comment.updated`;
-   * the acting client is deliberately excluded from that broadcast, and the
-   * reconcile behind it reads only the open set — where a thread that has
-   * just been resolved no longer appears. So without this the accepting
-   * user's own list keeps showing them open until a full refresh.
+   * Accepting a proposal resolves the plain comment threads it answers, or
+   * — while another proposal for one is still undecided — keeps it open
+   * but carries it onto the new text. Every other client hears about a
+   * resolve through `comment.updated`; the acting client is deliberately
+   * excluded from that broadcast, and the reconcile behind it reads only
+   * the open set — where a thread that has just been resolved no longer
+   * appears. So without this the accepting user's own list keeps showing
+   * them open until a full refresh, and a thread held open keeps pointing
+   * at a block the accept replaced until the reconcile lands.
    *
-   * The response names them but not their new shape, so read each one back
+   * The response names the resolved ones and the accepted thread lists
+   * the rest, but neither carries their new shape, so read each one back
    * rather than reconstructing it here: the server decides `capabilities`
    * and `resolution`, which are what the card renders. Never rejects — this
    * corrects what the reader cannot see yet and must not fail the accept.
@@ -821,8 +825,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    * mutation response carries the authoritative thread, and the ones that
    * delete or react update their own row. The full read exists only to
    * catch what the response cannot describe: accepting a proposal
-   * resolves the threads it answers, deleting one unlinks them. That is a
-   * safety net, and a safety net must not block the UI.
+   * resolves or re-anchors the threads it answers, deleting one unlinks
+   * them. That is a safety net, and a safety net must not block the UI.
    *
    * It used to be awaited. On a long review the read is hundreds of
    * kilobytes, and one measured edit sat for thirty seconds with the
@@ -1920,7 +1924,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
           // Before the reconcile, not alongside it: landing a thread marks
           // any read already in flight as stale, so doing these afterwards
           // would throw away the very reconcile they precede.
-          void landAnsweredThreads(resolvedAnsweredThreadIds).then(reconcileThreadsSoon);
+          const answeredThreadIds = new Set([
+            ...resolvedAnsweredThreadIds,
+            ...(updated.proposal?.answers_thread_ids ?? []),
+          ]);
+          void landAnsweredThreads([...answeredThreadIds]).then(reconcileThreadsSoon);
         } else {
           const updated = await apiRejectProposal(doc.uid, id, identity, body);
           landThread(updated);
