@@ -4365,6 +4365,33 @@ describe('threads API', () => {
         expect(comment.anchor.quote).toBe('Title');
         expect(comment.link_status).toBe('linked');
       });
+
+      test('reverting the accept in History takes the comment back with the proposal', async () => {
+        const { uid, commentId, first } = await seedAlternatives();
+        await respond(uid, first, 'accept');
+
+        const historyRes = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/history`, { headers: asAdmin() }),
+        );
+        const { history } = (await historyRes.json()) as { history: Array<{ oid: string }> };
+        const revert = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/history/${history[0]!.oid}/revert`, {
+            method: 'POST',
+            headers: asAdmin(),
+          }),
+        );
+        expect(revert.status).toBe(200);
+        expect(
+          ((await revert.json()) as { reopened_proposal_id: string }).reopened_proposal_id,
+        ).toBe(first);
+
+        const threads = await threadsOf(uid);
+        const comment = threads.find((t) => t.id === commentId)!;
+        const reopened = threads.find((t) => t.id === first)!;
+        expect(comment.anchor.block_id).toBe(reopened.anchor.block_id);
+        expect(comment.anchor.quote).toBe('Title');
+        expect(comment.link_status).toBe('linked');
+      });
     });
 
     describe('reopening a proposal', () => {
@@ -4420,7 +4447,10 @@ describe('threads API', () => {
         expect(revertRes.status).toBe(200);
         const revert = (await revertRes.json()) as { reopened_answered_thread_ids: string[] };
         expect(revert.reopened_answered_thread_ids).toEqual([commentId]);
-        expect((await threadsOf(uid, 'open')).map((t) => t.id)).toContain(commentId);
+
+        const comment = (await threadsOf(uid, 'open')).find((t) => t.id === commentId)!;
+        expect(comment.resolution).toBeNull();
+        expect(comment.anchor.quote).toBe('Title');
       });
 
       test('reopening a rejected one reopens the comment the other accept resolved', async () => {
