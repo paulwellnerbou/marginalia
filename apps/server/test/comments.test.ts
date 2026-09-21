@@ -4366,5 +4366,151 @@ describe('threads API', () => {
         expect(comment.link_status).toBe('linked');
       });
     });
+
+    describe('reopening a proposal', () => {
+      /** A comment, and the accepted proposal whose accept resolved it. */
+      async function seedResolvedByAccept() {
+        const uid = await newDoc('# Title\n');
+        const blockId = await firstBlockId(uid);
+        const commentId = await seedComment(uid, blockId);
+        const proposal = (await propose(uid, ALICE, blockId, '# Fixed', commentId)).id as string;
+        const accept = await respond(uid, proposal, 'accept');
+        expect(accept.body.resolved_answered_thread_ids).toEqual([commentId]);
+        return { uid, commentId, proposal };
+      }
+
+      /** A comment answered by two proposals: the first accepted, the second rejected. */
+      async function seedAcceptedAndRejected() {
+        const uid = await newDoc('# Title\n');
+        const blockId = await firstBlockId(uid);
+        const commentId = await seedComment(uid, blockId);
+        const first = (await propose(uid, ALICE, blockId, '# One', commentId)).id as string;
+        const second = (await propose(uid, ALICE, blockId, '# Two', commentId)).id as string;
+        await respond(uid, second, 'reject');
+        const accept = await respond(uid, first, 'accept');
+        expect(accept.body.resolved_answered_thread_ids).toEqual([commentId]);
+        return { uid, commentId, second };
+      }
+
+      test('undoing the accept reopens the comment it resolved', async () => {
+        const { uid, commentId, proposal } = await seedResolvedByAccept();
+
+        const reopen = await respond(uid, proposal, 'reopen');
+        expect(reopen.status).toBe(200);
+        expect(reopen.body.reopened_answered_thread_ids).toEqual([commentId]);
+
+        const comment = (await threadsOf(uid, 'open')).find((t) => t.id === commentId)!;
+        expect(comment.resolution).toBeNull();
+        expect(comment.anchor.quote).toBe('Title');
+      });
+
+      test('so does reverting the accept from the history', async () => {
+        const { uid, commentId } = await seedResolvedByAccept();
+        const historyRes = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/history`, { headers: asAdmin() }),
+        );
+        const { history } = (await historyRes.json()) as { history: Array<{ oid: string }> };
+
+        const revertRes = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/history/${history[0]!.oid}/revert`, {
+            method: 'POST',
+            headers: asAdmin(),
+          }),
+        );
+        expect(revertRes.status).toBe(200);
+        const revert = (await revertRes.json()) as { reopened_answered_thread_ids: string[] };
+        expect(revert.reopened_answered_thread_ids).toEqual([commentId]);
+        expect((await threadsOf(uid, 'open')).map((t) => t.id)).toContain(commentId);
+      });
+
+      test('reopening a rejected one reopens the comment the other accept resolved', async () => {
+        const { uid, commentId, second } = await seedAcceptedAndRejected();
+
+        const reopen = await respond(uid, second, 'reopen');
+        expect(reopen.status).toBe(200);
+        expect(reopen.body.reopened_answered_thread_ids).toEqual([commentId]);
+        // As an accept leaves a comment while another proposal for it is
+        // undecided.
+        expect((await threadsOf(uid, 'open')).map((t) => t.id)).toEqual([commentId, second]);
+      });
+
+      test('a comment resolved by hand stays resolved', async () => {
+        const { uid, commentId, proposal } = await seedResolvedByAccept();
+        await respond(uid, commentId, 'reopen');
+        await respond(uid, commentId, 'resolve');
+
+        const reopen = await respond(uid, proposal, 'reopen');
+        expect(reopen.status).toBe(200);
+        expect(reopen.body.reopened_answered_thread_ids).toEqual([]);
+        expect((await threadsOf(uid)).find((t) => t.id === commentId)!.state).toBe('resolved');
+      });
+
+      test('a comment the reopener cannot see stays resolved', async () => {
+        const uid = await newDoc('# Title\n');
+        const blockId = await firstBlockId(uid);
+        const commentId = await seedComment(uid, blockId);
+        const hide = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/threads/${commentId}`, {
+            method: 'PATCH',
+            headers: headersFor(ALICE),
+            body: JSON.stringify({ hidden: true }),
+          }),
+        );
+        expect(hide.status).toBe(200);
+        const proposal = (await propose(uid, ALICE, blockId, '# Fixed', commentId)).id as string;
+        const accept = await respond(uid, proposal, 'accept');
+        expect(accept.body.resolved_answered_thread_ids).toEqual([commentId]);
+
+        const reopen = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/threads/${proposal}/respond`, {
+            method: 'POST',
+            headers: asAdmin(BOB),
+            body: JSON.stringify({ action: 'reopen' }),
+          }),
+        );
+        expect(reopen.status).toBe(200);
+        const body = (await reopen.json()) as { reopened_answered_thread_ids: string[] };
+        expect(body.reopened_answered_thread_ids).toEqual([]);
+        expect((await threadsOf(uid)).find((t) => t.id === commentId)!.state).toBe('resolved');
+      });
+
+      test('a bundle round-trip keeps which comments an accept resolved', async () => {
+        const { uid } = await seedAcceptedAndRejected();
+        const exportRes = await app.hono.fetch(
+          new Request(`http://test/api/documents/${uid}/export`, { headers: asAdmin() }),
+        );
+        const importRes = await app.hono.fetch(
+          new Request('http://test/api/documents/import', {
+            method: 'POST',
+            headers: rawHeadersFor(ALICE),
+            body: JSON.stringify(await exportRes.json()),
+          }),
+        );
+        expect(importRes.status).toBe(201);
+        const imported = (await importRes.json()) as {
+          uid: string;
+          admin_invite: { token: string };
+        };
+        const headers = rawHeadersFor(ALICE);
+        headers.set(INVITE_HEADER, imported.admin_invite.token);
+        const listed = await app.hono.fetch(
+          new Request(`http://test/api/documents/${imported.uid}/threads?state=all`, { headers }),
+        );
+        const threads = ((await listed.json()) as { threads: ThreadShape[] }).threads;
+        const comment = threads.find((t) => t.proposal === null)!;
+        const rejected = threads.find((t) => t.resolution?.kind === 'reject')!;
+
+        const reopen = await app.hono.fetch(
+          new Request(`http://test/api/documents/${imported.uid}/threads/${rejected.id}/respond`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ action: 'reopen' }),
+          }),
+        );
+        expect(reopen.status).toBe(200);
+        const body = (await reopen.json()) as { reopened_answered_thread_ids: string[] };
+        expect(body.reopened_answered_thread_ids).toEqual([comment.id]);
+      });
+    });
   });
 });

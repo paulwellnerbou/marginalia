@@ -63,6 +63,7 @@ import {
   readProposalFullContent,
   reanchorProposals,
   reopenAcceptedProposal,
+  reopenAnsweredThreads,
   toWire as toProposalWire,
   windowProposalDiff,
 } from './edit-proposals.js';
@@ -1997,6 +1998,8 @@ async function respondToThread(c: Context, deps: AppDeps) {
   // Filled when accepting a proposal also closes the comment threads it
   // was written to answer.
   let resolvedAnsweredThreadIds: string[] = [];
+  // Filled when reopening a proposal reopens comments an accept closed.
+  let reopenedAnsweredThreadIds: string[] = [];
   let preparedWorkflow: PreparedThreadWorkflow | null = null;
   let createdReplyId: string | null = null;
   let createdReply: CommentRow | null = null;
@@ -2022,7 +2025,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
       const now = Date.now();
       db.prepare(
         `UPDATE comments
-            SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
+            SET resolved_at = ?, resolved_by_name = ?, resolved_by_accept = 0, updated_at = ?
           WHERE id = ?`,
       ).run(now, identity.displayName, now, tid);
     } else if (action === 'reject') {
@@ -2047,7 +2050,8 @@ async function respondToThread(c: Context, deps: AppDeps) {
       if (!isProposal) {
         db.prepare(
           `UPDATE comments
-              SET resolved_at = NULL, resolved_by_name = NULL, updated_at = ?
+              SET resolved_at = NULL, resolved_by_name = NULL, resolved_by_accept = 0,
+                  updated_at = ?
             WHERE id = ?`,
         ).run(now, tid);
       } else if (resolution?.kind === 'reject') {
@@ -2065,6 +2069,9 @@ async function respondToThread(c: Context, deps: AppDeps) {
         if (!preparedWorkflow) throw new ThreadActionError(409, 'not-reopenable');
         documentOid = preparedWorkflow.oid;
         reanchoredProposalUpdates = preparedWorkflow.applyDb();
+      }
+      if (isProposal) {
+        reopenedAnsweredThreadIds = reopenAnsweredThreads(db, doc.uid, tid, identity.clientId, now);
       }
     }
 
@@ -2138,7 +2145,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
     );
   }
 
-  for (const answeredId of resolvedAnsweredThreadIds) {
+  for (const answeredId of [...resolvedAnsweredThreadIds, ...reopenedAnsweredThreadIds]) {
     const answered = loadThreadRow(db, answeredId, doc.uid);
     if (answered && answered.is_hidden === 0) {
       realtime.broadcast(
@@ -2181,6 +2188,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
     ),
     created_reply_id: createdReplyId,
     resolved_answered_thread_ids: resolvedAnsweredThreadIds,
+    reopened_answered_thread_ids: reopenedAnsweredThreadIds,
     document: documentPayload,
   });
 }
@@ -2198,6 +2206,10 @@ async function respondToThread(c: Context, deps: AppDeps) {
  * delete never does — it is a verdict on one proposal, not on the
  * request — so when the last one is turned down, resolving the comment
  * is left to a person.
+ *
+ * The comments it closes are marked `resolved_by_accept`: reopening any
+ * proposal that answers one makes that proposal undecided again, so
+ * `reopenAnsweredThreads` reopens the comment with it.
  *
  * Only plain comment threads are closed. A proposal thread has its own
  * accepted/rejected lifecycle in `comments_edit_proposals.status`, and
@@ -2217,7 +2229,7 @@ function resolveAnsweredThreads(
   const now = Date.now();
   const close = db.prepare(
     `UPDATE comments
-        SET resolved_at = ?, resolved_by_name = ?, updated_at = ?
+        SET resolved_at = ?, resolved_by_name = ?, resolved_by_accept = 1, updated_at = ?
       WHERE id = ? AND doc_uid = ?`,
   );
   // Deleting a proposal leaves its status at 'open'.
@@ -3069,7 +3081,8 @@ async function toThreadWire(
           /**
            * Root threads this proposal answers, oldest first; empty if
            * it stands alone. Accepting it resolves each one no other open
-           * proposal also answers.
+           * proposal also answers. Reopening it reopens those an accept
+           * resolved.
            */
           answers_thread_ids: answersThreadIds,
         }

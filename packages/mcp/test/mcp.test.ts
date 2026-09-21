@@ -848,6 +848,14 @@ Prose in chapter seven.
 
     const open = await call('list_threads', { document: adminUrl, state: 'open' });
     expect(open).toContain('No threads matched.');
+
+    // Undoing the accept hands both requests back.
+    const reopened = await call('respond_to_thread', {
+      document: adminUrl,
+      thread_id: proposalId,
+      action: 'reopen',
+    });
+    expect(reopened).toContain(`Also reopened comment threads ${firstId}, ${secondId}`);
   });
 
   test('refuses a blank answered-thread id instead of claiming a link', async () => {

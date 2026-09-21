@@ -148,6 +148,49 @@ export function reopenAcceptedProposal(
 }
 
 /**
+ * Reopen the comments a reopened proposal answers that an accept had
+ * resolved: `resolveAnsweredThreads` keeps a comment open while a proposal
+ * answering it is undecided, and a reopen makes this one undecided again.
+ * A comment resolved by hand stays resolved, and one the reopener cannot
+ * see is left alone, as the accept leaves it.
+ *
+ * Returns the ids it reopened, oldest comment first.
+ */
+export function reopenAnsweredThreads(
+  db: Database,
+  docUid: string,
+  proposalId: string,
+  viewerClientId: string,
+  now: number,
+): string[] {
+  // Never a proposal, whatever its flag says: its resolved_at is its
+  // decision, which clearing here would split from its status.
+  const rows = db
+    .prepare(
+      `SELECT c.id
+         FROM comments_edit_proposal_answers a
+         JOIN comments c ON c.id = a.answered_comment_id
+         LEFT JOIN comments_edit_proposals cep ON cep.comment_id = c.id
+        WHERE a.proposal_comment_id = ?
+          AND c.doc_uid = ?
+          AND c.deleted_at IS NULL
+          AND cep.comment_id IS NULL
+          AND c.resolved_at IS NOT NULL
+          AND c.resolved_by_accept = 1
+          AND (c.is_hidden = 0 OR c.author_client_id = ?)
+        ORDER BY c.created_at ASC, c.rowid ASC`,
+    )
+    .all(proposalId, docUid, viewerClientId) as Array<{ id: string }>;
+  const reopen = db.prepare(
+    `UPDATE comments
+        SET resolved_at = NULL, resolved_by_name = NULL, resolved_by_accept = 0, updated_at = ?
+      WHERE id = ?`,
+  );
+  for (const { id } of rows) reopen.run(now, id);
+  return rows.map(({ id }) => id);
+}
+
+/**
  * What an anchor remembers of the section it was made in. A block id is
  * a content hash, so a line the document repeats carries one id on
  * several blocks, and this is what says which of them the anchor means.
