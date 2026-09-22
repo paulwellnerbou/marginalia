@@ -26,9 +26,10 @@ export interface McpConfig {
   /**
    * Invite token applied to a document reference that carries none of
    * its own — so a bare uid, or a link the viewer stripped the token
-   * from, still arrives with the agent's access. A token names one
-   * document, so using it on another simply resolves to nothing and
-   * the caller falls back to reader; it cannot leak sideways.
+   * from, still arrives with the agent's access. A token opens the
+   * document it was minted for and the rest of that document's folder;
+   * on any other document the server treats it as no token at all, so
+   * it cannot leak sideways.
    */
   defaultToken: string | null;
   /** Where the client id + per-document invite tokens are cached. Null disables persistence. */
