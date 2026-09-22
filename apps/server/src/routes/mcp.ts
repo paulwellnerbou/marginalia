@@ -281,9 +281,10 @@ function buildSession(
       password: null,
       // Lets the connection carry the agent's access, so a reference
       // without a token of its own — a bare uid, or a comment link the
-      // viewer stripped the token from — still arrives with it. Only
-      // covers the one document it names; anything else is learned
-      // during the session from the links the agent is handed.
+      // viewer stripped the token from — still arrives with it. It covers
+      // the document it was minted for and the rest of that document's
+      // folder; anything else is learned during the session from the
+      // links the agent is handed.
       defaultToken: readToken(url),
       // In-memory for the life of the session. Nothing may be written to
       // the server's disk on behalf of a caller, and a token learned

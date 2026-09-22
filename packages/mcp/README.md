@@ -61,7 +61,8 @@ after it with the URL's. The MCP tab generates the connection string from the in
 they cannot drift.
 
 Add `&token=<invite token>` and the connection carries the agent's access, so any reference
-to that document works even without a token in it:
+to that document — or to another document of its [folder](#folders) — works even without a
+token in it:
 
 ```bash
 claude mcp add --transport http marginalia \
@@ -75,8 +76,9 @@ The token applies to a reference that has none of its own, including a link copi
 comment — which the viewer strips the token from once an invite has been claimed. A token
 in a pasted URL still wins.
 
-An invite names **one** document, so `&token=` only privileges that one. It does not tie
-the connection to it: one connection serves any number of documents — hand the agent each
+An invite belongs to **one** document and, when that document is in a folder, to the rest
+of the folder, so `&token=` privileges only those. It does not tie the connection to them:
+one connection serves any number of documents — hand the agent each
 one's full `/d/<uid>/<token>` link, which is what the MCP tab gives you. It is remembered
 for the rest of the session, so later references to that document work without the token,
 comment links included.
