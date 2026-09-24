@@ -1,8 +1,16 @@
-import { Cross2Icon, Pencil1Icon, PlusIcon } from '@radix-ui/react-icons';
+import { CardStackMinusIcon, Cross2Icon, Pencil1Icon, PlusIcon } from '@radix-ui/react-icons';
 import { Tooltip } from '@radix-ui/themes';
 import { useEffect, useRef } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { closeTab, neighbourOf, type OpenTab, tabUrl } from '../lib/open-tabs.js';
+import { showToast } from '../lib/notifications.js';
+import {
+  closeAllTabs,
+  closeTab,
+  neighbourOf,
+  type OpenTab,
+  restoreTabs,
+  tabUrl,
+} from '../lib/open-tabs.js';
 import { FormatBadge } from './FormatBadge.js';
 
 /**
@@ -17,7 +25,8 @@ import { FormatBadge } from './FormatBadge.js';
  */
 export function DocumentTabs({ tabs }: { tabs: OpenTab[] }) {
   const { uid: activeUid } = useParams<{ uid?: string }>();
-  const editing = useLocation().pathname.endsWith('/edit');
+  const location = useLocation();
+  const editing = location.pathname.endsWith('/edit');
   const navigate = useNavigate();
   const activeRef = useRef<HTMLAnchorElement>(null);
 
@@ -37,6 +46,28 @@ export function DocumentTabs({ tabs }: { tabs: OpenTab[] }) {
     // document up with no tab for it would strand it outside the strip.
     const next = neighbourOf(tabs, tab.uid);
     navigate(next && remaining.some((t) => t.uid === next.uid) ? tabUrl(next) : '/');
+  }
+
+  // One click clears up to ten tabs, and it sits next to the +, so it
+  // offers an undo rather than asking first.
+  function onCloseAll() {
+    const closed = closeAllTabs();
+    const from =
+      activeUid && closed.some((t) => t.uid === activeUid)
+        ? `${location.pathname}${location.search}${location.hash}`
+        : null;
+    if (from) navigate('/');
+    showToast({
+      title: `Closed ${closed.length} tabs`,
+      body: 'The documents are still under Your documents.',
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          restoreTabs(closed);
+          if (from) navigate(from);
+        },
+      },
+    });
   }
 
   return (
@@ -73,6 +104,19 @@ export function DocumentTabs({ tabs }: { tabs: OpenTab[] }) {
           <PlusIcon />
         </Link>
       </Tooltip>
+      {/* With one tab its own ✕ does the same. */}
+      {tabs.length > 1 && (
+        <Tooltip content="Close all tabs">
+          <button
+            type="button"
+            className="doc-tab-close-all"
+            aria-label="Close all tabs"
+            onClick={onCloseAll}
+          >
+            <CardStackMinusIcon />
+          </button>
+        </Tooltip>
+      )}
     </nav>
   );
 }

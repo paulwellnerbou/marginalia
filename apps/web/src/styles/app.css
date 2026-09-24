@@ -530,23 +530,29 @@ button.primary:disabled {
     opacity: 1;
   }
 }
-.doc-tab-add {
+.doc-tab-add,
+.doc-tab-close-all {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
   width: 1.6rem;
   height: 1.6rem;
+  padding: 0;
+  border: 0;
   border-radius: var(--ui-control-radius);
+  background: transparent;
   color: var(--ui-fg-muted);
 }
-.doc-tab-add:hover {
+.doc-tab-add:hover,
+.doc-tab-close-all:hover {
   background: var(--gray-a3);
   color: var(--gray-12);
 }
 .doc-tab-link:focus-visible,
 .doc-tab-close:focus-visible,
-.doc-tab-add:focus-visible {
+.doc-tab-add:focus-visible,
+.doc-tab-close-all:focus-visible {
   outline: 2px solid var(--ui-accent-focus);
   outline-offset: -1px;
   border-radius: 4px;
