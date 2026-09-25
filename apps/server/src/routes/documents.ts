@@ -3305,6 +3305,9 @@ interface AcceptedProposalHistoryRow {
   base_block_start: number | null;
   base_block_end: number | null;
   deleted_at: number | null;
+  accepted_oid: string | null;
+  resolved_at: number | null;
+  resolved_by_name: string | null;
 }
 
 async function toHistoryWire(
@@ -3318,22 +3321,39 @@ async function toHistoryWire(
   const actorDisplayName = meta.clientId
     ? (userNames.get(meta.clientId) ?? fallbackHistoryAuthorName(entry.author.name, meta.clientId))
     : fallbackHistoryAuthorName(entry.author.name, null);
-  const proposal =
+  let actor: { client_id: string | null; display_name: string | null } = {
+    client_id: meta.clientId,
+    display_name: actorDisplayName,
+  };
+  let timestamp = entry.timestamp;
+  const accepted =
     meta.action === 'accept-proposal'
       ? await loadAcceptedProposalHistory(db, store, doc, entry.oid, userNames, meta.proposalId)
       : null;
 
+  // A fast-forward accept lands the proposer's own branch commit on main,
+  // so the commit's client id and whole-second timestamp are the
+  // proposer's, from when they proposed. The row records the accept, but
+  // only for the commit it names: an accept since reverted keeps the
+  // commit's.
+  const decided = accepted?.row.accepted_oid === entry.oid ? accepted.row : null;
+  if (decided?.resolved_at != null) timestamp = decided.resolved_at;
+  const acceptedBy = decided?.resolved_by_name;
+  // A merge commit is written by the accepter and is right as it is. One
+  // carrying the proposer is right only if they accepted it themselves;
+  // the row keeps the accepter's name but no client id.
+  if (acceptedBy && meta.clientId === decided.author_client_id && acceptedBy !== actorDisplayName) {
+    actor = { client_id: null, display_name: acceptedBy };
+  }
+
   return {
     oid: entry.oid,
     action: meta.action,
-    actor: {
-      client_id: meta.clientId,
-      display_name: actorDisplayName,
-    },
-    timestamp: entry.timestamp,
+    actor,
+    timestamp,
     restored_from_oid: meta.restoredFromOid,
     reverted_oid: meta.revertedOid,
-    proposal,
+    proposal: accepted?.wire ?? null,
   };
 }
 
@@ -3408,7 +3428,7 @@ async function loadAcceptedProposalHistory(
   acceptedOid: string,
   userNames: Map<string, string>,
   proposalId: string | null,
-): Promise<Record<string, unknown> | null> {
+): Promise<{ wire: Record<string, unknown>; row: AcceptedProposalHistoryRow } | null> {
   // Deliberately no `deleted_at` filter: the accept commit is part of
   // the document's history, so its attribution must survive deleting
   // the proposal thread. `deleted` only tells clients there is no live
@@ -3423,7 +3443,10 @@ async function loadAcceptedProposalHistory(
       cep.base_oid,
       cep.base_block_start,
       cep.base_block_end,
-      c.deleted_at
+      c.deleted_at,
+      cep.accepted_oid,
+      c.resolved_at,
+      c.resolved_by_name
     FROM comments c
     INNER JOIN comments_edit_proposals cep ON cep.comment_id = c.id
     WHERE c.doc_uid = ?
@@ -3452,13 +3475,16 @@ async function loadAcceptedProposalHistory(
     ? null
     : await readProposedTextFromBranch(store, doc, row);
   return {
-    id: row.id,
-    author: {
-      client_id: row.author_client_id,
-      display_name: userNames.get(row.author_client_id) ?? row.author_display_name,
+    wire: {
+      id: row.id,
+      author: {
+        client_id: row.author_client_id,
+        display_name: userNames.get(row.author_client_id) ?? row.author_display_name,
+      },
+      summary: summarizeProposalHistory(row.rationale, proposedText),
+      deleted: row.deleted_at !== null,
     },
-    summary: summarizeProposalHistory(row.rationale, proposedText),
-    deleted: row.deleted_at !== null,
+    row,
   };
 }
 
