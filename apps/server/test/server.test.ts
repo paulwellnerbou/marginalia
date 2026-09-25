@@ -1747,6 +1747,85 @@ describe('documents API', () => {
     });
   });
 
+  describe('a fast-forward accept in history', () => {
+    const source = '# Title\n\nalpha';
+    const blockId = () =>
+      [...locateAllBlocks(source).entries()].find(([, range]) => range.text === 'alpha')?.[0];
+
+    async function proposeAndAccept(
+      created: Awaited<ReturnType<typeof upload>>,
+      proposerHeaders: Headers,
+    ) {
+      const proposeRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/threads`, {
+          method: 'POST',
+          headers: proposerHeaders,
+          body: JSON.stringify({
+            anchor: { block_id: blockId(), quote: 'alpha' },
+            proposal: { proposed_text: 'beta' },
+          }),
+        }),
+      );
+      expect(proposeRes.status).toBe(201);
+      const { thread } = (await proposeRes.json()) as { thread: { id: string } };
+      const acceptRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/threads/${thread.id}/respond`, {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ action: 'accept' }),
+        }),
+      );
+      expect(acceptRes.status).toBe(200);
+
+      const historyRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/history`, {
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        }),
+      );
+      const { history } = (await historyRes.json()) as {
+        history: Array<{
+          action: string;
+          actor: { client_id: string | null; display_name: string | null };
+          timestamp: number;
+        }>;
+      };
+      const stored = app.db
+        .prepare('SELECT created_at, resolved_at FROM comments WHERE id = ?')
+        .get(thread.id) as { created_at: number; resolved_at: number };
+      return { accept: history.find((e) => e.action === 'accept-proposal'), stored };
+    }
+
+    test('is dated and attributed to the accept, not the proposal', async () => {
+      const created = await upload(CLIENT_A, { markdown: source });
+      const inviteRes = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/invites`, {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+          body: JSON.stringify({ display_name: 'Bob', role: 'collaborator' }),
+        }),
+      );
+      const { invite } = (await inviteRes.json()) as { invite: { token: string } };
+
+      const { accept, stored } = await proposeAndAccept(
+        created,
+        withInvite(headersFor(CLIENT_B), invite.token),
+      );
+      expect(accept?.timestamp).toBe(stored.resolved_at);
+      expect(accept?.timestamp ?? 0).toBeGreaterThanOrEqual(stored.created_at);
+      expect(accept?.actor).toEqual({ client_id: null, display_name: 'Alice' });
+    });
+
+    test('keeps the client id when the proposer accepted it', async () => {
+      const created = await upload(CLIENT_A, { markdown: source });
+      const { accept, stored } = await proposeAndAccept(
+        created,
+        withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      );
+      expect(accept?.timestamp).toBe(stored.resolved_at);
+      expect(accept?.actor).toEqual({ client_id: CLIENT_A.id, display_name: 'Alice' });
+    });
+  });
+
   test('accepting a proposal reanchors the thread to the updated block when the block id changes', async () => {
     const source = '## 2. Loesungskonzept & App-Architektur (Q1 - 30 %)\n\nBody.\n';
     const created = await upload(CLIENT_A, { markdown: source });
