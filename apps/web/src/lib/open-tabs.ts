@@ -65,6 +65,31 @@ export function closeTab(uid: string): OpenTab[] {
   return save(loadOpenTabs().filter((t) => t.uid !== uid));
 }
 
+/** Empty the strip, handing back what it held so the caller can offer
+ *  to put it back. */
+export function closeAllTabs(): OpenTab[] {
+  const closed = loadOpenTabs();
+  save([]);
+  return closed;
+}
+
+/**
+ * Undo `closeAllTabs`. Tabs opened in the meantime (here or in another
+ * browser tab) are kept, after the restored ones and in their fresher
+ * form, so the undo can't take back a later open.
+ */
+export function restoreTabs(tabs: OpenTab[]): OpenTab[] {
+  const current = loadOpenTabs();
+  const fresh = new Map(current.map((t) => [t.uid, t]));
+  const restored = new Set(tabs.map((t) => t.uid));
+  return save(
+    [
+      ...tabs.map((t) => fresh.get(t.uid) ?? t),
+      ...current.filter((t) => !restored.has(t.uid)),
+    ].slice(-MAX),
+  );
+}
+
 /**
  * Where to go when the open document's own tab is closed: the tab to its
  * right, or its left when it was the last one. Null leaves the caller to

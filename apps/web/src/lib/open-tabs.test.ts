@@ -2,11 +2,13 @@
 
 import { beforeEach, expect, test } from 'bun:test';
 import {
+  closeAllTabs,
   closeTab,
   loadOpenTabs,
   neighbourOf,
   type OpenTab,
   openTab,
+  restoreTabs,
   tabUrl,
   updateOpenTabToken,
 } from './open-tabs.js';
@@ -77,6 +79,46 @@ test('closing removes only that tab', () => {
   openTab(tab({ uid: 'doc-2', title: 'Two' }));
   expect(closeTab('doc-1').map((t) => t.uid)).toEqual(['doc-2']);
   expect(loadOpenTabs().map((t) => t.uid)).toEqual(['doc-2']);
+});
+
+test('closing all empties the strip and hands back what it held', () => {
+  openTab(tab());
+  openTab(tab({ uid: 'doc-2', title: 'Two' }));
+  expect(closeAllTabs().map((t) => t.uid)).toEqual(['doc-1', 'doc-2']);
+  expect(loadOpenTabs()).toEqual([]);
+});
+
+test('undoing close-all puts the tabs back in their order', () => {
+  openTab(tab());
+  openTab(tab({ uid: 'doc-2', title: 'Two' }));
+  restoreTabs(closeAllTabs());
+  expect(loadOpenTabs().map((t) => t.uid)).toEqual(['doc-1', 'doc-2']);
+});
+
+test('undoing close-all keeps what was opened since, after the restored tabs', () => {
+  openTab(tab());
+  openTab(tab({ uid: 'doc-2', title: 'Two' }));
+  const closed = closeAllTabs();
+  openTab(tab({ uid: 'doc-3', title: 'Three' }));
+  openTab(tab({ uid: 'doc-2', title: 'Two, renamed' }));
+
+  restoreTabs(closed);
+  expect(loadOpenTabs().map((t) => [t.uid, t.title])).toEqual([
+    ['doc-1', 'One'],
+    ['doc-2', 'Two, renamed'],
+    ['doc-3', 'Three'],
+  ]);
+});
+
+test('undoing close-all stays under the cap, dropping from the front', () => {
+  for (let i = 0; i < 10; i++) openTab(tab({ uid: `doc-${i}`, title: `Doc ${i}` }));
+  const closed = closeAllTabs();
+  openTab(tab({ uid: 'new', title: 'New' }));
+
+  const tabs = restoreTabs(closed);
+  expect(tabs).toHaveLength(10);
+  expect(tabs[0]?.uid).toBe('doc-1');
+  expect(tabs.at(-1)?.uid).toBe('new');
 });
 
 test('the neighbour of a closed tab is its right, then its left', () => {
