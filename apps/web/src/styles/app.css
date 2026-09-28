@@ -1228,8 +1228,11 @@ button.primary:disabled {
      can still run out. Keep that scroll inside the row: `.pane-doc` is
      `overflow: hidden`, which still scrolls programmatically, so focusing
      a control past the right edge would drag the whole pane sideways.
-     Scrollbar hidden: the row is 44px tall. */
+     Scrollbar hidden: the row is 44px tall. `overflow-x: auto` alone
+     computes y to `auto` too, so the few pixels a button at a large
+     interface size outgrows the row by would scroll. */
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
 }
 .doc-chrome::-webkit-scrollbar {
