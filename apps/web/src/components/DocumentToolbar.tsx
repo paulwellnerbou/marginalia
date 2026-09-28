@@ -175,7 +175,6 @@ export function DocumentToolbar({
       align="center"
       gap={fit === FIT_FULL ? '3' : '2'}
       px={fit >= FIT_TIGHT ? '2' : '3'}
-      py="2"
       className="doc-chrome"
     >
       {/* Always a menu, however much room the toolbar has: these are
