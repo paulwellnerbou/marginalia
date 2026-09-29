@@ -44,3 +44,20 @@ export function blockTextOf(el: HTMLElement): string {
   }
   return normalizeWs(raw);
 }
+
+/**
+ * Every block's text in rendered `html`, as the server's block map reads
+ * it: the text an anchor's quote has to match when the server re-anchors
+ * it after a save. The source-range parser's `text` is the markdown AST's
+ * reading, which runs list items together; a quote taken from it matches
+ * nothing and orphans the anchor on the next save.
+ */
+export function renderedBlockTexts(html: string): Map<string, string> {
+  const parsed = new DOMParser().parseFromString(html, 'text/html');
+  const texts = new Map<string, string>();
+  for (const el of parsed.querySelectorAll<HTMLElement>('[data-block]')) {
+    const id = el.dataset.block;
+    if (id && !texts.has(id)) texts.set(id, blockTextOf(el));
+  }
+  return texts;
+}

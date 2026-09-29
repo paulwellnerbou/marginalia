@@ -10,6 +10,7 @@ import {
   MagnifyingGlassIcon,
   MixerHorizontalIcon,
   Pencil1Icon,
+  PlusIcon,
   Share2Icon,
 } from '@radix-ui/react-icons';
 import { Button, DropdownMenu, Flex, IconButton, Popover, Tooltip } from '@radix-ui/themes';
@@ -36,22 +37,20 @@ import { ReadAloudControls } from './ReadAloudControls.js';
  */
 const FIT_FULL = 0;
 /**
- * Occasional actions go behind "More"; the bar tightens its spacing. Add
- * stays beside Edit: rare for most, but an author building a folder at a
- * desk adds one document after another.
+ * Occasional actions go behind "More"; the bar tightens its spacing. Append
+ * goes with them: handy on a wide screen, not worth a
+ * place on a narrow one.
  */
 const FIT_FOLDED = 1;
-/** Add follows the occasional actions, before anything loses its label. */
-const FIT_ADD_FOLDED = 2;
 /** The View button drops its label. */
-const FIT_TIGHT = 3;
+const FIT_TIGHT = 2;
 /**
  * Edit follows the rest into the menu. Last, because it is the one action
  * an editor came for, but ahead of leaving the row to scroll sideways: the
  * "More" button is its last child, so an overflowing row hides the very
  * button every folded action is behind.
  */
-const FIT_EDIT_FOLDED = 4;
+const FIT_EDIT_FOLDED = 3;
 
 interface Props {
   doc: Document;
@@ -161,7 +160,8 @@ export function DocumentToolbar({
   );
   const folded = fit >= FIT_FOLDED;
   const foldedInto = folded ? moreRef : undefined;
-  const addFolded = canAddDocument && fit >= FIT_ADD_FOLDED;
+  const appendHref = editHref && `${editHref}?append`;
+  const editFolded = !!editHref && fit >= FIT_EDIT_FOLDED;
 
   const downloads = useDocumentDownloads({
     doc,
@@ -224,12 +224,15 @@ export function DocumentToolbar({
           <Link to={editHref}>Edit</Link>
         </Button>
       )}
+      {appendHref && !folded && (
+        <Button variant="soft" asChild>
+          <Link to={appendHref} title="Append text at the end of the document">
+            Append
+          </Link>
+        </Button>
+      )}
       {canAddDocument && (
-        <NewFolderDocumentDialog
-          ref={newDocumentRef}
-          doc={doc}
-          foldedInto={addFolded ? moreRef : undefined}
-        />
+        <NewFolderDocumentDialog ref={newDocumentRef} doc={doc} foldedInto={foldedInto} />
       )}
       {onAdminChange && (
         <>
@@ -317,12 +320,20 @@ export function DocumentToolbar({
               </>
             ) : (
               <>
-                {editHref && fit >= FIT_EDIT_FOLDED && (
+                {editHref && editFolded && (
+                  <DropdownMenu.Item asChild>
+                    <Link to={editHref}>
+                      <Pencil1Icon />
+                      Edit
+                    </Link>
+                  </DropdownMenu.Item>
+                )}
+                {appendHref && (
                   <>
                     <DropdownMenu.Item asChild>
-                      <Link to={editHref}>
-                        <Pencil1Icon />
-                        Edit
+                      <Link to={appendHref}>
+                        <PlusIcon />
+                        Append
                       </Link>
                     </DropdownMenu.Item>
                     <DropdownMenu.Separator />
@@ -351,13 +362,17 @@ export function DocumentToolbar({
                   Download
                   <ChevronRightIcon className="doc-more-menu-forward" />
                 </DropdownMenu.Item>
-                {(addFolded || onAdminChange) && <DropdownMenu.Separator />}
-                {addFolded && (
-                  <DropdownMenu.Item onSelect={() => openFromMenu(newDocumentRef)}>
-                    <FilePlusIcon />
-                    Add a document
-                  </DropdownMenu.Item>
+                {canAddDocument && (
+                  <>
+                    <DropdownMenu.Separator />
+                    <DropdownMenu.Item onSelect={() => openFromMenu(newDocumentRef)}>
+                      <FilePlusIcon />
+                      Add a document
+                    </DropdownMenu.Item>
+                  </>
                 )}
+                {/* Admins can add documents too, so the separator above
+                    already starts this group. */}
                 {onAdminChange && (
                   <>
                     <DropdownMenu.Item onSelect={() => openFromMenu(copyRef)}>

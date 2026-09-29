@@ -96,6 +96,7 @@ import {
   pageIndexOfOffset,
 } from '../lib/paged-reading.js';
 import { partitionPendingMentions } from '../lib/pending-mentions.js';
+import { takeRevealOnOpen } from '../lib/pending-reveal.js';
 import { retryRequest } from '../lib/retry.js';
 import {
   anchorTouchesSections,
@@ -1053,6 +1054,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     },
     [],
   );
+
+  // Runs after RenderedDoc's own effect has put the html in place.
+  useEffect(() => {
+    const blockId = takeRevealOnOpen(doc.uid);
+    if (blockId) scrollToAnchor(blockId);
+  }, [doc.uid, scrollToAnchor]);
 
   // Reactive across UserMenu, composer, invite-load seeding, other tabs.
   const displayName = useDisplayName();

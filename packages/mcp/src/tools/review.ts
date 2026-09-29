@@ -1,3 +1,8 @@
+import {
+  insertAfterBlock,
+  insertBeforeBlock,
+  trimBlankLines,
+} from '@marginalia/renderer/insertion';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ListThreadsWire, ProposalDiffWire, ThreadWire } from '../api-types.js';
@@ -528,15 +533,10 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         if (typeof placement === 'string') return failure(placement);
         const { anchor: block, where } = placement;
 
-        // Only the seam between the anchor and the new text needs a blank
-        // line. The one towards the anchor's other neighbour stays put:
-        // outside the range in markdown, at the end of it in AsciiDoc,
-        // whose ranges carry their trailing newlines — hence moving those
-        // to the far side of the insertion.
-        const kept = block.source.trimEnd();
-        const trailing = block.source.slice(kept.length);
         const proposedText =
-          side === 'after' ? `${kept}\n\n${content}${trailing}` : `${content}\n\n${block.source}`;
+          side === 'after'
+            ? insertAfterBlock(block.source, content)
+            : insertBeforeBlock(content, block.source);
         const answered = [...new Set(args.answers_thread_ids ?? [])];
         const { thread } = await ctx.client.json<ThreadMutationWire>(
           loaded.ref,
@@ -1112,11 +1112,6 @@ function outlineNote(
 
 function endLine(source: string): string {
   return source.endsWith('\n') ? source : `${source}\n`;
-}
-
-/** Drop blank lines from both ends; the first line's indentation is content. */
-function trimBlankLines(source: string): string {
-  return source.replace(/^(?:[ \t]*\n)+/u, '').replace(/\s+$/u, '');
 }
 
 /**
