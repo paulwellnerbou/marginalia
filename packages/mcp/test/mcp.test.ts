@@ -194,7 +194,7 @@ describe('marginalia MCP server', () => {
         'list_history',
         'list_invites',
         'list_threads',
-        'propose_addition',
+        'propose_insertion',
         'react_to_comment',
         'reply_to_thread',
         'repair_proposal_anchor',
@@ -947,13 +947,13 @@ Prose in chapter seven.
   test('proposes a new chapter between two others, and the accept inserts it', async () => {
     const { adminUrl } = await seedBook();
     const chapter = '## Chapter Two and a Half\n\nA sandstorm pinned them in place for a day.';
-    const created = await call('propose_addition', {
+    const created = await call('propose_insertion', {
       document: adminUrl,
       section: 'Chapter Two',
       content: `\n${chapter}\n\n`,
       rationale: 'The jump to the well needs a beat in between.',
     });
-    expect(created).toContain('adding 3 line(s) after section The Salt Road › Chapter Two.');
+    expect(created).toContain('inserting 3 line(s) after section The Salt Road › Chapter Two.');
     expect(created).not.toContain('note:');
     // Anchored on the list closing chapter two, which the diff shows
     // kept and followed by the new chapter.
@@ -970,9 +970,9 @@ Prose in chapter seven.
     expect(after).toContain(`- Distance to the well: unknown\n\n${chapter}\n\n## Chapter Three\n`);
   });
 
-  test('proposes additions before a section and at either end of the document', async () => {
+  test('proposes insertions before a section and at either end of the document', async () => {
     const { adminUrl } = await seedBook();
-    const before = await call('propose_addition', {
+    const before = await call('propose_insertion', {
       document: adminUrl,
       section: 'Chapter Three',
       position: 'before',
@@ -982,7 +982,7 @@ Prose in chapter seven.
     expect(before).toContain('before section The Salt Road › Chapter Three');
     expect(before).toContain('+## Interlude\n+\n+Nobody spoke.\n+\n ## Chapter Three');
 
-    const end = await call('propose_addition', {
+    const end = await call('propose_insertion', {
       document: adminUrl,
       content: '## Epilogue\n\nThe well is still there.',
       rationale: 'Closure.',
@@ -992,7 +992,7 @@ Prose in chapter seven.
       ' They reached the well on the fourth evening, which Ibrahim considered luck.\n+\n+## Epilogue',
     );
 
-    const start = await call('propose_addition', {
+    const start = await call('propose_insertion', {
       document: adminUrl,
       position: 'before',
       content: '_For the caravan drivers._',
@@ -1014,21 +1014,21 @@ Prose in chapter seven.
     expect(after).toContain('considered luck.\n\n## Epilogue\n\nThe well is still there.');
   });
 
-  test('an addition next to a list item goes after the whole list', async () => {
+  test('an insertion next to a list item goes after the whole list', async () => {
     const { adminUrl } = await seedBook();
-    const created = await call('propose_addition', {
+    const created = await call('propose_insertion', {
       document: adminUrl,
       anchor_text: 'Water rations',
       content: 'They drank sparingly.',
       rationale: 'Shows the rationing.',
     });
-    expect(created).toContain('so the addition goes after the whole list');
+    expect(created).toContain('so the insertion goes after the whole list');
     expect(created).toContain(' - Distance to the well: unknown\n+\n+They drank sparingly.');
   });
 
   test('says when an added section will not sit beside the one it follows', async () => {
     const { adminUrl } = await seedBook();
-    const deeper = await call('propose_addition', {
+    const deeper = await call('propose_insertion', {
       document: adminUrl,
       section: 'Chapter One',
       content: '### Aside\n\nA footnote of a section.',
@@ -1039,7 +1039,7 @@ Prose in chapter seven.
     );
     expect(deeper).toContain('nests inside the section before it');
 
-    const headless = await call('propose_addition', {
+    const headless = await call('propose_insertion', {
       document: adminUrl,
       section: 'Chapter One',
       content: 'One more paragraph.',
@@ -1050,9 +1050,9 @@ Prose in chapter seven.
     );
   });
 
-  test('refuses an addition with two targets or no content', async () => {
+  test('refuses an insertion with two targets or no content', async () => {
     const { adminUrl } = await seedBook();
-    const both = await callExpectingError('propose_addition', {
+    const both = await callExpectingError('propose_insertion', {
       document: adminUrl,
       section: 'Chapter One',
       anchor_text: 'Water rations',
@@ -1060,7 +1060,7 @@ Prose in chapter seven.
       rationale: 'Why.',
     });
     expect(both).toContain('Pass either `section` or a block');
-    const empty = await callExpectingError('propose_addition', {
+    const empty = await callExpectingError('propose_insertion', {
       document: adminUrl,
       content: '\n  \n',
       rationale: 'Why.',
@@ -1483,7 +1483,7 @@ Prose in chapter seven.
     });
     const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(output)?.[1] as string;
 
-    const created = await call('propose_addition', {
+    const created = await call('propose_insertion', {
       document: adminUrl,
       section: 'Chapter One',
       content: '== Chapter One and a Half\n\nA sandstorm.',
@@ -1500,7 +1500,7 @@ Prose in chapter seven.
       'They left before dawn.\n\n== Chapter One and a Half\n\nA sandstorm.\n\n== Chapter Two',
     );
 
-    const deeper = await call('propose_addition', {
+    const deeper = await call('propose_insertion', {
       document: adminUrl,
       section: 'Chapter Two',
       content: '=== Aside\n\nSand.',
@@ -1509,20 +1509,20 @@ Prose in chapter seven.
     expect(deeper).toContain('the new heading is level 3');
   });
 
-  test('an asciidoc addition next to a list item goes after the whole list', async () => {
+  test('an asciidoc insertion next to a list item goes after the whole list', async () => {
     const output = await call('create_document', {
       source: '== Supplies\n\n* water\n* dates\n\n* rope\n\nThey packed light.\n',
       name: 'Supplies (adoc)',
       format: 'asciidoc',
     });
     const adminUrl = /^admin link[^:]*: (\S+)$/m.exec(output)?.[1] as string;
-    const created = await call('propose_addition', {
+    const created = await call('propose_insertion', {
       document: adminUrl,
       anchor_text: 'dates',
       content: 'Nothing else would fit.',
       rationale: 'Detail.',
     });
-    expect(created).toContain('inside a list, so the addition goes after the whole list');
+    expect(created).toContain('inside a list, so the insertion goes after the whole list');
     await call('respond_to_thread', {
       document: adminUrl,
       thread_id: /^thread_id: (\S+)/m.exec(created)?.[1] as string,

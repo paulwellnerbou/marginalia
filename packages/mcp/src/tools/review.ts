@@ -342,7 +342,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         'request made about it. List them all in `answers_thread_ids` rather than repeating ' +
         'the same edit once per comment.\n\n' +
         'To add new material — a chapter, a section, a paragraph — next to existing text rather ' +
-        'than rewriting it, use propose_addition.\n\n' +
+        'than rewriting it, use propose_insertion.\n\n' +
         'To revise a proposal that already exists, use update_proposal instead of creating a ' +
         'second one.',
       inputSchema: {
@@ -463,11 +463,11 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
   );
 
   server.registerTool(
-    'propose_addition',
+    'propose_insertion',
     {
-      title: 'Propose new text: a chapter, section or paragraph',
+      title: 'Propose inserting new text: a chapter, section or paragraph',
       description:
-        'Create an edit proposal that adds new material to the document without rewriting what ' +
+        'Create an edit proposal that inserts new material into the document without rewriting what ' +
         'is there — a new chapter, section, paragraph or table. The owner accepts it with one ' +
         'click like any other proposal.\n\n' +
         '`content` is only the new text, in the document’s own markup: a new section starts ' +
@@ -476,18 +476,18 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         '- `section`: after the whole section, subsections included, or before its heading. ' +
         'The way to add a chapter between two others, or after the last one.\n' +
         '- `block_id` / `anchor_text`: after or before one block. A list item or table cell ' +
-        'stands for its whole list or table, so the addition is always a block of its own; to ' +
+        'stands for its whole list or table, so the insertion is always a block of its own; to ' +
         'add a list item, rewrite the list with create_proposal.\n' +
         '- neither: at the end of the document (`after`) or its start (`before`).\n\n' +
         'The proposal is anchored on the neighbouring block and its proposed text is that ' +
-        'block plus the addition, as the diff in the result shows. To revise it with ' +
+        'block plus the insertion, as the diff in the result shows. To revise it with ' +
         'update_proposal, send both again.',
       inputSchema: {
         document: documentArg,
         content: z.string().describe('The new text alone, without the text it goes next to.'),
         rationale: z
           .string()
-          .describe('Why the addition is proposed. Shown as the proposal’s opening comment.'),
+          .describe('Why the insertion is proposed. Shown as the proposal’s opening comment.'),
         position: z
           .enum(['after', 'before'])
           .optional()
@@ -506,7 +506,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           .array(z.string().trim().min(1))
           .optional()
           .describe(
-            'The comment threads this addition answers — "this needs a section on X". Linked ' +
+            'The comment threads this insertion answers — "this needs a section on X". Linked ' +
               'both ways as with create_proposal, and resolved when the proposal is accepted.',
           ),
       },
@@ -524,7 +524,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         }
         const loaded = await loadDocument(ctx, args.document);
         const side = args.position ?? 'after';
-        const placement = placeAddition(loaded, side, args);
+        const placement = placeInsertion(loaded, side, args);
         if (typeof placement === 'string') return failure(placement);
         const { anchor: block, where } = placement;
 
@@ -532,7 +532,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         // line. The one towards the anchor's other neighbour stays put:
         // outside the range in markdown, at the end of it in AsciiDoc,
         // whose ranges carry their trailing newlines — hence moving those
-        // to the far side of the addition.
+        // to the far side of the insertion.
         const kept = block.source.trimEnd();
         const trailing = block.source.slice(kept.length);
         const proposedText =
@@ -556,7 +556,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         const notice = await replyInAnsweredThreads(ctx, loaded, thread.id, answered);
 
         return text(
-          `Created a proposal adding ${content.split('\n').length} line(s) ${where}.`,
+          `Created a proposal inserting ${content.split('\n').length} line(s) ${where}.`,
           `anchored on: block ${block.id}${occurrenceTag(block)} (${block.kind}, lines ` +
             `${block.startLine}-${block.endLine})`,
           `thread_id: ${thread.id}  status: open`,
@@ -931,8 +931,8 @@ function resolveContext(
   return targetId === null ? 'block' : 1;
 }
 
-/** Where `propose_addition` puts new text, and the block it anchors on. */
-interface AdditionPlacement {
+/** Where `propose_insertion` puts new text, and the block it anchors on. */
+interface InsertionPlacement {
   anchor: PlacedBlock & { source: string };
   side: 'after' | 'before';
   /** "after section Chapter Two", for the result line. */
@@ -949,7 +949,7 @@ interface AdditionPlacement {
  * inside the list, and after a table cell's range inside the row, where
  * a new heading or paragraph would break the structure around it.
  */
-function placeAddition(
+function placeInsertion(
   loaded: LoadedDocument,
   side: 'after' | 'before',
   target: {
@@ -958,7 +958,7 @@ function placeAddition(
     anchor_text?: string | undefined;
     occurrence?: number | undefined;
   },
-): AdditionPlacement | string {
+): InsertionPlacement | string {
   const map = loaded.blocks;
   const tops = topLevelBlocks(map);
   const place = (
@@ -966,7 +966,7 @@ function placeAddition(
     where: string,
     section: DocumentSection | null,
     notes: string[] = [],
-  ): AdditionPlacement | string =>
+  ): InsertionPlacement | string =>
     block
       ? {
           anchor: { ...block, source: map.source.slice(block.start, block.end) },
@@ -976,7 +976,7 @@ function placeAddition(
           notes,
         }
       : 'No block of this document could be placed in its source here, so there is nothing to ' +
-        'anchor the addition on. Name a neighbouring block with block_id instead.';
+        'anchor the insertion on. Name a neighbouring block with block_id instead.';
 
   if (target.section) {
     const section = resolveSection(map, target.section);
@@ -1009,7 +1009,7 @@ function placeAddition(
       top && top.index !== block.index ? (top === enclosing ? top.kind : 'list') : null;
     const notes = container
       ? [
-          `note: block ${block.id} is a ${block.kind} inside a ${container}, so the addition goes ${side} the whole ${container}.`,
+          `note: block ${block.id} is a ${block.kind} inside a ${container}, so the insertion goes ${side} the whole ${container}.`,
         ]
       : [];
     return place(top ?? undefined, `${side} block ${top?.id ?? block.id}`, null, notes);
@@ -1059,9 +1059,9 @@ function listEdge(
 }
 
 /**
- * Text between the anchor and where the addition was meant to go that no
+ * Text between the anchor and where the insertion was meant to go that no
  * block claims: link definitions, comments, or a block the local walk
- * failed to place. It stays on the far side of the addition, and the
+ * failed to place. It stays on the far side of the insertion, and the
  * caller should know.
  */
 function unplacedTail(map: DocumentBlockMap, anchor: PlacedBlock, limit: number): string[] {
@@ -1069,19 +1069,19 @@ function unplacedTail(map: DocumentBlockMap, anchor: PlacedBlock, limit: number)
   if (!tail) return [];
   return [
     `note: ${tail.split('\n').length} line(s) of source that form no block of their own follow ` +
-      `block ${anchor.id}, and will come after the addition: ${JSON.stringify(clip(tail, 80))}`,
+      `block ${anchor.id}, and will come after the insertion: ${JSON.stringify(clip(tail, 80))}`,
   ];
 }
 
 /**
- * Warn when an addition placed by section will not sit in the outline as
+ * Warn when an insertion placed by section will not sit in the outline as
  * a sibling of it. The diff shows the lines but not what they do to the
  * heading tree, and a chapter proposed one level too deep quietly becomes
  * a subsection of the chapter before it.
  */
 function outlineNote(
   loaded: LoadedDocument,
-  placement: AdditionPlacement,
+  placement: InsertionPlacement,
   content: string,
 ): string | null {
   const { section } = placement;
@@ -1104,8 +1104,8 @@ function outlineNote(
     `note: the new heading is level ${added} and section ${section.path.join(' › ')} is level ` +
     `${level}, so ${
       added > level
-        ? 'the addition nests inside the section before it instead of standing beside it.'
-        : 'the addition becomes the parent of the sections after it, up to the next heading at its level or above.'
+        ? 'the insertion nests inside the section before it instead of standing beside it.'
+        : 'the insertion becomes the parent of the sections after it, up to the next heading at its level or above.'
     }`
   );
 }
