@@ -1,4 +1,5 @@
-import { Button, Callout, Dialog, Flex } from '@radix-ui/themes';
+import { FilePlusIcon } from '@radix-ui/react-icons';
+import { Button, Callout, Dialog, Flex, IconButton } from '@radix-ui/themes';
 import { useImperativeHandle, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Document, DocumentFormat } from '../lib/api.js';
@@ -92,9 +93,9 @@ export function NewFolderDocumentDialog({
     >
       {!foldedInto && (
         <Dialog.Trigger>
-          <Button variant="soft" size="2" aria-label="Add a document" title="Add a document">
-            Add
-          </Button>
+          <IconButton variant="soft" size="2" aria-label="Add a document" title="Add a document">
+            <FilePlusIcon />
+          </IconButton>
         </Dialog.Trigger>
       )}
       <Dialog.Content

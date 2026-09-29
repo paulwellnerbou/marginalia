@@ -35,23 +35,17 @@ import { ReadAloudControls } from './ReadAloudControls.js';
  * statistics, downloads, the admin dialogs.
  */
 const FIT_FULL = 0;
-/**
- * Occasional actions go behind "More"; the bar tightens its spacing. Add
- * stays beside Edit: rare for most, but an author building a folder at a
- * desk adds one document after another.
- */
+/** Occasional actions go behind "More"; the bar tightens its spacing. */
 const FIT_FOLDED = 1;
-/** Add follows the occasional actions, before anything loses its label. */
-const FIT_ADD_FOLDED = 2;
 /** The View button drops its label. */
-const FIT_TIGHT = 3;
+const FIT_TIGHT = 2;
 /**
  * Edit follows the rest into the menu. Last, because it is the one action
  * an editor came for, but ahead of leaving the row to scroll sideways: the
  * "More" button is its last child, so an overflowing row hides the very
  * button every folded action is behind.
  */
-const FIT_EDIT_FOLDED = 4;
+const FIT_EDIT_FOLDED = 3;
 
 interface Props {
   doc: Document;
@@ -161,7 +155,6 @@ export function DocumentToolbar({
   );
   const folded = fit >= FIT_FOLDED;
   const foldedInto = folded ? moreRef : undefined;
-  const addFolded = canAddDocument && fit >= FIT_ADD_FOLDED;
 
   const downloads = useDocumentDownloads({
     doc,
@@ -225,11 +218,7 @@ export function DocumentToolbar({
         </Button>
       )}
       {canAddDocument && (
-        <NewFolderDocumentDialog
-          ref={newDocumentRef}
-          doc={doc}
-          foldedInto={addFolded ? moreRef : undefined}
-        />
+        <NewFolderDocumentDialog ref={newDocumentRef} doc={doc} foldedInto={foldedInto} />
       )}
       {onAdminChange && (
         <>
@@ -351,13 +340,17 @@ export function DocumentToolbar({
                   Download
                   <ChevronRightIcon className="doc-more-menu-forward" />
                 </DropdownMenu.Item>
-                {(addFolded || onAdminChange) && <DropdownMenu.Separator />}
-                {addFolded && (
-                  <DropdownMenu.Item onSelect={() => openFromMenu(newDocumentRef)}>
-                    <FilePlusIcon />
-                    Add a document
-                  </DropdownMenu.Item>
+                {canAddDocument && (
+                  <>
+                    <DropdownMenu.Separator />
+                    <DropdownMenu.Item onSelect={() => openFromMenu(newDocumentRef)}>
+                      <FilePlusIcon />
+                      Add a document
+                    </DropdownMenu.Item>
+                  </>
                 )}
+                {/* Admins can add documents too, so the separator above
+                    already starts this group. */}
                 {onAdminChange && (
                   <>
                     <DropdownMenu.Item onSelect={() => openFromMenu(copyRef)}>

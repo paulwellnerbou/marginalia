@@ -478,9 +478,8 @@ folder: folders are one level deep.
 The viewer never says "folder". A document in one lists it at the top of
 the left pane, above its contents: the main document first, the others
 beneath it, the open one highlighted. **Add a document** — at the foot
-of that list, and as **Add** beside Edit in the document toolbar for
-admins and editors (in its "More" menu when the pane is narrow), where it
-starts a folder from a document that stands alone —
+of that list, and as an icon in the document toolbar for admins and
+editors, where it starts a folder from a document that stands alone —
 asks for a name and opens the new document in the editor, starting from
 that name as a heading. The home page gives a folder one card, the main
 document's, with the others listed on it; one whose main document this
