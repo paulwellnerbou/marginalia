@@ -22,7 +22,7 @@ import {
   updateDocument,
   uploadAsset,
 } from '../lib/api.js';
-import { appendSource } from '../lib/append-source.js';
+import { appendSource, appendToBlock, firstBlockFrom, lastBlock } from '../lib/append-source.js';
 import { loadBlockRanges } from '../lib/block-range-loader.js';
 import { type ChapterScope, resolveChapterScope } from '../lib/chapter-scope.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
@@ -643,8 +643,14 @@ export function EditPage() {
       );
       if (activeUidRef.current !== targetUid) return;
       if (appendedFrom !== null && doc) {
-        const firstAppended = await firstBlockFrom(nextDocumentSource, doc.format, appendedFrom);
-        if (firstAppended) revealOnOpen(targetUid, firstAppended);
+        try {
+          const ranges = await loadBlockRanges(nextDocumentSource, doc.format);
+          const firstAppended = firstBlockFrom(ranges, appendedFrom);
+          if (firstAppended) revealOnOpen(targetUid, firstAppended);
+        } catch (err) {
+          // The text is saved; only the scroll to it is lost.
+          reportError('EditPage.firstAppendedBlock', err, { uid: targetUid });
+        }
       }
       if (activeUidRef.current !== targetUid) return;
       setSavedSource(source);
@@ -678,6 +684,34 @@ export function EditPage() {
     setSaving(true);
     setError(null);
     try {
+      if (appending) {
+        // Anchored on the block the document ends with now, proposing it
+        // followed by the addition: a proposal replaces a span, and this
+        // one leaves that span's own text as it was.
+        const latest = await getDocument(targetUid);
+        const ranges = await loadBlockRanges(latest.source, latest.format);
+        if (activeUidRef.current !== targetUid) return;
+        const last = lastBlock(ranges);
+        if (!last) {
+          setError('Cannot propose an addition to an empty document.');
+          return;
+        }
+        const [blockId, range] = last;
+        await createEditProposal(
+          targetUid,
+          {
+            proposed_text: appendToBlock(latest.source.slice(range.start, range.end), source),
+            rationale: rationale.trim() || null,
+            anchor_block_id: blockId,
+            anchor_quote: range.text,
+          },
+          identity,
+        );
+        if (activeUidRef.current !== targetUid) return;
+        revealOnOpen(targetUid, blockId);
+        navigate(`/d/${targetUid}`);
+        return;
+      }
       if (chapterScope) {
         const blocks = await loadBlockRanges(doc.source, doc.format);
         const quote = chapterScope.blockIds
@@ -743,9 +777,7 @@ export function EditPage() {
   }
 
   const canSave = canEdit;
-  // A proposal replaces a span of the document; appending has no span
-  // to anchor one to.
-  const canPropose = canEnterEditor && !appending;
+  const canPropose = canEnterEditor;
   const hasChanges = source !== savedSource;
 
   if (error && !doc) {
@@ -906,31 +938,4 @@ export function EditPage() {
       </div>
     </div>
   );
-}
-
-/**
- * The id of the first block starting at or after `offset`: where appended
- * text begins once the document is rendered. The outermost block wins a
- * tie, a list over its first item.
- */
-async function firstBlockFrom(
-  source: string,
-  format: Document['format'],
-  offset: number,
-): Promise<string | null> {
-  try {
-    const ranges = await loadBlockRanges(source, format);
-    let first: { id: string; start: number; end: number } | null = null;
-    for (const [id, { start, end }] of ranges) {
-      if (start < offset) continue;
-      if (!first || start < first.start || (start === first.start && end > first.end)) {
-        first = { id, start, end };
-      }
-    }
-    return first?.id ?? null;
-  } catch (err) {
-    // The text is saved; only the scroll to it is lost.
-    reportError('EditPage.firstAppendedBlock', err);
-    return null;
-  }
 }
