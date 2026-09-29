@@ -220,6 +220,7 @@ when no password is set.
 | `list_threads` | Comments and edit proposals with their discussion and anchored text. Open threads only, unless `thread_id` names one or `state` asks for more. `awaiting_my_response: true` is the work queue — open threads whose latest message is somebody else's; `section` scopes it to one chapter. A targeted thread includes one surrounding block on each side by default; `context` overrides that with a block count, `"section"` for the whole enclosing section, or `"none"`. |
 | `create_comment` | New comment anchored to a block (by `block_id` or a `anchor_text` snippet; `occurrence` picks between identical blocks sharing an id). |
 | `create_proposal` | A suggested replacement. `answers_thread_ids` links it to the comments it answers — every one the edit settles, not just the one that prompted it. |
+| `propose_addition` | A suggested addition — a new chapter, section or paragraph — that leaves the existing text alone. Place it `after` or `before` a whole `section`, a block, or the document itself. |
 | `update_proposal` | Revise an open proposal you authored, or any open proposal as document admin — new text, same thread, discussion intact. Rebuilds it against the current source, so it also refreshes a stale or conflicted proposal. `comment` posts a revision note in the discussion alongside the change. |
 | `reply_to_thread` | Answer a comment thread or an edit proposal. |
 | `respond_to_thread` | `resolve` / `accept` / `reject` / `reopen`, with an optional reply. Accepting a linked proposal also resolves the comments it answers, except one another open proposal also answers. Reopening it reopens the ones an accept resolved. |
@@ -412,6 +413,17 @@ replacement text has to be the complete rewritten block, markdown
 structure included: `## Chapter Two` keeps its `##`, a list item keeps
 its `- `. A table cell's range excludes the surrounding pipes, so a
 proposal on one cell cannot break the table.
+
+New text needs no rewrite of the text around it: `propose_addition`
+takes just the addition and a place — after a whole section with its
+subsections, before a section's heading, next to a block, or at either
+end of the document. It still has to anchor on something, so it anchors
+on the neighbouring block and proposes that block followed (or preceded)
+by the new text; the diff shows exactly that, and accepting inserts it.
+A list item or table cell stands for its whole list or table, so an
+addition never lands inside one. When a new section's heading level
+would nest it under the section before it, or it has no heading and
+would run on as part of that section, the result says so.
 
 Tools that take an anchor accept either an exact `block_id` or an
 `anchor_text` snippet. A snippet matching two unrelated blocks is
