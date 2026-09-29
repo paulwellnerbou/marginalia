@@ -299,8 +299,9 @@ never become an error in front of someone who is just trying to read.
 [`packages/mcp`](packages/mcp/README.md) is an MCP server that gives an
 agent the same review surface a human reviewer has: it can read a
 document, read the comments and edit proposals on it, reply to them,
-leave its own comments, suggest edits, and download the document in any
-supported format.
+leave its own comments, suggest edits — rewrites of existing text, or
+new chapters and sections — and download the document in any supported
+format.
 
 The loop it exists for: read a draft in the viewer, comment where
 something is off, then hand the agent the document URL and ask it to
