@@ -243,7 +243,7 @@ export function sectionByPath(map: DocumentBlockMap, path: string[]): DocumentSe
   return matches.length === 1 ? (matches[0] as DocumentSection) : null;
 }
 
-type PlacedBlock = DocumentBlock & { start: number; end: number };
+export type PlacedBlock = DocumentBlock & { start: number; end: number };
 
 const topLevelCache = new WeakMap<DocumentBlockMap, PlacedBlock[]>();
 
@@ -255,7 +255,7 @@ const topLevelCache = new WeakMap<DocumentBlockMap, PlacedBlock[]>();
  * would walk back into the same list rather than reach the paragraph
  * beside it. "A paragraph either side" means stepping over these.
  */
-function topLevelBlocks(map: DocumentBlockMap): PlacedBlock[] {
+export function topLevelBlocks(map: DocumentBlockMap): PlacedBlock[] {
   const cached = topLevelCache.get(map);
   if (cached) return cached;
 
@@ -328,6 +328,28 @@ export function anchorNeighbourhood(
     beforeBlocks: before.length,
     afterBlocks: after.length,
   };
+}
+
+/** The top-level block a block sits in, or the block itself when nothing encloses it. */
+export function enclosingTopLevel(map: DocumentBlockMap, block: DocumentBlock): PlacedBlock | null {
+  const { start, end } = block;
+  if (start === null || end === null) return null;
+  return topLevelBlocks(map).find((top) => top.start <= start && end <= top.end) ?? null;
+}
+
+/**
+ * The markdown or AsciiDoc level of the heading `source` opens with, or
+ * null when its first line is not one. Setext underlines count: `===`
+ * is level 1, `---` level 2.
+ */
+export function headingLevel(source: string, format: DocumentFormat): number | null {
+  const [first = '', second = ''] = source.split('\n');
+  if (format === 'asciidoc') return /^(={1,6})\s+\S/u.exec(first)?.[1]?.length ?? null;
+  const atx = /^ {0,3}(#{1,6})(\s|$)/u.exec(first);
+  if (atx) return (atx[1] as string).length;
+  if (first.trim() === '') return null;
+  const setext = /^ {0,3}(=+|-+)\s*$/u.exec(second);
+  return setext ? ((setext[1] as string).startsWith('=') ? 1 : 2) : null;
 }
 
 async function locateSourceBlocks(source: string, format: DocumentFormat): Promise<LocatedBlocks> {

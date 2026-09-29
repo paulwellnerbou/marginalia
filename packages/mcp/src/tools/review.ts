@@ -4,11 +4,19 @@ import type { ListThreadsWire, ProposalDiffWire, ThreadWire } from '../api-types
 import {
   anchorBlocks,
   buildAnchor,
+  clip,
   type DocumentBlock,
+  type DocumentBlockMap,
+  type DocumentSection,
+  enclosingTopLevel,
+  headingLevel,
+  type PlacedBlock,
   resolveBlock,
   resolveEndBlock,
   resolveSection,
+  sectionAt,
   sectionContains,
+  topLevelBlocks,
 } from '../blocks.js';
 import { commentUrl } from '../document-ref.js';
 import {
@@ -333,6 +341,8 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         'One proposal can answer several comments — a rewritten paragraph settles every ' +
         'request made about it. List them all in `answers_thread_ids` rather than repeating ' +
         'the same edit once per comment.\n\n' +
+        'To add new material — a chapter, a section, a paragraph — next to existing text rather ' +
+        'than rewriting it, use propose_insertion.\n\n' +
         'To revise a proposal that already exists, use update_proposal instead of creating a ' +
         'second one.',
       inputSchema: {
@@ -435,41 +445,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           },
         );
 
-        // The proposal already exists by now. If the courtesy back-link
-        // fails — wrong thread id, thread deleted meanwhile — reporting
-        // that as a tool error would invite a retry that creates a second
-        // proposal. Report it as a partial success and name the one step
-        // left to do by hand.
-        let notice: string | null = null;
-        if (answered.length > 0) {
-          notice =
-            answered.length === 1
-              ? `Linked to thread ${answered[0]}: it now shows this proposal, and accepting the proposal will resolve it unless another proposal for it is still open.`
-              : `Linked to ${answered.length} threads (${answered.join(', ')}): each now shows this proposal, and accepting it will resolve each one no other open proposal also answers.`;
-          const replyFailures: string[] = [];
-          for (const answeredId of answered) {
-            try {
-              await ctx.client.json<ThreadMutationWire>(
-                loaded.ref,
-                `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads/${encodeURIComponent(answeredId)}/respond`,
-                { method: 'POST', body: { body: `Addressed in edit proposal \`${thread.id}\`.` } },
-              );
-            } catch (err) {
-              // The links are already stored server-side; only the
-              // courtesy replies failed, so this is cosmetic rather than
-              // a lost link.
-              replyFailures.push(
-                `${answeredId} (${err instanceof Error ? err.message : String(err)})`,
-              );
-            }
-          }
-          notice +=
-            replyFailures.length === 0
-              ? ' Replied there too.'
-              : replyFailures.length === answered.length
-                ? ` (Could not post the reply: ${replyFailures.join('; ')})`
-                : ` Replied in the rest. (Could not post the reply in: ${replyFailures.join('; ')})`;
-        }
+        const notice = await replyInAnsweredThreads(ctx, loaded, thread.id, answered);
 
         const before = args.whole_document
           ? loaded.doc.source
@@ -482,6 +458,113 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           `url: ${commentUrl(loaded.ref, thread.id)}`,
           notice,
           `diff:\n${lineDiff(before, args.proposed_text)}`,
+        );
+      }),
+  );
+
+  server.registerTool(
+    'propose_insertion',
+    {
+      title: 'Propose inserting new text: a chapter, section or paragraph',
+      description:
+        'Create an edit proposal that inserts new material into the document without rewriting what ' +
+        'is there — a new chapter, section, paragraph or table. The owner accepts it with one ' +
+        'click like any other proposal.\n\n' +
+        '`content` is only the new text, in the document’s own markup: a new section starts ' +
+        'with its heading line at the level it should have (`## Chapter Four` beside other ' +
+        '`##` chapters). Say where it goes with `position` and one target:\n' +
+        '- `section`: after the whole section, subsections included, or before its heading. ' +
+        'The way to add a chapter between two others, or after the last one.\n' +
+        '- `block_id` / `anchor_text`: after or before one block. A list item or table cell ' +
+        'stands for its whole list or table, so the insertion is always a block of its own; to ' +
+        'add a list item, rewrite the list with create_proposal.\n' +
+        '- neither: at the end of the document (`after`) or its start (`before`).\n\n' +
+        'The proposal is anchored on the neighbouring block and its proposed text is that ' +
+        'block plus the insertion, as the diff in the result shows. To revise it with ' +
+        'update_proposal, send both again.',
+      inputSchema: {
+        document: documentArg,
+        content: z.string().describe('The new text alone, without the text it goes next to.'),
+        rationale: z
+          .string()
+          .describe('Why the insertion is proposed. Shown as the proposal’s opening comment.'),
+        position: z
+          .enum(['after', 'before'])
+          .optional()
+          .describe('Put the new text after the target (default) or before it.'),
+        section: z
+          .string()
+          .optional()
+          .describe(
+            'Place the new text next to this whole section: heading text, `#slug`, or ' +
+              '"Parent > Child".',
+          ),
+        block_id: blockIdArg,
+        occurrence: occurrenceArg,
+        anchor_text: anchorTextArg,
+        answers_thread_ids: z
+          .array(z.string().trim().min(1))
+          .optional()
+          .describe(
+            'The comment threads this insertion answers — "this needs a section on X". Linked ' +
+              'both ways as with create_proposal, and resolved when the proposal is accepted.',
+          ),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) =>
+      guard(async () => {
+        const content = trimBlankLines(args.content);
+        if (content.trim() === '') return failure('`content` is empty: there is nothing to add.');
+        if (args.section && (args.block_id || args.anchor_text)) {
+          return failure(
+            'Pass either `section` or a block (`block_id` / `anchor_text`), not both: they are ' +
+              'two ways of naming where the new text goes.',
+          );
+        }
+        const loaded = await loadDocument(ctx, args.document);
+        const side = args.position ?? 'after';
+        const placement = placeInsertion(loaded, side, args);
+        if (typeof placement === 'string') return failure(placement);
+        const { anchor: block, where } = placement;
+
+        // Only the seam between the anchor and the new text needs a blank
+        // line. The one towards the anchor's other neighbour stays put:
+        // outside the range in markdown, at the end of it in AsciiDoc,
+        // whose ranges carry their trailing newlines — hence moving those
+        // to the far side of the insertion.
+        const kept = block.source.trimEnd();
+        const trailing = block.source.slice(kept.length);
+        const proposedText =
+          side === 'after' ? `${kept}\n\n${content}${trailing}` : `${content}\n\n${block.source}`;
+        const answered = [...new Set(args.answers_thread_ids ?? [])];
+        const { thread } = await ctx.client.json<ThreadMutationWire>(
+          loaded.ref,
+          `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads`,
+          {
+            method: 'POST',
+            body: {
+              anchor: buildAnchor(block, undefined),
+              body: args.rationale,
+              proposal: {
+                proposed_text: proposedText,
+                ...(answered.length > 0 ? { answers_thread_ids: answered } : {}),
+              },
+            },
+          },
+        );
+        const notice = await replyInAnsweredThreads(ctx, loaded, thread.id, answered);
+
+        return text(
+          `Created a proposal inserting ${content.split('\n').length} line(s) ${where}.`,
+          `anchored on: block ${block.id}${occurrenceTag(block)} (${block.kind}, lines ` +
+            `${block.startLine}-${block.endLine})`,
+          `thread_id: ${thread.id}  status: open`,
+          `url: ${commentUrl(loaded.ref, thread.id)}`,
+          notice,
+          ...placement.notes,
+          outlineNote(loaded, placement, content),
+          `diff:\n${lineDiff(endLine(block.source), endLine(proposedText))}`,
         );
       }),
   );
@@ -846,6 +929,237 @@ function resolveContext(
   if (args.include_anchor_source === false) return 'none';
   if (args.context_blocks !== undefined) return args.context_blocks;
   return targetId === null ? 'block' : 1;
+}
+
+/** Where `propose_insertion` puts new text, and the block it anchors on. */
+interface InsertionPlacement {
+  anchor: PlacedBlock & { source: string };
+  side: 'after' | 'before';
+  /** "after section Chapter Two", for the result line. */
+  where: string;
+  /** The section the caller named, when they placed by section. */
+  section: DocumentSection | null;
+  notes: string[];
+}
+
+/**
+ * Pick the block a new passage goes next to.
+ *
+ * Always a top-level block: text spliced after a list item's range lands
+ * inside the list, and after a table cell's range inside the row, where
+ * a new heading or paragraph would break the structure around it.
+ */
+function placeInsertion(
+  loaded: LoadedDocument,
+  side: 'after' | 'before',
+  target: {
+    section?: string | undefined;
+    block_id?: string | undefined;
+    anchor_text?: string | undefined;
+    occurrence?: number | undefined;
+  },
+): InsertionPlacement | string {
+  const map = loaded.blocks;
+  const tops = topLevelBlocks(map);
+  const place = (
+    block: PlacedBlock | undefined,
+    where: string,
+    section: DocumentSection | null,
+    notes: string[] = [],
+  ): InsertionPlacement | string =>
+    block
+      ? {
+          anchor: { ...block, source: map.source.slice(block.start, block.end) },
+          side,
+          where,
+          section,
+          notes,
+        }
+      : 'No block of this document could be placed in its source here, so there is nothing to ' +
+        'anchor the insertion on. Name a neighbouring block with block_id instead.';
+
+  if (target.section) {
+    const section = resolveSection(map, target.section);
+    const label = section.path.join(' › ');
+    if (side === 'before') {
+      const heading = tops.find((b) => b.index === section.fromBlock);
+      return place(heading, `before section ${label}`, section);
+    }
+    // By index, not offset: an AsciiDoc block's range runs on over the
+    // blank lines after it, past the section's trimmed end.
+    const inside = tops.filter((b) => sectionContains(section, b));
+    const last = inside[inside.length - 1];
+    return place(
+      last,
+      `after section ${label}`,
+      section,
+      last ? unplacedTail(map, last, section.end) : [],
+    );
+  }
+
+  if (target.block_id || target.anchor_text) {
+    const block = resolveBlock(map, {
+      blockId: target.block_id,
+      anchorText: target.anchor_text,
+      occurrence: target.occurrence,
+    });
+    const enclosing = enclosingTopLevel(map, block);
+    const top = enclosing ? listEdge(map, tops, enclosing, side) : null;
+    const container =
+      top && top.index !== block.index ? (top === enclosing ? top.kind : 'list') : null;
+    const notes = container
+      ? [
+          `note: block ${block.id} is a ${block.kind} inside a ${container}, so the insertion goes ${side} the whole ${container}.`,
+        ]
+      : [];
+    return place(top ?? undefined, `${side} block ${top?.id ?? block.id}`, null, notes);
+  }
+
+  if (tops.length === 0) {
+    return (
+      'The document has no blocks to anchor a proposal on. Write the text with ' +
+      'update_document instead.'
+    );
+  }
+  if (side === 'before') return place(tops[0], 'at the start of the document', null);
+  const last = tops[tops.length - 1] as PlacedBlock;
+  return place(
+    last,
+    'at the end of the document',
+    null,
+    unplacedTail(map, last, map.source.trimEnd().length),
+  );
+}
+
+/**
+ * The first or last item of the list a top-level list item belongs to.
+ *
+ * AsciiDoc's block map has no list block around its items, so a top-level
+ * item is one of a run of them, and text spliced in after any but the last
+ * would split the list in two.
+ */
+function listEdge(
+  map: DocumentBlockMap,
+  tops: PlacedBlock[],
+  block: PlacedBlock,
+  side: 'after' | 'before',
+): PlacedBlock {
+  if (block.kind !== 'listItem') return block;
+  let at = tops.indexOf(block);
+  const step = side === 'after' ? 1 : -1;
+  for (;;) {
+    const current = tops[at] as PlacedBlock;
+    const next = tops[at + step];
+    if (!next || next.kind !== 'listItem') return current;
+    // Blank lines between items do not end an AsciiDoc list.
+    const [from, to] = side === 'after' ? [current.end, next.start] : [next.end, current.start];
+    if (map.source.slice(from, to).trim() !== '') return current;
+    at += step;
+  }
+}
+
+/**
+ * Text between the anchor and where the insertion was meant to go that no
+ * block claims: link definitions, comments, or a block the local walk
+ * failed to place. It stays on the far side of the insertion, and the
+ * caller should know.
+ */
+function unplacedTail(map: DocumentBlockMap, anchor: PlacedBlock, limit: number): string[] {
+  const tail = map.source.slice(anchor.end, limit).trim();
+  if (!tail) return [];
+  return [
+    `note: ${tail.split('\n').length} line(s) of source that form no block of their own follow ` +
+      `block ${anchor.id}, and will come after the insertion: ${JSON.stringify(clip(tail, 80))}`,
+  ];
+}
+
+/**
+ * Warn when an insertion placed by section will not sit in the outline as
+ * a sibling of it. The diff shows the lines but not what they do to the
+ * heading tree, and a chapter proposed one level too deep quietly becomes
+ * a subsection of the chapter before it.
+ */
+function outlineNote(
+  loaded: LoadedDocument,
+  placement: InsertionPlacement,
+  content: string,
+): string | null {
+  const { section } = placement;
+  if (!section) return null;
+  const format = loaded.doc.format;
+  const added = headingLevel(content, format);
+  const level = headingLevel(section.source, format);
+  if (added === null) {
+    const before =
+      placement.side === 'after' ? placement.anchor : loaded.blocks.blocks[section.fromBlock - 1];
+    const host = before ? sectionAt(loaded.blocks, before) : null;
+    return (
+      'note: the new text opens without a heading, so it becomes part of ' +
+      `${host ? `section ${host.path.join(' › ')}` : 'the text before the first heading'} ` +
+      'rather than a section of its own.'
+    );
+  }
+  if (level === null || added === level) return null;
+  return (
+    `note: the new heading is level ${added} and section ${section.path.join(' › ')} is level ` +
+    `${level}, so ${
+      added > level
+        ? 'the insertion nests inside the section before it instead of standing beside it.'
+        : 'the insertion becomes the parent of the sections after it, up to the next heading at its level or above.'
+    }`
+  );
+}
+
+function endLine(source: string): string {
+  return source.endsWith('\n') ? source : `${source}\n`;
+}
+
+/** Drop blank lines from both ends; the first line's indentation is content. */
+function trimBlankLines(source: string): string {
+  return source.replace(/^(?:[ \t]*\n)+/u, '').replace(/\s+$/u, '');
+}
+
+/**
+ * Post the "Addressed in" reply in every comment a new proposal answers,
+ * and say what was linked.
+ *
+ * The proposal already exists by now. If the courtesy back-link fails —
+ * wrong thread id, thread deleted meanwhile — reporting that as a tool
+ * error would invite a retry that creates a second proposal. Report it as
+ * a partial success and name the one step left to do by hand.
+ */
+async function replyInAnsweredThreads(
+  ctx: ToolContext,
+  loaded: LoadedDocument,
+  proposalId: string,
+  answered: string[],
+): Promise<string | null> {
+  if (answered.length === 0) return null;
+  let notice =
+    answered.length === 1
+      ? `Linked to thread ${answered[0]}: it now shows this proposal, and accepting the proposal will resolve it unless another proposal for it is still open.`
+      : `Linked to ${answered.length} threads (${answered.join(', ')}): each now shows this proposal, and accepting it will resolve each one no other open proposal also answers.`;
+  const replyFailures: string[] = [];
+  for (const answeredId of answered) {
+    try {
+      await ctx.client.json<ThreadMutationWire>(
+        loaded.ref,
+        `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads/${encodeURIComponent(answeredId)}/respond`,
+        { method: 'POST', body: { body: `Addressed in edit proposal \`${proposalId}\`.` } },
+      );
+    } catch (err) {
+      // The links are already stored server-side; only the courtesy
+      // replies failed, so this is cosmetic rather than a lost link.
+      replyFailures.push(`${answeredId} (${err instanceof Error ? err.message : String(err)})`);
+    }
+  }
+  notice +=
+    replyFailures.length === 0
+      ? ' Replied there too.'
+      : replyFailures.length === answered.length
+        ? ` (Could not post the reply: ${replyFailures.join('; ')})`
+        : ` Replied in the rest. (Could not post the reply in: ${replyFailures.join('; ')})`;
+  return notice;
 }
 
 /**
