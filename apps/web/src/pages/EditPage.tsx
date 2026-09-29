@@ -22,6 +22,7 @@ import {
   updateDocument,
   uploadAsset,
 } from '../lib/api.js';
+import { appendSource } from '../lib/append-source.js';
 import { loadBlockRanges } from '../lib/block-range-loader.js';
 import { type ChapterScope, resolveChapterScope } from '../lib/chapter-scope.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
@@ -88,6 +89,12 @@ export function EditPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
   const [searchParams] = useSearchParams();
   const chapterBlockId = searchParams.get('chapter');
+  /**
+   * `?append`: the editor starts empty and Save puts what was written after
+   * the document's last line, so adding a chapter to a long document needs
+   * no scrolling to its end.
+   */
+  const appending = !chapterBlockId && searchParams.has('append');
 
   useEffect(() => {
     if (!uid || !token) return;
@@ -95,13 +102,17 @@ export function EditPage() {
     // Strip the token from the address bar synchronously so copy-pasting the
     // URL no longer leaks the bearer credential, even if the claim request is
     // still in flight or the component later re-renders for a different uid.
-    const chapterQuery = chapterBlockId ? `?chapter=${encodeURIComponent(chapterBlockId)}` : '';
-    window.history.replaceState({}, '', `/d/${uid}/edit${chapterQuery}`);
+    const query = chapterBlockId
+      ? `?chapter=${encodeURIComponent(chapterBlockId)}`
+      : appending
+        ? '?append'
+        : '';
+    window.history.replaceState({}, '', `/d/${uid}/edit${query}`);
     claimInvite(uid, token).catch(() => {
       // 400 (admin invite), 409 (password-protected), 404 (invite gone):
       // fall back to invite-header auth via the token in localStorage.
     });
-  }, [uid, token, chapterBlockId]);
+  }, [uid, token, chapterBlockId, appending]);
 
   const navigate = useNavigate();
   const [doc, setDoc] = useState<Document | null>(null);
@@ -124,7 +135,7 @@ export function EditPage() {
   // React Router reuses EditPage when only :uid changes. Reset the complete
   // document-scoped state during render so there is never a committed frame
   // where the previous source can be saved under the new uid.
-  const pageKey = `${uid ?? ''}:${chapterBlockId ?? ''}`;
+  const pageKey = `${uid ?? ''}:${chapterBlockId ?? ''}:${appending}`;
   const [stateKey, setStateKey] = useState(pageKey);
   if (stateKey !== pageKey) {
     setStateKey(pageKey);
@@ -219,24 +230,28 @@ export function EditPage() {
     const referenceSource =
       doc && chapterScope
         ? doc.source.slice(0, chapterScope.start) + source + doc.source.slice(chapterScope.end)
-        : source;
+        : doc && appending
+          ? appendSource(doc.source, source)
+          : source;
     const refs = collectReferencedRefs(referenceSource, doc?.format ?? 'markdown');
     // The book cover is referenced by the document itself rather than by
     // its source, so it would otherwise read as an unreferenced leftover.
     if (doc?.cover) refs.add(doc.cover.ref_name);
     return refs;
-  }, [source, doc, chapterScope]);
+  }, [source, doc, chapterScope, appending]);
 
   useEffect(() => {
     if (!doc) return;
     const previous = document.title;
     document.title = chapterScope
       ? `Editing chapter: ${chapterScope.title} · Marginalia`
-      : `Editing: ${documentTitle(doc)} · Marginalia`;
+      : appending
+        ? `Adding to: ${documentTitle(doc)} · Marginalia`
+        : `Editing: ${documentTitle(doc)} · Marginalia`;
     return () => {
       document.title = previous;
     };
-  }, [doc, chapterScope]);
+  }, [doc, chapterScope, appending]);
 
   useEffect(() => {
     if (!doc) return;
@@ -273,12 +288,12 @@ export function EditPage() {
             return;
           }
         }
-        const initialSource = scope?.source ?? d.source;
+        const initialSource = appending ? '' : (scope?.source ?? d.source);
         setChapterScope(scope);
         setDoc(d);
         setSource(initialSource);
         setSavedSource(initialSource);
-        setRendered(scope ? null : { html: d.rendered.html });
+        setRendered(scope || appending ? null : { html: d.rendered.html });
         setAttached(d.attached_assets ?? []);
       } catch (err) {
         if (cancelled) return;
@@ -290,7 +305,7 @@ export function EditPage() {
     return () => {
       cancelled = true;
     };
-  }, [uid, chapterBlockId]);
+  }, [uid, chapterBlockId, appending]);
 
   // Mirror ViewPage: sync localStorage to the server's authoritative
   // name so the shared UserMenu label and save identity match the
@@ -327,8 +342,12 @@ export function EditPage() {
         // gets a plain editor — no asciidoc grammar bundled, and the
         // markdown grammar mistokenizes `image::foo[]` etc.
         if (markdown) extensions.push(markdown());
-        const state = EditorState.create({ doc: chapterScope?.source ?? doc.source, extensions });
+        const state = EditorState.create({
+          doc: appending ? '' : (chapterScope?.source ?? doc.source),
+          extensions,
+        });
         viewRef.current = new EditorView({ state, parent: editorEl.current });
+        if (appending) viewRef.current.focus();
       },
       (err) => {
         reportError('EditPage.editor', err, { uid });
@@ -341,7 +360,7 @@ export function EditPage() {
       viewRef.current = null;
       wrapCompartmentRef.current = null;
     };
-  }, [doc, uid, chapterScope]);
+  }, [doc, uid, chapterScope, appending]);
 
   // Toggle line wrapping without destroying the editor
   useEffect(() => {
@@ -364,7 +383,13 @@ export function EditPage() {
     // `getDocument()` already includes the authoritative server rendering.
     // Use it immediately and do not load the client renderer until source or
     // attachments actually diverge from that snapshot.
-    if (!chapterScope && doc && source === savedSource && attachedKey === serverAttachedKey) {
+    if (
+      !chapterScope &&
+      !appending &&
+      doc &&
+      source === savedSource &&
+      attachedKey === serverAttachedKey
+    ) {
       setRendered({ html: doc.rendered.html });
       return;
     }
@@ -404,6 +429,7 @@ export function EditPage() {
     serverAttachedKey,
     doc,
     chapterScope,
+    appending,
   ]);
 
   // Sync scrolling between source and preview
@@ -597,6 +623,13 @@ export function EditPage() {
         nextDocumentSource =
           latest.source.slice(0, latestScope.start) + source + latest.source.slice(latestScope.end);
         expectedDocumentSource = latest.source;
+      } else if (appending) {
+        // Appended to what is there now, not to what was loaded: text
+        // saved meanwhile stays, and the check below catches only a save
+        // landing between this read and the write.
+        const latest = await getDocument(targetUid);
+        nextDocumentSource = appendSource(latest.source, source);
+        expectedDocumentSource = latest.source;
       }
       await updateDocument(
         targetUid,
@@ -613,7 +646,9 @@ export function EditPage() {
       reportError('EditPage.save', err, { uid: targetUid });
       if (err instanceof ApiError && err.code === 'document-changed') {
         setError(
-          'The document changed just before your save. Review the latest chapter and try again.',
+          appending
+            ? 'The document changed just before your save. Save again to add your text.'
+            : 'The document changed just before your save. Review the latest chapter and try again.',
         );
       } else if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
       else setError(err instanceof Error ? `Save failed: ${err.message}` : 'Save failed');
@@ -700,7 +735,9 @@ export function EditPage() {
   }
 
   const canSave = canEdit;
-  const canPropose = canEnterEditor;
+  // A proposal replaces a span of the document; adding at its end has
+  // no span to anchor one to.
+  const canPropose = canEnterEditor && !appending;
   const hasChanges = source !== savedSource;
 
   if (error && !doc) {
@@ -734,7 +771,11 @@ export function EditPage() {
       <PasswordPromptDialog docUid={doc.uid} docName={doc.name} />
       <AppBar
         docTitle={`Editing: ${documentTitle(doc)}`}
-        {...(chapterScope ? { contextLabel: `Chapter: ${chapterScope.title}` } : {})}
+        {...(chapterScope
+          ? { contextLabel: `Chapter: ${chapterScope.title}` }
+          : appending
+            ? { contextLabel: 'Adding at the end' }
+            : {})}
         role={doc.role}
         docUid={doc.uid}
         passwordProtected={doc.password_protected}
@@ -847,7 +888,9 @@ export function EditPage() {
               />
             ) : (
               <Text color="gray" size="2" as="p" mx="4" mt="4">
-                Preview…
+                {appending && !source.trim()
+                  ? 'What you write here is added after the last line of the document.'
+                  : 'Preview…'}
               </Text>
             )}
           </div>

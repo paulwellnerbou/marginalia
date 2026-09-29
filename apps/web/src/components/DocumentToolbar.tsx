@@ -10,6 +10,7 @@ import {
   MagnifyingGlassIcon,
   MixerHorizontalIcon,
   Pencil1Icon,
+  PlusIcon,
   Share2Icon,
 } from '@radix-ui/react-icons';
 import { Button, DropdownMenu, Flex, IconButton, Popover, Tooltip } from '@radix-ui/themes';
@@ -35,7 +36,11 @@ import { ReadAloudControls } from './ReadAloudControls.js';
  * statistics, downloads, the admin dialogs.
  */
 const FIT_FULL = 0;
-/** Occasional actions go behind "More"; the bar tightens its spacing. */
+/**
+ * Occasional actions go behind "More"; the bar tightens its spacing. Add
+ * (text at the end) goes with them: handy on a wide screen, not worth a
+ * place on a narrow one.
+ */
 const FIT_FOLDED = 1;
 /** The View button drops its label. */
 const FIT_TIGHT = 2;
@@ -155,6 +160,8 @@ export function DocumentToolbar({
   );
   const folded = fit >= FIT_FOLDED;
   const foldedInto = folded ? moreRef : undefined;
+  const appendHref = editHref && `${editHref}?append`;
+  const editFolded = !!editHref && fit >= FIT_EDIT_FOLDED;
 
   const downloads = useDocumentDownloads({
     doc,
@@ -215,6 +222,13 @@ export function DocumentToolbar({
       {editHref && fit < FIT_EDIT_FOLDED && (
         <Button variant="soft" asChild>
           <Link to={editHref}>Edit</Link>
+        </Button>
+      )}
+      {appendHref && !folded && (
+        <Button variant="soft" asChild>
+          <Link to={appendHref} title="Add text at the end of the document">
+            Add
+          </Link>
         </Button>
       )}
       {canAddDocument && (
@@ -306,12 +320,20 @@ export function DocumentToolbar({
               </>
             ) : (
               <>
-                {editHref && fit >= FIT_EDIT_FOLDED && (
+                {editHref && editFolded && (
+                  <DropdownMenu.Item asChild>
+                    <Link to={editHref}>
+                      <Pencil1Icon />
+                      Edit
+                    </Link>
+                  </DropdownMenu.Item>
+                )}
+                {appendHref && (
                   <>
                     <DropdownMenu.Item asChild>
-                      <Link to={editHref}>
-                        <Pencil1Icon />
-                        Edit
+                      <Link to={appendHref}>
+                        <PlusIcon />
+                        Add at the end
                       </Link>
                     </DropdownMenu.Item>
                     <DropdownMenu.Separator />
