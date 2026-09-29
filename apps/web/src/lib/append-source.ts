@@ -1,11 +1,4 @@
-/**
- * The addition without the blank lines around it: the seam supplies the
- * one blank line it needs. Leading spaces stay, as they can make an
- * indented block.
- */
-function trimAddition(addition: string): string {
-  return addition.replace(/^(?:[ \t]*\n)+/, '').trimEnd();
-}
+import { trimBlankLines } from '@marginalia/renderer/insertion';
 
 /**
  * The document with `addition` after its last line, a blank line between
@@ -13,24 +6,11 @@ function trimAddition(addition: string): string {
  * more of that paragraph, and AsciiDoc does the same.
  */
 export function appendSource(source: string, addition: string): string {
-  const text = trimAddition(addition);
+  const text = trimBlankLines(addition);
   if (!text) return source;
   if (!source.trim()) return `${text}\n`;
   const separator = source.endsWith('\n\n') ? '' : source.endsWith('\n') ? '\n' : '\n\n';
   return `${source}${separator}${text}\n`;
-}
-
-/**
- * A block's source followed by `addition`, for a proposal that appends by
- * extending the document's last block. An AsciiDoc block's range runs on
- * over the blank lines after it; those move past the addition, so the
- * seam holds exactly one.
- */
-export function appendToBlock(block: string, addition: string): string {
-  const text = trimAddition(addition);
-  if (!text) return block;
-  const kept = block.trimEnd();
-  return `${kept}\n\n${text}${block.slice(kept.length)}`;
 }
 
 interface Range {

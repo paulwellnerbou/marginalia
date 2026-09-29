@@ -1,3 +1,4 @@
+import { insertAfterBlock } from '@marginalia/renderer/insertion';
 import type { RenderResult } from '@marginalia/renderer/types';
 import { Button, Container, Flex, Select, Slider, Text } from '@radix-ui/themes';
 import type { EditorView } from 'codemirror';
@@ -22,7 +23,7 @@ import {
   updateDocument,
   uploadAsset,
 } from '../lib/api.js';
-import { appendSource, appendToBlock, firstBlockFrom, lastBlock } from '../lib/append-source.js';
+import { appendSource, firstBlockFrom, lastBlock } from '../lib/append-source.js';
 import { loadBlockRanges } from '../lib/block-range-loader.js';
 import { renderedBlockTexts } from '../lib/block-text.js';
 import { type ChapterScope, resolveChapterScope } from '../lib/chapter-scope.js';
@@ -86,6 +87,8 @@ function attachedAssetKey(assets: readonly AttachedAsset[]): string {
     .sort()
     .join('\u0001');
 }
+
+const NOTHING_TO_APPEND = 'There is nothing to append: write some text first.';
 
 export function EditPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
@@ -589,6 +592,10 @@ export function EditPage() {
 
   async function handleSave(comment: string) {
     if (!uid) return;
+    if (appending && !source.trim()) {
+      setError(NOTHING_TO_APPEND);
+      return;
+    }
     const targetUid = uid;
     const resolved = displayName.trim();
     if (!resolved) {
@@ -674,6 +681,10 @@ export function EditPage() {
 
   async function handleProposeEdit(rationale: string) {
     if (!uid || !doc) return;
+    if (appending && !source.trim()) {
+      setError(NOTHING_TO_APPEND);
+      return;
+    }
     const targetUid = uid;
     const resolved = displayName.trim();
     if (!resolved) {
@@ -701,7 +712,7 @@ export function EditPage() {
         await createEditProposal(
           targetUid,
           {
-            proposed_text: appendToBlock(latest.source.slice(range.start, range.end), source),
+            proposed_text: insertAfterBlock(latest.source.slice(range.start, range.end), source),
             rationale: rationale.trim() || null,
             anchor_block_id: blockId,
             anchor_quote: renderedBlockTexts(latest.rendered.html).get(blockId) ?? range.text,

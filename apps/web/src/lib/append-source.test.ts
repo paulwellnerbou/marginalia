@@ -1,7 +1,7 @@
 /// <reference types="bun" />
 
 import { expect, test } from 'bun:test';
-import { appendSource, appendToBlock, firstBlockFrom, lastBlock } from './append-source.js';
+import { appendSource, firstBlockFrom, lastBlock } from './append-source.js';
 
 test('puts a blank line between the document and the addition', () => {
   expect(appendSource('# Story\n\nText.\n', '## Two\n')).toBe('# Story\n\nText.\n\n## Two\n');
@@ -24,14 +24,6 @@ test('adds nothing for a blank addition', () => {
 
 test('an empty document becomes the addition', () => {
   expect(appendSource('', '# Story')).toBe('# Story\n');
-});
-
-test('extends a block with one blank line before the addition', () => {
-  expect(appendToBlock('Last paragraph.', '\n## Two\n\n')).toBe('Last paragraph.\n\n## Two');
-});
-
-test('moves an AsciiDoc block’s trailing blank lines past the addition', () => {
-  expect(appendToBlock('Last paragraph.\n\n', '== Two')).toBe('Last paragraph.\n\n== Two\n\n');
 });
 
 const ranges = new Map([
