@@ -24,6 +24,7 @@ import {
 } from '../lib/api.js';
 import { appendSource, appendToBlock, firstBlockFrom, lastBlock } from '../lib/append-source.js';
 import { loadBlockRanges } from '../lib/block-range-loader.js';
+import { renderedBlockTexts } from '../lib/block-text.js';
 import { type ChapterScope, resolveChapterScope } from '../lib/chapter-scope.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { documentTitle } from '../lib/doc-title.js';
@@ -703,7 +704,7 @@ export function EditPage() {
             proposed_text: appendToBlock(latest.source.slice(range.start, range.end), source),
             rationale: rationale.trim() || null,
             anchor_block_id: blockId,
-            anchor_quote: range.text,
+            anchor_quote: renderedBlockTexts(latest.rendered.html).get(blockId) ?? range.text,
           },
           identity,
         );
@@ -713,11 +714,10 @@ export function EditPage() {
         return;
       }
       if (chapterScope) {
-        const blocks = await loadBlockRanges(doc.source, doc.format);
-        const quote = chapterScope.blockIds
-          .map((id) => blocks.get(id)?.text ?? '')
-          .filter(Boolean)
-          .join('\n\n');
+        // The heading's text alone, as the viewer and the MCP send for a
+        // span: the server looks for a proposal's quote in its first block,
+        // so the whole chapter's text would orphan it on the next save.
+        const quote = renderedBlockTexts(doc.rendered.html).get(chapterScope.headingBlockId);
         if (!quote) {
           setError('Cannot anchor a proposal to this chapter.');
           return;
