@@ -37,8 +37,8 @@ import { ReadAloudControls } from './ReadAloudControls.js';
  */
 const FIT_FULL = 0;
 /**
- * Occasional actions go behind "More"; the bar tightens its spacing. Add
- * (text at the end) goes with them: handy on a wide screen, not worth a
+ * Occasional actions go behind "More"; the bar tightens its spacing. Append
+ * goes with them: handy on a wide screen, not worth a
  * place on a narrow one.
  */
 const FIT_FOLDED = 1;
@@ -226,8 +226,8 @@ export function DocumentToolbar({
       )}
       {appendHref && !folded && (
         <Button variant="soft" asChild>
-          <Link to={appendHref} title="Add text at the end of the document">
-            Add
+          <Link to={appendHref} title="Append text at the end of the document">
+            Append
           </Link>
         </Button>
       )}
@@ -333,7 +333,7 @@ export function DocumentToolbar({
                     <DropdownMenu.Item asChild>
                       <Link to={appendHref}>
                         <PlusIcon />
-                        Add at the end
+                        Append
                       </Link>
                     </DropdownMenu.Item>
                     <DropdownMenu.Separator />

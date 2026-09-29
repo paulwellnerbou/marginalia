@@ -31,6 +31,7 @@ import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js'
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
 import { reportError } from '../lib/log.js';
 import { openTab } from '../lib/open-tabs.js';
+import { revealOnOpen } from '../lib/pending-reveal.js';
 import { loadRenderer } from '../lib/renderer-loader.js';
 import {
   applyTheme,
@@ -246,7 +247,7 @@ export function EditPage() {
     document.title = chapterScope
       ? `Editing chapter: ${chapterScope.title} · Marginalia`
       : appending
-        ? `Adding to: ${documentTitle(doc)} · Marginalia`
+        ? `Appending to: ${documentTitle(doc)} · Marginalia`
         : `Editing: ${documentTitle(doc)} · Marginalia`;
     return () => {
       document.title = previous;
@@ -601,6 +602,7 @@ export function EditPage() {
       const trimmed = comment.trim();
       let nextDocumentSource = source;
       let expectedDocumentSource: string | undefined;
+      let appendedFrom: number | null = null;
       if (chapterScope) {
         // Re-read immediately before saving so unrelated chapters edited
         // while this editor was open survive. The chapter itself must still
@@ -630,6 +632,7 @@ export function EditPage() {
         const latest = await getDocument(targetUid);
         nextDocumentSource = appendSource(latest.source, source);
         expectedDocumentSource = latest.source;
+        appendedFrom = latest.source.trimEnd().length;
       }
       await updateDocument(
         targetUid,
@@ -639,6 +642,11 @@ export function EditPage() {
         expectedDocumentSource,
       );
       if (activeUidRef.current !== targetUid) return;
+      if (appendedFrom !== null && doc) {
+        const firstAppended = await firstBlockFrom(nextDocumentSource, doc.format, appendedFrom);
+        if (firstAppended) revealOnOpen(targetUid, firstAppended);
+      }
+      if (activeUidRef.current !== targetUid) return;
       setSavedSource(source);
       navigate(`/d/${targetUid}`);
     } catch (err) {
@@ -647,7 +655,7 @@ export function EditPage() {
       if (err instanceof ApiError && err.code === 'document-changed') {
         setError(
           appending
-            ? 'The document changed just before your save. Save again to add your text.'
+            ? 'The document changed just before your save. Save again to append your text.'
             : 'The document changed just before your save. Review the latest chapter and try again.',
         );
       } else if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
@@ -735,8 +743,8 @@ export function EditPage() {
   }
 
   const canSave = canEdit;
-  // A proposal replaces a span of the document; adding at its end has
-  // no span to anchor one to.
+  // A proposal replaces a span of the document; appending has no span
+  // to anchor one to.
   const canPropose = canEnterEditor && !appending;
   const hasChanges = source !== savedSource;
 
@@ -774,7 +782,7 @@ export function EditPage() {
         {...(chapterScope
           ? { contextLabel: `Chapter: ${chapterScope.title}` }
           : appending
-            ? { contextLabel: 'Adding at the end' }
+            ? { contextLabel: 'Appending' }
             : {})}
         role={doc.role}
         docUid={doc.uid}
@@ -889,7 +897,7 @@ export function EditPage() {
             ) : (
               <Text color="gray" size="2" as="p" mx="4" mt="4">
                 {appending && !source.trim()
-                  ? 'What you write here is added after the last line of the document.'
+                  ? 'What you write here is appended after the last line of the document.'
                   : 'Preview…'}
               </Text>
             )}
@@ -898,4 +906,31 @@ export function EditPage() {
       </div>
     </div>
   );
+}
+
+/**
+ * The id of the first block starting at or after `offset`: where appended
+ * text begins once the document is rendered. The outermost block wins a
+ * tie, a list over its first item.
+ */
+async function firstBlockFrom(
+  source: string,
+  format: Document['format'],
+  offset: number,
+): Promise<string | null> {
+  try {
+    const ranges = await loadBlockRanges(source, format);
+    let first: { id: string; start: number; end: number } | null = null;
+    for (const [id, { start, end }] of ranges) {
+      if (start < offset) continue;
+      if (!first || start < first.start || (start === first.start && end > first.end)) {
+        first = { id, start, end };
+      }
+    }
+    return first?.id ?? null;
+  } catch (err) {
+    // The text is saved; only the scroll to it is lost.
+    reportError('EditPage.firstAppendedBlock', err);
+    return null;
+  }
 }
