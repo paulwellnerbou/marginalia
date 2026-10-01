@@ -6,14 +6,15 @@
  * web app's connector form.
  */
 
-export type McpClient = 'claude' | 'codex' | 'gemini' | 'vibe' | 'web' | 'json';
+export type McpClient = 'claude' | 'codex' | 'gemini' | 'vibe' | 'vibe-web' | 'web' | 'json';
 
 export const MCP_CLIENTS: { value: McpClient; label: string }[] = [
   { value: 'claude', label: 'Claude Code' },
   { value: 'codex', label: 'Codex CLI' },
   { value: 'gemini', label: 'Gemini CLI' },
-  { value: 'vibe', label: 'Mistral Vibe' },
-  { value: 'web', label: 'Le Chat, other web apps' },
+  { value: 'vibe', label: 'Mistral Vibe CLI' },
+  { value: 'vibe-web', label: 'Mistral Vibe (web)' },
+  { value: 'web', label: 'Other web apps' },
   { value: 'json', label: 'Other (JSON config)' },
 ];
 
@@ -49,6 +50,12 @@ name = "marginalia"
 transport = "streamable-http"
 url = "${url}"`,
       };
+    case 'vibe-web':
+      return {
+        instruction:
+          'In Vibe, open Context → Connectors → Add Connector → Custom MCP Connector, name it “marginalia” and use this server URL:',
+        text: url,
+      };
     case 'web':
       return {
         instruction: 'Add a custom MCP connector named “marginalia” with this server URL:',
@@ -76,7 +83,6 @@ url = "${url}"`,
  */
 export function guessClient(agentName: string): McpClient {
   const name = agentName.toLowerCase();
-  if (/le ?chat/.test(name)) return 'web';
   if (/mistral|vibe|devstral/.test(name)) return 'vibe';
   if (/codex|gpt|openai/.test(name)) return 'codex';
   if (/gemini/.test(name)) return 'gemini';

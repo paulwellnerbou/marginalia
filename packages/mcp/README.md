@@ -51,7 +51,8 @@ transport = "streamable-http"
 url = "https://marginalia.example.com/mcp"
 ```
 
-Web apps such as Le Chat take the URL as a custom MCP connector.
+Vibe on the web takes the URL as a custom MCP connector (Context → Connectors → Add
+Connector → Custom MCP Connector), as do other web apps.
 
 Everything the agent writes is signed "Claude". Append `?name=Codex` to the URL to change
 that — the server sends it on every request as the same `x-marginalia-client-name` header
