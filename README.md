@@ -316,8 +316,9 @@ claude mcp add --transport http marginalia https://marginalia.example.com/mcp
 ```
 
 Every document has an **MCP** tab in its right-hand pane that generates
-that command (and the JSON equivalent) along with an access link for the
-agent. Access works the same way it does for people — mint the agent its
+the setup for the agent's client — Claude Code, Codex, Gemini CLI,
+Mistral Vibe (CLI or web), a web app's connector form, or plain JSON config — along
+with an access link for the agent. Access works the same way it does for people — mint the agent its
 own `collaborator` link, so it can suggest everything and decide nothing.
 
 `packages/mcp` also runs standalone over stdio, which is what you want

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { connectionSnippet, guessClient, type McpClient } from '../src/lib/mcp-connection.js';
 
 /**
  * The MCP tab hands out a command to paste into a shell, and the URL it
@@ -19,14 +20,31 @@ describe('generated CLI command', () => {
     return out.trim().split('\n').filter(Boolean);
   }
 
-  test('quoted, the URL arrives as one intact argument', async () => {
-    const args = await argsOf(`claude mcp add --transport http marginalia '${url}'`);
-    expect(args[args.length - 1]).toBe(url);
-  });
+  for (const client of ['claude', 'codex', 'gemini'] satisfies McpClient[]) {
+    test(`${client}: the URL arrives as one intact argument`, async () => {
+      const args = await argsOf(connectionSnippet(client, url).text);
+      expect(args[0]).toBe(client);
+      expect(args).toContain(url);
+    });
+  }
 
   test('unquoted, the shell breaks the command apart', async () => {
     // Not merely a truncated URL: the `&` backgrounds everything before
     // it, so the command never takes effect in the shell at all.
     expect(await argsOf(`claude mcp add --transport http marginalia ${url}`)).toEqual([]);
+  });
+});
+
+describe('guessClient', () => {
+  test('an agent named after a model gets that vendor’s client', () => {
+    expect(guessClient('Mistral')).toBe('vibe');
+    expect(guessClient('Vibe')).toBe('vibe');
+    expect(guessClient('Codex')).toBe('codex');
+    expect(guessClient('Gemini')).toBe('gemini');
+    expect(guessClient('Claude')).toBe('claude');
+  });
+
+  test('an unrecognised name gets the client-neutral config', () => {
+    expect(guessClient('Reviewer')).toBe('json');
   });
 });

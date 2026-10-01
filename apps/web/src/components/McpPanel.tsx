@@ -1,18 +1,15 @@
 import { DEFAULT_AGENT_NAME, normalizeAgentName } from '@marginalia/mcp/identity';
-import {
-  Badge,
-  Box,
-  Button,
-  Callout,
-  Flex,
-  SegmentedControl,
-  Text,
-  TextField,
-} from '@radix-ui/themes';
+import { Badge, Box, Button, Callout, Flex, Select, Text, TextField } from '@radix-ui/themes';
 import { useCallback, useEffect, useState } from 'react';
 import { createInvite, type Invite, listInvites } from '../lib/api.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
+import {
+  connectionSnippet,
+  guessClient,
+  MCP_CLIENTS,
+  type McpClient,
+} from '../lib/mcp-connection.js';
 import { Copyable } from './Copyable.js';
 
 interface Props {
@@ -20,8 +17,6 @@ interface Props {
   /** Only an admin can mint the agent's access link. */
   canManageInvites: boolean;
 }
-
-type Setup = 'cli' | 'json';
 
 /**
  * Marks an invite as belonging to an agent rather than a person. Without
@@ -41,7 +36,8 @@ const AGENT_NOTE = 'AI agent';
 export function McpPanel({ uid, canManageInvites }: Props) {
   const [invites, setInvites] = useState<Invite[] | null>(null);
   const [agentName, setAgentName] = useState(DEFAULT_AGENT_NAME);
-  const [setup, setSetup] = useState<Setup>('cli');
+  // Per invite token; unset means the guess from the agent's name.
+  const [clients, setClients] = useState<Record<string, McpClient>>({});
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,7 +81,7 @@ export function McpPanel({ uid, canManageInvites }: Props) {
       // the mention on its first visit. The cost is that a named invite
       // seeds its own display name onto a new client's first request, so
       // the connection URL below always carries this same name; see
-      // `connectionFor`.
+      // `connectionUrl`.
       await createInvite(
         uid,
         { kind: 'named', display_name: name, role: 'collaborator', note: AGENT_NOTE },
@@ -103,7 +99,7 @@ export function McpPanel({ uid, canManageInvites }: Props) {
   const origin = window.location.origin;
 
   /**
-   * The connection string for one agent.
+   * The connection URL for one agent.
    *
    * `?name=` is taken from the invite, never from the name field: a
    * named invite seeds its own display name onto the agent's first
@@ -111,10 +107,7 @@ export function McpPanel({ uid, canManageInvites }: Props) {
    * signed with the invite's name and everything after it with the URL's.
    * Deriving one from the other makes that impossible.
    */
-  function connectionFor(
-    inviteName: string,
-    token: string,
-  ): { url: string; cli: string; json: string } {
+  function connectionUrl(inviteName: string, token: string): string {
     const params = new URLSearchParams();
     if (inviteName !== DEFAULT_AGENT_NAME) params.set('name', inviteName);
     // Carrying the token on the connection means any reference to this
@@ -122,22 +115,7 @@ export function McpPanel({ uid, canManageInvites }: Props) {
     // copied comment link, say. An explicit token in a pasted URL still
     // wins over it.
     params.set('token', token);
-    const url = `${origin}/mcp?${params.toString()}`;
-    return {
-      url,
-      // Quoted: the URL carries `&token=`, and an unquoted `&` in a
-      // shell backgrounds everything before it and runs the rest as a
-      // separate command — the token would silently go missing.
-      cli: `claude mcp add --transport http marginalia '${url}'`,
-      json: `{
-  "mcpServers": {
-    "marginalia": {
-      "type": "http",
-      "url": "${url}"
-    }
-  }
-}`,
-    };
+    return `${origin}/mcp?${params.toString()}`;
   }
 
   return (
@@ -215,20 +193,10 @@ export function McpPanel({ uid, canManageInvites }: Props) {
         — the agent just needs the URL.
       </Text>
 
-      <SegmentedControl.Root
-        size="1"
-        value={setup}
-        onValueChange={(v) => setSetup(v as Setup)}
-        mb="3"
-      >
-        <SegmentedControl.Item value="cli">Command line</SegmentedControl.Item>
-        <SegmentedControl.Item value="json">Config file</SegmentedControl.Item>
-      </SegmentedControl.Root>
-
       {agentInvites.length === 0 ? (
         <Callout.Root size="1" color="gray">
           <Callout.Text>
-            Create an access link above and the exact command for it appears here.
+            Create an access link above and the exact setup for it appears here.
           </Callout.Text>
         </Callout.Root>
       ) : (
@@ -236,20 +204,38 @@ export function McpPanel({ uid, canManageInvites }: Props) {
           // Normalize on read too: `?name=` has to match what the server
           // derives from it, whatever is stored.
           const inviteName = normalizeAgentName(invite.display_name);
-          const connection = connectionFor(inviteName, invite.token);
+          const client = clients[invite.token] ?? guessClient(inviteName);
+          const snippet = connectionSnippet(client, connectionUrl(inviteName, invite.token));
           return (
             <Box key={invite.token} mb="4">
               <Text as="p" size="2" weight="bold" mb="1">
                 {inviteName}
               </Text>
+              <Flex align="center" gap="2" mb="2">
+                <Text as="label" size="1" color="gray" htmlFor={`mcp-client-${invite.token}`}>
+                  Connect it from
+                </Text>
+                <Select.Root
+                  size="1"
+                  value={client}
+                  onValueChange={(v) =>
+                    setClients((prev) => ({ ...prev, [invite.token]: v as McpClient }))
+                  }
+                >
+                  <Select.Trigger id={`mcp-client-${invite.token}`} />
+                  <Select.Content>
+                    {MCP_CLIENTS.map((c) => (
+                      <Select.Item key={c.value} value={c.value}>
+                        {c.label}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+              </Flex>
               <Text as="p" size="1" color="gray" mb="1">
-                Connect it:
+                {snippet.instruction}
               </Text>
-              <Copyable
-                text={setup === 'cli' ? connection.cli : connection.json}
-                multiline
-                size="1"
-              />
+              <Copyable text={snippet.text} multiline size="1" />
               <Text as="p" size="1" color="gray" mt="2" mb="1">
                 Then give it this link to the document:
               </Text>
