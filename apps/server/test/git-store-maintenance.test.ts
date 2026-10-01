@@ -177,7 +177,7 @@ Para C baseline.
         author,
       );
       const merged = await tuned.mergeProposalBranch(reviewed, `p-${i}`, author);
-      expect(merged.ok).toBe(true);
+      expect(merged).toMatchObject({ ok: true });
     }
     await tuned.whenMaintenanceSettled();
 
