@@ -76,7 +76,8 @@ url = "${url}"`,
  */
 export function guessClient(agentName: string): McpClient {
   const name = agentName.toLowerCase();
-  if (/mistral|vibe|devstral|le ?chat/.test(name)) return 'vibe';
+  if (/le ?chat/.test(name)) return 'web';
+  if (/mistral|vibe|devstral/.test(name)) return 'vibe';
   if (/codex|gpt|openai/.test(name)) return 'codex';
   if (/gemini/.test(name)) return 'gemini';
   if (/claude/.test(name)) return 'claude';

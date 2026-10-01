@@ -38,6 +38,7 @@ describe('generated CLI command', () => {
 describe('guessClient', () => {
   test('an agent named after a model gets that vendor’s client', () => {
     expect(guessClient('Mistral')).toBe('vibe');
+    expect(guessClient('Le Chat')).toBe('web');
     expect(guessClient('Codex')).toBe('codex');
     expect(guessClient('Gemini')).toBe('gemini');
     expect(guessClient('Claude')).toBe('claude');
