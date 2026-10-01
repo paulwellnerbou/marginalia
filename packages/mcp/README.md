@@ -41,6 +41,17 @@ or, in `.mcp.json` / your client's MCP settings:
 ```
 
 Codex: `codex mcp add marginalia --url https://marginalia.example.com/mcp`.
+Gemini CLI: `gemini mcp add --transport http marginalia https://marginalia.example.com/mcp`.
+Mistral Vibe has no `mcp add`; append to `~/.vibe/config.toml`:
+
+```toml
+[[mcp_servers]]
+name = "marginalia"
+transport = "streamable-http"
+url = "https://marginalia.example.com/mcp"
+```
+
+Web apps such as Le Chat take the URL as a custom MCP connector.
 
 Everything the agent writes is signed "Claude". Append `?name=Codex` to the URL to change
 that — the server sends it on every request as the same `x-marginalia-client-name` header
