@@ -1,14 +1,28 @@
 import { DEFAULT_AGENT_NAME, normalizeAgentName } from '@marginalia/mcp/identity';
-import { Badge, Box, Button, Callout, Flex, Select, Text, TextField } from '@radix-ui/themes';
+import {
+  Badge,
+  Box,
+  Button,
+  Callout,
+  Flex,
+  SegmentedControl,
+  Select,
+  Text,
+  TextField,
+} from '@radix-ui/themes';
 import { useCallback, useEffect, useState } from 'react';
 import { createInvite, type Invite, listInvites } from '../lib/api.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import {
-  connectionSnippet,
+  CLAUDE_SCOPES,
+  type ClaudeScope,
+  connectionSetups,
   guessClient,
   MCP_CLIENTS,
   type McpClient,
+  SETUP_LABELS,
+  type Setup,
 } from '../lib/mcp-connection.js';
 import { Copyable } from './Copyable.js';
 
@@ -38,6 +52,9 @@ export function McpPanel({ uid, canManageInvites }: Props) {
   const [agentName, setAgentName] = useState(DEFAULT_AGENT_NAME);
   // Per invite token; unset means the guess from the agent's name.
   const [clients, setClients] = useState<Record<string, McpClient>>({});
+  // Shared by every agent; a client without this kind of setup shows its first.
+  const [setup, setSetup] = useState<Setup>('cli');
+  const [claudeScope, setClaudeScope] = useState<ClaudeScope>('local');
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -205,7 +222,13 @@ export function McpPanel({ uid, canManageInvites }: Props) {
           // derives from it, whatever is stored.
           const inviteName = normalizeAgentName(invite.display_name);
           const client = clients[invite.token] ?? guessClient(inviteName);
-          const snippet = connectionSnippet(client, connectionUrl(inviteName, invite.token));
+          const setups = connectionSetups(
+            client,
+            connectionUrl(inviteName, invite.token),
+            claudeScope,
+          );
+          const snippet = setups.find((s) => s.setup === setup) ?? setups[0];
+          const showScope = client === 'claude' && snippet.setup === 'cli';
           return (
             <Box key={invite.token} mb="4">
               <Text as="p" size="2" weight="bold" mb="1">
@@ -223,7 +246,7 @@ export function McpPanel({ uid, canManageInvites }: Props) {
                   }
                 >
                   <Select.Trigger id={`mcp-client-${invite.token}`} />
-                  <Select.Content>
+                  <Select.Content position="popper">
                     {MCP_CLIENTS.map((c) => (
                       <Select.Item key={c.value} value={c.value}>
                         {c.label}
@@ -232,10 +255,53 @@ export function McpPanel({ uid, canManageInvites }: Props) {
                   </Select.Content>
                 </Select.Root>
               </Flex>
+              {setups.length > 1 && (
+                <SegmentedControl.Root
+                  size="1"
+                  value={snippet.setup}
+                  onValueChange={(v) => setSetup(v as Setup)}
+                  mb="2"
+                >
+                  {setups.map((s) => (
+                    <SegmentedControl.Item key={s.setup} value={s.setup}>
+                      {SETUP_LABELS[s.setup]}
+                    </SegmentedControl.Item>
+                  ))}
+                </SegmentedControl.Root>
+              )}
+              {showScope && (
+                <Flex align="center" gap="2" mb="2" wrap="wrap">
+                  <Text as="label" size="1" color="gray" htmlFor={`mcp-scope-${invite.token}`}>
+                    Scope
+                  </Text>
+                  <Select.Root
+                    size="1"
+                    value={claudeScope}
+                    onValueChange={(v) => setClaudeScope(v as ClaudeScope)}
+                  >
+                    <Select.Trigger id={`mcp-scope-${invite.token}`} />
+                    <Select.Content position="popper">
+                      {CLAUDE_SCOPES.map((s) => (
+                        <Select.Item key={s.value} value={s.value}>
+                          {s.label}
+                        </Select.Item>
+                      ))}
+                    </Select.Content>
+                  </Select.Root>
+                  <Text size="1" color="gray">
+                    {CLAUDE_SCOPES.find((s) => s.value === claudeScope)?.description}
+                  </Text>
+                </Flex>
+              )}
               <Text as="p" size="1" color="gray" mb="1">
                 {snippet.instruction}
               </Text>
               <Copyable text={snippet.text} multiline size="1" />
+              {snippet.note && (
+                <Text as="p" size="1" color="orange" mt="1">
+                  {snippet.note}
+                </Text>
+              )}
               <Text as="p" size="1" color="gray" mt="2" mb="1">
                 Then give it this link to the document:
               </Text>
