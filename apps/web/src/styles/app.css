@@ -5704,6 +5704,18 @@ span.ic-bookmark-card-quote {
   border-left: 3px solid var(--ui-border);
   color: var(--ui-fg-muted);
 }
+.ic-row-body ul,
+.ic-row-body ol {
+  margin: 0.3rem 0;
+}
+/* A body that opens or closes on a list or quote would otherwise start
+   with a blank band that also eats into the clamped lines. */
+.ic-body-clip > div > :first-child {
+  margin-top: 0;
+}
+.ic-body-clip > div > :last-child {
+  margin-bottom: 0;
+}
 
 .ic-row-actions {
   display: flex;
