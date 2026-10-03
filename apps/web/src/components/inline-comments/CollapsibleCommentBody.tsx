@@ -43,7 +43,10 @@ export function CollapsibleCommentBody({ children, threadRefs }: Props) {
     const content = contentRef.current;
     if (!clip || !content) return;
 
-    const measure = () => setClipped(isClipped(content.scrollHeight, clip.clientHeight));
+    // The clip's scrollHeight, not the content's: a leading list or
+    // blockquote's margin collapses out of the content box but still
+    // takes room inside the clip, which is a block formatting context.
+    const measure = () => setClipped(isClipped(clip.scrollHeight, clip.clientHeight));
     measure();
 
     if (typeof ResizeObserver === 'undefined') return;
