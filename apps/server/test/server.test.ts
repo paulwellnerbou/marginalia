@@ -4273,8 +4273,33 @@ describe('documents API', () => {
     expect(packageXml).toContain('<dc:title>The Salt Road</dc:title>');
     const firstChapter = await zip.file('EPUB/chapter-001.xhtml')!.async('string');
     expect(firstChapter).toContain('class="epub-hr-ornament"');
-    expect(firstChapter).toContain('360,20 374,36 360,52 346,36');
+    expect(firstChapter).toMatch(/class="epub-hr-ornament"[^>]*>\s*<path[^>]*\sd="M30 37\b/);
     expect(firstChapter).not.toContain('<hr');
+  });
+
+  test('POST /:uid/export.epub picks the scene-break ornament by theme', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown: '# Breaks\n\n## One\n\nFirst.\n\n---\n\nSecond.\n',
+    });
+    const chapterFor = async (theme: string) => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${created.uid}/export.epub?theme=${theme}`, {
+          method: 'POST',
+          headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+        }),
+      );
+      expect(res.status).toBe(200);
+      const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+      return zip.file('EPUB/chapter-001.xhtml')!.async('string');
+    };
+
+    const document = await chapterFor('book');
+    expect(document).toMatch(/class="epub-hr-ornament"[^>]*>\s*<path[^>]*\sd="M60 36\.3\b/);
+    expect(document).not.toContain('<hr');
+
+    const plain = await chapterFor('default');
+    expect(plain).not.toContain('epub-hr-ornament');
+    expect(plain).toContain('<hr');
   });
 
   test('POST /:uid/export.epub embeds an uploaded raster cover', async () => {
