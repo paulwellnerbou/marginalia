@@ -4273,7 +4273,7 @@ describe('documents API', () => {
     expect(packageXml).toContain('<dc:title>The Salt Road</dc:title>');
     const firstChapter = await zip.file('EPUB/chapter-001.xhtml')!.async('string');
     expect(firstChapter).toContain('class="epub-hr-ornament"');
-    expect(firstChapter).toContain('360,20 374,36 360,52 346,36');
+    expect(firstChapter).toContain('<path fill="currentColor" d="M30 37 ');
     expect(firstChapter).not.toContain('<hr');
   });
 
