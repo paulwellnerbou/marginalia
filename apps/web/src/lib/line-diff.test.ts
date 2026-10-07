@@ -74,6 +74,70 @@ test('word-diffs a rewrite that the diff separated from its original by a blank 
   expect(changedWords(rewrite)).toEqual(['dawn']);
 });
 
+const changedText = (line?: DiffLine) =>
+  line?.segments?.filter((segment) => segment.changed).map((segment) => segment.text.trim());
+
+test('word-diffs a split paragraph against both of its halves', () => {
+  const before = [
+    'Head',
+    'She locks the stable door behind her. The yard is empty and the lamps are already lit.',
+    'Tail',
+  ];
+  const after = [
+    'Head',
+    'She locks the stable door behind her and stands a while in the cold.',
+    '',
+    'Outside, the yard is empty and the lamps are already lit.',
+    'Tail',
+  ];
+
+  const lines = diffLines(before.join('\n'), after.join('\n'));
+  const removed = lines.find((line) => line.op === 'remove');
+  const first = lines.find((line) => line.op === 'add' && line.text.startsWith('She'));
+  const second = lines.find((line) => line.op === 'add' && line.text.startsWith('Outside'));
+
+  expect(changedText(removed)).toEqual(['The']);
+  expect(changedText(first)).toEqual(['and stands a while in the cold']);
+  expect(changedText(second)).toEqual(['Outside,', 'the']);
+});
+
+test('word-diffs a merged paragraph against both of its sources', () => {
+  const before = [
+    'Head',
+    'She locks the stable door behind her.',
+    '',
+    'The yard is empty and the lamps are already lit.',
+    'Tail',
+  ];
+  const after = [
+    'Head',
+    'She locks the stable door behind her; the yard is empty and the lamps are already lit.',
+    'Tail',
+  ];
+
+  const lines = diffLines(before.join('\n'), after.join('\n'));
+  const removed = lines.filter((line) => line.op === 'remove' && line.text);
+  const added = lines.find((line) => line.op === 'add');
+
+  expect(removed.map(changedText)).toEqual([['.'], ['The']]);
+  expect(changedText(added)).toEqual([';', 'the']);
+});
+
+test('does not fold an unrelated new paragraph into a neighbouring rewrite', () => {
+  const before = ['Head', 'The cold wakes him before the alarm does.', 'Tail'];
+  const after = [
+    'Head',
+    'Rain on the roof, and the smell of wet straw.',
+    'The cold wakes him before dawn does.',
+    'Tail',
+  ];
+
+  const lines = diffLines(before.join('\n'), after.join('\n'));
+  const inserted = lines.find((line) => line.op === 'add' && line.text.startsWith('Rain'));
+
+  expect(inserted?.segments).toBeUndefined();
+});
+
 test('leaves a wholly rewritten line unpaired instead of matching stray words', () => {
   const before = 'Alpha keeps this part\nThe cold wakes him before the alarm does.';
   const after = 'Alpha keeps this part\nRain, and the smell of wet straw.';

@@ -37,6 +37,11 @@ const PAIRING_MAX_CELLS = 10_000;
  *  so a rewritten line renders as a whole-line change instead of a scattering
  *  of coincidental word matches. */
 const PAIRING_MIN_SIMILARITY = 0.3;
+/** Consecutive tokens a neighbouring line must share verbatim with a pair to
+ *  join it as the other half of a split or merged paragraph. A run, not an
+ *  overlap ratio, because the half that kept its sentence is often mostly new
+ *  text, and common words alone match just as often by chance. */
+const SPLIT_MIN_SHARED_RUN = 5;
 
 export function diffLines(before: string, after: string): DiffLine[] {
   const a = before.split('\n');
@@ -85,10 +90,13 @@ function annotateInlineDiffs(lines: DiffLine[]): void {
       else if (line.op === 'add') adds.push(line);
     }
 
-    for (const [removeLine, addLine] of pairLines(removes, adds)) {
-      const inline = diffInline(removeLine.text, addLine.text);
-      removeLine.segments = inline.before;
-      addLine.segments = inline.after;
+    for (const group of growPairs(removes, adds, pairLines(removes, adds))) {
+      const inline = diffInline(
+        group.removes.map((line) => line.text).join('\n'),
+        group.adds.map((line) => line.text).join('\n'),
+      );
+      assignSegments(group.removes, inline.before);
+      assignSegments(group.adds, inline.after);
     }
 
     blockStart = blockEnd;
@@ -154,6 +162,87 @@ function pairLines(removes: DiffLine[], adds: DiffLine[]): Array<[DiffLine, Diff
     }
   }
   return pairs;
+}
+
+interface RewriteGroup {
+  removes: DiffLine[];
+  adds: DiffLine[];
+}
+
+/**
+ * Widens each pair to the unpaired lines beside it that carry part of its text,
+ * so a paragraph split in two — or two merged into one — is word-diffed against
+ * all of where its words went. Paired one-to-one, the sentence that moved to
+ * the other half shows as deleted, and that half shows as wholly new.
+ */
+function growPairs(
+  removes: DiffLine[],
+  adds: DiffLine[],
+  pairs: Array<[DiffLine, DiffLine]>,
+): RewriteGroup[] {
+  const claimed = new Set<DiffLine>(pairs.flat());
+  return pairs.map(([removeLine, addLine]) => {
+    const group: RewriteGroup = { removes: [removeLine], adds: [addLine] };
+    absorbNeighbours(group.adds, adds, group.removes, claimed);
+    absorbNeighbours(group.removes, removes, group.adds, claimed);
+    return group;
+  });
+}
+
+function absorbNeighbours(
+  members: DiffLine[],
+  side: DiffLine[],
+  partners: DiffLine[],
+  claimed: Set<DiffLine>,
+): void {
+  const partnerRuns = tokenRuns(partners.map((line) => line.text).join('\n'));
+  const absorb = (from: number, step: -1 | 1) => {
+    for (let i = from + step; i >= 0 && i < side.length; i += step) {
+      const line = side[i]!;
+      if (!line.text.trim()) continue;
+      if (claimed.has(line) || !sharesRun(line.text, partnerRuns)) return;
+      claimed.add(line);
+      if (step < 0) members.unshift(line);
+      else members.push(line);
+    }
+  };
+  absorb(side.indexOf(members[0]!), -1);
+  absorb(side.indexOf(members.at(-1)!), 1);
+}
+
+function runTokens(text: string): string[] {
+  return tokenizeInline(text).filter((token) => token.trim());
+}
+
+function tokenRuns(text: string): Set<string> {
+  const tokens = runTokens(text);
+  const runs = new Set<string>();
+  for (let i = 0; i + SPLIT_MIN_SHARED_RUN <= tokens.length; i++) {
+    runs.add(tokens.slice(i, i + SPLIT_MIN_SHARED_RUN).join('\0'));
+  }
+  return runs;
+}
+
+function sharesRun(text: string, runs: Set<string>): boolean {
+  const tokens = runTokens(text);
+  for (let i = 0; i + SPLIT_MIN_SHARED_RUN <= tokens.length; i++) {
+    if (runs.has(tokens.slice(i, i + SPLIT_MIN_SHARED_RUN).join('\0'))) return true;
+  }
+  return false;
+}
+
+/** Deals a group's segments back out to its lines, which were joined by "\n". */
+function assignSegments(lines: DiffLine[], segments: DiffSegment[]): void {
+  const perLine: DiffSegment[][] = [[]];
+  for (const segment of segments) {
+    segment.text.split('\n').forEach((part, index) => {
+      if (index > 0) perLine.push([]);
+      pushSegment(perLine.at(-1)!, segment.changed, part);
+    });
+  }
+  lines.forEach((line, index) => {
+    line.segments = perLine[index] ?? [];
+  });
 }
 
 interface TokenBag {
