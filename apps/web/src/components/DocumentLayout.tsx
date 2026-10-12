@@ -73,6 +73,16 @@ import {
   bookmarkMarkerSpecs,
   bookmarkMarking,
 } from '../lib/bookmark-markers.js';
+import {
+  anchorInChapter,
+  CHAPTER_HIDDEN_ATTR,
+  chapterIndexOf,
+  chapterNodes,
+  clearChapterView,
+  REVEAL_CHAPTER_EVENT,
+  revealChapterOf,
+  showChapter,
+} from '../lib/chapter-reading.js';
 import { buildCommentHighlights } from '../lib/comment-highlights.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
@@ -94,6 +104,7 @@ import {
   pageIndexAt,
   pageIndexOfElement,
   pageIndexOfOffset,
+  revealElement,
 } from '../lib/paged-reading.js';
 import { partitionPendingMentions } from '../lib/pending-mentions.js';
 import { takeRevealOnOpen } from '../lib/pending-reveal.js';
@@ -135,6 +146,7 @@ import { usePagedReading } from '../lib/usePagedReading.js';
 import { ActivityList } from './ActivityList.js';
 import { AppBar } from './AppBar.js';
 import { BlockActions } from './BlockActions.js';
+import { ChapterPager } from './ChapterPager.js';
 import { DisplayStepper } from './DisplayStepper.js';
 import {
   type DocumentSearchResult,
@@ -172,6 +184,8 @@ const INLINE_COMMENTS_STACKING_KEY = 'marginalia.inlineCommentsStacking';
 const INLINE_COMMENTS_HIDE_RESOLVED_KEY = 'marginalia.inlineCommentsHideResolved';
 const COMMENTS_DISPLAY_MODE_KEY = 'marginalia.commentsDisplayMode';
 const READING_MODE_KEY = 'marginalia.readingMode';
+/** Per document: the heading id of the chapter last on screen in chapter reading. */
+const CHAPTER_KEY_PREFIX = 'marginalia.chapter.';
 const RIGHT_TAB_KEY = 'marginalia.rightTab';
 const COLLAPSED_WIDTH = 36;
 /**
@@ -270,8 +284,32 @@ interface ThreadFocusTarget {
 /** How comment threads render in the document pane: a margin column, or floating cards over the text. */
 type CommentsDisplayMode = 'column' | 'floating';
 
-/** How the document advances: continuous scrolling, or discrete pages like an e-reader. */
-type ReadingMode = 'scroll' | 'paged';
+/**
+ * How the document advances: continuous scrolling, discrete pages like an
+ * e-reader, or one chapter at a time, scrolled.
+ */
+type ReadingMode = 'scroll' | 'paged' | 'chapters';
+
+function storedReadingMode(): ReadingMode {
+  const saved = localStorage.getItem(READING_MODE_KEY);
+  return saved === 'paged' || saved === 'chapters' ? saved : 'scroll';
+}
+
+/**
+ * The chapter on screen in chapter reading, for one document. Held by
+ * heading id so a chapter inserted ahead of it doesn't move the reader,
+ * with the index as the fallback for when an edit renames the heading
+ * out from under them.
+ */
+interface ChapterChoice {
+  docUid: string;
+  id: string | null;
+  index: number;
+}
+
+function storedChapterChoice(docUid: string): ChapterChoice {
+  return { docUid, id: localStorage.getItem(CHAPTER_KEY_PREFIX + docUid), index: 0 };
+}
 
 type RightTab = 'comments' | 'history' | 'search' | 'activities' | 'mcp' | 'bookmarks';
 
@@ -412,9 +450,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       return saved === 'floating' || saved === 'column' ? saved : null;
     },
   );
-  const [readingMode, setReadingMode] = useState<ReadingMode>(() =>
-    localStorage.getItem(READING_MODE_KEY) === 'paged' ? 'paged' : 'scroll',
-  );
+  const [readingMode, setReadingMode] = useState<ReadingMode>(storedReadingMode);
   /**
    * Set when this engine turns out not to paint the sideways pagination
    * (see the effect below), which switches the reader to vertical pages.
@@ -423,6 +459,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    */
   const [tooWideForPages, setTooWideForPages] = useState(false);
   const paged = readingMode === 'paged';
+  const chapterMode = readingMode === 'chapters';
   /** Pages run down the screen rather than across — same mode, other axis. */
   const pagedVertical = paged && tooWideForPages;
   const commentsDisplayMode: CommentsDisplayMode =
@@ -1175,6 +1212,117 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   const headingIds = useMemo(() => flattenTocIds(liveRendered.toc), [liveRendered.toc]);
   const headingIdSet = useMemo(() => new Set(headingIds), [headingIds]);
 
+  const chapters = useMemo(
+    () => chapterNodes(liveRendered.toc, liveRendered.frontmatter),
+    [liveRendered.toc, liveRendered.frontmatter],
+  );
+  const chapterIndexById = useMemo(
+    () => new Map(chapters.map((chapter, index) => [chapter.id, index])),
+    [chapters],
+  );
+  /** Chapter reading with something to step through: one chapter is just the document. */
+  const chapterReading = chapterMode && chapters.length > 1;
+  const [chapterChoice, setChapterChoice] = useState<ChapterChoice>(() =>
+    storedChapterChoice(doc.uid),
+  );
+  if (chapterChoice.docUid !== doc.uid) setChapterChoice(storedChapterChoice(doc.uid));
+  const chapterIndex = useMemo(() => {
+    const found = chapterChoice.id === null ? -1 : (chapterIndexById.get(chapterChoice.id) ?? -1);
+    return found >= 0 ? found : Math.min(chapterChoice.index, Math.max(chapters.length - 1, 0));
+  }, [chapterChoice, chapterIndexById, chapters.length]);
+  const currentChapterId = chapters[chapterIndex]?.id ?? null;
+
+  // Keep the choice in step with the chapter on screen: its index current
+  // while the heading resolves, so an edit renaming that heading falls back
+  // to where the reader is rather than to wherever the choice was loaded
+  // from, and the renamed heading's id adopted once it has.
+  useEffect(() => {
+    if (!chapterReading || !currentChapterId || chapterChoice.docUid !== doc.uid) return;
+    if (chapterChoice.id === currentChapterId && chapterChoice.index === chapterIndex) return;
+    setChapterChoice({ docUid: doc.uid, id: currentChapterId, index: chapterIndex });
+  }, [chapterReading, chapterChoice, currentChapterId, chapterIndex, doc.uid]);
+
+  useEffect(() => {
+    if (chapterReading && currentChapterId) {
+      localStorage.setItem(CHAPTER_KEY_PREFIX + doc.uid, currentChapterId);
+    }
+  }, [chapterReading, currentChapterId, doc.uid]);
+
+  /** The chapter headings the view last hid against, for the pager to swap with synchronously. */
+  const chapterHeadingsRef = useRef<HTMLElement[]>([]);
+  const wasChapterReading = useRef(false);
+  const readingHeadingIdRef = useRef(activeHeadingId);
+  readingHeadingIdRef.current = activeHeadingId;
+
+  /**
+   * Hide everything outside the chapter on screen, and swap chapters for
+   * any navigation that reaches into a hidden one — TOC, search, links,
+   * comment jumps, read-aloud all announce that through
+   * `REVEAL_CHAPTER_EVENT` before they measure.
+   */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: liveRendered.html re-applies against the fresh DOM after an innerHTML rewrite or a patched-in block.
+  useEffect(() => {
+    const root = docRef.current;
+    const scroll = docScrollRef.current;
+    const entering = chapterReading && !wasChapterReading.current;
+    const leaving = !chapterReading && wasChapterReading.current;
+    wasChapterReading.current = chapterReading;
+    if (!root) return;
+
+    const headingOf = (id: string) => root.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`);
+    const found = chapters.map((chapter) => headingOf(chapter.id));
+    const headings = found.filter((el): el is HTMLElement => el !== null);
+
+    if (!chapterReading || headings.length !== chapters.length) {
+      chapterHeadingsRef.current = [];
+      // Keep the chapter's opening where the reader had it; the offset
+      // alone would land them in an earlier chapter once those reappear.
+      const clear = () => clearChapterView(root);
+      if (leaving && scroll) keepInPlace(scroll, headings[chapterIndex], clear);
+      else clear();
+      return;
+    }
+    chapterHeadingsRef.current = headings;
+
+    const choose = (index: number) =>
+      setChapterChoice({ docUid: doc.uid, id: chapters[index]?.id ?? null, index });
+
+    // Switching over from another layout opens on the chapter being
+    // read, not the one remembered from the last visit.
+    const active =
+      entering && readingHeadingIdRef.current ? headingOf(readingHeadingIdRef.current) : null;
+    if (active && scroll) {
+      const index = chapterIndexOf(headings, active);
+      keepInPlace(scroll, active, () => showChapter(root, headings, index));
+      if (index !== chapterIndex) choose(index);
+    } else {
+      showChapter(root, headings, chapterIndex);
+    }
+
+    const onReveal = (event: Event) => {
+      if (!(event.target instanceof Element)) return;
+      const index = chapterIndexOf(headings, event.target);
+      showChapter(root, headings, index);
+      choose(index);
+    };
+    root.addEventListener(REVEAL_CHAPTER_EVENT, onReveal);
+    return () => root.removeEventListener(REVEAL_CHAPTER_EVENT, onReveal);
+  }, [chapterReading, chapters, chapterIndex, doc.uid, liveRendered.html]);
+
+  const goToChapter = useCallback(
+    (index: number) => {
+      const root = docRef.current;
+      const headings = chapterHeadingsRef.current;
+      const next = Math.min(Math.max(index, 0), chapters.length - 1);
+      // Swapped here rather than left to the effect, so the scroll to the
+      // top lands in the new chapter and not, for a frame, in the old one.
+      if (root && headings.length === chapters.length) showChapter(root, headings, next);
+      docScrollRef.current?.scrollTo({ top: 0 });
+      setChapterChoice({ docUid: doc.uid, id: chapters[next]?.id ?? null, index: next });
+    },
+    [chapters, doc.uid],
+  );
+
   /** Heading ids the reader focused via the TOC funnel buttons; empty = no filter. */
   const [sectionFilter, setSectionFilter] = useState<ReadonlySet<string>>(EMPTY_SECTION_FILTER);
   const sectionFilterActive = sectionFilter.size > 0;
@@ -1229,6 +1377,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     let applying = true;
     applySectionFilterToDocument(root, sectionRelations, added);
     applying = false;
+
+    // A section focused from the TOC can sit in a chapter chapter reading
+    // has hidden, which would leave the reader looking at nothing but the
+    // folded headings of this one.
+    const focused = [...added]
+      .map((id) => root.querySelector(`[id="${CSS.escape(id)}"]`))
+      .find((el) => el !== null);
+    if (focused?.closest(`[${CHAPTER_HIDDEN_ATTR}]`)) {
+      revealElement(focused, { behavior: 'auto', block: 'start' });
+    }
 
     if (!sectionRelations) return;
     // Re-assert only when the toggled section is one the filter locks
@@ -1293,7 +1451,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       // their `getBoundingClientRect()` still reports the wrapper's
       // collapsed position, so without this filter the TOC would
       // happily highlight a heading the reader can't see.
-      const visible = headings.filter((h) => !h.closest('.collapse-section.is-collapsed'));
+      const visible = headings.filter(
+        (h) => !h.closest(`.collapse-section.is-collapsed, [${CHAPTER_HIDDEN_ATTR}]`),
+      );
       if (visible.length === 0) {
         // Every heading is currently inside a folded section — clear
         // the highlight so the TOC doesn't keep pointing at one of
@@ -1350,8 +1510,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       if (frame) window.cancelAnimationFrame(frame);
     };
     // `paged` re-runs the scan: switching layout fires neither scroll
-    // nor resize, so the highlight would sit on a stale heading.
-  }, [headingIdsKey, liveRendered.html, paged, pagedVertical]);
+    // nor resize, so the highlight would sit on a stale heading. So does
+    // swapping chapters.
+  }, [headingIdsKey, liveRendered.html, paged, pagedVertical, chapterReading, chapterIndex]);
 
   /**
    * A section fragment in the URL goes stale the moment the reader moves
@@ -2734,13 +2895,25 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    * cards exist — each used to filter its own copy, and the floating
    * toolbar counted threads the layer never showed.
    */
-  const commentSurfaceThreads = useMemo(
-    () =>
-      inlineCommentsHideResolved
-        ? sectionVisibleThreads.filter((t) => !isResolved(t))
-        : sectionVisibleThreads,
-    [sectionVisibleThreads, inlineCommentsHideResolved],
-  );
+  const commentSurfaceThreads = useMemo(() => {
+    const shown = inlineCommentsHideResolved
+      ? sectionVisibleThreads.filter((t) => !isResolved(t))
+      : sectionVisibleThreads;
+    // A card anchored in a hidden chapter has nothing on screen to sit
+    // beside. The Threads tab keeps them all, and opening one from there
+    // brings its chapter up.
+    if (!chapterReading || !blockSectionIds) return shown;
+    return shown.filter((t) =>
+      anchorInChapter(t.anchor, blockSectionIds, chapterIndexById, chapterIndex),
+    );
+  }, [
+    sectionVisibleThreads,
+    inlineCommentsHideResolved,
+    chapterReading,
+    blockSectionIds,
+    chapterIndexById,
+    chapterIndex,
+  ]);
 
   /**
    * Highlights share only the resolved half of that filter. A section
@@ -2831,7 +3004,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         jumpToAnchor?: boolean;
       },
     ) => {
-      const jumpToAnchor = options?.jumpToAnchor ?? true;
+      const thread = threads.find((t) => t.id === threadId);
+      // A thread whose card lives in another chapter — a span clicked at
+      // its tail — has nothing to open on this one, so go to where it starts.
+      const inOtherChapter =
+        chapterReading &&
+        !!blockSectionIds &&
+        !!thread &&
+        !anchorInChapter(thread.anchor, blockSectionIds, chapterIndexById, chapterIndex);
+      const jumpToAnchor = (options?.jumpToAnchor ?? true) || inOtherChapter;
       const scroll = options?.scroll ?? !jumpToAnchor;
       // Opening a thread the section filter hides (from Activities,
       // History, a deep link) wins over the filter — lift it so the
@@ -2861,7 +3042,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       }
 
       if (jumpToAnchor) {
-        const thread = threads.find((t) => t.id === threadId);
         const blockId = thread?.anchor.block_id;
         if (thread && blockId) {
           scrollToAnchor(blockId, thread.anchor.quote, thread.id, 0, thread.anchor);
@@ -2879,6 +3059,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       sectionFilterActive,
       sectionVisibleThreads,
       clearSectionFilter,
+      chapterReading,
+      blockSectionIds,
+      chapterIndexById,
+      chapterIndex,
     ],
   );
 
@@ -2988,21 +3172,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       </Text>
       <SegmentedControl.Root
         size="1"
-        // The effective mode, not the stored one: while the fallback is
-        // in force the reader is looking at a scrolling document, and a
-        // control insisting otherwise just reads as broken.
-        value={paged ? 'paged' : 'scroll'}
+        value={readingMode}
         onValueChange={(next) => {
           // Choosing "Pages" again re-measures, so a reader who has
           // since shrunk the text gets them back — and one who hasn't
           // gets the toast saying why, rather than a dead control.
           setTooWideForPages(false);
-          setReadingMode(next === 'paged' ? 'paged' : 'scroll');
+          setReadingMode(next === 'paged' || next === 'chapters' ? next : 'scroll');
         }}
         aria-label="Reading layout"
       >
         <SegmentedControl.Item value="scroll">Scroll</SegmentedControl.Item>
         <SegmentedControl.Item value="paged">Pages</SegmentedControl.Item>
+        <SegmentedControl.Item value="chapters">Chapters</SegmentedControl.Item>
       </SegmentedControl.Root>
 
       <Text size="1" color="gray">
@@ -3507,6 +3689,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                 </IconButton>
               </Flex>
             )}
+            {chapterReading && (
+              <ChapterPager chapters={chapters} index={chapterIndex} onGoTo={goToChapter} />
+            )}
           </main>
 
           <aside className={`pane pane-right ${commentsOpen ? 'open' : 'closed'}`}>
@@ -3765,6 +3950,7 @@ function scrollToTargetAndSettle(
   offset: number,
   isCurrent: () => boolean,
 ): void {
+  revealChapterOf(target);
   const vertical = scroll.classList.contains(PAGED_VERTICAL_CLASS);
   const paged = scroll.classList.contains(PAGED_CLASS) || vertical;
   /** Where the reader should end up, on whichever axis is in play. */
@@ -3830,6 +4016,17 @@ function scrollToTargetAndSettle(
   for (const ev of SETTLE_USER_EVENTS) {
     scroll.addEventListener(ev, stop, { passive: true, once: true });
   }
+}
+
+/**
+ * Run a DOM change that moves content above `anchor`, then scroll by
+ * however far that moved it, so the reader sees the same text after.
+ */
+function keepInPlace(scroll: HTMLElement, anchor: Element | undefined, change: () => void): void {
+  const before = anchor?.getBoundingClientRect().top;
+  change();
+  if (!anchor || before === undefined) return;
+  scroll.scrollTop += anchor.getBoundingClientRect().top - before;
 }
 
 /**

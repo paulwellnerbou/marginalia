@@ -1163,6 +1163,31 @@ button.primary:disabled {
      than a third control so the pager stays one quiet line. */
   font-weight: inherit;
 }
+.doc-pager-chapter {
+  /* Room for a chapter title on a phone with both arrows beside it; a
+     longer one is cut short here and read in full in the list. */
+  max-width: min(36ch, calc(100vw - 7rem));
+  font-weight: inherit;
+}
+.doc-pager-chapter-label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6em;
+  min-width: 0;
+}
+.doc-pager-chapter-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.doc-pager-chapter-count {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.doc-pager-chapters {
+  max-height: min(360px, 60vh);
+}
 .doc-pager-jump-field {
   /* Wide enough for a four-figure page number: vertical pages slice a
      book into far more of them than columns do. */
@@ -1550,6 +1575,12 @@ button.primary:disabled {
 }
 
 /* Heading collapse / expand --------------------------------------- */
+
+/* Chapter reading: everything outside the chapter on screen. Above any
+   theme or fold rule that would give the element a display of its own. */
+.marginalia [data-chapter-hidden] {
+  display: none !important;
+}
 
 .marginalia .collapse-section {
   display: grid;

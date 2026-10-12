@@ -1,3 +1,5 @@
+import { revealChapterOf } from './chapter-reading.js';
+
 /**
  * Wraps the content under each heading so the reader can collapse /
  * expand sections by clicking a chevron.
@@ -206,6 +208,9 @@ export function setSectionCollapsed(wrapper: HTMLElement, collapsed: boolean): v
  * pre-expansion offset.
  */
 export function expandAncestors(target: Element): Promise<void> {
+  // First, so the expansion below animates on screen instead of inside a
+  // hidden chapter.
+  revealChapterOf(target);
   const expanded: HTMLElement[] = [];
   let el: Element | null = target;
   while (el) {
