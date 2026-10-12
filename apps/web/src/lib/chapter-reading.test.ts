@@ -70,10 +70,16 @@ describe('anchorInChapter', () => {
     expect(anchorInChapter({ block_id: 'intro' }, blocks, chapters, 0)).toBe(true);
   });
 
-  test('a span shows in the chapters at either end', () => {
+  test('a span shows only in the chapter it starts in', () => {
     const span = { block_id: 'p1', end_block_id: 'p3' };
     expect(anchorInChapter(span, blocks, chapters, 0)).toBe(true);
+    expect(anchorInChapter(span, blocks, chapters, 2)).toBe(false);
+  });
+
+  test('a span whose start is gone shows where it ends', () => {
+    const span = { block_id: 'deleted', end_block_id: 'p3' };
     expect(anchorInChapter(span, blocks, chapters, 2)).toBe(true);
+    expect(anchorInChapter(span, blocks, chapters, 0)).toBe(false);
   });
 
   test('an anchor whose blocks are gone is not hidden by chapter', () => {

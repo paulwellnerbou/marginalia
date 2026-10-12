@@ -104,6 +104,7 @@ import {
   pageIndexAt,
   pageIndexOfElement,
   pageIndexOfOffset,
+  revealElement,
 } from '../lib/paged-reading.js';
 import { partitionPendingMentions } from '../lib/pending-mentions.js';
 import { takeRevealOnOpen } from '../lib/pending-reveal.js';
@@ -1231,6 +1232,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   }, [chapterChoice, chapterIndexById, chapters.length]);
   const currentChapterId = chapters[chapterIndex]?.id ?? null;
 
+  // Keep the choice in step with the chapter on screen: its index current
+  // while the heading resolves, so an edit renaming that heading falls back
+  // to where the reader is rather than to wherever the choice was loaded
+  // from, and the renamed heading's id adopted once it has.
+  useEffect(() => {
+    if (!chapterReading || !currentChapterId || chapterChoice.docUid !== doc.uid) return;
+    if (chapterChoice.id === currentChapterId && chapterChoice.index === chapterIndex) return;
+    setChapterChoice({ docUid: doc.uid, id: currentChapterId, index: chapterIndex });
+  }, [chapterReading, chapterChoice, currentChapterId, chapterIndex, doc.uid]);
+
   useEffect(() => {
     if (chapterReading && currentChapterId) {
       localStorage.setItem(CHAPTER_KEY_PREFIX + doc.uid, currentChapterId);
@@ -1366,6 +1377,16 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     let applying = true;
     applySectionFilterToDocument(root, sectionRelations, added);
     applying = false;
+
+    // A section focused from the TOC can sit in a chapter chapter reading
+    // has hidden, which would leave the reader looking at nothing but the
+    // folded headings of this one.
+    const focused = [...added]
+      .map((id) => root.querySelector(`[id="${CSS.escape(id)}"]`))
+      .find((el) => el !== null);
+    if (focused?.closest(`[${CHAPTER_HIDDEN_ATTR}]`)) {
+      revealElement(focused, { behavior: 'auto', block: 'start' });
+    }
 
     if (!sectionRelations) return;
     // Re-assert only when the toggled section is one the filter locks
@@ -2983,7 +3004,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         jumpToAnchor?: boolean;
       },
     ) => {
-      const jumpToAnchor = options?.jumpToAnchor ?? true;
+      const thread = threads.find((t) => t.id === threadId);
+      // A thread whose card lives in another chapter — a span clicked at
+      // its tail — has nothing to open on this one, so go to where it starts.
+      const inOtherChapter =
+        chapterReading &&
+        !!blockSectionIds &&
+        !!thread &&
+        !anchorInChapter(thread.anchor, blockSectionIds, chapterIndexById, chapterIndex);
+      const jumpToAnchor = (options?.jumpToAnchor ?? true) || inOtherChapter;
       const scroll = options?.scroll ?? !jumpToAnchor;
       // Opening a thread the section filter hides (from Activities,
       // History, a deep link) wins over the filter — lift it so the
@@ -3013,7 +3042,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       }
 
       if (jumpToAnchor) {
-        const thread = threads.find((t) => t.id === threadId);
         const blockId = thread?.anchor.block_id;
         if (thread && blockId) {
           scrollToAnchor(blockId, thread.anchor.quote, thread.id, 0, thread.anchor);
@@ -3031,6 +3059,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       sectionFilterActive,
       sectionVisibleThreads,
       clearSectionFilter,
+      chapterReading,
+      blockSectionIds,
+      chapterIndexById,
+      chapterIndex,
     ],
   );
 

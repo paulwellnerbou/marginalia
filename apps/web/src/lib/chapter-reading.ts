@@ -137,9 +137,11 @@ export function chapterOfSectionChain(
 }
 
 /**
- * Whether a comment anchor sits in chapter `index`, so its card belongs on
- * screen. Spans count from either end. An anchor whose blocks the document
- * no longer has is placed by nothing, and stays wherever it is shown.
+ * Whether a comment anchor's card belongs on screen with chapter `index`.
+ * A span crossing chapters lives in the one it starts in: cards are placed,
+ * and jumps land, at the start of the anchor, which a later chapter has
+ * hidden. An anchor whose blocks the document no longer has is placed by
+ * nothing, and stays wherever it is shown.
  */
 export function anchorInChapter(
   anchor: SectionAnchorRef,
@@ -151,8 +153,6 @@ export function anchorInChapter(
     const chain = blockId ? blockSections.get(blockId) : undefined;
     return chain === undefined ? null : chapterOfSectionChain(chain, chapterIndexById);
   };
-  const start = chapterOf(anchor.block_id);
-  const end = chapterOf(anchor.end_block_id);
-  if (start === null && end === null) return true;
-  return start === index || end === index;
+  const home = chapterOf(anchor.block_id) ?? chapterOf(anchor.end_block_id);
+  return home === null || home === index;
 }
