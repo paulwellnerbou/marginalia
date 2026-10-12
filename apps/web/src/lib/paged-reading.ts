@@ -1,3 +1,5 @@
+import { revealChapterOf } from './chapter-reading.js';
+
 /**
  * Geometry for paged (e-reader) reading mode, in either direction.
  *
@@ -181,6 +183,7 @@ export function goToPage(
  * goes through here so none of them can strand the reader mid-page.
  */
 export function revealElement(el: Element, options: ScrollIntoViewOptions): void {
+  revealChapterOf(el);
   const scroll = pagedScrollerOf(el);
   if (!scroll) {
     el.scrollIntoView(options);
