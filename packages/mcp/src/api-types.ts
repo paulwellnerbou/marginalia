@@ -95,7 +95,10 @@ export interface ThreadCommentWire {
   capabilities: { edit: boolean; delete: boolean; hide?: boolean; react: boolean };
   reactions: Array<{ emoji: string; count: number; reacted: boolean; authors: string[] }>;
   created_at: number;
+  /** Bumped by edits, but also by re-anchoring, renames and resolving. */
   updated_at: number;
+  /** A person's last change to the text or visibility; absent on older instances. */
+  edited?: { at: number; by_name: string | null } | null;
 }
 
 export interface ThreadWire {

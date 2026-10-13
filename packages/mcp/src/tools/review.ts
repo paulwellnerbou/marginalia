@@ -26,11 +26,13 @@ import {
 import { commentUrl } from '../document-ref.js';
 import {
   type ContextScope,
+  lastChange,
   lineDiff,
   occurrenceTag,
   threadDetail,
   threadList,
   threadStatus,
+  timestamp,
 } from '../format.js';
 import {
   blockDriftNote,
@@ -93,15 +95,18 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         'read one, pass its thread_id — that fetches it whatever its state. Reach for ' +
         'state="all" only when the question really is about the whole history.\n\n' +
         'Comments and the proposals written to answer them are shown linked in both ' +
-        'directions. `needs_proposal: true` lists the comments still waiting for one.',
+        'directions. `needs_proposal: true` lists the comments still waiting for one.\n\n' +
+        'To catch up on what changed — new threads, replies, edited messages, resolutions — ' +
+        'pass `since`; `sort: "recent"` puts the latest activity first. Each message shows ' +
+        'when it was created, edited (and by whom) and otherwise updated.',
       inputSchema: {
         document: documentArg,
         state: z
           .enum(['open', 'resolved', 'all'])
           .optional()
           .describe(
-            'Default "open". "resolved" covers resolved comments and accepted/rejected ' +
-              'proposals. Ignored when thread_id names a thread.',
+            'Default "open", or "all" when `since` is given. "resolved" covers resolved ' +
+              'comments and accepted/rejected proposals. Ignored when thread_id names a thread.',
           ),
         kind: z.enum(['all', 'comments', 'proposals']).optional().describe('Default "all".'),
         thread_id: z
@@ -144,6 +149,27 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
               'comments. Excludes threads you opened and nobody answered, and re-includes ones ' +
               'where the reviewer came back after your reply.',
           ),
+        since: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .describe(
+            'Only threads where something happened after this moment: a new thread or reply, ' +
+              'an edited message, a resolution. Also matches messages touched without a ' +
+              'visible change — re-anchored after a document edit, or their author renamed — ' +
+              'so expect the odd thread where nothing seems new. An ISO 8601 date or time ' +
+              '("2026-10-12" is midnight UTC, "2026-10-12T09:00Z") or a span back from now ' +
+              '("30m", "12h", "7d", "2w"). Implies sort "recent".',
+          ),
+        sort: z
+          .enum(['created', 'recent'])
+          .optional()
+          .describe(
+            '"created" (default without `since`): oldest thread first. "recent": the thread ' +
+              'with the latest activity first — with `limit`, the way to get the last few ' +
+              'changed threads.',
+          ),
         context: z
           .union([z.enum(['none', 'block', 'section']), z.number().int().min(0).max(10)])
           .optional()
@@ -184,7 +210,14 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         // A `#comment-<id>` fragment in the document URL means "this
         // thread", so honour it when no id was passed outright.
         const targetId = args.thread_id ?? loaded.ref.commentId ?? null;
-        const state = args.state ?? 'open';
+        const since = args.since === undefined ? null : parseSince(args.since, Date.now());
+        if (args.since !== undefined && since === null) {
+          return failure(
+            `\`since\` "${args.since}" is neither an ISO 8601 date/time nor a span like "12h" or "7d".`,
+          );
+        }
+        // Catching up means resolutions too, so `since` looks past the open threads.
+        const state = args.state ?? (since === null ? 'open' : 'all');
         const listed = await fetchThreads(ctx, loaded, { state, threadId: targetId });
 
         const section = args.section ? resolveSection(loaded.blocks, args.section) : null;
@@ -246,6 +279,11 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           });
         }
 
+        if (since !== null) threads = threads.filter((t) => lastChange(t) > since);
+        if ((args.sort ?? (since === null ? 'created' : 'recent')) === 'recent') {
+          threads = [...threads].sort((a, b) => lastChange(b) - lastChange(a));
+        }
+
         const total = threads.length;
         threads = threads.slice(0, args.limit ?? 50);
 
@@ -254,6 +292,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           `document ${loaded.doc.uid} — ${counts}`,
           hiddenThreadsNote(listed.counts, state, targetId),
           section ? `section: ${section.path.join(' › ')}` : null,
+          since !== null ? `changed since ${timestamp(since)}` : null,
           !args.thread_id && loaded.ref.commentId
             ? `filtered to the thread named by the link's #comment-${loaded.ref.commentId}`
             : null,
@@ -1231,6 +1270,20 @@ function summarize(threads: ThreadWire[]): string {
     `proposal yet), ${proposals.length} edit proposal(s) (${openProposals} open)` +
     (orphaned > 0 ? `, ${orphaned} with a lost anchor` : '')
   );
+}
+
+const SPAN_MS = { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 } as const;
+
+/** `since` as epoch ms: an ISO 8601 date/time, or a span like "12h" back from `now`. */
+export function parseSince(raw: string, now: number): number | null {
+  const span = /^(\d+)\s*([mhdw])$/i.exec(raw);
+  if (span) {
+    return now - Number(span[1]) * SPAN_MS[span[2]!.toLowerCase() as keyof typeof SPAN_MS];
+  }
+  // Date.parse accepts much looser forms than ISO; insist on the date part.
+  if (!/^\d{4}-\d{2}-\d{2}/.test(raw)) return null;
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? null : ms;
 }
 
 /** Is `path` inside `prefix` (or equal to it)? */

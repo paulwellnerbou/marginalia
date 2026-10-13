@@ -329,6 +329,51 @@ describe('marginalia MCP server', () => {
     expect(inOne).not.toContain('Comment in chapter three.');
   });
 
+  test('lists what changed since a moment, latest first', async () => {
+    const { adminUrl } = await seedBook();
+    const first = await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'The caravan left before dawn',
+      body: 'Older comment.',
+    });
+    const firstId = /^thread_id: (\S+)/m.exec(first)?.[1] as string;
+    await Bun.sleep(5);
+    const cutoff = new Date().toISOString();
+    await Bun.sleep(5);
+    await call('create_comment', {
+      document: adminUrl,
+      anchor_text: 'They reached the well',
+      body: 'Newer comment.',
+    });
+
+    const newOnly = await call('list_threads', { document: adminUrl, since: cutoff });
+    expect(newOnly).toContain('changed since');
+    expect(newOnly).toContain('Newer comment.');
+    expect(newOnly).not.toContain('Older comment.');
+
+    await Bun.sleep(5);
+    await call('edit_comment', {
+      document: adminUrl,
+      thread_id: firstId,
+      comment_id: firstId,
+      body: 'Older comment, reworded.',
+    });
+    await call('respond_to_thread', { document: adminUrl, thread_id: firstId, action: 'resolve' });
+
+    // Edited and then resolved: still listed, though no longer open, and
+    // ahead of the newer comment because its change is the latest.
+    const both = await call('list_threads', { document: adminUrl, since: cutoff });
+    expect(both).toContain('edited ');
+    expect(both.indexOf('Older comment, reworded.')).toBeGreaterThan(-1);
+    expect(both.indexOf('Older comment, reworded.')).toBeLessThan(both.indexOf('Newer comment.'));
+
+    const invalid = await callExpectingError('list_threads', {
+      document: adminUrl,
+      since: 'yesterday',
+    });
+    expect(invalid).toContain('since');
+  });
+
   test('lists blocks with ids, line ranges and verbatim source', async () => {
     const { adminUrl } = await seedBook();
     const output = await call('list_blocks', { document: adminUrl, query: 'caravan' });

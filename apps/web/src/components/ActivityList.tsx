@@ -3,6 +3,7 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { formatAnchorQuote } from '../lib/anchor-quote.js';
 import {
   type Comment,
+  type CommentEdit,
   getHistory,
   getHistoryDiff,
   type HistoryEntry,
@@ -55,6 +56,14 @@ export type Activity =
   | { kind: 'history'; timestamp: number; id: string; entry: HistoryEntry }
   | { kind: 'thread'; timestamp: number; id: string; thread: Thread }
   | { kind: 'reply'; timestamp: number; id: string; thread: Thread; comment: Comment }
+  | {
+      kind: 'edit';
+      timestamp: number;
+      id: string;
+      thread: Thread;
+      comment: Comment;
+      edit: CommentEdit;
+    }
   | {
       kind: 'resolution';
       timestamp: number;
@@ -152,6 +161,18 @@ export function ActivityList({
           id: `reply-${comment.id}`,
           thread,
           comment,
+        });
+      }
+      // Only the latest edit is stored, so a comment edited twice shows once.
+      for (const comment of thread.comments) {
+        if (!comment.edited) continue;
+        items.push({
+          kind: 'edit',
+          timestamp: comment.edited.at,
+          id: `edit-${comment.id}-${comment.edited.at}`,
+          thread,
+          comment,
+          edit: comment.edited,
         });
       }
 
@@ -452,6 +473,52 @@ export function ActivityList({
                     </Flex>
                     <Text size="1" color="gray">
                       Replied to {isProposal ? 'proposal' : 'thread'} by {threadAuthorName}
+                    </Text>
+                  </Box>
+                </Flex>
+              </Flex>
+            );
+          }
+
+          if (activity.kind === 'edit') {
+            const { thread, comment, edit } = activity;
+            const isProposal = thread.proposal !== null;
+            const name = edit.by_name || 'Unknown';
+            // Same avatar colour as the author's other rows when they edited it themselves.
+            const seed = name === comment.author.display_name ? comment.author.client_id : name;
+            const threadAuthorName = thread.comments[0].author.display_name || 'someone';
+            const text =
+              comment.id === thread.id
+                ? isProposal
+                  ? 'Edited proposal'
+                  : 'Edited thread'
+                : `Edited reply to ${isProposal ? 'proposal' : 'thread'} by ${threadAuthorName}`;
+
+            return (
+              <Flex
+                key={activity.id}
+                direction="column"
+                gap="2"
+                pb="4"
+                mb="4"
+                className="history-entry"
+                {...buildRowProps(thread.id, onOpenThread, borderStyle)}
+              >
+                <Flex align="start" gap="3">
+                  <Box style={{ flexShrink: 0, marginTop: '2px' }}>
+                    <InlineAvatar name={name} seed={seed} size="md" />
+                  </Box>
+                  <Box style={{ flex: 1, minWidth: 0 }}>
+                    <Flex align="baseline" gap="2" wrap="wrap">
+                      <Text size="2" weight="medium">
+                        {name}
+                      </Text>
+                      <Text size="1" color="gray" title={formatTimestampLong(activity.timestamp)}>
+                        {formatTimestamp(activity.timestamp)}
+                      </Text>
+                    </Flex>
+                    <Text size="1" color="gray">
+                      {text}
                     </Text>
                   </Box>
                 </Flex>

@@ -1465,6 +1465,17 @@ export interface Comment {
   reactions: CommentReaction[];
   created_at: number;
   updated_at: number;
+  /**
+   * The last time a person changed this comment's text or visibility (or,
+   * on a proposal's opener, its proposed text). Null when never edited;
+   * unlike `updated_at`, re-anchoring and resolving leave it alone.
+   */
+  edited?: CommentEdit | null;
+}
+
+export interface CommentEdit {
+  at: number;
+  by_name: string | null;
 }
 
 export interface ThreadProposalData {
