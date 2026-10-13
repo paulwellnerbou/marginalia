@@ -2188,9 +2188,9 @@ async function importDocument(c: Context, deps: AppDeps) {
         anchor_start_offset, anchor_end_offset,
         anchor_heading_path, anchor_section_index, anchor_section_index_path,
         author_client_id, author_display_name, body, is_hidden, is_bookmark, link_status,
-        resolved_at, resolved_by_name, resolved_by_accept,
+        resolved_at, resolved_by_name, resolved_by_accept, edited_at, edited_by_name,
         created_at, updated_at, deleted_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertEditProposal = db.prepare(
     `INSERT INTO comments_edit_proposals
@@ -2270,6 +2270,10 @@ async function importDocument(c: Context, deps: AppDeps) {
       typeof row.resolved_at === 'number' ? row.resolved_at : null,
       typeof row.resolved_by_name === 'string' ? row.resolved_by_name : null,
       typeof row.resolved_at === 'number' && row.resolved_by_accept === true ? 1 : 0,
+      typeof row.edited_at === 'number' ? row.edited_at : null,
+      typeof row.edited_at === 'number' && typeof row.edited_by_name === 'string'
+        ? row.edited_by_name
+        : null,
       typeof row.created_at === 'number' ? row.created_at : now,
       typeof row.updated_at === 'number' ? row.updated_at : now,
       deletedAt,
@@ -2581,6 +2585,8 @@ async function mapBundleComments(
     resolved_at: row.resolved_at,
     resolved_by_name: row.resolved_by_name,
     resolved_by_accept: row.resolved_by_accept === 1,
+    edited_at: row.edited_at,
+    edited_by_name: row.edited_by_name,
     created_at: row.created_at,
     updated_at: row.updated_at,
     // Set only for the accepted-proposal tombstones the export keeps for

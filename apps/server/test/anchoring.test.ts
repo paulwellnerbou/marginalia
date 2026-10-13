@@ -59,6 +59,8 @@ function comment(anchor: Partial<CommentRow>): CommentRow {
     resolved_at: null,
     resolved_by_name: null,
     resolved_by_accept: 0,
+    edited_at: null,
+    edited_by_name: null,
     created_at: 0,
     updated_at: 0,
     deleted_at: null,

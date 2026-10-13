@@ -7,7 +7,14 @@ import {
   type DocumentBlockMap,
   type DocumentSection,
 } from '../src/blocks.js';
-import { type ContextScope, documentHeader, threadDetail, threadList } from '../src/format.js';
+import {
+  type ContextScope,
+  documentHeader,
+  lastChange,
+  threadDetail,
+  threadList,
+} from '../src/format.js';
+import { parseSince } from '../src/tools/review.js';
 
 const SOURCE = `# Guide
 
@@ -366,5 +373,60 @@ describe('documentHeader folder list', () => {
   test('says nothing about folders for a document that stands alone', async () => {
     const out = documentHeader(await documentWire({ folder: null }), ref, await blockMap());
     expect(out).not.toContain('folder:');
+  });
+});
+
+describe('message change times', () => {
+  const at = (iso: string) => Date.parse(iso);
+  const opener = (thread: ThreadWire) => {
+    const comment = thread.comments[0];
+    if (!comment) throw new Error('the fixture thread has no opener');
+    return comment;
+  };
+
+  test('names an edit and its author, and an update only when it came later', async () => {
+    const thread = threadOn(null, null);
+    Object.assign(opener(thread), {
+      created_at: at('2026-10-01T09:00Z'),
+      edited: { at: at('2026-10-02T09:00Z'), by_name: 'Ada' },
+      updated_at: at('2026-10-02T09:00Z'),
+    });
+    const editedOnly = await threadDetail(thread, 0, 1, options(null, 'none'));
+    expect(editedOnly).toContain('· edited 2026-10-02 09:00 UTC by Ada ·');
+    expect(editedOnly).not.toContain('updated');
+
+    opener(thread).updated_at = at('2026-10-03T09:00Z');
+    const updatedSince = await threadDetail(thread, 0, 1, options(null, 'none'));
+    expect(updatedSince).toContain('by Ada · updated 2026-10-03 09:00 UTC ·');
+  });
+
+  test('a thread last changed when its latest message or resolution did', () => {
+    const thread = threadOn(null, null);
+    Object.assign(opener(thread), { created_at: 10, updated_at: 20 });
+    expect(lastChange(thread)).toBe(20);
+    thread.resolution = { kind: 'resolve', at: 30, by_name: 'Ada' };
+    expect(lastChange(thread)).toBe(30);
+  });
+});
+
+describe('parseSince', () => {
+  const now = Date.parse('2026-10-13T12:00:00Z');
+
+  test('reads spans back from now', () => {
+    expect(parseSince('30m', now)).toBe(now - 30 * 60_000);
+    expect(parseSince('12h', now)).toBe(now - 12 * 3_600_000);
+    expect(parseSince('7D', now)).toBe(now - 7 * 86_400_000);
+    expect(parseSince('2w', now)).toBe(now - 14 * 86_400_000);
+  });
+
+  test('reads ISO dates and times', () => {
+    expect(parseSince('2026-10-12', now)).toBe(Date.parse('2026-10-12T00:00:00Z'));
+    expect(parseSince('2026-10-12T09:30Z', now)).toBe(Date.parse('2026-10-12T09:30:00Z'));
+  });
+
+  test('refuses anything else', () => {
+    expect(parseSince('yesterday', now)).toBeNull();
+    expect(parseSince('10/12/2026', now)).toBeNull();
+    expect(parseSince('2026-13-45', now)).toBeNull();
   });
 });

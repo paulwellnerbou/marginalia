@@ -40,6 +40,7 @@ interface ThreadCommentNodeShape {
   reactions?: Array<{ emoji: string; count: number; reacted: boolean; authors: string[] }>;
   created_at: number;
   updated_at: number;
+  edited?: { at: number; by_name: string | null } | null;
 }
 
 interface ThreadShape {
@@ -836,6 +837,113 @@ describe('threads API', () => {
         (comment) => comment.id,
       ),
     ).toEqual([threadId, replyId]);
+  });
+
+  test('an edit records who changed a message and when; nothing else does', async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const created = await addComment(uid, ALICE, { block_id: blockId, quote: 'Title' }, 'Hi');
+    const threadId = (created.body.comment as { id: string }).id;
+    const replied = await addReply(uid, BOB, threadId, 'Hello');
+    const replyId = (replied.body.comment as { id: string }).id;
+
+    const patch = (who: typeof ALICE, path: string, body: unknown) =>
+      app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads/${path}`, {
+          method: 'PATCH',
+          headers: headersFor(who),
+          body: JSON.stringify(body),
+        }),
+      );
+    const thread = async () => {
+      const res = await app.hono.fetch(
+        new Request(`http://test/api/documents/${uid}/threads?state=all`, {
+          headers: headersFor(ALICE),
+        }),
+      );
+      return ((await res.json()) as { threads: ThreadShape[] }).threads[0]!;
+    };
+
+    expect((await thread()).comments.map((c) => c.edited)).toEqual([null, null]);
+
+    // Saving the same text is not an edit.
+    expect((await patch(ALICE, threadId, { body: 'Hi' })).status).toBe(200);
+    expect((await thread()).comments[0].edited).toBeNull();
+
+    expect((await patch(ALICE, threadId, { body: 'Hi there' })).status).toBe(200);
+    expect((await patch(BOB, `${threadId}/comments/${replyId}`, { body: 'Hello!' })).status).toBe(
+      200,
+    );
+    const edited = await thread();
+    expect(edited.comments.map((c) => c.edited?.by_name)).toEqual(['Alice', 'Bob']);
+    const rootEditedAt = edited.comments[0].edited!.at;
+
+    // Re-anchoring after a document edit and resolving both bump
+    // updated_at, but neither is somebody editing the message.
+    const put = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, {
+        method: 'PUT',
+        headers: asAdmin(),
+        body: JSON.stringify({ markdown: '# Title\n\nIntro.\n\nA paragraph.\n' }),
+      }),
+    );
+    expect(put.status).toBe(200);
+    const resolve = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${threadId}/respond`, {
+        method: 'POST',
+        headers: headersFor(ALICE),
+        body: JSON.stringify({ action: 'resolve' }),
+      }),
+    );
+    expect(resolve.status).toBe(200);
+    const settled = await thread();
+    expect(settled.comments[0].updated_at).toBeGreaterThan(rootEditedAt);
+    expect(settled.comments[0].edited).toEqual({ at: rootEditedAt, by_name: 'Alice' });
+
+    // Toggling privacy is an edit too.
+    const carolReply = await addReply(uid, CAROL, threadId, 'Me too');
+    const carolReplyId = (carolReply.body.comment as { id: string }).id;
+    const hidden = await patch(CAROL, `${threadId}/comments/${carolReplyId}`, { hidden: true });
+    expect(hidden.status).toBe(200);
+    const carolView = ((await hidden.json()) as { thread: ThreadShape }).thread;
+    expect(carolView.comments.find((c) => c.id === carolReplyId)?.edited?.by_name).toBe('Carol');
+
+    const { headers, imported } = await roundTrip(uid);
+    const importedList = await app.hono.fetch(
+      new Request(`http://test/api/documents/${imported.uid}/threads?state=all`, { headers }),
+    );
+    const importedThread = ((await importedList.json()) as { threads: ThreadShape[] }).threads[0]!;
+    expect(importedThread.comments[0].edited).toEqual({ at: rootEditedAt, by_name: 'Alice' });
+  });
+
+  test("an admin revising someone's proposal is recorded as the admin's edit", async () => {
+    const uid = await newDoc('# Title\n\nA paragraph.\n');
+    const blockId = await firstBlockId(uid);
+    const created = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads`, {
+        method: 'POST',
+        headers: headersFor(BOB),
+        body: JSON.stringify({
+          anchor: { block_id: blockId, quote: 'Title' },
+          body: 'rationale',
+          proposal: { proposed_text: '# Better title' },
+        }),
+      }),
+    );
+    expect(created.status).toBe(201);
+    const proposalId = ((await created.json()) as { thread: ThreadShape }).thread.id;
+
+    const revised = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}/threads/${proposalId}`, {
+        method: 'PATCH',
+        headers: asAdmin(),
+        body: JSON.stringify({ proposal: { proposed_text: '# Best title' } }),
+      }),
+    );
+    expect(revised.status).toBe(200);
+    const thread = ((await revised.json()) as { thread: ThreadShape }).thread;
+    expect(thread.comments[0].author.display_name).toBe('Bob');
+    expect(thread.comments[0].edited?.by_name).toBe('Alice');
   });
 
   test('rejects nested replies (only one level)', async () => {

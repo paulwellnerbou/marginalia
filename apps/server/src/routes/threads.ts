@@ -962,6 +962,13 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
         ).run(doc.uid, doc.uid, tid, tid, tid);
       }
     }
+    if (
+      branchUpdate ||
+      (next.body !== undefined && next.body !== row.body) ||
+      (nextHidden !== undefined && nextHidden !== (row.is_hidden === 1))
+    ) {
+      markEdited(db, tid, now, identity);
+    }
     if (revisionComment) {
       createdReply = insertThreadReply(db, doc.uid, row, revisionComment, identity);
     }
@@ -1369,6 +1376,7 @@ async function resolveThreadConflict(c: Context, deps: AppDeps) {
       now,
       tid,
     );
+    markEdited(db, tid, now, identity);
     if (resolutionComment) {
       createdReply = insertThreadReply(db, doc.uid, row, resolutionComment, identity);
     }
@@ -1414,6 +1422,18 @@ function parseResolvedText(
   if (typeof raw !== 'string') return { ok: false, error: 'invalid-body' };
   if (raw.length > MAX_PROPOSED_TEXT_LENGTH) return { ok: false, error: 'proposal-text-too-long' };
   return { ok: true, text: raw };
+}
+
+/**
+ * Record a person's change to a comment's text or visibility. Kept apart
+ * from `updated_at` so the activity feed shows edits, not re-anchoring.
+ */
+function markEdited(db: Database, id: string, at: number, identity: Identity): void {
+  db.prepare('UPDATE comments SET edited_at = ?, edited_by_name = ? WHERE id = ?').run(
+    at,
+    identity.displayName,
+    id,
+  );
 }
 
 /**
@@ -1601,6 +1621,12 @@ async function editThreadReply(c: Context, deps: AppDeps) {
               AND delivered_at IS NULL`,
         ).run(doc.uid, cid);
       }
+    }
+    if (
+      (next.body && next.body !== reply.body) ||
+      (nextHidden !== undefined && nextHidden !== (reply.is_hidden === 1))
+    ) {
+      markEdited(db, cid, now, decision.identity);
     }
     db.exec('COMMIT');
   } catch (err) {
@@ -2995,6 +3021,7 @@ async function toThreadWire(
         reactions: reactionsByComment.get(row.id) ?? [],
         created_at: row.created_at,
         updated_at: row.updated_at,
+        edited: editedWire(row),
       },
       ...visibleReplies.map((reply) => ({
         id: reply.id,
@@ -3013,9 +3040,14 @@ async function toThreadWire(
         reactions: reactionsByComment.get(reply.id) ?? [],
         created_at: reply.created_at,
         updated_at: reply.updated_at,
+        edited: editedWire(reply),
       })),
     ],
   };
+}
+
+function editedWire(row: CommentRow): { at: number; by_name: string | null } | null {
+  return row.edited_at === null ? null : { at: row.edited_at, by_name: row.edited_by_name };
 }
 
 interface ReactionWire {

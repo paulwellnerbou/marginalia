@@ -106,6 +106,10 @@ CREATE TABLE IF NOT EXISTS comments (
   -- 1 -> resolved by accepting a proposal that answers this comment, not
   -- by a person; reopening a proposal that answers it reopens it.
   resolved_by_accept    INTEGER NOT NULL DEFAULT 0,
+  -- Last time a person changed the text or visibility, and who. Unlike
+  -- updated_at, which re-anchoring, renames and resolving also bump.
+  edited_at             INTEGER,
+  edited_by_name        TEXT,
   created_at            INTEGER NOT NULL,
   updated_at            INTEGER NOT NULL,
   deleted_at            INTEGER
@@ -487,6 +491,9 @@ export interface CommentRow {
   resolved_by_name: string | null;
   /** 1 when an accept resolved this comment rather than a person — see the schema. */
   resolved_by_accept: number;
+  /** Set only by a person's edit — see the schema. */
+  edited_at: number | null;
+  edited_by_name: string | null;
   created_at: number;
   updated_at: number;
   deleted_at: number | null;
@@ -616,6 +623,10 @@ export function openDatabase(path: string): Database {
   // No record exists for comments resolved before this column: they count
   // as resolved by hand, so a reopen leaves them as they are.
   ensureColumn(db, 'comments', 'resolved_by_accept', 'INTEGER NOT NULL DEFAULT 0');
+  // Edits made before these columns left no record, so those comments
+  // read as never edited.
+  ensureColumn(db, 'comments', 'edited_at', 'INTEGER');
+  ensureColumn(db, 'comments', 'edited_by_name', 'TEXT');
   ensureColumn(db, 'documents', 'format', "TEXT NOT NULL DEFAULT 'markdown'");
   ensureColumn(db, 'documents', 'password_recovery_ciphertext', 'TEXT');
   ensureColumn(db, 'documents', 'password_recovery_iv', 'TEXT');

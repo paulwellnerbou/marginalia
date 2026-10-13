@@ -1,5 +1,5 @@
 import { createPatch } from 'diff';
-import type { DocumentWire, ThreadWire } from './api-types.js';
+import type { DocumentWire, ThreadCommentWire, ThreadWire } from './api-types.js';
 import {
   anchorBlocks,
   anchorNeighbourhood,
@@ -33,6 +33,34 @@ export function gutter(text: string, prefix = '  | '): string {
 export function timestamp(ms: number | null | undefined): string {
   if (!ms) return 'unknown time';
   return `${new Date(ms).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+}
+
+/**
+ * When anything last happened in a thread: a message posted, edited or
+ * otherwise touched, or the thread resolved.
+ */
+export function lastChange(thread: ThreadWire): number {
+  let latest = thread.resolution?.at ?? 0;
+  for (const comment of thread.comments) {
+    latest = Math.max(latest, comment.created_at, comment.updated_at, comment.edited?.at ?? 0);
+  }
+  return latest;
+}
+
+/**
+ * ` · edited …` / ` · updated …` after a message's creation time. An
+ * update is only named when it came after the last edit, since an edit
+ * bumps both.
+ */
+function changeNote(comment: ThreadCommentWire): string {
+  let note = '';
+  let since = comment.created_at;
+  if (comment.edited) {
+    note += ` · edited ${timestamp(comment.edited.at)} by ${comment.edited.by_name ?? 'unknown'}`;
+    since = Math.max(since, comment.edited.at);
+  }
+  if (comment.updated_at > since) note += ` · updated ${timestamp(comment.updated_at)}`;
+  return note;
 }
 
 export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: DocumentBlockMap): string {
@@ -337,7 +365,7 @@ export function threadDetail(
   thread.comments.forEach((comment, index) => {
     const role = index === 0 ? 'opener' : `reply ${index}`;
     lines.push(
-      `  [${role}] ${comment.author.display_name} · ${timestamp(comment.created_at)} · comment_id=${comment.id}`,
+      `  [${role}] ${comment.author.display_name} · ${timestamp(comment.created_at)}${changeNote(comment)} · comment_id=${comment.id}`,
     );
     lines.push(gutter(comment.body, '    | '));
     if (comment.reactions.length > 0) {
