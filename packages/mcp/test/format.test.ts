@@ -378,27 +378,31 @@ describe('documentHeader folder list', () => {
 
 describe('message change times', () => {
   const at = (iso: string) => Date.parse(iso);
+  const opener = (thread: ThreadWire) => {
+    const comment = thread.comments[0];
+    if (!comment) throw new Error('the fixture thread has no opener');
+    return comment;
+  };
 
   test('names an edit and its author, and an update only when it came later', async () => {
     const thread = threadOn(null, null);
-    thread.comments[0] = {
-      ...thread.comments[0],
+    Object.assign(opener(thread), {
       created_at: at('2026-10-01T09:00Z'),
       edited: { at: at('2026-10-02T09:00Z'), by_name: 'Ada' },
       updated_at: at('2026-10-02T09:00Z'),
-    };
+    });
     const editedOnly = await threadDetail(thread, 0, 1, options(null, 'none'));
     expect(editedOnly).toContain('· edited 2026-10-02 09:00 UTC by Ada ·');
     expect(editedOnly).not.toContain('updated');
 
-    thread.comments[0].updated_at = at('2026-10-03T09:00Z');
+    opener(thread).updated_at = at('2026-10-03T09:00Z');
     const updatedSince = await threadDetail(thread, 0, 1, options(null, 'none'));
     expect(updatedSince).toContain('by Ada · updated 2026-10-03 09:00 UTC ·');
   });
 
   test('a thread last changed when its latest message or resolution did', () => {
     const thread = threadOn(null, null);
-    thread.comments[0] = { ...thread.comments[0], created_at: 10, updated_at: 20 };
+    Object.assign(opener(thread), { created_at: 10, updated_at: 20 });
     expect(lastChange(thread)).toBe(20);
     thread.resolution = { kind: 'resolve', at: 30, by_name: 'Ada' };
     expect(lastChange(thread)).toBe(30);
