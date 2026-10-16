@@ -274,6 +274,12 @@ export function InlineCommentRow({
               value={draft}
               rows={3}
               onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  if (!saving) void saveEdit();
+                }
+              }}
             />
             <div className="ic-composer-actions">
               <button
