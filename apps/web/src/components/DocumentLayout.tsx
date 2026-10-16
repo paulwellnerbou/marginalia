@@ -83,6 +83,7 @@ import {
   revealChapterOf,
   showChapter,
 } from '../lib/chapter-reading.js';
+import { chapterEditQuery } from '../lib/chapter-scope.js';
 import { buildCommentHighlights } from '../lib/comment-highlights.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
@@ -2273,6 +2274,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         const req: Parameters<typeof apiCreateProposal>[1] = {
           anchor_block_id: pendingProposalTarget.block_id,
           anchor_quote: pendingProposalTarget.block_text,
+          anchor_section: pendingProposalTarget.section ?? null,
           proposed_text: payload.proposed_text,
         };
         if (pendingProposalTarget.end_block_id) {
@@ -2345,6 +2347,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
           end_block_id: null,
           block_text: renderedText || thread.anchor.quote || sourceText,
           block_count: 1,
+          section: {
+            heading_path: thread.anchor.heading_path ?? null,
+            section_index: thread.anchor.section_index ?? null,
+            section_index_path: thread.anchor.section_index_path ?? null,
+          },
         },
       });
     },
@@ -3584,9 +3591,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                         onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
                         isBookmarked={isBlockBookmarked}
                         onToggleBookmark={(el) => void onToggleBlockBookmark(el)}
-                        onEditChapter={(headingBlockId) =>
+                        onEditChapter={(headingBlockId, headingCopy) =>
                           navigate(
-                            `/d/${doc.uid}/edit?chapter=${encodeURIComponent(headingBlockId)}`,
+                            `/d/${doc.uid}/edit${chapterEditQuery(headingBlockId, headingCopy)}`,
                           )
                         }
                       />

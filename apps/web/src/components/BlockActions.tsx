@@ -1,12 +1,14 @@
 import { BookmarkFilledIcon, BookmarkIcon } from '@radix-ui/react-icons';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { isBookmarkableBlock } from '../lib/selection.js';
+import { anchorElements } from '../lib/anchor-target.js';
+import { blockAnchorSection, isBookmarkableBlock } from '../lib/selection.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
 interface Props {
   rootRef: React.RefObject<HTMLElement | null>;
   onPropose: (target: ProposalTarget) => void;
-  onEditChapter?: (headingBlockId: string) => void;
+  /** `headingCopy`: which of the headings carrying that id, counting from 0. */
+  onEditChapter?: (headingBlockId: string, headingCopy: number) => void;
   /** Whether this block element already carries one of the reader's bookmarks. */
   isBookmarked?: (el: HTMLElement) => boolean;
   /** Adds the reader's bookmark to the block, or removes it. */
@@ -184,9 +186,15 @@ export function BlockActions({
 
   function propose() {
     const el = targetElement();
-    if (!el || !renderedTarget) return;
+    const root = rootRef.current;
+    if (!el || !root || !renderedTarget) return;
     const blockText = (el.textContent ?? '').replace(/\s+/gu, ' ').trim();
-    onPropose({ block_id: renderedTarget.blockId, block_text: blockText, block_count: 1 });
+    onPropose({
+      block_id: renderedTarget.blockId,
+      block_text: blockText,
+      block_count: 1,
+      section: blockAnchorSection(root, el),
+    });
     setHoveredTarget(null);
   }
 
@@ -198,8 +206,11 @@ export function BlockActions({
   }
 
   function editChapter() {
-    if (!renderedTarget?.isHeading) return;
-    onEditChapter?.(renderedTarget.blockId);
+    const el = targetElement();
+    const root = rootRef.current;
+    if (!el || !root || !renderedTarget?.isHeading) return;
+    const copy = anchorElements(root, renderedTarget.blockId).indexOf(el);
+    onEditChapter?.(renderedTarget.blockId, Math.max(0, copy));
     setHoveredTarget(null);
   }
 

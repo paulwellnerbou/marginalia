@@ -1,5 +1,6 @@
 import { joinSpanQuote } from '@marginalia/renderer/anchor-span';
 import type { SectionContext } from '@marginalia/renderer/section-score';
+import type { AnchorSection } from './anchor-target.js';
 import type { CommentAnchor } from './api.js';
 import { anchorIdOf, elementsIntersectingRange } from './block-span.js';
 import { blockTextOf, isInjectedChromeText, normalizeWs } from './block-text.js';
@@ -71,8 +72,7 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
   // Section context is computed against the enclosing top-level block
   // even when the comment is anchored to a sub-block — heading path /
   // section index are properties of the section the block lives in.
-  const sectionTarget = first.el.dataset.block ? first.el : closestTopBlock(first.el);
-  const section = sectionTarget ? computeSectionContext(root, sectionTarget) : ROOT_SECTION;
+  const section = blockSectionOf(root, first.el);
   return {
     block_id: first.blockId,
     end_block_id: slices.length > 1 ? last.blockId : null,
@@ -121,8 +121,7 @@ export function captureBlockAnchor(root: HTMLElement, el: HTMLElement): CommentA
   const quote = blockText.slice(0, BLOCK_QUOTE_LIMIT);
   if (!quote) return null;
 
-  const sectionTarget = el.dataset.block ? el : closestTopBlock(el);
-  const section = sectionTarget ? computeSectionContext(root, sectionTarget) : ROOT_SECTION;
+  const section = blockSectionOf(root, el);
   return {
     block_id: blockId,
     end_block_id: null,
@@ -219,8 +218,24 @@ export interface BlockSection extends SectionContext {
 /** Before any heading: the root section, nothing in it yet. */
 const ROOT_SECTION: BlockSection = { headingPath: [], sectionIndex: 0, sectionIndexPath: [0] };
 
-function computeSectionContext(root: HTMLElement, target: HTMLElement): BlockSection {
+/**
+ * The section a `[data-block]` / `[data-subblock]` element sits in — what
+ * tells the copies of a repeated block apart, since they share one id.
+ */
+export function blockSectionOf(root: HTMLElement, el: HTMLElement): BlockSection {
+  const target = el.dataset.block ? el : closestTopBlock(el);
+  if (!target) return ROOT_SECTION;
   return sectionContextsOf(root, new Set([target])).get(target) ?? ROOT_SECTION;
+}
+
+/** `blockSectionOf` in the shape an anchor posts it. */
+export function blockAnchorSection(root: HTMLElement, el: HTMLElement): AnchorSection {
+  const section = blockSectionOf(root, el);
+  return {
+    heading_path: section.headingPath,
+    section_index: section.sectionIndex,
+    section_index_path: section.sectionIndexPath,
+  };
 }
 
 /**

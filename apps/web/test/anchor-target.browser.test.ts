@@ -8,7 +8,11 @@ import type {
   findAnchorBlock,
   resolveAnchorElement,
 } from '../src/lib/anchor-target.js';
-import type { collectTopLevelBlocks, sectionContextsOf } from '../src/lib/selection.js';
+import type {
+  blockAnchorSection,
+  collectTopLevelBlocks,
+  sectionContextsOf,
+} from '../src/lib/selection.js';
 
 /** What the fixture hangs on `window` for the page to call. */
 interface AnchorTargetApi {
@@ -16,6 +20,7 @@ interface AnchorTargetApi {
   resolveAnchorElement: typeof resolveAnchorElement;
   collectTopLevelBlocks: typeof collectTopLevelBlocks;
   sectionContextsOf: typeof sectionContextsOf;
+  blockAnchorSection: typeof blockAnchorSection;
 }
 
 // Which element an anchor lands on is decided by walking the live DOM —
@@ -218,6 +223,32 @@ describe.if(process.env.MARGINALIA_TEST_PROFILE === 'chromium')(
           section_index_path: [8, 1, 0],
         }),
       ).toBe(2);
+    });
+
+    test('the section a proposal is posted with leads back to the copy it was made on', async () => {
+      // A proposal on a repeated heading or sub-block has to name its copy,
+      // or the server splices the first one.
+      const roundTrips = await page.evaluate(() => {
+        const { blockAnchorSection, findAnchorBlock } = (
+          window as unknown as { anchorTarget: AnchorTargetApi }
+        ).anchorTarget;
+        const root = document.getElementById('doc') as HTMLElement;
+        const copies = Array.from(root.querySelectorAll<HTMLElement>('[data-block="h-elias"]'));
+        const item = root.querySelector('[data-subblock="li-b"]') as HTMLElement;
+        return {
+          headings: copies.map((el) => {
+            const chosen = findAnchorBlock(root, 'h-elias', blockAnchorSection(root, el), null);
+            return chosen ? copies.indexOf(chosen) : -1;
+          }),
+          item: blockAnchorSection(root, item),
+        };
+      });
+      expect(roundTrips.headings).toEqual([0, 1, 2]);
+      expect(roundTrips.item).toEqual({
+        heading_path: ['Crestwood', 'Chapter 2', 'Elias'],
+        section_index: 3,
+        section_index_path: [11, 11, 4, 3],
+      });
     });
 
     test('without a stored section, a repeated id means its first element', async () => {

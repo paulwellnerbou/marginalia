@@ -1,7 +1,7 @@
-import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
+import type { BlockSourceRange, LocatedBlocks } from '@marginalia/renderer/locate-block';
 import type { DocumentFormat } from './api.js';
 
-type BlockLocator = (source: string) => Map<string, BlockSourceRange>;
+type BlockLocator = (source: string) => LocatedBlocks;
 
 const locatorPromises = new Map<DocumentFormat, Promise<BlockLocator>>();
 
@@ -16,14 +16,19 @@ export function loadBlockRanges(
   source: string,
   format: DocumentFormat,
 ): Promise<Map<string, BlockSourceRange>> {
+  return loadLocatedBlocks(source, format).then((located) => located.byId);
+}
+
+/** Like `loadBlockRanges`, keeping every copy of a repeated block too. */
+export function loadLocatedBlocks(source: string, format: DocumentFormat): Promise<LocatedBlocks> {
   let promise = locatorPromises.get(format);
   if (!promise) {
     promise =
       format === 'asciidoc'
         ? import('@marginalia/renderer/locate-block-asciidoc').then(
-            (module) => module.locateAllBlocksAsciidoc,
+            (module) => module.locateBlocksAsciidoc,
           )
-        : import('@marginalia/renderer/locate-block').then((module) => module.locateAllBlocks);
+        : import('@marginalia/renderer/locate-block').then((module) => module.locateBlocks);
     locatorPromises.set(format, promise);
     promise.catch(() => {
       if (locatorPromises.get(format) === promise) locatorPromises.delete(format);

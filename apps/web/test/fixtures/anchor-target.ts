@@ -1,5 +1,9 @@
 import { findAnchorBlock, resolveAnchorElement } from '../../src/lib/anchor-target.js';
-import { collectTopLevelBlocks, sectionContextsOf } from '../../src/lib/selection.js';
+import {
+  blockAnchorSection,
+  collectTopLevelBlocks,
+  sectionContextsOf,
+} from '../../src/lib/selection.js';
 
 // A document that heads three of its sections with the same name, the way
 // the renderer draws one: ids are content hashes, so the repeated heading
@@ -28,5 +32,11 @@ document.body.innerHTML = `
 </article>`;
 
 Object.assign(window, {
-  anchorTarget: { findAnchorBlock, resolveAnchorElement, collectTopLevelBlocks, sectionContextsOf },
+  anchorTarget: {
+    findAnchorBlock,
+    resolveAnchorElement,
+    collectTopLevelBlocks,
+    sectionContextsOf,
+    blockAnchorSection,
+  },
 });

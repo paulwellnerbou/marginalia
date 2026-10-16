@@ -70,12 +70,12 @@ describe('proposals on a repeated block', () => {
     });
   }
 
-  async function upload(): Promise<{ uid: string; token: string }> {
+  async function upload(markdown = SOURCE): Promise<{ uid: string; token: string }> {
     const res = await app.hono.fetch(
       new Request('http://test/api/documents', {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({ invite_only: false, markdown: SOURCE }),
+        body: JSON.stringify({ invite_only: false, markdown }),
       }),
     );
     expect(res.status).toBe(201);
@@ -209,6 +209,31 @@ describe('proposals on a repeated block', () => {
     const proposalId = await propose(uid, token, { block_id: first!.id, quote: '"Go on."' });
     expect(await app.store.readProposalTip({ uid, format: 'markdown' }, proposalId)).toBe(
       SOURCE.replace('## Chapter 2\n\n"Go on."', `## Chapter 2\n\n${REPLACEMENT}`),
+    );
+  });
+
+  test('renaming the second of two same-named chapters renames the second', async () => {
+    // A chapter inserted ahead of "Chapter 4" under the same name: both
+    // headings share one id and one heading path, and only the position
+    // within that path tells them apart.
+    const markdown = '# Book\n\n## Chapter 4\n\nNew prose.\n\n## Chapter 4\n\nOld prose.\n';
+    const { uid, token } = await upload(markdown);
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${uid}`, { headers: headers(token) }),
+    );
+    const { rendered } = (await res.json()) as { rendered: { blocks: RenderedBlock[] } };
+    const headings = rendered.blocks.filter((b) => b.text === 'Chapter 4');
+    expect(headings.length).toBe(2);
+    expect(headings[1]!.headingPath).toEqual(headings[0]!.headingPath);
+
+    const proposalId = await propose(
+      uid,
+      token,
+      anchorOn(headings[1]!, 'Chapter 4'),
+      '## Chapter 5',
+    );
+    expect(await app.store.readProposalTip({ uid, format: 'markdown' }, proposalId)).toBe(
+      '# Book\n\n## Chapter 4\n\nNew prose.\n\n## Chapter 5\n\nOld prose.\n',
     );
   });
 });

@@ -1,3 +1,4 @@
+import type { AnchorSection } from './anchor-target.js';
 import { getClientId, getDisplayName, type Identity } from './identity.js';
 import { loadInviteToken } from './invite.js';
 import { markTransportFailure } from './retry.js';
@@ -1934,6 +1935,8 @@ export function createEditProposal(
     anchor_block_id: string;
     anchor_end_block_id?: string | null;
     anchor_quote: string;
+    /** Without it the server takes the first copy of a repeated block. */
+    anchor_section?: AnchorSection | null;
     proposed_text: string;
     rationale?: string | null;
     /**
@@ -1951,6 +1954,7 @@ export function createEditProposal(
         block_id: payload.anchor_block_id,
         end_block_id: payload.anchor_end_block_id ?? null,
         quote: payload.anchor_quote,
+        ...payload.anchor_section,
       },
       body: payload.rationale,
       proposal: {
