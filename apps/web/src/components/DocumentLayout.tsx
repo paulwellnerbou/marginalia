@@ -1,4 +1,8 @@
-import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
+import type {
+  BlockOccurrence,
+  BlockSourceRange,
+  LocatedBlocks,
+} from '@marginalia/renderer/locate-block';
 import {
   BookmarkIcon,
   ChevronLeftIcon,
@@ -67,7 +71,7 @@ import {
   uploadAsset,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
-import { loadBlockRanges } from '../lib/block-range-loader.js';
+import { loadLocatedBlocks } from '../lib/block-range-loader.js';
 import {
   type BookmarkMarkerSpec,
   bookmarkMarkerSpecs,
@@ -83,6 +87,7 @@ import {
   revealChapterOf,
   showChapter,
 } from '../lib/chapter-reading.js';
+import { chapterEditQuery } from '../lib/chapter-scope.js';
 import { buildCommentHighlights } from '../lib/comment-highlights.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
@@ -258,6 +263,7 @@ function isCompactViewport(): boolean {
 const COMMENTS_COLUMN_MIN_WIDTH = 700;
 
 const EMPTY_BLOCK_RANGES = new Map<string, BlockSourceRange>();
+const EMPTY_BLOCK_OCCURRENCES = new Map<string, BlockOccurrence[]>();
 /** Delay before scrolling to a specific reply after the parent thread has expanded (ms). */
 const REPLY_SCROLL_DELAY_MS = 900;
 const EMPTY_SECTION_FILTER: ReadonlySet<string> = new Set();
@@ -688,21 +694,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     uid: string;
     source: string;
     format: Document['format'];
-    ranges: Map<string, BlockSourceRange>;
+    located: LocatedBlocks;
   } | null>(null);
   const blockRangesAvailable =
     loadedBlockRanges?.uid === doc.uid && loadedBlockRanges.format === doc.format;
   const blockRangesReady = blockRangesAvailable && loadedBlockRanges.source === liveSource;
-  const blockRanges = blockRangesAvailable ? loadedBlockRanges.ranges : EMPTY_BLOCK_RANGES;
+  const blockRanges = blockRangesAvailable ? loadedBlockRanges.located.byId : EMPTY_BLOCK_RANGES;
+  const blockOccurrences = blockRangesAvailable
+    ? loadedBlockRanges.located.occurrences
+    : EMPTY_BLOCK_OCCURRENCES;
   const blockRangeSource = blockRangesAvailable ? loadedBlockRanges.source : liveSource;
 
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      void loadBlockRanges(liveSource, doc.format).then(
-        (ranges) => {
+      void loadLocatedBlocks(liveSource, doc.format).then(
+        (located) => {
           if (!cancelled) {
-            setLoadedBlockRanges({ uid: doc.uid, source: liveSource, format: doc.format, ranges });
+            setLoadedBlockRanges({ uid: doc.uid, source: liveSource, format: doc.format, located });
           }
         },
         (err) => reportError('DocumentLayout.blockRanges', err, { uid: doc.uid }),
@@ -2273,6 +2282,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         const req: Parameters<typeof apiCreateProposal>[1] = {
           anchor_block_id: pendingProposalTarget.block_id,
           anchor_quote: pendingProposalTarget.block_text,
+          anchor_section: pendingProposalTarget.section ?? null,
           proposed_text: payload.proposed_text,
         };
         if (pendingProposalTarget.end_block_id) {
@@ -2345,6 +2355,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
           end_block_id: null,
           block_text: renderedText || thread.anchor.quote || sourceText,
           block_count: 1,
+          section: {
+            heading_path: thread.anchor.heading_path ?? null,
+            section_index: thread.anchor.section_index ?? null,
+            section_index_path: thread.anchor.section_index_path ?? null,
+          },
         },
       });
     },
@@ -3584,9 +3599,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                         onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
                         isBookmarked={isBlockBookmarked}
                         onToggleBookmark={(el) => void onToggleBlockBookmark(el)}
-                        onEditChapter={(headingBlockId) =>
+                        onEditChapter={(headingBlockId, headingCopy) =>
                           navigate(
-                            `/d/${doc.uid}/edit?chapter=${encodeURIComponent(headingBlockId)}`,
+                            `/d/${doc.uid}/edit${chapterEditQuery(headingBlockId, headingCopy)}`,
                           )
                         }
                       />
@@ -3881,7 +3896,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
           docUid={doc.uid}
           docSource={blockRangeSource}
           docFormat={doc.format}
-          blockRanges={blockRanges}
+          blockOccurrences={blockOccurrences}
           attachedAssets={doc.attached_assets}
           needsName={!displayName}
           onCancel={() => setPendingDraft(null)}

@@ -1,12 +1,29 @@
 import { describe, expect, test } from 'bun:test';
-import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
-import { mergeBlockRanges } from './mergeBlockRanges.js';
+import { locateAnchorSpan } from '../src/anchor-range.js';
+import { type BlockOccurrence, type BlockSourceRange, locateBlocks } from '../src/locate-block.js';
 
-function makeRanges(entries: Array<[string, BlockSourceRange]>): Map<string, BlockSourceRange> {
-  return new Map(entries);
+/** One copy per id, outside any heading. */
+function makeRanges(entries: Array<[string, BlockSourceRange]>): Map<string, BlockOccurrence[]> {
+  return new Map(
+    entries.map(([id, range], i) => [
+      id,
+      [{ ...range, id, headingPath: [], sectionIndex: i, sectionIndexPath: [i] }],
+    ]),
+  );
 }
 
-describe('mergeBlockRanges', () => {
+/** Just the offsets — a merged span's `kind`/`text` say nothing. */
+function mergeBlockRanges(
+  ranges: Map<string, BlockOccurrence[]>,
+  startId: string,
+  endId: string | null,
+  format: 'markdown' | 'asciidoc',
+): { start: number; end: number } | null {
+  const range = locateAnchorSpan(ranges, startId, endId, null, format);
+  return range ? { start: range.start, end: range.end } : null;
+}
+
+describe('locateAnchorSpan endpoints', () => {
   test('returns the start range when endId is null', () => {
     const ranges = makeRanges([['p1', { start: 0, end: 10, kind: 'paragraph', text: 'first' }]]);
     expect(mergeBlockRanges(ranges, 'p1', null, 'markdown')).toEqual({ start: 0, end: 10 });
@@ -106,5 +123,40 @@ describe('mergeBlockRanges', () => {
     ]);
     expect(mergeBlockRanges(ranges, 'p', 'i', 'markdown')).toBeNull();
     expect(mergeBlockRanges(ranges, 'i', 'p', 'markdown')).toBeNull();
+  });
+});
+
+describe('locateAnchorSpan on repeated blocks', () => {
+  // The same reply opens both chapters, and the same line ends them.
+  const source =
+    '# Book\n\n## One\n\nMm.\n\nFirst.\n\nThe end.\n\n## Two\n\nMm.\n\nSecond.\n\nThe end.\n';
+  const { occurrences } = locateBlocks(source);
+  const copies = (text: string) => [...occurrences.values()].flat().filter((o) => o.text === text);
+  const slice = (range: { start: number; end: number } | null) =>
+    range ? source.slice(range.start, range.end) : null;
+  const [, secondMm] = copies('Mm.');
+  const second = copies('Second.')[0]!;
+  const [, secondEnd] = copies('The end.');
+
+  test('a span starting on a later copy starts there, not at the first copy', () => {
+    const section = {
+      headingPath: secondMm!.headingPath,
+      sectionIndexPath: secondMm!.sectionIndexPath,
+    };
+    expect(slice(locateAnchorSpan(occurrences, secondMm!.id, second.id, section, 'markdown'))).toBe(
+      'Mm.\n\nSecond.',
+    );
+  });
+
+  test('without a section the span starts at the first copy', () => {
+    expect(slice(locateAnchorSpan(occurrences, secondMm!.id, second.id, null, 'markdown'))).toBe(
+      'Mm.\n\nFirst.\n\nThe end.\n\n## Two\n\nMm.\n\nSecond.',
+    );
+  });
+
+  test('a repeated end resolves to its first copy after the start', () => {
+    const section = { headingPath: second.headingPath, sectionIndexPath: second.sectionIndexPath };
+    const range = locateAnchorSpan(occurrences, second.id, secondEnd!.id, section, 'markdown');
+    expect(range).toMatchObject({ start: second.start, end: secondEnd!.end });
   });
 });

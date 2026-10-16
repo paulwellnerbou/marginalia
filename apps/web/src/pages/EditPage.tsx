@@ -24,9 +24,14 @@ import {
   uploadAsset,
 } from '../lib/api.js';
 import { appendSource, firstBlockFrom, lastBlock } from '../lib/append-source.js';
-import { loadBlockRanges } from '../lib/block-range-loader.js';
+import { loadBlockRanges, loadLocatedBlocks } from '../lib/block-range-loader.js';
 import { renderedBlockTexts } from '../lib/block-text.js';
-import { type ChapterScope, resolveChapterScope } from '../lib/chapter-scope.js';
+import {
+  type ChapterScope,
+  chapterCopyParam,
+  chapterEditQuery,
+  resolveChapterScope,
+} from '../lib/chapter-scope.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
@@ -94,6 +99,8 @@ export function EditPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
   const [searchParams] = useSearchParams();
   const chapterBlockId = searchParams.get('chapter');
+  /** Which of the headings sharing `chapterBlockId` — same-titled chapters share one id. */
+  const chapterCopy = chapterCopyParam(searchParams.get('copy'));
   /**
    * `?append`: the editor starts empty and Save puts what was written after
    * the document's last line, so adding a chapter to a long document needs
@@ -108,7 +115,7 @@ export function EditPage() {
     // URL no longer leaks the bearer credential, even if the claim request is
     // still in flight or the component later re-renders for a different uid.
     const query = chapterBlockId
-      ? `?chapter=${encodeURIComponent(chapterBlockId)}`
+      ? chapterEditQuery(chapterBlockId, chapterCopy)
       : appending
         ? '?append'
         : '';
@@ -117,7 +124,7 @@ export function EditPage() {
       // 400 (admin invite), 409 (password-protected), 404 (invite gone):
       // fall back to invite-header auth via the token in localStorage.
     });
-  }, [uid, token, chapterBlockId, appending]);
+  }, [uid, token, chapterBlockId, chapterCopy, appending]);
 
   const navigate = useNavigate();
   const [doc, setDoc] = useState<Document | null>(null);
@@ -285,9 +292,15 @@ export function EditPage() {
         if (cancelled) return;
         let scope: ChapterScope | null = null;
         if (chapterBlockId) {
-          const ranges = await loadBlockRanges(d.source, d.format);
+          const located = await loadLocatedBlocks(d.source, d.format);
           if (cancelled) return;
-          scope = resolveChapterScope(d.source, d.rendered.html, ranges, chapterBlockId);
+          scope = resolveChapterScope(
+            d.source,
+            d.rendered.html,
+            located.occurrences,
+            chapterBlockId,
+            chapterCopy,
+          );
           if (!scope) {
             setError('This chapter could not be found. It may have changed or been removed.');
             return;
@@ -310,7 +323,7 @@ export function EditPage() {
     return () => {
       cancelled = true;
     };
-  }, [uid, chapterBlockId, appending]);
+  }, [uid, chapterBlockId, chapterCopy, appending]);
 
   // Mirror ViewPage: sync localStorage to the server's authoritative
   // name so the shared UserMenu label and save identity match the
@@ -617,12 +630,13 @@ export function EditPage() {
         // match our base; otherwise replacing it would silently overwrite a
         // concurrent edit.
         const latest = await getDocument(targetUid);
-        const latestRanges = await loadBlockRanges(latest.source, latest.format);
+        const latestBlocks = await loadLocatedBlocks(latest.source, latest.format);
         const latestScope = resolveChapterScope(
           latest.source,
           latest.rendered.html,
-          latestRanges,
+          latestBlocks.occurrences,
           chapterScope.headingBlockId,
+          chapterScope.headingCopy,
         );
         if (!latestScope || latestScope.source !== savedSource) {
           setError(
@@ -739,6 +753,7 @@ export function EditPage() {
             proposed_text: source,
             rationale: rationale.trim() || null,
             anchor_block_id: chapterScope.headingBlockId,
+            anchor_section: chapterScope.section,
             anchor_end_block_id:
               chapterScope.endBlockId === chapterScope.headingBlockId
                 ? null

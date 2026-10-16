@@ -1,8 +1,9 @@
 import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import type { AnchorSection } from '../lib/anchor-target.js';
 import type { CommentAnchor, DocumentFormat } from '../lib/api.js';
-import { captureSelection, selectionRect } from '../lib/selection.js';
+import { blockAnchorSection, captureSelection, selectionRect } from '../lib/selection.js';
 
 export interface ProposalTarget {
   block_id: string;
@@ -15,6 +16,8 @@ export interface ProposalTarget {
   block_text: string;
   /** Number of top-level blocks the span covers. 1 for single-block. */
   block_count: number;
+  /** Section of the first block, which says which copy a repeated block id means. */
+  section?: AnchorSection | null;
 }
 
 interface Props {
@@ -147,11 +150,13 @@ export function SelectionToolbar({ rootRef, docFormat, blockRanges, onAdd, onPro
       .map((el) => (el.textContent ?? '').replace(/\s+/gu, ' ').trim())
       .filter((s) => s.length > 0)
       .join('\n\n');
+    const first = span.textEls[0];
     onPropose?.({
       block_id: span.startId,
       end_block_id: span.endId,
       block_text: blockText,
       block_count: span.blockCount,
+      section: first ? blockAnchorSection(root, first) : null,
     });
     setState(null);
     window.getSelection()?.removeAllRanges();
