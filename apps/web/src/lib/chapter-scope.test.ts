@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { locateBlocks } from '@marginalia/renderer/locate-block';
+import { locateBlocksAsciidoc } from '@marginalia/renderer/locate-block-asciidoc';
+import { renderDocument } from '@marginalia/renderer/render';
 import {
   chapterCopyParam,
   chapterEditQuery,
@@ -71,6 +73,50 @@ describe('resolveChapterScopeFromBlocks', () => {
     expect(second?.section.section_index).toBe(3);
 
     expect(resolveChapterScopeFromBlocks(book, occurrences, blocks, heading, 2)).toBeNull();
+  });
+});
+
+/**
+ * The blocks the viewer's DOM lists, read off the rendered HTML: what the
+ * editor pairs, in order, with the locator's occurrences.
+ */
+function renderedBlocks(html: string) {
+  return [...html.matchAll(/<(\w+)[^>]*\sdata-block="([^"]+)"/g)].map((m) => {
+    const heading = /^h([1-6])$/i.exec(m[1]!);
+    return { id: m[2]!, headingLevel: heading ? Number(heading[1]) : null };
+  });
+}
+
+describe.each([
+  {
+    format: 'markdown' as const,
+    locate: locateBlocks,
+    book: '# Book\n\n## Chapter 4\n\nNew prose.\n\nThe end.\n\n## Chapter 4\n\nOld prose.\n\nThe end.\n',
+    second: '## Chapter 4\n\nOld prose.\n\nThe end.',
+  },
+  {
+    format: 'asciidoc' as const,
+    locate: locateBlocksAsciidoc,
+    book: '= Book\n\n== Chapter 4\n\nNew prose.\n\nThe end.\n\n== Chapter 4\n\nOld prose.\n\nThe end.\n',
+    second: '== Chapter 4\n\nOld prose.\n\nThe end.\n',
+  },
+])('a rendered $format book with two same-titled chapters', ({ format, locate, book, second }) => {
+  test('the second copy of the heading opens the second chapter', async () => {
+    const { html } = await renderDocument(book, format);
+    const blocks = renderedBlocks(html);
+    const { occurrences } = locate(book);
+    // The pairing only holds while both walks list the same blocks in
+    // the same order.
+    expect(blocks.map((b) => b.id)).toEqual(
+      [...occurrences.values()]
+        .flat()
+        .sort((a, b) => a.start - b.start)
+        .map((o) => o.id),
+    );
+    const heading = blocks.find((b) => b.headingLevel === 2)!.id;
+    const scope = resolveChapterScopeFromBlocks(book, occurrences, blocks, heading, 1);
+    expect(scope?.source).toBe(second);
+    expect(scope?.section.section_index).toBe(3);
   });
 });
 
