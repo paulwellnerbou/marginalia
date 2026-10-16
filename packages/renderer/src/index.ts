@@ -1,3 +1,5 @@
+export type { AnchorSection } from './anchor-range.js';
+export { chooseBySection, locateAnchorSpan } from './anchor-range.js';
 export {
   joinSpanQuote,
   SPAN_SEPARATOR,

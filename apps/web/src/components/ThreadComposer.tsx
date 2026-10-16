@@ -1,4 +1,5 @@
-import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
+import { locateAnchorSpan } from '@marginalia/renderer/anchor-range';
+import type { BlockOccurrence } from '@marginalia/renderer/locate-block';
 import type { RenderResult } from '@marginalia/renderer/types';
 import { EnterFullScreenIcon, ExitFullScreenIcon } from '@radix-ui/react-icons';
 import { Button, Dialog, Flex, IconButton, Text, TextArea, TextField } from '@radix-ui/themes';
@@ -8,7 +9,6 @@ import type { AttachedAsset, DocumentFormat, Thread } from '../lib/api.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { reportError } from '../lib/log.js';
 import { loadRenderer } from '../lib/renderer-loader.js';
-import { mergeBlockRanges } from './mergeBlockRanges.js';
 import { RenderedDoc } from './RenderedDoc.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
@@ -340,7 +340,8 @@ interface ProposalComposerProps {
   docUid: string;
   docSource: string;
   docFormat: DocumentFormat;
-  blockRanges: Map<string, BlockSourceRange>;
+  /** Every copy of every block: the target's section picks the copy to prefill from. */
+  blockOccurrences: ReadonlyMap<string, readonly BlockOccurrence[]>;
   /** Drives the preview's asset rewrite so attached images render as
    *  `/d/<uid>/asset/<id>` instead of broken `cat.png` refs. */
   attachedAssets: AttachedAsset[];
@@ -479,7 +480,7 @@ export function ProposalComposer({
   docUid,
   docSource,
   docFormat,
-  blockRanges,
+  blockOccurrences,
   attachedAssets,
   needsName,
   onCancel,
@@ -494,7 +495,7 @@ export function ProposalComposer({
             docUid={docUid}
             docSource={docSource}
             docFormat={docFormat}
-            blockRanges={blockRanges}
+            blockOccurrences={blockOccurrences}
             attachedAssets={attachedAssets}
             needsName={needsName}
             onCancel={onCancel}
@@ -514,7 +515,7 @@ function ProposalComposerBody({
   docUid,
   docSource,
   docFormat,
-  blockRanges,
+  blockOccurrences,
   attachedAssets,
   needsName,
   onCancel,
@@ -527,7 +528,7 @@ function ProposalComposerBody({
   docUid: string;
   docSource: string;
   docFormat: DocumentFormat;
-  blockRanges: Map<string, BlockSourceRange>;
+  blockOccurrences: ReadonlyMap<string, readonly BlockOccurrence[]>;
   attachedAssets: AttachedAsset[];
   needsName: boolean;
   onCancel: () => void;
@@ -536,15 +537,23 @@ function ProposalComposerBody({
   onToggleExpanded: () => void;
   onTitlePointerDown: (e: React.PointerEvent) => void;
 }) {
+  // Resolved as the server will splice it, so the copy shown is the copy replaced.
   const originalSource = useMemo(() => {
-    const range = mergeBlockRanges(
-      blockRanges,
+    const section = target.section
+      ? {
+          headingPath: target.section.heading_path ?? null,
+          sectionIndexPath: target.section.section_index_path ?? null,
+        }
+      : null;
+    const range = locateAnchorSpan(
+      blockOccurrences,
       target.block_id,
       target.end_block_id ?? null,
+      section,
       docFormat,
     );
     return range ? docSource.slice(range.start, range.end) : '';
-  }, [docSource, blockRanges, target.block_id, target.end_block_id, docFormat]);
+  }, [docSource, blockOccurrences, target, docFormat]);
 
   const [value, setValue] = useState(originalSource);
   const [rationale, setRationale] = useState('');

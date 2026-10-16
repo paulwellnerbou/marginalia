@@ -1,4 +1,8 @@
-import type { BlockSourceRange } from '@marginalia/renderer/locate-block';
+import type {
+  BlockOccurrence,
+  BlockSourceRange,
+  LocatedBlocks,
+} from '@marginalia/renderer/locate-block';
 import {
   BookmarkIcon,
   ChevronLeftIcon,
@@ -67,7 +71,7 @@ import {
   uploadAsset,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
-import { loadBlockRanges } from '../lib/block-range-loader.js';
+import { loadLocatedBlocks } from '../lib/block-range-loader.js';
 import {
   type BookmarkMarkerSpec,
   bookmarkMarkerSpecs,
@@ -259,6 +263,7 @@ function isCompactViewport(): boolean {
 const COMMENTS_COLUMN_MIN_WIDTH = 700;
 
 const EMPTY_BLOCK_RANGES = new Map<string, BlockSourceRange>();
+const EMPTY_BLOCK_OCCURRENCES = new Map<string, BlockOccurrence[]>();
 /** Delay before scrolling to a specific reply after the parent thread has expanded (ms). */
 const REPLY_SCROLL_DELAY_MS = 900;
 const EMPTY_SECTION_FILTER: ReadonlySet<string> = new Set();
@@ -689,21 +694,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     uid: string;
     source: string;
     format: Document['format'];
-    ranges: Map<string, BlockSourceRange>;
+    located: LocatedBlocks;
   } | null>(null);
   const blockRangesAvailable =
     loadedBlockRanges?.uid === doc.uid && loadedBlockRanges.format === doc.format;
   const blockRangesReady = blockRangesAvailable && loadedBlockRanges.source === liveSource;
-  const blockRanges = blockRangesAvailable ? loadedBlockRanges.ranges : EMPTY_BLOCK_RANGES;
+  const blockRanges = blockRangesAvailable ? loadedBlockRanges.located.byId : EMPTY_BLOCK_RANGES;
+  const blockOccurrences = blockRangesAvailable
+    ? loadedBlockRanges.located.occurrences
+    : EMPTY_BLOCK_OCCURRENCES;
   const blockRangeSource = blockRangesAvailable ? loadedBlockRanges.source : liveSource;
 
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      void loadBlockRanges(liveSource, doc.format).then(
-        (ranges) => {
+      void loadLocatedBlocks(liveSource, doc.format).then(
+        (located) => {
           if (!cancelled) {
-            setLoadedBlockRanges({ uid: doc.uid, source: liveSource, format: doc.format, ranges });
+            setLoadedBlockRanges({ uid: doc.uid, source: liveSource, format: doc.format, located });
           }
         },
         (err) => reportError('DocumentLayout.blockRanges', err, { uid: doc.uid }),
@@ -3888,7 +3896,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
           docUid={doc.uid}
           docSource={blockRangeSource}
           docFormat={doc.format}
-          blockRanges={blockRanges}
+          blockOccurrences={blockOccurrences}
           attachedAssets={doc.attached_assets}
           needsName={!displayName}
           onCancel={() => setPendingDraft(null)}
