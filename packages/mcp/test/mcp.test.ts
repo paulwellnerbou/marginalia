@@ -535,6 +535,69 @@ describe('marginalia MCP server', () => {
     expect(threads).toContain('- Distance to the well: unknown');
   });
 
+  test('says which copy of a repeated word a comment marks', async () => {
+    const { adminUrl, uid } = await seedBook();
+    const invite = await call('create_invite', {
+      document: adminUrl,
+      role: 'collaborator',
+      display_name: REVIEWER.displayName,
+    });
+    const token = new URL(/(http\S+)/.exec(invite)?.[1] as string).pathname.split('/')[3] as string;
+    const listed = await call('list_blocks', { document: adminUrl, query: 'The caravan left' });
+    const blockId = /block_id=([0-9a-f]{16})/.exec(listed)?.[1] as string;
+    expect(blockId).toBeTruthy();
+
+    // What the viewer stores for a selection of the second "the" of three.
+    const text =
+      'The caravan left before dawn, when the sand was still cold enough to walk on. ' +
+      'Ibrahim counted the camels twice and found the same number both times.';
+    const at = text.indexOf('the camels');
+    await reviewerComments(uid, token, blockId, 'the', 'Which camels?', undefined, {
+      prefix: text.slice(at - 32, at),
+      suffix: text.slice(at + 3, at + 35),
+      start_offset: at,
+      end_offset: at + 3,
+    });
+
+    const threads = await call('list_threads', { document: adminUrl });
+    expect(threads).toContain('quoted text: "the"');
+    expect(threads).toContain('walk on. Ibrahim counted ⟦the⟧ camels twice');
+    expect(threads).toContain('quote position: occurrence 2 of 3');
+
+    const created = await call('create_comment', {
+      document: adminUrl,
+      block_id: blockId,
+      quote: 'the',
+      quote_occurrence: 3,
+      body: 'And this one?',
+    });
+    expect(created).toContain('Marks occurrence 3 of 3');
+    const mine = await call('list_threads', {
+      document: adminUrl,
+      thread_id: /^thread_id: (\S+)$/m.exec(created)?.[1] as string,
+    });
+    expect(mine).toContain('found ⟦the⟧ same number');
+    expect(mine).toContain('quote position: occurrence 3 of 3');
+
+    // Without the argument, the first copy as before, and a note saying so.
+    const defaulted = await call('create_comment', {
+      document: adminUrl,
+      block_id: blockId,
+      quote: 'the',
+      body: 'Default.',
+    });
+    expect(defaulted).toContain('this marks the first');
+
+    const tooFar = await callExpectingError('create_comment', {
+      document: adminUrl,
+      block_id: blockId,
+      quote: 'the',
+      quote_occurrence: 4,
+      body: 'Out of range.',
+    });
+    expect(tooFar).toContain('occurs only 3 times');
+  });
+
   test('refuses an ambiguous anchor rather than guessing a block', async () => {
     const { adminUrl } = await seedBook();
     const message = await callExpectingError('create_comment', {

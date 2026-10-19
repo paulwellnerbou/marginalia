@@ -1,12 +1,14 @@
 import { createPatch } from 'diff';
 import type { DocumentWire, ThreadCommentWire, ThreadWire } from './api-types.js';
 import {
+  ANCHOR_CONTEXT_LEN,
   anchorBlocks,
   anchorNeighbourhood,
   clip,
   type DocumentBlock,
   type DocumentBlockMap,
   type DocumentSection,
+  quotePosition,
   sectionAt,
   sectionByPath,
 } from './blocks.js';
@@ -340,7 +342,10 @@ export function threadDetail(
       spanEndId ? ` end_block_id=${spanEndId}` : ''
     } (${where}) link_status=${thread.link_status}`,
   );
-  if (anchor.quote) lines.push(`quoted text: ${JSON.stringify(clip(anchor.quote, 240))}`);
+  if (anchor.quote) {
+    lines.push(`quoted text: ${JSON.stringify(clip(anchor.quote, 240))}`);
+    lines.push(...quoteWhereabouts(anchor, spanEndId === null ? block : null));
+  }
   if (thread.proposal?.whole_document) lines.push('scope: replaces the WHOLE document on accept');
   if (thread.resolution) {
     lines.push(
@@ -412,6 +417,37 @@ export function threadDetail(
   }
 
   return lines.join('\n');
+}
+
+/**
+ * Which copy of the quote the comment marks. A short quote — a word, a
+ * comma — often occurs several times in one paragraph, and the quote
+ * alone cannot say which one the reader selected.
+ */
+function quoteWhereabouts(anchor: ThreadWire['anchor'], block: DocumentBlock | null): string[] {
+  const quote = anchor.quote ?? '';
+  // Older instances may omit the context; it is optional on the wire.
+  const prefix = anchor.prefix ?? '';
+  const suffix = anchor.suffix ?? '';
+  const lines: string[] = [];
+  if (prefix || suffix) {
+    const before = prefix.length >= ANCHOR_CONTEXT_LEN ? `…${prefix}` : prefix;
+    const after = suffix.length >= ANCHOR_CONTEXT_LEN ? `${suffix}…` : suffix;
+    lines.push(
+      `quote in context: ${JSON.stringify(`${before}⟦${clip(quote, 120)}⟧${after}`.replace(/\s+/gu, ' '))}`,
+    );
+  }
+  const position = block ? quotePosition(block.text, anchor) : null;
+  if (position && position.occurrences > 1) {
+    lines.push(
+      position.occurrence === null
+        ? `quote position: the quoted text occurs ${position.occurrences} times in the block; ` +
+            'go by the context above to tell which'
+        : `quote position: occurrence ${position.occurrence} of ${position.occurrences} of the ` +
+            `quoted text in the block (quote_occurrence=${position.occurrence})`,
+    );
+  }
+  return lines;
 }
 
 /**

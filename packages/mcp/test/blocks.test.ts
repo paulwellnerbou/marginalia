@@ -4,9 +4,12 @@ import type { DocumentWire } from '../src/api-types.js';
 import {
   anchorBlocks,
   anchorNeighbourhood,
+  BlockLookupError,
   buildAnchor,
   buildBlockMap,
   type DocumentBlock,
+  quotePosition,
+  quoteStarts,
   resolveBlock,
   resolveEndBlock,
   resolveSection,
@@ -301,11 +304,59 @@ describe('buildAnchor', () => {
     expect(anchor.start_offset).toBe(4);
   });
 
+  test('marks the requested copy of a phrase the block repeats', async () => {
+    const map = await buildBlockMap(await documentFrom('One, and two, and three.\n'));
+    const paragraph = map.blocks[0] as DocumentBlock;
+    expect(buildAnchor(paragraph, ', and').start_offset).toBe(3);
+    const second = buildAnchor(paragraph, ', and', null, 2);
+    expect(second.start_offset).toBe(12);
+    expect(second.prefix).toBe('One, and two');
+    expect(second.suffix).toBe(' three.');
+    expect(() => buildAnchor(paragraph, ', and', null, 3)).toThrow(BlockLookupError);
+    expect(() => buildAnchor(paragraph, undefined, null, 2)).toThrow('name it with quote');
+    // An unmatched quote still falls back to the whole block when no
+    // later copy was asked for.
+    expect(buildAnchor(paragraph, 'missing', null, 1).quote).toBe('One, and two, and three.');
+  });
+
   test('records a multi-block span through end_block_id', async () => {
     const map = await buildBlockMap(await documentFrom(SOURCE));
     const items = map.blocks.filter((b) => b.kind === 'listItem');
     const anchor = buildAnchor(items[0] as DocumentBlock, undefined, items[1] as DocumentBlock);
     expect(anchor.end_block_id).toBe((items[1] as DocumentBlock).id);
+  });
+});
+
+describe('quotePosition', () => {
+  const text = 'One, and two, and three, and four.';
+  const at = (n: number) => quoteStarts(text, ', and')[n - 1] as number;
+  const anchorAt = (start: number, offset: number | null = start) => ({
+    quote: ', and',
+    prefix: text.slice(Math.max(0, start - 32), start),
+    suffix: text.slice(start + 5, start + 37),
+    start_offset: offset,
+  });
+
+  test('names the copy the context and offset agree on', () => {
+    expect(quotePosition(text, anchorAt(at(2)))).toEqual({ occurrence: 2, occurrences: 3 });
+  });
+
+  test('trusts the context over an offset an earlier edit shifted', () => {
+    expect(quotePosition(text, anchorAt(at(3), at(1)))).toEqual({ occurrence: 3, occurrences: 3 });
+  });
+
+  test('falls back to the offset when no context is stored', () => {
+    const bare = { quote: ', and', prefix: '', suffix: '', start_offset: at(2) };
+    expect(quotePosition(text, bare)).toEqual({ occurrence: 2, occurrences: 3 });
+  });
+
+  test('admits it cannot tell when nothing singles a copy out', () => {
+    const bare = { quote: ', and', prefix: null, suffix: null, start_offset: null };
+    expect(quotePosition(text, bare)).toEqual({ occurrence: null, occurrences: 3 });
+  });
+
+  test('is null for a quote the block does not hold', () => {
+    expect(quotePosition(text, { ...anchorAt(0), quote: 'five' })).toBeNull();
   });
 });
 

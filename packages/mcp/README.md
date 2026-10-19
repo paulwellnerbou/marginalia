@@ -449,6 +449,13 @@ three chapters is one `block_id` on three blocks. `list_blocks` and
 is meant; a shared id without it is refused with the copies listed, so a
 proposal never lands two chapters away from the comment it answers.
 
+A short quote — a comma, a single word — often occurs several times in
+one paragraph. `list_threads` shows each quote in its surrounding text
+and, when the block holds more than one copy, prints
+`quote position: occurrence n of m`. `create_comment` /
+`create_proposal` take `quote_occurrence` to mark a copy other than the
+first.
+
 ## Downloads
 
 `export_document` writes files locally:

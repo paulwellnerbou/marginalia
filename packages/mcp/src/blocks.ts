@@ -85,7 +85,7 @@ export interface DocumentBlockMap {
   unresolved: string[];
 }
 
-const ANCHOR_CONTEXT_LEN = 32;
+export const ANCHOR_CONTEXT_LEN = 32;
 /** Server-side ceilings; exceeding them is a 400, so clamp instead. */
 const MAX_ANCHOR_QUOTE_LENGTH = 60000;
 
@@ -436,10 +436,25 @@ export function buildAnchor(
   block: DocumentBlock,
   quote: string | undefined,
   endBlock?: DocumentBlock | null,
+  quoteOccurrence?: number,
 ): AnchorPayload {
   const blockText = block.text;
   const requested = quote ? normalizeWhitespace(quote) : '';
-  let start = requested ? blockText.indexOf(requested) : -1;
+  const starts = quoteStarts(blockText, requested);
+  // Asking for a later copy than the block has is a misread of the block,
+  // and the whole-block fallback would hide that behind a valid anchor.
+  if (quoteOccurrence !== undefined && quoteOccurrence > 1 && quoteOccurrence > starts.length) {
+    throw new BlockLookupError(
+      !requested
+        ? 'quote_occurrence counts copies of a phrase; name it with quote or anchor_text.'
+        : starts.length === 0
+          ? `quote_occurrence=${quoteOccurrence}, but ${JSON.stringify(clip(requested, 80))} does not ` +
+            `occur in the rendered text of block ${block.id}.`
+          : `quote_occurrence=${quoteOccurrence}, but ${JSON.stringify(clip(requested, 80))} occurs ` +
+            `only ${starts.length} time${starts.length === 1 ? '' : 's'} in block ${block.id}.`,
+    );
+  }
+  let start = starts[(quoteOccurrence ?? 1) - 1] ?? -1;
   let effective = requested;
   if (start < 0) {
     effective = blockText;
@@ -459,6 +474,56 @@ export function buildAnchor(
     heading_path: block.headingPath,
     section_index: block.sectionIndex,
     section_index_path: block.sectionIndexPath,
+  };
+}
+
+/** Every offset at which `quote` starts in `text`, overlapping matches included. */
+export function quoteStarts(text: string, quote: string): number[] {
+  const starts: number[] = [];
+  if (!quote) return starts;
+  for (let at = text.indexOf(quote); at >= 0; at = text.indexOf(quote, at + 1)) starts.push(at);
+  return starts;
+}
+
+/** The fields of a thread anchor that place its quote inside the block. */
+export interface QuoteLocation {
+  quote: string | null;
+  prefix: string | null;
+  suffix: string | null;
+  start_offset: number | null;
+}
+
+/**
+ * Which copy of an anchor's quote, counted within the block's text, the
+ * anchor sits on. `occurrence` is null when the block holds several
+ * copies and neither the stored offset nor the context singles one out —
+ * an edit since can leave both stale. Null overall when the quote is
+ * not in the block at all.
+ */
+export function quotePosition(
+  blockText: string,
+  anchor: QuoteLocation,
+): { occurrence: number | null; occurrences: number } | null {
+  const quote = anchor.quote ?? '';
+  const starts = quoteStarts(blockText, quote);
+  if (starts.length === 0) return null;
+  if (starts.length === 1) return { occurrence: 1, occurrences: 1 };
+  const prefix = anchor.prefix ?? '';
+  const suffix = anchor.suffix ?? '';
+  // Context outranks the offset: an edit earlier in the block shifts the
+  // offset onto whichever copy now happens to sit there.
+  const scores = starts.map(
+    (at) =>
+      (blockText.slice(0, at).endsWith(prefix) &&
+      blockText.slice(at + quote.length).startsWith(suffix)
+        ? 2
+        : 0) + (at === anchor.start_offset ? 1 : 0),
+  );
+  const best = Math.max(...scores);
+  const winners = scores.filter((score) => score === best).length;
+  return {
+    occurrence: best > 0 && winners === 1 ? scores.indexOf(best) + 1 : null,
+    occurrences: starts.length,
   };
 }
 
