@@ -98,6 +98,19 @@ const DEFAULT_GC_LOOSE_OBJECTS = 512;
  */
 const DEFAULT_WRITES_PER_MAINTENANCE_CHECK = 50;
 
+/**
+ * `git gc`, minus packing refs.
+ *
+ * `pack-refs --prune` moves a ref into `packed-refs` and then deletes the
+ * loose file, while isomorphic-git resolves a ref by loading
+ * `packed-refs` first and only then reading the loose file. A gc landing
+ * between the two hands it the ref's old packed value — or nothing at
+ * all, on the repo's first pack — and a write built on that `main`
+ * drops whatever came after. Refs were never the bulk of these repos;
+ * the objects are, and those still pack.
+ */
+const GC_ARGS = ['-c', 'gc.packRefs=false', 'gc', '--quiet'];
+
 /** Tuning for the automatic repo packing described above. */
 export interface GitStoreMaintenanceOptions {
   /** Loose objects tolerated before a repo is packed. */
@@ -326,11 +339,11 @@ export class GitStore {
    *
    * Which means `gc` runs while isomorphic-git is still writing to the
    * same repo, and most of what it does is safe there: git takes its own
-   * lock, writes `packed-refs` atomically, keeps recent unreachable
-   * objects, and a loose object it packs away is still found — reads
-   * fall through to the packfile, and loose refs to `packed-refs`. The
-   * one thing that is not safe is the empty `objects/XX/` directories it
-   * reaps behind itself, which can strand a write that was about to use
+   * lock, keeps recent unreachable objects, and a loose object it packs
+   * away is still found — reads fall through to the packfile. Two things
+   * are not safe. Packing refs races isomorphic-git's ref lookup, so it
+   * is switched off (`GC_ARGS`). And the empty `objects/XX/` directories
+   * gc reaps behind itself can strand a write that was about to use
    * one. That is what the `fs` at the top of this file exists to absorb;
    * without it, packing a busy document fails the save that provoked it.
    */
@@ -385,7 +398,7 @@ export class GitStore {
     if (!existsSync(dir)) return;
     try {
       if ((await this.looseObjectCount(dir)) < this.looseObjectLimit) return;
-      await execFileAsync('git', ['gc', '--quiet'], { cwd: dir });
+      await execFileAsync('git', GC_ARGS, { cwd: dir });
       // A pack leaves no loose objects behind, so the next check is a
       // cheap no-op until another `looseObjectLimit` have accumulated.
     } catch (err) {
@@ -427,7 +440,7 @@ export class GitStore {
    */
   async packNow(uid: string): Promise<void> {
     this.writesSinceMaintenance.set(uid, 0);
-    await execFileAsync('git', ['gc', '--quiet'], { cwd: this.repoDir(uid) });
+    await execFileAsync('git', GC_ARGS, { cwd: this.repoDir(uid) });
   }
 
   /**

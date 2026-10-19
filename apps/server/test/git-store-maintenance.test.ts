@@ -109,6 +109,18 @@ Para C baseline.
     expect(await store.readProposalTip(doc, 'p-pruned')).toContain('Para C accepted.');
   });
 
+  test('packing leaves refs loose, where isomorphic-git looks for them last', async () => {
+    // isomorphic-git loads packed-refs before it reads a loose ref, so a
+    // gc moving `main` between the two hands back a stale tip or none.
+    await store.packNow(doc.uid);
+    const gitDir = join(store.repoDir(doc.uid), '.git');
+    expect(fs.existsSync(join(gitDir, 'refs', 'heads', 'main'))).toBe(true);
+    const packed = join(gitDir, 'packed-refs');
+    expect(fs.existsSync(packed) ? fs.readFileSync(packed, 'utf8') : '').not.toContain(
+      'refs/heads/main',
+    );
+  });
+
   test('history and content still read after refs are packed into packed-refs', async () => {
     const baseOid = await store.mainOid(doc);
     for (let i = 0; i < 4; i++) {
@@ -122,7 +134,9 @@ Para C baseline.
     }
     await store.write(doc, `${INITIAL}\nA later edit.\n`, author, 'update');
 
+    // Repos packed before refs were left loose still carry packed-refs.
     await store.packNow(doc.uid);
+    execFileSync('git', ['pack-refs', '--all', '--prune'], { cwd: store.repoDir(doc.uid) });
     expect(fs.existsSync(join(store.repoDir(doc.uid), '.git', 'packed-refs'))).toBe(true);
 
     // isomorphic-git resolving refs that now live only in packed-refs.
