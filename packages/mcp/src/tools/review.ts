@@ -7,6 +7,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ListThreadsWire, ProposalDiffWire, ThreadWire } from '../api-types.js';
 import {
+  type AnchorPayload,
   anchorBlocks,
   buildAnchor,
   clip,
@@ -16,6 +17,7 @@ import {
   enclosingTopLevel,
   headingLevel,
   type PlacedBlock,
+  quoteStarts,
   resolveBlock,
   resolveEndBlock,
   resolveSection,
@@ -79,6 +81,17 @@ const occurrenceArg = z
       'the document repeats is one id on several blocks. 1 is the first copy in the document; ' +
       'list_blocks and list_threads print `occurrence=n of m` next to such ids. Required for ' +
       'a shared id, and only meaningful together with block_id.',
+  );
+
+const quoteOccurrenceArg = z
+  .number()
+  .int()
+  .min(1)
+  .optional()
+  .describe(
+    'Which copy of the highlighted phrase, when it occurs more than once inside the block: ' +
+      '1 is the first. list_threads prints `quote position: occurrence n of m` for a ' +
+      'comment on such a phrase, and passing that n here marks the same spot. Defaults to 1.',
   );
 
 export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
@@ -344,6 +357,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
             'Exact phrase inside the block to highlight. Defaults to anchor_text, or the whole ' +
               'block. Must be the rendered text, not markdown syntax.',
           ),
+        quote_occurrence: quoteOccurrenceArg,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -355,7 +369,12 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           anchorText: args.anchor_text,
           occurrence: args.occurrence,
         });
-        const anchor = buildAnchor(block, args.quote ?? args.anchor_text);
+        const anchor = buildAnchor(
+          block,
+          args.quote ?? args.anchor_text,
+          null,
+          args.quote_occurrence,
+        );
         const { thread } = await ctx.client.json<ThreadMutationWire>(
           loaded.ref,
           `/api/documents/${encodeURIComponent(loaded.ref.uid)}/threads`,
@@ -366,6 +385,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           `thread_id: ${thread.id}`,
           `url: ${commentUrl(loaded.ref, thread.id)}`,
           `highlighted: ${JSON.stringify(anchor.quote.slice(0, 200))}`,
+          quoteChoiceNote(block, anchor, args.quote_occurrence),
         );
       }),
   );
@@ -400,6 +420,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
         block_id: blockIdArg,
         occurrence: occurrenceArg,
         anchor_text: anchorTextArg,
+        quote_occurrence: quoteOccurrenceArg,
         end_block_id: z
           .string()
           .optional()
@@ -462,6 +483,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
           block,
           args.whole_document ? undefined : args.anchor_text,
           endBlock,
+          args.whole_document ? undefined : args.quote_occurrence,
         );
         // Unknown arguments are stripped before the handler sees them,
         // so dropping the singular from the schema would have turned a
@@ -500,6 +522,7 @@ export function registerReviewTools(server: McpServer, ctx: ToolContext): void {
             : `Created an edit proposal on block ${block.id}${occurrenceTag(block)}${endBlock ? `…${endBlock.id}` : ''} (lines ${block.startLine}-${(endBlock ?? block).endLine}).`,
           `thread_id: ${thread.id}  status: open`,
           `url: ${commentUrl(loaded.ref, thread.id)}`,
+          args.whole_document ? null : quoteChoiceNote(block, anchor, args.quote_occurrence),
           notice,
           `diff:\n${lineDiff(before, args.proposed_text)}`,
         );
@@ -1284,6 +1307,20 @@ export function parseSince(raw: string, now: number): number | null {
   if (!/^\d{4}-\d{2}-\d{2}/.test(raw)) return null;
   const ms = Date.parse(raw);
   return Number.isNaN(ms) ? null : ms;
+}
+
+/** Which copy of a repeated phrase a new anchor marks, when the block offers a choice. */
+function quoteChoiceNote(
+  block: DocumentBlock,
+  anchor: AnchorPayload,
+  asked: number | undefined,
+): string | null {
+  const copies = quoteStarts(block.text, anchor.quote).length;
+  if (copies < 2) return null;
+  return asked === undefined
+    ? `The highlighted text occurs ${copies} times in this block; this marks the first. ` +
+        'Pass quote_occurrence to mark another.'
+    : `Marks occurrence ${asked} of ${copies} of the highlighted text in this block.`;
 }
 
 /** Is `path` inside `prefix` (or equal to it)? */
