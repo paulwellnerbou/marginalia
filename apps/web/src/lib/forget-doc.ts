@@ -13,6 +13,7 @@ import { removeDoc as removeKeyringDoc } from './keyring.js';
 import { reportError } from './log.js';
 import { closeTab } from './open-tabs.js';
 import { clearSavedPassword } from './passwords.js';
+import { forgetReadingPosition } from './reading-position.js';
 import { removeFromRecent } from './recent-docs.js';
 import { setUserThemeOverride } from './themes.js';
 
@@ -27,6 +28,7 @@ export function forgetDocumentLocally(uid: string): void {
   attempt(uid, 'invite', () => clearInviteToken(uid));
   attempt(uid, 'password', () => clearSavedPassword(uid));
   attempt(uid, 'theme', () => setUserThemeOverride(uid, null));
+  attempt(uid, 'readingPosition', () => forgetReadingPosition(uid));
 }
 
 /**

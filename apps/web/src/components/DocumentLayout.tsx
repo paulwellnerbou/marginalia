@@ -107,12 +107,18 @@ import {
   PAGED_CLASS,
   PAGED_VERTICAL_CLASS,
   pageIndexAt,
-  pageIndexOfElement,
+  pageIndexOfClientRect,
   pageIndexOfOffset,
   revealElement,
 } from '../lib/paged-reading.js';
 import { partitionPendingMentions } from '../lib/pending-mentions.js';
 import { takeRevealOnOpen } from '../lib/pending-reveal.js';
+import {
+  loadReadingPosition,
+  readingPositionOf,
+  resolveReadingPosition,
+  saveReadingPosition,
+} from '../lib/reading-position.js';
 import { retryRequest } from '../lib/retry.js';
 import {
   anchorTouchesSections,
@@ -1100,12 +1106,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     },
     [],
   );
-
-  // Runs after RenderedDoc's own effect has put the html in place.
-  useEffect(() => {
-    const blockId = takeRevealOnOpen(doc.uid);
-    if (blockId) scrollToAnchor(blockId);
-  }, [doc.uid, scrollToAnchor]);
 
   // Reactive across UserMenu, composer, invite-load seeding, other tabs.
   const displayName = useDisplayName();
@@ -2653,6 +2653,71 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     setTooWideForPages(false);
   }, [pageLayoutKey]);
 
+  /** False until the opening scroll has been sent, so the top of the page
+   *  the document mounts at is never written over where the reader was. */
+  const readingPositionRestored = useRef(false);
+
+  // Note where the reader is once they stop scrolling. A layout effect so
+  // the cleanup still finds this document's DOM: switching tabs within
+  // the settle delay would otherwise lose the last stretch read.
+  useLayoutEffect(() => {
+    const scroll = docScrollRef.current;
+    if (!scroll) return;
+    const uid = doc.uid;
+    readingPositionRestored.current = false;
+    let timer = 0;
+    const note = () => {
+      timer = 0;
+      const root = docRef.current;
+      const position = root && readingPositionOf(scroll, root);
+      if (position) saveReadingPosition(uid, position);
+    };
+    const onScroll = () => {
+      if (!readingPositionRestored.current) return;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(note, READING_POSITION_SETTLE_MS);
+    };
+    const flush = () => {
+      if (!timer) return;
+      window.clearTimeout(timer);
+      note();
+    };
+    scroll.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('pagehide', flush);
+    return () => {
+      flush();
+      scroll.removeEventListener('scroll', onScroll);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, [doc.uid]);
+
+  // Open where the reader is expected: a block the editor just handed
+  // over, else wherever they left off — unless the URL names a place of
+  // its own. Declared after the pager so its pages are measured first,
+  // and runs after RenderedDoc's own effect has put the html in place.
+  useEffect(() => {
+    const blockId = takeRevealOnOpen(doc.uid);
+    if (blockId) {
+      scrollToAnchor(blockId);
+    } else if (!window.location.hash) {
+      const saved = loadReadingPosition(doc.uid);
+      const root = docRef.current;
+      const scroll = docScrollRef.current;
+      const place = saved && root && resolveReadingPosition(root, saved);
+      if (saved && place && scroll) {
+        const seq = ++scrollToAnchorSeq.current;
+        scrollToTargetAndSettle(
+          scroll,
+          place,
+          saved.top,
+          () => seq === scrollToAnchorSeq.current,
+          'auto',
+        );
+      }
+    }
+    readingPositionRestored.current = true;
+  }, [doc.uid, scrollToAnchor]);
+
   const title = documentTitle(doc);
 
   /**
@@ -3941,6 +4006,8 @@ function flashAnchor(el: HTMLElement): void {
 }
 
 const SETTLE_TICK_MS = 150;
+/** Quiet time after the last scroll before noting where the reader is (ms). */
+const READING_POSITION_SETTLE_MS = 250;
 const SETTLE_IDLE_MS = 140;
 const SETTLE_MAX_MS = 2600;
 const SETTLE_TOLERANCE_PX = 2;
@@ -3961,18 +4028,26 @@ const SETTLE_USER_EVENTS = ['wheel', 'touchstart', 'mousedown'] as const;
  */
 function scrollToTargetAndSettle(
   scroll: HTMLElement,
-  target: HTMLElement,
+  target: HTMLElement | Range,
   offset: number,
   isCurrent: () => boolean,
+  behavior: ScrollBehavior = 'smooth',
 ): void {
-  revealChapterOf(target);
+  const element =
+    target instanceof Range
+      ? target.startContainer instanceof Element
+        ? target.startContainer
+        : target.startContainer.parentElement
+      : target;
+  if (!element) return;
+  revealChapterOf(element);
   const vertical = scroll.classList.contains(PAGED_VERTICAL_CLASS);
   const paged = scroll.classList.contains(PAGED_CLASS) || vertical;
   /** Where the reader should end up, on whichever axis is in play. */
   const intended = (): number | null => {
-    if (!target.isConnected) return null;
+    if (!element.isConnected) return null;
     if (paged) {
-      const page = pageIndexOfElement(scroll, target);
+      const page = pageIndexOfClientRect(scroll, target.getBoundingClientRect());
       // `offset` centres a card in the scroll flow; a page has no such
       // freedom — the target's page starts where it starts.
       if (page === null) return null;
@@ -3999,7 +4074,7 @@ function scrollToTargetAndSettle(
 
   const first = intended();
   if (first === null) return;
-  scrollTo(first, 'smooth');
+  scrollTo(first, behavior);
 
   let lastScrollAt = performance.now();
   let stableChecks = 0;

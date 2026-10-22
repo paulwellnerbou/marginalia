@@ -1,5 +1,6 @@
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { clampPage, goToPage, measurePages, pageIndexOfClientRect } from './paged-reading.js';
+import { rectOfTextPlace, type TextPlace, textPlaceAtTop } from './reading-position.js';
 import { isAppleWebKit } from './webkit.js';
 
 /** Travel along the paging axis that counts as a page-turning swipe, in px. */
@@ -128,77 +129,10 @@ function absorbsWheel(
   return false;
 }
 
-/**
- * Where the reader is, as a position in the text: the words the page in
- * front of them opens with.
- *
- * Nothing about the *layout* survives a reflow usefully. A page number
- * is meaningless once the count changes. So is which column fragment of
- * a block the reader was on, since wider pages hold more text and the
- * same fragment index lands somewhere else entirely — that is a page
- * number wearing a different hat. And a block alone is too coarse:
- * `getBoundingClientRect()` reports the union of a block's fragments,
- * whose left edge names the first page it appears on however far into a
- * long paragraph the reader actually is. Only the text itself holds
- * still, so that is what gets remembered.
- */
-interface HeldPlace {
-  node: Node;
-  offset: number;
-}
-
-/** Text position under a viewport point, across both spellings of the API. */
-function caretAt(x: number, y: number): HeldPlace | null {
-  const doc = document as Document & {
-    caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-    caretRangeFromPoint?: (x: number, y: number) => Range | null;
-  };
-  const position = doc.caretPositionFromPoint?.(x, y);
-  if (position) return { node: position.offsetNode, offset: position.offset };
-  const range = doc.caretRangeFromPoint?.(x, y);
-  return range ? { node: range.startContainer, offset: range.startOffset } : null;
-}
-
-function nodeLength(node: Node): number {
-  return node.nodeType === Node.TEXT_NODE ? (node as Text).data.length : node.childNodes.length;
-}
-
-/** The text the current page opens with, or null where it can't be read. */
-function heldPlaceOf(scroll: HTMLElement): HeldPlace | null {
-  const box = scroll.getBoundingClientRect();
-  const x = box.left + box.width / 2;
-  // Down the middle of the column, from the first line inwards: the top
-  // of a page can be page margin, the clearance above a heading, or the
-  // tail of a floated figure, none of which sit on any text.
-  for (const fraction of [0.04, 0.12, 0.25, 0.45, 0.7]) {
-    const place = caretAt(x, box.top + box.height * fraction);
-    // Overlays share the viewport with the scrollport — the floating
-    // comment toolbar sits over the top of every page — so only a hit
-    // inside the document itself counts.
-    if (place?.node.parentElement?.closest('[data-block]') && scroll.contains(place.node)) {
-      return place;
-    }
-  }
-  return null;
-}
-
 /** The page a remembered position has landed on after a reflow. */
-function pageOfHeldPlace(scroll: HTMLElement, held: HeldPlace): number | null {
-  if (!held.node.isConnected) return null;
-  const length = nodeLength(held.node);
-  const start = Math.min(held.offset, length);
-  const range = document.createRange();
-  try {
-    range.setStart(held.node, start);
-    // One character wide where there is one: a collapsed range can
-    // report an empty rect at a line boundary, which locates nothing.
-    range.setEnd(held.node, Math.min(start + 1, length));
-  } catch {
-    return null;
-  }
-  const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
-  if (rect.width === 0 && rect.height === 0 && rect.left === 0) return null;
-  return pageIndexOfClientRect(scroll, rect);
+function pageOfHeldPlace(scroll: HTMLElement, held: TextPlace): number | null {
+  const rect = rectOfTextPlace(held);
+  return rect ? pageIndexOfClientRect(scroll, rect) : null;
 }
 
 /** True while the event target is somewhere the keys already mean something. */
@@ -323,7 +257,7 @@ export function usePagedReading(
    * is at the left edge answers with wherever the text happened to land,
    * which is exactly the drift this is meant to undo.
    */
-  const heldPlace = useRef<HeldPlace | null>(null);
+  const heldPlace = useRef<TextPlace | null>(null);
   /**
    * Page pitch and content extent as of the last re-measure, both along
    * the paging axis. Watching the *width* would be silently useless
@@ -557,7 +491,7 @@ export function usePagedReading(
     if (!enabled || !scroll) return;
     let timer = 0;
     const note = () => {
-      heldPlace.current = heldPlaceOf(scroll);
+      heldPlace.current = textPlaceAtTop(scroll);
     };
     const schedule = () => {
       window.clearTimeout(timer);
