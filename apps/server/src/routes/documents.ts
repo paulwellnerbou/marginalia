@@ -2,7 +2,9 @@ import type { Database } from 'bun:sqlite';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import type { BlockSourceRange, ReviewExportData, ReviewThread } from '@marginalia/renderer';
 import {
+  docMetaPlainText,
   exportDocx,
+  extractDocMeta,
   extractDocumentTitle,
   locateAllBlocks,
   locateAllBlocksAsciidoc,
@@ -1691,6 +1693,9 @@ async function exportDocumentAsEpub(
     accepted = await sourceWithAcceptedProposals(deps, doc, source);
     source = accepted.source;
   }
+  // The summary becomes the book's blurb rather than its first page.
+  const meta = extractDocMeta(source, doc.format);
+  source = meta.source;
 
   const derivedTitle = doc.name ?? extractDocumentTitle(source, doc.format);
   const title = derivedTitle?.trim() || 'Untitled';
@@ -1747,6 +1752,7 @@ async function exportDocumentAsEpub(
     identifier: `urn:marginalia:${doc.uid}`,
     title,
     author: identity?.displayName ?? null,
+    description: meta.summary ? docMetaPlainText(meta.summary, doc.format) : null,
     chapters,
     cover,
     theme,
@@ -1834,6 +1840,8 @@ async function exportDocumentAsDocx(
     acceptedProposals = await sourceWithAcceptedProposals(deps, doc, source);
     source = acceptedProposals.source;
   }
+  // Summary and about are about the book, not in it.
+  source = extractDocMeta(source, doc.format).source;
   // Title resolution for both the DOCX core properties and the
   // download filename: explicit `doc.name` wins; else the document's
   // own title (frontmatter `title:` or first H1 / `= Header`); else
@@ -1965,7 +1973,8 @@ async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
       ? themeParam
       : (doc.default_theme ?? 'default');
 
-  const source = store.read(doc);
+  // Summary and about are about the book, not in it.
+  const source = extractDocMeta(store.read(doc), doc.format).source;
   // Matches DOCX: explicit `doc.name` beats the extracted title.
   const derivedTitle = doc.name ?? extractDocumentTitle(source, doc.format);
 

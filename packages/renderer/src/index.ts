@@ -9,6 +9,15 @@ export {
 } from './anchor-span.js';
 export type { RewriteOptions as AssetRewriteOptions } from './asset-rewrite.js';
 export { rewriteAssetReferences } from './asset-rewrite.js';
+export type { DocMetaKind } from './doc-meta.js';
+export {
+  DOC_META_ATTR,
+  DOC_META_KINDS,
+  isDocMetaKind,
+  SUMMARY_MAX_CHARACTERS,
+} from './doc-meta.js';
+export type { ExtractedDocMeta } from './doc-meta-extract.js';
+export { docMetaPlainText, extractDocMeta } from './doc-meta-extract.js';
 export type {
   DocxExportOptions,
   ReviewComment,

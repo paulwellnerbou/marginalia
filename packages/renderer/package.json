@@ -11,6 +11,7 @@
     "./injected-chrome": "./src/injected-chrome.ts",
     "./insertion": "./src/insertion.ts",
     "./asset-rewrite": "./src/asset-rewrite.ts",
+    "./doc-meta": "./src/doc-meta.ts",
     "./extract-title": "./src/extract-title.ts",
     "./locate-block": "./src/locate-block.ts",
     "./locate-block-asciidoc": "./src/locate-block-asciidoc.ts",

@@ -8,6 +8,7 @@ import {
   normalizeBlockText,
   SectionTracker,
 } from '../block-ids-shared.js';
+import { markdownDocMetaByIndex } from '../doc-meta.js';
 import type { BlockInfo, BlockMap } from '../types.js';
 import type { BlockOffsets } from './block-elements.js';
 
@@ -41,7 +42,9 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
     // ranges. Otherwise selections inside a later duplicate would
     // walk past the cell and resolve up to the enclosing table.
     const subBlockCounts = new Map<string, number>();
-    for (const node of tree.children) {
+    const docMeta = markdownDocMetaByIndex(tree.children);
+    for (const [index, node] of tree.children.entries()) {
+      const metaKind = docMeta.get(index);
       const text = normalizeBlockText(mdastToString(node));
       if (!text && node.type !== 'thematicBreak') continue;
 
@@ -60,6 +63,7 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
         // made it onto an element.
         anchorable: false,
       };
+      if (metaKind) info.docMeta = metaKind;
       if (node.type === 'heading') {
         const headingId = slugOf(node);
         if (headingId) info.headingId = headingId;
@@ -91,6 +95,7 @@ export const remarkBlockIds: Plugin<[], Root> = () => {
           sectionIndex,
           sectionIndexPath: [...sectionIndexPath],
           anchorable: false,
+          ...(metaKind ? { docMeta: metaKind } : {}),
         });
       });
     }

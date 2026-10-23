@@ -1,3 +1,4 @@
+import { SUMMARY_MAX_CHARACTERS } from '@marginalia/renderer/doc-meta';
 import { createPatch } from 'diff';
 import type { DocumentWire, ThreadCommentWire, ThreadWire } from './api-types.js';
 import {
@@ -98,6 +99,7 @@ export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: Documen
       ? ['access: invite-only — only people with their own access link can open this document']
       : []),
     ...folderLines(doc),
+    ...docMetaLines(doc),
     `updated: ${timestamp(doc.updated_at)}`,
     `whole document: ${size(doc.source)}`,
     `blocks: ${map.blocks.length}, sections: ${map.sections.length}`,
@@ -114,6 +116,41 @@ export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: Documen
     );
   }
   return lines.join('\n');
+}
+
+/**
+ * Where the summary and about live, so an agent asked to improve the blurb
+ * proposes against those blocks — or knows how to add one.
+ */
+function docMetaLines(doc: DocumentWire): string[] {
+  const blocks = doc.rendered.blocks.filter(
+    (b) => b.docMeta && b.kind !== 'html' && b.kind !== 'listItem' && b.kind !== 'tableCell',
+  );
+  const summary = blocks.filter((b) => b.docMeta === 'summary');
+  const hasAbout = blocks.some((b) => b.docMeta === 'about');
+  const [open, close] =
+    doc.format === 'asciidoc'
+      ? ['[.{kind}] over --', '--']
+      : ['<!-- {kind} -->', '<!-- /{kind} -->'];
+  const marked = (kind: string) =>
+    `between ${open.replace('{kind}', kind)} and ${close.replace('{kind}', kind)}`;
+  if (summary.length === 0 && !hasAbout) {
+    return [
+      `summary / about: none yet. They are regions of the source ${marked('summary')} (or about), ` +
+        'near the top; propose_insertion adds one. Readers see them folded above the text, and ' +
+        'exports leave them out.',
+    ];
+  }
+  const lines: string[] = [];
+  if (summary.length > 0) {
+    const chars = Array.from(summary.map((b) => b.text).join('\n')).length;
+    lines.push(
+      `summary: ${chars} characters (story platforms allow ${SUMMARY_MAX_CHARACTERS}), ` +
+        `${marked('summary')} — edit its blocks like any other`,
+    );
+  }
+  if (hasAbout) lines.push(`about: ${marked('about')} — edit its blocks like any other`);
+  return lines;
 }
 
 /** Past this the list costs more context than it saves lookups. */

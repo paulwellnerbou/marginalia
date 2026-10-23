@@ -47,7 +47,12 @@ export interface DocumentStats {
 }
 
 export interface StatsInput {
-  blocks: ReadonlyArray<Pick<BlockInfo, 'kind' | 'text'> & { headingId?: string | undefined }>;
+  blocks: ReadonlyArray<
+    Pick<BlockInfo, 'kind' | 'text'> & {
+      headingId?: string | undefined;
+      docMeta?: BlockInfo['docMeta'] | undefined;
+    }
+  >;
   anchors: ReadonlyArray<Anchor>;
   frontmatter?: Record<string, unknown> | undefined;
 }
@@ -123,6 +128,8 @@ export function computeDocumentStats(input: StatsInput): DocumentStats {
 
   for (const block of input.blocks) {
     if (SUB_BLOCK_KINDS.has(block.kind)) continue;
+    // A blurb and notes about the book, not part of it.
+    if (block.docMeta) continue;
 
     if (block.kind === 'heading') {
       const anchor = block.headingId ? anchorById.get(block.headingId) : undefined;

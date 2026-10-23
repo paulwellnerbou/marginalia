@@ -1631,6 +1631,87 @@ button.primary:disabled {
   }
 }
 
+/* Summary / about folds: a labelled toggle over a region set slightly
+   apart, since it is about the book rather than part of it. */
+.marginalia .doc-meta-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75em;
+  font-family: var(--md-font-heading, inherit);
+  font-size: 0.8em;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--md-color-fg-muted, currentColor);
+}
+.marginalia .doc-meta-fold.is-collapsed + .doc-meta-header {
+  margin-top: 0.4em;
+}
+.marginalia .doc-meta-toggle {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  cursor: pointer;
+  border-radius: 0.2em;
+}
+.marginalia .doc-meta-toggle:hover {
+  color: var(--md-color-accent, currentColor);
+}
+.marginalia .doc-meta-toggle:focus-visible {
+  outline: 2px solid var(--md-color-accent, currentColor);
+  outline-offset: 2px;
+}
+.marginalia .doc-meta-toggle svg {
+  width: 1em;
+  height: 1em;
+  transform: rotate(90deg);
+  transition: transform 200ms ease;
+}
+.marginalia .doc-meta-toggle[aria-expanded="false"] svg {
+  transform: rotate(0deg);
+}
+.marginalia .doc-meta-count {
+  font-family: var(--md-font-body, inherit);
+  letter-spacing: normal;
+  text-transform: none;
+  font-variant-numeric: tabular-nums;
+}
+.marginalia .doc-meta-header:has(+ .doc-meta-fold.is-collapsed) .doc-meta-count {
+  display: none;
+}
+.marginalia .doc-meta-count.is-over {
+  color: var(--red-11);
+}
+.marginalia .doc-meta-header + .doc-meta-fold {
+  margin-top: 0.4em;
+}
+.marginalia .doc-meta {
+  padding-left: 1em;
+  border-left: 2px solid var(--md-color-border, currentColor);
+  color: var(--md-color-fg-muted, currentColor);
+}
+.marginalia section.doc-meta > * + * {
+  margin-top: var(--md-space-block);
+}
+@media (prefers-reduced-motion: reduce) {
+  .marginalia .doc-meta-toggle svg {
+    transition: none;
+  }
+}
+@media print {
+  .marginalia .doc-meta-header,
+  .marginalia .doc-meta-fold {
+    display: none;
+  }
+}
+
 /* Reserve room for the absolutely-positioned chevron. */
 .marginalia :is(h1, h2, h3, h4, h5, h6):has(> .heading-collapse-toggle) {
   padding-right: 1.4em;

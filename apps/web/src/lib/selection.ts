@@ -283,13 +283,14 @@ export function sectionContextsOf(
 
 /** `[data-block]` descendants in document order, treating known
  * structural containers as transparent: the runtime collapse
- * wrappers (`.collapse-section[-inner]`) and AsciiDoc's section
- * shape (`#content`, `#preamble`, `.sectN`, `.sectionbody`).
- * Without those, comments captured inside a folded section or
- * inside any AsciiDoc body would lose their heading-path metadata.
+ * wrappers (`.collapse-section[-inner]`), the Markdown summary /
+ * about wrapper (`section.doc-meta`) and AsciiDoc's section shape
+ * (`#content`, `#preamble`, `.sectN`, `.sectionbody`). Without those,
+ * comments captured inside a folded section or inside any AsciiDoc
+ * body would lose their heading-path metadata.
  */
 const TRANSPARENT_CONTAINER_RE =
-  /(?:^|\s)(?:collapse-section|collapse-section-inner|sect\d+|sectionbody)(?:\s|$)/;
+  /(?:^|\s)(?:collapse-section|collapse-section-inner|doc-meta|sect\d+|sectionbody)(?:\s|$)/;
 export function collectTopLevelBlocks(root: HTMLElement): HTMLElement[] {
   const out: HTMLElement[] = [];
   for (const child of Array.from(root.children)) {

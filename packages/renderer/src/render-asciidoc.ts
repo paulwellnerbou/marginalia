@@ -16,6 +16,7 @@ import {
   normalizeBlockText,
   SectionTracker,
 } from './block-ids-shared.js';
+import { DOC_META_KINDS, type DocMetaKind } from './doc-meta.js';
 import { rehypeAsciidocAnchorsToc } from './plugins/asciidoc-anchors-toc.js';
 import { rehypeAsciidocAssetCollector } from './plugins/asciidoc-asset-collector.js';
 import { rehypeAsciidocBlockIds } from './plugins/asciidoc-block-ids.js';
@@ -313,6 +314,8 @@ function emitLeafBlock(block: AsciidoctorAbstractBlock, ctx: string, state: Walk
   let info: BlockInfo | null = null;
   if (text) {
     info = recordBlock(block, ctx, text, state);
+    const metaKind = ctx === 'open' ? docMetaRoleOf(block) : null;
+    if (metaKind) info.docMeta = metaKind;
   }
   // Lists also get sub-block BlockInfo + marker roles for each item.
   // Even when the ulist itself doesn't yield useful text (asciidoctor
@@ -345,6 +348,13 @@ function emitLeafBlock(block: AsciidoctorAbstractBlock, ctx: string, state: Walk
 function synthesizeParent(state: WalkState, kind: string): BlockInfo {
   const { headingPath, sectionIndex, sectionIndexPath } = state.sections.peek();
   return { id: '', kind, text: '', headingPath, sectionIndex, sectionIndexPath, anchorable: false };
+}
+
+/** `[.summary]` / `[.about]` on an open block; see `doc-meta.ts`. */
+function docMetaRoleOf(block: AsciidoctorAbstractBlock): DocMetaKind | null {
+  const hasRole = (block as { hasRole?: (role: string) => boolean }).hasRole;
+  if (typeof hasRole !== 'function') return null;
+  return DOC_META_KINDS.find((kind) => hasRole.call(block, kind)) ?? null;
 }
 
 function getStyle(block: AsciidoctorAbstractBlock): string | null {

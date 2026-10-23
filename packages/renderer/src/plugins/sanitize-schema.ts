@@ -34,6 +34,14 @@ export const sanitizeSchema: Schema = {
       'rel',
       'ariaLabel',
     ],
+    // Same for <section>, held to `footnotes` by default; the summary and
+    // about wrappers carry `doc-meta`.
+    section: [
+      ...(baseAttrs.section ?? []).filter(
+        (entry) => !(Array.isArray(entry) && entry[0] === 'className'),
+      ),
+      'className',
+    ],
     th: [...(baseAttrs.th ?? []), 'align'],
     td: [...(baseAttrs.td ?? []), 'align'],
     pre: [...(baseAttrs.pre ?? []), 'className', 'style', 'data*'],

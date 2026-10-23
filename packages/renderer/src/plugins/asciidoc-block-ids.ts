@@ -6,6 +6,7 @@ import {
   MARGINALIA_SUBBLOCK_MARKER_PREFIX,
   type SubBlockEntry,
 } from '../asciidoc-markers.js';
+import { DOC_META_ATTR } from '../doc-meta.js';
 import type { BlockMap } from '../types.js';
 
 export interface AsciidocBlockIdsOptions {
@@ -60,6 +61,10 @@ export const rehypeAsciidocBlockIds: Plugin<[AsciidocBlockIdsOptions], Root> = (
       if (blockIdx !== null) {
         const info = blocks[blockIdx];
         if (info) props['data-block'] = info.id;
+        if (info?.docMeta) {
+          props[DOC_META_ATTR] = info.docMeta;
+          remaining.push('doc-meta');
+        }
       }
       if (subBlockIdx !== null) {
         const entry = subBlocks[subBlockIdx];

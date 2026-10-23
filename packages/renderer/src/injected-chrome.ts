@@ -26,6 +26,7 @@
 export const INJECTED_CHROME_CLASSES: readonly string[] = [
   'heading-anchor',
   'heading-collapse-toggle',
+  'doc-meta-header',
   'missing-asset',
   'data-footnote-backref',
 ];

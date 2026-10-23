@@ -17,6 +17,7 @@ import {
 } from './plugins/block-elements.js';
 import { remarkBlockIds } from './plugins/block-ids.js';
 import { rehypeBlockText } from './plugins/block-text.js';
+import { remarkDocMetaSections } from './plugins/doc-meta.js';
 import { remarkExtractFrontmatter } from './plugins/frontmatter.js';
 import { preprocessGridTables } from './plugins/grid-tables.js';
 import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
@@ -87,6 +88,7 @@ export async function render(markdown: string, options: RenderOptions = {}): Pro
     .use(remarkMermaid, { mode: options.mermaid ?? 'client' })
     .use(remarkTocMarker)
     .use(remarkAssetCollector)
+    .use(remarkDocMetaSections)
     .use(remarkRehype, { allowDangerousHtml: true })
     // Before rehype-raw: it re-parses the tree, and the source positions
     // this pass matches footnote definitions on don't survive that.

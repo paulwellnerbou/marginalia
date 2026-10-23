@@ -4277,6 +4277,30 @@ describe('documents API', () => {
     expect(firstChapter).not.toContain('<hr');
   });
 
+  test('POST /:uid/export.epub takes the summary as its blurb and leaves both regions out', async () => {
+    const created = await upload(CLIENT_A, {
+      markdown:
+        '# The Salt Road\n\n<!-- summary -->\nA *long* walk & a short rest.\n<!-- /summary -->\n\n' +
+        '<!-- about -->\nNotes for readers.\n<!-- /about -->\n\n## Departure\n\nFirst.\n',
+    });
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.epub`, {
+        method: 'POST',
+        headers: withInvite(headersFor(CLIENT_A), created.admin_invite.token),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const zip = await JSZip.loadAsync(Buffer.from(await res.arrayBuffer()));
+    const packageXml = await zip.file('EPUB/package.opf')!.async('string');
+    expect(packageXml).toContain(
+      '<dc:description>A long walk &amp; a short rest.</dc:description>',
+    );
+    const chapter = await zip.file('EPUB/chapter-001.xhtml')!.async('string');
+    expect(chapter).toContain('First.');
+    expect(chapter).not.toContain('short rest');
+    expect(chapter).not.toContain('Notes for readers');
+  });
+
   test('POST /:uid/export.epub picks the scene-break ornament by theme', async () => {
     const created = await upload(CLIENT_A, {
       markdown: '# Breaks\n\n## One\n\nFirst.\n\n---\n\nSecond.\n',

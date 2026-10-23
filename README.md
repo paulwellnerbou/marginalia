@@ -527,6 +527,37 @@ has read the story can open its outline by uid without being told it
 exists. `create_document` takes `folder` to add one — see the
 [MCP README](packages/mcp/README.md#folders).
 
+## Summary and about
+
+A document can carry a **summary** (a blurb) and an **about** text (notes
+for readers), like the fields a story platform lists beside a book. Both
+live in the source, as marked regions near the top:
+
+```markdown
+<!-- summary -->
+Frankfurt, October 2015. Felix has just learned …
+<!-- /summary -->
+
+<!-- about -->
+The story is set in Frankfurt am Main in the *autumn of 2015*.
+<!-- /about -->
+```
+
+In AsciiDoc it is an open block with the role, `[.summary]` or `[.about]`
+over `--` … `--`. A region needs its closing marker and only counts at
+the top level; other Markdown renderers just don't show the comments.
+
+Since they are ordinary text, comments, edit proposals (including those
+an agent makes over MCP), history and revert all work on them. The
+viewer shows each as a fold above the text, closed until the reader
+opens it and remembered per document; jumping to a thread inside one
+opens it. The summary's fold shows its length against the 1,400
+characters story platforms allow. Statistics leave both out, and so do
+the PDF, Word and EPUB exports; the EPUB takes the summary as its
+description. Source downloads, chapter ZIPs, copies and JSON bundles
+keep them as written. MCP's `get_document` says where each region is,
+or how to add one.
+
 ## Document statistics
 
 The bar-chart button in the document toolbar opens word counts for the
