@@ -3662,6 +3662,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                           openCommentThread(threadId, { scroll: false, jumpToAnchor: false })
                         }
                         onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
+                        docMetaKey={doc.uid}
                       />
                       {canComment && blockRangesReady && (
                         <SelectionToolbar

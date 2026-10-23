@@ -227,6 +227,8 @@ export function expandAncestors(target: Element): Promise<void> {
     } else {
       const inner = section.firstElementChild as HTMLElement | null;
       inner?.removeAttribute('inert');
+      // A fold with its own toggle (summary, about) syncs from this.
+      section.dispatchEvent(new CustomEvent('marginalia:collapse-toggle', { bubbles: true }));
     }
     el = section.parentElement;
   }

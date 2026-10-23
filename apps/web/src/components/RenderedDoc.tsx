@@ -1,4 +1,5 @@
 import { splitSpanQuote } from '@marginalia/renderer/anchor-span';
+import { DOC_META_ATTR } from '@marginalia/renderer/doc-meta';
 import type { RenderResult } from '@marginalia/renderer/types';
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import { type AnchorSection, resolveAnchorElement } from '../lib/anchor-target.js';
@@ -6,6 +7,7 @@ import type { ThreadState } from '../lib/api.js';
 import { spanElements } from '../lib/block-span.js';
 import { isInjectedChromeText } from '../lib/block-text.js';
 import { type BookmarkMarkerSpec, syncBookmarkMarkers } from '../lib/bookmark-markers.js';
+import { installDocMetaFolds } from '../lib/doc-meta-fold.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { revealElement } from '../lib/paged-reading.js';
@@ -66,6 +68,11 @@ interface RenderedDocProps {
    * (no file picker, no drop target) for readers.
    */
   onMissingAssetUpload?: ((refName: string, file: File) => void | Promise<void>) | undefined;
+  /**
+   * Where the summary / about folds remember their state — the document's
+   * uid. Without it they start open and remember nothing.
+   */
+  docMetaKey?: string | undefined;
 }
 
 /** Default for `bookmarks`, held so the sync effect doesn't re-run on every render. */
@@ -103,6 +110,7 @@ export function RenderedDoc({
   onSearchResultsChange,
   onHighlightClick,
   onMissingAssetUpload,
+  docMetaKey,
 }: RenderedDocProps) {
   const internal = useRef<HTMLElement>(null);
   const ref = elRef ?? internal;
@@ -151,6 +159,7 @@ export function RenderedDoc({
     void renderMermaidIn(el);
     replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
     installHeadingCollapse(el);
+    installDocMetaFolds(el, docMetaKey ?? null);
     // Replay the current hash after the article is populated. Opening
     // a deep link directly (`/d/...#section`) lets the browser fire
     // its initial fragment jump *before* React renders, so without
@@ -179,7 +188,7 @@ export function RenderedDoc({
         });
       }
     }
-  }, [rendered.html, ref, canUploadMissing]);
+  }, [rendered.html, ref, canUploadMissing, docMetaKey]);
 
   // If canUploadMissing flips while `rendered.html` stays the same
   // (e.g. invite upgraded mid-session so the user gains editor role),
@@ -639,6 +648,10 @@ function hasHeading(el: HTMLElement): boolean {
   return /^H[1-6]$/.test(el.tagName) || el.querySelector('h1,h2,h3,h4,h5,h6') !== null;
 }
 
+function docMetaRegionOf(el: Element): string | null {
+  return el.closest(`[${DOC_META_ATTR}]`)?.getAttribute(DOC_META_ATTR) ?? null;
+}
+
 /**
  * Splice the run of blocks that changed into the live article, leaving every
  * other element — and so every highlight, mermaid render and measured card
@@ -698,6 +711,10 @@ function patchChangedBlocks(root: HTMLElement, nextHtml: string): HTMLElement[] 
 
   const inserted = fresh.slice(start, start + insertCount);
   if (inserted.some(hasHeading)) return null;
+  // Blocks entering or leaving a summary / about region need its wrapper
+  // built or torn down, which the full swap does.
+  const region = docMetaRegionOf(anchor);
+  if ([...removed, ...inserted].some((el) => docMetaRegionOf(el) !== region)) return null;
   // Mermaid blocks are rendered in place by an async pass keyed to the whole
   // article; re-running it over a partially patched tree is not worth the risk.
   if (inserted.some((el) => el.querySelector('.mermaid') || el.classList.contains('mermaid'))) {

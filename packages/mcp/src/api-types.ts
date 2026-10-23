@@ -18,6 +18,8 @@ export interface BlockInfoWire {
   headingPath: string[];
   sectionIndex: number;
   sectionIndexPath: number[];
+  /** Inside the document's summary or about region. Absent on older instances. */
+  docMeta?: 'summary' | 'about';
 }
 
 export interface AnchorWire {

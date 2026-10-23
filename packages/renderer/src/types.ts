@@ -1,3 +1,5 @@
+import type { DocMetaKind } from './doc-meta.js';
+
 /**
  * Public types produced and consumed by the renderer.
  *
@@ -137,6 +139,11 @@ export interface BlockInfo {
    * other block, and on a heading that reached no element.
    */
   headingId?: string;
+  /**
+   * Set on every block inside a summary or about region (see `doc-meta.ts`),
+   * its markers included. Statistics leave these out; anchoring doesn't care.
+   */
+  docMeta?: DocMetaKind;
 }
 
 /** Ordered list of top-level blocks, by document order. */

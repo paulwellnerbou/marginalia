@@ -15,6 +15,8 @@ export interface ExportEpubOptions {
   identifier: string;
   title: string;
   author?: string | null;
+  /** The document's summary, which e-readers show as the book's blurb. */
+  description?: string | null;
   chapters: EpubChapter[];
   cover?: EpubCover | null;
   /** Viewer theme selected for this export. Used for portable theme ornaments. */
@@ -145,6 +147,7 @@ function packageOpf(
     <dc:title>${escapeXml(options.title)}</dc:title>
     <dc:language>en</dc:language>
     ${options.author ? `<dc:creator>${escapeXml(options.author)}</dc:creator>` : ''}
+    ${options.description ? `<dc:description>${escapeXml(options.description)}</dc:description>` : ''}
     <meta property="dcterms:modified">${modified}</meta>
     <meta name="cover" content="cover-image"/>
   </metadata>
