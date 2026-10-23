@@ -4,10 +4,11 @@ import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
-import { type DocMetaKind, findMarkdownDocMetaRegions } from './doc-meta.js';
+import { DOC_META_KINDS, type DocMetaKind, findMarkdownDocMetaRegions } from './doc-meta.js';
 import type { DocumentFormat } from './render.js';
 
-const ASCIIDOC_ROLE_RE = /^\[(?:\.(summary|about)|role\s*=\s*"?(summary|about)"?)\]\s*$/i;
+const ATTRIBUTE_LINE_RE = /^\[(.*)\]$/;
+const BLOCK_TITLE_RE = /^\.[^.\s]/;
 
 export interface ExtractedDocMeta {
   /** The source with every region, markers included, taken out. */
@@ -87,34 +88,63 @@ function lineEnd(source: string, offset: number): number {
   return offset;
 }
 
+/**
+ * Mirrors the renderer, which asks asciidoctor's `hasRole` of every open
+ * block: a role counts wherever it sits — `[.summary]`, `[#blurb.summary.lead]`,
+ * `[open.about%collapsible]`, `[role="lead summary"]` — not only alone.
+ */
+function asciidocRoles(attributeList: string): string[] {
+  const roles: string[] = [];
+  const entries = attributeList.split(',').map((e) => e.trim());
+  const first = entries[0] ?? '';
+  if (!first.includes('=')) {
+    for (const m of first.matchAll(/\.([^.#%]+)/g)) roles.push(m[1] as string);
+  }
+  for (const entry of entries) {
+    const named = /^role\s*=\s*(["']?)(.*)\1$/.exec(entry);
+    if (named) roles.push(...(named[2] as string).split(/\s+/));
+  }
+  return roles.map((r) => r.toLowerCase());
+}
+
+/**
+ * Open blocks (`--` … `--`) whose header carries a summary or about role.
+ * The cut takes the whole header — attribute lines and a `.Title` — so
+ * nothing of the region is left behind in an export.
+ */
 function asciidocRegions(source: string): Cut[] {
   const cuts: Cut[] = [];
-  const lines = source.split('\n');
+  const lines = source.split('\n').map((l) => l.trimEnd());
   const starts: number[] = [];
   let offset = 0;
-  for (const line of lines) {
+  for (const line of source.split('\n')) {
     starts.push(offset);
     offset += line.length + 1;
   }
   const at = (i: number) => starts[i] ?? source.length;
-  for (let i = 0; i + 1 < lines.length; i++) {
-    const m = ASCIIDOC_ROLE_RE.exec((lines[i] ?? '').trimEnd());
-    if (!m || (lines[i + 1] ?? '').trimEnd() !== '--') continue;
-    let close = -1;
-    for (let j = i + 2; j < lines.length; j++) {
-      if ((lines[j] ?? '').trimEnd() === '--') {
-        close = j;
-        break;
-      }
-    }
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i] !== '--') continue;
+    const close = lines.indexOf('--', i + 1);
     if (close === -1) break;
-    cuts.push({
-      kind: (m[1] ?? m[2] ?? '').toLowerCase() as DocMetaKind,
-      start: at(i),
-      end: Math.min(at(close + 1), source.length),
-      innerStart: at(i + 2),
-      innerEnd: at(close),
-    });
+    let headerStart = i;
+    const roles: string[] = [];
+    while (headerStart > 0) {
+      const above = lines[headerStart - 1] ?? '';
+      const attrs = ATTRIBUTE_LINE_RE.exec(above);
+      if (attrs) roles.push(...asciidocRoles(attrs[1] as string));
+      else if (!BLOCK_TITLE_RE.test(above)) break;
+      headerStart -= 1;
+    }
+    const kind = DOC_META_KINDS.find((k) => roles.includes(k));
+    if (kind) {
+      cuts.push({
+        kind,
+        start: at(headerStart),
+        end: Math.min(at(close + 1), source.length),
+        innerStart: at(i + 1),
+        innerEnd: at(close),
+      });
+    }
     i = close;
   }
   return cuts;

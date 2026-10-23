@@ -98,6 +98,34 @@ describe('extractDocMeta', () => {
     );
   });
 
+  test('finds an AsciiDoc role wherever the renderer does', async () => {
+    const headers = [
+      '[#blurb.summary.lead]',
+      '[open.summary%collapsible]',
+      '[role="lead summary"]',
+      '.The blurb\n[.summary]',
+      '[.summary]\n.The blurb',
+    ];
+    for (const header of headers) {
+      const source = `= Book\n\n${header}\n--\nA blurb.\n--\n\n== One\n\nText.\n`;
+      const rendered = await renderAsciidoc(source);
+      expect(rendered.blocks.some((b) => b.docMeta === 'summary')).toBe(true);
+      const meta = extractDocMeta(source, 'asciidoc');
+      expect({ header, summary: meta.summary, source: meta.source }).toEqual({
+        header,
+        summary: 'A blurb.',
+        source: '= Book\n\n\n== One\n\nText.\n',
+      });
+    }
+  });
+
+  test('leaves other AsciiDoc open blocks alone', () => {
+    const source = '[.note]\n--\nKeep.\n--\n\n[.about]\n--\nNotes.\n--\n';
+    const meta = extractDocMeta(source, 'asciidoc');
+    expect(meta.about).toBe('Notes.');
+    expect(meta.source).toBe('[.note]\n--\nKeep.\n--\n\n');
+  });
+
   test('reads AsciiDoc open blocks with the role', () => {
     const source = '= Book\n\n[.summary]\n--\nA blurb.\n--\n\n== One\n\nText.\n';
     const meta = extractDocMeta(source, 'asciidoc');

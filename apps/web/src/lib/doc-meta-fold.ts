@@ -26,9 +26,12 @@ function storageKeyFor(docKey: string): string {
   return `marginalia.docMeta.${docKey}`;
 }
 
-export function readOpenState(docKey: string): OpenState {
+type StateStorage = Pick<Storage, 'getItem' | 'setItem'>;
+
+/** Which folds a reader left open; anything unreadable counts as all closed. */
+export function readOpenState(docKey: string, storage: StateStorage = localStorage): OpenState {
   try {
-    const raw = JSON.parse(localStorage.getItem(storageKeyFor(docKey)) ?? '{}') as unknown;
+    const raw = JSON.parse(storage.getItem(storageKeyFor(docKey)) ?? '{}') as unknown;
     if (!raw || typeof raw !== 'object') return {};
     const out: OpenState = {};
     for (const [k, v] of Object.entries(raw)) if (isDocMetaKind(k) && v === true) out[k] = true;
@@ -38,12 +41,17 @@ export function readOpenState(docKey: string): OpenState {
   }
 }
 
-function writeOpenState(docKey: string, kind: DocMetaKind, open: boolean): void {
+export function writeOpenState(
+  docKey: string,
+  kind: DocMetaKind,
+  open: boolean,
+  storage: StateStorage = localStorage,
+): void {
   try {
-    const state = readOpenState(docKey);
+    const state = readOpenState(docKey, storage);
     if (open) state[kind] = true;
     else delete state[kind];
-    localStorage.setItem(storageKeyFor(docKey), JSON.stringify(state));
+    storage.setItem(storageKeyFor(docKey), JSON.stringify(state));
   } catch {
     // Storage blocked: the fold still works for this visit.
   }
@@ -51,14 +59,17 @@ function writeOpenState(docKey: string, kind: DocMetaKind, open: boolean): void 
 
 /**
  * Characters as a story platform counts them: the text a reader sees,
- * paragraphs one line break apart.
+ * whitespace runs as one space, paragraphs one line break apart.
  */
-export function summaryCharacterCount(region: Element): number {
-  const content = region.querySelector(':scope > .content') ?? region;
-  const parts = Array.from(content.children)
-    .map((el) => (el.textContent ?? '').replace(/\s+/g, ' ').trim())
-    .filter(Boolean);
+export function countSummaryCharacters(paragraphs: readonly string[]): number {
+  const parts = paragraphs.map((p) => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
   return Array.from(parts.join('\n')).length;
+}
+
+/** The region's paragraphs, through AsciiDoc's `.content` wrapper. */
+function summaryCharacterCount(region: Element): number {
+  const content = region.querySelector(':scope > .content') ?? region;
+  return countSummaryCharacters(Array.from(content.children, (el) => el.textContent ?? ''));
 }
 
 /** Idempotent; also refreshes the summary count after a patch changed the text. */
