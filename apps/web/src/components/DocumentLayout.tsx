@@ -178,6 +178,10 @@ import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
 import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
 import { COMMENT_FLASH_MS, type ThreadActionResult } from './inline-comments/inlineUtils.js';
 import { PendingCommentPopover } from './inline-comments/PendingCommentPopover.js';
+import {
+  buildThreadLocationIndex,
+  ThreadLocationProvider,
+} from './inline-comments/threadLocation.js';
 import { McpPanel } from './McpPanel.js';
 import { PageJump } from './PageJump.js';
 import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
@@ -2952,6 +2956,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     () => ({ isBookmarked: (id: string) => bookmarkedThreadIds.has(id), toggle: toggleBookmark }),
     [bookmarkedThreadIds, toggleBookmark],
   );
+  const threadLocations = useMemo(
+    () => buildThreadLocationIndex(liveRendered.blocks),
+    [liveRendered.blocks],
+  );
 
   // A bookmarked thread that was resolved before this page load lives only
   // in the archive, so the tab has to pull it in to show it. Lazy on the
@@ -3390,517 +3398,491 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
 
   return (
     <BookmarkControlsProvider value={bookmarkControls}>
-      <div className="doc-page">
-        <AppBar
-          docTitle={title}
-          role={doc.role}
-          docUid={doc.uid}
-          passwordProtected={doc.password_protected}
-          onLogout={() => window.location.reload()}
-          format={doc.format}
-        />
+      <ThreadLocationProvider value={threadLocations}>
+        <div className="doc-page">
+          <AppBar
+            docTitle={title}
+            role={doc.role}
+            docUid={doc.uid}
+            passwordProtected={doc.password_protected}
+            onLogout={() => window.location.reload()}
+            format={doc.format}
+          />
 
-        {pending && (
-          <span className="doc-pending" role="progressbar" aria-label="Loading document" />
-        )}
-
-        <div
-          className={`doc-layout${overlayPanes ? ' doc-layout-overlay' : ''}${pending ? ' doc-layout--pending' : ''}`}
-          style={gridStyle}
-          onTransitionEnd={onPanesSettled}
-          inert={pending}
-        >
-          {overlayPaneOpen && (
-            <button
-              type="button"
-              className="pane-scrim"
-              aria-label="Close panel"
-              onClick={closeOverlayPanes}
-            />
+          {pending && (
+            <span className="doc-pending" role="progressbar" aria-label="Loading document" />
           )}
-          <aside className={`pane pane-toc ${tocOpen ? 'open' : 'closed'}`}>
-            <Flex align="center" gap="2" px="2" py="2" className="pane-header">
-              <Tooltip content={tocOpen ? 'Collapse' : 'Expand contents'}>
-                <IconButton variant="ghost" size="1" onClick={() => openToc(!tocOpen)}>
-                  <ChevronLeftIcon className="pane-toggle-icon" />
-                </IconButton>
-              </Tooltip>
-              <Text size="1" color="gray" weight="medium" className="pane-header-label">
-                Contents
-              </Text>
-            </Flex>
-            {tocBody && (
-              /* Held at the open width so the headings don't re-wrap their
-               way through the collapse; the pane clips what won't fit. */
-              <div className="pane-body" style={{ width: tocWidth }} inert={!tocOpen}>
-                {doc.folder && (
-                  <FolderDocuments
-                    folder={doc.folder}
-                    currentUid={doc.uid}
-                    currentTitle={title}
-                    onAdd={
-                      doc.role === 'admin' || doc.role === 'editor'
-                        ? () => newDocumentRef.current?.open()
-                        : undefined
-                    }
-                  />
-                )}
-                <Toc
-                  nodes={liveRendered.toc}
-                  activeId={activeHeadingId}
-                  filterIds={sectionFilter}
-                  onToggleFilter={toggleSectionFilter}
-                  onClearFilter={clearSectionFilter}
-                />
-              </div>
-            )}
-            {tocOpen && <ResizeHandle side="left" width={tocWidth} onResize={setTocWidth} />}
-          </aside>
 
-          <main className="pane pane-doc" ref={docPaneRef}>
-            {/* Document-specific toolbar lives inside the doc pane so it sits
-              only over the document column, not above the side panes. */}
-            <DocumentToolbar
-              doc={doc}
-              rendered={liveRendered}
-              source={liveSource}
-              theme={theme}
-              reviewExportEnabled={inlineCommentsOpen || floatingComments}
-              onDocSettingsChanged={onDocSettingsChanged}
-              newDocumentRef={newDocumentRef}
-              viewControls={displayControls}
-              readAloud={{
-                docUid: doc.uid,
-                rootRef: docRef,
-                htmlKey: liveRendered.html,
-                frontmatter: liveRendered.frontmatter,
-                inlineCommentsOffset: inlineCommentsColumnWidth,
-                dock: readAloudDock,
-              }}
-              searchOpen={docSearchOpen}
-              onToggleSearch={toggleDocumentSearch}
-              uiScale={uiScale}
-              editHref={editHref}
-            />
-            {docSearchOpen && (
-              <div
-                className="doc-search-popover"
-                style={
-                  inlineCommentsColumnWidth > 0
-                    ? ({
-                        '--doc-search-inline-comments-offset': `${inlineCommentsColumnWidth}px`,
-                      } as React.CSSProperties)
-                    : undefined
-                }
-              >
-                <Flex align="center" gap="2" className="doc-search-toolbar">
-                  <TextField.Root
-                    ref={docSearchInputRef}
-                    size="1"
-                    type="search"
-                    value={docSearchQuery}
-                    onChange={(event) => setDocSearchQuery(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
-                      event.preventDefault();
-                      navigateSearchResult(event.shiftKey ? -1 : 1);
-                    }}
-                    placeholder="Search this document"
-                    className="doc-search-field"
-                  >
-                    <TextField.Slot>
-                      <MagnifyingGlassIcon />
-                    </TextField.Slot>
-                  </TextField.Root>
-                  <Tooltip
-                    content={
-                      docSearchCaseSensitive
-                        ? 'Disable case sensitivity'
-                        : 'Enable case sensitivity'
-                    }
-                  >
-                    <IconButton
-                      size="1"
-                      variant="ghost"
-                      color="gray"
-                      className="doc-toolbar-toggle"
-                      aria-label={
-                        docSearchCaseSensitive
-                          ? 'Disable case-sensitive search'
-                          : 'Enable case-sensitive search'
-                      }
-                      aria-pressed={docSearchCaseSensitive}
-                      onClick={() => {
-                        setDocSearchCaseSensitive((prev) => !prev);
-                        docSearchInputRef.current?.focus({ preventScroll: true });
-                      }}
-                    >
-                      <LetterCaseToggleIcon />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip
-                    content={
-                      docSearchWholeWords ? 'Disable whole-word matching' : 'Match whole words only'
-                    }
-                  >
-                    <IconButton
-                      size="1"
-                      variant="ghost"
-                      color="gray"
-                      className="doc-toolbar-toggle"
-                      aria-label={
-                        docSearchWholeWords
-                          ? 'Disable whole-word search'
-                          : 'Enable whole-word search'
-                      }
-                      aria-pressed={docSearchWholeWords}
-                      onClick={() => {
-                        setDocSearchWholeWords((prev) => !prev);
-                        docSearchInputRef.current?.focus({ preventScroll: true });
-                      }}
-                    >
-                      <WholeWordIcon />
-                    </IconButton>
-                  </Tooltip>
-                  <Text size="1" color="gray" className="doc-search-count">
-                    {searchResults.length === 0
-                      ? '0 results'
-                      : `${activeSearchIndex >= 0 ? activeSearchIndex + 1 : 1}/${searchResults.length}`}
-                  </Text>
-                  <IconButton
-                    size="1"
-                    variant="ghost"
-                    color="gray"
-                    aria-label="Previous search result"
-                    onClick={() => navigateSearchResult(-1)}
-                    disabled={searchResults.length === 0}
-                  >
-                    <ChevronLeftIcon />
-                  </IconButton>
-                  <IconButton
-                    size="1"
-                    variant="ghost"
-                    color="gray"
-                    aria-label="Next search result"
-                    onClick={() => navigateSearchResult(1)}
-                    disabled={searchResults.length === 0}
-                  >
-                    <ChevronRightIcon />
-                  </IconButton>
-                  <IconButton
-                    size="1"
-                    variant="ghost"
-                    color="gray"
-                    aria-label="Close document search"
-                    onClick={closeDocumentSearch}
-                  >
-                    <Cross2Icon />
-                  </IconButton>
-                </Flex>
-              </div>
-            )}
-            {floatingComments && hasAnyThread && (
-              <FloatingCommentsToolbar
-                threads={commentSurfaceThreads}
-                hideResolved={inlineCommentsHideResolved}
-                onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
-                onSwitchToColumn={() => setCommentsDisplayMode('column')}
-                columnModeAvailable={columnModeAvailable && !paged}
-                docElementRef={docRef}
-                scrollContainerRef={docScrollRef}
-                currentThreadId={focusedThread?.threadId ?? null}
-                onOpenThread={openCommentThread}
+          <div
+            className={`doc-layout${overlayPanes ? ' doc-layout-overlay' : ''}${pending ? ' doc-layout--pending' : ''}`}
+            style={gridStyle}
+            onTransitionEnd={onPanesSettled}
+            inert={pending}
+          >
+            {overlayPaneOpen && (
+              <button
+                type="button"
+                className="pane-scrim"
+                aria-label="Close panel"
+                onClick={closeOverlayPanes}
               />
             )}
-            {/* The reading width is published here rather than on the row
+            <aside className={`pane pane-toc ${tocOpen ? 'open' : 'closed'}`}>
+              <Flex align="center" gap="2" px="2" py="2" className="pane-header">
+                <Tooltip content={tocOpen ? 'Collapse' : 'Expand contents'}>
+                  <IconButton variant="ghost" size="1" onClick={() => openToc(!tocOpen)}>
+                    <ChevronLeftIcon className="pane-toggle-icon" />
+                  </IconButton>
+                </Tooltip>
+                <Text size="1" color="gray" weight="medium" className="pane-header-label">
+                  Contents
+                </Text>
+              </Flex>
+              {tocBody && (
+                /* Held at the open width so the headings don't re-wrap their
+               way through the collapse; the pane clips what won't fit. */
+                <div className="pane-body" style={{ width: tocWidth }} inert={!tocOpen}>
+                  {doc.folder && (
+                    <FolderDocuments
+                      folder={doc.folder}
+                      currentUid={doc.uid}
+                      currentTitle={title}
+                      onAdd={
+                        doc.role === 'admin' || doc.role === 'editor'
+                          ? () => newDocumentRef.current?.open()
+                          : undefined
+                      }
+                    />
+                  )}
+                  <Toc
+                    nodes={liveRendered.toc}
+                    activeId={activeHeadingId}
+                    filterIds={sectionFilter}
+                    onToggleFilter={toggleSectionFilter}
+                    onClearFilter={clearSectionFilter}
+                  />
+                </div>
+              )}
+              {tocOpen && <ResizeHandle side="left" width={tocWidth} onResize={setTocWidth} />}
+            </aside>
+
+            <main className="pane pane-doc" ref={docPaneRef}>
+              {/* Document-specific toolbar lives inside the doc pane so it sits
+              only over the document column, not above the side panes. */}
+              <DocumentToolbar
+                doc={doc}
+                rendered={liveRendered}
+                source={liveSource}
+                theme={theme}
+                reviewExportEnabled={inlineCommentsOpen || floatingComments}
+                onDocSettingsChanged={onDocSettingsChanged}
+                newDocumentRef={newDocumentRef}
+                viewControls={displayControls}
+                readAloud={{
+                  docUid: doc.uid,
+                  rootRef: docRef,
+                  htmlKey: liveRendered.html,
+                  frontmatter: liveRendered.frontmatter,
+                  inlineCommentsOffset: inlineCommentsColumnWidth,
+                  dock: readAloudDock,
+                }}
+                searchOpen={docSearchOpen}
+                onToggleSearch={toggleDocumentSearch}
+                uiScale={uiScale}
+                editHref={editHref}
+              />
+              {docSearchOpen && (
+                <div
+                  className="doc-search-popover"
+                  style={
+                    inlineCommentsColumnWidth > 0
+                      ? ({
+                          '--doc-search-inline-comments-offset': `${inlineCommentsColumnWidth}px`,
+                        } as React.CSSProperties)
+                      : undefined
+                  }
+                >
+                  <Flex align="center" gap="2" className="doc-search-toolbar">
+                    <TextField.Root
+                      ref={docSearchInputRef}
+                      size="1"
+                      type="search"
+                      value={docSearchQuery}
+                      onChange={(event) => setDocSearchQuery(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;
+                        event.preventDefault();
+                        navigateSearchResult(event.shiftKey ? -1 : 1);
+                      }}
+                      placeholder="Search this document"
+                      className="doc-search-field"
+                    >
+                      <TextField.Slot>
+                        <MagnifyingGlassIcon />
+                      </TextField.Slot>
+                    </TextField.Root>
+                    <Tooltip
+                      content={
+                        docSearchCaseSensitive
+                          ? 'Disable case sensitivity'
+                          : 'Enable case sensitivity'
+                      }
+                    >
+                      <IconButton
+                        size="1"
+                        variant="ghost"
+                        color="gray"
+                        className="doc-toolbar-toggle"
+                        aria-label={
+                          docSearchCaseSensitive
+                            ? 'Disable case-sensitive search'
+                            : 'Enable case-sensitive search'
+                        }
+                        aria-pressed={docSearchCaseSensitive}
+                        onClick={() => {
+                          setDocSearchCaseSensitive((prev) => !prev);
+                          docSearchInputRef.current?.focus({ preventScroll: true });
+                        }}
+                      >
+                        <LetterCaseToggleIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip
+                      content={
+                        docSearchWholeWords
+                          ? 'Disable whole-word matching'
+                          : 'Match whole words only'
+                      }
+                    >
+                      <IconButton
+                        size="1"
+                        variant="ghost"
+                        color="gray"
+                        className="doc-toolbar-toggle"
+                        aria-label={
+                          docSearchWholeWords
+                            ? 'Disable whole-word search'
+                            : 'Enable whole-word search'
+                        }
+                        aria-pressed={docSearchWholeWords}
+                        onClick={() => {
+                          setDocSearchWholeWords((prev) => !prev);
+                          docSearchInputRef.current?.focus({ preventScroll: true });
+                        }}
+                      >
+                        <WholeWordIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Text size="1" color="gray" className="doc-search-count">
+                      {searchResults.length === 0
+                        ? '0 results'
+                        : `${activeSearchIndex >= 0 ? activeSearchIndex + 1 : 1}/${searchResults.length}`}
+                    </Text>
+                    <IconButton
+                      size="1"
+                      variant="ghost"
+                      color="gray"
+                      aria-label="Previous search result"
+                      onClick={() => navigateSearchResult(-1)}
+                      disabled={searchResults.length === 0}
+                    >
+                      <ChevronLeftIcon />
+                    </IconButton>
+                    <IconButton
+                      size="1"
+                      variant="ghost"
+                      color="gray"
+                      aria-label="Next search result"
+                      onClick={() => navigateSearchResult(1)}
+                      disabled={searchResults.length === 0}
+                    >
+                      <ChevronRightIcon />
+                    </IconButton>
+                    <IconButton
+                      size="1"
+                      variant="ghost"
+                      color="gray"
+                      aria-label="Close document search"
+                      onClick={closeDocumentSearch}
+                    >
+                      <Cross2Icon />
+                    </IconButton>
+                  </Flex>
+                </div>
+              )}
+              {floatingComments && hasAnyThread && (
+                <FloatingCommentsToolbar
+                  threads={commentSurfaceThreads}
+                  hideResolved={inlineCommentsHideResolved}
+                  onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
+                  onSwitchToColumn={() => setCommentsDisplayMode('column')}
+                  columnModeAvailable={columnModeAvailable && !paged}
+                  docElementRef={docRef}
+                  scrollContainerRef={docScrollRef}
+                  currentThreadId={focusedThread?.threadId ?? null}
+                  onOpenThread={openCommentThread}
+                />
+              )}
+              {/* The reading width is published here rather than on the row
               so the edge tap zones — siblings of the scrollport, not
               descendants — can size themselves to the gutter it leaves.
               Everything that read it inside the row still inherits it. */}
-            <div className="doc-viewport" style={{ ['--md-max-width' as string]: `${maxWidth}ch` }}>
-              {/* `marginalia-theme` is applied here (not just inside the
+              <div
+                className="doc-viewport"
+                style={{ ['--md-max-width' as string]: `${maxWidth}ch` }}
+              >
+                {/* `marginalia-theme` is applied here (not just inside the
               article) so the inline comments column inherits the
               document's themed background — otherwise it would sit on
               the surrounding pane-doc background and look like a
               different surface. */}
-              <div
-                className={`doc-scroll marginalia-theme${
-                  paged ? ` ${pagedVertical ? PAGED_VERTICAL_CLASS : PAGED_CLASS}` : ''
-                }`}
-                ref={docScrollRef}
-              >
                 <div
-                  className={`doc-row${!floatingComments && inlineCommentsOpen ? ' doc-row-with-inline' : ''}${rowHostsPopover ? ' doc-row-floating' : ''}`}
+                  className={`doc-scroll marginalia-theme${
+                    paged ? ` ${pagedVertical ? PAGED_VERTICAL_CLASS : PAGED_CLASS}` : ''
+                  }`}
+                  ref={docScrollRef}
                 >
-                  <div className="doc-body">
-                    <RenderedDoc
-                      rendered={liveRendered}
-                      elRef={docRef}
-                      maxWidthCh={maxWidth}
-                      textZoom={textZoom / 100}
-                      highlights={commentHighlights}
-                      bookmarks={bookmarkMarkers}
-                      searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}
-                      searchOptions={docSearchOptions}
-                      activeSearchResultId={activeSearchTarget?.id ?? null}
-                      activeSearchVersion={activeSearchTarget?.nonce ?? 0}
-                      onSearchResultsChange={updateSearchResults}
-                      onHighlightClick={(threadId) =>
-                        openCommentThread(threadId, { scroll: false, jumpToAnchor: false })
-                      }
-                      onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
-                    />
-                    {canComment && blockRangesReady && (
-                      <SelectionToolbar
-                        rootRef={docRef}
-                        docFormat={doc.format}
-                        blockRanges={blockRanges}
-                        onAdd={startCommentDraft}
-                        onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
-                      />
-                    )}
-                    {canComment && blockRangesReady && (
-                      <BlockActions
-                        rootRef={docRef}
-                        onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
-                        isBookmarked={isBlockBookmarked}
-                        onToggleBookmark={(el) => void onToggleBlockBookmark(el)}
-                        onEditChapter={(headingBlockId, headingCopy) =>
-                          navigate(
-                            `/d/${doc.uid}/edit${chapterEditQuery(headingBlockId, headingCopy)}`,
-                          )
+                  <div
+                    className={`doc-row${!floatingComments && inlineCommentsOpen ? ' doc-row-with-inline' : ''}${rowHostsPopover ? ' doc-row-floating' : ''}`}
+                  >
+                    <div className="doc-body">
+                      <RenderedDoc
+                        rendered={liveRendered}
+                        elRef={docRef}
+                        maxWidthCh={maxWidth}
+                        textZoom={textZoom / 100}
+                        highlights={commentHighlights}
+                        bookmarks={bookmarkMarkers}
+                        searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}
+                        searchOptions={docSearchOptions}
+                        activeSearchResultId={activeSearchTarget?.id ?? null}
+                        activeSearchVersion={activeSearchTarget?.nonce ?? 0}
+                        onSearchResultsChange={updateSearchResults}
+                        onHighlightClick={(threadId) =>
+                          openCommentThread(threadId, { scroll: false, jumpToAnchor: false })
                         }
+                        onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
+                      />
+                      {canComment && blockRangesReady && (
+                        <SelectionToolbar
+                          rootRef={docRef}
+                          docFormat={doc.format}
+                          blockRanges={blockRanges}
+                          onAdd={startCommentDraft}
+                          onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+                        />
+                      )}
+                      {canComment && blockRangesReady && (
+                        <BlockActions
+                          rootRef={docRef}
+                          onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
+                          isBookmarked={isBlockBookmarked}
+                          onToggleBookmark={(el) => void onToggleBlockBookmark(el)}
+                          onEditChapter={(headingBlockId, headingCopy) =>
+                            navigate(
+                              `/d/${doc.uid}/edit${chapterEditQuery(headingBlockId, headingCopy)}`,
+                            )
+                          }
+                        />
+                      )}
+                    </div>
+                    {floatingComments ? (
+                      paged ? null : (
+                        floatingCommentsLayer
+                      )
+                    ) : (
+                      <InlineCommentsLayer
+                        uid={doc.uid}
+                        threads={commentSurfaceThreads}
+                        docHtml={liveRendered.html}
+                        docElementRef={docRef}
+                        scrollContainerRef={docScrollRef}
+                        blockRanges={blockRanges}
+                        canComment={canComment}
+                        open={inlineCommentsOpen}
+                        onToggleOpen={() => setInlineCommentsOpen((v) => !v)}
+                        stackingEnabled={inlineCommentsStacking}
+                        onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
+                        hideResolved={inlineCommentsHideResolved}
+                        onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
+                        onSwitchToFloating={() => setCommentsDisplayMode('floating')}
+                        pendingAnchor={canComment && composerInColumn ? pendingAnchor : null}
+                        focusedThread={focusedThread}
+                        displayName={effectiveDisplayName}
+                        mentionCandidates={mentionCandidates}
+                        onCancelPending={() => setPendingDraft(null)}
+                        onCreate={onCreate}
+                        onReply={onReply}
+                        onEdit={onEdit}
+                        onSetHidden={onSetCommentHidden}
+                        onDeleteNode={onDeleteNode}
+                        onDeleteThread={onDeleteThread}
+                        onResolveThread={onResolveThread}
+                        onRepairThread={onRepairThread}
+                        onResolveConflict={onResolveConflict}
+                        onReact={onReact}
+                        onCreateProposal={onCreateProposalForComment}
+                        onEditProposal={onEditProposal}
+                        onScrollToAnchor={scrollToAnchor}
                       />
                     )}
+                    {paged ? null : pendingCommentPopover}
                   </div>
-                  {floatingComments ? (
-                    paged ? null : (
-                      floatingCommentsLayer
-                    )
-                  ) : (
-                    <InlineCommentsLayer
-                      uid={doc.uid}
-                      threads={commentSurfaceThreads}
-                      docHtml={liveRendered.html}
-                      docElementRef={docRef}
-                      scrollContainerRef={docScrollRef}
-                      blockRanges={blockRanges}
-                      canComment={canComment}
-                      open={inlineCommentsOpen}
-                      onToggleOpen={() => setInlineCommentsOpen((v) => !v)}
-                      stackingEnabled={inlineCommentsStacking}
-                      onToggleStacking={() => setInlineCommentsStacking((v) => !v)}
-                      hideResolved={inlineCommentsHideResolved}
-                      onToggleHideResolved={() => setInlineCommentsHideResolved((v) => !v)}
-                      onSwitchToFloating={() => setCommentsDisplayMode('floating')}
-                      pendingAnchor={canComment && composerInColumn ? pendingAnchor : null}
-                      focusedThread={focusedThread}
-                      displayName={effectiveDisplayName}
-                      mentionCandidates={mentionCandidates}
-                      onCancelPending={() => setPendingDraft(null)}
-                      onCreate={onCreate}
-                      onReply={onReply}
-                      onEdit={onEdit}
-                      onSetHidden={onSetCommentHidden}
-                      onDeleteNode={onDeleteNode}
-                      onDeleteThread={onDeleteThread}
-                      onResolveThread={onResolveThread}
-                      onRepairThread={onRepairThread}
-                      onResolveConflict={onResolveConflict}
-                      onReact={onReact}
-                      onCreateProposal={onCreateProposalForComment}
-                      onEditProposal={onEditProposal}
-                      onScrollToAnchor={scrollToAnchor}
-                    />
-                  )}
-                  {paged ? null : pendingCommentPopover}
                 </div>
+                {paged && (
+                  <>
+                    <button
+                      type="button"
+                      className="doc-page-zone doc-page-zone-prev"
+                      aria-label="Previous page"
+                      disabled={pages.page <= 0}
+                      onClick={() => pages.tap(-1)}
+                    />
+                    <button
+                      type="button"
+                      className="doc-page-zone doc-page-zone-next"
+                      aria-label="Next page"
+                      disabled={pages.page >= pages.pageCount - 1}
+                      onClick={() => pages.tap(1)}
+                    />
+                    {floatingCommentsLayer}
+                    {pendingCommentPopover}
+                  </>
+                )}
               </div>
-              {paged && (
-                <>
-                  <button
-                    type="button"
-                    className="doc-page-zone doc-page-zone-prev"
-                    aria-label="Previous page"
-                    disabled={pages.page <= 0}
-                    onClick={() => pages.tap(-1)}
-                  />
-                  <button
-                    type="button"
-                    className="doc-page-zone doc-page-zone-next"
-                    aria-label="Next page"
-                    disabled={pages.page >= pages.pageCount - 1}
-                    onClick={() => pages.tap(1)}
-                  />
-                  {floatingCommentsLayer}
-                  {pendingCommentPopover}
-                </>
-              )}
-            </div>
-            {/* Where the read-aloud transport lives. Empty until it opens;
+              {/* Where the read-aloud transport lives. Empty until it opens;
               the stylesheet decides whether it then floats over the top of
               the document or sits here, in flow, as a bar above the pager. */}
-            <div className="read-aloud-dock" ref={setReadAloudDock} />
-            {paged && (
-              <Flex className="doc-pager" align="center" gap="2">
-                <IconButton
-                  variant="ghost"
-                  size="1"
-                  aria-label="Previous page"
-                  disabled={pages.page <= 0}
-                  onClick={() => pages.turn(-1)}
-                >
-                  <ChevronLeftIcon />
-                </IconButton>
-                <PageJump
-                  page={pages.page}
-                  pageCount={pages.pageCount}
-                  // Instant: a jump is rarely to the next page, and smooth
-                  // scrolling a hundred pitches is a long blur of columns.
-                  onGoTo={(index) => pages.goTo(index, 'auto')}
-                />
-                <IconButton
-                  variant="ghost"
-                  size="1"
-                  aria-label="Next page"
-                  disabled={pages.page >= pages.pageCount - 1}
-                  onClick={() => pages.turn(1)}
-                >
-                  <ChevronRightIcon />
-                </IconButton>
-              </Flex>
-            )}
-            {chapterReading && (
-              <ChapterPager chapters={chapters} index={chapterIndex} onGoTo={goToChapter} />
-            )}
-          </main>
+              <div className="read-aloud-dock" ref={setReadAloudDock} />
+              {paged && (
+                <Flex className="doc-pager" align="center" gap="2">
+                  <IconButton
+                    variant="ghost"
+                    size="1"
+                    aria-label="Previous page"
+                    disabled={pages.page <= 0}
+                    onClick={() => pages.turn(-1)}
+                  >
+                    <ChevronLeftIcon />
+                  </IconButton>
+                  <PageJump
+                    page={pages.page}
+                    pageCount={pages.pageCount}
+                    // Instant: a jump is rarely to the next page, and smooth
+                    // scrolling a hundred pitches is a long blur of columns.
+                    onGoTo={(index) => pages.goTo(index, 'auto')}
+                  />
+                  <IconButton
+                    variant="ghost"
+                    size="1"
+                    aria-label="Next page"
+                    disabled={pages.page >= pages.pageCount - 1}
+                    onClick={() => pages.turn(1)}
+                  >
+                    <ChevronRightIcon />
+                  </IconButton>
+                </Flex>
+              )}
+              {chapterReading && (
+                <ChapterPager chapters={chapters} index={chapterIndex} onGoTo={goToChapter} />
+              )}
+            </main>
 
-          <aside className={`pane pane-right ${commentsOpen ? 'open' : 'closed'}`}>
-            {commentsOpen && (
-              <ResizeHandle side="right" width={commentsWidth} onResize={setCommentsWidth} />
-            )}
-            {/* Out of flow, so it can cross-fade with a body that is still
+            <aside className={`pane pane-right ${commentsOpen ? 'open' : 'closed'}`}>
+              {commentsOpen && (
+                <ResizeHandle side="right" width={commentsWidth} onResize={setCommentsWidth} />
+              )}
+              {/* Out of flow, so it can cross-fade with a body that is still
               on its way out. */}
-            <Flex
-              align="center"
-              justify="center"
-              py="2"
-              className="pane-expand"
-              inert={commentsOpen}
-            >
-              <Tooltip content="Expand comments / history">
-                <IconButton variant="ghost" size="1" onClick={() => openComments(true)}>
-                  <ChevronLeftIcon />
-                </IconButton>
-              </Tooltip>
-            </Flex>
-            {commentsBody && (
-              <div className="pane-body" style={{ width: commentsWidth }} inert={!commentsOpen}>
-                <Tabs.Root
-                  value={rightTab}
-                  onValueChange={(v) => setRightTab(v as RightTab)}
-                  className="right-tabs"
-                >
-                  <Flex align="center" px="2" pt="2" className="pane-header">
-                    <Tabs.List size="1">
-                      <Tabs.Trigger value="activities">Activities</Tabs.Trigger>
-                      <Tabs.Trigger value="comments">
-                        <Flex align="center" gap="2">
-                          Threads
-                          {threadCount > 0 && (
-                            <Badge size="1" variant="soft" color="gray" radius="full">
-                              {threadCount}
-                            </Badge>
-                          )}
-                        </Flex>
-                      </Tabs.Trigger>
-                      {showBookmarksTab && (
-                        <Tabs.Trigger value="bookmarks">
+              <Flex
+                align="center"
+                justify="center"
+                py="2"
+                className="pane-expand"
+                inert={commentsOpen}
+              >
+                <Tooltip content="Expand comments / history">
+                  <IconButton variant="ghost" size="1" onClick={() => openComments(true)}>
+                    <ChevronLeftIcon />
+                  </IconButton>
+                </Tooltip>
+              </Flex>
+              {commentsBody && (
+                <div className="pane-body" style={{ width: commentsWidth }} inert={!commentsOpen}>
+                  <Tabs.Root
+                    value={rightTab}
+                    onValueChange={(v) => setRightTab(v as RightTab)}
+                    className="right-tabs"
+                  >
+                    <Flex align="center" px="2" pt="2" className="pane-header">
+                      <Tabs.List size="1">
+                        <Tabs.Trigger value="activities">Activities</Tabs.Trigger>
+                        <Tabs.Trigger value="comments">
                           <Flex align="center" gap="2">
-                            <BookmarkIcon aria-hidden />
-                            Bookmarks
-                            {bookmarkedThreads.length > 0 && (
+                            Threads
+                            {threadCount > 0 && (
                               <Badge size="1" variant="soft" color="gray" radius="full">
-                                {bookmarkedThreads.length}
+                                {threadCount}
                               </Badge>
                             )}
                           </Flex>
                         </Tabs.Trigger>
-                      )}
-                      <Tabs.Trigger value="history">History</Tabs.Trigger>
-                      <Tabs.Trigger value="mcp">MCP</Tabs.Trigger>
-                      {hasSearchResults && (
-                        <Tabs.Trigger value="search">
-                          <Flex align="center" gap="2">
-                            Search Results
-                            <Badge size="1" variant="soft" color="gray" radius="full">
-                              {searchResults.length}
-                            </Badge>
-                          </Flex>
-                        </Tabs.Trigger>
-                      )}
-                    </Tabs.List>
-                    <span className="spacer" />
-                    <Tooltip content="Collapse">
-                      <IconButton variant="ghost" size="1" onClick={() => openComments(false)}>
-                        <ChevronRightIcon />
-                      </IconButton>
-                    </Tooltip>
-                  </Flex>
-                  <Tabs.Content value="activities" className="right-tab-panel">
-                    <ActivityList
-                      uid={doc.uid}
-                      version={historyVersion}
-                      threads={commentThreads}
-                      onOpenThread={openCommentThread}
-                      canRevert={canEdit}
-                      onRevertEdit={onRevertHistoryEdit}
-                    />
-                  </Tabs.Content>
-                  <Tabs.Content value="comments" className="right-tab-panel">
-                    <InlineCommentsList
-                      uid={doc.uid}
-                      threads={sectionVisibleThreads}
-                      loading={threadsLoading}
-                      onVisibleCountChange={onThreadTabVisibleCountChange}
-                      resolvedThreadCount={resolvedThreadCount}
-                      sectionFilterCount={sectionFilter.size}
-                      onClearSectionFilter={clearSectionFilter}
-                      blockRanges={blockRanges}
-                      canComment={canComment}
-                      focusedThread={focusedThread}
-                      handledFocusNonce={threadsListFocus}
-                      displayName={effectiveDisplayName}
-                      mentionCandidates={mentionCandidates}
-                      onReply={onReply}
-                      onEdit={onEdit}
-                      onSetHidden={onSetCommentHidden}
-                      onDeleteNode={onDeleteNode}
-                      onDeleteThread={onDeleteThread}
-                      onResolveThread={onResolveThread}
-                      onRepairThread={onRepairThread}
-                      onResolveConflict={onResolveConflict}
-                      onReact={onReact}
-                      onCreateProposal={onCreateProposalForComment}
-                      onEditProposal={onEditProposal}
-                      onScrollToAnchor={scrollToAnchor}
-                      onNeedResolvedThreads={ensureArchive}
-                    />
-                  </Tabs.Content>
-                  {showBookmarksTab && (
-                    <Tabs.Content value="bookmarks" className="right-tab-panel">
+                        {showBookmarksTab && (
+                          <Tabs.Trigger value="bookmarks">
+                            <Flex align="center" gap="2">
+                              <BookmarkIcon aria-hidden />
+                              Bookmarks
+                              {bookmarkedThreads.length > 0 && (
+                                <Badge size="1" variant="soft" color="gray" radius="full">
+                                  {bookmarkedThreads.length}
+                                </Badge>
+                              )}
+                            </Flex>
+                          </Tabs.Trigger>
+                        )}
+                        <Tabs.Trigger value="history">History</Tabs.Trigger>
+                        <Tabs.Trigger value="mcp">MCP</Tabs.Trigger>
+                        {hasSearchResults && (
+                          <Tabs.Trigger value="search">
+                            <Flex align="center" gap="2">
+                              Search Results
+                              <Badge size="1" variant="soft" color="gray" radius="full">
+                                {searchResults.length}
+                              </Badge>
+                            </Flex>
+                          </Tabs.Trigger>
+                        )}
+                      </Tabs.List>
+                      <span className="spacer" />
+                      <Tooltip content="Collapse">
+                        <IconButton variant="ghost" size="1" onClick={() => openComments(false)}>
+                          <ChevronRightIcon />
+                        </IconButton>
+                      </Tooltip>
+                    </Flex>
+                    <Tabs.Content value="activities" className="right-tab-panel">
+                      <ActivityList
+                        uid={doc.uid}
+                        version={historyVersion}
+                        threads={commentThreads}
+                        onOpenThread={openCommentThread}
+                        canRevert={canEdit}
+                        onRevertEdit={onRevertHistoryEdit}
+                      />
+                    </Tabs.Content>
+                    <Tabs.Content value="comments" className="right-tab-panel">
                       <InlineCommentsList
                         uid={doc.uid}
-                        variant="bookmarks"
-                        threads={bookmarkedThreads}
-                        loading={threadsLoading || archiveLoading}
-                        onVisibleCountChange={ignoreVisibleCount}
+                        threads={sectionVisibleThreads}
+                        loading={threadsLoading}
+                        onVisibleCountChange={onThreadTabVisibleCountChange}
                         resolvedThreadCount={resolvedThreadCount}
                         sectionFilterCount={sectionFilter.size}
                         onClearSectionFilter={clearSectionFilter}
                         blockRanges={blockRanges}
                         canComment={canComment}
                         focusedThread={focusedThread}
-                        handledFocusNonce={bookmarksListFocus}
+                        handledFocusNonce={threadsListFocus}
                         displayName={effectiveDisplayName}
                         mentionCandidates={mentionCandidates}
                         onReply={onReply}
@@ -3918,65 +3900,98 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                         onNeedResolvedThreads={ensureArchive}
                       />
                     </Tabs.Content>
-                  )}
-                  <Tabs.Content value="mcp" className="right-tab-panel">
-                    <McpPanel uid={doc.uid} canManageInvites={doc.role === 'admin'} />
-                  </Tabs.Content>
-                  <Tabs.Content value="history" className="right-tab-panel">
-                    <HistoryList
-                      uid={doc.uid}
-                      version={historyVersion}
-                      canRestore={canEdit}
-                      onRestoreAsNewDocument={onRestoreAsNewDocument}
-                      onRevertEdit={onRevertHistoryEdit}
-                      onOpenThread={openCommentThread}
-                      {...(canEdit ? { onRestoreVersion: onRestoreHistoryVersion } : {})}
-                    />
-                  </Tabs.Content>
-                  {hasSearchResults && (
-                    <Tabs.Content value="search" className="right-tab-panel">
-                      <DocumentSearchResultsPane
-                        query={deferredDocSearchQuery}
-                        results={searchResults}
-                        activeResultId={activeSearchTarget?.id ?? null}
-                        onSelectResult={focusSearchResult}
+                    {showBookmarksTab && (
+                      <Tabs.Content value="bookmarks" className="right-tab-panel">
+                        <InlineCommentsList
+                          uid={doc.uid}
+                          variant="bookmarks"
+                          threads={bookmarkedThreads}
+                          loading={threadsLoading || archiveLoading}
+                          onVisibleCountChange={ignoreVisibleCount}
+                          resolvedThreadCount={resolvedThreadCount}
+                          sectionFilterCount={sectionFilter.size}
+                          onClearSectionFilter={clearSectionFilter}
+                          blockRanges={blockRanges}
+                          canComment={canComment}
+                          focusedThread={focusedThread}
+                          handledFocusNonce={bookmarksListFocus}
+                          displayName={effectiveDisplayName}
+                          mentionCandidates={mentionCandidates}
+                          onReply={onReply}
+                          onEdit={onEdit}
+                          onSetHidden={onSetCommentHidden}
+                          onDeleteNode={onDeleteNode}
+                          onDeleteThread={onDeleteThread}
+                          onResolveThread={onResolveThread}
+                          onRepairThread={onRepairThread}
+                          onResolveConflict={onResolveConflict}
+                          onReact={onReact}
+                          onCreateProposal={onCreateProposalForComment}
+                          onEditProposal={onEditProposal}
+                          onScrollToAnchor={scrollToAnchor}
+                          onNeedResolvedThreads={ensureArchive}
+                        />
+                      </Tabs.Content>
+                    )}
+                    <Tabs.Content value="mcp" className="right-tab-panel">
+                      <McpPanel uid={doc.uid} canManageInvites={doc.role === 'admin'} />
+                    </Tabs.Content>
+                    <Tabs.Content value="history" className="right-tab-panel">
+                      <HistoryList
+                        uid={doc.uid}
+                        version={historyVersion}
+                        canRestore={canEdit}
+                        onRestoreAsNewDocument={onRestoreAsNewDocument}
+                        onRevertEdit={onRevertHistoryEdit}
+                        onOpenThread={openCommentThread}
+                        {...(canEdit ? { onRestoreVersion: onRestoreHistoryVersion } : {})}
                       />
                     </Tabs.Content>
-                  )}
-                </Tabs.Root>
-              </div>
-            )}
-          </aside>
-        </div>
+                    {hasSearchResults && (
+                      <Tabs.Content value="search" className="right-tab-panel">
+                        <DocumentSearchResultsPane
+                          query={deferredDocSearchQuery}
+                          results={searchResults}
+                          activeResultId={activeSearchTarget?.id ?? null}
+                          onSelectResult={focusSearchResult}
+                        />
+                      </Tabs.Content>
+                    )}
+                  </Tabs.Root>
+                </div>
+              )}
+            </aside>
+          </div>
 
-        {/*
+          {/*
         Proposal composer lives here (outside the right sidebar) so it
         stays mounted — and therefore openable — even when the user has
         the Threads/History pane collapsed. Radix Dialog portals the
         actual overlay to the body, so its DOM position here doesn't
         affect rendering.
       */}
-        <ProposalComposer
-          target={pendingProposalTarget}
-          docUid={doc.uid}
-          docSource={blockRangeSource}
-          docFormat={doc.format}
-          blockOccurrences={blockOccurrences}
-          attachedAssets={doc.attached_assets}
-          needsName={!displayName}
-          onCancel={() => setPendingDraft(null)}
-          onSubmit={onCreateProposal}
-        />
-        <ProposalEditComposer
-          thread={editingProposal}
-          docUid={doc.uid}
-          docFormat={doc.format}
-          attachedAssets={doc.attached_assets}
-          needsName={!displayName}
-          onCancel={() => setEditingProposal(null)}
-          onSubmit={onUpdateProposal}
-        />
-      </div>
+          <ProposalComposer
+            target={pendingProposalTarget}
+            docUid={doc.uid}
+            docSource={blockRangeSource}
+            docFormat={doc.format}
+            blockOccurrences={blockOccurrences}
+            attachedAssets={doc.attached_assets}
+            needsName={!displayName}
+            onCancel={() => setPendingDraft(null)}
+            onSubmit={onCreateProposal}
+          />
+          <ProposalEditComposer
+            thread={editingProposal}
+            docUid={doc.uid}
+            docFormat={doc.format}
+            attachedAssets={doc.attached_assets}
+            needsName={!displayName}
+            onCancel={() => setEditingProposal(null)}
+            onSubmit={onUpdateProposal}
+          />
+        </div>
+      </ThreadLocationProvider>
     </BookmarkControlsProvider>
   );
 }

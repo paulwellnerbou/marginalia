@@ -33,6 +33,7 @@ import {
   readCachedProposalDiff,
   writeCachedProposalDiff,
 } from './proposalDiffCache.js';
+import { threadHeadingPath, useThreadLocationIndex } from './threadLocation.js';
 import type { ThreadRefApi } from './threadRefs.js';
 
 /**
@@ -179,6 +180,10 @@ export function InlineThreadCard({
   // Null when the card renders outside a document layout — then no toggle.
   const bookmarks = useBookmarkControls();
   const bookmarked = bookmarks?.isBookmarked(thread.id) ?? false;
+  const locations = useThreadLocationIndex();
+  // A nested card sits inside the card of the thread it answers, which already says where.
+  const location =
+    locations && !nested ? threadHeadingPath(locations, thread.anchor).join(' › ') : '';
   // The reply composer stays closed until asked for — one textarea per
   // expanded thread crowds the column out of the reading space.
   const [replyOpen, setReplyOpen] = useState(false);
@@ -520,6 +525,11 @@ export function InlineThreadCard({
   return (
     <article className={cardClasses} data-comment-thread-id={thread.id} tabIndex={-1}>
       <header className="ic-card-header">
+        {location && (
+          <div className="ic-card-location" title={location}>
+            {location}
+          </div>
+        )}
         <div className="ic-card-header-top">
           <div className="ic-card-badges">
             {proposalThread && (
