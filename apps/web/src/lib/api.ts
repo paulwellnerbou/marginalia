@@ -19,7 +19,15 @@ export interface RenderedDocument {
   toc: TocNode[];
   frontmatter: Record<string, unknown>;
   warnings: Array<{ kind: string; message: string }>;
-  blocks: Array<{ id: string; kind: string; text: string; headingId?: string }>;
+  blocks: Array<{
+    id: string;
+    kind: string;
+    text: string;
+    headingId?: string;
+    headingPath: string[];
+    sectionIndex: number;
+    sectionIndexPath: number[];
+  }>;
 }
 
 export interface ExportedDocumentRepresentation {
