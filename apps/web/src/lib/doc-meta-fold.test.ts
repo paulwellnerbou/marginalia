@@ -1,7 +1,12 @@
 /// <reference types="bun" />
 
 import { describe, expect, test } from 'bun:test';
-import { countSummaryCharacters, readOpenState, writeOpenState } from './doc-meta-fold.js';
+import {
+  countSummaryCharacters,
+  isAddRowDismissed,
+  readOpenState,
+  writeOpenState,
+} from './doc-meta-fold.js';
 
 function memoryStorage(initial: Record<string, string> = {}) {
   const data = new Map(Object.entries(initial));
@@ -61,5 +66,13 @@ describe('fold open state', () => {
     };
     expect(readOpenState('doc', blocked)).toEqual({});
     expect(() => writeOpenState('doc', 'summary', true, blocked)).not.toThrow();
+  });
+});
+
+describe('add row', () => {
+  test('stays until dismissed for that document', () => {
+    const storage = memoryStorage({ 'marginalia.docMetaAdd.doc-a': 'dismissed' });
+    expect(isAddRowDismissed('doc-a', storage)).toBe(true);
+    expect(isAddRowDismissed('doc-b', storage)).toBe(false);
   });
 });

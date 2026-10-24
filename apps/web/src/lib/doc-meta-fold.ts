@@ -1,5 +1,6 @@
 import {
   DOC_META_ATTR,
+  DOC_META_KINDS,
   type DocMetaKind,
   isDocMetaKind,
   SUMMARY_MAX_CHARACTERS,
@@ -72,17 +73,104 @@ function summaryCharacterCount(region: Element): number {
   return countSummaryCharacters(Array.from(content.children, (el) => el.textContent ?? ''));
 }
 
-/** Idempotent; also refreshes the summary count after a patch changed the text. */
-export function installDocMetaFolds(article: HTMLElement, docKey: string | null): void {
+/** For editors: how to get to a missing region in the editor. */
+export interface DocMetaAdd {
+  href: (kind: DocMetaKind) => string;
+  /** A plain click; modified clicks follow `href` so a new tab still works. */
+  open: (kind: DocMetaKind) => void;
+}
+
+/**
+ * Idempotent; also refreshes the summary count after a patch changed the
+ * text, and the editor's "Add …" row after a region came or went.
+ */
+export function installDocMetaFolds(
+  article: HTMLElement,
+  docKey: string | null,
+  add: DocMetaAdd | null = null,
+): void {
   const stored = docKey ? readOpenState(docKey) : null;
+  const present = new Set<DocMetaKind>();
   for (const region of article.querySelectorAll<HTMLElement>(`[${DOC_META_ATTR}]`)) {
     const kind = region.getAttribute(DOC_META_ATTR);
     if (!isDocMetaKind(kind)) continue;
+    present.add(kind);
     const existing = region.closest<HTMLElement>('.doc-meta-fold');
     const wrapper =
       existing ?? wrapRegion(region, kind, stored ? stored[kind] !== true : false, docKey);
     if (kind === 'summary') updateCount(wrapper, region);
   }
+  syncAddRow(article, docKey, add, present);
+}
+
+const ADD_LABELS: Record<DocMetaKind, string> = { summary: 'Add summary', about: 'Add about' };
+
+function addRowKey(docKey: string): string {
+  return `marginalia.docMetaAdd.${docKey}`;
+}
+
+export function isAddRowDismissed(docKey: string, storage: StateStorage = localStorage): boolean {
+  try {
+    return storage.getItem(addRowKey(docKey)) === 'dismissed';
+  } catch {
+    return false;
+  }
+}
+
+function dismissAddRow(docKey: string): void {
+  try {
+    localStorage.setItem(addRowKey(docKey), 'dismissed');
+  } catch {
+    // Storage blocked: hidden for this visit only.
+  }
+}
+
+/**
+ * Where the folds would be — after them, else under the title — a quiet
+ * row offering the missing ones, so an editor learns they exist.
+ */
+function syncAddRow(
+  article: HTMLElement,
+  docKey: string | null,
+  add: DocMetaAdd | null,
+  present: ReadonlySet<DocMetaKind>,
+): void {
+  article.querySelector('.doc-meta-add')?.remove();
+  const missing = DOC_META_KINDS.filter((k) => !present.has(k));
+  if (!add || !docKey || missing.length === 0 || isAddRowDismissed(docKey)) return;
+
+  const row = document.createElement('div');
+  row.className = 'doc-meta-header doc-meta-add';
+  for (const kind of missing) {
+    const link = document.createElement('a');
+    link.className = 'doc-meta-add-link';
+    link.href = add.href(kind);
+    link.textContent = ADD_LABELS[kind];
+    link.addEventListener('click', (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      add.open(kind);
+    });
+    row.appendChild(link);
+  }
+  const dismiss = document.createElement('button');
+  dismiss.type = 'button';
+  dismiss.className = 'doc-meta-add-dismiss';
+  dismiss.textContent = '×';
+  dismiss.title = 'Hide for this document';
+  dismiss.setAttribute('aria-label', 'Hide the summary and about suggestions for this document');
+  dismiss.addEventListener('click', () => {
+    dismissAddRow(docKey);
+    row.remove();
+  });
+  row.appendChild(dismiss);
+
+  const folds = article.querySelectorAll('.doc-meta-fold');
+  const lastFold = folds[folds.length - 1];
+  const first = article.firstElementChild;
+  if (lastFold) lastFold.after(row);
+  else if (first && (first.tagName === 'H1' || first.id === 'header')) first.after(row);
+  else article.prepend(row);
 }
 
 function wrapRegion(
