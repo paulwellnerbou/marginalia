@@ -6,6 +6,7 @@ import {
   chapterCopyParam,
   chapterEditQuery,
   resolveChapterScopeFromBlocks,
+  resolveDocMetaScope,
 } from './chapter-scope.js';
 
 /** What the rendered document lists for `source`: each top-level block in order. */
@@ -132,5 +133,52 @@ describe('chapter edit query', () => {
     expect(chapterCopyParam('-1')).toBe(0);
     expect(chapterCopyParam('1.5')).toBe(0);
     expect(chapterCopyParam('x')).toBe(0);
+  });
+});
+
+describe('resolveDocMetaScope', () => {
+  async function scopeOf(src: string, kind: 'summary' | 'about', format: 'markdown' | 'asciidoc') {
+    const rendered = await renderDocument(src, format);
+    const { occurrences } = format === 'asciidoc' ? locateBlocksAsciidoc(src) : locateBlocks(src);
+    return resolveDocMetaScope(src, occurrences, rendered.blocks, kind);
+  }
+
+  const md =
+    '# Book\n\n<!-- summary -->\nFirst line.\n\nSecond line.\n<!-- /summary -->\n\n' +
+    '<!-- about -->\nNotes.\n<!-- /about -->\n\n## One\n\nText.\n';
+
+  test('spans the region between its markers, markers left out', async () => {
+    const scope = await scopeOf(md, 'summary', 'markdown');
+    expect(scope?.source).toBe('First line.\n\nSecond line.');
+    expect(scope?.title).toBe('Summary');
+    expect(scope?.docMeta).toBe('summary');
+    expect(scope && md.slice(scope.start, scope.end)).toBe(scope?.source ?? null);
+    expect(scope?.blockIds.length).toBe(2);
+    expect((await scopeOf(md, 'about', 'markdown'))?.source).toBe('Notes.');
+  });
+
+  test('is null without a region, or with only its markers', async () => {
+    expect(await scopeOf('# Book\n\nText.\n', 'summary', 'markdown')).toBeNull();
+    expect(
+      await scopeOf('<!-- summary -->\n<!-- /summary -->\n\nText.\n', 'summary', 'markdown'),
+    ).toBeNull();
+  });
+
+  test('takes only the first region of a kind', async () => {
+    const twice =
+      '<!-- about -->\nA.\n<!-- /about -->\n\nMiddle.\n\n<!-- about -->\nB.\n<!-- /about -->\n';
+    expect((await scopeOf(twice, 'about', 'markdown'))?.source).toBe('A.');
+  });
+
+  test('finds the AsciiDoc open block', async () => {
+    const adoc = '= Book\n\n[.summary]\n--\nA blurb.\n--\n\n== One\n\nText.\n';
+    const scope = await scopeOf(adoc, 'summary', 'asciidoc');
+    expect(scope?.title).toBe('Summary');
+    expect(scope?.source).toBe('A blurb.');
+    expect(scope?.proposalWrap).toEqual({ before: '--\n', after: '\n--\n' });
+    expect(scope && adoc.slice(scope.start, scope.end)).toBe('A blurb.');
+    expect(
+      await scopeOf('= Book\n\n[.summary]\n--\n--\n\nText.\n', 'summary', 'asciidoc'),
+    ).toBeNull();
   });
 });

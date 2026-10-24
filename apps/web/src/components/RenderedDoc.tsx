@@ -7,7 +7,7 @@ import type { ThreadState } from '../lib/api.js';
 import { spanElements } from '../lib/block-span.js';
 import { isInjectedChromeText } from '../lib/block-text.js';
 import { type BookmarkMarkerSpec, syncBookmarkMarkers } from '../lib/bookmark-markers.js';
-import { type DocMetaAdd, installDocMetaFolds } from '../lib/doc-meta-fold.js';
+import { type DocMetaLinks, installDocMetaFolds } from '../lib/doc-meta-fold.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { revealElement } from '../lib/paged-reading.js';
@@ -73,8 +73,11 @@ interface RenderedDocProps {
    * uid. Without it they start open and remember nothing.
    */
   docMetaKey?: string | undefined;
-  /** Editors only: offers a missing summary / about under the title. */
-  docMetaAdd?: DocMetaAdd | undefined;
+  /**
+   * For readers who may edit or propose: "Edit" on the summary / about
+   * folds, and for editors an offer of the missing ones under the title.
+   */
+  docMetaLinks?: DocMetaLinks | undefined;
 }
 
 /** Default for `bookmarks`, held so the sync effect doesn't re-run on every render. */
@@ -113,7 +116,7 @@ export function RenderedDoc({
   onHighlightClick,
   onMissingAssetUpload,
   docMetaKey,
-  docMetaAdd,
+  docMetaLinks,
 }: RenderedDocProps) {
   const internal = useRef<HTMLElement>(null);
   const ref = elRef ?? internal;
@@ -133,12 +136,12 @@ export function RenderedDoc({
   }, [onMissingAssetUpload]);
   const canUploadMissing = Boolean(onMissingAssetUpload);
   // Same as the upload callback: read the latest from a ref, re-run only
-  // when the row appears or goes.
-  const docMetaAddRef = useRef(docMetaAdd);
+  // when what the links offer changes.
+  const docMetaLinksRef = useRef(docMetaLinks);
   useEffect(() => {
-    docMetaAddRef.current = docMetaAdd;
-  }, [docMetaAdd]);
-  const canAddDocMeta = Boolean(docMetaAdd);
+    docMetaLinksRef.current = docMetaLinks;
+  }, [docMetaLinks]);
+  const docMetaOffer = docMetaLinks ? (docMetaLinks.canAdd ? 'add' : 'edit') : 'none';
 
   // Apply `rendered.html` to the article's innerHTML exactly once per
   // unique html value, then run mermaid + replace missing-asset markers
@@ -169,7 +172,7 @@ export function RenderedDoc({
     void renderMermaidIn(el);
     replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
     installHeadingCollapse(el);
-    installDocMetaFolds(el, docMetaKey ?? null, docMetaAddRef.current ?? null);
+    installDocMetaFolds(el, docMetaKey ?? null, docMetaLinksRef.current ?? null);
     // Replay the current hash after the article is populated. Opening
     // a deep link directly (`/d/...#section`) lets the browser fire
     // its initial fragment jump *before* React renders, so without
@@ -201,16 +204,13 @@ export function RenderedDoc({
   }, [rendered.html, ref, canUploadMissing, docMetaKey]);
 
   // The html effect above stops early when the markup is unchanged, so the
-  // editor's "Add …" row follows the role here.
+  // "Edit" links and the "Add …" row follow the role here.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: docMetaOffer is the trigger; the links themselves are read from the ref.
   useEffect(() => {
     const el = ref.current;
     if (!el || lastHtml.current === null) return;
-    installDocMetaFolds(
-      el,
-      docMetaKey ?? null,
-      canAddDocMeta ? (docMetaAddRef.current ?? null) : null,
-    );
-  }, [ref, docMetaKey, canAddDocMeta]);
+    installDocMetaFolds(el, docMetaKey ?? null, docMetaLinksRef.current ?? null);
+  }, [ref, docMetaKey, docMetaOffer]);
 
   // If canUploadMissing flips while `rendered.html` stays the same
   // (e.g. invite upgraded mid-session so the user gains editor role),

@@ -32,6 +32,7 @@ import {
   chapterCopyParam,
   chapterEditQuery,
   resolveChapterScope,
+  resolveDocMetaScope,
 } from '../lib/chapter-scope.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
@@ -97,6 +98,17 @@ function attachedAssetKey(assets: readonly AttachedAsset[]): string {
 
 const NOTHING_TO_APPEND = 'There is nothing to append: write some text first.';
 
+/** What the scoped editor holds, for messages: "this chapter", "the summary". */
+function scopeNoun(scope: ChapterScope, sentenceStart = false): string {
+  const noun =
+    scope.docMeta === 'summary'
+      ? 'the summary'
+      : scope.docMeta === 'about'
+        ? 'the about text'
+        : 'this chapter';
+  return sentenceStart ? noun[0]?.toUpperCase() + noun.slice(1) : noun;
+}
+
 export function EditPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
   const [searchParams] = useSearchParams();
@@ -109,7 +121,10 @@ export function EditPage() {
    * no scrolling to its end.
    */
   const appending = !chapterBlockId && searchParams.has('append');
-  /** `?meta=summary|about`: open on that region, adding it if it's missing. */
+  /**
+   * `?meta=summary|about`: edit just that region, like a chapter; when the
+   * document has none yet, the whole document with empty markers added.
+   */
   const metaParam = searchParams.get('meta');
   const openMeta = !chapterBlockId && !appending && isDocMetaKind(metaParam) ? metaParam : null;
 
@@ -154,7 +169,7 @@ export function EditPage() {
   // React Router reuses EditPage when only :uid changes. Reset the complete
   // document-scoped state during render so there is never a committed frame
   // where the previous source can be saved under the new uid.
-  const pageKey = `${uid ?? ''}:${chapterBlockId ?? ''}:${appending}`;
+  const pageKey = `${uid ?? ''}:${chapterBlockId ?? ''}:${appending}:${openMeta ?? ''}`;
   const [stateKey, setStateKey] = useState(pageKey);
   if (stateKey !== pageKey) {
     setStateKey(pageKey);
@@ -263,7 +278,7 @@ export function EditPage() {
     if (!doc) return;
     const previous = document.title;
     document.title = chapterScope
-      ? `Editing chapter: ${chapterScope.title} · Marginalia`
+      ? `Editing ${chapterScope.docMeta ? chapterScope.title.toLowerCase() : `chapter: ${chapterScope.title}`} · Marginalia`
       : appending
         ? `Appending to: ${documentTitle(doc)} · Marginalia`
         : `Editing: ${documentTitle(doc)} · Marginalia`;
@@ -312,6 +327,10 @@ export function EditPage() {
             setError('This chapter could not be found. It may have changed or been removed.');
             return;
           }
+        } else if (openMeta) {
+          const located = await loadLocatedBlocks(d.source, d.format);
+          if (cancelled) return;
+          scope = resolveDocMetaScope(d.source, located.occurrences, d.rendered.blocks, openMeta);
         }
         const initialSource = appending ? '' : (scope?.source ?? d.source);
         setChapterScope(scope);
@@ -330,7 +349,7 @@ export function EditPage() {
     return () => {
       cancelled = true;
     };
-  }, [uid, chapterBlockId, chapterCopy, appending]);
+  }, [uid, chapterBlockId, chapterCopy, appending, openMeta]);
 
   // Mirror ViewPage: sync localStorage to the server's authoritative
   // name so the shared UserMenu label and save identity match the
@@ -373,7 +392,7 @@ export function EditPage() {
         });
         viewRef.current = new EditorView({ state, parent: editorEl.current });
         if (appending) viewRef.current.focus();
-        if (openMeta) showDocMetaInEditor(viewRef.current, doc.format, openMeta);
+        if (openMeta && !chapterScope) showDocMetaInEditor(viewRef.current, doc.format, openMeta);
       },
       (err) => {
         reportError('EditPage.editor', err, { uid });
@@ -639,16 +658,23 @@ export function EditPage() {
         // concurrent edit.
         const latest = await getDocument(targetUid);
         const latestBlocks = await loadLocatedBlocks(latest.source, latest.format);
-        const latestScope = resolveChapterScope(
-          latest.source,
-          latest.rendered.html,
-          latestBlocks.occurrences,
-          chapterScope.headingBlockId,
-          chapterScope.headingCopy,
-        );
+        const latestScope = chapterScope.docMeta
+          ? resolveDocMetaScope(
+              latest.source,
+              latestBlocks.occurrences,
+              latest.rendered.blocks,
+              chapterScope.docMeta,
+            )
+          : resolveChapterScope(
+              latest.source,
+              latest.rendered.html,
+              latestBlocks.occurrences,
+              chapterScope.headingBlockId,
+              chapterScope.headingCopy,
+            );
         if (!latestScope || latestScope.source !== savedSource) {
           setError(
-            'This chapter changed while you were editing. Close and reopen it to review the latest version.',
+            `${scopeNoun(chapterScope, true)} changed while you were editing. Close and reopen it to review the latest version.`,
           );
           return;
         }
@@ -692,7 +718,7 @@ export function EditPage() {
         setError(
           appending
             ? 'The document changed just before your save. Save again to append your text.'
-            : 'The document changed just before your save. Review the latest chapter and try again.',
+            : `The document changed just before your save. Review the latest ${chapterScope ? scopeNoun(chapterScope) : 'version'} and try again.`,
         );
       } else if (err instanceof ApiError) setError(`${err.status}: ${err.code}`);
       else setError(err instanceof Error ? `Save failed: ${err.message}` : 'Save failed');
@@ -747,18 +773,19 @@ export function EditPage() {
         return;
       }
       if (chapterScope) {
-        // The heading's text alone, as the viewer and the MCP send for a
+        // The first block's text alone, as the viewer and the MCP send for a
         // span: the server looks for a proposal's quote in its first block,
         // so the whole chapter's text would orphan it on the next save.
         const quote = renderedBlockTexts(doc.rendered.html).get(chapterScope.headingBlockId);
         if (!quote) {
-          setError('Cannot anchor a proposal to this chapter.');
+          setError(`Cannot anchor a proposal to ${scopeNoun(chapterScope)}.`);
           return;
         }
+        const wrap = chapterScope.proposalWrap;
         await createEditProposal(
           targetUid,
           {
-            proposed_text: source,
+            proposed_text: wrap ? wrap.before + source + wrap.after : source,
             rationale: rationale.trim() || null,
             anchor_block_id: chapterScope.headingBlockId,
             anchor_section: chapterScope.section,
@@ -846,7 +873,11 @@ export function EditPage() {
       <AppBar
         docTitle={`Editing: ${documentTitle(doc)}`}
         {...(chapterScope
-          ? { contextLabel: `Chapter: ${chapterScope.title}` }
+          ? {
+              contextLabel: chapterScope.docMeta
+                ? chapterScope.title
+                : `Chapter: ${chapterScope.title}`,
+            }
           : appending
             ? { contextLabel: 'Appending' }
             : {})}
@@ -878,7 +909,7 @@ export function EditPage() {
               format={doc.format}
               wordWrap={wordWrap}
               onWordWrapToggle={() => setWordWrap((w) => !w)}
-              docMeta={!chapterBlockId && !appending}
+              docMeta={!chapterScope && !appending}
             />
           )}
           <div className="edit-source__editor" ref={editorEl} />

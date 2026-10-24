@@ -1657,7 +1657,10 @@ button.primary:disabled {
   text-transform: inherit;
   color: inherit;
   display: inline-flex;
-  align-items: center;
+  /* The label sets the button's baseline, so it lines up with the count
+     and the Edit link beside it. With `center` the chevron, which has no
+     baseline, would set it and lift the label above the count. */
+  align-items: baseline;
   gap: 0.35em;
   cursor: pointer;
   border-radius: 0.2em;
@@ -1670,6 +1673,7 @@ button.primary:disabled {
   outline-offset: 2px;
 }
 .marginalia .doc-meta-toggle svg {
+  align-self: center;
   width: 1em;
   height: 1em;
   transform: rotate(90deg);
@@ -1688,8 +1692,18 @@ button.primary:disabled {
 .marginalia .doc-meta-header:has(+ .doc-meta-fold.is-collapsed) .doc-meta-count {
   display: none;
 }
-.marginalia .doc-meta-count.is-over {
-  color: var(--red-11);
+.marginalia .doc-meta-edit {
+  margin-left: auto;
+  color: inherit;
+  text-decoration: none;
+  border-radius: 0.2em;
+}
+.marginalia .doc-meta-edit:hover {
+  color: var(--md-color-accent, currentColor);
+}
+.marginalia .doc-meta-edit:focus-visible {
+  outline: 2px solid var(--md-color-accent, currentColor);
+  outline-offset: 2px;
 }
 /* Editors' hint for a missing summary / about, in the folds' own voice. */
 .marginalia .doc-meta-add {

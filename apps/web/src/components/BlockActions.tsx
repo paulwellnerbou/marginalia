@@ -1,3 +1,4 @@
+import { DOC_META_ATTR, type DocMetaKind, isDocMetaKind } from '@marginalia/renderer/doc-meta';
 import { BookmarkFilledIcon, BookmarkIcon } from '@radix-ui/react-icons';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { anchorElements } from '../lib/anchor-target.js';
@@ -9,6 +10,8 @@ interface Props {
   onPropose: (target: ProposalTarget) => void;
   /** `headingCopy`: which of the headings carrying that id, counting from 0. */
   onEditChapter?: (headingBlockId: string, headingCopy: number) => void;
+  /** Opens the editor on just the summary or about region the block sits in. */
+  onEditDocMeta?: (kind: DocMetaKind) => void;
   /** Whether this block element already carries one of the reader's bookmarks. */
   isBookmarked?: (el: HTMLElement) => boolean;
   /** Adds the reader's bookmark to the block, or removes it. */
@@ -44,6 +47,7 @@ export function BlockActions({
   rootRef,
   onPropose,
   onEditChapter,
+  onEditDocMeta,
   isBookmarked,
   onToggleBookmark,
 }: Props) {
@@ -205,6 +209,12 @@ export function BlockActions({
     if (el) onToggleBookmark?.(el);
   }
 
+  function editDocMeta() {
+    if (!docMetaKind) return;
+    onEditDocMeta?.(docMetaKind);
+    setHoveredTarget(null);
+  }
+
   function editChapter() {
     const el = targetElement();
     const root = rootRef.current;
@@ -220,8 +230,12 @@ export function BlockActions({
   // on paragraphs whose box stretches wider than the visible text.
   const targetEl = onToggleBookmark ? targetElement() : null;
   const bookmarked = targetEl ? (isBookmarked?.(targetEl) ?? false) : false;
+  // An AsciiDoc region is itself the block, a Markdown one wraps its blocks.
+  const regionKind = renderedTarget.el.closest(`[${DOC_META_ATTR}]`)?.getAttribute(DOC_META_ATTR);
+  const docMetaKind = onEditDocMeta && isDocMetaKind(regionKind) ? regionKind : null;
   const buttonWidth =
-    buttonSize.width || (renderedTarget.isHeading ? 230 : 124) + (onToggleBookmark ? 106 : 0);
+    buttonSize.width ||
+    (renderedTarget.isHeading ? 230 : 124) + (onToggleBookmark ? 106 : 0) + (docMetaKind ? 120 : 0);
   const buttonHeight = buttonSize.height || 28;
   const style: React.CSSProperties = {
     top: Math.max(4, renderedTarget.rect.top - buttonHeight + 6),
@@ -262,6 +276,17 @@ export function BlockActions({
             <BookmarkIcon className="block-actions-icon" aria-hidden />
           )}
           {bookmarked ? 'Bookmarked' : 'Bookmark'}
+        </button>
+      )}
+      {docMetaKind && (
+        <button
+          type="button"
+          className="block-actions-btn"
+          onClick={editDocMeta}
+          title={docMetaKind === 'summary' ? 'Edit the summary' : 'Edit the about text'}
+          aria-label={docMetaKind === 'summary' ? 'Edit the summary' : 'Edit the about text'}
+        >
+          {docMetaKind === 'summary' ? 'Edit summary' : 'Edit about'}
         </button>
       )}
       {renderedTarget.isHeading && onEditChapter && (

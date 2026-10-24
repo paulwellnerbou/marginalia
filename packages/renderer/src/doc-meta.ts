@@ -30,9 +30,6 @@ export const DOC_META_KINDS: readonly DocMetaKind[] = ['summary', 'about'];
 /** Carried by the element that wraps a region in the rendered HTML. */
 export const DOC_META_ATTR = 'data-doc-meta';
 
-/** The limit story platforms put on a summary. Shown to the author, not enforced. */
-export const SUMMARY_MAX_CHARACTERS = 1400;
-
 export function isDocMetaKind(v: unknown): v is DocMetaKind {
   return v === 'summary' || v === 'about';
 }

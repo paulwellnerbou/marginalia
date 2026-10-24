@@ -1,3 +1,4 @@
+import type { DocMetaKind } from '@marginalia/renderer/doc-meta';
 import type { BlockOccurrence } from '@marginalia/renderer/locate-block';
 import type { AnchorSection } from './anchor-target.js';
 
@@ -13,6 +14,17 @@ export interface ChapterScope {
   start: number;
   end: number;
   source: string;
+  /**
+   * Set when the scope is a summary or about region rather than a chapter:
+   * `headingBlockId` / `headingCopy` then name the region's first block.
+   */
+  docMeta?: DocMetaKind;
+  /**
+   * Source the blocks span beyond `start`/`end`: an AsciiDoc open block's
+   * `--` delimiters, kept out of the editor. A proposal replaces whole
+   * blocks, so it sends them back around the edited text.
+   */
+  proposalWrap?: { before: string; after: string };
 }
 
 interface RenderedBlock {
@@ -115,5 +127,79 @@ export function resolveChapterScopeFromBlocks(
     start: startRange.start,
     end: endRange.end,
     source: source.slice(startRange.start, endRange.end),
+  };
+}
+
+const DOC_META_TITLES: Record<DocMetaKind, string> = { summary: 'Summary', about: 'About' };
+
+/** Sub-blocks repeat a slice of their top-level block and take no copy count. */
+const SUB_BLOCK_KINDS = new Set(['listItem', 'tableCell']);
+
+interface DocMetaBlock {
+  id: string;
+  kind: string;
+  docMeta?: DocMetaKind | undefined;
+}
+
+/**
+ * The first summary or about region as an editing scope, shaped like a
+ * chapter so the editor saves and proposes it the same way: from the first
+ * block inside the markers to the last, markers left out of the editor.
+ * Null when the document has no such region, or only its empty markers.
+ */
+export function resolveDocMetaScope(
+  source: string,
+  occurrences: ReadonlyMap<string, readonly BlockOccurrence[]>,
+  blocks: readonly DocMetaBlock[],
+  kind: DocMetaKind,
+): ChapterScope | null {
+  const seen = new Map<string, number>();
+  const inside: Array<{ id: string; copy: number; range: BlockOccurrence }> = [];
+  for (const block of blocks) {
+    if (SUB_BLOCK_KINDS.has(block.kind)) continue;
+    const copy = seen.get(block.id) ?? 0;
+    seen.set(block.id, copy + 1);
+    if (block.docMeta !== kind) {
+      // Only the first region: a second one would pull everything between in.
+      if (inside.length > 0) break;
+      continue;
+    }
+    // The Markdown markers are blocks of their own; they stay out of the editor.
+    if (block.kind === 'html') continue;
+    const range = occurrences.get(block.id)?.[copy];
+    if (range) inside.push({ id: block.id, copy, range });
+  }
+  const first = inside[0];
+  const last = inside.at(-1);
+  if (!first || !last || last.range.end < first.range.start) return null;
+  let start = first.range.start;
+  let end = last.range.end;
+  let proposalWrap: ChapterScope['proposalWrap'];
+  const span = source.slice(start, end);
+  const open = /^--\r?\n/.exec(span);
+  const close = span.search(/\r?\n--\s*$/);
+  if (open && close >= open[0].length) {
+    proposalWrap = { before: open[0], after: span.slice(close) };
+    end = start + close;
+    start += open[0].length;
+  } else if (open) {
+    return null;
+  }
+  return {
+    headingBlockId: first.id,
+    headingCopy: first.copy,
+    section: {
+      heading_path: first.range.headingPath,
+      section_index: first.range.sectionIndex,
+      section_index_path: first.range.sectionIndexPath,
+    },
+    endBlockId: last.id,
+    blockIds: inside.map((b) => b.id),
+    title: DOC_META_TITLES[kind],
+    start,
+    end,
+    source: source.slice(start, end),
+    docMeta: kind,
+    ...(proposalWrap ? { proposalWrap } : {}),
   };
 }

@@ -551,16 +551,23 @@ Nobody has to type the markers. The editor toolbar has a Summary and an
 About button: each jumps to its region, or adds empty markers under the
 title when there is none (not while editing a single chapter or
 appending). Editors also see "Add summary" / "Add about" in the document
-itself, where the folds would be, for whichever is missing; it opens the
-editor with the markers in place (`/d/<uid>/edit?meta=summary`), and ×
-hides it for that document in this browser.
+itself, where the folds would be, for whichever is missing, and ×
+hides that for the document in this browser.
+
+**Edit summary** / **Edit about** work like Edit chapter: on the fold's
+header, or hovering a block inside the region. The editor then holds
+only the region's text — markers and AsciiDoc delimiters stay out of it —
+and Save puts it back, or Propose edit turns it into a proposal on the
+region's blocks. Both go through `/d/<uid>/edit?meta=summary`; for a
+document without that region yet, the same address opens the whole
+document with empty markers added.
 
 Since they are ordinary text, comments, edit proposals (including those
 an agent makes over MCP), history and revert all work on them. The
 viewer shows each as a fold above the text, closed until the reader
 opens it and remembered per document; jumping to a thread inside one
-opens it. The summary's fold shows its length against the 1,400
-characters story platforms allow. Statistics leave both out, and so do
+opens it. Each fold shows how many characters its text has; there is
+no limit. Statistics leave both out, and so do
 the PDF, Word and EPUB exports; the EPUB takes the summary as its
 description. Source downloads, chapter ZIPs, copies and JSON bundles
 keep them as written. MCP's `get_document` says where each region is,

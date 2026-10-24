@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import {
-  countSummaryCharacters,
+  countDocMetaCharacters,
   isAddRowDismissed,
   readOpenState,
   writeOpenState,
@@ -17,19 +17,19 @@ function memoryStorage(initial: Record<string, string> = {}) {
   };
 }
 
-describe('countSummaryCharacters', () => {
+describe('countDocMetaCharacters', () => {
   test('counts paragraphs one line break apart and collapses whitespace', () => {
-    expect(countSummaryCharacters(['  Frankfurt,\n  2015. ', '', 'Felix.'])).toBe(
+    expect(countDocMetaCharacters(['  Frankfurt,\n  2015. ', '', 'Felix.'])).toBe(
       'Frankfurt, 2015.\nFelix.'.length,
     );
   });
 
   test('counts code points, so an emoji is one character', () => {
-    expect(countSummaryCharacters(['é 🚲'])).toBe(3);
+    expect(countDocMetaCharacters(['é 🚲'])).toBe(3);
   });
 
-  test('lands exactly on the limit boundary', () => {
-    expect(countSummaryCharacters(['x'.repeat(700), 'y'.repeat(699)])).toBe(1400);
+  test('has no limit', () => {
+    expect(countDocMetaCharacters(['x'.repeat(2000), 'y'.repeat(999)])).toBe(3000);
   });
 });
 
