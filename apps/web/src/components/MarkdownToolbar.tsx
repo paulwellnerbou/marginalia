@@ -9,8 +9,17 @@ import {
 } from '@radix-ui/react-icons';
 import { IconButton } from '@radix-ui/themes';
 import type { EditorView } from 'codemirror';
-import { Heading1, Heading2, Heading3, ListOrdered, WrapText } from 'lucide-react';
+import {
+  Heading1,
+  Heading2,
+  Heading3,
+  Info,
+  ListOrdered,
+  ScrollText,
+  WrapText,
+} from 'lucide-react';
 import type { RefObject } from 'react';
+import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
 
 // ── shared helpers ────────────────────────────────────────────────────────────
 
@@ -113,9 +122,20 @@ interface Props {
   format: 'markdown' | 'asciidoc';
   wordWrap: boolean;
   onWordWrapToggle: () => void;
+  /**
+   * Offer the summary / about buttons. Only when the editor holds the whole
+   * document: a chapter or an append has no top to put them at.
+   */
+  docMeta?: boolean;
 }
 
-export function MarkdownToolbar({ viewRef, format, wordWrap, onWordWrapToggle }: Props) {
+export function MarkdownToolbar({
+  viewRef,
+  format,
+  wordWrap,
+  onWordWrapToggle,
+  docMeta = false,
+}: Props) {
   function act(fn: (v: EditorView) => void) {
     return () => {
       const v = viewRef.current;
@@ -232,6 +252,25 @@ export function MarkdownToolbar({ viewRef, format, wordWrap, onWordWrapToggle }:
           onClick={act((v) => (isAdoc ? adocLink(v) : mdLink(v)))}
         />
       </div>
+
+      {docMeta && (
+        <>
+          <Sep />
+          {/* The book's blurb and notes, kept under the title */}
+          <div className="markdown-toolbar__group">
+            <Btn
+              label="Summary: go to it, or add one under the title"
+              icon={<ScrollText size={14} />}
+              onClick={act((v) => showDocMetaInEditor(v, format, 'summary'))}
+            />
+            <Btn
+              label="About: go to it, or add one under the title"
+              icon={<Info size={14} />}
+              onClick={act((v) => showDocMetaInEditor(v, format, 'about'))}
+            />
+          </div>
+        </>
+      )}
 
       <div className="markdown-toolbar__spacer" />
 

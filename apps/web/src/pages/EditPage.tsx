@@ -1,3 +1,4 @@
+import { isDocMetaKind } from '@marginalia/renderer/doc-meta';
 import { insertAfterBlock } from '@marginalia/renderer/insertion';
 import type { RenderResult } from '@marginalia/renderer/types';
 import { Button, Container, Flex, Select, Slider, Text } from '@radix-ui/themes';
@@ -33,6 +34,7 @@ import {
   resolveChapterScope,
 } from '../lib/chapter-scope.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
+import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
@@ -107,6 +109,9 @@ export function EditPage() {
    * no scrolling to its end.
    */
   const appending = !chapterBlockId && searchParams.has('append');
+  /** `?meta=summary|about`: open on that region, adding it if it's missing. */
+  const metaParam = searchParams.get('meta');
+  const openMeta = !chapterBlockId && !appending && isDocMetaKind(metaParam) ? metaParam : null;
 
   useEffect(() => {
     if (!uid || !token) return;
@@ -118,13 +123,15 @@ export function EditPage() {
       ? chapterEditQuery(chapterBlockId, chapterCopy)
       : appending
         ? '?append'
-        : '';
+        : openMeta
+          ? `?meta=${openMeta}`
+          : '';
     window.history.replaceState({}, '', `/d/${uid}/edit${query}`);
     claimInvite(uid, token).catch(() => {
       // 400 (admin invite), 409 (password-protected), 404 (invite gone):
       // fall back to invite-header auth via the token in localStorage.
     });
-  }, [uid, token, chapterBlockId, chapterCopy, appending]);
+  }, [uid, token, chapterBlockId, chapterCopy, appending, openMeta]);
 
   const navigate = useNavigate();
   const [doc, setDoc] = useState<Document | null>(null);
@@ -366,6 +373,7 @@ export function EditPage() {
         });
         viewRef.current = new EditorView({ state, parent: editorEl.current });
         if (appending) viewRef.current.focus();
+        if (openMeta) showDocMetaInEditor(viewRef.current, doc.format, openMeta);
       },
       (err) => {
         reportError('EditPage.editor', err, { uid });
@@ -378,7 +386,7 @@ export function EditPage() {
       viewRef.current = null;
       wrapCompartmentRef.current = null;
     };
-  }, [doc, uid, chapterScope, appending]);
+  }, [doc, uid, chapterScope, appending, openMeta]);
 
   // Toggle line wrapping without destroying the editor
   useEffect(() => {
@@ -870,6 +878,7 @@ export function EditPage() {
               format={doc.format}
               wordWrap={wordWrap}
               onWordWrapToggle={() => setWordWrap((w) => !w)}
+              docMeta={!chapterBlockId && !appending}
             />
           )}
           <div className="edit-source__editor" ref={editorEl} />

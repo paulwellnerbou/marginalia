@@ -20,8 +20,8 @@ import type { RootContent } from 'mdast';
  * first region of each kind is the one exports read.
  *
  * Kept free of parser imports so the web app can read the constants
- * without pulling a Markdown pipeline into its bundle; the source-level
- * helpers for exports live in `doc-meta-extract.ts`.
+ * without pulling a Markdown pipeline into its bundle; the helpers that
+ * parse Markdown for exports live in `doc-meta-extract.ts`.
  */
 export type DocMetaKind = 'summary' | 'about';
 
@@ -86,4 +86,82 @@ export function markdownDocMetaByIndex(children: readonly RootContent[]): Map<nu
     for (let i = region.open; i <= region.close; i++) byIndex.set(i, region.kind);
   }
   return byIndex;
+}
+
+/** Where a region sits in a source, as character offsets. */
+export interface DocMetaSpan {
+  kind: DocMetaKind;
+  /** First character of the opening marker or block header. */
+  start: number;
+  /** Just past the closing marker's line. */
+  end: number;
+  /** The region's own text: from the line after the opener to the closer's line. */
+  innerStart: number;
+  innerEnd: number;
+}
+
+const ATTRIBUTE_LINE_RE = /^\[(.*)\]$/;
+const BLOCK_TITLE_RE = /^\.[^.\s]/;
+
+/**
+ * Mirrors the renderer, which asks asciidoctor's `hasRole` of every open
+ * block: a role counts wherever it sits — `[.summary]`, `[#blurb.summary.lead]`,
+ * `[open.about%collapsible]`, `[role="lead summary"]` — not only alone.
+ */
+function asciidocRoles(attributeList: string): string[] {
+  const roles: string[] = [];
+  const entries = attributeList.split(',').map((e) => e.trim());
+  const first = entries[0] ?? '';
+  if (!first.includes('=')) {
+    for (const m of first.matchAll(/\.([^.#%]+)/g)) roles.push(m[1] as string);
+  }
+  for (const entry of entries) {
+    const named = /^role\s*=\s*(["']?)(.*)\1$/.exec(entry);
+    if (named) roles.push(...(named[2] as string).split(/\s+/));
+  }
+  return roles.map((r) => r.toLowerCase());
+}
+
+/**
+ * Open blocks (`--` … `--`) whose header carries a summary or about role.
+ * The span takes the whole header — attribute lines and a `.Title` — so an
+ * export that cuts it leaves nothing of the region behind. Line-based, so
+ * the editor can use it without a parser.
+ */
+export function findAsciidocDocMetaRegions(source: string): DocMetaSpan[] {
+  const cuts: DocMetaSpan[] = [];
+  const lines = source.split('\n').map((l) => l.trimEnd());
+  const starts: number[] = [];
+  let offset = 0;
+  for (const line of source.split('\n')) {
+    starts.push(offset);
+    offset += line.length + 1;
+  }
+  const at = (i: number) => starts[i] ?? source.length;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i] !== '--') continue;
+    const close = lines.indexOf('--', i + 1);
+    if (close === -1) break;
+    let headerStart = i;
+    const roles: string[] = [];
+    while (headerStart > 0) {
+      const above = lines[headerStart - 1] ?? '';
+      const attrs = ATTRIBUTE_LINE_RE.exec(above);
+      if (attrs) roles.push(...asciidocRoles(attrs[1] as string));
+      else if (!BLOCK_TITLE_RE.test(above)) break;
+      headerStart -= 1;
+    }
+    const kind = DOC_META_KINDS.find((k) => roles.includes(k));
+    if (kind) {
+      cuts.push({
+        kind,
+        start: at(headerStart),
+        end: Math.min(at(close + 1), source.length),
+        innerStart: at(i + 1),
+        innerEnd: at(close),
+      });
+    }
+    i = close;
+  }
+  return cuts;
 }

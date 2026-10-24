@@ -89,6 +89,7 @@ import {
 } from '../lib/chapter-reading.js';
 import { chapterEditQuery } from '../lib/chapter-scope.js';
 import { buildCommentHighlights } from '../lib/comment-highlights.js';
+import type { DocMetaAdd } from '../lib/doc-meta-fold.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { shareFolderToken } from '../lib/folder.js';
@@ -2252,6 +2253,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   );
 
   const canEdit = doc.role === 'admin' || doc.role === 'editor';
+  // Memoized: RenderedDoc keeps it in a ref and only watches whether it's set.
+  const docMetaAdd = useMemo<DocMetaAdd | undefined>(
+    () =>
+      canEdit && editHref
+        ? {
+            href: (kind) => `${editHref}?meta=${kind}`,
+            open: (kind) => navigate(`${editHref}?meta=${kind}`),
+          }
+        : undefined,
+    [canEdit, editHref, navigate],
+  );
 
   // Editors can fill missing-asset placeholders directly in view mode
   // without navigating to the editor. Upload, then re-fetch so the
@@ -3663,6 +3675,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                         }
                         onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
                         docMetaKey={doc.uid}
+                        docMetaAdd={docMetaAdd}
                       />
                       {canComment && blockRangesReady && (
                         <SelectionToolbar

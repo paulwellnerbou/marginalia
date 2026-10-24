@@ -547,6 +547,14 @@ In AsciiDoc it is an open block with the role, `[.summary]` or `[.about]`
 over `--` … `--`. A region needs its closing marker and only counts at
 the top level; other Markdown renderers just don't show the comments.
 
+Nobody has to type the markers. The editor toolbar has a Summary and an
+About button: each jumps to its region, or adds empty markers under the
+title when there is none (not while editing a single chapter or
+appending). Editors also see "Add summary" / "Add about" in the document
+itself, where the folds would be, for whichever is missing; it opens the
+editor with the markers in place (`/d/<uid>/edit?meta=summary`), and ×
+hides it for that document in this browser.
+
 Since they are ordinary text, comments, edit proposals (including those
 an agent makes over MCP), history and revert all work on them. The
 viewer shows each as a fold above the text, closed until the reader
