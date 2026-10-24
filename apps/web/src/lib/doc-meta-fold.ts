@@ -3,7 +3,6 @@ import {
   DOC_META_KINDS,
   type DocMetaKind,
   isDocMetaKind,
-  SUMMARY_MAX_CHARACTERS,
 } from '@marginalia/renderer/doc-meta';
 
 /**
@@ -62,32 +61,35 @@ export function writeOpenState(
  * Characters as a story platform counts them: the text a reader sees,
  * whitespace runs as one space, paragraphs one line break apart.
  */
-export function countSummaryCharacters(paragraphs: readonly string[]): number {
+export function countDocMetaCharacters(paragraphs: readonly string[]): number {
   const parts = paragraphs.map((p) => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
   return Array.from(parts.join('\n')).length;
 }
 
 /** The region's paragraphs, through AsciiDoc's `.content` wrapper. */
-function summaryCharacterCount(region: Element): number {
+function regionCharacterCount(region: Element): number {
   const content = region.querySelector(':scope > .content') ?? region;
-  return countSummaryCharacters(Array.from(content.children, (el) => el.textContent ?? ''));
+  return countDocMetaCharacters(Array.from(content.children, (el) => el.textContent ?? ''));
 }
 
-/** For editors: how to get to a missing region in the editor. */
-export interface DocMetaAdd {
+/** For readers who may edit or propose: how to reach a region in the editor. */
+export interface DocMetaLinks {
   href: (kind: DocMetaKind) => string;
   /** A plain click; modified clicks follow `href` so a new tab still works. */
   open: (kind: DocMetaKind) => void;
+  /** Offer the regions the document lacks too — editors only. */
+  canAdd: boolean;
 }
 
 /**
- * Idempotent; also refreshes the summary count after a patch changed the
- * text, and the editor's "Add …" row after a region came or went.
+ * Idempotent; also refreshes the counts after a patch changed the text,
+ * the "Edit" links after the role changed, and the "Add …" row after a
+ * region came or went.
  */
 export function installDocMetaFolds(
   article: HTMLElement,
   docKey: string | null,
-  add: DocMetaAdd | null = null,
+  links: DocMetaLinks | null = null,
 ): void {
   const stored = docKey ? readOpenState(docKey) : null;
   const present = new Set<DocMetaKind>();
@@ -98,9 +100,13 @@ export function installDocMetaFolds(
     const existing = region.closest<HTMLElement>('.doc-meta-fold');
     const wrapper =
       existing ?? wrapRegion(region, kind, stored ? stored[kind] !== true : false, docKey);
-    if (kind === 'summary') updateCount(wrapper, region);
+    const header = wrapper.previousElementSibling;
+    if (header instanceof HTMLElement && header.classList.contains('doc-meta-header')) {
+      updateCount(header, region);
+      syncEditLink(header, kind, links);
+    }
   }
-  syncAddRow(article, docKey, add, present);
+  syncAddRow(article, docKey, links?.canAdd ? links : null, present);
 }
 
 const ADD_LABELS: Record<DocMetaKind, string> = { summary: 'Add summary', about: 'Add about' };
@@ -132,7 +138,7 @@ function dismissAddRow(docKey: string): void {
 function syncAddRow(
   article: HTMLElement,
   docKey: string | null,
-  add: DocMetaAdd | null,
+  add: DocMetaLinks | null,
   present: ReadonlySet<DocMetaKind>,
 ): void {
   article.querySelector('.doc-meta-add')?.remove();
@@ -146,11 +152,7 @@ function syncAddRow(
     link.className = 'doc-meta-add-link';
     link.href = add.href(kind);
     link.textContent = ADD_LABELS[kind];
-    link.addEventListener('click', (e) => {
-      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      e.preventDefault();
-      add.open(kind);
-    });
+    followInApp(link, () => add.open(kind));
     row.appendChild(link);
   }
   const dismiss = document.createElement('button');
@@ -224,16 +226,39 @@ function wrapRegion(
   return wrapper;
 }
 
-function updateCount(wrapper: HTMLElement, region: Element): void {
-  const header = wrapper.previousElementSibling;
-  if (!header?.classList.contains('doc-meta-header')) return;
+/** Router navigation for a plain click; a modified click opens `href` as a link would. */
+function followInApp(link: HTMLAnchorElement, open: () => void): void {
+  link.addEventListener('click', (e) => {
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    open();
+  });
+}
+
+/** Right after the toggle, so the "Edit" link stays last. */
+function updateCount(header: HTMLElement, region: Element): void {
   let count = header.querySelector<HTMLElement>('.doc-meta-count');
   if (!count) {
     count = document.createElement('span');
     count.className = 'doc-meta-count';
-    header.appendChild(count);
+    header.querySelector('.doc-meta-toggle')?.after(count);
   }
-  const n = summaryCharacterCount(region);
-  count.textContent = `${n.toLocaleString()} / ${SUMMARY_MAX_CHARACTERS.toLocaleString()} characters`;
-  count.classList.toggle('is-over', n > SUMMARY_MAX_CHARACTERS);
+  const n = regionCharacterCount(region);
+  count.textContent = `${n.toLocaleString()} ${n === 1 ? 'character' : 'characters'}`;
+}
+
+function syncEditLink(header: HTMLElement, kind: DocMetaKind, links: DocMetaLinks | null): void {
+  const existing = header.querySelector('.doc-meta-edit');
+  if (!links) {
+    existing?.remove();
+    return;
+  }
+  if (existing) return;
+  const link = document.createElement('a');
+  link.className = 'doc-meta-edit';
+  link.href = links.href(kind);
+  link.textContent = 'Edit';
+  link.setAttribute('aria-label', kind === 'summary' ? 'Edit the summary' : 'Edit the about text');
+  followInApp(link, () => links.open(kind));
+  header.appendChild(link);
 }

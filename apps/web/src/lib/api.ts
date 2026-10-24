@@ -27,6 +27,8 @@ export interface RenderedDocument {
     headingPath: string[];
     sectionIndex: number;
     sectionIndexPath: number[];
+    /** Inside the summary or about region. */
+    docMeta?: 'summary' | 'about';
   }>;
 }
 

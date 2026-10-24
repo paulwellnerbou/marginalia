@@ -385,7 +385,7 @@ describe('documentHeader summary and about', () => {
       '<!-- summary -->\nFrankfurt, 2015.\n<!-- /summary -->\n\n# Book\n\nText.\n',
     );
     const out = documentHeader(doc, ref, await blockMap());
-    expect(out).toContain('summary: 16 characters (story platforms allow 1400)');
+    expect(out).toContain('summary: 16 characters, between');
     expect(out).toContain('between <!-- summary --> and <!-- /summary -->');
     expect(out).not.toContain('about:');
   });

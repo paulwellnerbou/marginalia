@@ -89,7 +89,7 @@ import {
 } from '../lib/chapter-reading.js';
 import { chapterEditQuery } from '../lib/chapter-scope.js';
 import { buildCommentHighlights } from '../lib/comment-highlights.js';
-import type { DocMetaAdd } from '../lib/doc-meta-fold.js';
+import type { DocMetaLinks } from '../lib/doc-meta-fold.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { shareFolderToken } from '../lib/folder.js';
@@ -2253,16 +2253,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   );
 
   const canEdit = doc.role === 'admin' || doc.role === 'editor';
-  // Memoized: RenderedDoc keeps it in a ref and only watches whether it's set.
-  const docMetaAdd = useMemo<DocMetaAdd | undefined>(
+  // Memoized: RenderedDoc keeps it in a ref and only watches what it offers.
+  // Anyone who can propose gets "Edit", as with Edit chapter; only editors
+  // are offered the missing regions.
+  const docMetaLinks = useMemo<DocMetaLinks | undefined>(
     () =>
-      canEdit && editHref
+      canComment
         ? {
-            href: (kind) => `${editHref}?meta=${kind}`,
-            open: (kind) => navigate(`${editHref}?meta=${kind}`),
+            href: (kind) => `/d/${doc.uid}/edit?meta=${kind}`,
+            open: (kind) => navigate(`/d/${doc.uid}/edit?meta=${kind}`),
+            canAdd: canEdit && !!editHref,
           }
         : undefined,
-    [canEdit, editHref, navigate],
+    [canComment, canEdit, editHref, doc.uid, navigate],
   );
 
   // Editors can fill missing-asset placeholders directly in view mode
@@ -3675,7 +3678,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                         }
                         onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
                         docMetaKey={doc.uid}
-                        docMetaAdd={docMetaAdd}
+                        docMetaLinks={docMetaLinks}
                       />
                       {canComment && blockRangesReady && (
                         <SelectionToolbar
@@ -3697,6 +3700,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                               `/d/${doc.uid}/edit${chapterEditQuery(headingBlockId, headingCopy)}`,
                             )
                           }
+                          onEditDocMeta={(kind) => navigate(`/d/${doc.uid}/edit?meta=${kind}`)}
                         />
                       )}
                     </div>

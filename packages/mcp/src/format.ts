@@ -1,4 +1,3 @@
-import { SUMMARY_MAX_CHARACTERS } from '@marginalia/renderer/doc-meta';
 import { createPatch } from 'diff';
 import type { DocumentWire, ThreadCommentWire, ThreadWire } from './api-types.js';
 import {
@@ -127,30 +126,27 @@ function docMetaLines(doc: DocumentWire): string[] {
     (b) => b.docMeta && b.kind !== 'html' && b.kind !== 'listItem' && b.kind !== 'tableCell',
   );
   const summary = blocks.filter((b) => b.docMeta === 'summary');
-  const hasAbout = blocks.some((b) => b.docMeta === 'about');
+  const about = blocks.filter((b) => b.docMeta === 'about');
   const [open, close] =
     doc.format === 'asciidoc'
       ? ['[.{kind}] over --', '--']
       : ['<!-- {kind} -->', '<!-- /{kind} -->'];
   const marked = (kind: string) =>
     `between ${open.replace('{kind}', kind)} and ${close.replace('{kind}', kind)}`;
-  if (summary.length === 0 && !hasAbout) {
+  if (summary.length === 0 && about.length === 0) {
     return [
       `summary / about: none yet. They are regions of the source ${marked('summary')} (or about), ` +
         'near the top; propose_insertion adds one. Readers see them folded above the text, and ' +
         'exports leave them out.',
     ];
   }
-  const lines: string[] = [];
-  if (summary.length > 0) {
-    const chars = Array.from(summary.map((b) => b.text).join('\n')).length;
-    lines.push(
-      `summary: ${chars} characters (story platforms allow ${SUMMARY_MAX_CHARACTERS}), ` +
-        `${marked('summary')} — edit its blocks like any other`,
-    );
-  }
-  if (hasAbout) lines.push(`about: ${marked('about')} — edit its blocks like any other`);
-  return lines;
+  const line = (kind: string, inside: typeof blocks) =>
+    `${kind}: ${Array.from(inside.map((b) => b.text).join('\n')).length} characters, ` +
+    `${marked(kind)} — edit its blocks like any other`;
+  return [
+    ...(summary.length > 0 ? [line('summary', summary)] : []),
+    ...(about.length > 0 ? [line('about', about)] : []),
+  ];
 }
 
 /** Past this the list costs more context than it saves lookups. */

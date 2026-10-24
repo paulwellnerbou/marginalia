@@ -14,7 +14,6 @@ export {
   DOC_META_ATTR,
   DOC_META_KINDS,
   isDocMetaKind,
-  SUMMARY_MAX_CHARACTERS,
 } from './doc-meta.js';
 export type { ExtractedDocMeta } from './doc-meta-extract.js';
 export { docMetaPlainText, extractDocMeta } from './doc-meta-extract.js';
