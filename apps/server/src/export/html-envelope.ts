@@ -113,6 +113,8 @@ function mermaidBootstrap(umd: string): string {
       startOnLoad: false,
       securityLevel: 'loose',
       theme: 'default',
+      layout: 'dagre',
+      look: 'classic',
       fontFamily: 'inherit',
       themeVariables: { fontSize: '18px' },
       flowchart: { htmlLabels: true },

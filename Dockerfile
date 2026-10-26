@@ -120,6 +120,10 @@ RUN bun install --frozen-lockfile --production \
             /app/node_modules/.bun/dagre* \
             /app/node_modules/.bun/d3* \
             /app/node_modules/.bun/langium@* \
+            /app/node_modules/.bun/chevrotain* \
+            /app/node_modules/.bun/@chevrotain* \
+            /app/node_modules/.bun/es-toolkit@* \
+            /app/node_modules/.bun/lodash-es@* \
             /app/node_modules/.bun/elkjs@* \
             /app/node_modules/.bun/katex@*
 
