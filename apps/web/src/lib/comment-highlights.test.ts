@@ -92,6 +92,14 @@ test('resolved threads leave no mark — and so no click target — while hidden
   expect(highlights.map((h) => h.threadId)).toEqual(['OPEN']);
 });
 
+test('the resolved thread the reader opened keeps its mark while the rest stay hidden', () => {
+  const highlights = buildCommentHighlights(
+    [thread('C', resolved), thread('OPENED', resolved), thread('OPEN')],
+    { hideResolved: true, revealThreadId: 'OPENED' },
+  );
+  expect(highlights.map((h) => h.threadId)).toEqual(['OPENED', 'OPEN']);
+});
+
 test('showing resolved brings their highlights back', () => {
   const highlights = buildCommentHighlights([thread('C', resolved), thread('OPEN')], {
     hideResolved: false,

@@ -179,6 +179,8 @@ import { InlineCommentsLayer } from './inline-comments/InlineCommentsLayer.js';
 import { InlineCommentsList } from './inline-comments/InlineCommentsList.js';
 import { COMMENT_FLASH_MS, type ThreadActionResult } from './inline-comments/inlineUtils.js';
 import { PendingCommentPopover } from './inline-comments/PendingCommentPopover.js';
+import { buildThreadListCards, countThreadListCards } from './inline-comments/threadListCards.js';
+import { loadThreadFilters } from './inline-comments/threadListPrefs.js';
 import {
   buildThreadLocationIndex,
   ThreadLocationProvider,
@@ -543,9 +545,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    * later refreshes redraw threads that are already on screen.
    */
   const [threadsLoading, setThreadsLoading] = useState(true);
+  /** What the mounted Threads tab last counted; null while it is not mounted. */
   const [threadTabVisibleCount, setThreadTabVisibleCount] = useState<{
     docUid: string;
-    sourceThreads: Thread[];
     count: number;
   } | null>(null);
   const [mentionCandidates, setMentionCandidates] = useState<string[]>([]);
@@ -1758,8 +1760,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     // there is no column, and forcing the flag would clobber the
     // user's persisted column preference.
     if (!floatingComments) setInlineCommentsOpen(true);
-    // A link to a settled thread is still a request to read it.
-    if (isResolved(thread)) setInlineCommentsHideResolved(false);
 
     // The fragment is consumed now — drop it from the address bar so it
     // doesn't outlive the navigation it described.
@@ -2765,25 +2765,39 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     if (!sectionFilterActive || !blockSectionIds) return commentThreads;
     return commentThreads.filter((t) => threadTouchesSections(t, blockSectionIds, sectionFilter));
   }, [commentThreads, sectionFilterActive, blockSectionIds, sectionFilter]);
-  const threadCount =
-    threadTabVisibleCount?.docUid === doc.uid &&
-    threadTabVisibleCount.sourceThreads === sectionVisibleThreads
-      ? threadTabVisibleCount.count
-      : sectionVisibleThreads.length;
+  const threadTabReportedCount =
+    threadTabVisibleCount?.docUid === doc.uid ? threadTabVisibleCount.count : null;
+  /*
+   * The badge has to agree with the tab when it opens, so while the tab is
+   * not mounted it counts the way the tab will: its cards, its remembered
+   * filters, and the card it will reveal for a focus request it has yet
+   * to honour. The raw thread total is thousands once the archive is in.
+   */
+  const threadTabFallbackNeeded = threadTabReportedCount === null;
+  // The list only advances threadsListFocus while mounted, and then this count goes unused.
+  const threadTabFallbackCount = useMemo(() => {
+    if (!threadTabFallbackNeeded) return 0;
+    const unhonoured =
+      focusedThread && focusedThread.nonce !== threadsListFocus.current
+        ? focusedThread.threadId
+        : null;
+    return countThreadListCards(
+      buildThreadListCards(sectionVisibleThreads).cards,
+      loadThreadFilters(),
+      getClientId(),
+      unhonoured,
+    );
+  }, [threadTabFallbackNeeded, sectionVisibleThreads, focusedThread]);
+  const threadCount = threadTabReportedCount ?? threadTabFallbackCount;
   const onThreadTabVisibleCountChange = useCallback(
-    (count: number) => {
+    (count: number | null) => {
       setThreadTabVisibleCount((current) => {
-        if (
-          current?.docUid === doc.uid &&
-          current.sourceThreads === sectionVisibleThreads &&
-          current.count === count
-        ) {
-          return current;
-        }
-        return { docUid: doc.uid, sourceThreads: sectionVisibleThreads, count };
+        if (count === null) return null;
+        if (current?.docUid === doc.uid && current.count === count) return current;
+        return { docUid: doc.uid, count };
       });
     },
-    [doc.uid, sectionVisibleThreads],
+    [doc.uid],
   );
 
   // Bookmarks answer to the chapter filter but not the resolved/status
@@ -2992,6 +3006,19 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   }, [rightTab, showBookmarksTab]);
 
   /**
+   * A settled thread the reader opened by name — from Activities, History,
+   * the Threads tab, a deep link — gets its card while resolved ones are
+   * hidden, the way the Threads tab reveals one card past its filters.
+   * Turning "Show resolved" on for it would put every settled thread in
+   * the document back on the page and in the count. The next thread
+   * opened supersedes it.
+   */
+  const revealedResolvedId = useMemo(() => {
+    const id = focusedThread?.threadId;
+    return id && commentThreads.some((t) => t.id === id && isResolved(t)) ? id : null;
+  }, [focusedThread?.threadId, commentThreads]);
+
+  /**
    * Threads that get a card: the section filter, then the
    * show/hide-resolved switch. Applied once here so the column, the
    * floating cards and their toolbars can never disagree about which
@@ -3000,7 +3027,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    */
   const commentSurfaceThreads = useMemo(() => {
     const shown = inlineCommentsHideResolved
-      ? sectionVisibleThreads.filter((t) => !isResolved(t))
+      ? sectionVisibleThreads.filter((t) => !isResolved(t) || t.id === revealedResolvedId)
       : sectionVisibleThreads;
     // A card anchored in a hidden chapter has nothing on screen to sit
     // beside. The Threads tab keeps them all, and opening one from there
@@ -3012,6 +3039,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   }, [
     sectionVisibleThreads,
     inlineCommentsHideResolved,
+    revealedResolvedId,
     chapterReading,
     blockSectionIds,
     chapterIndexById,
@@ -3028,9 +3056,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     () =>
       buildCommentHighlights(commentThreads, {
         hideResolved: inlineCommentsHideResolved,
+        revealThreadId: revealedResolvedId,
         pendingAnchor: canComment ? pendingAnchor : null,
       }),
-    [canComment, commentThreads, pendingAnchor, inlineCommentsHideResolved],
+    [canComment, commentThreads, pendingAnchor, inlineCommentsHideResolved, revealedResolvedId],
   );
 
   /**
@@ -3122,12 +3151,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       // thread card can actually appear.
       if (sectionFilterActive && !sectionVisibleThreads.some((t) => t.id === threadId)) {
         clearSectionFilter();
-      }
-      // Same for a resolved thread while resolved ones are hidden: the
-      // reader asked for this one by name, from a surface that lists
-      // them (Activities, History, the Threads tab).
-      if (threads.some((t) => t.id === threadId && isResolved(t))) {
-        setInlineCommentsHideResolved(false);
       }
       // Prefer the inline column when it's actually visible; otherwise
       // fall back to the right pane (and open it if it's collapsed).
