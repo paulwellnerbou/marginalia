@@ -13,6 +13,7 @@ import '@radix-ui/themes/styles.css';
 import '@marginalia/themes/default.css';
 import './styles/theme.css';
 import './styles/app.css';
+import { installExternalLinkHandler } from './lib/external-links.js';
 import { installGlobalErrorLogging } from './lib/log.js';
 import { registerServiceWorker } from './lib/pwa.js';
 import { applyUiScale, readUiScale } from './lib/ui-scale.js';
@@ -20,6 +21,7 @@ import { APP_THEME } from './styles/theme.js';
 
 installGlobalErrorLogging();
 registerServiceWorker();
+installExternalLinkHandler();
 // Before first paint, so the chrome never renders at one size and
 // resizes to another.
 applyUiScale(readUiScale());
