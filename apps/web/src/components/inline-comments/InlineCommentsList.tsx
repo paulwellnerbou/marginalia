@@ -35,11 +35,11 @@ import {
   normalizeThreadSearch,
   showThreadListControls,
   THREAD_FILTER_TOGGLES,
-  type ThreadCard,
   type ThreadFilters,
   threadListEmptyMessage,
   threadMatchesSearch,
 } from './threadFilters.js';
+import { buildThreadListCards, type ThreadListCard } from './threadListCards.js';
 import { planThreadFocus } from './threadListFocus.js';
 import {
   loadThreadFilters,
@@ -48,7 +48,6 @@ import {
   saveThreadSortMode,
   type ThreadSortMode,
 } from './threadListPrefs.js';
-import { computeThreadNesting, nestedThreadsOf } from './threadNesting.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
 import {
   DEFAULT_ROW_ESTIMATE,
@@ -85,8 +84,12 @@ interface Props {
   variant?: 'threads' | 'bookmarks';
   /** True until the document's first thread read settles. */
   loading?: boolean;
-  /** Reports the number of cards left after this tab's filters and search. */
-  onVisibleCountChange: (count: number) => void;
+  /**
+   * Reports the number of cards left after this tab's filters and search,
+   * and null on unmount: the search goes with the list, so its last count
+   * is no longer what the tab would show.
+   */
+  onVisibleCountChange: (count: number | null) => void;
   /**
    * Resolved threads the whole document has, as the server counts them —
    * including the ones this list has not loaded. Opening a document reads
@@ -147,14 +150,13 @@ interface Props {
   onNeedResolvedThreads?: () => void;
 }
 
-interface ThreadListItem extends ThreadCard {
+interface ThreadListItem extends ThreadListCard {
   id: string;
   blockIndex: number;
   sectionIndexPath: number[];
   startOffset: number;
   createdAt: number;
   latestActivityAt: number;
-  isOrphan: boolean;
 }
 
 const FOCUS_FLASH_MS = 760;
@@ -213,50 +215,29 @@ export function InlineCommentsList({
   const byId = useMemo(() => threadsById(threads), [threads]);
 
   const { activeItems, orphanedItems, parentOf } = useMemo(() => {
-    const activeThreads: Thread[] = [];
-    const orphanThreads: Thread[] = [];
-    for (const t of threads) {
-      const orphan =
-        t.link_status === 'orphaned' && (!isProposal(t) || proposalStatus(t) !== 'accepted');
-      if (orphan) orphanThreads.push(t);
-      else activeThreads.push(t);
-    }
-    // Nesting is bucket-local: a proposal only merges into its answered
-    // thread's card when both would render in the same section, so
-    // e.g. an orphaned proposal keeps its standalone card under
-    // "Orphaned discussions" instead of vanishing into a linked card.
-    const parents = new Map<string, string>();
-    const buildItems = (bucket: Thread[], isOrphan: boolean): ThreadListItem[] => {
-      const nesting = computeThreadNesting(bucket);
-      for (const [id, parentId] of nesting.parentOf) parents.set(id, parentId);
-      return nesting.topLevel.map((t) => {
-        const nested = nestedThreadsOf(nesting, t.id);
-        let latest = latestActivityTs(t);
-        for (const n of nested) latest = Math.max(latest, latestActivityTs(n));
-        return {
-          id: t.id,
-          thread: t,
-          nested,
-          // Drawn from every thread, not just this bucket: a reply of
-          // the viewer's counts wherever the conversation carried it.
-          linked: linkedThreads(t, nested, byId),
-          blockIndex: t.anchor.block_id
-            ? (blockOrder.get(t.anchor.block_id) ?? Number.MAX_SAFE_INTEGER)
-            : Number.MAX_SAFE_INTEGER,
-          sectionIndexPath: t.anchor.section_index_path ?? [],
-          startOffset: isProposal(t) ? 0 : (t.anchor.start_offset ?? 0),
-          createdAt: t.comments[0].created_at,
-          latestActivityAt: latest,
-          isOrphan,
-        };
-      });
-    };
+    const { cards, parentOf } = buildThreadListCards(threads);
+    const items = cards.map((card): ThreadListItem => {
+      const t = card.thread;
+      let latest = latestActivityTs(t);
+      for (const n of card.nested) latest = Math.max(latest, latestActivityTs(n));
+      return {
+        ...card,
+        id: t.id,
+        blockIndex: t.anchor.block_id
+          ? (blockOrder.get(t.anchor.block_id) ?? Number.MAX_SAFE_INTEGER)
+          : Number.MAX_SAFE_INTEGER,
+        sectionIndexPath: t.anchor.section_index_path ?? [],
+        startOffset: isProposal(t) ? 0 : (t.anchor.start_offset ?? 0),
+        createdAt: t.comments[0].created_at,
+        latestActivityAt: latest,
+      };
+    });
     return {
-      activeItems: buildItems(activeThreads, false),
-      orphanedItems: buildItems(orphanThreads, true),
-      parentOf: parents,
+      activeItems: items.filter((item) => !item.isOrphan),
+      orphanedItems: items.filter((item) => item.isOrphan),
+      parentOf,
     };
-  }, [threads, blockOrder, byId]);
+  }, [threads, blockOrder]);
 
   // Whose replies count as answers — the id the server stamps comments
   // with. Read every render, not memoized: pairing adopts the keyring's
@@ -362,6 +343,7 @@ export function InlineCommentsList({
   useEffect(() => {
     onVisibleCountChange(visibleCount);
   }, [visibleCount, onVisibleCountChange]);
+  useEffect(() => () => onVisibleCountChange(null), [onVisibleCountChange]);
 
   // Collapse state spans every thread, filtered out or not, so toggling a
   // filter never re-expands what the reader collapsed. Nested proposals
@@ -837,29 +819,6 @@ function shouldAutoCollapse(t: Thread): boolean {
     if (s === 'accepted' || s === 'rejected') return true;
   }
   return false;
-}
-
-/**
- * The threads a card cross-links to: proposals answering it that render
- * in another card, and the comments a proposal card answers. What the
- * card already renders inside itself is not a link.
- */
-function linkedThreads(
-  thread: Thread,
-  nested: readonly Thread[],
-  byId: Map<string, Thread>,
-): Thread[] {
-  const inCard = new Set([thread.id, ...nested.map((n) => n.id)]);
-  const linked = new Map<string, Thread>();
-  for (const source of [thread, ...nested]) {
-    const ids = [...source.answered_by_thread_ids, ...(source.proposal?.answers_thread_ids ?? [])];
-    for (const id of ids) {
-      if (inCard.has(id) || linked.has(id)) continue;
-      const target = byId.get(id);
-      if (target) linked.set(id, target);
-    }
-  }
-  return [...linked.values()];
 }
 
 function latestActivityTs(t: Thread): number {

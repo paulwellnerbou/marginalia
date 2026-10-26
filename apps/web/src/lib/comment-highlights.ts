@@ -41,6 +41,8 @@ export interface CommentHighlight {
 export interface CommentHighlightOptions {
   /** Leave resolved threads out of the text entirely — see below. */
   hideResolved: boolean;
+  /** A resolved thread kept despite `hideResolved`: the one the reader opened. */
+  revealThreadId?: string | null;
   /** Anchor of a comment being composed, painted before it exists. */
   pendingAnchor?: CommentAnchor | null;
 }
@@ -57,12 +59,12 @@ export interface CommentHighlightOptions {
  */
 export function buildCommentHighlights(
   threads: readonly Thread[],
-  { hideResolved, pendingAnchor = null }: CommentHighlightOptions,
+  { hideResolved, revealThreadId = null, pendingAnchor = null }: CommentHighlightOptions,
 ): CommentHighlight[] {
   const highlights: CommentHighlight[] = [];
 
   for (const thread of threads) {
-    if (hideResolved && isResolved(thread)) continue;
+    if (hideResolved && isResolved(thread) && thread.id !== revealThreadId) continue;
     // Orphaned threads have no anchor at all; skip them. Linked and
     // low-confidence threads both still carry a block_id + quote and
     // can drive a highlight — the renderer's `findHighlightBlock`
