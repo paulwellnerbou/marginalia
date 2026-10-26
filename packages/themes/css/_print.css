@@ -84,6 +84,14 @@
     height: auto;
   }
 
+  /* On screen a wide diagram scrolls sideways; on paper the part past
+   * the column is cut off, so scale it down to fit instead. */
+  .marginalia div.mermaid svg,
+  .marginalia div.mermaid img {
+    max-width: 100%;
+    height: auto;
+  }
+
   /* ---- Interactive UI suppression ------------------------------ */
 
   /* Heading anchor sigils (`<a class="heading-anchor">` injected by
