@@ -505,3 +505,39 @@ Gamma paragraph.
     expect(await locateBlockRangeAsciidoc(listSrc, items[0]![0], items[0]![0])).not.toBeNull();
   });
 });
+
+describe('renderAsciidoc footnotes', () => {
+  const src = [
+    'Intro.footnote:[Intro note.]',
+    '',
+    '* An item.footnote:[Item note.]',
+    '',
+    'Named.footnote:disclaimer[Shared note.] Again.footnote:disclaimer[]',
+    '',
+    'Last.footnote:[Last note.]',
+    '',
+  ].join('\n');
+
+  const markers = (html: string) =>
+    [...html.matchAll(/class="footnote"[^>]*>(\d+)</g)].map((m) => Number(m[1]));
+  const definitions = (html: string) =>
+    [...html.matchAll(/id="_footnotedef_(\d+)"/g)].map((m) => Number(m[1]));
+
+  test('number from 1 in document order, once each', async () => {
+    const { html } = await renderAsciidoc(src);
+    expect(markers(html)).toEqual([1, 2, 3, 3, 4]);
+    expect(definitions(html)).toEqual([1, 2, 3, 4]);
+  });
+
+  test('a lone footnote is the first', async () => {
+    const { html, blocks } = await renderAsciidoc('Para with a note.footnote:[One.]\n');
+    expect(markers(html)).toEqual([1]);
+    expect(blocks[0]?.text).toBe('Para with a note.[1]');
+  });
+
+  test('block ids still match the locator', async () => {
+    const rendered = (await renderAsciidoc(src)).blocks.map((b) => b.id);
+    const located = [...(await locateAllBlocksAsciidoc(src)).keys()];
+    expect(new Set(rendered)).toEqual(new Set(located));
+  });
+});

@@ -1,4 +1,4 @@
-import { type AbstractBlock, load } from '@asciidoctor/core';
+import { type AbstractBlock, type Document, load } from '@asciidoctor/core';
 import type { Root as HastRoot } from 'hast';
 
 import rehypeParse from 'rehype-parse';
@@ -82,7 +82,13 @@ export async function renderAsciidoc(
     sourcemap: true,
   });
 
+  const footnotesBeforeWalk = footnoteCount(doc);
   const { blocks, subBlocks } = await walkBlocks(doc);
+  // The walk reads each block's text through `getContent()`, which runs
+  // the inline subs and so registers the block's footnotes a first time;
+  // `convert()` would number its own pass after those. Forget the walk's
+  // footnotes so the rendered ones count from where parsing left them.
+  forgetFootnotesSince(doc, footnotesBeforeWalk);
 
   const html = await doc.convert();
   const frontmatter = await extractFrontmatter(doc);
@@ -350,6 +356,16 @@ function docMetaRoleOf(block: AsciidoctorAbstractBlock): DocMetaKind | null {
   const hasRole = (block as { hasRole?: (role: string) => boolean }).hasRole;
   if (typeof hasRole !== 'function') return null;
   return DOC_META_KINDS.find((kind) => hasRole.call(block, kind)) ?? null;
+}
+
+function footnoteCount(doc: Document): number {
+  return doc.getFootnotes().length;
+}
+
+function forgetFootnotesSince(doc: Document, count: number): void {
+  (doc.getCatalog().footnotes as unknown[]).length = count;
+  // `counter()` restarts at 1 once the attribute is gone.
+  doc.removeAttribute('footnote-number');
 }
 
 function getStyle(block: AsciidoctorAbstractBlock): string | null {

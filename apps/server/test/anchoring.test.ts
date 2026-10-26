@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { BlockInfo, BlockSourceRange } from '@marginalia/renderer';
+import { type BlockInfo, type BlockSourceRange, renderAsciidoc } from '@marginalia/renderer';
 import { prepareBlockReplacements, reanchor } from '../src/anchoring.js';
 import type { CommentRow } from '../src/db.js';
 
@@ -625,5 +625,66 @@ describe('reanchor: edit proposals against elementless blocks', () => {
     );
     expect(upd.linkStatus).toBe('linked');
     expect(upd.blockId).toBe('frontmatter');
+  });
+});
+
+/**
+ * AsciiDoc footnotes used to render one number too high per earlier
+ * footnote (a lone one showed `[2]`), and comments captured that text.
+ * Block ids never carried the doubled numbers, so the anchors keep their
+ * block; these pin what becomes of the quote around the marker. Losing
+ * the ones that span it mid-quote was accepted rather than migrated.
+ */
+describe('reanchor: anchors captured on doubled footnote numbers', () => {
+  const source = 'Plain intro.\n\nAnother outrageous statement.footnote:[A note.] It goes on.\n';
+  const footnoted = async () => {
+    const { blocks } = await renderAsciidoc(source);
+    const block = blocks.find((b) => b.text.startsWith('Another'))!;
+    expect(block.text).toBe('Another outrageous statement.[1] It goes on.');
+    return { blocks, block };
+  };
+
+  test('a quote beside the marker stays linked', async () => {
+    const { blocks, block } = await footnoted();
+    const upd = reanchor(
+      comment({
+        anchor_block_id: block.id,
+        anchor_quote: 'outrageous statement',
+        anchor_prefix: 'Another ',
+        anchor_suffix: '.[2] It goes on.',
+      }),
+      blocks,
+    );
+    expect(upd.linkStatus).toBe('linked');
+    expect(upd.blockId).toBe(block.id);
+  });
+
+  test('a quote ending at the marker keeps its block', async () => {
+    const { blocks, block } = await footnoted();
+    const upd = reanchor(
+      comment({
+        anchor_block_id: block.id,
+        anchor_quote: 'outrageous statement.[2]',
+        anchor_prefix: 'Another ',
+        anchor_suffix: ' It goes on.',
+      }),
+      blocks,
+    );
+    expect(upd.linkStatus).toBe('low-confidence');
+    expect(upd.blockId).toBe(block.id);
+  });
+
+  test('a quote spanning the marker mid-way is orphaned', async () => {
+    const { blocks, block } = await footnoted();
+    const upd = reanchor(
+      comment({
+        anchor_block_id: block.id,
+        anchor_quote: 'outrageous statement.[2] It goes on',
+        anchor_prefix: 'Another ',
+        anchor_suffix: '.',
+      }),
+      blocks,
+    );
+    expect(upd.linkStatus).toBe('orphaned');
   });
 });
