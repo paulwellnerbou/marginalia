@@ -29,5 +29,8 @@
     "@types/bun": "latest",
     "playwright": "^1.64.1",
     "typescript": "^7.0.2"
+  },
+  "patchedDependencies": {
+    "@asciidoctor/core@4.1.1": "patches/@asciidoctor%2Fcore@4.1.1.patch"
   }
 }

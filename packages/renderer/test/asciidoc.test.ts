@@ -238,7 +238,7 @@ const x = 1;
     expect(adoc.frontmatter.title).toBe('Title');
   });
 
-  test('isDocumentFormat guard', () => {
+  test('isDocumentFormat guard', async () => {
     expect(isDocumentFormat('markdown')).toBe(true);
     expect(isDocumentFormat('asciidoc')).toBe(true);
     expect(isDocumentFormat('txt')).toBe(false);
@@ -267,7 +267,7 @@ Go on.
     expect(copies.length).toBe(2);
     expect(copies[1]!.id).toBe(copies[0]!.id);
 
-    const occurrences = locateBlocksAsciidoc(src).occurrences.get(copies[0]!.id)!;
+    const occurrences = (await locateBlocksAsciidoc(src)).occurrences.get(copies[0]!.id)!;
     expect(occurrences.length).toBe(2);
     expect(occurrences.map((o) => src.slice(o.start, o.end).trim())).toEqual(['Go on.', 'Go on.']);
     expect(occurrences[0]!.start).toBeLessThan(occurrences[1]!.start);
@@ -308,7 +308,7 @@ Go on.
 '''
 `;
     const r = await renderAsciidoc(src);
-    const located = locateBlocksAsciidoc(src);
+    const located = await locateBlocksAsciidoc(src);
     const seen = new Map<string, number>();
     for (const block of r.blocks) {
       const nth = seen.get(block.id) ?? 0;
@@ -334,7 +334,7 @@ First para.
 Second para.
 `;
     const r = await renderAsciidoc(src);
-    const locs = locateAllBlocksAsciidoc(src);
+    const locs = await locateAllBlocksAsciidoc(src);
 
     for (const block of r.blocks) {
       const range = locs.get(block.id);
@@ -349,12 +349,12 @@ Second para.
     }
   });
 
-  test('non-overlapping ranges for neighboring paragraphs', () => {
+  test('non-overlapping ranges for neighboring paragraphs', async () => {
     const src = `Alpha.
 
 Bravo.
 `;
-    const locs = locateAllBlocksAsciidoc(src);
+    const locs = await locateAllBlocksAsciidoc(src);
     const ranges = Array.from(locs.values()).sort((a, b) => a.start - b.start);
     for (let i = 1; i < ranges.length; i++) {
       expect(ranges[i]!.start).toBeGreaterThanOrEqual(ranges[i - 1]!.end - 1);
@@ -375,7 +375,7 @@ Quoted.
 ____
 `;
     const r = await renderAsciidoc(src);
-    const locs = locateAllBlocksAsciidoc(src);
+    const locs = await locateAllBlocksAsciidoc(src);
 
     const note = r.blocks.find((b) => b.kind === 'admonition');
     const quote = r.blocks.find((b) => b.kind === 'quote');
@@ -405,7 +405,7 @@ ____
   test('open blocks (`--` delimiter) span opener to closer, not just one line', async () => {
     const src = `[open]\n--\nFirst.\n\nSecond.\n--\n`;
     const r = await renderAsciidoc(src);
-    const locs = locateAllBlocksAsciidoc(src);
+    const locs = await locateAllBlocksAsciidoc(src);
     const open = r.blocks.find((b) => b.kind === 'open');
     expect(open).toBeTruthy();
     const range = locs.get(open!.id);
@@ -420,7 +420,7 @@ ____
   test('list item sub-block ids round-trip back to their source line', async () => {
     const src = `* alpha\n* bravo\n`;
     const r = await renderAsciidoc(src);
-    const locs = locateAllBlocksAsciidoc(src);
+    const locs = await locateAllBlocksAsciidoc(src);
 
     const subIds = [...r.html.matchAll(/data-subblock="([^"]+)"/g)].map((m) => m[1]);
     expect(subIds).toHaveLength(2);
@@ -441,10 +441,10 @@ Beta paragraph.
 Gamma paragraph.
 `;
 
-  test('multi-block range covers both endpoints + inter-block whitespace', () => {
-    const ids = [...locateAllBlocksAsciidoc(src).keys()];
+  test('multi-block range covers both endpoints + inter-block whitespace', async () => {
+    const ids = [...(await locateAllBlocksAsciidoc(src)).keys()];
     const [a, , c] = ids;
-    const range = locateBlockRangeAsciidoc(src, a!, c!);
+    const range = await locateBlockRangeAsciidoc(src, a!, c!);
     expect(range).not.toBeNull();
     const sliced = src.slice(range!.start, range!.end);
     expect(sliced).toContain('Alpha paragraph.');
@@ -454,29 +454,29 @@ Gamma paragraph.
     expect(range!.text).toBe('');
   });
 
-  test('null endId returns the start block range; reversed order still merges via min/max', () => {
-    const ids = [...locateAllBlocksAsciidoc(src).keys()];
+  test('null endId returns the start block range; reversed order still merges via min/max', async () => {
+    const ids = [...(await locateAllBlocksAsciidoc(src)).keys()];
     const [a, , c] = ids;
-    const single = locateBlockRangeAsciidoc(src, a!, null);
+    const single = await locateBlockRangeAsciidoc(src, a!, null);
     expect(single).not.toBeNull();
     expect(src.slice(single!.start, single!.end).trim()).toBe('Alpha paragraph.');
 
-    const forward = locateBlockRangeAsciidoc(src, a!, c!);
-    const reversed = locateBlockRangeAsciidoc(src, c!, a!);
+    const forward = await locateBlockRangeAsciidoc(src, a!, c!);
+    const reversed = await locateBlockRangeAsciidoc(src, c!, a!);
     expect(forward).not.toBeNull();
     expect(reversed).not.toBeNull();
     expect(reversed!.start).toBe(forward!.start);
     expect(reversed!.end).toBe(forward!.end);
   });
 
-  test('returns null when either endpoint id is unknown', () => {
-    const ids = [...locateAllBlocksAsciidoc(src).keys()];
+  test('returns null when either endpoint id is unknown', async () => {
+    const ids = [...(await locateAllBlocksAsciidoc(src)).keys()];
     const [a] = ids;
-    expect(locateBlockRangeAsciidoc(src, a!, 'nope')).toBeNull();
-    expect(locateBlockRangeAsciidoc(src, 'nope', a!)).toBeNull();
+    expect(await locateBlockRangeAsciidoc(src, a!, 'nope')).toBeNull();
+    expect(await locateBlockRangeAsciidoc(src, 'nope', a!)).toBeNull();
   });
 
-  test('rejects listItem endpoints (asciidoc-only restriction) when endId is set', () => {
+  test('rejects listItem endpoints (asciidoc-only restriction) when endId is set', async () => {
     // The markdown twin accepts `listItem` endpoints, but asciidoc's
     // `listItemSourceRange` is best-effort and doesn't yet cover
     // continuation (`+`) lines, so a multi-listItem splice would
@@ -488,20 +488,20 @@ Gamma paragraph.
 * two
 * three
 `;
-    const map = locateAllBlocksAsciidoc(listSrc);
+    const map = await locateAllBlocksAsciidoc(listSrc);
     const para = [...map.entries()].find(([, r]) => r.kind === 'paragraph');
     const items = [...map.entries()].filter(([, r]) => r.kind === 'listItem');
     expect(para).toBeDefined();
     expect(items.length).toBe(3);
 
     // listItem→listItem and listItem↔paragraph multi-block: rejected.
-    expect(locateBlockRangeAsciidoc(listSrc, items[0]![0], items[1]![0])).toBeNull();
-    expect(locateBlockRangeAsciidoc(listSrc, items[0]![0], items[2]![0])).toBeNull();
-    expect(locateBlockRangeAsciidoc(listSrc, para![0], items[0]![0])).toBeNull();
-    expect(locateBlockRangeAsciidoc(listSrc, items[0]![0], para![0])).toBeNull();
+    expect(await locateBlockRangeAsciidoc(listSrc, items[0]![0], items[1]![0])).toBeNull();
+    expect(await locateBlockRangeAsciidoc(listSrc, items[0]![0], items[2]![0])).toBeNull();
+    expect(await locateBlockRangeAsciidoc(listSrc, para![0], items[0]![0])).toBeNull();
+    expect(await locateBlockRangeAsciidoc(listSrc, items[0]![0], para![0])).toBeNull();
 
     // Single-block listItem path is unaffected.
-    expect(locateBlockRangeAsciidoc(listSrc, items[0]![0], null)).not.toBeNull();
-    expect(locateBlockRangeAsciidoc(listSrc, items[0]![0], items[0]![0])).not.toBeNull();
+    expect(await locateBlockRangeAsciidoc(listSrc, items[0]![0], null)).not.toBeNull();
+    expect(await locateBlockRangeAsciidoc(listSrc, items[0]![0], items[0]![0])).not.toBeNull();
   });
 });

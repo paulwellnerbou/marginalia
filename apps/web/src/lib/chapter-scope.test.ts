@@ -26,7 +26,7 @@ function located(source: string) {
 const source = '# One\n\nintro\n\n## Detail\n\nmore\n\n# Two\n\nend';
 
 describe('resolveChapterScopeFromBlocks', () => {
-  test('includes nested sections and stops before the next peer heading', () => {
+  test('includes nested sections and stops before the next peer heading', async () => {
     const { occurrences, blocks, idOf } = located(source);
     expect(resolveChapterScopeFromBlocks(source, occurrences, blocks, idOf('One'))).toEqual({
       headingBlockId: idOf('One'),
@@ -41,19 +41,19 @@ describe('resolveChapterScopeFromBlocks', () => {
     });
   });
 
-  test('runs the final chapter through its final block', () => {
+  test('runs the final chapter through its final block', async () => {
     const { occurrences, blocks, idOf } = located(source);
     const scope = resolveChapterScopeFromBlocks(source, occurrences, blocks, idOf('Two'));
     expect(scope?.source).toBe('# Two\n\nend');
     expect(scope?.endBlockId).toBe(idOf('end'));
   });
 
-  test('rejects a non-heading target', () => {
+  test('rejects a non-heading target', async () => {
     const { occurrences, blocks, idOf } = located(source);
     expect(resolveChapterScopeFromBlocks(source, occurrences, blocks, idOf('intro'))).toBeNull();
   });
 
-  test('two chapters with one title resolve to the copy asked for', () => {
+  test('two chapters with one title resolve to the copy asked for', async () => {
     // A chapter inserted ahead of "Chapter 4" under the same name, each
     // ending on the same line: the heading and the last paragraph each
     // carry one id on two blocks.
@@ -105,7 +105,7 @@ describe.each([
   test('the second copy of the heading opens the second chapter', async () => {
     const { html } = await renderDocument(book, format);
     const blocks = renderedBlocks(html);
-    const { occurrences } = locate(book);
+    const { occurrences } = await locate(book);
     // The pairing only holds while both walks list the same blocks in
     // the same order.
     expect(blocks.map((b) => b.id)).toEqual(
@@ -122,12 +122,12 @@ describe.each([
 });
 
 describe('chapter edit query', () => {
-  test('names the copy only past the first', () => {
+  test('names the copy only past the first', async () => {
     expect(chapterEditQuery('abc', 0)).toBe('?chapter=abc');
     expect(chapterEditQuery('abc', 2)).toBe('?chapter=abc&copy=2');
   });
 
-  test('reads anything but a non-negative integer as the first copy', () => {
+  test('reads anything but a non-negative integer as the first copy', async () => {
     expect(chapterCopyParam(null)).toBe(0);
     expect(chapterCopyParam('2')).toBe(2);
     expect(chapterCopyParam('-1')).toBe(0);
@@ -139,7 +139,8 @@ describe('chapter edit query', () => {
 describe('resolveDocMetaScope', () => {
   async function scopeOf(src: string, kind: 'summary' | 'about', format: 'markdown' | 'asciidoc') {
     const rendered = await renderDocument(src, format);
-    const { occurrences } = format === 'asciidoc' ? locateBlocksAsciidoc(src) : locateBlocks(src);
+    const { occurrences } =
+      format === 'asciidoc' ? await locateBlocksAsciidoc(src) : locateBlocks(src);
     return resolveDocMetaScope(src, occurrences, rendered.blocks, kind);
   }
 

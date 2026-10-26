@@ -130,7 +130,7 @@ export async function backfillProposalBranches(
     } else {
       const blocks =
         doc.format === 'asciidoc'
-          ? locateAllBlocksAsciidoc(baseSource)
+          ? await locateAllBlocksAsciidoc(baseSource)
           : locateAllBlocks(baseSource);
       const range = blocks.get(row.anchor_block_id);
       if (!range) {

@@ -252,14 +252,14 @@ export function anchorSectionOf(row: {
  * viewer's proposal composer prefills from too. Accept, diff, and orphan
  * paths all come through here so they can't drift apart.
  */
-export function locateAnchorRange(
+export async function locateAnchorRange(
   doc: DocumentRow,
   source: string,
   blockId: string,
   endBlockId: string | null,
   section: AnchorSection | null = null,
-): BlockSourceRange | null {
-  const occurrences = locateDocumentBlockOccurrencesCached(doc.format, source);
+): Promise<BlockSourceRange | null> {
+  const occurrences = await locateDocumentBlockOccurrencesCached(doc.format, source);
   return locateAnchorSpan(occurrences, blockId, endBlockId, section, doc.format);
 }
 
@@ -270,7 +270,7 @@ export function locateAnchorRange(
 export function locateDocumentBlocks(
   doc: DocumentRow,
   source: string,
-): ReadonlyMap<string, BlockSourceRange> {
+): Promise<ReadonlyMap<string, BlockSourceRange>> {
   return locateDocumentBlocksCached(doc.format, source);
 }
 
@@ -279,12 +279,12 @@ export function locateDocumentBlocks(
  * order — for a search by source position, where the later copies of a
  * repeated block are as real as the first.
  */
-export function locateDocumentBlockOccurrences(
+export async function locateDocumentBlockOccurrences(
   doc: DocumentRow,
   source: string,
-): Array<readonly [string, BlockOccurrence]> {
+): Promise<Array<readonly [string, BlockOccurrence]>> {
   const pairs: Array<readonly [string, BlockOccurrence]> = [];
-  for (const copies of locateDocumentBlockOccurrencesCached(doc.format, source).values()) {
+  for (const copies of (await locateDocumentBlockOccurrencesCached(doc.format, source)).values()) {
     for (const copy of copies) pairs.push([copy.id, copy]);
   }
   return pairs.sort((a, b) => a[1].start - b[1].start);
@@ -483,8 +483,8 @@ export async function prepareAcceptUndo(
   });
 
   const rendered = await renderDocumentCached(accept.before, doc.format);
-  const previousBlocks = locateDocumentBlocks(doc, accept.after);
-  const knownBlocks = locateDocumentBlocks(doc, accept.before);
+  const previousBlocks = await locateDocumentBlocks(doc, accept.after);
+  const knownBlocks = await locateDocumentBlocks(doc, accept.before);
   const blockReplacements = prepareBlockReplacements({
     before: previousBlocks,
     after: knownBlocks,

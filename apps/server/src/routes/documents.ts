@@ -952,12 +952,14 @@ async function updateDocument(c: Context, deps: AppDeps) {
   const rendered = await renderDocumentCached(nextSource, doc.format);
   const previousBlocks =
     doc.format === 'asciidoc'
-      ? locateAllBlocksAsciidoc(previousSource)
+      ? await locateAllBlocksAsciidoc(previousSource)
       : locateAllBlocks(previousSource);
   // Include sub-block ids so comments and proposals on list items / table
   // cells see the same before/after transition as top-level blocks.
   const knownBlocks =
-    doc.format === 'asciidoc' ? locateAllBlocksAsciidoc(nextSource) : locateAllBlocks(nextSource);
+    doc.format === 'asciidoc'
+      ? await locateAllBlocksAsciidoc(nextSource)
+      : locateAllBlocks(nextSource);
   const blockReplacements = prepareBlockReplacements({
     before: previousBlocks,
     after: knownBlocks,
@@ -2220,7 +2222,7 @@ async function importDocument(c: Context, deps: AppDeps) {
   const importBaseSource = docSpec.source;
   const importBlocks =
     format === 'asciidoc'
-      ? locateAllBlocksAsciidoc(importBaseSource)
+      ? await locateAllBlocksAsciidoc(importBaseSource)
       : locateAllBlocks(importBaseSource);
   for (const raw of commentRows) {
     const row = raw as Record<string, unknown>;
@@ -2761,11 +2763,11 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   const rendered = await renderDocumentCached(restoredSource, doc.format);
   const previousBlocks =
     doc.format === 'asciidoc'
-      ? locateAllBlocksAsciidoc(previousSource)
+      ? await locateAllBlocksAsciidoc(previousSource)
       : locateAllBlocks(previousSource);
   const knownBlocks =
     doc.format === 'asciidoc'
-      ? locateAllBlocksAsciidoc(restoredSource)
+      ? await locateAllBlocksAsciidoc(restoredSource)
       : locateAllBlocks(restoredSource);
   const blockReplacements = prepareBlockReplacements({
     before: previousBlocks,
@@ -2830,11 +2832,11 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
     const rendered = await renderDocumentCached(reverted.after, doc.format);
     const previousBlocks =
       doc.format === 'asciidoc'
-        ? locateAllBlocksAsciidoc(reverted.before)
+        ? await locateAllBlocksAsciidoc(reverted.before)
         : locateAllBlocks(reverted.before);
     const knownBlocks =
       doc.format === 'asciidoc'
-        ? locateAllBlocksAsciidoc(reverted.after)
+        ? await locateAllBlocksAsciidoc(reverted.after)
         : locateAllBlocks(reverted.after);
     const blockReplacements = prepareBlockReplacements({
       before: previousBlocks,

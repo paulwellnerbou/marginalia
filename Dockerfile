@@ -96,6 +96,8 @@ COPY --from=builder /app/apps/server/node_modules/mermaid/dist/mermaid.min.js \
 # can validate against the lockfile; production install below skips
 # all dev deps.
 COPY --from=builder /app/package.json /app/bun.lock ./
+# The patchedDependencies in package.json, applied by the install below.
+COPY --from=builder /app/patches ./patches
 COPY --from=builder /app/apps ./apps
 COPY --from=builder /app/packages ./packages
 COPY deploy-scripts/container-entrypoint.sh /app/entrypoint.sh

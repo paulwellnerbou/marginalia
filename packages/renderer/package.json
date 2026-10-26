@@ -24,7 +24,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@asciidoctor/core": "^3.0.4",
+    "@asciidoctor/core": "^4.1.1",
     "@marginalia/themes": "workspace:*",
     "diff": "^9.0.0",
     "docx": "^9.14.0",

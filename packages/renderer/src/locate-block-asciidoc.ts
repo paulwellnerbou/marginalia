@@ -1,4 +1,4 @@
-import Asciidoctor from '@asciidoctor/core';
+import { load } from '@asciidoctor/core';
 import {
   type BlockSection,
   computeSubBlockId,
@@ -13,13 +13,6 @@ import {
   type LocatedBlocks,
 } from './locate-block.js';
 
-declare global {
-  var __asciidoctor: ReturnType<typeof Asciidoctor> | undefined;
-}
-
-const asciidoctor = globalThis.__asciidoctor ?? Asciidoctor();
-globalThis.__asciidoctor = asciidoctor;
-
 /**
  * AsciiDoc twin of `locateBlocks` — resolve block IDs back to source
  * ranges so the server can apply edit proposals. IDs must match what
@@ -28,8 +21,8 @@ globalThis.__asciidoctor = asciidoctor;
  * number blocks through the same `SectionTracker` so each copy of a
  * repeated block carries the section context the renderer gave it.
  */
-export function locateBlocksAsciidoc(source: string): LocatedBlocks {
-  const doc = asciidoctor.load(source, {
+export async function locateBlocksAsciidoc(source: string): Promise<LocatedBlocks> {
+  const doc = await load(source, {
     safe: 'safe',
     standalone: false,
     sourcemap: true,
@@ -41,13 +34,15 @@ export function locateBlocksAsciidoc(source: string): LocatedBlocks {
     sections: new SectionTracker(),
     subBlockCounts: new Map(),
   };
-  walkTopLevel(doc, state);
+  await walkTopLevel(doc, state);
   return state.out;
 }
 
 /** Every block's id → source range, first occurrence winning. See `locateBlocksAsciidoc`. */
-export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSourceRange> {
-  return locateBlocksAsciidoc(source).byId;
+export async function locateAllBlocksAsciidoc(
+  source: string,
+): Promise<Map<string, BlockSourceRange>> {
+  return (await locateBlocksAsciidoc(source)).byId;
 }
 
 /**
@@ -66,12 +61,12 @@ export function locateAllBlocksAsciidoc(source: string): Map<string, BlockSource
  * asciidoc list items — so the markdown same-parent path can't admit
  * them either. Re-allow once continuations are supported.
  */
-export function locateBlockRangeAsciidoc(
+export async function locateBlockRangeAsciidoc(
   source: string,
   startId: string,
   endId: string | null,
-): BlockSourceRange | null {
-  const all = locateAllBlocksAsciidoc(source);
+): Promise<BlockSourceRange | null> {
+  const all = await locateAllBlocksAsciidoc(source);
   const a = all.get(startId);
   if (!a) return null;
   if (!endId || endId === startId) return a;
@@ -101,18 +96,18 @@ interface WalkState {
  * and recurse, everything else is a leaf that is recorded and then
  * searched for list items, which inherit its section context.
  */
-function walkTopLevel(block: Any, state: WalkState): void {
+async function walkTopLevel(block: Any, state: WalkState): Promise<void> {
   const ctx = getContext(block) ?? '';
   if (ctx === 'document' || ctx === 'preamble') {
-    for (const child of getChildren(block)) walkTopLevel(child, state);
+    for (const child of getChildren(block)) await walkTopLevel(child, state);
     return;
   }
   if (ctx === 'section') {
     recordHeading(block, state);
-    for (const child of getChildren(block)) walkTopLevel(child, state);
+    for (const child of getChildren(block)) await walkTopLevel(child, state);
     return;
   }
-  recordLeaf(block, ctx, state);
+  await recordLeaf(block, ctx, state);
 }
 
 function recordHeading(block: Any, state: WalkState): void {
@@ -129,7 +124,7 @@ function recordHeading(block: Any, state: WalkState): void {
   );
 }
 
-function recordLeaf(block: Any, ctx: string, state: WalkState): void {
+async function recordLeaf(block: Any, ctx: string, state: WalkState): Promise<void> {
   if (ctx === 'thematic_break' || ctx === 'page_break') {
     const section = state.sections.next();
     const range = sourceRange(block, state.source, false);
@@ -137,7 +132,7 @@ function recordLeaf(block: Any, ctx: string, state: WalkState): void {
       addOccurrence(state.out, hashBlock(ctx, ''), { ...range, kind: ctx, text: '' }, section);
     return;
   }
-  const text = normalizeBlockText(extractBlockText(block));
+  const text = normalizeBlockText(await extractBlockText(block));
   // The renderer records, and so numbers, a leaf only when it has text; a
   // textless list still lends its items the position it stands at.
   const section = text ? state.sections.next() : state.sections.peek();
@@ -268,11 +263,11 @@ function getTitle(block: Any): string | null {
   return fn.call(block) ?? null;
 }
 
-function extractBlockText(block: Any): string {
-  const contentFn = (block as { getContent?: () => string | undefined }).getContent;
+async function extractBlockText(block: Any): Promise<string> {
+  const contentFn = (block as { getContent?: () => Promise<unknown> }).getContent;
   if (typeof contentFn === 'function') {
     try {
-      const html = contentFn.call(block);
+      const html = await contentFn.call(block);
       if (typeof html === 'string' && html.length > 0) return stripTags(html);
     } catch {
       /* fall through */

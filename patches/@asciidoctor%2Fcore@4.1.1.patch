@@ -1,0 +1,39 @@
+diff --git a/build/browser/index.js b/build/browser/index.js
+index ccfcfb1edd6fd55f7f852948726ca0e0bedfc96e..e24d958a3d1d01564a6c659a62b94b38f7369625 100644
+--- a/build/browser/index.js
++++ b/build/browser/index.js
+@@ -7901,7 +7901,7 @@ class PreprocessorReader extends Reader {
+       if (!this.#skipping && !skip) {
+         this.replaceNextLine(text.trimEnd());
+         // Push a dummy line to stand in for the opening conditional directive
+-        this._lines.push('');
++        this._unshift('');
+         if (text.startsWith('include::')) this._lookAhead--;
+       }
+     } else {
+diff --git a/build/node/index.cjs b/build/node/index.cjs
+index 5223d86f397a96353912bc4a3eda861b00732495..dd36809b61b901c4bc32488b996dbe4dc3c0d73b 100644
+--- a/build/node/index.cjs
++++ b/build/node/index.cjs
+@@ -7909,7 +7909,7 @@ class PreprocessorReader extends Reader {
+       if (!this.#skipping && !skip) {
+         this.replaceNextLine(text.trimEnd());
+         // Push a dummy line to stand in for the opening conditional directive
+-        this._lines.push('');
++        this._unshift('');
+         if (text.startsWith('include::')) this._lookAhead--;
+       }
+     } else {
+diff --git a/src/reader.js b/src/reader.js
+index 12bef0acb2abc7ec4e6329b94bcb01c91029c6d0..e5a035ae9a00cf0d996f4492d5f084b63eff646f 100644
+--- a/src/reader.js
++++ b/src/reader.js
+@@ -1266,7 +1266,7 @@ export class PreprocessorReader extends Reader {
+       if (!this.#skipping && !skip) {
+         this.replaceNextLine(text.trimEnd())
+         // Push a dummy line to stand in for the opening conditional directive
+-        this._lines.push('')
++        this._unshift('')
+         if (text.startsWith('include::')) this._lookAhead--
+       }
+     } else {
