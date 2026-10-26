@@ -100,11 +100,6 @@ function elementText(node: RootContent): string {
 }
 
 function isInjectedChrome(node: Element): boolean {
-  const className = node.properties?.['className'];
-  const classes = Array.isArray(className)
-    ? className
-    : typeof className === 'string'
-      ? className.split(/\s+/)
-      : [];
-  return classes.some((c) => INJECTED_CHROME_CLASSES.includes(String(c)));
+  const classes = node.properties?.className ?? [];
+  return classes.some((c) => INJECTED_CHROME_CLASSES.includes(c));
 }

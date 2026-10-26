@@ -203,10 +203,8 @@ export const rehypeShikiHighlight: Plugin<[ShikiOptions], Root> = (options) => {
 };
 
 function extractLang(code: Element): string | null {
-  const cls = code.properties?.className;
-  const list = Array.isArray(cls) ? cls : typeof cls === 'string' ? cls.split(' ') : [];
-  for (const c of list) {
-    if (typeof c === 'string' && c.startsWith('language-')) {
+  for (const c of code.properties?.className ?? []) {
+    if (c.startsWith('language-')) {
       return c.slice('language-'.length);
     }
   }

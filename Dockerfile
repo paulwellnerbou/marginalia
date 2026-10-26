@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.13-debian AS builder
+FROM oven/bun:1.4.4-debian AS builder
 WORKDIR /app
 
 # Skip the Chromium auto-download triggered by Playwright's postinstall —
@@ -44,7 +44,7 @@ FROM rust:1.95-slim-bookworm AS mermaid-builder
 ARG MMDR_VERSION=0.2.2
 RUN cargo install mermaid-rs-renderer --version ${MMDR_VERSION} --locked --root /out
 
-FROM oven/bun:1.3.13-debian AS runner
+FROM oven/bun:1.4.4-debian AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production

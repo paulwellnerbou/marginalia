@@ -96,10 +96,7 @@ export const rehypeAsciidocBlockIds: Plugin<[AsciidocBlockIdsOptions], Root> = (
 };
 
 function getClassList(node: Element): string[] {
-  const cls = node.properties?.className;
-  if (Array.isArray(cls)) return cls.map(String);
-  if (typeof cls === 'string') return cls.split(/\s+/).filter(Boolean);
-  return [];
+  return node.properties?.className ?? [];
 }
 
 function setClassList(node: Element, list: string[]): void {

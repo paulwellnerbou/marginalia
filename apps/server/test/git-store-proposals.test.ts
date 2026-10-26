@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as git from 'isomorphic-git';
 import { type DocLocator, GitStore } from '../src/git-store.js';
+import { crissCrossProposal } from './criss-cross.js';
 
 /**
  * Tests for the proposal-branch primitives on GitStore. The lifecycle:
@@ -275,9 +276,8 @@ Para C baseline.
    * A runtime image without `git` used to report every proposal that
    * iso-git couldn't merge as an unresolvable conflict, so proposals
    * that merge perfectly well became permanently unacceptable. Hiding
-   * the PATH reproduces exactly that deployment; the criss-cross
-   * topology is the one that reaches the native fallback at all (see
-   * the MergeNotSupportedError case below).
+   * the PATH reproduces exactly that deployment; a criss-cross history
+   * is what reaches the native fallback.
    */
   test('a missing `git` reports unavailable rather than conflict', async () => {
     const paras = [1, 2, 3, 4, 5, 6].map((n) => `Para ${n} baseline.`);
@@ -286,19 +286,15 @@ Para C baseline.
     const baseOid = await mainOid();
     const edit = (n: number) => base.replace(`Para ${n} baseline.`, `Para ${n} edited.`);
 
-    for (const n of [1, 2, 3, 4, 5]) {
+    for (const n of [1, 2]) {
       await store.createProposalBranch(doc, baseOid, `p${n}`, edit(n), author);
     }
     expect((await store.mergeProposalBranch(doc, 'p1', author)).ok).toBe(true);
     expect((await store.mergeProposalBranch(doc, 'p2', author)).ok).toBe(true);
 
-    const m2Oid = await mainOid();
     const xProposed = store.read(doc).replace('Para 6 baseline.', 'Para 6 from x.');
-    await store.createProposalBranch(doc, m2Oid, 'x', xProposed, author);
-
-    for (const n of [3, 4, 5]) {
-      expect((await store.mergeProposalBranch(doc, `p${n}`, author)).ok).toBe(true);
-    }
+    await store.createProposalBranch(doc, await mainOid(), 'x', xProposed, author);
+    await crissCrossProposal(store, doc, 'x', author);
 
     const realPath = process.env.PATH;
     process.env.PATH = join(dir, 'no-binaries-here');
@@ -388,11 +384,10 @@ Para C baseline.
   });
 
   test('proposalMergeStatus and accept survive criss-cross accept histories', async () => {
-    // Sequentially accepted sibling proposals build a merge-commit web in
-    // which iso-git's findMergeBase can return several merge bases (it
-    // lacks the recursive strategy and doesn't fully reduce candidates).
-    // git.merge then throws MergeNotSupportedError even though native git
-    // merges the same refs cleanly. Topology copied from a real repo:
+    // Sequentially accepted sibling proposals build a merge-commit web
+    // with several common ancestors, all but one of them redundant; a
+    // merge that fails to reduce them refuses a proposal that merges
+    // cleanly. Topology copied from a real repo:
     // five proposals branched at A, accepted one by one (FF, then 3-way
     // merges), with X branched from the intermediate merge commit M2.
     const paras = [1, 2, 3, 4, 5, 6].map((n) => `Para ${n} baseline.`);

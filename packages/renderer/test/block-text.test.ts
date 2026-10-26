@@ -19,9 +19,7 @@ import type { BlockMap } from '../src/types.js';
 const htmlParser = unified().use(rehypeParse, { fragment: true });
 
 function classesOf(node: Element): string[] {
-  const className = node.properties?.className;
-  if (Array.isArray(className)) return className.map(String);
-  return typeof className === 'string' ? className.split(/\s+/) : [];
+  return node.properties?.className ?? [];
 }
 
 /** The client's `blockTextOf`, over a parsed tree instead of a live DOM. */

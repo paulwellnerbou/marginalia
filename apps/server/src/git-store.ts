@@ -994,8 +994,8 @@ export class GitStore {
             deleteByTheirs?: string[];
           };
         };
-        // MergeNotSupportedError: multiple merge bases (criss-cross accept
-        // history) — iso-git can't 3-way merge these, native git can.
+        // MergeNotSupportedError: several best merge bases (a true
+        // criss-cross) — iso-git can't 3-way merge these, native git can.
         if (e.code === 'MergeConflictError' || e.code === 'MergeNotSupportedError') {
           const nativeMerge = await this.previewProposalMergeWithGitUnlocked(doc, proposalId);
           if (nativeMerge.ok) {
@@ -1093,7 +1093,7 @@ export class GitStore {
       } catch (err) {
         const e = err as { code?: string };
         // MergeNotSupportedError: iso-git lacks the recursive strategy, so
-        // it bails when the accept-merge web yields multiple merge bases.
+        // it bails on a true criss-cross with several best merge bases.
         // Native git resolves those, so it gets the same fallback as
         // conflicts.
         if (e.code === 'MergeConflictError' || e.code === 'MergeNotSupportedError') {

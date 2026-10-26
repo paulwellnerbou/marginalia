@@ -469,11 +469,10 @@ describe('exportDocx — [TOC] / [[_TOC_]] markers', () => {
     const md = ['# Title', '', '[TOC]', '', '## A', '', '[[_TOC_]]', '', '## B'].join('\n');
     const buf = await exportDocx(md);
     const { documentXml } = await inspectDocx(buf);
-    // A single Word TOC field uses three `<w:fldChar>` elements
-    // (begin + separate + end). Two TOCs would give us six. One
-    // TOC → three.
-    const fldCharMatches = documentXml.match(/<w:fldChar/g) ?? [];
-    expect(fldCharMatches.length).toBe(3);
+    // Each entry carries a PAGEREF field of its own, so count the TOC
+    // field instructions rather than every field.
+    const tocFields = documentXml.match(/<w:instrText[^>]*>TOC /g) ?? [];
+    expect(tocFields.length).toBe(1);
     // No stray "Contents" from a second emission.
     const contentsMatches = documentXml.match(/>Contents</g) ?? [];
     expect(contentsMatches.length).toBe(1);
@@ -2570,12 +2569,18 @@ describe('exportDocx — review mode (proposals as tracked changes)', () => {
   test('omitting the review payload leaves the document body unchanged', async () => {
     // Byte-level equality is not safe (docx writes timestamps into
     // core.xml), so compare the document.xml text — that's what the
-    // renderer actually controls.
+    // renderer actually controls. Bookmark ids come from a counter that
+    // docx shares across every document in the process.
     const md = '# Plain\n\nBody text here.\n';
     const a = await exportDocx(md);
     const b = await exportDocx(md, {});
-    const da = (await inspectComments(a)).documentXml;
-    const db = (await inspectComments(b)).documentXml;
+    const bodyOf = async (buf: Buffer) =>
+      (await inspectComments(buf)).documentXml.replace(
+        /(<w:bookmark(?:Start|End)\b[^>]*\bw:id=")\d+"/g,
+        '$1#"',
+      );
+    const da = await bodyOf(a);
+    const db = await bodyOf(b);
     expect(da).toBe(db);
   });
 

@@ -496,10 +496,11 @@ function countHeadings(root: HastRoot): number {
 
 /**
  * Emit a TOC block: an optional "Contents" heading followed by Word's
- * native TableOfContents field. We set `beginDirty: true` (via the
- * options object's untyped slot) so Word prompts the user to
- * auto-populate the TOC on first open — otherwise they'd see an empty
- * placeholder until they press F9 themselves.
+ * native TableOfContents field. docx fills its entries in from the
+ * headings, but without page numbers, which only a layout engine knows.
+ * We set `beginDirty: true` (via the options object's untyped slot) so
+ * Word prompts the user to update the TOC on first open — otherwise
+ * the page numbers stay blank until they press F9 themselves.
  */
 function buildTocBlocks(label: string, _tokens: ThemeTokens): FileChild[] {
   const out: FileChild[] = [];
@@ -519,8 +520,7 @@ function buildTocBlocks(label: string, _tokens: ThemeTokens): FileChild[] {
   // `hyperlink: true` makes entries clickable in Word.
   // `headingStyleRange: '1-6'` pulls all heading levels into the TOC.
   // `beginDirty: true` marks the TOC field dirty so Word prompts to
-  // auto-populate on first open (otherwise the user sees an empty
-  // placeholder until they press F9).
+  // fill in the page numbers on first open.
   //
   // The first argument to `TableOfContents` is the SDT alias — an
   // internal accessibility/navigation tag on the content control,

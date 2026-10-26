@@ -27,11 +27,11 @@
     "@asciidoctor/core": "^3.0.4",
     "@marginalia/themes": "workspace:*",
     "diff": "^9.0.0",
-    "docx": "^9.6.1",
+    "docx": "^9.14.0",
     "github-slugger": "^2.0.0",
     "hast-util-to-string": "^3.0.1",
-    "hast-util-to-text": "^4.0.2",
-    "image-size": "^2.0.2",
+    "hast-util-to-text": "^4.0.3",
+    "image-size": "^2.0.4",
     "mdast-util-to-string": "^4.0.0",
     "rehype-parse": "^9.0.1",
     "rehype-raw": "^7.0.0",
@@ -41,15 +41,15 @@
     "remark-gfm": "^4.0.1",
     "remark-parse": "^11.0.0",
     "remark-rehype": "^11.1.2",
-    "shiki": "^4.0.2",
+    "shiki": "^4.5.0",
     "unified": "^11.0.5",
-    "unist-util-visit": "^5.1.0"
+    "unist-util-visit": "^5.2.0"
   },
   "devDependencies": {
-    "@types/hast": "^3.0.4",
+    "@types/hast": "^3.0.5",
     "@types/mdast": "^4.0.4",
     "@types/unist": "^3.0.3",
     "hast-util-sanitize": "^5.0.2",
-    "jszip": "^3.10.1"
+    "jszip": "^3.10.2"
   }
 }
