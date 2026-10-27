@@ -88,12 +88,13 @@ export function captureSelection(root: HTMLElement): CommentAnchor | null {
 }
 
 /**
- * Longest quote a whole-block anchor carries. The server takes far more,
+ * Longest quote a whole-block bookmark carries. The server takes far more,
  * but a bookmark on a chapter-length block has no use for it: the quote
  * exists to re-find the block after an edit and to title the card, and a
- * couple of thousand characters already pin a block uniquely.
+ * couple of thousand characters already pin a block uniquely. A comment
+ * takes the whole block, since its quote is also what gets highlighted.
  */
-const BLOCK_QUOTE_LIMIT = 2000;
+export const BOOKMARK_QUOTE_LIMIT = 2000;
 
 /**
  * Whether a block can carry a bookmark. A rendered diagram can't: its text
@@ -105,20 +106,24 @@ export function isBookmarkableBlock(el: HTMLElement): boolean {
 }
 
 /**
- * Anchor covering a whole block — what a bookmark marks, where a comment
- * marks a selection. `el` is a `[data-block]` / `[data-subblock]`
- * element; the quote is its normalized text, so re-anchoring and the
- * section context behave exactly as they do for a comment someone made
- * by sweeping the entire paragraph.
+ * Anchor covering a whole block — what a bookmark marks, and a comment
+ * made from the block's hover actions. `el` is a `[data-block]` /
+ * `[data-subblock]` element; the quote is its normalized text, so
+ * re-anchoring and the section context behave exactly as they do for a
+ * comment someone made by sweeping the entire paragraph.
  *
  * Returns null for a block with no text of its own (an image, an empty
  * cell): there would be nothing to re-find it by.
  */
-export function captureBlockAnchor(root: HTMLElement, el: HTMLElement): CommentAnchor | null {
+export function captureBlockAnchor(
+  root: HTMLElement,
+  el: HTMLElement,
+  quoteLimit = Number.POSITIVE_INFINITY,
+): CommentAnchor | null {
   const blockId = anchorIdOf(el);
   if (!blockId || !isBookmarkableBlock(el)) return null;
   const blockText = blockTextOf(el);
-  const quote = blockText.slice(0, BLOCK_QUOTE_LIMIT);
+  const quote = blockText.slice(0, quoteLimit);
   if (!quote) return null;
 
   const section = blockSectionOf(root, el);
