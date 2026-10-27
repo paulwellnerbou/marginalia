@@ -281,6 +281,31 @@ Para C baseline.
     }
   }, 10_000);
 
+  test('an accept finishes even though packing reaped a directory its checkout listed', async () => {
+    // isomorphic-git's checkout walks the working tree, `.git` included,
+    // and since 1.44 stats every entry it lists before descending. A
+    // fanout directory gc empties and removes between that listing and
+    // that stat failed the accept with ENOENT.
+    const baseOid = await store.mainOid(doc);
+    await store.createProposalBranch(doc, baseOid, 'p-reaped', `${INITIAL}\nAccepted.\n`, author);
+    const objects = join(store.repoDir(doc.uid), '.git', 'objects');
+    const emptied = join(objects, 'ff');
+    mkdirSync(emptied, { recursive: true });
+    const realReaddir = fs.promises.readdir;
+    fs.promises.readdir = (async (...args: Parameters<typeof realReaddir>) => {
+      const names = await realReaddir(...args);
+      if (String(args[0]) === objects) rmSync(emptied, { recursive: true, force: true });
+      return names;
+    }) as typeof fs.promises.readdir;
+    try {
+      expect(await store.mergeProposalBranch(doc, 'p-reaped', author)).toMatchObject({ ok: true });
+    } finally {
+      fs.promises.readdir = realReaddir;
+    }
+
+    expect(store.read(doc)).toContain('Accepted.');
+  });
+
   test('a repo below the loose-object limit is left alone', async () => {
     // Packing on every check would repack an already-tidy repo for
     // nothing. Well under the default limit, so no pack should appear.
