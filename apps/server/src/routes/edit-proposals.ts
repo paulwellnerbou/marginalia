@@ -33,7 +33,7 @@ import {
   PROPOSAL_ANSWERS_JSON_SQL,
   parseAnswerIds,
 } from '../db.js';
-import type { GitStore } from '../git-store.js';
+import type { FileVersionReader, GitStore } from '../git-store.js';
 import { renderDocumentCached } from '../render-cache.js';
 import { toWire as toCommentWire } from './comments.js';
 
@@ -640,7 +640,7 @@ export function toWire(row: EditProposalThreadRow): Record<string, unknown> {
  * helper without casts.
  */
 export async function readProposalContent(
-  store: GitStore,
+  store: FileVersionReader,
   doc: DocumentRow,
   row: {
     id: string;

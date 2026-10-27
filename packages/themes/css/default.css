@@ -300,7 +300,9 @@
 .marginalia :is(h1, h2, h3, h4, h5, h6) > a.heading-anchor:hover {
   color: var(--md-color-accent);
 }
-.marginalia :is(h1, h2, h3, h4, h5, h6) a:not(.heading-anchor) {
+/* Asciidoctor's `:sectlinks:` wraps the whole title in a self-link; that
+   one reads as a heading, any other link in a title stays a link. */
+.marginalia :is(h1, h2, h3, h4, h5, h6) > a.link {
   color: inherit;
   text-decoration: none;
 }

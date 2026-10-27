@@ -89,7 +89,12 @@ import {
   exportPdf,
 } from '../export/pdf.js';
 import { loadPrintCss, loadThemeCss } from '../export/theme-css.js';
-import type { HistoryEntry as GitHistoryEntry, GitStore, HistoryPackStream } from '../git-store.js';
+import type {
+  FileVersionReader,
+  HistoryEntry as GitHistoryEntry,
+  GitStore,
+  HistoryPackStream,
+} from '../git-store.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
 import type { Realtime } from '../realtime.js';
 import { renderDocumentCached, renderDocumentCopy } from '../render-cache.js';
@@ -1267,10 +1272,10 @@ async function exportDocument(c: Context, deps: AppDeps) {
     .prepare('SELECT client_id, display_name FROM doc_users WHERE doc_uid = ?')
     .all(doc.uid) as Array<{ client_id: string; display_name: string }>;
 
-  // Everything above this line is small enough to hold; only `history`
-  // is written incrementally. Field order matches the object literal
-  // this replaced, so two exports of the same document stay diffable
-  // across the change.
+  // Everything above this line is small enough to hold; `comments` and
+  // `history` are written incrementally. Field order matches the object
+  // literal this replaced, so two exports of the same document stay
+  // diffable across the change.
   const head = {
     version: 5 as const,
     kind: 'marginalia.document-bundle',
@@ -1294,12 +1299,19 @@ async function exportDocument(c: Context, deps: AppDeps) {
       blocks: rendered.blocks,
       warnings: rendered.warnings,
     },
-    comments: await mapBundleComments(comments, store, doc),
   };
 
   const filename = (doc.name ?? doc.uid).replace(/[^\w.-]+/g, '_').slice(0, 80);
   return new Response(
-    jsonTextStream(bundleJson(head, historyStream, historyBuffer, participants)),
+    jsonTextStream(
+      bundleJson(
+        head,
+        bundleCommentsJson(comments, store, doc),
+        historyStream,
+        historyBuffer,
+        participants,
+      ),
+    ),
     {
       headers: {
         'content-type': 'application/json; charset=utf-8',
@@ -1317,14 +1329,15 @@ async function exportDocument(c: Context, deps: AppDeps) {
  * commit. Object ids are preserved, which is what keeps `accepted_oid`
  * and the restored-from trailers meaningful on the other side.
  *
- * The pack is the one field that can be arbitrarily large, so it is the
- * one field never assembled: its bytes are base64'd and handed onward a
- * chunk at a time. Everything else is stringified whole, which is what
- * keeps this readable — those fields are bounded by the document's text
- * and comment count, not by the length of its history.
+ * The pack and the comments are the two fields never assembled. The
+ * pack's bytes are base64'd and handed onward a chunk at a time; each
+ * comment is stringified on its own, since a proposal's payload costs
+ * two reads of the whole document. Everything else is stringified
+ * whole — bounded by the document's text, not by its history.
  */
 async function* bundleJson(
   head: object,
+  comments: AsyncIterable<string>,
   streamed: HistoryPackStream | null,
   buffered: { pack: Uint8Array; headOid: string; commits: number } | null,
   participants: unknown,
@@ -1332,7 +1345,13 @@ async function* bundleJson(
   const headJson = JSON.stringify(head);
   // Splice into the head's own object rather than nesting, so the
   // fragments concatenate into exactly the shape the importer expects.
-  yield `${headJson.slice(0, -1)},"history":`;
+  yield `${headJson.slice(0, -1)},"comments":[`;
+  let first = true;
+  for await (const comment of comments) {
+    yield first ? comment : `,${comment}`;
+    first = false;
+  }
+  yield '],"history":';
 
   if (streamed) {
     yield `{"pack_base64":"`;
@@ -2565,16 +2584,41 @@ function reanchorAndBroadcast(
 }
 
 /**
- * Sequential `for...of` rather than `Promise.all`: each branch-backed
- * proposal does git reads, and a doc with hundreds of proposals would
- * otherwise spike open-fd / I/O contention by reading them all at once.
+ * Each comment as its own JSON text, in row order.
+ *
+ * Stringified as soon as it is built so nothing outlives it: a
+ * proposal's snapshot and proposed text are slices of two full
+ * document reads, and a slice can keep its whole parent string alive.
+ * Held for every proposal at once, that comes to gigabytes on a
+ * document with thousands of them. Streaming also gets the first bytes
+ * out before the server's idle timeout, which a fully built comment
+ * list can miss.
+ *
+ * A small batch rather than one at a time keeps the shared git
+ * subprocess answering while earlier reads are decoded.
  */
-async function mapBundleComments(
+async function* bundleCommentsJson(
   comments: BundleCommentRow[],
   store: GitStore,
   doc: DocumentRow,
-): Promise<unknown[]> {
-  return mapWithConcurrency(comments, 4, async (row) => ({
+): AsyncGenerator<string> {
+  const reader = store.openFileVersionReader(doc);
+  try {
+    for (let i = 0; i < comments.length; i += BUNDLE_COMMENT_BATCH) {
+      const batch = comments.slice(i, i + BUNDLE_COMMENT_BATCH);
+      yield* await mapWithConcurrency(batch, BUNDLE_COMMENT_BATCH, async (row) =>
+        JSON.stringify(await bundleComment(reader, doc, row)),
+      );
+    }
+  } finally {
+    reader.close();
+  }
+}
+
+const BUNDLE_COMMENT_BATCH = 4;
+
+async function bundleComment(store: FileVersionReader, doc: DocumentRow, row: BundleCommentRow) {
+  return {
     id: row.id,
     parent_id: row.parent_id,
     parent_proposal_id: row.parent_proposal_id,
@@ -2605,11 +2649,11 @@ async function mapBundleComments(
     // invisible as discussions.
     deleted_at: row.deleted_at,
     edit_proposal: await bundleProposalPayload(store, doc, row),
-  }));
+  };
 }
 
 async function bundleProposalPayload(
-  store: GitStore,
+  store: FileVersionReader,
   doc: DocumentRow,
   row: BundleCommentRow,
 ): Promise<{
