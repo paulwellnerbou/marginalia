@@ -129,7 +129,7 @@ import {
   reassertSectionFilterOnDocument,
   threadTouchesSections,
 } from '../lib/section-filter.js';
-import { captureBlockAnchor } from '../lib/selection.js';
+import { BOOKMARK_QUOTE_LIMIT, captureBlockAnchor } from '../lib/selection.js';
 import {
   applyTheme,
   BUILT_IN_THEMES,
@@ -2857,7 +2857,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
           await onDeleteThread(existing.threadId);
           return;
         }
-        const anchor = captureBlockAnchor(root, el);
+        const anchor = captureBlockAnchor(root, el, BOOKMARK_QUOTE_LIMIT);
         if (!anchor) {
           reportFailure('There is no text in this block to bookmark.');
           return;
@@ -3715,6 +3715,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                       {canComment && blockRangesReady && (
                         <BlockActions
                           rootRef={docRef}
+                          onComment={startCommentDraft}
                           onPropose={(target) => setPendingDraft({ mode: 'proposal', target })}
                           isBookmarked={isBlockBookmarked}
                           onToggleBookmark={(el) => void onToggleBlockBookmark(el)}

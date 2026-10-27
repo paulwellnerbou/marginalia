@@ -1,12 +1,16 @@
 import { DOC_META_ATTR, type DocMetaKind, isDocMetaKind } from '@marginalia/renderer/doc-meta';
-import { BookmarkFilledIcon, BookmarkIcon } from '@radix-ui/react-icons';
+import { BookmarkFilledIcon, BookmarkIcon, ChatBubbleIcon } from '@radix-ui/react-icons';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { anchorElements } from '../lib/anchor-target.js';
-import { blockAnchorSection, isBookmarkableBlock } from '../lib/selection.js';
+import type { CommentAnchor } from '../lib/api.js';
+import { blockTextOf } from '../lib/block-text.js';
+import { blockAnchorSection, captureBlockAnchor, isBookmarkableBlock } from '../lib/selection.js';
 import type { ProposalTarget } from './SelectionToolbar.js';
 
 interface Props {
   rootRef: React.RefObject<HTMLElement | null>;
+  /** Starts a comment draft on the whole block. */
+  onComment?: (anchor: CommentAnchor) => void;
   onPropose: (target: ProposalTarget) => void;
   /** `headingCopy`: which of the headings carrying that id, counting from 0. */
   onEditChapter?: (headingBlockId: string, headingCopy: number) => void;
@@ -23,8 +27,8 @@ const BLOCK_ACTIONS_FADE_OUT_MS = 260;
 /**
  * Hover-trigger on every block that can carry a proposal — top-level
  * blocks (`[data-block]`) and sub-blocks like list items / table cells
- * (`[data-subblock]`). Renders a "Propose edit" button floating at the
- * block's top-right while the pointer is over it. Complements the
+ * (`[data-subblock]`). Renders "Comment" / "Propose edit" buttons floating
+ * at the block's top-right while the pointer is over it. Complements the
  * SelectionToolbar, which only appears on an active text selection.
  *
  * State tracking uses a single `mousemove` listener on `window`:
@@ -45,6 +49,7 @@ const BLOCK_ACTIONS_FADE_OUT_MS = 260;
  */
 export function BlockActions({
   rootRef,
+  onComment,
   onPropose,
   onEditChapter,
   onEditDocMeta,
@@ -188,6 +193,15 @@ export function BlockActions({
     return renderedTarget?.el.isConnected ? renderedTarget.el : null;
   }
 
+  function comment() {
+    const el = targetElement();
+    const root = rootRef.current;
+    if (!el || !root) return;
+    const anchor = captureBlockAnchor(root, el);
+    if (anchor) onComment?.(anchor);
+    setHoveredTarget(null);
+  }
+
   function propose() {
     const el = targetElement();
     const root = rootRef.current;
@@ -228,14 +242,20 @@ export function BlockActions({
   // Keep the button just above the block instead of hanging out in the
   // right gutter. That matches the user's cursor path better, especially
   // on paragraphs whose box stretches wider than the visible text.
-  const targetEl = onToggleBookmark ? targetElement() : null;
+  const targetEl = onToggleBookmark || onComment ? targetElement() : null;
+  // Same test captureBlockAnchor applies, so the button never does nothing.
+  const commentable =
+    !!onComment && !!targetEl && isBookmarkableBlock(targetEl) && blockTextOf(targetEl) !== '';
   const bookmarked = targetEl ? (isBookmarked?.(targetEl) ?? false) : false;
   // An AsciiDoc region is itself the block, a Markdown one wraps its blocks.
   const regionKind = renderedTarget.el.closest(`[${DOC_META_ATTR}]`)?.getAttribute(DOC_META_ATTR);
   const docMetaKind = onEditDocMeta && isDocMetaKind(regionKind) ? regionKind : null;
   const buttonWidth =
     buttonSize.width ||
-    (renderedTarget.isHeading ? 230 : 124) + (onToggleBookmark ? 106 : 0) + (docMetaKind ? 120 : 0);
+    (renderedTarget.isHeading ? 230 : 124) +
+      (commentable ? 100 : 0) +
+      (onToggleBookmark ? 106 : 0) +
+      (docMetaKind ? 120 : 0);
   const buttonHeight = buttonSize.height || 28;
   const style: React.CSSProperties = {
     top: Math.max(4, renderedTarget.rect.top - buttonHeight + 6),
@@ -248,6 +268,18 @@ export function BlockActions({
       className={isVisible ? 'block-actions is-visible' : 'block-actions'}
       style={style}
     >
+      {commentable && (
+        <button
+          type="button"
+          className="block-actions-btn"
+          onClick={comment}
+          title="Comment on this block"
+          aria-label="Comment on this block"
+        >
+          <ChatBubbleIcon className="block-actions-icon" aria-hidden />
+          Comment
+        </button>
+      )}
       <button
         type="button"
         className="block-actions-btn"
