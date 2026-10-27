@@ -750,8 +750,11 @@ export class GitStore {
 
     // `--revs` takes the rev to pack from stdin; `--stdout` writes the
     // pack to ours. Reachability is git's own walk, which is what makes
-    // this cheap — no oid enumeration on our side.
-    const child = spawn('git', ['pack-objects', '--stdout', '--revs'], {
+    // this cheap — no oid enumeration on our side. One delta-search
+    // thread: each thread keeps its own window of objects, and on a
+    // 5,000-commit document ten of them peaked at 430 MB against 170 MB
+    // for one, which also packed smaller, for 0.6 s more.
+    const child = spawn('git', ['-c', 'pack.threads=1', 'pack-objects', '--stdout', '--revs'], {
       cwd: dir,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -768,6 +771,35 @@ export class GitStore {
       child.kill();
       return null;
     }
+  }
+
+  /**
+   * Reads of one document's file at many revisions, served by a single
+   * native `git cat-file --batch`. For callers that read hundreds in a
+   * row (the bundle export reads two per proposal): isomorphic-git loads
+   * the pack and resolves the delta chain afresh on every read, which on
+   * a 5,000-commit document churns through a gigabyte.
+   *
+   * Any read the subprocess can't answer, including every read on a
+   * runtime without git, falls back to this store's own. Call `close()`
+   * when done.
+   */
+  openFileVersionReader(doc: DocLocator): FileVersionReader & { close(): void } {
+    const path = this.filename(doc.format);
+    const batch = existsSync(join(this.repoDir(doc.uid), '.git'))
+      ? new CatFileBatch(this.repoDir(doc.uid))
+      : null;
+    const native = async (d: DocLocator, rev: string): Promise<string | null> => {
+      if (!batch || d.uid !== doc.uid || rev.includes('\n')) return null;
+      const blob = await batch.read(`${rev}:${path}`).catch(() => null);
+      return blob && new TextDecoder().decode(blob);
+    };
+    return {
+      readAt: async (d, oid) => (await native(d, oid)) ?? this.readAt(d, oid),
+      readProposalTip: async (d, proposalId) =>
+        (await native(d, proposalRef(proposalId))) ?? this.readProposalTip(d, proposalId),
+      close: () => batch?.close(),
+    };
   }
 
   /** Add a tree and everything under it to `oids`, skipping already-seen subtrees. */
@@ -1356,6 +1388,92 @@ export interface ProposalRepairBranchResult {
   rewrite: RewriteProposalBranchResult | null;
 }
 
+/** File reads at a revision; `GitStore` itself is one. */
+export interface FileVersionReader {
+  readAt(doc: DocLocator, oid: string): Promise<string>;
+  readProposalTip(doc: DocLocator, proposalId: string): Promise<string | null>;
+}
+
+/**
+ * One `git cat-file --batch` subprocess, answering one request at a time.
+ * Never throws at construction: a missing binary or a dead child shows
+ * up as a rejected `read`.
+ */
+class CatFileBatch {
+  private readonly child: ChildProcessWithoutNullStreams;
+  private readonly chunks: AsyncIterator<Uint8Array>;
+  private buffered: Uint8Array = new Uint8Array(0);
+  private queue: Promise<unknown> = Promise.resolve();
+
+  constructor(dir: string) {
+    this.child = spawn('git', ['cat-file', '--batch'], {
+      cwd: dir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    this.child.on('error', () => {});
+    this.child.stdin.on('error', () => {});
+    this.child.stderr.resume();
+    // Attached now and never swapped: see `stdoutAfterFirstChunk` on
+    // what Bun drops while stdout has no reader.
+    this.chunks = this.child.stdout[Symbol.asyncIterator]();
+  }
+
+  /** The object's bytes, or null when `rev` names no blob. */
+  read(rev: string): Promise<Uint8Array | null> {
+    const result = this.queue.then(() => this.request(rev));
+    this.queue = result.catch(() => {});
+    return result;
+  }
+
+  close(): void {
+    this.child.stdin.end();
+    this.child.kill();
+  }
+
+  private async request(rev: string): Promise<Uint8Array | null> {
+    this.child.stdin.write(`${rev}\n`);
+    // `<oid> <type> <size>`, or `<rev> missing` with no body.
+    const header = /^[0-9a-f]+ (\w+) (\d+)$/.exec(await this.line());
+    if (!header) return null;
+    // The body is followed by a newline of its own.
+    const body = await this.bytes(Number(header[2]) + 1);
+    return header[1] === 'blob' ? body.subarray(0, -1) : null;
+  }
+
+  private async line(): Promise<string> {
+    for (;;) {
+      const end = this.buffered.indexOf(0x0a);
+      if (end >= 0) {
+        const line = new TextDecoder().decode(this.buffered.subarray(0, end));
+        this.buffered = this.buffered.subarray(end + 1);
+        return line;
+      }
+      await this.pull();
+    }
+  }
+
+  private async bytes(n: number): Promise<Uint8Array> {
+    while (this.buffered.length < n) await this.pull();
+    const out = this.buffered.slice(0, n);
+    this.buffered = this.buffered.subarray(n);
+    return out;
+  }
+
+  private async pull(): Promise<void> {
+    const next = await this.chunks.next();
+    if (next.done) throw new Error('git cat-file --batch ended');
+    const chunk = next.value as Uint8Array;
+    if (this.buffered.length === 0) {
+      this.buffered = chunk;
+      return;
+    }
+    const joined = new Uint8Array(this.buffered.length + chunk.length);
+    joined.set(this.buffered);
+    joined.set(chunk, this.buffered.length);
+    this.buffered = joined;
+  }
+}
+
 /** A packfile being produced by a subprocess, plus what describes it. */
 export interface HistoryPackStream {
   headOid: string;
@@ -1402,7 +1520,7 @@ async function stdoutAfterFirstChunk(
   child.stdin.end(stdinPayload);
 
   const failure = (detail: string) =>
-    new Error(`git ${child.spawnargs[1] ?? ''} ${detail}: ${stderr.trim()}`.replace(/\s+/g, ' '));
+    new Error(`${child.spawnargs.join(' ')} ${detail}: ${stderr.trim()}`.replace(/\s+/g, ' '));
 
   // One iterator over stdout, attached before the first pull and reused
   // for the rest of the read. Taking the first chunk through a separate
