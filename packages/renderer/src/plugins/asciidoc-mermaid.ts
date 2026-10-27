@@ -106,10 +106,7 @@ function findFirstByTag(node: Element, tag: string): Element | null {
 }
 
 function classesFromWrapper(node: Element): string[] {
-  const cls = node.properties?.className;
-  if (Array.isArray(cls)) return cls.map(String);
-  if (typeof cls === 'string') return cls.split(/\s+/).filter(Boolean);
-  return [];
+  return node.properties?.className ?? [];
 }
 
 type Visitor = (

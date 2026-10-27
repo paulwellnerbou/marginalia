@@ -25,9 +25,12 @@
     "format": "biome format --write ."
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.14",
+    "@biomejs/biome": "^2.6.3",
     "@types/bun": "latest",
-    "playwright": "^1.59.1",
-    "typescript": "^6.0.3"
+    "playwright": "^1.64.1",
+    "typescript": "^7.0.2"
+  },
+  "patchedDependencies": {
+    "@asciidoctor/core@4.1.1": "patches/@asciidoctor%2Fcore@4.1.1.patch"
   }
 }

@@ -54,8 +54,24 @@ async function writeCreatingReapedDirs(...args: WriteFileArgs): Promise<void> {
 }
 
 /**
+ * A directory listing without `.git` in it.
+ *
+ * isomorphic-git's checkout walks the working tree and nothing in that
+ * walk leaves `.git` out, so it lists everything in there too, and since
+ * 1.44 it stats each entry before descending. `gc` removes the fanout
+ * directories it emptied, so one can vanish between the listing and the
+ * stat, and the checkout — an accept — fails with ENOENT. isomorphic-git
+ * reaches what is inside `.git` by path, never by listing the directory
+ * that holds it, so hiding it from listings costs it nothing.
+ */
+async function readdirWithoutGitDir(path: nodeFs.PathLike): Promise<string[]> {
+  // isomorphic-git asks for plain names only.
+  return (await nodeFs.promises.readdir(path)).filter((name) => name !== '.git');
+}
+
+/**
  * The filesystem isomorphic-git works through in this module — the real
- * one, with the write above swapped in.
+ * one, with the write and the listing above swapped in.
  *
  * Deliberately named `fs`, and deliberately the only `fs` in scope that
  * isomorphic-git could be handed: packing runs concurrently with writes
@@ -68,8 +84,11 @@ async function writeCreatingReapedDirs(...args: WriteFileArgs): Promise<void> {
  */
 const fs = {
   promises: new Proxy(nodeFs.promises, {
-    get: (target, prop, receiver) =>
-      prop === 'writeFile' ? writeCreatingReapedDirs : Reflect.get(target, prop, receiver),
+    get: (target, prop, receiver) => {
+      if (prop === 'writeFile') return writeCreatingReapedDirs;
+      if (prop === 'readdir') return readdirWithoutGitDir;
+      return Reflect.get(target, prop, receiver);
+    },
   }),
 };
 
@@ -344,8 +363,9 @@ export class GitStore {
    * are not safe. Packing refs races isomorphic-git's ref lookup, so it
    * is switched off (`GC_ARGS`). And the empty `objects/XX/` directories
    * gc reaps behind itself can strand a write that was about to use
-   * one. That is what the `fs` at the top of this file exists to absorb;
-   * without it, packing a busy document fails the save that provoked it.
+   * one, or a checkout that had just listed one. That is what the `fs`
+   * at the top of this file exists to absorb; without it, packing a busy
+   * document fails the save or the accept that provoked it.
    */
   private noteWriteForMaintenance(uid: string): void {
     // Check on the first write this process makes to a document, then
@@ -1026,8 +1046,8 @@ export class GitStore {
             deleteByTheirs?: string[];
           };
         };
-        // MergeNotSupportedError: multiple merge bases (criss-cross accept
-        // history) — iso-git can't 3-way merge these, native git can.
+        // MergeNotSupportedError: several best merge bases (a true
+        // criss-cross) — iso-git can't 3-way merge these, native git can.
         if (e.code === 'MergeConflictError' || e.code === 'MergeNotSupportedError') {
           const nativeMerge = await this.previewProposalMergeWithGitUnlocked(doc, proposalId);
           if (nativeMerge.ok) {
@@ -1125,7 +1145,7 @@ export class GitStore {
       } catch (err) {
         const e = err as { code?: string };
         // MergeNotSupportedError: iso-git lacks the recursive strategy, so
-        // it bails when the accept-merge web yields multiple merge bases.
+        // it bails on a true criss-cross with several best merge bases.
         // Native git resolves those, so it gets the same fallback as
         // conflicts.
         if (e.code === 'MergeConflictError' || e.code === 'MergeNotSupportedError') {

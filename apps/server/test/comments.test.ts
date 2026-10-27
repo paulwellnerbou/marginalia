@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { type App, createApp } from '../src/app.js';
 import { CLIENT_HEADER, CLIENT_NAME_HEADER, INVITE_HEADER } from '../src/auth.js';
 import { loadConfig } from '../src/config.js';
+import { crissCrossProposal } from './criss-cross.js';
 
 const ALICE = { id: 'aaaaaaaaaaaaaaaaaaaa', name: 'Alice' };
 const BOB = { id: 'bbbbbbbbbbbbbbbbbbbb', name: 'Bob' };
@@ -2154,9 +2155,7 @@ describe('threads API', () => {
     // A deployment without `git` cannot run the three-way merge that
     // backs accept. That must not come back as 409 proposal-conflict:
     // the proposal is fine and the user has nothing to fix.
-    // Sequentially accepted siblings build the criss-cross history that
-    // iso-git's merge refuses, which is the only route to the native
-    // fallback — and the shape a busy review document ends up in.
+    // A criss-cross history is what reaches the native fallback.
     const paras = [1, 2, 3, 4, 5, 6].map((n) => `Para ${n} baseline.`);
     const uid = await newDoc(`# Welcome\n\n${paras.join('\n\n')}\n`);
 
@@ -2195,15 +2194,16 @@ describe('threads API', () => {
       );
 
     const ids: string[] = [];
-    for (const n of [1, 2, 3, 4, 5]) {
+    for (const n of [1, 2]) {
       ids.push(await propose(`Para ${n} baseline.`, `Para ${n} edited.`));
     }
-    for (const n of [0, 1]) expect((await accept(ids[n]!)).status).toBe(200);
+    for (const id of ids) expect((await accept(id)).status).toBe(200);
 
-    // Branched off the intermediate merge commit, so accepting the rest
-    // leaves this one with several merge bases.
     const late = await propose('Para 6 baseline.', 'Para 6 edited.');
-    for (const n of [2, 3, 4]) expect((await accept(ids[n]!)).status).toBe(200);
+    await crissCrossProposal(app.store, { uid, format: 'markdown' }, late, {
+      displayName: BOB.name,
+      clientId: BOB.id,
+    });
 
     const realPath = process.env.PATH;
     process.env.PATH = join(dir, 'no-binaries-here');

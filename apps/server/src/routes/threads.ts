@@ -408,7 +408,7 @@ async function createThread(c: Context, deps: AppDeps) {
     if (proposal.wholeDocument) {
       blockRange = { start: 0, end: currentSource.length, kind: 'multi', text: '' };
     } else {
-      blockRange = locateAnchorRange(doc, currentSource, anchor.blockId, anchor.endBlockId, {
+      blockRange = await locateAnchorRange(doc, currentSource, anchor.blockId, anchor.endBlockId, {
         headingPath: anchor.headingPath,
         sectionIndexPath: anchor.sectionIndexPath,
       });
@@ -684,7 +684,7 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
       };
 
       const rendered = await renderDocumentCached(preview.before, doc.format);
-      const blocks = locateDocumentBlocks(doc, preview.before);
+      const blocks = await locateDocumentBlocks(doc, preview.before);
       anchor = locateProposalAnchorBySourceSpan(
         blocks,
         rendered.blocks,
@@ -1125,7 +1125,7 @@ async function readProposalRebaseTarget(
   if (row.is_whole_document === 1 || !anchorBlockId) {
     blockRange = { start: 0, end: currentSource.length, kind: 'multi', text: '' };
   } else {
-    blockRange = locateAnchorRange(
+    blockRange = await locateAnchorRange(
       doc,
       currentSource,
       anchorBlockId,
@@ -1196,7 +1196,7 @@ async function readProposalConflictSides(
     if (row.link_status === 'orphaned' || !anchorBlockId) {
       return { ok: false, status: 409, error: 'proposal-orphaned' };
     }
-    const range = locateAnchorRange(
+    const range = await locateAnchorRange(
       doc,
       currentSource,
       anchorBlockId,
@@ -2040,7 +2040,7 @@ async function respondToThread(c: Context, deps: AppDeps) {
     } else if (action === 'reopen' && resolution?.kind === 'accept') {
       preparedWorkflow = await prepareReopenAcceptedProposalThread(doc, row, deps, identity);
     } else if (action === 'reopen' && resolution?.kind === 'reject') {
-      reopenBlocks = locateDocumentBlocks(doc, deps.store.read(doc));
+      reopenBlocks = await locateDocumentBlocks(doc, deps.store.read(doc));
     }
   } catch (err) {
     if (err instanceof ThreadActionError) {
@@ -2330,7 +2330,7 @@ async function prepareAcceptProposalThread(
     // Guard above ensures anchor_block_id is non-null in this branch.
     const blockId = row.anchor_block_id;
     if (!blockId) throw new ThreadActionError(409, 'proposal-orphaned');
-    preMergeRange = locateAnchorRange(
+    preMergeRange = await locateAnchorRange(
       doc,
       preMergeSource,
       blockId,
@@ -2437,7 +2437,7 @@ async function recoverLandedAccept(
   } catch {
     return null;
   }
-  const preMergeRange = locateAnchorRange(
+  const preMergeRange = await locateAnchorRange(
     doc,
     preMergeSource,
     row.anchor_block_id,
@@ -2493,11 +2493,11 @@ async function completeAcceptWorkflow({
   const isWholeDoc = row.is_whole_document === 1;
   const spliceStart = isWholeDoc
     ? 0
-    : locatePostMergeSpliceStart(doc, nextSource, proposedText, preMergeRange.start);
+    : await locatePostMergeSpliceStart(doc, nextSource, proposedText, preMergeRange.start);
 
   const rendered = await renderDocumentCopy(nextSource, doc.format);
-  const previousBlocks = locateDocumentBlocks(doc, preMergeSource);
-  const presentBlocks = locateDocumentBlocks(doc, nextSource);
+  const previousBlocks = await locateDocumentBlocks(doc, preMergeSource);
+  const presentBlocks = await locateDocumentBlocks(doc, nextSource);
   const blockReplacements = prepareBlockReplacements({
     before: previousBlocks,
     after: presentBlocks,
@@ -2523,7 +2523,7 @@ async function completeAcceptWorkflow({
   }));
 
   const acceptedAnchor = locateAcceptedProposalAnchor(
-    locateDocumentBlockOccurrences(doc, nextSource),
+    await locateDocumentBlockOccurrences(doc, nextSource),
     rendered.blocks,
     spliceStart,
     spliceStart + proposedText.length,
@@ -3210,19 +3210,19 @@ function isProposalRow(row: ThreadRow): row is EditProposalThreadRow {
  * pre-merge source). Falls back to `baselineStart` if no block start
  * carries the proposed text.
  */
-function locatePostMergeSpliceStart(
+async function locatePostMergeSpliceStart(
   doc: DocumentRow,
   nextSource: string,
   proposedText: string,
   baselineStart: number,
-): number {
+): Promise<number> {
   if (proposedText.length === 0) return baselineStart;
   let bestStart: number | null = null;
   let bestDist = Number.POSITIVE_INFINITY;
   // Every copy, not one per id: the accepted text may now read like an
   // earlier paragraph, and of the two the copy nearest the baseline is
   // the one this accept produced.
-  for (const [, range] of locateDocumentBlockOccurrences(doc, nextSource)) {
+  for (const [, range] of await locateDocumentBlockOccurrences(doc, nextSource)) {
     // Require an exact range match — a prefix-only match could pick an
     // unrelated block that just happens to start with proposedText.
     if (nextSource.slice(range.start, range.end) !== proposedText) continue;
@@ -3294,7 +3294,7 @@ async function locateConflictRepairAnchor(
   if (!currentSpan) return null;
 
   const rendered = await renderDocumentCached(currentSource, doc.format);
-  const blocks = locateDocumentBlocks(doc, currentSource);
+  const blocks = await locateDocumentBlocks(doc, currentSource);
   return locateProposalAnchorBySourceSpan(
     blocks,
     rendered.blocks,

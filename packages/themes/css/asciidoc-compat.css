@@ -50,7 +50,8 @@
  * (e.g. inside `.content` of another block, or when the doc has no
  * sections at all).
  */
-.marginalia *
+.marginalia
+  *
   + :is(
     .paragraph,
     .listingblock,

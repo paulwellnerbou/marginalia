@@ -1,7 +1,7 @@
 import type { BlockSourceRange, LocatedBlocks } from '@marginalia/renderer/locate-block';
 import type { DocumentFormat } from './api.js';
 
-type BlockLocator = (source: string) => LocatedBlocks;
+type BlockLocator = (source: string) => LocatedBlocks | Promise<LocatedBlocks>;
 
 const locatorPromises = new Map<DocumentFormat, Promise<BlockLocator>>();
 

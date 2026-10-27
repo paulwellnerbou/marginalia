@@ -25,6 +25,11 @@ async function getMermaid(): Promise<typeof import('mermaid').default> {
         startOnLoad: false,
         securityLevel: 'loose',
         theme: 'default',
+        // mermaid 12 defaults to ELK and the "neo" look, which re-lays out
+        // and recolours diagrams people already wrote. Mirrored by the server's
+        // Chromium renderers.
+        layout: 'dagre',
+        look: 'classic',
         fontFamily: 'inherit',
         // Mermaid diagrams are usually drawn into an intrinsic viewBox that
         // ends up scaled down by the browser to fit narrower containers,

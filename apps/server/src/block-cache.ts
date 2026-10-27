@@ -31,8 +31,11 @@ import type { DocumentFormat } from './db.js';
  */
 const MAX_ENTRIES = 16;
 
-/** Insertion order is the LRU order; a hit re-inserts to move to the back. */
-const entries = new Map<string, LocatedBlocks>();
+/**
+ * Insertion order is the LRU order; a hit re-inserts to move to the back.
+ * Entries are promises so concurrent misses on one source share a parse.
+ */
+const entries = new Map<string, Promise<LocatedBlocks>>();
 
 let hits = 0;
 let misses = 0;
@@ -53,11 +56,11 @@ function keyFor(source: string, format: DocumentFormat): string {
  * must not be mutated — callers only ever read it, which is what makes
  * sharing safe.
  */
-export function locateDocumentBlocksCached(
+export async function locateDocumentBlocksCached(
   format: DocumentFormat,
   source: string,
-): ReadonlyMap<string, BlockSourceRange> {
-  return located(format, source).byId;
+): Promise<ReadonlyMap<string, BlockSourceRange>> {
+  return (await located(format, source)).byId;
 }
 
 /**
@@ -65,14 +68,14 @@ export function locateDocumentBlocksCached(
  * sits in. Same cache entry as `locateDocumentBlocksCached`, so asking
  * for both costs one parse.
  */
-export function locateDocumentBlockOccurrencesCached(
+export async function locateDocumentBlockOccurrencesCached(
   format: DocumentFormat,
   source: string,
-): ReadonlyMap<string, readonly BlockOccurrence[]> {
-  return located(format, source).occurrences;
+): Promise<ReadonlyMap<string, readonly BlockOccurrence[]>> {
+  return (await located(format, source)).occurrences;
 }
 
-function located(format: DocumentFormat, source: string): LocatedBlocks {
+function located(format: DocumentFormat, source: string): Promise<LocatedBlocks> {
   const key = keyFor(source, format);
   const hit = entries.get(key);
   if (hit) {
@@ -83,7 +86,12 @@ function located(format: DocumentFormat, source: string): LocatedBlocks {
   }
 
   misses += 1;
-  const blocks = format === 'asciidoc' ? locateBlocksAsciidoc(source) : locateBlocks(source);
+  const blocks =
+    format === 'asciidoc' ? locateBlocksAsciidoc(source) : Promise.resolve(locateBlocks(source));
+  // A failed parse must not answer every later caller with the same error.
+  blocks.catch(() => {
+    if (entries.get(key) === blocks) entries.delete(key);
+  });
   entries.set(key, blocks);
   if (entries.size > MAX_ENTRIES) {
     const oldest = entries.keys().next().value;

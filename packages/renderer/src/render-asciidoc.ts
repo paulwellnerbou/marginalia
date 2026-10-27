@@ -1,4 +1,4 @@
-import Asciidoctor from '@asciidoctor/core';
+import { type AbstractBlock, type Document, load } from '@asciidoctor/core';
 import type { Root as HastRoot } from 'hast';
 
 import rehypeParse from 'rehype-parse';
@@ -38,15 +38,6 @@ import type {
   Warning,
 } from './types.js';
 
-type AsciidoctorInstance = ReturnType<typeof Asciidoctor>;
-
-declare global {
-  var __asciidoctor: AsciidoctorInstance | undefined;
-}
-
-globalThis.__asciidoctor ??= Asciidoctor();
-const asciidoctor: AsciidoctorInstance = globalThis.__asciidoctor;
-
 interface AdocRenderData {
   anchors?: Anchor[];
   assets?: AssetRef[];
@@ -68,7 +59,7 @@ export async function renderAsciidoc(
   source: string,
   options: RenderOptions = {},
 ): Promise<RenderResult> {
-  const doc = asciidoctor.load(source, {
+  const doc = await load(source, {
     // Keep asciidoctor's own source highlighting out of the way so Shiki
     // runs over the resulting <pre><code> just like on the markdown path.
     // `showtitle` is on so `= My Doc` renders as a visible `<h1>` at the
@@ -91,10 +82,16 @@ export async function renderAsciidoc(
     sourcemap: true,
   });
 
-  const { blocks, subBlocks } = walkBlocks(doc);
+  const footnotesBeforeWalk = footnoteCount(doc);
+  const { blocks, subBlocks } = await walkBlocks(doc);
+  // The walk reads each block's text through `getContent()`, which runs
+  // the inline subs and so registers the block's footnotes a first time;
+  // `convert()` would number its own pass after those. Forget the walk's
+  // footnotes so the rendered ones count from where parsing left them.
+  forgetFootnotesSince(doc, footnotesBeforeWalk);
 
-  const html = doc.convert() as string;
-  const frontmatter = extractFrontmatter(doc);
+  const html = await doc.convert();
+  const frontmatter = await extractFrontmatter(doc);
 
   // Order matters: mermaid runs before block-ids so the replacement div
   // carries over the marker class, and block-ids then attaches data-block
@@ -138,7 +135,7 @@ export async function renderAsciidoc(
   };
 }
 
-type AsciidoctorAbstractBlock = ReturnType<ReturnType<typeof Asciidoctor>['load']>;
+type AsciidoctorAbstractBlock = AbstractBlock;
 
 interface WalkState {
   /**
@@ -179,10 +176,10 @@ interface WalkState {
  * own relative order and inheriting their enclosing list's section
  * context.
  */
-function walkBlocks(doc: AsciidoctorAbstractBlock): {
+async function walkBlocks(doc: AsciidoctorAbstractBlock): Promise<{
   blocks: BlockMap;
   subBlocks: SubBlockEntry[];
-} {
+}> {
   const state: WalkState = {
     blocks: [],
     counter: 0,
@@ -192,7 +189,7 @@ function walkBlocks(doc: AsciidoctorAbstractBlock): {
     subBlockEntries: [],
     subBlockInfos: [],
   };
-  walkTopLevel(doc, state);
+  await walkTopLevel(doc, state);
   return {
     // Top-level entries first, then sub-block infos. Marker-index
     // lookups in `rehypeAsciidocBlockIds` only touch the top-level
@@ -274,18 +271,18 @@ function getItemText(item: AsciidoctorAbstractBlock): string {
   return stripTags(raw);
 }
 
-function walkTopLevel(block: AsciidoctorAbstractBlock, state: WalkState): void {
+async function walkTopLevel(block: AsciidoctorAbstractBlock, state: WalkState): Promise<void> {
   const ctx = (block as { getContext(): string }).getContext();
   if (ctx === 'document' || ctx === 'preamble') {
-    for (const child of getChildren(block)) walkTopLevel(child, state);
+    for (const child of getChildren(block)) await walkTopLevel(child, state);
     return;
   }
   if (ctx === 'section') {
     emitSectionHeading(block, state);
-    for (const child of getChildren(block)) walkTopLevel(child, state);
+    for (const child of getChildren(block)) await walkTopLevel(child, state);
     return;
   }
-  emitLeafBlock(block, ctx, state);
+  await emitLeafBlock(block, ctx, state);
 }
 
 function emitSectionHeading(block: AsciidoctorAbstractBlock, state: WalkState): void {
@@ -297,7 +294,11 @@ function emitSectionHeading(block: AsciidoctorAbstractBlock, state: WalkState): 
   void recordBlock(block, 'heading', text, state);
 }
 
-function emitLeafBlock(block: AsciidoctorAbstractBlock, ctx: string, state: WalkState): void {
+async function emitLeafBlock(
+  block: AsciidoctorAbstractBlock,
+  ctx: string,
+  state: WalkState,
+): Promise<void> {
   // `[mermaid]` on a listing/literal block lands as a "style" in the AST
   // and is otherwise dropped from the HTML. Promote it to a role so the
   // mermaid role survives into the wrapper's class list, where the
@@ -310,7 +311,7 @@ function emitLeafBlock(block: AsciidoctorAbstractBlock, ctx: string, state: Walk
     void recordBlock(block, ctx, '', state);
     return;
   }
-  const text = normalizeBlockText(extractBlockText(block));
+  const text = normalizeBlockText(await extractBlockText(block));
   let info: BlockInfo | null = null;
   if (text) {
     info = recordBlock(block, ctx, text, state);
@@ -355,6 +356,16 @@ function docMetaRoleOf(block: AsciidoctorAbstractBlock): DocMetaKind | null {
   const hasRole = (block as { hasRole?: (role: string) => boolean }).hasRole;
   if (typeof hasRole !== 'function') return null;
   return DOC_META_KINDS.find((kind) => hasRole.call(block, kind)) ?? null;
+}
+
+function footnoteCount(doc: Document): number {
+  return doc.getFootnotes().length;
+}
+
+function forgetFootnotesSince(doc: Document, count: number): void {
+  (doc.getCatalog().footnotes as unknown[]).length = count;
+  // `counter()` restarts at 1 once the attribute is gone.
+  doc.removeAttribute('footnote-number');
 }
 
 function getStyle(block: AsciidoctorAbstractBlock): string | null {
@@ -412,11 +423,11 @@ function getTitle(block: AsciidoctorAbstractBlock): string | null {
  * strip tags; fall back to raw source lines. Matches the spirit of
  * mdast-util-to-string which reads children text out of the AST.
  */
-function extractBlockText(block: AsciidoctorAbstractBlock): string {
-  const contentFn = (block as { getContent?: () => string | undefined }).getContent;
+async function extractBlockText(block: AsciidoctorAbstractBlock): Promise<string> {
+  const contentFn = (block as { getContent?: () => Promise<unknown> }).getContent;
   if (typeof contentFn === 'function') {
     try {
-      const html = contentFn.call(block);
+      const html = await contentFn.call(block);
       if (typeof html === 'string' && html.length > 0) return stripTags(html);
     } catch {
       /* some block kinds throw on getContent; fall through */
@@ -471,9 +482,9 @@ function addRole(block: AsciidoctorAbstractBlock, role: string): void {
  * against a freshly-parsed empty document and only surface the deltas.
  */
 let DEFAULT_ATTRS: Set<string> | null = null;
-function defaultAttrKeys(): Set<string> {
+async function defaultAttrKeys(): Promise<Set<string>> {
   if (DEFAULT_ATTRS) return DEFAULT_ATTRS;
-  const empty = asciidoctor.load('', { safe: 'safe', standalone: false });
+  const empty = await load('', { safe: 'safe', standalone: false });
   const attrs =
     (empty as { getAttributes?: () => Record<string, unknown> | undefined }).getAttributes?.() ??
     {};
@@ -481,11 +492,11 @@ function defaultAttrKeys(): Set<string> {
   return DEFAULT_ATTRS;
 }
 
-function extractFrontmatter(doc: AsciidoctorAbstractBlock): Record<string, unknown> {
+async function extractFrontmatter(doc: AsciidoctorAbstractBlock): Promise<Record<string, unknown>> {
   const fn = (doc as { getAttributes?: () => Record<string, unknown> | undefined }).getAttributes;
   if (typeof fn !== 'function') return {};
   const attrs = fn.call(doc) ?? {};
-  const defaults = defaultAttrKeys();
+  const defaults = await defaultAttrKeys();
   const out: Record<string, unknown> = {};
   const authorKeys = new Set([
     'doctitle',

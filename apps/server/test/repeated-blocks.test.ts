@@ -249,31 +249,31 @@ describe('locateAnchorRange on a repeated block', () => {
     return list!;
   }
 
-  test('picks the copy the anchor’s section names, and the first without one', () => {
+  test('picks the copy the anchor’s section names, and the first without one', async () => {
     const [first, second] = occurrencesOf(SOURCE, '"Go on."');
     expect(
-      locateAnchorRange(doc, SOURCE, second!.id, null, {
+      await locateAnchorRange(doc, SOURCE, second!.id, null, {
         headingPath: ['Book', 'Chapter 7'],
         sectionIndexPath: second!.sectionIndexPath,
       }),
     ).toMatchObject({ start: second!.start, end: second!.end });
-    expect(locateAnchorRange(doc, SOURCE, second!.id, null, null)).toMatchObject({
+    expect(await locateAnchorRange(doc, SOURCE, second!.id, null, null)).toMatchObject({
       start: first!.start,
       end: first!.end,
     });
   });
 
-  test('a span ends at the first copy of its end id after the start', () => {
+  test('a span ends at the first copy of its end id after the start', async () => {
     const md = 'Alpha.\n\n"Go on."\n\nBeta.\n\n"Go on."\n\nGamma.\n';
     const goOn = occurrencesOf(md, '"Go on."');
     const [beta] = occurrencesOf(md, 'Beta.');
-    const forwards = locateAnchorRange(doc, md, beta!.id, goOn[0]!.id, null);
+    const forwards = await locateAnchorRange(doc, md, beta!.id, goOn[0]!.id, null);
     expect(md.slice(forwards!.start, forwards!.end)).toBe('Beta.\n\n"Go on."');
 
     // The same span with its endpoints the other way round: the section
     // names the second copy as the start, and the end is the copy of
     // Beta nearest to it.
-    const backwards = locateAnchorRange(doc, md, goOn[0]!.id, beta!.id, {
+    const backwards = await locateAnchorRange(doc, md, goOn[0]!.id, beta!.id, {
       headingPath: [],
       sectionIndexPath: goOn[1]!.sectionIndexPath,
     });

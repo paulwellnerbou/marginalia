@@ -69,6 +69,7 @@ function iconSvg(variant: Variant): string {
       : '';
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Marginalia</title>
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="${COLOR.tileFrom}"/>

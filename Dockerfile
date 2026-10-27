@@ -1,4 +1,4 @@
-FROM oven/bun:1.3.13-debian AS builder
+FROM oven/bun:1.4.4-debian AS builder
 WORKDIR /app
 
 # Skip the Chromium auto-download triggered by Playwright's postinstall —
@@ -41,10 +41,10 @@ FROM rust:1.95-slim-bookworm AS mermaid-builder
 # `--locked` consumes the Cargo.lock published with the crate so the
 # binary is reproducible; bumping ${MMDR_VERSION} is the only knob
 # that should change the resulting bytes.
-ARG MMDR_VERSION=0.2.2
+ARG MMDR_VERSION=0.3.1
 RUN cargo install mermaid-rs-renderer --version ${MMDR_VERSION} --locked --root /out
 
-FROM oven/bun:1.3.13-debian AS runner
+FROM oven/bun:1.4.4-debian AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
@@ -96,6 +96,8 @@ COPY --from=builder /app/apps/server/node_modules/mermaid/dist/mermaid.min.js \
 # can validate against the lockfile; production install below skips
 # all dev deps.
 COPY --from=builder /app/package.json /app/bun.lock ./
+# The patchedDependencies in package.json, applied by the install below.
+COPY --from=builder /app/patches ./patches
 COPY --from=builder /app/apps ./apps
 COPY --from=builder /app/packages ./packages
 COPY deploy-scripts/container-entrypoint.sh /app/entrypoint.sh
@@ -120,6 +122,10 @@ RUN bun install --frozen-lockfile --production \
             /app/node_modules/.bun/dagre* \
             /app/node_modules/.bun/d3* \
             /app/node_modules/.bun/langium@* \
+            /app/node_modules/.bun/chevrotain* \
+            /app/node_modules/.bun/@chevrotain* \
+            /app/node_modules/.bun/es-toolkit@* \
+            /app/node_modules/.bun/lodash-es@* \
             /app/node_modules/.bun/elkjs@* \
             /app/node_modules/.bun/katex@*
 
