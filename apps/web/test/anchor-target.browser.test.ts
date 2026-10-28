@@ -10,6 +10,7 @@ import type {
 } from '../src/lib/anchor-target.js';
 import type {
   blockAnchorSection,
+  captureSelection,
   collectTopLevelBlocks,
   sectionContextsOf,
 } from '../src/lib/selection.js';
@@ -21,6 +22,7 @@ interface AnchorTargetApi {
   collectTopLevelBlocks: typeof collectTopLevelBlocks;
   sectionContextsOf: typeof sectionContextsOf;
   blockAnchorSection: typeof blockAnchorSection;
+  captureSelection: typeof captureSelection;
 }
 
 // Which element an anchor lands on is decided by walking the live DOM —
@@ -272,6 +274,50 @@ describe.if(process.env.MARGINALIA_TEST_PROFILE === 'chromium')(
         return resolveAnchorElement(root, 'list-1', 'beta', null)?.dataset.subblock ?? null;
       });
       expect(chosen).toBe('li-b');
+    });
+
+    test('a selected word anchors where it was selected, not at an earlier copy', async () => {
+      // "he" also sits inside "Then" just before the line break, and once
+      // more after a run of spaces.
+      const anchors = await page.evaluate(() => {
+        const { captureSelection } = (window as unknown as { anchorTarget: AnchorTargetApi })
+          .anchorTarget;
+        const root = document.getElementById('sel') as HTMLElement;
+        const p = root.querySelector('p') as HTMLElement;
+        const select = (node: Node, start: number, end: number) => {
+          const range = document.createRange();
+          range.setStart(node, start);
+          range.setEnd(node, end);
+          const sel = window.getSelection()!;
+          sel.removeAllRanges();
+          sel.addRange(range);
+          const a = captureSelection(root);
+          sel.removeAllRanges();
+          return (
+            a && { quote: a.quote, start: a.start_offset, end: a.end_offset, prefix: a.prefix }
+          );
+        };
+        const first = p.firstChild as Text;
+        const last = p.lastChild as Text;
+        const lineStart = first.data.indexOf('\nhe') + 1;
+        const secondHe = last.data.lastIndexOf('he');
+        return {
+          lineStart: select(first, lineStart, lineStart + 2),
+          withLeadingSpace: select(first, lineStart - 1, lineStart + 2),
+          afterSpaces: select(last, secondHe, secondHe + 2),
+          text: p.textContent!.replace(/\s+/g, ' ').trim(),
+        };
+      });
+      const lineHe = anchors.text.indexOf(' he ') + 1;
+      expect(anchors.lineStart).toEqual({
+        quote: 'he',
+        start: lineHe,
+        end: lineHe + 2,
+        prefix: 'she catches herself. Then ',
+      });
+      expect(anchors.withLeadingSpace?.start).toBe(lineHe);
+      const lastHe = anchors.text.lastIndexOf(' he ') + 1;
+      expect(anchors.afterSpaces).toMatchObject({ quote: 'he', start: lastHe, end: lastHe + 2 });
     });
   },
 );
