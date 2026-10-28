@@ -1,6 +1,7 @@
 import { findAnchorBlock, resolveAnchorElement } from '../../src/lib/anchor-target.js';
 import {
   blockAnchorSection,
+  captureSelection,
   collectTopLevelBlocks,
   sectionContextsOf,
 } from '../../src/lib/selection.js';
@@ -29,6 +30,10 @@ document.body.innerHTML = `
       <ul data-block="list-1"><li data-subblock="li-a">alpha</li><li data-subblock="li-b">beta</li></ul>
     </div>
   </div>
+</article>
+<article class="marginalia" id="sel">
+  <p data-block="p-then">she catches herself. Then
+he licks <em>her</em> ear, and   he smiles.</p>
 </article>`;
 
 Object.assign(window, {
@@ -38,5 +43,6 @@ Object.assign(window, {
     collectTopLevelBlocks,
     sectionContextsOf,
     blockAnchorSection,
+    captureSelection,
   },
 });

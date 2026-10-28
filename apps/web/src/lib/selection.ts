@@ -164,27 +164,35 @@ function sliceBlock(el: HTMLElement, range: Range): BlockSlice | null {
   }
   if (clamped.collapsed) return null;
 
-  const quote = normalizeWs(selectedTextOf(el, clamped));
+  const selectedRaw = selectedTextOf(el, clamped);
+  const quote = normalizeWs(selectedRaw);
   if (!quote) return null;
 
   const blockText = blockTextOf(el);
 
-  // DOM offsets are per-text-node; convert to offsets within the block's
-  // normalized text by measuring the length of the un-selected prefix.
+  // The quote starts where the normalized text before it ends, counting the
+  // whitespace the selection opens with (the quote trimmed it off). Searching
+  // for the quote near the raw offset instead finds an earlier copy of a
+  // short one: selecting "he" in "Then he" would anchor inside "Then".
   const preRange = document.createRange();
   preRange.selectNodeContents(el);
   preRange.setEnd(clamped.startContainer, clamped.startOffset);
-  const rawStart = selectedTextOf(el, preRange).length;
-
-  // Offsets into the normalized string aren't exactly `rawStart` because
-  // whitespace was collapsed, but we can approximate by locating `quote`
-  // in the normalized block text starting near rawStart.
-  const approxIdx = Math.max(0, rawStart - 10);
-  let startOffset = blockText.indexOf(quote, approxIdx);
-  if (startOffset < 0) startOffset = blockText.indexOf(quote);
-  if (startOffset < 0) startOffset = 0;
+  const leadingWs = /^\s*/u.exec(selectedRaw)?.[0] ?? '';
+  const before = (selectedTextOf(el, preRange) + leadingWs).replace(/\s+/gu, ' ').trimStart();
+  const startOffset = blockText.startsWith(quote, before.length)
+    ? before.length
+    : nearestIndexOf(blockText, quote, before.length);
 
   return { el, blockId, quote, startOffset, blockText };
+}
+
+/** The occurrence of `needle` in `text` closest to `near`, or 0 if none. */
+function nearestIndexOf(text: string, needle: string, near: number): number {
+  let best = -1;
+  for (let idx = text.indexOf(needle); idx >= 0; idx = text.indexOf(needle, idx + 1)) {
+    if (best < 0 || Math.abs(idx - near) < Math.abs(best - near)) best = idx;
+  }
+  return Math.max(best, 0);
 }
 
 /**
