@@ -9,6 +9,11 @@ import { isInjectedChromeText } from '../lib/block-text.js';
 import { type BookmarkMarkerSpec, syncBookmarkMarkers } from '../lib/bookmark-markers.js';
 import { type DocMetaLinks, installDocMetaFolds } from '../lib/doc-meta-fold.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
+import {
+  type HighlightRange,
+  type MergedHighlightRange,
+  mergeRanges,
+} from '../lib/highlight-ranges.js';
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { revealElement } from '../lib/paged-reading.js';
 import { collectTopLevelBlocks } from '../lib/selection.js';
@@ -752,7 +757,7 @@ function patchChangedBlocks(root: HTMLElement, nextHtml: string): HTMLElement[] 
 
 /** How one block's highlights are painted, and the signature that says so. */
 interface BlockHighlightPlan {
-  ranges: HighlightRange[];
+  ranges: MergedHighlightRange[];
   /** Block-scope marking (whole-block comment), or null for range scope. */
   blockScope: { threadId: string | null; interactive: boolean } | null;
   signature: string;
@@ -847,7 +852,7 @@ function paintBlockHighlights(block: HTMLElement, plan: BlockHighlightPlan): voi
   const textNodes = collectTextNodes(block, isInjectedChromeText);
   for (let i = plan.ranges.length - 1; i >= 0; i--) {
     const range = plan.ranges[i]!;
-    wrapRangeAcrossTextNodes(textNodes, range.rawStart, range.rawEnd, range.threads);
+    wrapRangeAcrossTextNodes(textNodes, range);
   }
 }
 
@@ -973,11 +978,12 @@ function planCommentHighlights(
 }
 
 function planSignature(
-  ranges: HighlightRange[],
+  ranges: MergedHighlightRange[],
   blockScope: { threadId: string | null; interactive: boolean } | null,
 ): string {
   const parts = ranges.map(
-    (r) => `${r.rawStart}-${r.rawEnd}:${r.threads.map((t) => `${t.id}/${t.state}`).join(',')}`,
+    (r) =>
+      `${r.rawStart}-${r.rawEnd}${r.visible ? '' : '~'}:${r.threads.map((t) => `${t.id}/${t.state}`).join(',')}`,
   );
   if (blockScope) parts.push(`block:${blockScope.threadId ?? ''}/${blockScope.interactive}`);
   return parts.join('|');
@@ -1184,47 +1190,17 @@ function findTextNodeEntry(
   return textNodes[textNodes.length - 1] ?? null;
 }
 
-type RangeThread = { id: string; state: ThreadState };
-type HighlightRange = { rawStart: number; rawEnd: number; threads: RangeThread[] };
-
-function mergeRanges(ranges: HighlightRange[]): HighlightRange[] {
-  if (ranges.length <= 1) return ranges;
-  const sorted = [...ranges].sort((a, b) => a.rawStart - b.rawStart || a.rawEnd - b.rawEnd);
-  const merged: HighlightRange[] = [{ ...sorted[0]!, threads: [...sorted[0]!.threads] }];
-
-  for (let i = 1; i < sorted.length; i++) {
-    const next = sorted[i]!;
-    const prev = merged[merged.length - 1]!;
-    if (next.rawStart <= prev.rawEnd) {
-      prev.rawEnd = Math.max(prev.rawEnd, next.rawEnd);
-      const seen = new Set(prev.threads.map((t) => t.id));
-      for (const t of next.threads) {
-        if (!seen.has(t.id)) {
-          prev.threads.push(t);
-          seen.add(t.id);
-        }
-      }
-      continue;
-    }
-    merged.push({ ...next, threads: [...next.threads] });
-  }
-
-  return merged;
-}
-
 function wrapRangeAcrossTextNodes(
   textNodes: Array<{ node: Text; start: number; end: number }>,
-  rawStart: number,
-  rawEnd: number,
-  threads: RangeThread[],
+  range: MergedHighlightRange,
 ): void {
   for (let i = textNodes.length - 1; i >= 0; i--) {
     const entry = textNodes[i]!;
-    const segmentStart = Math.max(rawStart, entry.start);
-    const segmentEnd = Math.min(rawEnd, entry.end);
+    const segmentStart = Math.max(range.rawStart, entry.start);
+    const segmentEnd = Math.min(range.rawEnd, entry.end);
     if (segmentEnd <= segmentStart) continue;
 
-    wrapTextSlice(entry.node, segmentStart - entry.start, segmentEnd - entry.start, threads);
+    wrapTextSlice(entry.node, segmentStart - entry.start, segmentEnd - entry.start, range);
   }
 }
 
@@ -1248,7 +1224,7 @@ function wrapTextSlice(
   node: Text,
   startOffset: number,
   endOffset: number,
-  threads: RangeThread[],
+  { threads, visible }: MergedHighlightRange,
 ): void {
   let target = node;
   if (startOffset > 0) {
@@ -1264,10 +1240,7 @@ function wrapTextSlice(
   const mark = document.createElement('mark');
   mark.dataset.commentHighlight = 'true';
   const openThread = threads.find((t) => t.state === 'open');
-  // No threads = a pending/transient highlight (e.g. a fresh selection):
-  // treat as visible "open" so it isn't styled transparent.
-  const isVisuallyOpen = threads.length === 0 || openThread !== undefined;
-  mark.className = isVisuallyOpen ? 'comment-highlight' : 'comment-highlight-resolved';
+  mark.className = visible ? 'comment-highlight' : 'comment-highlight-resolved';
   if (threads.length > 0) {
     // Overlapping ranges merge into one mark; every covered thread must
     // stay findable for scroll-to-thread, not just the click target.
