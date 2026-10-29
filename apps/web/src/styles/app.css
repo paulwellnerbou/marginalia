@@ -3431,6 +3431,55 @@ button.primary:disabled {
   padding-bottom: 0.6rem;
 }
 
+/* A row growing into or shrinking out of the list. The 0fr↔1fr track
+   animates to the row's own height without measuring it, and the row's
+   bottom padding goes with it, so the gap closes too. Durations match
+   ROW_PRESENCE_MS in useRowPresence.tsx, whose timer removes the row. */
+.ic-list-presence[data-presence] {
+  display: grid;
+}
+.ic-list-presence[data-presence] > .ic-list-presence-clip {
+  min-height: 0;
+  /* The card's shadow and focus ring still reach sideways. */
+  overflow-x: visible;
+  overflow-y: clip;
+}
+.ic-list-presence[data-presence="enter"] {
+  animation: ic-list-row-enter 280ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+.ic-list-presence[data-presence="exit"] {
+  animation: ic-list-row-exit 280ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  pointer-events: none;
+}
+/* Fades lead on the way out and trail on the way in, so the card is never
+   seen squashed at full strength. */
+@keyframes ic-list-row-enter {
+  0% {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+  40% {
+    opacity: 0;
+  }
+  100% {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+}
+@keyframes ic-list-row-exit {
+  0% {
+    grid-template-rows: 1fr;
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+  100% {
+    grid-template-rows: 0fr;
+    opacity: 0;
+  }
+}
+
 /* One-line note that the TOC's section filter is narrowing this list. */
 .ic-list-section-filter-note {
   display: flex;
@@ -3635,6 +3684,17 @@ button.primary:disabled {
   border-bottom: 1px dashed var(--ui-border);
 }
 
+/* The space above each orphaned card lives inside its animated row, with
+   the section's gap taken back, so a card shrinking out takes its share
+   of the spacing with it. */
+.ic-list-orphans > .ic-list-presence {
+  margin-top: -0.6rem;
+}
+.ic-list-orphan-row {
+  display: flow-root;
+  padding-top: 0.6rem;
+}
+
 .ic-list-section-title {
   margin: 0;
   font-size: 0.78rem;
@@ -3653,6 +3713,17 @@ button.primary:disabled {
   text-align: center;
   color: var(--ui-fg-muted);
   font-size: 0.85rem;
+}
+/* Fades in where the last card has just shrunk away. */
+@media (prefers-reduced-motion: no-preference) {
+  .ic-list-empty[data-empty-state] {
+    animation: ic-list-empty-in 200ms ease-out both;
+  }
+}
+@keyframes ic-list-empty-in {
+  from {
+    opacity: 0;
+  }
 }
 
 /* ============================================================

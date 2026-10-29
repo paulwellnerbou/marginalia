@@ -158,6 +158,94 @@ describe.if(process.env.MARGINALIA_TEST_PROFILE === 'chromium')(
       await page.waitForSelector('[data-comment-thread-id="t119"]');
     });
 
+    /** Heights of `selector`'s first match, one per frame, for `ms`. */
+    async function sampleHeights(selector: string, ms: number): Promise<number[]> {
+      return page.evaluate(
+        ({ selector, ms }) =>
+          new Promise<number[]>((resolve) => {
+            const heights: number[] = [];
+            const start = performance.now();
+            const frame = () => {
+              const el = document.querySelector(selector);
+              heights.push(el ? el.getBoundingClientRect().height : 0);
+              if (performance.now() - start < ms) requestAnimationFrame(frame);
+              else resolve(heights);
+            };
+            requestAnimationFrame(frame);
+          }),
+        { selector, ms },
+      );
+    }
+
+    for (const count of [10, 120]) {
+      test(`a removed thread shrinks out of the list (${count} threads)`, async () => {
+        await open(`?count=${count}`);
+        // Latest first: the second row from the top, and the one below it.
+        const [gone, below] = [`t${count - 2}`, `t${count - 3}`];
+        const row = `.ic-list-presence:has([data-comment-thread-id="${gone}"])`;
+        const topOf = (id: string) =>
+          page
+            .locator(`[data-comment-thread-id="${id}"]`)
+            .evaluate((el) => el.getBoundingClientRect().top);
+        const full = await page.locator(row).evaluate((el) => el.getBoundingClientRect().height);
+        const belowTop = await topOf(below);
+        await update('remove', gone);
+        expect(await page.locator(row).getAttribute('data-presence')).toBe('exit');
+        const heights = await sampleHeights(row, 500);
+        // Shrinks through the heights in between rather than jumping.
+        expect(heights.some((h) => h > 5 && h < full - 5)).toBe(true);
+        for (let i = 1; i < heights.length; i++) {
+          expect(heights[i]).toBeLessThanOrEqual((heights[i - 1] ?? 0) + 0.5);
+        }
+        await page.waitForSelector(`[data-comment-thread-id="${gone}"]`, { state: 'detached' });
+        // The row below took its place, gap included.
+        expect(Math.abs(belowTop - full - (await topOf(below)))).toBeLessThan(1);
+      });
+    }
+
+    test('a removed orphan shrinks out of its section', async () => {
+      await open('?count=10&orphans=3');
+      const row = '.ic-list-orphans > .ic-list-presence:has([data-comment-thread-id="t1"])';
+      const rowsTop = () =>
+        page.locator('.ic-list-rows').evaluate((el) => el.getBoundingClientRect().top);
+      const full = await page.locator(row).evaluate((el) => el.getBoundingClientRect().height);
+      const before = await rowsTop();
+      await update('remove', 't1');
+      expect(await page.locator(row).getAttribute('data-presence')).toBe('exit');
+      const heights = await sampleHeights(row, 500);
+      expect(heights.some((h) => h > 5 && h < full - 5)).toBe(true);
+      await page.waitForSelector('[data-comment-thread-id="t1"]', { state: 'detached' });
+      // The card's share of the section's spacing went with it.
+      expect(Math.abs(before - full - (await rowsTop()))).toBeLessThan(1);
+    });
+
+    test('the empty state waits for the last card to leave', async () => {
+      await open('?count=1');
+      await update('remove', 't0');
+      expect(await page.locator('.ic-list-presence[data-presence="exit"]').count()).toBe(1);
+      expect(await page.locator('.ic-list-empty').count()).toBe(0);
+      await page.waitForSelector('[data-comment-thread-id="t0"]', { state: 'detached' });
+      await page.waitForSelector('.ic-list-empty');
+    });
+
+    test('a new thread grows into the list', async () => {
+      await open('?count=10');
+      await update('insert', 'new');
+      const row = '.ic-list-presence:has([data-comment-thread-id="new"])';
+      expect(await page.locator(row).getAttribute('data-presence')).toBe('enter');
+      const heights = await sampleHeights(row, 500);
+      const full = heights.at(-1) ?? 0;
+      expect(full).toBeGreaterThan(50);
+      expect(heights.some((h) => h > 5 && h < full - 5)).toBe(true);
+      expect(await page.locator(row).getAttribute('data-presence')).toBeNull();
+    });
+
+    test('a bulk removal swaps the list without animating', async () => {
+      await open('?count=120');
+      await update('shrink');
+      expect(await page.locator('.ic-list-presence[data-presence]').count()).toBe(0);
+    });
+
     test('crosses the windowing threshold as threads arrive, and clamps after removal', async () => {
       await open('?count=50');
       await scrollTo(1);
