@@ -49,6 +49,8 @@ function thread(i: number): Thread {
 
 const initialCount = Number(new URLSearchParams(location.search).get('count') ?? 120);
 const hookMode = new URLSearchParams(location.search).has('hook');
+/** The first this many threads lost their anchors, so they list as orphans. */
+const orphanCount = Number(new URLSearchParams(location.search).get('orphans') ?? 0);
 const noop = async () => {};
 const action = async () => ({ ok: true as const });
 const keys = Array.from({ length: 100 }, (_, i) => `t${i}`);
@@ -71,11 +73,17 @@ function HookList() {
 
 function ThreadList() {
   const [threads, setThreads] = useState(() =>
-    Array.from({ length: initialCount }, (_, i) => thread(i)),
+    Array.from(
+      { length: initialCount },
+      (_, i): Thread => (i < orphanCount ? { ...thread(i), link_status: 'orphaned' } : thread(i)),
+    ),
   );
   const [focus, setFocus] = useState<{ threadId: string; nonce: number } | null>(null);
   Object.assign(window, {
-    updateThreads(kind: 'append' | 'reply' | 'focus' | 'shrink' | 'proposal', id = 't90') {
+    updateThreads(
+      kind: 'append' | 'reply' | 'focus' | 'shrink' | 'proposal' | 'remove' | 'insert',
+      id = 't90',
+    ) {
       flushSync(() => {
         if (kind === 'focus') setFocus((prev) => ({ threadId: id, nonce: (prev?.nonce ?? 0) + 1 }));
         if (kind === 'append')
@@ -96,6 +104,12 @@ function ThreadList() {
             },
           ]);
         if (kind === 'shrink') setThreads((prev) => prev.slice(0, 65));
+        if (kind === 'remove') setThreads((prev) => prev.filter((t) => t.id !== id));
+        if (kind === 'insert') {
+          const t = thread(2000);
+          // Sorts right after t2, near the top of the list.
+          setThreads((prev) => [...prev, { ...t, id, anchor: { ...t.anchor, start_offset: 2 } }]);
+        }
         if (kind === 'reply')
           setThreads((prev) =>
             prev.map((t) => ({

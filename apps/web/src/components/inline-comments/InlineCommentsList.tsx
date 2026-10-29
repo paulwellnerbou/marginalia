@@ -49,6 +49,7 @@ import {
   type ThreadSortMode,
 } from './threadListPrefs.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
+import { PresenceRowFrame, useRowPresence } from './useRowPresence.js';
 import {
   DEFAULT_ROW_ESTIMATE,
   useIsomorphicLayoutEffect,
@@ -379,12 +380,26 @@ export function InlineCommentsList({
   const allCollapsed = threadIds.length > 0 && threadIds.every((id) => collapsed.has(id));
 
   /*
+   * Rows that leave the list — resolved under the open filter, deleted,
+   * un-bookmarked — shrink out of it, and new ones grow in. Leaving rows
+   * stay among the keys until they are gone, so the windowing keeps their
+   * height in its spacers while they animate. The first load and anything
+   * the reader changes wholesale swap the list without animating.
+   */
+  const presenceOptions = {
+    resetToken: `${listResetNonce}|${loading}`,
+    instantKey: revealedCardId,
+  };
+  const presenceRows = useRowPresence(visibleActive, presenceOptions);
+  const orphanRows = useRowPresence(visibleOrphans, presenceOptions);
+
+  /*
    * Only the cards near the viewport are rendered. A card is a heavy tree
    * — a dozen Radix controls each carrying their own context and effects —
    * so re-rendering a thousand of them is what made accepting a proposal
    * freeze the page long after the request had come back.
    */
-  const activeKeys = useMemo(() => visibleActive.map((item) => item.id), [visibleActive]);
+  const activeKeys = useMemo(() => presenceRows.map((row) => row.key), [presenceRows]);
   const win = useWindowedList({
     keys: activeKeys,
     estimateHeight: DEFAULT_ROW_ESTIMATE,
@@ -406,8 +421,8 @@ export function InlineCommentsList({
     resetToken: listResetNonce,
   });
   const windowedActive = useMemo(
-    () => visibleActive.slice(win.start, win.end),
-    [visibleActive, win.start, win.end],
+    () => presenceRows.slice(win.start, win.end),
+    [presenceRows, win.start, win.end],
   );
 
   const [focusedId, setFocusedId] = useState<string | null>(null);
@@ -760,7 +775,7 @@ export function InlineCommentsList({
         </div>
       )}
 
-      {visibleOrphans.length > 0 && (
+      {orphanRows.length > 0 && (
         <section className="ic-list-orphans">
           <h4 className="ic-list-section-title">
             {bookmarks ? 'Orphaned bookmarks' : 'Orphaned discussions'}
@@ -770,7 +785,11 @@ export function InlineCommentsList({
               ? 'The passages these point to could not be matched to the current document.'
               : 'These comments or proposed changes could not be matched to the current document.'}
           </p>
-          {visibleOrphans.map(renderItem)}
+          {orphanRows.map((row) => (
+            <PresenceRowFrame key={row.key} phase={row.phase}>
+              <div className="ic-list-orphan-row">{renderItem(row.item)}</div>
+            </PresenceRowFrame>
+          ))}
         </section>
       )}
 
@@ -779,8 +798,10 @@ export function InlineCommentsList({
           <span className="ic-spinner" aria-hidden="true" /> Loading threads…
         </div>
       ) : (
-        visibleCount === 0 && (
-          <div className="ic-list-empty">
+        // Waits for the last card to finish leaving, rather than showing up
+        // above it while it shrinks.
+        presenceRows.length + orphanRows.length === 0 && (
+          <div className="ic-list-empty" data-empty-state="">
             {bookmarks
               ? bookmarksEmptyMessage(searchNeedle !== '', sectionFilterCount)
               : threadListEmptyMessage({
@@ -797,10 +818,15 @@ export function InlineCommentsList({
 
       <div ref={rowsRef} className="ic-list-rows">
         {win.padTop > 0 && <div style={{ height: win.padTop }} aria-hidden="true" />}
-        {windowedActive.map((item) => (
-          <div key={item.id} ref={win.measure(item.id)} className="ic-list-row">
-            {renderItem(item)}
-          </div>
+        {/* The animation clips the wrapper around the measured row, so the
+            windowing never sees a row's height change mid-animation and
+            does not re-render the list on every frame of it. */}
+        {windowedActive.map((row) => (
+          <PresenceRowFrame key={row.key} phase={row.phase}>
+            <div ref={win.measure(row.key)} className="ic-list-row">
+              {renderItem(row.item)}
+            </div>
+          </PresenceRowFrame>
         ))}
         {win.padBottom > 0 && <div style={{ height: win.padBottom }} aria-hidden="true" />}
       </div>
