@@ -501,11 +501,14 @@ export function InlineCommentsList({
 
   const refIndex = useMemo(() => threadRefIndex(threads), [threads]);
 
-  /** Jump to a linked thread by scrolling to its anchor, which focuses it. */
+  /**
+   * Jump to a linked thread by scrolling to its anchor, which focuses it.
+   * Same target as the card's own jump, section included (see `onJump`).
+   */
   const focusLinked = useCallback(
     (target: Thread) => {
       const blockId = target.anchor.block_id;
-      if (blockId) onScrollToAnchor(blockId, target.anchor.quote, target.id);
+      if (blockId) onScrollToAnchor(blockId, target.anchor.quote, target.id, 0, target.anchor);
     },
     [onScrollToAnchor],
   );
