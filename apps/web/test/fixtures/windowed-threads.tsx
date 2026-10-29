@@ -105,11 +105,8 @@ function ThreadList() {
           ]);
         if (kind === 'shrink') setThreads((prev) => prev.slice(0, 65));
         if (kind === 'remove') setThreads((prev) => prev.filter((t) => t.id !== id));
-        if (kind === 'insert') {
-          const t = thread(2000);
-          // Sorts right after t2, near the top of the list.
-          setThreads((prev) => [...prev, { ...t, id, anchor: { ...t.anchor, start_offset: 2 } }]);
-        }
+        // The newest activity, so it lists first under the default latest-first sort.
+        if (kind === 'insert') setThreads((prev) => [...prev, { ...thread(2000), id }]);
         if (kind === 'reply')
           setThreads((prev) =>
             prev.map((t) => ({
