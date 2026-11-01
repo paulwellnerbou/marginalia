@@ -304,7 +304,7 @@ const beautifulTokens: ThemeTokens = {
   colors: {
     fg: '#1a1712',
     fgMuted: '#736a5c',
-    bg: '#fbf8f1',
+    bg: '#fbf8f2',
     accent: '#1f3864',
     accentMuted: '#c9d1e0',
     border: '#e2dccd',
@@ -349,7 +349,7 @@ const bookTokens: ThemeTokens = {
   colors: {
     fg: '#1a1915',
     fgMuted: '#6a655a',
-    bg: '#fbf9f4',
+    bg: '#fbf9f5',
     accent: '#3a2c1e',
     accentMuted: '#c9b99a',
     border: '#d9cfb8',
