@@ -102,6 +102,7 @@ export function scopeHtmlCss(sources: readonly string[], fontLinks: readonly str
   // before renaming any reference.
   const renames = globalNameRenames(roots, warnings);
 
+  const printGrids = singleColumnGridSelectors(roots);
   const bodies: string[] = [];
   for (const root of roots) {
     root.walkAtRules('import', (rule) => {
@@ -125,7 +126,7 @@ export function scopeHtmlCss(sources: readonly string[], fontLinks: readonly str
     bodies.push(root.toString());
   }
 
-  const css = [...imports, BASE_CSS, ...bodies].join('\n');
+  const css = [...imports, BASE_CSS, ...bodies, printGridOverride(printGrids)].join('\n');
   return { css: escapeStyleText(css), warnings };
 }
 
@@ -195,6 +196,54 @@ function renameIdents(value: string, names: Map<string, string>): string {
   return value.replace(/("[^"]*"|'[^']*')|(-?[A-Za-z_][\w-]*)/g, (m, str: string | undefined) =>
     str ? m : (names.get(m) ?? m),
   );
+}
+
+/**
+ * Grids that set no columns: a stack of blocks laid out as a grid only
+ * for `gap`. Chromium fragments a grid badly across printed pages — an
+ * item that breaks (a long table) keeps its first-page height and runs
+ * over the items after it — so in print these become flex columns, which
+ * keep the gap and break cleanly. Grids with columns stay grids.
+ *
+ * Read before scoping, so selectors compare as the page wrote them.
+ */
+function singleColumnGridSelectors(roots: readonly postcss.Root[]): string[] {
+  const grids = new Set<string>();
+  const withColumns = new Set<string>();
+  for (const root of roots) {
+    root.walkRules((rule) => {
+      if (insidePrintMedia(rule) || rule.parent?.type === 'rule') return;
+      for (const node of rule.nodes) {
+        if (node.type !== 'decl') continue;
+        const prop = node.prop.toLowerCase();
+        if (prop === 'display' && /^(inline-)?grid\b/i.test(node.value.trim())) {
+          grids.add(rule.selector);
+        } else if (/^grid(-template(-columns|-areas)?)?$/.test(prop) || prop === 'grid-auto-flow') {
+          withColumns.add(rule.selector);
+        }
+      }
+    });
+  }
+  return [...grids].filter((sel) => !withColumns.has(sel));
+}
+
+function insidePrintMedia(node: postcss.Node): boolean {
+  for (let p = node.parent; p; p = p.parent) {
+    if (
+      p.type === 'atrule' &&
+      (p as AtRule).name.toLowerCase() === 'media' &&
+      /\bprint\b/i.test((p as AtRule).params)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function printGridOverride(selectors: readonly string[]): string {
+  if (selectors.length === 0) return '';
+  const scoped = selectors.map((sel) => scopeSelectorList(sel, null)).join(', ');
+  return `@media print{${scoped}{display:flex;flex-direction:column;align-items:stretch;}}`;
 }
 
 /** Strip what an inline `style` attribute must not carry. */

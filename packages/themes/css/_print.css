@@ -59,12 +59,10 @@
     page-break-inside: avoid;
   }
 
-  /* Keep block-level content together when it fits on a page. */
-  .marginalia pre,
-  .marginalia blockquote,
-  .marginalia table,
-  .marginalia div.mermaid,
-  .marginalia figure {
+  /* Keep block-level content together when it fits on a page. Not in an
+     HTML page (`.mg-html-root`): its own CSS decides, and a long table
+     there would jump to a fresh page and split anyway, leaving a gap. */
+  .marginalia :is(pre, blockquote, table, div.mermaid, figure):not(.mg-html-root *) {
     break-inside: avoid-page;
     page-break-inside: avoid;
   }

@@ -323,3 +323,21 @@ describe('HTML documents: review fixes', () => {
     expect(warnings).toHaveLength(1);
   });
 });
+
+describe('HTML documents: print', () => {
+  test('grids without columns print as flex columns; grids with columns stay', () => {
+    const { css } = scopeHtmlCss(
+      [
+        '.col { display: grid; gap: 44px } section { display: grid; gap: 16px }',
+        '.facts { display: grid; grid-template-columns: repeat(2, 1fr) }',
+        '.cards { display: grid } .cards { grid-template-columns: 1fr 1fr }',
+        '@media print { .only-print { display: grid } }',
+      ],
+      [],
+    );
+    const print = css.slice(css.lastIndexOf('@media print{'));
+    expect(print).toBe(
+      '@media print{.mg-html-root .col, .mg-html-root section{display:flex;flex-direction:column;align-items:stretch;}}',
+    );
+  });
+});
