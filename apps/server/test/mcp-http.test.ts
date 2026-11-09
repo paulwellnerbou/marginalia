@@ -31,11 +31,13 @@ describe('hosted MCP endpoint', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  async function connect(query = ''): Promise<Client> {
+  async function connect(query = '', headers: Record<string, string> = {}): Promise<Client> {
     const client = new Client({ name: 'test', version: '0' });
     // The SDK's client transport declares `sessionId?: string`, which the
     // repo's exactOptionalPropertyTypes rejects against `Transport`.
-    const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp${query}`));
+    const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp${query}`), {
+      requestInit: { headers },
+    });
     await client.connect(transport as unknown as Parameters<Client['connect']>[0]);
     return client;
   }
@@ -533,6 +535,90 @@ describe('hosted MCP endpoint', () => {
     })) as { content: Array<{ text?: string }>; isError?: boolean };
     expect(failed.isError).toBe(true);
     expect(failed.content.map((c) => c.text).join('')).toContain('not in the user’s keyring');
+    await agent.close();
+  });
+
+  const OWNER = {
+    'content-type': 'application/json',
+    'x-marginalia-client': 'owner-client-0001',
+    'x-marginalia-client-name': 'Paul',
+  };
+
+  async function ownerDocInRing(): Promise<{
+    doc: { uid: string; admin_invite: { token: string } };
+    key: string;
+  }> {
+    const res = await fetch(`${baseUrl}/api/documents`, {
+      method: 'POST',
+      headers: OWNER,
+      body: JSON.stringify({ markdown: '# Ring\n\nAlpha.\n' }),
+    });
+    const doc = (await res.json()) as { uid: string; admin_invite: { token: string } };
+    const ringRes = await fetch(`${baseUrl}/api/keyrings`, {
+      method: 'POST',
+      headers: OWNER,
+      body: JSON.stringify({
+        docs: [{ doc_uid: doc.uid, invite_token: doc.admin_invite.token }],
+      }),
+    });
+    const ring = ((await ringRes.json()) as { token: string }).token;
+    const keyRes = await fetch(`${baseUrl}/api/keyrings/self/agents`, {
+      method: 'POST',
+      headers: { ...OWNER, 'x-marginalia-keyring': ring },
+      body: JSON.stringify({ display_name: 'Codex', role: 'collaborator' }),
+    });
+    return { doc, key: ((await keyRes.json()) as { key: string }).key };
+  }
+
+  test('a link handed to a keyed agent is not swapped for its own invite on a refusal', async () => {
+    const { doc, key } = await ownerDocInRing();
+    const editorRes = await fetch(`${baseUrl}/api/documents/${doc.uid}/invites`, {
+      method: 'POST',
+      headers: { ...OWNER, 'x-marginalia-invite': doc.admin_invite.token },
+      body: JSON.stringify({ kind: 'named', display_name: 'Codex', role: 'editor' }),
+    });
+    const editor = ((await editorRes.json()) as { invite: { token: string } }).invite.token;
+
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    expect(
+      await callText(agent, 'get_document', {
+        document: `${baseUrl}/d/${doc.uid}/${editor}`,
+        include_source: false,
+      }),
+    ).toContain('your role: editor');
+    const refused = (await agent.callTool({
+      name: 'create_invite',
+      arguments: { document: doc.uid, role: 'reader' },
+    })) as { isError?: boolean };
+    expect(refused.isError).toBe(true);
+    expect(
+      await callText(agent, 'get_document', { document: doc.uid, include_source: false }),
+    ).toContain('your role: editor');
+    await agent.close();
+  });
+
+  test('behind a trusted proxy, the public https origin is the one it knows', async () => {
+    http.stop(true);
+    await app.close();
+    app = await createApp(
+      loadConfig({ dataDir: dir, port: 0, webDir: join(dir, 'web'), trustedProxyHops: 1 }),
+    );
+    http = Bun.serve({ port: 0, fetch: app.hono.fetch, websocket: app.websocket });
+    baseUrl = `http://localhost:${http.port}`;
+    const { doc, key } = await ownerDocInRing();
+
+    const agent = await connect(`?key=${encodeURIComponent(key)}`, {
+      'x-forwarded-proto': 'https',
+      'x-forwarded-host': 'marginalia.example',
+    });
+    const listed = await callText(agent, 'list_documents');
+    expect(listed).toContain(`url: https://marginalia.example/d/${doc.uid}`);
+    expect(
+      await callText(agent, 'get_document', {
+        document: `https://marginalia.example/d/${doc.uid}`,
+        include_source: false,
+      }),
+    ).toContain('your role: collaborator');
     await agent.close();
   });
 

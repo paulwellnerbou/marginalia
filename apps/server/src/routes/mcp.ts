@@ -38,10 +38,10 @@ import { Hono } from 'hono';
  * here and unguessable, so one caller cannot address another's, which
  * makes a session as isolated as a separate stdio process.
  */
-export function mcpRouter(deps: { hono: Hono }): Hono {
+export function mcpRouter(deps: { hono: Hono; trustedProxyHops: number }): Hono {
   const r = new Hono();
   const sessions = new SessionStore();
-  r.all('/', async (c) => handleMcp(c, deps.hono, sessions));
+  r.all('/', async (c) => handleMcp(c, deps, sessions));
   return r;
 }
 
@@ -121,7 +121,11 @@ class SessionStore {
   }
 }
 
-async function handleMcp(c: Context, app: Hono, sessions: SessionStore): Promise<Response> {
+async function handleMcp(
+  c: Context,
+  deps: { hono: Hono; trustedProxyHops: number },
+  sessions: SessionStore,
+): Promise<Response> {
   const existingId = c.req.header(SESSION_HEADER);
   if (existingId) {
     const session = sessions.get(existingId);
@@ -160,7 +164,7 @@ async function handleMcp(c: Context, app: Hono, sessions: SessionStore): Promise
 
   // No session id: an initialize request, or a malformed one the
   // transport will reject on its own.
-  const { server, transport } = await buildSession(new URL(c.req.url), app);
+  const { server, transport } = await buildSession(publicUrl(c, deps.trustedProxyHops), deps.hono);
   let keep = false;
   try {
     await server.connect(transport);
@@ -323,6 +327,37 @@ async function buildSession(
   });
 
   return { server, transport };
+}
+
+/**
+ * The URL as the caller addressed it. Behind a TLS-terminating proxy the
+ * request arrives as http, and the agent compares the links it is handed
+ * against this origin, so only the forwarded scheme and host make an
+ * https document link count as this instance. Read only from proxies the
+ * deployment trusts, as `clientKey` does with the address.
+ */
+export function publicUrl(c: Context, trustedHops: number): URL {
+  const url = new URL(c.req.url);
+  if (trustedHops === 0) return url;
+  const vouched = (header: string): string | null => {
+    const values = (c.req.header(header) ?? '')
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+    return values[Math.max(0, values.length - trustedHops)] ?? null;
+  };
+  const forwardedProto = vouched('x-forwarded-proto');
+  const proto = forwardedProto === 'http' || forwardedProto === 'https' ? forwardedProto : null;
+  const own = url.protocol.slice(0, -1);
+  const scheme = proto ?? own;
+  // The request's own host carries the internal port, which the public
+  // origin must not keep once the scheme changes.
+  const host = vouched('x-forwarded-host') ?? (scheme !== own ? url.hostname : url.host);
+  try {
+    return new URL(`${url.pathname}${url.search}`, `${scheme}://${host}`);
+  } catch {
+    return url;
+  }
 }
 
 function readDisplayName(url: URL): string {

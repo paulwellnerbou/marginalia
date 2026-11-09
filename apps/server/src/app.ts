@@ -92,7 +92,7 @@ export async function createApp(config: ServerConfig): Promise<App> {
   hono.route('/api', agentKeysRouter({ db }));
   // Marginalia's own MCP endpoint. Mounted after the API routes because
   // it dispatches tool calls back through this same app.
-  hono.route('/mcp', mcpRouter({ hono }));
+  hono.route('/mcp', mcpRouter({ hono, trustedProxyHops: config.trustedProxyHops }));
   hono.get('*', async (c) => {
     const fileResponse = await serveWebAsset(config.webDir, c.req.path);
     return fileResponse ?? c.notFound();

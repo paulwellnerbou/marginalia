@@ -182,12 +182,13 @@ export function DeviceSyncPanel({
           <Flex gap="3" align="center" wrap="wrap" justify="between">
             <Text size="1" color="gray">
               Lost a device, or shared a code by mistake? Replacing the keyring disconnects every
-              device but this one. Your documents and their access links are unaffected.
+              device but this one and revokes its agent keys. Your documents and their access links
+              are unaffected.
             </Text>
             <Flex gap="2">
               <ArmedButton
                 label="Replace keyring"
-                confirmLabel="Disconnect other devices"
+                confirmLabel="Disconnect devices and agents"
                 color="amber"
                 icon={<UpdateIcon />}
                 onConfirm={rotate}

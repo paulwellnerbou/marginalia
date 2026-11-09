@@ -152,7 +152,8 @@ Three doors, and they are not the same door:
 - **Stop syncing here** clears `marginalia.keyring` and nothing else.
   Local, on purpose — the other devices are still using the ring.
 - **Replace keyring** rotates the token: this device keeps the ring, the
-  others fall off it. For a code shared by mistake or a lost device.
+  others fall off it, and its agent keys are revoked. For a code shared
+  by mistake or a lost device.
 - **Delete keyring** destroys it for everyone, including the server's
   copies of the invite tokens. Documents keep opening on each device
   from its own `localStorage`; only the syncing ends.
@@ -231,10 +232,17 @@ Revoking is what the indirection buys. **Revoke** on a key deletes every
 invite it was given, so the agent loses access wherever it cached them.
 The same happens per document when the ring forgets that document or
 stops holding its admin link, and for every key when the ring is
-deleted or swept. Rotating the ring keeps its keys: they are separate
-credentials and did not leak with the old token. Deleting one agent
+deleted, rotated or swept. Rotating revokes them because whoever held
+the old token could have minted a key of their own. Deleting one agent
 invite from a document's access panel removes that link only — the key
 mints a new one on next use; revoke the key to stop it.
+
+A device pushes the link it opened a document with, and an owner opening
+their own document through a reviewer's link must not demote the ring:
+while the ring holds a live admin link for a document, a lesser one does
+not replace it. If the ring's only link is dead — rotated on a device
+that has not synced since — the agent keeps an invite it already has but
+is not minted a new one until a synced device opens the document again.
 
 Documents the agent creates go into the ring under their admin link, so
 they show up on every device, and the agent then works on them with its
@@ -254,7 +262,8 @@ Used with the key (`X-Marginalia-Agent-Key`), by the MCP server:
 
 - `GET    /api/agent/self` — the name and role ceiling
 - `GET    /api/agent/documents` — the ring's documents, no tokens, with
-  the role the agent would get on each (null where it cannot)
+  the role the agent would get on each (null where it cannot) and
+  `link_stale` where the ring's only link no longer exists
 - `POST   /api/agent/documents/:uid/access` — this agent's invite on that
   document, minted on first use
 - `PUT    /api/agent/documents/:uid` — add a document's admin link to the
@@ -309,6 +318,12 @@ which cannot be forged at all: no header, no trusted hops, or a chain
 shorter than configured — where a real hop can't be told from a spoof.
 Behind a proxy that resolves to the proxy, one shared bucket, which is
 the safe direction; with no proxy it is the real client.
+
+The same count decides whether the hosted `/mcp` endpoint believes
+`X-Forwarded-Proto` and `X-Forwarded-Host`. Behind a TLS-terminating
+proxy the request arrives as `http`, and the endpoint needs the public
+`https` origin to recognise the document links an agent is handed as its
+own and to hand out working ones.
 
 Unset means 0, the safe answer for the bare `docker run` above, and
 garbage fails closed to 0 rather than becoming a trusted topology. You

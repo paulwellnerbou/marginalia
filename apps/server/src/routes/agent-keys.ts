@@ -11,8 +11,9 @@ import type {
   KeyringAgentRow,
   KeyringRow,
 } from '../db.js';
-import { newAgentId, newAgentKey, newInviteToken } from '../ids.js';
-import { readKeyringRow, touchKeyringIfStale, upsertKeyringDoc } from './keyrings.js';
+import { newAgentId, newAgentKey } from '../ids.js';
+import { createInviteRow } from './documents.js';
+import { readKeyringRow, safeJson, touchKeyringIfStale, upsertKeyringDoc } from './keyrings.js';
 
 /**
  * Agent keys — one MCP connection for a whole keyring.
@@ -209,6 +210,8 @@ interface AgentDocumentWire {
   updated_at: number;
   /** The role the agent gets here, or null when the ring holds no admin link for it. */
   role: InviteRole | null;
+  /** The ring's only links here no longer exist: rotated on a device that has not synced. */
+  link_stale: boolean;
 }
 
 /**
@@ -241,19 +244,24 @@ function agentDocuments(c: Context, db: Database) {
     password_hash: string | null;
     kind: string | null;
   }>;
-  // One admin link opens the whole folder, so a document is reachable
-  // when any entry for its gate is an admin link.
-  const adminGates = new Set(rows.filter((r) => r.kind === 'admin').map((r) => r.gate_uid));
+  // One admin link opens the whole folder, so coverage is per gate.
+  const kindsByGate = new Map<string, Array<string | null>>();
+  for (const r of rows)
+    kindsByGate.set(r.gate_uid, [...(kindsByGate.get(r.gate_uid) ?? []), r.kind]);
 
-  const docs: AgentDocumentWire[] = rows.map((r) => ({
-    doc_uid: r.doc_uid,
-    title: r.title,
-    format: r.format,
-    folder_uid: r.folder_uid,
-    password_protected: r.password_hash !== null,
-    updated_at: r.updated_at,
-    role: adminGates.has(r.gate_uid) ? caller.agent.role : null,
-  }));
+  const docs: AgentDocumentWire[] = rows.map((r) => {
+    const coverage = coverageOf(kindsByGate.get(r.gate_uid) ?? []);
+    return {
+      doc_uid: r.doc_uid,
+      title: r.title,
+      format: r.format,
+      folder_uid: r.folder_uid,
+      password_protected: r.password_hash !== null,
+      updated_at: r.updated_at,
+      role: coverage === 'admin' ? caller.agent.role : null,
+      link_stale: coverage === 'stale',
+    };
+  });
   c.header('Cache-Control', 'no-store');
   return c.json({ display_name: caller.agent.display_name, role: caller.agent.role, docs });
 }
@@ -285,32 +293,29 @@ function agentAccess(c: Context, db: Database) {
            JOIN invites i ON i.token = ai.invite_token AND i.doc_uid = ai.gate_uid
           WHERE ai.agent_id = ? AND ai.gate_uid = ?`,
       )
-      .get(agent.id, gateUid) as { invite_token: string } | undefined;
+      .get(agent.id, gateUid) as { invite_token: string } | null;
     if (mapped) return mapped.invite_token;
+    // A dead admin link proves nothing about who administers the document
+    // now, so it is good for keeping an invite but not for minting one.
+    if (coverage === 'stale') return null;
 
-    const fresh = newInviteToken();
-    const now = Date.now();
-    db.prepare(
-      `INSERT INTO invites
-         (token, doc_uid, display_name, role, kind, note, created_at, created_by_name)
-       VALUES (?, ?, ?, ?, 'named', ?, ?, ?)`,
-    ).run(
-      fresh,
-      gateUid,
-      agent.display_name,
-      agent.role,
-      AGENT_INVITE_NOTE,
-      now,
-      caller.ring.display_name,
-    );
+    const invite = createInviteRow(db, {
+      docUid: gateUid,
+      displayName: agent.display_name,
+      role: agent.role,
+      kind: 'named',
+      note: AGENT_INVITE_NOTE,
+      createdByName: caller.ring.display_name,
+    });
     db.prepare(
       `INSERT INTO keyring_agent_invites (agent_id, gate_uid, invite_token, created_at)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(agent_id, gate_uid)
          DO UPDATE SET invite_token = excluded.invite_token, created_at = excluded.created_at`,
-    ).run(agent.id, gateUid, fresh, now);
-    return fresh;
+    ).run(agent.id, gateUid, invite.token, invite.created_at);
+    return invite.token;
   })();
+  if (!token) return c.json({ error: 'keyring-link-stale' }, 409);
 
   const role = (
     db.prepare('SELECT role FROM invites WHERE token = ?').get(token) as { role: InviteRole }
@@ -350,12 +355,14 @@ async function agentAddDocument(c: Context, db: Database) {
 
 // --- lifecycle --------------------------------------------------------
 
-/** Whether a ring can delegate a gate: it holds an admin link, some other link, or none. */
-function ringCoverage(
-  db: Database,
-  ringToken: string,
-  gateUid: string,
-): 'admin' | 'not-admin' | 'none' {
+type RingCoverage = 'admin' | 'stale' | 'not-admin' | 'none';
+
+/**
+ * What a ring holds for a gate: a live admin link, only links that no
+ * longer exist (rotated on a device that has not synced since), some
+ * other live link, or nothing.
+ */
+function ringCoverage(db: Database, ringToken: string, gateUid: string): RingCoverage {
   const rows = db
     .prepare(
       `SELECT i.kind FROM keyring_docs kd
@@ -364,8 +371,13 @@ function ringCoverage(
         WHERE kd.keyring_token = ? AND COALESCE(d.folder_uid, d.uid) = ?`,
     )
     .all(gateUid, ringToken, gateUid) as Array<{ kind: string | null }>;
-  if (rows.length === 0) return 'none';
-  return rows.some((r) => r.kind === 'admin') ? 'admin' : 'not-admin';
+  return coverageOf(rows.map((r) => r.kind));
+}
+
+function coverageOf(kinds: Array<string | null>): RingCoverage {
+  if (kinds.length === 0) return 'none';
+  if (kinds.includes('admin')) return 'admin';
+  return kinds.every((k) => k === null) ? 'stale' : 'not-admin';
 }
 
 function deleteAgentInvite(db: Database, inviteToken: string): void {
@@ -418,14 +430,4 @@ export function revokeUncoveredAgentInvites(db: Database, ringToken: string, doc
       );
     }
   })();
-}
-
-async function safeJson(c: Context): Promise<Record<string, unknown> | null> {
-  try {
-    const body = (await c.req.json()) as unknown;
-    if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
-    return body as Record<string, unknown>;
-  } catch {
-    return null;
-  }
 }

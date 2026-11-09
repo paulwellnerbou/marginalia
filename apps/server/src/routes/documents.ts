@@ -3311,7 +3311,7 @@ async function rotateAdminInvite(c: Context, deps: AppDeps) {
   });
 }
 
-function createInviteRow(
+export function createInviteRow(
   db: Database,
   opts: {
     docUid: string;

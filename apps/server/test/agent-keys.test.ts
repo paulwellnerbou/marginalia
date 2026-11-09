@@ -246,23 +246,91 @@ describe('keyring agent keys', () => {
     expect((await access(key, doc.uid)).status).toBe(401);
   });
 
-  test('deleting the ring revokes its agents; rotating it keeps them', async () => {
+  test('deleting the ring revokes its agents', async () => {
     const doc = await upload();
     const token = await ringWith(doc);
     const { key } = await mintKey(token);
+    const granted = ((await (await access(key, doc.uid)).json()) as { invite_token: string })
+      .invite_token;
+    expect(await roleWith(doc.uid, granted)).toBe('collaborator');
+
+    await call('/api/keyrings/self', { method: 'DELETE', headers: ring(token) });
+    expect(await roleWith(doc.uid, granted)).toBe('http-401');
+    expect((await access(key, doc.uid)).status).toBe(401);
+  });
+
+  test('rotating the ring revokes its agents, which the old token could have minted', async () => {
+    const doc = await upload();
+    const token = await ringWith(doc);
+    const { key } = await mintKey(token);
+    const granted = ((await (await access(key, doc.uid)).json()) as { invite_token: string })
+      .invite_token;
 
     const rotated = await call('/api/keyrings/self/rotate', {
       method: 'POST',
       headers: ring(token),
     });
     const fresh = ((await rotated.json()) as { token: string }).token;
-    const granted = ((await (await access(key, doc.uid)).json()) as { invite_token: string })
-      .invite_token;
-    expect(await roleWith(doc.uid, granted)).toBe('collaborator');
-
-    await call('/api/keyrings/self', { method: 'DELETE', headers: ring(fresh) });
     expect(await roleWith(doc.uid, granted)).toBe('http-401');
     expect((await access(key, doc.uid)).status).toBe(401);
+    const left = await call('/api/keyrings/self/agents', { headers: ring(fresh) });
+    expect(((await left.json()) as { agents: unknown[] }).agents).toEqual([]);
+  });
+
+  test('opening a document through a lesser link keeps the ring’s admin link', async () => {
+    const doc = await upload();
+    const token = await ringWith(doc);
+    const { key } = await mintKey(token);
+    const granted = ((await (await access(key, doc.uid)).json()) as { invite_token: string })
+      .invite_token;
+    const reviewer = await call(`/api/documents/${doc.uid}/invites`, {
+      method: 'POST',
+      headers: headersFor(OWNER, { [INVITE_HEADER]: doc.admin_invite.token }),
+      body: { kind: 'named', display_name: 'Ann', role: 'collaborator' },
+    });
+    const reviewerToken = ((await reviewer.json()) as { invite: { token: string } }).invite.token;
+
+    const put = await call(`/api/keyrings/self/docs/${doc.uid}`, {
+      method: 'PUT',
+      headers: ring(token),
+      body: { invite_token: reviewerToken },
+    });
+    expect(put.status).toBe(200);
+    const pulled = (await (await call('/api/keyrings/self', { headers: ring(token) })).json()) as {
+      docs: Array<{ invite_token: string }>;
+    };
+    expect(pulled.docs.map((d) => d.invite_token)).toEqual([doc.admin_invite.token]);
+    expect(await roleWith(doc.uid, granted)).toBe('collaborator');
+  });
+
+  test('a rotated admin link the ring has not caught up with keeps invites but mints none', async () => {
+    const doc = await upload();
+    const token = await ringWith(doc);
+    const holder = await mintKey(token);
+    const granted = (
+      (await (await access(holder.key, doc.uid)).json()) as {
+        invite_token: string;
+      }
+    ).invite_token;
+    const newcomer = await mintKey(token, { display_name: 'Codex' });
+
+    // Rotated on a device that is not syncing: the ring still holds the dead link.
+    const rotated = await call(`/api/documents/${doc.uid}/invites/admin/rotate`, {
+      method: 'POST',
+      headers: headersFor(OWNER, { [INVITE_HEADER]: doc.admin_invite.token }),
+    });
+    expect(rotated.status).toBe(200);
+
+    const kept = (await (await access(holder.key, doc.uid)).json()) as { invite_token: string };
+    expect(kept.invite_token).toBe(granted);
+    const refused = await access(newcomer.key, doc.uid);
+    expect(refused.status).toBe(409);
+    expect(((await refused.json()) as { error: string }).error).toBe('keyring-link-stale');
+
+    const listed = (await (
+      await call('/api/agent/documents', { headers: agent(newcomer.key) })
+    ).json()) as { docs: Array<{ role: string | null; link_stale: boolean }> };
+    expect(listed.docs).toEqual([expect.objectContaining({ role: null, link_stale: true })]);
   });
 
   test('one admin link in the ring opens the rest of its folder', async () => {

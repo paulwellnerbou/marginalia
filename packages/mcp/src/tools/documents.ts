@@ -64,7 +64,7 @@ export function registerDocumentTools(
             : `known documents:\n${known
                 .map(
                   (d) =>
-                    `  ${d.uid}  ${d.baseUrl}  ${d.token ? 'access link stored' : 'no invite token (read-only)'}`,
+                    `  ${d.uid}  ${d.baseUrl}  ${d.token ? 'access link stored' : ctx.client.hasAgentKey && d.baseUrl === ctx.client.defaultBaseUrl ? 'no link stored — the agent key opens it if it is in the keyring' : 'no invite token (read-only)'}`,
                 )
                 .join('\n')}`;
         return text(lines.join('\n'), docs);
@@ -101,7 +101,7 @@ export function registerDocumentTools(
                 [
                   `${d.doc_uid}  ${d.title ?? '(untitled)'}`,
                   `  format: ${d.format}  updated: ${timestamp(d.updated_at)}`,
-                  `  role: ${d.role ?? 'none — not the user’s to delegate; ask for a link'}`,
+                  `  role: ${d.role ?? (d.link_stale ? 'none — the keyring’s link is out of date; ask the user to open it once on a synced device' : 'none — not the user’s to delegate; ask for a link')}`,
                   d.folder_uid ? `  folder: main document ${d.folder_uid}` : null,
                   d.password_protected ? '  password protected' : null,
                   `  url: ${base}/d/${d.doc_uid}`,
@@ -616,14 +616,14 @@ interface AgentDocumentsWire {
     password_protected: boolean;
     updated_at: number;
     role: string | null;
+    link_stale: boolean;
   }>;
 }
 
 /**
  * With an agent key, a document the agent creates goes into the user's
- * keyring, and the agent drops the admin link for its own invite: the
- * key's role is the ceiling the user chose, and the creator's admin link
- * would otherwise sit above it for as long as the session remembers it.
+ * keyring, so it reaches their devices; the client then works on it with
+ * the key's own invite.
  */
 async function fileInKeyring(
   ctx: ToolContext,
@@ -634,15 +634,7 @@ async function fileInKeyring(
     return { ok: false, note: null };
   }
   try {
-    await ctx.client.agentJson(`/api/agent/documents/${encodeURIComponent(ref.uid)}`, {
-      method: 'PUT',
-      body: { invite_token: ref.token, ...(title ? { title } : {}) },
-    });
-    const granted = await ctx.client.agentJson<{ invite_token: string }>(
-      `/api/agent/documents/${encodeURIComponent(ref.uid)}/access`,
-      { method: 'POST' },
-    );
-    ctx.client.rememberDocument({ ...ref, token: granted.invite_token });
+    await ctx.client.fileInKeyring(ref, title);
     return { ok: true };
   } catch (err) {
     return {

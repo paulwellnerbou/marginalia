@@ -130,7 +130,7 @@ export function touchKeyringIfStale(db: Database, ring: KeyringRow): void {
   if (Date.now() - ring.updated_at > KEYRING_TOUCH_INTERVAL_MS) touch(db, ring.token);
 }
 
-async function safeJson(c: Context): Promise<Record<string, unknown> | null> {
+export async function safeJson(c: Context): Promise<Record<string, unknown> | null> {
   try {
     const body = (await c.req.json()) as unknown;
     if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
@@ -271,9 +271,9 @@ async function deleteKeyring(c: Context, { db }: KeyringDeps) {
  * remove.
  *
  * Insert-then-move-then-delete, so the rows are never briefly ownerless.
- * Outstanding pairing codes die with the old token: a rotation is a
- * response to compromise, and a code minted before it should not still
- * open the door.
+ * Outstanding pairing codes and agent keys die with the old token: a
+ * rotation is a response to compromise, and whoever held the token could
+ * have minted either.
  */
 async function rotateKeyring(c: Context, { db }: KeyringDeps) {
   const ring = readKeyringRow(db, c);
@@ -290,12 +290,7 @@ async function rotateKeyring(c: Context, { db }: KeyringDeps) {
       fresh,
       ring.token,
     );
-    // Agent keys are their own credentials and did not leak with the ring
-    // token, so they follow the ring rather than dying with the old token.
-    db.prepare('UPDATE keyring_agents SET keyring_token = ? WHERE keyring_token = ?').run(
-      fresh,
-      ring.token,
-    );
+    revokeRingAgents(db, ring.token);
     db.prepare('DELETE FROM keyring_pairings WHERE keyring_token = ?').run(ring.token);
     db.prepare('DELETE FROM keyrings WHERE token = ?').run(ring.token);
   })();
@@ -322,15 +317,22 @@ async function putKeyringDoc(c: Context, { db }: KeyringDeps) {
   // authorization check — anyone holding the token could use it directly
   // — just a guard against junk rows that would 404 on another device
   // with no way to tell why.
-  if (!inviteMatchesDoc(db, docUid, inviteToken)) {
-    return c.json({ error: 'invite-not-found' }, 404);
-  }
+  const kind = inviteKind(db, docUid, inviteToken);
+  if (!kind) return c.json({ error: 'invite-not-found' }, 404);
+
+  // Owners open their own documents through a lesser link to see what a
+  // reviewer sees, and every view pushes the link it used. Taking that
+  // over a live admin link would demote every device and the ring's agents.
+  const held = db
+    .prepare('SELECT invite_token FROM keyring_docs WHERE keyring_token = ? AND doc_uid = ?')
+    .get(ring.token, docUid) as { invite_token: string } | null;
+  const keep = kind !== 'admin' && !!held && inviteKind(db, docUid, held.invite_token) === 'admin';
 
   const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) || null : null;
-  if (upsertKeyringDoc(db, ring.token, docUid, inviteToken, title) === 'full') {
+  const stored = keep && held ? held.invite_token : inviteToken;
+  if (upsertKeyringDoc(db, ring.token, docUid, stored, title) === 'full') {
     return c.json({ error: 'keyring-full' }, 409);
   }
-  // A lesser link replacing the ring's admin one ends what agents could do there.
   revokeUncoveredAgentInvites(db, ring.token, docUid);
 
   return c.json({ ok: true }, 200);
@@ -626,15 +628,19 @@ export function upsertKeyringDoc(
 }
 
 /** A folder document's invites are its main document's. */
-function inviteMatchesDoc(db: Database, docUid: string, inviteToken: string): boolean {
+function inviteKind(db: Database, docUid: string, inviteToken: string): string | null {
   const row = db
     .prepare(
-      `SELECT 1 FROM invites i
+      `SELECT i.kind FROM invites i
          JOIN documents d ON d.uid = ?
         WHERE i.token = ? AND i.doc_uid = COALESCE(d.folder_uid, d.uid)`,
     )
-    .get(docUid, inviteToken);
-  return !!row;
+    .get(docUid, inviteToken) as { kind: string } | undefined;
+  return row?.kind ?? null;
+}
+
+function inviteMatchesDoc(db: Database, docUid: string, inviteToken: string): boolean {
+  return inviteKind(db, docUid, inviteToken) !== null;
 }
 
 function parseDocSeeds(
