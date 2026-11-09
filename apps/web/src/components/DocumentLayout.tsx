@@ -564,7 +564,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   });
   const [blockWidth, setBlockWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(BLOCK_WIDTH_KEY));
-    return Number.isFinite(saved) && saved > 0 ? saved : 0;
+    return Number.isFinite(saved) && saved > maxWidth ? saved : 0;
   });
   // Not in pages: a page is exactly as wide as the screen, and the tap
   // zones that turn it sit in the gutters a wide block would grow into.
@@ -3378,7 +3378,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         defaultValue={DEFAULT_MAX_WIDTH}
         value={maxWidth}
         format={(v) => `${v}ch`}
-        onCommit={setMaxWidth}
+        onCommit={(next) => {
+          setMaxWidth(next);
+          // A block width the text has caught up with reads as "Text", so
+          // it must be off too, or narrowing the text again revives it.
+          setBlockWidth((b) => (b > next ? b : 0));
+        }}
       />
 
       <Text size="1" color="gray">
