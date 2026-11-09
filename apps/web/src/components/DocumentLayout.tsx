@@ -417,24 +417,27 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    * Overlaid, the two panes would stack on top of each other and bury
    * the document between them, so opening one puts the other away.
    */
+  // Full view hides the right pane without closing it, so nothing done in
+  // full view touches `commentsOpen`: the pane comes back as it was left.
   const openToc = useCallback(
     (next: boolean) => {
       setTocOpen(next);
-      if (next && overlayPanes) setCommentsOpen(false);
+      if (next && overlayPanes && !fullView) setCommentsOpen(false);
     },
-    [overlayPanes],
+    [overlayPanes, fullView],
   );
   const openComments = useCallback(
     (next: boolean) => {
+      if (fullView) return;
       setCommentsOpen(next);
       if (next && overlayPanes) setTocOpen(false);
     },
-    [overlayPanes],
+    [overlayPanes, fullView],
   );
   const closeOverlayPanes = useCallback(() => {
     setTocOpen(false);
-    setCommentsOpen(false);
-  }, []);
+    if (!fullView) setCommentsOpen(false);
+  }, [fullView]);
   const overlayPaneOpen = overlayPanes && (tocOpen || rightPaneOpen);
 
   // A pane that sat beside the document before a rotation would cover it

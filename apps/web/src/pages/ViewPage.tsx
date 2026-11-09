@@ -49,7 +49,7 @@ export function ViewPage() {
     // The query and fragment stay: a shared link carries `?view=full` and
     // `#comment-…` there, and both are read after this runs.
     window.history.replaceState(
-      {},
+      window.history.state,
       '',
       `/d/${uid}${window.location.search}${window.location.hash}`,
     );
