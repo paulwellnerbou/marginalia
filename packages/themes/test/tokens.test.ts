@@ -21,6 +21,7 @@ const EXPECTED_IDS = [
   'article',
   'technical',
   'serif-print',
+  'report',
 ];
 
 function mustGetThemeTokens(id: string): ThemeTokens {
@@ -120,6 +121,15 @@ describe('theme tokens', () => {
       expect(t.fonts.heading.families[0]).toBe('Open Sans');
       expectCssContains('asciidoc-article', 'Noto Serif');
       expectCssContains('asciidoc-article', '#toc > .sectlevel1 > li');
+    });
+
+    test('report uses Barlow with condensed headings and Plex Mono', () => {
+      const t = mustGetThemeTokens('report');
+      expect(t.fonts.body.families[0]).toBe('Barlow');
+      expect(t.fonts.heading.families[0]).toBe('Barlow Semi Condensed');
+      expect(t.fonts.mono.families[0]).toBe('IBM Plex Mono');
+      expectCssContains('report', t.colors.accent);
+      expectCssContains('report', t.colors.bg);
     });
   });
 

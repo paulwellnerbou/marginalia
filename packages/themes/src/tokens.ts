@@ -225,6 +225,18 @@ const DROID_SANS_MONO: FontStack = {
   families: ['Droid Sans Mono', 'DejaVu Sans Mono', 'SF Mono', 'Consolas', 'monospace'],
 };
 
+const BARLOW_BODY: FontStack = {
+  families: ['Barlow', 'Helvetica Neue', 'Arial', 'sans-serif'],
+};
+
+const BARLOW_CONDENSED_HEADING: FontStack = {
+  families: ['Barlow Semi Condensed', 'DIN Alternate', 'Arial Narrow', 'sans-serif'],
+};
+
+const IBM_PLEX_MONO: FontStack = {
+  families: ['IBM Plex Mono', 'ui-monospace', 'Menlo', 'monospace'],
+};
+
 // -- Per-theme tokens ---------------------------------------------------
 //
 // `basePt` is hand-picked per theme for print rendering (DOCX),
@@ -581,6 +593,48 @@ const serifPrintTokens: ThemeTokens = {
 
 // -- Public map & accessor ---------------------------------------------
 
+const reportTokens: ThemeTokens = {
+  id: 'report',
+  label: 'Report',
+  fonts: { body: BARLOW_BODY, heading: BARLOW_CONDENSED_HEADING, mono: IBM_PLEX_MONO },
+  fontSize: {
+    basePt: 11,
+    h1Em: 2.6,
+    h2Em: 1.55,
+    h3Em: 1.1,
+    h4Em: 0.8,
+    h5Em: 0.78,
+    h6Em: 0.78,
+  },
+  lineHeight: { body: 1.58, heading: 1.12 },
+  headingWeight: 600,
+  headingLetterSpacingEm: 0,
+  headingUppercase: {
+    h1: false,
+    h2: false,
+    h3: false,
+    h4: true,
+    h5: true,
+    h6: true,
+  },
+  colors: {
+    fg: '#23221f',
+    fgMuted: '#66625a',
+    bg: '#f6f5f1',
+    accent: '#6f7d12',
+    accentMuted: '#c9d38a',
+    border: '#dcd8ce',
+    codeBg: '#ffffff',
+    codeFg: '#23221f',
+    quoteBar: '#d6ec4e',
+    tableStripe: '#ffffff',
+  },
+  spacing: { blockEm: 1.05, headingTopEm: 2, listItemEm: 0.35 },
+  page: { size: 'A4', marginPt: 64 },
+  blockquote: { italic: false, hasBar: true },
+  table: { headerUnderline: true, zebra: false },
+};
+
 export const THEME_TOKENS: Readonly<Record<string, ThemeTokens>> = Object.freeze({
   default: defaultTokens,
   handbook: handbookTokens,
@@ -590,6 +644,7 @@ export const THEME_TOKENS: Readonly<Record<string, ThemeTokens>> = Object.freeze
   article: articleTokens,
   technical: technicalTokens,
   'serif-print': serifPrintTokens,
+  report: reportTokens,
 });
 
 export const THEME_IDS: readonly string[] = Object.freeze(Object.keys(THEME_TOKENS));

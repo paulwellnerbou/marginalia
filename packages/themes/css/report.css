@@ -1,0 +1,335 @@
+/*
+ * Marginalia — Report
+ *
+ * A briefing or assessment read on screen: condensed display headings,
+ * a plain grotesque body, monospace for figures and references, white
+ * cards on a warm grey page, one lime accent. The single ornament is a
+ * floor guide line with an arrowhead that opens every section.
+ */
+
+@import url("https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,400;0,500;0,600;1,400;1,600&family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
+@import "./default.css";
+
+.marginalia-theme,
+.marginalia {
+  --md-max-width: 76ch;
+
+  --md-font-body: "Barlow", "Helvetica Neue", Arial, sans-serif;
+  --md-font-heading: "Barlow Semi Condensed", "DIN Alternate", "Arial Narrow", sans-serif;
+  --md-font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+
+  --md-font-size: 17px;
+  --md-line-height: 1.58;
+  --md-heading-weight: 600;
+  --md-heading-line-height: 1.12;
+  --md-heading-letter-spacing: 0;
+
+  --md-space-block: 1.05em;
+  --md-space-heading-top: 2em;
+  --md-space-list-item: 0.35em;
+
+  --md-color-fg: #23221f;
+  --md-color-fg-muted: #66625a;
+  --md-color-bg: #f6f5f1;
+  --md-color-accent: #6f7d12;
+  --md-color-accent-muted: #c9d38a;
+  --md-color-border: #dcd8ce;
+  --md-color-code-bg: #ffffff;
+  --md-color-code-fg: #23221f;
+  --md-color-quote-bar: #d6ec4e;
+  /* Same as the card surface: rows are told apart by their rules, not by striping. */
+  --md-color-table-stripe: #ffffff;
+  --md-color-selection-bg: color-mix(in srgb, #d6ec4e 60%, transparent);
+  --md-color-block-bg: var(--report-surface);
+
+  --report-surface: #ffffff;
+  --report-bar: #2b2b2b;
+  --report-highlight: #d6ec4e;
+  --report-line: #c3ab7c;
+  --report-ok: #2f6b3a;
+  --report-warn: #8a5a00;
+  --report-crit: #9b2c22;
+  /* Line and arrowhead are separate mask layers so the arrow keeps its
+     shape however wide the column is; only the line stretches. */
+  --report-guide-up: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 960 28' preserveAspectRatio='none'%3E%3Cpath d='M0 22H520L560 6H960' fill='none' stroke='%23000' stroke-width='2' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E");
+  --report-guide-up-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 28'%3E%3Cpolygon points='0,1 15,6 0,11'/%3E%3C/svg%3E");
+  --report-guide-down: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 960 28' preserveAspectRatio='none'%3E%3Cpath d='M0 6H300L340 22H960' fill='none' stroke='%23000' stroke-width='2' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E");
+  --report-guide-down-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 28'%3E%3Cpolygon points='0,17 15,22 0,27'/%3E%3C/svg%3E");
+}
+
+.marginalia {
+  padding-top: 2.25rem;
+  padding-bottom: 5rem;
+}
+
+/* --- Headings ----------------------------------------------------- */
+
+.marginalia :is(h1, h2, h3, h4, h5, h6) {
+  text-wrap: balance;
+}
+
+.marginalia h1 {
+  font-size: 2.6em;
+  font-weight: 700;
+  line-height: 1.05;
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+/* The paragraph right under the title reads as the lede. */
+.marginalia > h1 + p,
+.marginalia > h1 + .doc-meta-header + p {
+  font-size: 1.1em;
+  color: var(--md-color-fg-muted);
+}
+
+.marginalia h2 {
+  font-size: 1.55em;
+  border-bottom: 0;
+  padding-bottom: 0;
+  margin-top: 3.1em;
+}
+.marginalia h3 {
+  font-size: 1.1em;
+  margin-top: 1.8em;
+}
+.marginalia h4 {
+  font-size: 0.8em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.marginalia :is(h5, h6) {
+  font-size: 0.78em;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--md-color-fg-muted);
+}
+
+/* --- Floor guide line --------------------------------------------- */
+
+/* Drawn in the heading's top margin rather than in its box, so the
+   heading anchor, block actions and comment marks keep lining up with
+   the text. */
+.marginalia h2::before,
+.marginalia hr {
+  background: var(--report-line);
+  -webkit-mask:
+    var(--report-guide-up) left top / calc(100% - 15px) 100% no-repeat,
+    var(--report-guide-up-arrow) right top / 15px 100% no-repeat;
+  mask:
+    var(--report-guide-up) left top / calc(100% - 15px) 100% no-repeat,
+    var(--report-guide-up-arrow) right top / 15px 100% no-repeat;
+}
+.marginalia h2::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(100% + 0.7em);
+  height: 28px;
+  pointer-events: none;
+}
+.marginalia :is(h2:nth-of-type(even), .sect1:nth-of-type(even) > h2)::before {
+  -webkit-mask:
+    var(--report-guide-down) left top / calc(100% - 15px) 100% no-repeat,
+    var(--report-guide-down-arrow) right top / 15px 100% no-repeat;
+  mask:
+    var(--report-guide-down) left top / calc(100% - 15px) 100% no-repeat,
+    var(--report-guide-down-arrow) right top / 15px 100% no-repeat;
+}
+/* Nothing above to divide it from, or a rule already did it. */
+.marginalia > h2:first-child::before,
+.marginalia .sect1:first-child > h2::before,
+.marginalia hr + h2::before,
+.marginalia .collapse-section:has(> .collapse-section-inner > hr:last-child) + h2::before {
+  display: none;
+}
+.marginalia hr + h2,
+.marginalia .collapse-section:has(> .collapse-section-inner > hr:last-child) + h2 {
+  margin-top: 0.8em;
+}
+
+.marginalia hr {
+  border: 0;
+  height: 28px;
+  margin: 2.4em 0;
+}
+
+/* --- Inline ------------------------------------------------------- */
+
+.marginalia strong {
+  font-weight: 600;
+}
+.marginalia a {
+  text-decoration-color: var(--md-color-accent-muted);
+}
+.marginalia a:hover {
+  text-decoration-color: var(--report-highlight);
+  text-decoration-thickness: 2px;
+}
+.marginalia :not(pre) > code {
+  font-size: 0.8em;
+  background: var(--report-surface);
+  border: 1px solid var(--md-color-border);
+  border-radius: 0;
+  padding: 0 0.3em;
+}
+.marginalia pre {
+  font-size: 0.8em;
+  border: 1px solid var(--md-color-border);
+  border-radius: 0;
+}
+
+/* --- Cards: quotes, sidebars, examples, admonitions --------------- */
+
+.marginalia blockquote {
+  font-style: normal;
+  color: var(--md-color-fg);
+  background: var(--report-surface);
+  border: 1px solid var(--md-color-border);
+  border-left: 3px solid var(--md-color-quote-bar);
+  padding: 0.8em 1em;
+}
+.marginalia :is(.sidebarblock, .exampleblock) {
+  border: 1px solid var(--md-color-border);
+  border-radius: 0;
+}
+.marginalia :is(.sidebarblock, .exampleblock) > .title {
+  font-family: var(--md-font-heading);
+  font-size: 1.05em;
+  font-weight: 600;
+}
+.marginalia .admonitionblock {
+  border: 1px solid var(--md-color-border);
+  border-left-width: 3px;
+  border-radius: 0;
+}
+.marginalia .admonitionblock > table {
+  margin: 0;
+}
+.marginalia .admonitionblock td.icon {
+  font-family: var(--md-font-heading);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.marginalia .admonitionblock.note {
+  border-left-color: var(--md-color-accent);
+}
+.marginalia .admonitionblock.tip {
+  border-left-color: var(--report-ok);
+}
+.marginalia .admonitionblock.tip td.icon {
+  color: var(--report-ok);
+}
+.marginalia .admonitionblock:is(.warning, .caution) {
+  border-left-color: var(--report-warn);
+}
+.marginalia .admonitionblock:is(.warning, .caution) td.icon {
+  color: var(--report-warn);
+}
+.marginalia .admonitionblock.important {
+  border-left-color: var(--report-crit);
+}
+.marginalia .admonitionblock.important td.icon {
+  color: var(--report-crit);
+}
+
+/* --- Tables ------------------------------------------------------- */
+
+.marginalia table {
+  font-size: 0.86em;
+  background: var(--report-surface);
+  border: 1px solid var(--md-color-border);
+}
+.marginalia th,
+.marginalia td {
+  padding: 0.55em 0.7em;
+}
+.marginalia table.tableblock {
+  margin-inline: 0;
+}
+.marginalia table.tableblock.stretch {
+  width: 100%;
+}
+.marginalia thead th,
+.marginalia table > tr:first-child > th {
+  font-family: var(--md-font-heading);
+  font-size: 0.9em;
+  font-weight: 600;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--md-color-fg-muted);
+  background: var(--md-color-bg);
+  border-bottom: 1px solid var(--md-color-border);
+}
+.marginalia :is(th, td)[align="right"],
+.marginalia :is(th, td).halign-right {
+  white-space: nowrap;
+}
+/* A closing row in bold reads as the total. */
+.marginalia tbody tr:last-child:has(> td > strong:only-child) > td {
+  border-top: 2px solid var(--report-bar);
+  border-bottom: 0;
+}
+
+/* --- Lists -------------------------------------------------------- */
+
+.marginalia li::marker {
+  color: var(--report-line);
+}
+
+/* ------------------------------------------------------------------
+ * DARK VARIANT — the same warm greys and lime, lifted for a dark page.
+ * ------------------------------------------------------------------ */
+
+[data-appearance="dark"] .marginalia-theme,
+[data-appearance="dark"] .marginalia {
+  --md-color-fg: #ecebe6;
+  --md-color-fg-muted: #a9a59b;
+  --md-color-bg: transparent;
+  --md-color-accent: #d6ec4e;
+  --md-color-accent-muted: #5c6420;
+  --md-color-border: #3a3934;
+  --md-color-code-bg: #242421;
+  --md-color-code-fg: #ecebe6;
+  --md-color-quote-bar: #d6ec4e;
+  --md-color-table-stripe: #242421;
+  --md-color-selection-bg: color-mix(in srgb, #d6ec4e 32%, transparent);
+  --report-surface: #242421;
+  --report-bar: #ecebe6;
+  --report-line: #b49b6a;
+  --report-ok: #9fd3a6;
+  --report-warn: #f0c46a;
+  --report-crit: #f2a197;
+}
+[data-appearance="dark"] .marginalia thead th,
+[data-appearance="dark"] .marginalia table > tr:first-child > th {
+  background: #1b1b19;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-appearance="auto"] .marginalia-theme,
+  [data-appearance="auto"] .marginalia {
+    --md-color-fg: #ecebe6;
+    --md-color-fg-muted: #a9a59b;
+    --md-color-bg: transparent;
+    --md-color-accent: #d6ec4e;
+    --md-color-accent-muted: #5c6420;
+    --md-color-border: #3a3934;
+    --md-color-code-bg: #242421;
+    --md-color-code-fg: #ecebe6;
+    --md-color-quote-bar: #d6ec4e;
+    --md-color-table-stripe: #242421;
+    --md-color-selection-bg: color-mix(in srgb, #d6ec4e 32%, transparent);
+    --report-surface: #242421;
+    --report-bar: #ecebe6;
+    --report-line: #b49b6a;
+    --report-ok: #9fd3a6;
+    --report-warn: #f0c46a;
+    --report-crit: #f2a197;
+  }
+  [data-appearance="auto"] .marginalia thead th,
+  [data-appearance="auto"] .marginalia table > tr:first-child > th {
+    background: #1b1b19;
+  }
+}

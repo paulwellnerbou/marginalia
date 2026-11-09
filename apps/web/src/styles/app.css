@@ -844,6 +844,14 @@ button.primary:disabled {
 .pane-doc:has(> :is(.ic-float-toolbar-popover, .doc-search-popover)) > * {
   --doc-float-rows: 1;
 }
+
+/* Full view: no toolbar above the document for floating chrome to clear. */
+.doc-page-full {
+  --doc-chrome-height: 0px;
+}
+.doc-layout-full > .pane-right {
+  display: none;
+}
 .pane-doc .doc-scroll {
   flex: 1;
   /* The marginalia-theme rule (applied alongside .doc-scroll so the
@@ -1198,6 +1206,12 @@ button.primary:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* Pinned to the foot of the pane, collapsed to the rail or not. */
+.pane-footer {
+  margin-top: auto;
+  flex-shrink: 0;
+  border-top: 1px solid var(--ui-border);
+}
 .pane-header {
   display: flex;
   align-items: center;

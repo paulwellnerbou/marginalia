@@ -573,6 +573,25 @@ description. Source downloads, chapter ZIPs, copies and JSON bundles
 keep them as written. MCP's `get_document` says where each region is,
 or how to add one.
 
+## Full view
+
+View → **Document only** shows the document with nothing of the app
+around it: the contents on the left, the comment cards beside the text
+(floating over it where the column has no room), and no app bar,
+toolbar or Threads/History pane. Reading and commenting work as usual.
+
+The mode is part of the address, `?view=full`, so a link can open
+straight into it — an invite link too: `/d/<uid>/<token>?view=full`
+keeps the parameter when the token is taken out of the address bar.
+**Open links in full view** in Access control adds it to every access
+link and QR code listed there.
+**Exit full view** at the foot of the contents pane (or its collapsed
+rail) goes back to the normal view and drops the parameter.
+
+Paired with the **Report** theme (condensed headings, white cards on a
+warm grey page, a lime accent and a guide line opening every section)
+it reads like a standalone briefing.
+
 ## Document statistics
 
 The bar-chart button in the document toolbar opens word counts for the

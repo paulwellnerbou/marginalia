@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   Callout,
+  Checkbox,
   Code,
   Flex,
   IconButton,
@@ -26,6 +27,7 @@ import {
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { replaceFolderToken } from '../lib/folder.js';
+import { linkWithFullView } from '../lib/full-view.js';
 import { getClientId, getDisplayName, useDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
 import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
@@ -159,6 +161,7 @@ export function InvitesPanel({
   const [role, setRole] = useState<Role>('reader');
   const [submitting, setSubmitting] = useState(false);
   const [rotating, setRotating] = useState(false);
+  const [shareFullView, setShareFullView] = useState(false);
   // A set rather than one token: role changes on different rows overlap, and
   // a single slot would let the second one re-enable the first row's select
   // and then clear the flag out from under it while it is still in flight.
@@ -447,6 +450,25 @@ export function InvitesPanel({
 
       <Separator size="4" />
 
+      <Flex direction="column" gap="1">
+        <Text as="label" size="2">
+          <Flex align="center" gap="2">
+            <Checkbox
+              checked={shareFullView}
+              onCheckedChange={(c) => setShareFullView(c === true)}
+            />
+            Open links in full view
+          </Flex>
+        </Text>
+        <Flex pl="6">
+          <Text size="1" color="gray">
+            Adds <Code size="1">?view=full</Code> to the links and QR codes below: the recipient
+            sees only the document, its contents and the comments, and can leave full view from the
+            contents pane.
+          </Text>
+        </Flex>
+      </Flex>
+
       {!invites ? (
         <Text size="1" color="gray">
           Loading…
@@ -511,7 +533,7 @@ export function InvitesPanel({
                 </Box>
               </Flex>
               <Copyable
-                text={window.location.origin + inv.url}
+                text={linkWithFullView(window.location.origin + inv.url, shareFullView)}
                 multiline
                 ariaLabel="Copy invite link"
                 size="1"

@@ -13,7 +13,8 @@
     "./book.css": "./css/book.css",
     "./article.css": "./css/article.css",
     "./technical.css": "./css/technical.css",
-    "./beautiful.css": "./css/beautiful.css"
+    "./beautiful.css": "./css/beautiful.css",
+    "./report.css": "./css/report.css"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"
