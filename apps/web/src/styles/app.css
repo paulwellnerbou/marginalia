@@ -899,6 +899,78 @@ button.primary:disabled {
 }
 
 /* ============================================================
+ * Wide blocks
+ *
+ * Images, tables, code and diagrams may grow past the reading column,
+ * up to the block width setting, when their content needs the room. A
+ * block that fits the column stays exactly where it was; one that
+ * doesn't widens evenly to both sides, never past the pane.
+ *
+ * Only top-level blocks: centring on a list item or a quote would centre
+ * on its indent, not on the column.
+ * ============================================================ */
+
+/* Registered so the width is resolved once, on the article: left as a
+   plain token, `ch` would be re-read against each block's own font, and
+   a monospace code block's characters are a good deal wider. */
+@property --md-wide-lane {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+/* The container the lane is capped against: the document's own share of
+   the row, without the inline comments column beside it. */
+.pane-doc .doc-body.doc-body-wide {
+  container-type: inline-size;
+}
+.doc-body-wide .marginalia {
+  /* Less the article's side padding, so a block at the cap keeps the
+     same margin to the pane edge that the text has on a narrow screen. */
+  --md-wide-lane: max(0px, min(var(--md-wide-width), 100cqw - 3rem));
+}
+.doc-body-wide
+  :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
+  > :is(table, pre, figure, p[data-block-kind="image"], .mermaid, .imageblock, .listingblock) {
+  /* Shrink-to-fit within the lane, never narrower than the column. The
+     start margin puts the left edge on the column's centre line and the
+     translate pulls it back by half the block's own width — the only way
+     to centre on a width CSS doesn't know in advance. The negative end
+     margin is what lets the block's available width be the lane rather
+     than the column. */
+  box-sizing: border-box;
+  width: fit-content;
+  min-width: 100%;
+  /* `fit-content` gives way to min-content, and unwrapped code has
+     nothing narrower than its longest line. */
+  max-width: var(--md-wide-lane);
+  margin-left: 50%;
+  margin-right: calc(50% - var(--md-wide-lane));
+  translate: -50%;
+}
+/* A table's auto width already shrinks to fit; the themes' `width: 100%`
+   would pin it to the lane instead. An AsciiDoc table that isn't
+   `stretch` was sized by its author (autowidth or a percentage), so it
+   keeps that and is only centred. */
+.doc-body-wide
+  :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
+  > table {
+  width: auto;
+}
+.doc-body-wide
+  :is(.sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
+  > table.tableblock:not(.stretch) {
+  min-width: 0;
+}
+/* Mermaid sizes its SVG as a percentage of the box with a max-width, so
+   the box has no content width to shrink to: give it the whole lane and
+   let the diagram centre in it, up to its own natural size. */
+.doc-body-wide
+  :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
+  > .mermaid:not(.mermaid-error) {
+  width: var(--md-wide-lane);
+}
+
+/* ============================================================
  * Paged reading (e-reader mode)
  *
  * One CSS column per page, each exactly as wide as the scrollport,

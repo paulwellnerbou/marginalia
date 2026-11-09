@@ -198,6 +198,8 @@ import { ProposalComposer, ProposalEditComposer } from './ThreadComposer.js';
 import { Toc } from './Toc.js';
 
 const MAX_WIDTH_KEY = 'marginalia.maxWidth';
+/** How wide images, tables, code and diagrams may grow; at or below the reading width, they don't. */
+const BLOCK_WIDTH_KEY = 'marginalia.blockWidth';
 const TEXT_ZOOM_KEY = 'marginalia.textZoom';
 const TOC_WIDTH_KEY = 'marginalia.tocWidth';
 const COMMENTS_WIDTH_KEY = 'marginalia.commentsWidth';
@@ -219,6 +221,7 @@ const COLLAPSED_WIDTH = 36;
 const TEXT_ZOOM_MIN = 80;
 const TEXT_ZOOM_MAX = 220;
 const DEFAULT_MAX_WIDTH = 72;
+const BLOCK_WIDTH_MAX = 200;
 /** How long a pane takes to fold away. Published to the stylesheet, which
  *  runs the animation, so the two can't drift apart. */
 const PANE_COLLAPSE_MS = 240;
@@ -559,6 +562,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     const saved = Number(localStorage.getItem(MAX_WIDTH_KEY));
     return Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_MAX_WIDTH;
   });
+  const [blockWidth, setBlockWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(BLOCK_WIDTH_KEY));
+    return Number.isFinite(saved) && saved > 0 ? saved : 0;
+  });
+  // Not in pages: a page is exactly as wide as the screen, and the tap
+  // zones that turn it sit in the gutters a wide block would grow into.
+  const wideBlocks = blockWidth > maxWidth && !paged;
   /** Mirrors the stored interface size so the stepper has something to show. */
   const [uiScale, setUiScaleState] = useState<number>(readUiScale);
   /* Live rather than read once, so what the reset advertises and what it
@@ -1183,6 +1193,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   useEffect(() => {
     localStorage.setItem(MAX_WIDTH_KEY, String(maxWidth));
   }, [maxWidth]);
+  useEffect(() => {
+    localStorage.setItem(BLOCK_WIDTH_KEY, String(blockWidth));
+  }, [blockWidth]);
   useEffect(() => {
     localStorage.setItem(TEXT_ZOOM_KEY, String(textZoom));
   }, [textZoom]);
@@ -3369,6 +3382,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       />
 
       <Text size="1" color="gray">
+        Block width
+      </Text>
+      {/* Kept apart from the reading width rather than relative to it, so
+          widening the text never drags the blocks along. Anything at or
+          under the reading width reads as "Text" and is stored as off. */}
+      <DisplayStepper
+        ariaLabel="Block width"
+        min={maxWidth}
+        max={Math.max(maxWidth, BLOCK_WIDTH_MAX)}
+        step={8}
+        defaultValue={maxWidth}
+        value={Math.max(blockWidth, maxWidth)}
+        format={(v) => (v > maxWidth ? `${v}ch` : 'Text')}
+        onCommit={(next) => setBlockWidth(next > maxWidth ? next : 0)}
+        onReset={() => setBlockWidth(0)}
+      />
+
+      <Text size="1" color="gray">
         Text size
       </Text>
       <DisplayStepper
@@ -3755,7 +3786,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                   <div
                     className={`doc-row${!floatingComments && inlineCommentsOpen ? ' doc-row-with-inline' : ''}${rowHostsPopover ? ' doc-row-floating' : ''}`}
                   >
-                    <div className="doc-body">
+                    <div
+                      className={wideBlocks ? 'doc-body doc-body-wide' : 'doc-body'}
+                      style={
+                        wideBlocks
+                          ? { ['--md-wide-width' as string]: `${blockWidth}ch` }
+                          : undefined
+                      }
+                    >
                       <RenderedDoc
                         rendered={liveRendered}
                         elRef={docRef}
