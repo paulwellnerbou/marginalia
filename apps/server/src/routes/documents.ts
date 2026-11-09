@@ -1181,6 +1181,8 @@ async function purgeDocument(deps: AppDeps, doc: DocumentRow): Promise<void> {
   // already drop rows whose document is gone, so this is about not
   // leaving dead credentials in the store, not about correctness.
   db.prepare('DELETE FROM keyring_docs WHERE doc_uid = ?').run(doc.uid);
+  // The invites these pointed at went with the doc's invites above.
+  db.prepare('DELETE FROM keyring_agent_invites WHERE gate_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
 
   for (const id of attachedAssetIds) {

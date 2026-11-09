@@ -419,6 +419,123 @@ describe('hosted MCP endpoint', () => {
     await withToken.close();
   });
 
+  test('an agent key opens the whole keyring by bare uid, and files what it creates', async () => {
+    const owner = {
+      'content-type': 'application/json',
+      'x-marginalia-client': 'owner-client-0001',
+      'x-marginalia-client-name': 'Paul',
+    };
+    const upload = async (title: string) => {
+      const res = await fetch(`${baseUrl}/api/documents`, {
+        method: 'POST',
+        headers: owner,
+        body: JSON.stringify({ markdown: `# ${title}\n\nAlpha.\n` }),
+      });
+      return (await res.json()) as { uid: string; admin_invite: { token: string } };
+    };
+    const one = await upload('One');
+    const two = await upload('Two');
+    const ringRes = await fetch(`${baseUrl}/api/keyrings`, {
+      method: 'POST',
+      headers: owner,
+      body: JSON.stringify({
+        docs: [one, two].map((d) => ({ doc_uid: d.uid, invite_token: d.admin_invite.token })),
+      }),
+    });
+    const ring = ((await ringRes.json()) as { token: string }).token;
+    const keyRes = await fetch(`${baseUrl}/api/keyrings/self/agents`, {
+      method: 'POST',
+      headers: { ...owner, 'x-marginalia-keyring': ring },
+      body: JSON.stringify({ display_name: 'Codex', role: 'collaborator' }),
+    });
+    const { key } = (await keyRes.json()) as { key: string };
+
+    // No `?name=`: the key carries it.
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    expect(await callText(agent, 'get_identity')).toContain('display name: Codex');
+    const listed = await callText(agent, 'list_documents');
+    expect(listed).toContain(one.uid);
+    expect(listed).toContain(two.uid);
+    expect(listed).not.toContain(one.admin_invite.token);
+
+    expect(
+      await callText(agent, 'get_document', { document: two.uid, include_source: false }),
+    ).toContain('your role: collaborator');
+    await callText(agent, 'create_comment', {
+      document: two.uid,
+      anchor_text: 'Alpha.',
+      body: 'through the agent key',
+    });
+    const threads = await callText(agent, 'list_threads', { document: two.uid });
+    expect(threads).toContain('Codex');
+
+    const created = await callText(agent, 'create_document', { source: '# Fresh\n\nNew.\n' });
+    const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+    expect(created).toContain('added to the user’s keyring');
+    expect(
+      await callText(agent, 'get_document', { document: uid, include_source: false }),
+    ).toContain('your role: collaborator');
+    const pulled = await fetch(`${baseUrl}/api/keyrings/self`, {
+      headers: { ...owner, 'x-marginalia-keyring': ring },
+    });
+    const docs = ((await pulled.json()) as { docs: Array<{ doc_uid: string; role: string }> }).docs;
+    expect(docs.find((d) => d.doc_uid === uid)?.role).toBe('admin');
+
+    // The owner deletes the agent's invite on `two`; the session's
+    // remembered token dies with it, and the key mints a fresh one.
+    const listing = await fetch(`${baseUrl}/api/documents/${two.uid}/invites`, {
+      headers: { ...owner, 'x-marginalia-invite': two.admin_invite.token },
+    });
+    const agentInvite = (
+      (await listing.json()) as { invites: Array<{ token: string; kind: string }> }
+    ).invites.find((i) => i.kind === 'named');
+    await fetch(`${baseUrl}/api/documents/${two.uid}/invites/${agentInvite?.token}`, {
+      method: 'DELETE',
+      headers: { ...owner, 'x-marginalia-invite': two.admin_invite.token },
+    });
+    await callText(agent, 'create_comment', {
+      document: two.uid,
+      anchor_text: 'Alpha.',
+      body: 'after the invite was deleted',
+    });
+    await agent.close();
+  });
+
+  test('a document outside the keyring says why the agent key could not open it', async () => {
+    const owner = {
+      'content-type': 'application/json',
+      'x-marginalia-client': 'owner-client-0001',
+      'x-marginalia-client-name': 'Paul',
+    };
+    const res = await fetch(`${baseUrl}/api/documents`, {
+      method: 'POST',
+      headers: owner,
+      body: JSON.stringify({ markdown: '# Elsewhere\n' }),
+    });
+    const outside = (await res.json()) as { uid: string };
+    const ringRes = await fetch(`${baseUrl}/api/keyrings`, {
+      method: 'POST',
+      headers: owner,
+      body: JSON.stringify({ docs: [] }),
+    });
+    const ring = ((await ringRes.json()) as { token: string }).token;
+    const keyRes = await fetch(`${baseUrl}/api/keyrings/self/agents`, {
+      method: 'POST',
+      headers: { ...owner, 'x-marginalia-keyring': ring },
+      body: JSON.stringify({}),
+    });
+    const { key } = (await keyRes.json()) as { key: string };
+
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const failed = (await agent.callTool({
+      name: 'get_document',
+      arguments: { document: outside.uid },
+    })) as { content: Array<{ text?: string }>; isError?: boolean };
+    expect(failed.isError).toBe(true);
+    expect(failed.content.map((c) => c.text).join('')).toContain('not in the user’s keyring');
+    await agent.close();
+  });
+
   test('a #comment- link selects that thread, opener or reply', async () => {
     const admin = await connect('?name=Paul');
     const created = await callText(admin, 'create_document', {

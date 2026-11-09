@@ -8,7 +8,7 @@ import type {
   UploadResponseWire,
 } from '../api-types.js';
 import { clip, matchBlocks, resolveSection, sectionContains } from '../blocks.js';
-import { documentUrl, viewerUrl } from '../document-ref.js';
+import { type DocumentRef, documentUrl, viewerUrl } from '../document-ref.js';
 import {
   blockList,
   documentHeader,
@@ -31,9 +31,9 @@ import {
 export function registerDocumentTools(
   server: McpServer,
   ctx: ToolContext,
-  options: { allowLocalFiles: boolean } = { allowLocalFiles: true },
+  options: { allowLocalFiles: boolean; agentKey?: boolean } = { allowLocalFiles: true },
 ): void {
-  const { allowLocalFiles } = options;
+  const { allowLocalFiles, agentKey = false } = options;
   server.registerTool(
     'get_identity',
     {
@@ -55,6 +55,7 @@ export function registerDocumentTools(
           `allowed hosts: ${ctx.config.allowedHosts.length > 0 ? ctx.config.allowedHosts.join(', ') : '(any host you name in a URL)'}`,
           `state file: ${ctx.state.path ?? '(in-memory only; document links are forgotten on exit)'}`,
           `password configured: ${ctx.config.password ? 'yes' : 'no'}`,
+          `agent key: ${ctx.client.hasAgentKey ? 'configured — list_documents shows the keyring' : 'none'}`,
           `download directory: ${ctx.config.downloadDir}`,
         ];
         const docs =
@@ -69,6 +70,50 @@ export function registerDocumentTools(
         return text(lines.join('\n'), docs);
       }),
   );
+
+  if (agentKey) {
+    server.registerTool(
+      'list_documents',
+      {
+        title: 'List the documents in the user’s keyring',
+        description:
+          'Every document in the keyring this connection’s agent key belongs to: uid, title, ' +
+          'format, folder, and the role you get on it. Pass a uid from here to any tool — no ' +
+          'link needed. Documents listed with no role are held only through someone else’s ' +
+          'link; ask the user for an access link to those.',
+        inputSchema: {},
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      },
+      async () =>
+        guard(async () => {
+          const ring = await ctx.client.agentJson<AgentDocumentsWire>('/api/agent/documents');
+          if (ring.docs.length === 0) {
+            return text(
+              'The keyring is empty. Documents the user opens on a synced device appear here.',
+            );
+          }
+          const base = ctx.client.defaultBaseUrl;
+          return text(
+            `${ring.docs.length} document(s), most recently changed first. You act as ` +
+              `"${ring.display_name}" with at most the ${ring.role} role.`,
+            ring.docs
+              .map((d) =>
+                [
+                  `${d.doc_uid}  ${d.title ?? '(untitled)'}`,
+                  `  format: ${d.format}  updated: ${timestamp(d.updated_at)}`,
+                  `  role: ${d.role ?? 'none — not the user’s to delegate; ask for a link'}`,
+                  d.folder_uid ? `  folder: main document ${d.folder_uid}` : null,
+                  d.password_protected ? '  password protected' : null,
+                  `  url: ${base}/d/${d.doc_uid}`,
+                ]
+                  .filter((l) => l !== null)
+                  .join('\n'),
+              )
+              .join('\n'),
+          );
+        }),
+    );
+  }
 
   server.registerTool(
     'create_document',
@@ -208,6 +253,7 @@ export function registerDocumentTools(
 
         const ref = { baseUrl: base.baseUrl, uid: created.uid, token: created.admin_invite.token };
         ctx.client.rememberDocument(ref);
+        const filed = await fileInKeyring(ctx, ref, created.name ?? args.name ?? null);
         // Only an explicit `true` closes the document — an instance that
         // predates the flag omits the field and serves the bare URL to
         // anyone, so saying otherwise would be a promise it cannot keep.
@@ -216,7 +262,10 @@ export function registerDocumentTools(
           [
             `Created "${created.name ?? '(untitled)'}" (${created.format}).`,
             `uid: ${created.uid}`,
-            `admin link (full control — keep private): ${base.baseUrl}${created.admin_invite.url}`,
+            filed.ok
+              ? 'admin link: added to the user’s keyring — it is in their document list on every ' +
+                'synced device, so it is not repeated here'
+              : `admin link (full control — keep private): ${base.baseUrl}${created.admin_invite.url}`,
             inviteOnly
               ? `token-free link: ${base.baseUrl}/d/${created.uid} — invite-only, so it opens ` +
                 'nothing until you mint that person their own access link'
@@ -225,8 +274,11 @@ export function registerDocumentTools(
               ? `password (shown once, store it now): ${created.password}`
               : 'no password gate',
           ].join('\n'),
-          'To let someone review it, use create_invite with role "collaborator" (comment + ' +
-            'propose) or "editor" (also accept proposals) and share that link — not the admin link.',
+          filed.ok
+            ? 'From here on you work on it with your own invite, at your agent key’s role.'
+            : 'To let someone review it, use create_invite with role "collaborator" (comment + ' +
+                'propose) or "editor" (also accept proposals) and share that link — not the admin link.',
+          filed.ok ? null : filed.note,
         );
       }),
   );
@@ -551,4 +603,51 @@ export function registerDocumentTools(
         return text(`rendered HTML for ${doc.uid}:`, gutter(doc.rendered.html, ''));
       }),
   );
+}
+
+interface AgentDocumentsWire {
+  display_name: string;
+  role: string;
+  docs: Array<{
+    doc_uid: string;
+    title: string | null;
+    format: string;
+    folder_uid: string | null;
+    password_protected: boolean;
+    updated_at: number;
+    role: string | null;
+  }>;
+}
+
+/**
+ * With an agent key, a document the agent creates goes into the user's
+ * keyring, and the agent drops the admin link for its own invite: the
+ * key's role is the ceiling the user chose, and the creator's admin link
+ * would otherwise sit above it for as long as the session remembers it.
+ */
+async function fileInKeyring(
+  ctx: ToolContext,
+  ref: DocumentRef,
+  title: string | null,
+): Promise<{ ok: true } | { ok: false; note: string | null }> {
+  if (!ctx.client.hasAgentKey || ref.baseUrl !== ctx.client.defaultBaseUrl) {
+    return { ok: false, note: null };
+  }
+  try {
+    await ctx.client.agentJson(`/api/agent/documents/${encodeURIComponent(ref.uid)}`, {
+      method: 'PUT',
+      body: { invite_token: ref.token, ...(title ? { title } : {}) },
+    });
+    const granted = await ctx.client.agentJson<{ invite_token: string }>(
+      `/api/agent/documents/${encodeURIComponent(ref.uid)}/access`,
+      { method: 'POST' },
+    );
+    ctx.client.rememberDocument({ ...ref, token: granted.invite_token });
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      note: `note: it could not be added to the keyring — ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }

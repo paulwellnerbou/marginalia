@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  adoptAgentIdentity,
+  agentKeyClientId,
   createMarginaliaMcpServer,
   MAX_CLIENT_ID_LENGTH,
   normalizeAgentName,
@@ -158,7 +160,7 @@ async function handleMcp(c: Context, app: Hono, sessions: SessionStore): Promise
 
   // No session id: an initialize request, or a malformed one the
   // transport will reject on its own.
-  const { server, transport } = buildSession(new URL(c.req.url), app);
+  const { server, transport } = await buildSession(new URL(c.req.url), app);
   let keep = false;
   try {
     await server.connect(transport);
@@ -261,20 +263,21 @@ function notFoundSession(): Response {
  * from, and letting them change mid-session would mean an agent's
  * authorship shifting under it.
  */
-function buildSession(
+async function buildSession(
   url: URL,
   app: Hono,
-): { server: McpServer; transport: WebStandardStreamableHTTPServerTransport } {
-  const displayName = readDisplayName(url);
-
-  const { server } = createMarginaliaMcpServer(
+): Promise<{ server: McpServer; transport: WebStandardStreamableHTTPServerTransport }> {
+  const fetchImpl = async (input: URL | RequestInfo, init?: RequestInit) =>
+    app.fetch(new Request(input as URL | string, init));
+  const agentKey = readAgentKey(url);
+  const config = await adoptAgentIdentity(
     {
       // Document URLs the agent passes carry their own origin; this is
       // only the fallback for a bare uid, and this instance is the one
       // sensible answer.
       baseUrl: url.origin,
-      displayName,
-      clientId: readClientId(url, displayName),
+      displayName: readDisplayName(url),
+      clientId: null,
       // A hosted endpoint must not reach other instances on behalf of
       // whoever connects to it.
       allowedHosts: [url.hostname],
@@ -286,6 +289,10 @@ function buildSession(
       // folder; anything else is learned during the session from the
       // links the agent is handed.
       defaultToken: readToken(url),
+      // The whole keyring, document by document: each is exchanged for an
+      // invite of the agent's own on first use. The key carries the
+      // agent's name, which replaces `?name=`.
+      agentKey,
       // In-memory for the life of the session. Nothing may be written to
       // the server's disk on behalf of a caller, and a token learned
       // here must not outlive the connection that supplied it.
@@ -293,8 +300,12 @@ function buildSession(
       // Unused: `allowLocalFiles: false` keeps the filesystem tools off.
       downloadDir: '',
     },
+    fetchImpl,
+  );
+  const { server } = createMarginaliaMcpServer(
+    { ...config, clientId: readClientId(url, config.displayName, agentKey) },
     {
-      fetchImpl: async (input, init) => app.fetch(new Request(input as URL | string, init)),
+      fetchImpl,
       // The filesystem here is the Marginalia host's, not the caller's.
       // Creating a document needs no invite, so leaving these on would
       // let anyone who can reach this endpoint read the server's files
@@ -332,6 +343,12 @@ function readToken(url: URL): string | null {
   return raw.length > 0 ? raw : null;
 }
 
+/** Optional `?key=`: an agent key for the caller's keyring. Replayed only to this instance. */
+function readAgentKey(url: URL): string | null {
+  const raw = sanitizeIdentityValue(url.searchParams.get('key'), MAX_CLIENT_ID_LENGTH);
+  return raw.length > 0 ? raw : null;
+}
+
 /**
  * The marker Marginalia uses to decide who may edit or delete a comment.
  *
@@ -342,8 +359,10 @@ function readToken(url: URL): string | null {
  * makes, where `clientId` is an unverified header a caller supplies.
  * Pass `client_id` explicitly to keep separate agents apart.
  */
-function readClientId(url: URL, displayName: string): string {
+function readClientId(url: URL, displayName: string, agentKey: string | null): string {
   const explicit = sanitizeIdentityValue(url.searchParams.get('client_id'), MAX_CLIENT_ID_LENGTH);
   if (explicit.length >= 8) return explicit;
+  // A key is one agent, whatever it is called.
+  if (agentKey) return agentKeyClientId(agentKey);
   return `mcp-${createHash('sha256').update(displayName).digest('hex').slice(0, 28)}`;
 }

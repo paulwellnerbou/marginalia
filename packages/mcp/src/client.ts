@@ -1,3 +1,4 @@
+import { AGENT_KEY_HEADER } from './agent-key.js';
 import type { McpConfig } from './config.js';
 import { assertHostAllowed, type DocumentRef, parseDocumentRef } from './document-ref.js';
 import type { McpState } from './state.js';
@@ -6,6 +7,9 @@ const CLIENT_HEADER = 'x-marginalia-client';
 const CLIENT_NAME_HEADER = 'x-marginalia-client-name';
 const INVITE_HEADER = 'x-marginalia-invite';
 const SESSION_COOKIE = 'marginalia_session';
+
+/** How long a refused agent-key exchange is believed before asking again. */
+const AGENT_REFUSAL_TTL_MS = 60_000;
 
 /**
  * An error the server reported, carrying its machine-readable code so
@@ -37,6 +41,8 @@ export interface RequestOptions {
 export class MarginaliaClient {
   /** Password-session cookies, keyed by `origin|uid`. Never persisted. */
   private readonly sessions = new Map<string, string>();
+  /** Why the agent key could not open a document, keyed by uid. */
+  private readonly agentRefusals = new Map<string, { code: string; at: number }>();
 
   constructor(
     private readonly config: McpConfig,
@@ -61,6 +67,85 @@ export class MarginaliaClient {
 
   get defaultBaseUrl(): string {
     return this.config.baseUrl;
+  }
+
+  get hasAgentKey(): boolean {
+    return !!this.config.agentKey;
+  }
+
+  /**
+   * A request made with the agent key itself, against the configured
+   * instance only: the key belongs to that instance's keyring and is never
+   * sent anywhere a document reference could point.
+   */
+  async agentJson<T>(path: string, options: RequestOptions = {}): Promise<T> {
+    const key = this.config.agentKey;
+    if (!key) {
+      throw new MarginaliaApiError(
+        400,
+        'no-agent-key',
+        'This connection has no agent key. Create one under "Your devices" on the Marginalia home page.',
+      );
+    }
+    const headers = this.identityHeaders();
+    headers.set(AGENT_KEY_HEADER, key);
+    let body: BodyInit | null = null;
+    if (options.body !== undefined) {
+      headers.set('content-type', 'application/json');
+      body = JSON.stringify(options.body);
+    }
+    let res: Response;
+    try {
+      res = await this.fetchImpl(new URL(path, this.config.baseUrl), {
+        method: options.method ?? 'GET',
+        headers,
+        body,
+      });
+    } catch (err) {
+      throw new MarginaliaApiError(
+        0,
+        'network-error',
+        `Could not reach ${this.config.baseUrl}: ${err instanceof Error ? err.message : String(err)}.`,
+      );
+    }
+    if (!res.ok) {
+      const code = await readErrorCode(res);
+      throw new MarginaliaApiError(res.status, code, describeAgentError(res.status, code));
+    }
+    return (await res.json()) as T;
+  }
+
+  /**
+   * Exchange the agent key for this agent's own invite on `ref`'s
+   * document, remembered like any token learned from a link. Null when
+   * there is no key, the reference is for another instance, or the ring
+   * cannot open it — the request then goes out as it would have without a
+   * key, and its error says why.
+   */
+  private async agentToken(ref: DocumentRef): Promise<string | null> {
+    if (!this.config.agentKey || !ref.uid || ref.baseUrl !== this.config.baseUrl) return null;
+    const refused = this.agentRefusals.get(ref.uid);
+    if (refused && Date.now() - refused.at < AGENT_REFUSAL_TTL_MS) return null;
+    try {
+      const granted = await this.agentJson<{ invite_token: string }>(
+        `/api/agent/documents/${encodeURIComponent(ref.uid)}/access`,
+        { method: 'POST' },
+      );
+      this.agentRefusals.delete(ref.uid);
+      this.state.remember(ref.uid, { baseUrl: ref.baseUrl, token: granted.invite_token });
+      return granted.invite_token;
+    } catch (err) {
+      const code = err instanceof MarginaliaApiError ? err.code : 'network-error';
+      this.agentRefusals.set(ref.uid, { code, at: Date.now() });
+      return null;
+    }
+  }
+
+  private identityHeaders(): Headers {
+    const headers = new Headers();
+    headers.set(CLIENT_HEADER, this.clientId);
+    headers.set(CLIENT_NAME_HEADER, encodeHeaderValue(this.config.displayName));
+    return headers;
   }
 
   /**
@@ -165,17 +250,16 @@ export class MarginaliaClient {
     ref: DocumentRef,
     path: string,
     options: RequestOptions,
-    internal: { skipSessionRetry?: boolean } = {},
+    internal: { skipSessionRetry?: boolean; skipAgentRetry?: boolean } = {},
   ): Promise<Response> {
     const url = new URL(path, ref.baseUrl);
     for (const [key, value] of Object.entries(options.query ?? {})) {
       if (value !== undefined) url.searchParams.set(key, value);
     }
 
-    const headers = new Headers();
-    headers.set(CLIENT_HEADER, this.clientId);
-    headers.set(CLIENT_NAME_HEADER, encodeHeaderValue(this.config.displayName));
-    if (ref.token) headers.set(INVITE_HEADER, ref.token);
+    const headers = this.identityHeaders();
+    const token = ref.token ?? (await this.agentToken(ref));
+    if (token) headers.set(INVITE_HEADER, token);
     const session = this.sessions.get(sessionKey(ref));
     if (session) headers.set('cookie', `${SESSION_COOKIE}=${session}`);
 
@@ -214,9 +298,58 @@ export class MarginaliaClient {
       !internal.skipSessionRetry
     ) {
       await this.authenticate(ref, this.config.password);
-      return this.send(ref, path, options, { skipSessionRetry: true });
+      return this.send(ref, path, options, { ...internal, skipSessionRetry: true });
     }
-    throw new MarginaliaApiError(res.status, code, describeApiError(res.status, code, ref));
+    // A remembered invite can be deleted from the access panel while the
+    // key still stands; the key then mints a fresh one, so ask it once.
+    if (token && !internal.skipAgentRetry && (code === 'invite-required' || code === 'forbidden')) {
+      const fresh = await this.agentToken({ ...ref, token: null });
+      if (fresh && fresh !== token) {
+        return this.send({ ...ref, token: fresh }, path, options, {
+          ...internal,
+          skipAgentRetry: true,
+        });
+      }
+    }
+    const refusal = token ? null : this.agentRefusals.get(ref.uid);
+    const message = describeApiError(res.status, code, ref);
+    throw new MarginaliaApiError(
+      res.status,
+      code,
+      refusal ? `${message} ${describeAgentRefusal(refusal.code)}` : message,
+    );
+  }
+}
+
+function describeAgentRefusal(code: string): string {
+  switch (code) {
+    case 'not-in-keyring':
+      return 'The agent key could not help: this document is not in the user’s keyring. Ask for its link.';
+    case 'not-delegable':
+      return (
+        'The agent key could not help: the user’s keyring holds this document only through ' +
+        'someone else’s link, not one they administer. Ask its owner for an access link.'
+      );
+    case 'agent-key-invalid':
+      return 'The agent key was rejected — it has been revoked, or its keyring deleted.';
+    default:
+      return `The agent key could not open it (${code}).`;
+  }
+}
+
+function describeAgentError(status: number, code: string): string {
+  switch (code) {
+    case 'agent-key-invalid':
+      return (
+        'The agent key was rejected — it has been revoked, or its keyring deleted. Create a new ' +
+        'one under "Your devices" on the Marginalia home page and update the connection.'
+      );
+    case 'admin-invite-required':
+      return 'Only a document’s admin link can be added to the keyring.';
+    case 'keyring-full':
+      return 'The keyring is full; the user has to forget some documents first.';
+    default:
+      return `Marginalia returned ${status} ${code}.`;
   }
 }
 

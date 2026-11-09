@@ -24,6 +24,7 @@ import {
 } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { redeemErrorMessage } from '../lib/pairing-error.js';
+import { AgentKeysPanel } from './AgentKeysPanel.js';
 import { ArmedButton } from './ArmedButton.js';
 import { Copyable } from './Copyable.js';
 import { PairingQr } from './PairingQr.js';
@@ -175,6 +176,9 @@ export function DeviceSyncPanel({
       {connected && (
         <>
           <Separator size="4" my="3" />
+          <AgentKeysPanel />
+
+          <Separator size="4" my="3" />
           <Flex gap="3" align="center" wrap="wrap" justify="between">
             <Text size="1" color="gray">
               Lost a device, or shared a code by mistake? Replacing the keyring disconnects every
@@ -206,8 +210,9 @@ export function DeviceSyncPanel({
           <Separator size="4" my="3" />
           <Flex gap="3" align="center" wrap="wrap" justify="between">
             <Text size="1" color="gray">
-              Done with syncing everywhere? Deleting the keyring stops every device and removes the
-              server's copy of your access links. Each device keeps the documents it already has.
+              Done with syncing everywhere? Deleting the keyring stops every device, revokes its
+              agent keys, and removes the server's copy of your access links. Each device keeps the
+              documents it already has.
             </Text>
             <ArmedButton
               label="Delete keyring"

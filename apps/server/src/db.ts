@@ -323,6 +323,35 @@ CREATE TABLE IF NOT EXISTS keyring_pairings (
 
 CREATE INDEX IF NOT EXISTS idx_keyring_pairings_token
   ON keyring_pairings(keyring_token);
+
+-- A revocable credential that lets an MCP agent work across a keyring
+-- without holding the keyring token. Only the SHA-256 of the key is kept:
+-- it is shown once at creation and never again. role caps what the agent
+-- gets on any document; display_name is what it signs as.
+CREATE TABLE IF NOT EXISTS keyring_agents (
+  id            TEXT PRIMARY KEY,
+  key_hash      TEXT NOT NULL UNIQUE,
+  keyring_token TEXT NOT NULL,
+  display_name  TEXT NOT NULL,
+  role          TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  last_used_at  INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_keyring_agents_ring ON keyring_agents(keyring_token);
+
+-- The ordinary named invite minted for an agent on one access gate (a
+-- folder's main document, or a standalone one). Revoking the agent deletes
+-- these invites, which is what actually cuts its access.
+CREATE TABLE IF NOT EXISTS keyring_agent_invites (
+  agent_id      TEXT NOT NULL,
+  gate_uid      TEXT NOT NULL,
+  invite_token  TEXT NOT NULL,
+  created_at    INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, gate_uid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_keyring_agent_invites_gate ON keyring_agent_invites(gate_uid);
 `;
 
 /** Document source flavours persisted in `documents.format`. */
@@ -453,6 +482,16 @@ export interface KeyringDocRow {
   invite_token: string;
   title: string | null;
   added_at: number;
+}
+
+export interface KeyringAgentRow {
+  id: string;
+  key_hash: string;
+  keyring_token: string;
+  display_name: string;
+  role: InviteRole;
+  created_at: number;
+  last_used_at: number | null;
 }
 
 export interface KeyringPairingRow {

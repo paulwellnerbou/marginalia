@@ -206,6 +206,60 @@ All except the last take the keyring token in `X-Marginalia-Keyring`.
   Unauthenticated by design: the redeeming device has nothing yet, and
   the code is the proof
 
+### Agent keys: one MCP connection for the whole ring
+
+An MCP connection normally carries one document's invite. An **agent
+key** carries the keyring instead — without carrying the keyring token,
+which is the one secret the pairing flow keeps off screens and would
+otherwise end up in agent config files and third-party connector
+settings. *AI agents* in the **Your devices** panel mints one: a name the
+agent signs with, a role ceiling (`collaborator` by default, at most
+`editor`), and a URL, `/mcp?key=mak_…`, shown once. The server keeps
+only its SHA-256.
+
+The key authorizes nothing directly either. The agent exchanges it, one
+document at a time, for an ordinary **named invite** the server mints at
+the key's role from the admin link the ring holds. Those invites appear
+in each document's access panel, noted *AI agent via keyring*, and
+`authorize()` treats them like any other. Only documents the ring holds
+an admin link for can be delegated — minting an invite is an admin act,
+and passing on a lesser link of the ring's own would have the agent
+acting under somebody else's invite with no way to take it back. One
+admin link opens its whole folder, as it does for people.
+
+Revoking is what the indirection buys. **Revoke** on a key deletes every
+invite it was given, so the agent loses access wherever it cached them.
+The same happens per document when the ring forgets that document or
+stops holding its admin link, and for every key when the ring is
+deleted or swept. Rotating the ring keeps its keys: they are separate
+credentials and did not leak with the old token. Deleting one agent
+invite from a document's access panel removes that link only — the key
+mints a new one on next use; revoke the key to stop it.
+
+Documents the agent creates go into the ring under their admin link, so
+they show up on every device, and the agent then works on them with its
+own capped invite rather than the creator's admin link. Its client id is
+derived from the key, so two keys never share comment ownership, and
+using a key counts as using the ring for the idle sweep.
+
+Managed with the keyring token (`X-Marginalia-Keyring`):
+
+- `GET    /api/keyrings/self/agents` — the ring's keys, never the keys
+  themselves
+- `POST   /api/keyrings/self/agents` — `display_name` + `role`; returns
+  the key once. Names are unique per ring
+- `DELETE /api/keyrings/self/agents/:id` — revoke it and its invites
+
+Used with the key (`X-Marginalia-Agent-Key`), by the MCP server:
+
+- `GET    /api/agent/self` — the name and role ceiling
+- `GET    /api/agent/documents` — the ring's documents, no tokens, with
+  the role the agent would get on each (null where it cannot)
+- `POST   /api/agent/documents/:uid/access` — this agent's invite on that
+  document, minted on first use
+- `PUT    /api/agent/documents/:uid` — add a document's admin link to the
+  ring; nothing else is accepted
+
 ### Rate limiting
 
 `POST /api/pairings/redeem` is the only unauthenticated route where
@@ -321,6 +375,9 @@ Mistral Vibe (CLI or web) or a web app's connector form, as a command or
 a config file entry where the client takes both — along
 with an access link for the agent. Access works the same way it does for people — mint the agent its
 own `collaborator` link, so it can suggest everything and decide nothing.
+For every document at once, give it an
+[agent key](#agent-keys-one-mcp-connection-for-the-whole-ring) from the
+home page's **Your devices** panel instead.
 
 `packages/mcp` also runs standalone over stdio, which is what you want
 while developing it. See the
