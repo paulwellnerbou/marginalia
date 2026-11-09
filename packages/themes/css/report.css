@@ -105,6 +105,22 @@
   color: var(--md-color-fg-muted);
 }
 
+/* A section opening on an emphasised line reads it as its subtitle. The
+   viewer wraps what follows a heading in a collapse section, AsciiDoc in
+   a section body. */
+.marginalia
+  :is(
+    h2 + p,
+    h2 + .collapse-section > .collapse-section-inner > p:first-child,
+    h2 + .sectionbody > .paragraph:first-child > p,
+    h2 + .collapse-section > .collapse-section-inner > .sectionbody > .paragraph:first-child > p
+  ):has(> em:only-child)
+  > em {
+  font-family: var(--md-font-heading);
+  font-style: normal;
+  font-weight: 600;
+}
+
 /* --- Floor guide line --------------------------------------------- */
 
 /* Drawn in the heading's top margin rather than in its box, so the
