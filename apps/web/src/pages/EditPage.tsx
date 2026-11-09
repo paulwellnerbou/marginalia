@@ -90,8 +90,8 @@ function collectReferencedRefs(source: string, format: DocumentFormat): Set<stri
   const mdRe = /!\[[^\]]*\]\(([^)\s"']+)/g;
   // AsciiDoc: image::src[]  /  image:src[] (inline) / include::src[]
   const adocRe = /(?:^|\s)(?:image::|image:|include::)([^\s[]+)/g;
-  // HTML: src="…" on any element.
-  const htmlRe = /\bsrc\s*=\s*["']([^"']+)["']/gi;
+  // HTML: src="…" on any element; not `data-src`, which nothing loads.
+  const htmlRe = /(?<![\w-])src\s*=\s*["']([^"']+)["']/gi;
   const re = format === 'asciidoc' ? adocRe : format === 'html' ? htmlRe : mdRe;
   let m = re.exec(source);
   while (m !== null) {
