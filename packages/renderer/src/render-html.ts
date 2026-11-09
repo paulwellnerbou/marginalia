@@ -185,7 +185,8 @@ function cleanChildren(children: ElementContent[]): ElementContent[] {
       continue;
     }
     if (isNonContent(child)) continue;
-    const props = child.properties ?? {};
+    child.properties ??= {};
+    const props = child.properties;
     if (typeof props.src === 'string' && /^\s*data:/i.test(props.src)) {
       if (!/^\s*data:image\//i.test(props.src)) delete props.src;
     }

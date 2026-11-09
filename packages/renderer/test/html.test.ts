@@ -225,6 +225,9 @@ describe('HTML documents: title', () => {
       'Big news & more',
     );
     expect(extractDocumentTitle('<p>none</p>', 'html')).toBeNull();
+    expect(
+      extractDocumentTitle('<title>Gr&ouml;&szlig;e &copy; 2026 &amp;lt;</title>', 'html'),
+    ).toBe('Größe © 2026 &lt;');
   });
 });
 
