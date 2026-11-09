@@ -128,6 +128,14 @@ describe('extractDocumentTitle — asciidoc', () => {
     expect(extractDocumentTitle(adoc, 'asciidoc')).toBe('YAML Wins');
   });
 
+  test('picks up a Markdown-style `# Title`, as Asciidoctor does', () => {
+    expect(extractDocumentTitle('# Welcome\n\nBody.\n', 'asciidoc')).toBe('Welcome');
+  });
+
+  test('a section heading is not the document title', () => {
+    expect(extractDocumentTitle('== Section\n\nBody.\n', 'asciidoc')).toBeNull();
+  });
+
   test('returns null when no header is found', () => {
     expect(extractDocumentTitle('Just paragraph text.\n', 'asciidoc')).toBeNull();
   });
