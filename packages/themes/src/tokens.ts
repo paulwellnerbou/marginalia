@@ -624,7 +624,9 @@ const reportTokens: ThemeTokens = {
     accent: '#6f7d12',
     accentMuted: '#c9d38a',
     border: '#dcd8ce',
-    codeBg: '#ffffff',
+    // On screen code sits on a white card with a border; a Word page is
+    // white already and the exporter draws no border, so it needs a tint.
+    codeBg: '#efede7',
     codeFg: '#23221f',
     quoteBar: '#d6ec4e',
     tableStripe: '#ffffff',

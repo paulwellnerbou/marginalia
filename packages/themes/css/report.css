@@ -235,13 +235,23 @@
 
 /* --- Tables ------------------------------------------------------- */
 
-.marginalia table {
+/* Data tables only: AsciiDoc also lays out callout lists, horizontal
+   lists and admonitions with tables, and `tableblock` brings its own
+   frame from the table's `frame` attribute. */
+.marginalia
+  :is(
+    table:not(.tableblock):not(:is(.colist, .hdlist, .admonitionblock) > table),
+    table.tableblock
+  ) {
   font-size: 0.86em;
   background: var(--report-surface);
+}
+.marginalia table:not(.tableblock):not(:is(.colist, .hdlist, .admonitionblock) > table) {
   border: 1px solid var(--md-color-border);
 }
-.marginalia th,
-.marginalia td {
+.marginalia
+  :is(table:not(.tableblock):not(:is(.colist, .hdlist, .admonitionblock) > table), table.tableblock)
+  :is(th, td) {
   padding: 0.55em 0.7em;
 }
 .marginalia table.tableblock {
@@ -250,8 +260,7 @@
 .marginalia table.tableblock.stretch {
   width: 100%;
 }
-.marginalia thead th,
-.marginalia table > tr:first-child > th {
+.marginalia thead th {
   font-family: var(--md-font-heading);
   font-size: 0.9em;
   font-weight: 600;
@@ -262,12 +271,8 @@
   background: var(--md-color-bg);
   border-bottom: 1px solid var(--md-color-border);
 }
-.marginalia :is(th, td)[align="right"],
-.marginalia :is(th, td).halign-right {
-  white-space: nowrap;
-}
-/* A closing row in bold reads as the total. */
-.marginalia tbody tr:last-child:has(> td > strong:only-child) > td {
+/* A closing row whose label is bold reads as the total. */
+.marginalia tbody tr:last-child:has(> :first-child > strong:only-child) > td {
   border-top: 2px solid var(--report-bar);
   border-bottom: 0;
 }
@@ -302,8 +307,7 @@
   --report-warn: #f0c46a;
   --report-crit: #f2a197;
 }
-[data-appearance="dark"] .marginalia thead th,
-[data-appearance="dark"] .marginalia table > tr:first-child > th {
+[data-appearance="dark"] .marginalia thead th {
   background: #1b1b19;
 }
 
@@ -328,8 +332,7 @@
     --report-warn: #f0c46a;
     --report-crit: #f2a197;
   }
-  [data-appearance="auto"] .marginalia thead th,
-  [data-appearance="auto"] .marginalia table > tr:first-child > th {
+  [data-appearance="auto"] .marginalia thead th {
     background: #1b1b19;
   }
 }

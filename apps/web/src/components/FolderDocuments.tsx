@@ -9,6 +9,8 @@ interface Props {
   currentTitle: string;
   /** Present for readers allowed to add a document here. */
   onAdd?: (() => void) | undefined;
+  /** Query the links carry, so a mode set in the address survives moving between documents. */
+  linkSearch?: string;
 }
 
 /**
@@ -16,7 +18,13 @@ interface Props {
  * the main document as the entry, the rest beneath it. No "folder" label —
  * the main document's title says what they belong to.
  */
-export function FolderDocuments({ folder, currentUid, currentTitle, onAdd }: Props) {
+export function FolderDocuments({
+  folder,
+  currentUid,
+  currentTitle,
+  onAdd,
+  linkSearch = '',
+}: Props) {
   const main = folder.documents.find((d) => d.main);
   const companions = folder.documents.filter((d) => !d.main);
   const titleOf = (d: FolderDocument) =>
@@ -30,12 +38,22 @@ export function FolderDocuments({ folder, currentUid, currentTitle, onAdd }: Pro
       <ul className="folder-docs-list">
         {main && (
           <li>
-            <FolderLink doc={main} title={titleOf(main)} current={main.uid === currentUid} />
+            <FolderLink
+              doc={main}
+              title={titleOf(main)}
+              current={main.uid === currentUid}
+              search={linkSearch}
+            />
             {companions.length > 0 && (
               <ul className="folder-docs-list folder-docs-companions">
                 {companions.map((d) => (
                   <li key={d.uid}>
-                    <FolderLink doc={d} title={titleOf(d)} current={d.uid === currentUid} />
+                    <FolderLink
+                      doc={d}
+                      title={titleOf(d)}
+                      current={d.uid === currentUid}
+                      search={linkSearch}
+                    />
                   </li>
                 ))}
               </ul>
@@ -57,15 +75,17 @@ function FolderLink({
   doc,
   title,
   current,
+  search,
 }: {
   doc: FolderDocument;
   title: string;
   current: boolean;
+  search: string;
 }) {
   const Icon = doc.main ? ReaderIcon : FileTextIcon;
   return (
     <Link
-      to={`/d/${doc.uid}`}
+      to={`/d/${doc.uid}${search}`}
       className={`folder-docs-row${doc.main ? ' folder-docs-main' : ''}${current ? ' active' : ''}`}
       aria-current={current ? 'page' : undefined}
       title={title}

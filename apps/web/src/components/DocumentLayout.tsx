@@ -96,7 +96,7 @@ import type { DocMetaLinks } from '../lib/doc-meta-fold.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { shareFolderToken } from '../lib/folder.js';
-import { isFullViewSearch, writeFullViewToUrl } from '../lib/full-view.js';
+import { isFullViewSearch, withFullView, writeFullViewToUrl } from '../lib/full-view.js';
 import { expandAncestors } from '../lib/heading-collapse.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
@@ -412,13 +412,20 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     setFullViewState(next);
     writeFullViewToUrl(next);
   }, []);
+  // Back and Forward can land on an entry made in the other mode, e.g. a
+  // heading link followed in full view.
+  useEffect(() => {
+    const sync = () => setFullViewState(isFullViewSearch(window.location.search));
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, []);
+  // Full view hides the right pane without closing it, so nothing done in
+  // full view touches `commentsOpen`: the pane comes back as it was left.
   const rightPaneOpen = commentsOpen && !fullView;
   /**
    * Overlaid, the two panes would stack on top of each other and bury
    * the document between them, so opening one puts the other away.
    */
-  // Full view hides the right pane without closing it, so nothing done in
-  // full view touches `commentsOpen`: the pane comes back as it was left.
   const openToc = useCallback(
     (next: boolean) => {
       setTocOpen(next);
@@ -3296,6 +3303,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     setRightTab((prev) => (prev === 'search' ? 'comments' : prev));
   }, []);
 
+  // Search is opened from the toolbar and lists its results in the right
+  // pane; full view has neither.
+  useEffect(() => {
+    if (fullView) closeDocumentSearch();
+  }, [fullView, closeDocumentSearch]);
+
   const toggleDocumentSearch = useCallback(() => {
     if (docSearchOpen) closeDocumentSearch();
     else setDocSearchOpen(true);
@@ -3523,6 +3536,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                       folder={doc.folder}
                       currentUid={doc.uid}
                       currentTitle={title}
+                      linkSearch={fullView ? withFullView('', true) : ''}
                       onAdd={
                         // The dialog it opens lives in the toolbar.
                         !fullView && (doc.role === 'admin' || doc.role === 'editor')
