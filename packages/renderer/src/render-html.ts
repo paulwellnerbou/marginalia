@@ -190,6 +190,16 @@ function cleanChildren(children: ElementContent[]): ElementContent[] {
     if (typeof props.src === 'string' && /^\s*data:/i.test(props.src)) {
       if (!/^\s*data:image\//i.test(props.src)) delete props.src;
     }
+    if (typeof props.srcSet === 'string') {
+      const srcSet = sanitizeSrcSet(props.srcSet);
+      if (srcSet) props.srcSet = srcSet;
+      else delete props.srcSet;
+    }
+    if (child.tagName === 'a' && typeof props.target === 'string') {
+      // Browsers imply this for `_blank` today; naming it covers every target.
+      const rel = Array.isArray(props.rel) ? props.rel.map(String) : [];
+      props.rel = [...new Set([...rel, 'noopener', 'noreferrer'])];
+    }
     if (typeof props.style === 'string') {
       const style = sanitizeInlineStyle(props.style);
       if (style) props.style = style;
@@ -199,4 +209,37 @@ function cleanChildren(children: ElementContent[]): ElementContent[] {
     out.push(child);
   }
   return out;
+}
+
+/**
+ * `srcset` minus candidates `src` would not be allowed: any scheme but
+ * http(s) and `data:image/`. The sanitizer checks protocols on `src` only.
+ * A candidate's URL runs to the next whitespace (a `data:` URL holds
+ * commas), then an optional descriptor up to the comma.
+ */
+function sanitizeSrcSet(srcSet: string): string | null {
+  const kept: string[] = [];
+  let rest = srcSet;
+  for (;;) {
+    rest = rest.replace(/^[\s,]+/, '');
+    if (!rest) break;
+    let url = /^\S+/.exec(rest)![0];
+    rest = rest.slice(url.length);
+    let descriptor = '';
+    if (url.endsWith(',')) {
+      url = url.replace(/,+$/, '');
+    } else {
+      const d = /^[^,]*/.exec(rest)![0];
+      descriptor = d.trim();
+      rest = rest.slice(d.length);
+    }
+    const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(url)?.[1]?.toLowerCase();
+    const allowed =
+      scheme === undefined ||
+      scheme === 'http' ||
+      scheme === 'https' ||
+      (scheme === 'data' && /^data:image\//i.test(url));
+    if (allowed) kept.push(descriptor ? `${url} ${descriptor}` : url);
+  }
+  return kept.length > 0 ? kept.join(', ') : null;
 }

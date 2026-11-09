@@ -146,6 +146,18 @@ describe('HTML documents: sanitizing', () => {
     expect(r.html).toContain('<nav aria-label="Abschnitte"');
   });
 
+  test('srcset keeps only what src would, and targeted links lose the opener', async () => {
+    const r = await renderDocument(
+      [
+        '<img src="a.png" srcset="a.png 1x, data:image/png;base64,AA,BB 2x, data:text/html;base64,CC 3x, javascript:x 4x">',
+        '<a href="https://example.com" target="_blank" rel="nofollow">x</a>',
+      ].join(''),
+      'html',
+    );
+    expect(r.html).toContain('srcset="a.png 1x, data:image/png;base64,AA,BB 2x"');
+    expect(r.html).toContain('rel="nofollow noopener noreferrer"');
+  });
+
   test('wraps the body in the scope root, carrying html and body classes and the language', async () => {
     const r = await renderDocument(page, 'html');
     expect(r.html).toStartWith(
