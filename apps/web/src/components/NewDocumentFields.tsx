@@ -23,9 +23,20 @@ export interface NewDocumentSeed {
  * home page's "New document" and a folder's "Add a document" share it, so
  * the two can only differ in what they do with the result.
  */
-export function useNewDocumentFields(defaults: { source: string; format: DocumentFormat }) {
+export function useNewDocumentFields(defaults: {
+  source: string;
+  format: DocumentFormat;
+  /** Example source per format. An untouched example follows the format switch. */
+  samples?: Record<DocumentFormat, string> | undefined;
+}) {
   const [source, setSource] = useState(defaults.source);
-  const [format, setFormat] = useState<DocumentFormat>(defaults.format);
+  const [format, setFormatState] = useState<DocumentFormat>(defaults.format);
+  const samples = defaults.samples;
+
+  function setFormat(next: DocumentFormat) {
+    if (samples && source === samples[format]) setSource(samples[next]);
+    setFormatState(next);
+  }
   // The DOCUMENT's name. Empty → the title the source gives itself.
   const [docName, setDocName] = useState('');
   // Asked for inline only while none is set globally.
@@ -53,7 +64,7 @@ export function useNewDocumentFields(defaults: { source: string; format: Documen
     effectiveDocName: docName.trim() || derivedTitle,
     async loadFile(file: File) {
       setSource(await file.text());
-      setFormat(formatFromFilename(file.name));
+      setFormatState(formatFromFilename(file.name));
     },
     /** Stores the inline display name. Null while there is none to use. */
     identityForSubmit(): Identity | null {
@@ -63,8 +74,9 @@ export function useNewDocumentFields(defaults: { source: string; format: Documen
       return { clientId: getClientId(), displayName: user.slice(0, 80) };
     },
     reset(seed: NewDocumentSeed | null = null) {
-      setSource(seed?.source ?? defaults.source);
-      setFormat(seed?.format ?? defaults.format);
+      const nextFormat = seed?.format ?? defaults.format;
+      setSource(seed?.source ?? samples?.[nextFormat] ?? defaults.source);
+      setFormatState(nextFormat);
       setDocName(seed?.docName ?? '');
     },
   };
@@ -270,22 +282,16 @@ function SourceDropZone({
 }
 
 /**
- * Pull a plausible title out of AsciiDoc source. Preference order:
- *   1. The document title line `= Title`
- *   2. The first non-blank, non-attribute line
- *
- * `deriveDisplayName` only recognises markdown heading syntax; this plays
- * its role for AsciiDoc when the name field is left blank.
+ * The document title as the renderer reads it, else the first content line
+ * — the AsciiDoc counterpart of `deriveDisplayName`.
  */
 function deriveAsciidocTitle(source: string): string {
-  const lines = source.split(/\r?\n/);
-  for (const raw of lines) {
+  const title = extractDocumentTitle(source, 'asciidoc');
+  if (title) return title;
+  for (const raw of source.split(/\r?\n/)) {
     const line = raw.trim();
-    if (!line) continue;
-    const titleMatch = /^=\s+(.+)$/.exec(line);
-    if (titleMatch) return titleMatch[1]!.trim();
-    if (line.startsWith(':') || line.startsWith('//')) continue;
-    return line.slice(0, 80);
+    if (!line || line.startsWith(':') || line.startsWith('//')) continue;
+    return line.replace(/^[=#]+\s+/, '').slice(0, 80);
   }
   return '';
 }

@@ -74,7 +74,7 @@ import {
 } from '../lib/recent-docs.js';
 import { appRoleColor } from '../styles/theme.js';
 
-const SAMPLE = `# Welcome
+const MARKDOWN_SAMPLE = `# Welcome
 
 This is a markdown document. Edit me, then save.
 
@@ -88,6 +88,24 @@ This is a markdown document. Edit me, then save.
 console.log('hello');
 \`\`\`
 `;
+
+const ASCIIDOC_SAMPLE = `= Welcome
+
+This is an AsciiDoc document. Edit me, then save.
+
+== Features
+
+* Tables, images, mermaid diagrams, syntax-highlighted code
+* In-document references that work with Unicode headings
+* Threaded comments you can resolve
+
+[source,ts]
+----
+console.log('hello');
+----
+`;
+
+const SAMPLES = { markdown: MARKDOWN_SAMPLE, asciidoc: ASCIIDOC_SAMPLE };
 
 const GITHUB_REPO_URL = 'https://github.com/paulwellnerbou/marginalia';
 
@@ -617,7 +635,11 @@ function UploadDialog({
   draft: PendingNewDocumentDraft | null;
   onUploaded: (d: RecentDoc & { token?: string }) => void;
 }) {
-  const fields = useNewDocumentFields({ source: SAMPLE, format: 'markdown' });
+  const fields = useNewDocumentFields({
+    source: MARKDOWN_SAMPLE,
+    format: 'markdown',
+    samples: SAMPLES,
+  });
   const { source, format, docName, effectiveDocName, userDisplayName } = fields;
   const [passwordProtected, setPasswordProtected] = useState(false);
   // Matches the server default. Unticking it is the deliberate act of
