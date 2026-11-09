@@ -1,4 +1,5 @@
 import type { Schema } from 'hast-util-sanitize';
+import { NON_CONTENT_TAGS } from '../html-blocks.js';
 import { sanitizeSchema } from './sanitize-schema.js';
 
 const baseAttrs = (sanitizeSchema.attributes ?? {}) as Record<
@@ -90,7 +91,7 @@ const SVG_ATTRS = [
  */
 export const htmlSanitizeSchema: Schema = {
   ...sanitizeSchema,
-  strip: ['script', 'style', 'template', 'noscript', 'iframe', 'object', 'embed'],
+  strip: [...NON_CONTENT_TAGS],
   attributes: {
     ...baseAttrs,
     '*': [...(baseAttrs['*'] ?? []), 'style', 'role', 'hidden', 'translate', ...ARIA],

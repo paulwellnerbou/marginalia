@@ -23,8 +23,12 @@ import {
  * always lands in exactly one block per text node.
  */
 
-/** Elements whose content is never document text. */
-const NON_CONTENT = new Set([
+/**
+ * Elements whose content is never document text. The renderer drops them
+ * and the sanitizer strips them, so the block walk has to skip exactly
+ * these or an id would hash text the page never shows.
+ */
+export const NON_CONTENT_TAGS: readonly string[] = [
   'script',
   'style',
   'template',
@@ -34,7 +38,11 @@ const NON_CONTENT = new Set([
   'meta',
   'link',
   'base',
-]);
+  'iframe',
+  'object',
+  'embed',
+];
+const NON_CONTENT = new Set(NON_CONTENT_TAGS);
 
 /**
  * Phrasing (inline) elements: their text belongs to the enclosing block.

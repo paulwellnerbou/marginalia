@@ -4,6 +4,7 @@ import {
   canMergeMultiBlock,
   exportDocx,
   extractDocumentTitle,
+  htmlSectionSpan,
   locateBlockRangeHtml,
   locateBlocksHtml,
   renderDocument,
@@ -236,5 +237,74 @@ describe('HTML documents: DOCX', () => {
     expect(xml).toMatch(/w:val="Heading1"/);
     // The fact card's number and caption are separate paragraphs, not one run.
     expect(xml).toMatch(/8 <\/w:t>[\s\S]*?Sprachen[\s\S]*?<\/w:p>[\s\S]*?DE, EN/);
+  });
+});
+
+describe('HTML documents: section spans', () => {
+  const doc = [
+    '<main>',
+    '<section id="a">',
+    '  <h2>A</h2>',
+    '  <p>a text</p>',
+    '  <div class="scroll"><table><tr><td>cell</td></tr></table></div>',
+    '</section>',
+    '<svg class="guide"><path d="M0 0"/></svg>',
+    '<section id="b">',
+    '  <span class="eyebrow">B</span>',
+    '  <h2>B</h2>',
+    '  <p>b text</p>',
+    '</section>',
+    '</main>',
+  ].join('\n');
+  const at = (s: string) => doc.indexOf(s);
+
+  test('takes the wrapper a heading leads and the siblings that end before the next one', () => {
+    const span = htmlSectionSpan(doc, at('<h2>A'), at('<h2>B'));
+    // The whole first section and the divider after it, closing tags included.
+    expect(span && doc.slice(span.start, span.end)).toBe(
+      doc.slice(at('<section id="a">'), at('<svg')) + '<svg class="guide"><path d="M0 0"/></svg>',
+    );
+  });
+
+  test('stays inside a wrapper the heading does not lead', () => {
+    const span = htmlSectionSpan(doc, at('<h2>B'), doc.length);
+    expect(span && doc.slice(span.start, span.end)).toBe('<h2>B</h2>\n  <p>b text</p>');
+  });
+
+  test('null when no element starts at the offset', () => {
+    expect(htmlSectionSpan(doc, at('<h2>A') + 1, doc.length)).toBeNull();
+  });
+});
+
+describe('HTML documents: review fixes', () => {
+  test("an SVG's <title> is not the document title", async () => {
+    const src = '<h1>Q3 Report</h1><svg><title>Revenue bars</title><rect/></svg>';
+    expect((await renderDocument(src, 'html')).frontmatter.title).toBeUndefined();
+    expect(extractDocumentTitle(src, 'html')).toBe('Q3 Report');
+  });
+
+  test('html > body collapses into the root like a descendant chain', () => {
+    expect(scopeSelectorList('html > body, :root>body .x, html>body>main', null)).toBe(
+      '.mg-html-root, .mg-html-root .x, .mg-html-root>main',
+    );
+  });
+
+  test("page-global names are renamed or dropped so they cannot redefine the app's", () => {
+    const { css, warnings } = scopeHtmlCss(
+      [
+        '@keyframes pulse { from { opacity: 0 } }',
+        '@property --accent-9 { syntax: "<length>"; inherits: false; initial-value: 0px }',
+        '.a { animation: pulse 1s; animation-name: pulse }',
+        '@counter-style thumbs { system: cyclic; symbols: "x" }',
+        'ol { list-style: thumbs inside }',
+      ],
+      [],
+    );
+    expect(css).toContain('@keyframes mg-page-pulse');
+    expect(css).toContain('animation: mg-page-pulse 1s; animation-name: mg-page-pulse');
+    expect(css).toContain('@counter-style mg-page-thumbs');
+    expect(css).toContain('list-style: mg-page-thumbs inside');
+    expect(css).not.toContain('@property');
+    expect(warnings).toHaveLength(1);
   });
 });

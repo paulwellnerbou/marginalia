@@ -34,6 +34,7 @@ import {
   chapterEditQuery,
   resolveChapterScope,
   resolveDocMetaScope,
+  type SectionBalancer,
 } from '../lib/chapter-scope.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
@@ -48,8 +49,8 @@ import {
   applyTheme,
   BUILT_IN_THEMES,
   getUserThemeOverride,
-  HTML_PAGE_THEME,
   setUserThemeOverride,
+  themeForDocument,
 } from '../lib/themes.js';
 
 const ASSETS_COLLAPSED_WIDTH = 36;
@@ -71,6 +72,16 @@ const LS_WORD_WRAP = 'marginalia.editWordWrap';
  * Not used by the preview rewrite — that path takes the authoritative
  * attached-asset set from the server's `attached_assets` payload.
  */
+/** HTML chapters are widened to whole elements; the locator is loaded only for them. */
+async function sectionBalancer(
+  source: string,
+  format: DocumentFormat,
+): Promise<SectionBalancer | undefined> {
+  if (format !== 'html') return undefined;
+  const { htmlSectionSpan } = await import('@marginalia/renderer/locate-block-html');
+  return (headingStart, limit) => htmlSectionSpan(source, headingStart, limit);
+}
+
 function collectReferencedRefs(source: string, format: DocumentFormat): Set<string> {
   const out = new Set<string>();
   // Markdown: ![alt](src), ignore reference-style. Keep it narrow —
@@ -232,8 +243,8 @@ export function EditPage() {
   }, [wordWrap]);
   const isHtml = doc?.format === 'html';
   useEffect(() => {
-    void applyTheme(isHtml ? HTML_PAGE_THEME : theme);
-  }, [theme, isHtml]);
+    void applyTheme(themeForDocument(doc?.format ?? 'markdown', theme));
+  }, [theme, doc?.format]);
 
   const editorEl = useRef<HTMLDivElement>(null);
   const previewEl = useRef<HTMLDivElement>(null);
@@ -327,6 +338,7 @@ export function EditPage() {
             located.occurrences,
             chapterBlockId,
             chapterCopy,
+            await sectionBalancer(d.source, d.format),
           );
           if (!scope) {
             setError('This chapter could not be found. It may have changed or been removed.');
@@ -399,7 +411,10 @@ export function EditPage() {
         });
         viewRef.current = new EditorView({ state, parent: editorEl.current });
         if (appending) viewRef.current.focus();
-        if (openMeta && !chapterScope) showDocMetaInEditor(viewRef.current, doc.format, openMeta);
+        // HTML has no summary / about regions; a stray `?meta=` opens the page.
+        if (openMeta && !chapterScope && doc.format !== 'html') {
+          showDocMetaInEditor(viewRef.current, doc.format, openMeta);
+        }
       },
       (err) => {
         reportError('EditPage.editor', err, { uid });
@@ -682,6 +697,7 @@ export function EditPage() {
               latestBlocks.occurrences,
               chapterScope.headingBlockId,
               chapterScope.headingCopy,
+              await sectionBalancer(latest.source, latest.format),
             );
         if (!latestScope || latestScope.source !== savedSource) {
           setError(
@@ -793,10 +809,25 @@ export function EditPage() {
           return;
         }
         const wrap = chapterScope.proposalWrap;
+        const trim = chapterScope.proposalTrim;
+        let proposed = wrap ? wrap.before + source + wrap.after : source;
+        if (trim) {
+          const kept =
+            source.length >= trim.before.length + trim.after.length &&
+            source.startsWith(trim.before) &&
+            source.endsWith(trim.after);
+          if (!kept) {
+            setError(
+              `This change reaches past the text of ${scopeNoun(chapterScope)} (its wrapping tags or trailing elements). Propose it on the whole document instead.`,
+            );
+            return;
+          }
+          proposed = source.slice(trim.before.length, source.length - trim.after.length);
+        }
         await createEditProposal(
           targetUid,
           {
-            proposed_text: wrap ? wrap.before + source + wrap.after : source,
+            proposed_text: proposed,
             rationale: rationale.trim() || null,
             anchor_block_id: chapterScope.headingBlockId,
             anchor_section: chapterScope.section,

@@ -1,3 +1,4 @@
+import type { Element, ElementContent, Root } from 'hast';
 import { parseHtmlSource, sourceEnd, walkHtmlBlocks } from './html-blocks.js';
 import { addOccurrence, type BlockSourceRange, type LocatedBlocks } from './locate-block.js';
 
@@ -46,4 +47,78 @@ export function locateBlockRangeHtml(
     kind: 'multi',
     text: '',
   };
+}
+
+/**
+ * The source span of the section a heading opens, as whole elements: from
+ * the heading — or the wrapper it leads, `<section><h2>` — through every
+ * following sibling that ends before `limit` (the next same-or-higher
+ * heading's start, or the source end). Splicing an edited copy back can
+ * then never leave a wrapper half open, and trailing content without text
+ * of its own (an image, a divider SVG) stays with its section.
+ *
+ * Content in a sibling that also holds the next heading belongs to
+ * neither section. Null when no element starts at `headingStart`.
+ */
+export function htmlSectionSpan(
+  source: string,
+  headingStart: number,
+  limit: number,
+): { start: number; end: number } | null {
+  const tree = parseHtmlSource(source);
+  const found = findAt(tree, headingStart, null);
+  if (!found) return null;
+  let { node, parent } = found;
+  while (
+    parent &&
+    !CONTAINER_ROOTS.has(parent.node.tagName) &&
+    firstContentChild(parent.node) === node &&
+    (sourceEnd(parent.node) ?? Number.POSITIVE_INFINITY) <= limit
+  ) {
+    node = parent.node;
+    parent = parent.parent;
+  }
+  const start = node.position?.start?.offset ?? headingStart;
+  let end = sourceEnd(node) ?? start;
+  const siblings = parent?.node.children ?? [];
+  for (let i = siblings.indexOf(node) + 1; i < siblings.length; i++) {
+    const sibling = siblings[i]!;
+    const siblingEnd =
+      sibling.type === 'element' ? sourceEnd(sibling) : sibling.position?.end?.offset;
+    if (siblingEnd === undefined || siblingEnd > limit) break;
+    if (sibling.type === 'element' || sibling.type === 'text') end = Math.max(end, siblingEnd);
+  }
+  // Whitespace between the last element and the limit stays outside.
+  while (end > start && /\s/u.test(source[end - 1] ?? '')) end--;
+  return { start, end };
+}
+
+interface Located {
+  node: Element;
+  parent: Located | null;
+}
+
+const CONTAINER_ROOTS = new Set(['body', 'html']);
+
+function findAt(parent: Root | Element, offset: number, chain: Located | null): Located | null {
+  for (const child of parent.children) {
+    if (child.type !== 'element') continue;
+    const here: Located = { node: child, parent: chain };
+    if (child.position?.start?.offset === offset && !CONTAINER_ROOTS.has(child.tagName)) {
+      return here;
+    }
+    const start = child.position?.start?.offset;
+    const end = sourceEnd(child);
+    if (start !== undefined && end !== undefined && (offset < start || offset >= end)) continue;
+    const found = findAt(child, offset, here);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** The first child that is an element or non-blank text. */
+function firstContentChild(el: Element): ElementContent | undefined {
+  return el.children.find(
+    (c) => c.type === 'element' || (c.type === 'text' && c.value.trim() !== ''),
+  );
 }

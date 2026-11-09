@@ -138,8 +138,8 @@ import {
   applyTheme,
   BUILT_IN_THEMES,
   getUserThemeOverride,
-  HTML_PAGE_THEME,
   setUserThemeOverride,
+  themeForDocument,
 } from '../lib/themes.js';
 import {
   mergeArchiveThreads,
@@ -1221,12 +1221,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   useEffect(() => {
     if (isRememberedRightTab(rightTab)) localStorage.setItem(RIGHT_TAB_KEY, rightTab);
   }, [rightTab]);
-  // An HTML document styles itself; the Page theme only colours the
-  // review chrome around it.
+  // An HTML page styles itself: no theme, width or text-size controls.
   const isHtml = doc.format === 'html';
   useEffect(() => {
-    void applyTheme(isHtml ? HTML_PAGE_THEME : theme);
-  }, [theme, isHtml]);
+    void applyTheme(themeForDocument(doc.format, theme));
+  }, [theme, doc.format]);
 
   useEffect(() => {
     setTheme(getUserThemeOverride(doc.uid) ?? doc.default_theme);
@@ -3561,7 +3560,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                     nodes={liveRendered.toc}
                     activeId={activeHeadingId}
                     filterIds={sectionFilter}
-                    onToggleFilter={toggleSectionFilter}
+                    // Focusing folds the other sections, and HTML pages have no folds.
+                    onToggleFilter={isHtml ? undefined : toggleSectionFilter}
                     onClearFilter={clearSectionFilter}
                   />
                 </div>

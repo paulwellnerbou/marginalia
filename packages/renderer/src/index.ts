@@ -39,6 +39,7 @@ export {
   locateBlocksAsciidoc,
 } from './locate-block-asciidoc.js';
 export {
+  htmlSectionSpan,
   locateAllBlocksHtml,
   locateBlockRangeHtml,
   locateBlocksHtml,

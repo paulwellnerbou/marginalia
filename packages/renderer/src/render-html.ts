@@ -4,7 +4,13 @@ import rehypeStringify from 'rehype-stringify';
 import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 import { normalizeBlockText } from './block-ids-shared.js';
-import { findElement, parseHtmlSource, textOf, walkHtmlBlocks } from './html-blocks.js';
+import {
+  findElement,
+  isNonContent,
+  parseHtmlSource,
+  textOf,
+  walkHtmlBlocks,
+} from './html-blocks.js';
 import { HTML_ROOT_CLASS, sanitizeInlineStyle, scopeHtmlCss } from './html-css.js';
 import { rehypeAsciidocAssetCollector } from './plugins/asciidoc-asset-collector.js';
 import { markAnchorable, rehypeCollectRenderedBlockIds } from './plugins/block-elements.js';
@@ -36,7 +42,9 @@ export async function renderHtml(
 
   const htmlEl = findElement(tree, 'html');
   const body = findElement(tree, 'body');
-  const titleEl = findElement(tree, 'title');
+  // Only the head's: an SVG in the body has a `<title>` of its own.
+  const head = findElement(tree, 'head');
+  const titleEl = head ? findElement(head, 'title') : null;
   const title = titleEl ? normalizeBlockText(rawText(titleEl)) : '';
 
   const styles: string[] = [];
@@ -176,7 +184,7 @@ function cleanChildren(children: ElementContent[]): ElementContent[] {
       out.push(child);
       continue;
     }
-    if (DROP.has(child.tagName)) continue;
+    if (isNonContent(child)) continue;
     const props = child.properties ?? {};
     if (typeof props.src === 'string' && /^\s*data:/i.test(props.src)) {
       if (!/^\s*data:image\//i.test(props.src)) delete props.src;
@@ -191,18 +199,3 @@ function cleanChildren(children: ElementContent[]): ElementContent[] {
   }
   return out;
 }
-
-const DROP = new Set([
-  'script',
-  'style',
-  'template',
-  'noscript',
-  'title',
-  'meta',
-  'link',
-  'base',
-  'head',
-  'iframe',
-  'object',
-  'embed',
-]);

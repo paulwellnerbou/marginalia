@@ -191,7 +191,8 @@ function headingLine(source: string, format: DocumentFormat): string | null {
   const lines = source.split('\n');
   const first = lines[0] ?? '';
   if (format === 'asciidoc') return /^={1,6}\s+\S/u.test(first) ? first : null;
-  if (format === 'html') return /^\s*<h[1-6]\b/iu.test(first) ? first : null;
+  // A section may open with the wrapper its heading leads, `<section><h2>`.
+  if (format === 'html') return lines.find((line) => /<h[1-6]\b/iu.test(line)) ?? null;
   if (/^ {0,3}#{1,6}(\s|$)/u.test(first)) return first;
   // Setext: it is the underline that makes the line above it a heading.
   return first.trim() !== '' && /^ {0,3}(=+|-+)\s*$/u.test(lines[1] ?? '') ? first : null;

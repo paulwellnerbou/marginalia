@@ -17,7 +17,8 @@ import { computeSectionRelations, type SectionRelation } from '../lib/section-fi
 interface TocFilter {
   ids: ReadonlySet<string>;
   relations: ReadonlyMap<string, SectionRelation> | null;
-  onToggle: (id: string) => void;
+  /** Absent where focusing has nothing to fold, as on an HTML page. */
+  onToggle: ((id: string) => void) | undefined;
 }
 
 export function Toc({
@@ -30,7 +31,7 @@ export function Toc({
   nodes: TocNode[];
   activeId?: string | null;
   filterIds: ReadonlySet<string>;
-  onToggleFilter: (id: string) => void;
+  onToggleFilter: ((id: string) => void) | undefined;
   onClearFilter: () => void;
 }) {
   const [query, setQuery] = useState('');
@@ -261,19 +262,21 @@ function TocItem({
         <a ref={linkRef} href={`#${node.id}`} className={isActive ? 'active' : undefined}>
           {renderHighlightedText(plainText, query)}
         </a>
-        <IconButton
-          size="1"
-          variant="ghost"
-          {...(isFiltered ? {} : { color: 'gray' as const })}
-          className="toc-filter-btn"
-          data-active={isFiltered ? 'true' : undefined}
-          aria-pressed={isFiltered}
-          aria-label={filterLabel}
-          title={filterLabel}
-          onClick={() => filter.onToggle(node.id)}
-        >
-          <FunnelIcon />
-        </IconButton>
+        {filter.onToggle && (
+          <IconButton
+            size="1"
+            variant="ghost"
+            {...(isFiltered ? {} : { color: 'gray' as const })}
+            className="toc-filter-btn"
+            data-active={isFiltered ? 'true' : undefined}
+            aria-pressed={isFiltered}
+            aria-label={filterLabel}
+            title={filterLabel}
+            onClick={() => filter.onToggle?.(node.id)}
+          >
+            <FunnelIcon />
+          </IconButton>
+        )}
       </div>
       {hasChildren && (
         // Always rendered so children animate in/out (rather than

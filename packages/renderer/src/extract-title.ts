@@ -13,6 +13,7 @@
  * Returns `null` if neither signal is present. Callers decide what to
  * fall back to (the doc uid, typically).
  */
+import { decodeEntities } from './html-entities.js';
 import type { DocumentFormat } from './render.js';
 
 export function extractDocumentTitle(source: string, format: DocumentFormat): string | null {
@@ -21,10 +22,14 @@ export function extractDocumentTitle(source: string, format: DocumentFormat): st
   return extractMarkdownTitle(source);
 }
 
-/** `<title>`, else the first `<h1>`. */
+/**
+ * `<title>`, else the first `<h1>`. An SVG's `<title>` is its accessible
+ * name, not the page's, so SVGs and comments are cut out first.
+ */
 function extractHtmlTitle(source: string): string | null {
+  const page = source.replace(/<svg\b[\s\S]*?<\/svg>|<!--[\s\S]*?-->/gi, '');
   for (const re of [/<title\b[^>]*>([\s\S]*?)<\/title>/i, /<h1\b[^>]*>([\s\S]*?)<\/h1>/i]) {
-    const m = re.exec(source);
+    const m = re.exec(page);
     const text = m
       ? decodeEntities(m[1]!.replace(/<[^>]+>/g, ''))
           .replace(/\s+/g, ' ')
@@ -33,18 +38,6 @@ function extractHtmlTitle(source: string): string | null {
     if (text) return text;
   }
   return null;
-}
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&#(\d+);/g, (_m, n: string) => String.fromCodePoint(Number(n)))
-    .replace(/&#x([0-9a-f]+);/gi, (_m, n: string) => String.fromCodePoint(Number.parseInt(n, 16)))
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;|&apos;/g, "'")
-    .replace(/&amp;/g, '&');
 }
 
 /**

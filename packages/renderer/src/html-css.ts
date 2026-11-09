@@ -87,18 +87,23 @@ export function scopeHtmlCss(sources: readonly string[], fontLinks: readonly str
       });
   }
 
-  const bodies: string[] = [];
+  const roots: postcss.Root[] = [];
   for (const source of sources) {
-    let root: postcss.Root;
     try {
-      root = postcss.parse(source);
+      roots.push(postcss.parse(source));
     } catch (err) {
       warnings.push({
         kind: 'sanitized-element',
         message: `Dropped a <style> block that does not parse: ${(err as Error).message}`,
       });
-      continue;
     }
+  }
+  // Names are global across every <style> of the page, so collect them all
+  // before renaming any reference.
+  const renames = globalNameRenames(roots, warnings);
+
+  const bodies: string[] = [];
+  for (const root of roots) {
     root.walkAtRules('import', (rule) => {
       const href = importHref(rule.params);
       if (href && isFontStylesheet(href)) imports.push(`@import url(${JSON.stringify(href)});`);
@@ -113,6 +118,7 @@ export function scopeHtmlCss(sources: readonly string[], fontLinks: readonly str
       rule.remove();
     });
     scopeContainer(root, null);
+    applyRenames(root, renames);
     root.walkDecls((decl) => {
       if (isUnsafeValue(decl.value) || /^(behavior|-moz-binding)$/i.test(decl.prop)) decl.remove();
     });
@@ -121,6 +127,74 @@ export function scopeHtmlCss(sources: readonly string[], fontLinks: readonly str
 
   const css = [...imports, BASE_CSS, ...bodies].join('\n');
   return { css: escapeStyleText(css), warnings };
+}
+
+/**
+ * `@keyframes`, `@counter-style` and `@property` declare names for the
+ * whole page the app shares, where a page's `@keyframes rt-fade-in` or
+ * `@property --accent-9` would redefine the app's own. Keyframes and
+ * counter styles get a prefixed name, rewritten where the page uses
+ * them; registered properties are dropped, since every `var()` reading
+ * them would need renaming too. `@font-face` stays: families from font
+ * services arrive by `@import` and cannot be renamed either, and `@page`
+ * is wanted for the PDF export.
+ */
+interface Renames {
+  keyframes: Map<string, string>;
+  counterStyles: Map<string, string>;
+}
+
+const PAGE_NAME_PREFIX = 'mg-page-';
+
+function globalNameRenames(roots: postcss.Root[], warnings: Warning[]): Renames {
+  const renames: Renames = { keyframes: new Map(), counterStyles: new Map() };
+  for (const root of roots) {
+    root.walkAtRules((rule) => {
+      const name = rule.name.toLowerCase();
+      if (name === 'property') {
+        warnings.push({
+          kind: 'sanitized-element',
+          message: `Dropped @property ${rule.params}: registered properties would apply to the whole app.`,
+        });
+        rule.remove();
+        return;
+      }
+      const target = /^(-webkit-)?keyframes$/.test(name)
+        ? renames.keyframes
+        : name === 'counter-style'
+          ? renames.counterStyles
+          : null;
+      if (!target) return;
+      const original = rule.params.trim().replace(/^["']|["']$/g, '');
+      if (!original) return;
+      const renamed = target.get(original) ?? `${PAGE_NAME_PREFIX}${original}`;
+      target.set(original, renamed);
+      rule.params = renamed;
+    });
+  }
+  return renames;
+}
+
+const KEYFRAME_PROPS = /^(-webkit-)?animation(-name)?$/i;
+const COUNTER_STYLE_PROPS = /^(list-style(-type)?|content|system|fallback)$/i;
+
+function applyRenames(root: postcss.Root, renames: Renames): void {
+  if (renames.keyframes.size === 0 && renames.counterStyles.size === 0) return;
+  root.walkDecls((decl) => {
+    const names = KEYFRAME_PROPS.test(decl.prop)
+      ? renames.keyframes
+      : COUNTER_STYLE_PROPS.test(decl.prop)
+        ? renames.counterStyles
+        : null;
+    if (names && names.size > 0) decl.value = renameIdents(decl.value, names);
+  });
+}
+
+/** Replace whole identifiers outside strings. */
+function renameIdents(value: string, names: Map<string, string>): string {
+  return value.replace(/("[^"]*"|'[^']*')|(-?[A-Za-z_][\w-]*)/g, (m, str: string | undefined) =>
+    str ? m : (names.get(m) ?? m),
+  );
 }
 
 /** Strip what an inline `style` attribute must not carry. */
@@ -226,8 +300,8 @@ function scopeSelector(selector: string, root: string): string {
   let rest = selector;
   let suffix = '';
   let matchedRoot = false;
-  // `html body.x > main` → root.x > main: every leading root-ish compound
-  // collapses into the one root element.
+  // `html body.x > main`, `html > body` → root.x > main, root: every
+  // leading root-ish compound collapses into the one root element.
   for (;;) {
     const m = ROOTISH_RE.exec(rest);
     if (!m) break;
@@ -235,9 +309,9 @@ function scopeSelector(selector: string, root: string): string {
     const compoundEnd = endOfCompound(rest);
     suffix += rest.slice(m[0].length, compoundEnd);
     rest = rest.slice(compoundEnd);
-    const descendant = /^\s+(?=[\w:.#[*-])/.exec(rest);
-    if (descendant && ROOTISH_RE.test(rest.slice(descendant[0].length))) {
-      rest = rest.slice(descendant[0].length);
+    const combinator = /^(?:\s*>\s*|\s+)(?=[\w:.#[*-])/.exec(rest);
+    if (combinator && ROOTISH_RE.test(rest.slice(combinator[0].length))) {
+      rest = rest.slice(combinator[0].length);
       continue;
     }
     break;
