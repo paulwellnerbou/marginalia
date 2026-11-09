@@ -5,8 +5,8 @@
  * on every download request — or client-side in the UI.
  *
  * Priority:
- *   1. YAML frontmatter `title:` (markdown) or `= Title` header
- *      (asciidoc). Matches what the renderer itself treats as the
+ *   1. YAML frontmatter `title:` (markdown), `= Title` header
+ *      (asciidoc) or `<title>` (html). Matches what the renderer itself treats as the
  *      document title.
  *   2. First top-level heading in the body (`#` / `==`).
  *
@@ -16,7 +16,35 @@
 import type { DocumentFormat } from './render.js';
 
 export function extractDocumentTitle(source: string, format: DocumentFormat): string | null {
-  return format === 'asciidoc' ? extractAsciidocTitle(source) : extractMarkdownTitle(source);
+  if (format === 'asciidoc') return extractAsciidocTitle(source);
+  if (format === 'html') return extractHtmlTitle(source);
+  return extractMarkdownTitle(source);
+}
+
+/** `<title>`, else the first `<h1>`. */
+function extractHtmlTitle(source: string): string | null {
+  for (const re of [/<title\b[^>]*>([\s\S]*?)<\/title>/i, /<h1\b[^>]*>([\s\S]*?)<\/h1>/i]) {
+    const m = re.exec(source);
+    const text = m
+      ? decodeEntities(m[1]!.replace(/<[^>]+>/g, ''))
+          .replace(/\s+/g, ' ')
+          .trim()
+      : '';
+    if (text) return text;
+  }
+  return null;
+}
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&#(\d+);/g, (_m, n: string) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, n: string) => String.fromCodePoint(Number.parseInt(n, 16)))
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, '&');
 }
 
 /**

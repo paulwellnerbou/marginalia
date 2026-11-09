@@ -40,7 +40,7 @@ export function locateAnchorSpan(
   blockId: string,
   endBlockId: string | null,
   section: AnchorSection | null,
-  format: 'markdown' | 'asciidoc',
+  format: 'markdown' | 'asciidoc' | 'html',
 ): BlockSourceRange | null {
   const startBlock = chooseBySection(occurrences.get(blockId) ?? [], section);
   if (!startBlock) return null;

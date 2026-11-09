@@ -138,6 +138,7 @@ import {
   applyTheme,
   BUILT_IN_THEMES,
   getUserThemeOverride,
+  HTML_PAGE_THEME,
   setUserThemeOverride,
 } from '../lib/themes.js';
 import {
@@ -1220,9 +1221,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   useEffect(() => {
     if (isRememberedRightTab(rightTab)) localStorage.setItem(RIGHT_TAB_KEY, rightTab);
   }, [rightTab]);
+  // An HTML document styles itself; the Page theme only colours the
+  // review chrome around it.
+  const isHtml = doc.format === 'html';
   useEffect(() => {
-    void applyTheme(theme);
-  }, [theme]);
+    void applyTheme(isHtml ? HTML_PAGE_THEME : theme);
+  }, [theme, isHtml]);
 
   useEffect(() => {
     setTheme(getUserThemeOverride(doc.uid) ?? doc.default_theme);
@@ -2301,14 +2305,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   // are offered the missing regions.
   const docMetaLinks = useMemo<DocMetaLinks | undefined>(
     () =>
-      canComment
+      canComment && doc.format !== 'html'
         ? {
             href: (kind) => `/d/${doc.uid}/edit?meta=${kind}`,
             open: (kind) => navigate(`/d/${doc.uid}/edit?meta=${kind}`),
             canAdd: canEdit && !!editHref,
           }
         : undefined,
-    [canComment, canEdit, editHref, doc.uid, navigate],
+    [canComment, canEdit, editHref, doc.uid, doc.format, navigate],
   );
 
   // Editors can fill missing-asset placeholders directly in view mode
@@ -3354,33 +3358,37 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         <SegmentedControl.Item value="chapters">Chapters</SegmentedControl.Item>
       </SegmentedControl.Root>
 
-      <Text size="1" color="gray">
-        Reading width
-      </Text>
-      <DisplayStepper
-        ariaLabel="Reading width"
-        min={40}
-        max={120}
-        step={4}
-        defaultValue={DEFAULT_MAX_WIDTH}
-        value={maxWidth}
-        format={(v) => `${v}ch`}
-        onCommit={setMaxWidth}
-      />
+      {!isHtml && (
+        <>
+          <Text size="1" color="gray">
+            Reading width
+          </Text>
+          <DisplayStepper
+            ariaLabel="Reading width"
+            min={40}
+            max={120}
+            step={4}
+            defaultValue={DEFAULT_MAX_WIDTH}
+            value={maxWidth}
+            format={(v) => `${v}ch`}
+            onCommit={setMaxWidth}
+          />
 
-      <Text size="1" color="gray">
-        Text size
-      </Text>
-      <DisplayStepper
-        ariaLabel="Text size"
-        min={TEXT_ZOOM_MIN}
-        max={TEXT_ZOOM_MAX}
-        step={5}
-        defaultValue={100}
-        value={textZoom}
-        format={(v) => `${v}%`}
-        onCommit={setTextZoom}
-      />
+          <Text size="1" color="gray">
+            Text size
+          </Text>
+          <DisplayStepper
+            ariaLabel="Text size"
+            min={TEXT_ZOOM_MIN}
+            max={TEXT_ZOOM_MAX}
+            step={5}
+            defaultValue={100}
+            value={textZoom}
+            format={(v) => `${v}%`}
+            onCommit={setTextZoom}
+          />
+        </>
+      )}
 
       <Text size="1" color="gray">
         Interface size
@@ -3400,26 +3408,30 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         onReset={() => setUiScaleState(resetUiScale())}
       />
 
-      <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
-        Theme
-      </Text>
-      <Select.Root
-        value={theme}
-        size="1"
-        onValueChange={(next) => {
-          setTheme(next);
-          setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
-        }}
-      >
-        <Select.Trigger id="doc-theme-select" variant="soft" />
-        <Select.Content position="popper" style={{ maxHeight: 360 }}>
-          {BUILT_IN_THEMES.map((t) => (
-            <Select.Item key={t.id} value={t.id}>
-              {t.label}
-            </Select.Item>
-          ))}
-        </Select.Content>
-      </Select.Root>
+      {!isHtml && (
+        <>
+          <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
+            Theme
+          </Text>
+          <Select.Root
+            value={theme}
+            size="1"
+            onValueChange={(next) => {
+              setTheme(next);
+              setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
+            }}
+          >
+            <Select.Trigger id="doc-theme-select" variant="soft" />
+            <Select.Content position="popper" style={{ maxHeight: 360 }}>
+              {BUILT_IN_THEMES.map((t) => (
+                <Select.Item key={t.id} value={t.id}>
+                  {t.label}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+        </>
+      )}
 
       <Text size="1" color="gray">
         Full view

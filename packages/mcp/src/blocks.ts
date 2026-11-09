@@ -338,13 +338,17 @@ export function enclosingTopLevel(map: DocumentBlockMap, block: DocumentBlock): 
 }
 
 /**
- * The markdown or AsciiDoc level of the heading `source` opens with, or
+ * The markdown, AsciiDoc or HTML level of the heading `source` opens with, or
  * null when its first line is not one. Setext underlines count: `===`
  * is level 1, `---` level 2.
  */
 export function headingLevel(source: string, format: DocumentFormat): number | null {
   const [first = '', second = ''] = source.split('\n');
   if (format === 'asciidoc') return /^(={1,6})\s+\S/u.exec(first)?.[1]?.length ?? null;
+  if (format === 'html') {
+    const level = /^\s*<h([1-6])\b/iu.exec(source)?.[1];
+    return level ? Number(level) : null;
+  }
   const atx = /^ {0,3}(#{1,6})(\s|$)/u.exec(first);
   if (atx) return (atx[1] as string).length;
   if (first.trim() === '') return null;
@@ -357,6 +361,10 @@ async function locateSourceBlocks(source: string, format: DocumentFormat): Promi
     // Asciidoctor is a heavy import; only pay for it on asciidoc docs.
     const { locateBlocksAsciidoc } = await import('@marginalia/renderer/locate-block-asciidoc');
     return locateBlocksAsciidoc(source);
+  }
+  if (format === 'html') {
+    const { locateBlocksHtml } = await import('@marginalia/renderer/locate-block-html');
+    return locateBlocksHtml(source);
   }
   return locateBlocks(source);
 }

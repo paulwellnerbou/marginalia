@@ -38,6 +38,9 @@ export const BUILT_IN_THEMES: ThemeMeta[] = [
   { id: 'serif-print', label: 'Serif (Print)', blurb: 'Print-optimized serif, narrow column.' },
 ];
 
+/** What HTML documents are shown with; not offered in the theme picker. */
+export const HTML_PAGE_THEME = 'page';
+
 // Eagerly-declared imports so Vite bundles all themes and we can switch
 // between them at runtime without issuing a fresh network request.
 const themeImports: Record<string, () => Promise<unknown>> = {
@@ -50,6 +53,7 @@ const themeImports: Record<string, () => Promise<unknown>> = {
   beautiful: () => import('@marginalia/themes/beautiful.css?url'),
   'serif-print': () => import('@marginalia/themes/serif-print.css?url'),
   report: () => import('@marginalia/themes/report.css?url'),
+  [HTML_PAGE_THEME]: () => import('@marginalia/themes/page.css?url'),
 };
 
 const THEME_LINK_ATTR = 'data-marginalia-theme';

@@ -25,6 +25,8 @@ export interface ExtractedDocMeta {
  * goes out without them, and the summary can become its blurb.
  */
 export function extractDocMeta(source: string, format: DocumentFormat): ExtractedDocMeta {
+  // HTML documents have no summary / about regions.
+  if (format === 'html') return { source, summary: null, about: null };
   const cuts = format === 'asciidoc' ? findAsciidocDocMetaRegions(source) : markdownRegions(source);
   const found: Record<DocMetaKind, string | null> = { summary: null, about: null };
   let stripped = '';
@@ -44,7 +46,7 @@ export function extractDocMeta(source: string, format: DocumentFormat): Extracte
  * through: its inline markup is rarer in a blurb and has no cheap parse.
  */
 export function docMetaPlainText(text: string, format: DocumentFormat): string {
-  if (format === 'asciidoc') return text;
+  if (format !== 'markdown') return text;
   const tree = unified().use(remarkParse).use(remarkGfm).parse(text) as Root;
   return tree.children
     .map((node) => mdastToString(node).trim())

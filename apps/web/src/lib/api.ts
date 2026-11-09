@@ -15,6 +15,8 @@ export interface TocNode extends Anchor {
 
 export interface RenderedDocument {
   html: string;
+  /** The HTML format's own stylesheet, scoped to its root. */
+  css?: string | undefined;
   anchors: Anchor[];
   toc: TocNode[];
   frontmatter: Record<string, unknown>;
@@ -81,7 +83,7 @@ export interface ExportedComment {
   } | null;
 }
 
-export type DocumentFormat = 'markdown' | 'asciidoc';
+export type DocumentFormat = 'markdown' | 'asciidoc' | 'html';
 
 /**
  * Mermaid renderer used for DOCX/PDF exports.
@@ -97,7 +99,7 @@ export type MermaidRenderer = 'mmdr' | 'chromium';
 export const MERMAID_RENDERERS: readonly MermaidRenderer[] = ['mmdr', 'chromium'] as const;
 
 export function isDocumentFormat(v: unknown): v is DocumentFormat {
-  return v === 'markdown' || v === 'asciidoc';
+  return v === 'markdown' || v === 'asciidoc' || v === 'html';
 }
 
 export interface DocumentBundle {

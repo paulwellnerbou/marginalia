@@ -15,6 +15,7 @@ import {
   downloadDocumentSourceWithAcceptedProposals,
   uploadDocumentCover,
 } from '../lib/api.js';
+import { FORMAT_INFO } from '../lib/format-info.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
 import { showToast } from '../lib/notifications.js';
@@ -158,12 +159,9 @@ export function useDocumentDownloads({
       ? 'Not saved yet'
       : 'This download only';
 
-  const sourceExt = doc.format === 'asciidoc' ? 'adoc' : 'md';
-  const sourceLabel = doc.format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source';
-  const acceptedSourceLabel =
-    doc.format === 'asciidoc'
-      ? 'AsciiDoc with proposals accepted'
-      : 'Markdown with proposals accepted';
+  const { ext: sourceExt, label: formatLabel, mime } = FORMAT_INFO[doc.format];
+  const sourceLabel = `${formatLabel} source`;
+  const acceptedSourceLabel = `${formatLabel} with proposals accepted`;
 
   function downloadBlob(blob: Blob, filename: string): void {
     const url = URL.createObjectURL(blob);
@@ -185,7 +183,6 @@ export function useDocumentDownloads({
     setBusy('source');
     try {
       const base = sanitizeDocumentFilename(resolveTitle(doc, source), doc.uid);
-      const mime = doc.format === 'asciidoc' ? 'text/asciidoc' : 'text/markdown';
       downloadBlob(new Blob([source], { type: `${mime};charset=utf-8` }), `${base}.${sourceExt}`);
     } catch (err) {
       reportError('DownloadMenu.source', err, { uid: doc.uid });

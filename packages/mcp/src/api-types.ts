@@ -4,7 +4,7 @@
  * are ignored rather than rejected.
  */
 
-export type DocumentFormat = 'markdown' | 'asciidoc';
+export type DocumentFormat = 'markdown' | 'asciidoc' | 'html';
 export type Role = 'admin' | 'editor' | 'collaborator' | 'reader';
 /** `orphaned` and `conflict` mean the anchor no longer resolves against the current source. */
 export type LinkStatus = 'linked' | 'low-confidence' | 'conflict' | 'orphaned';

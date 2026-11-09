@@ -93,6 +93,7 @@ import { remarkSlugger } from './plugins/slugger.js';
 import { remarkTocMarker, TOC_MARKER_CLASSNAME } from './plugins/toc-marker.js';
 import type { DocumentFormat } from './render.js';
 import { renderAsciidoc } from './render-asciidoc.js';
+import { renderHtml } from './render-html.js';
 import type { RenderOptions } from './types.js';
 
 /**
@@ -557,9 +558,13 @@ async function sourceToHast(
   format: DocumentFormat,
   options: Pick<RenderOptions, 'highlight'>,
 ): Promise<{ hast: HastRoot; frontmatter: Record<string, unknown> }> {
-  if (format === 'asciidoc') {
-    const { html, frontmatter } = await renderAsciidoc(source, options);
+  if (format === 'asciidoc' || format === 'html') {
+    // The page's own CSS doesn't carry over; its structure does.
+    const { html, frontmatter } =
+      format === 'asciidoc' ? await renderAsciidoc(source, options) : await renderHtml(source);
     const hast = unified().use(rehypeParse, { fragment: true }).parse(html) as HastRoot;
+    if (format === 'html')
+      hast.children = normalizeHtmlLayout(hast.children as HastNode[]) as HastRoot['children'];
     return { hast, frontmatter };
   }
 
@@ -1186,6 +1191,77 @@ function appendFootnoteBlock(
       return;
     }
   }
+}
+
+// -- HTML documents -----------------------------------------------------
+
+/** Sectioning tags the walker has no case for; they are plain wrappers here. */
+const HTML_LAYOUT_TAGS = new Set([
+  'main',
+  'header',
+  'footer',
+  'nav',
+  'aside',
+  'hgroup',
+  'search',
+  'address',
+]);
+
+const HTML_BLOCK_TAGS = new Set([
+  'p',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'ul',
+  'ol',
+  'dl',
+  'table',
+  'pre',
+  'blockquote',
+  'div',
+  'section',
+  'article',
+  'figure',
+  'figcaption',
+  'hr',
+  'details',
+  'summary',
+  ...HTML_LAYOUT_TAGS,
+]);
+
+/**
+ * A hand-written page nests its text in layout elements the walker only
+ * knows as transparent wrappers, and puts inline content straight into
+ * them (`<div class="fact"><span>8</span> Sprachen</div>`). Wrappers
+ * become `<div>`s, and every run of inline content beside blocks becomes
+ * a `<p>`, so each lands as a paragraph instead of being run together.
+ */
+function normalizeHtmlLayout(nodes: HastNode[]): HastNode[] {
+  const out: HastNode[] = [];
+  let run: HastNode[] = [];
+  const flush = () => {
+    if (run.some((n) => (n.type === 'text' ? (n as Text).value.trim() !== '' : isElement(n)))) {
+      out.push({ type: 'element', tagName: 'p', properties: {}, children: run } as HastNode);
+    }
+    run = [];
+  };
+  for (const node of nodes) {
+    if (!isElement(node) || !HTML_BLOCK_TAGS.has(node.tagName)) {
+      run.push(node);
+      continue;
+    }
+    flush();
+    if (HTML_LAYOUT_TAGS.has(node.tagName)) node.tagName = 'div';
+    if (['div', 'section', 'article', 'figure', 'blockquote', 'details'].includes(node.tagName)) {
+      node.children = normalizeHtmlLayout(node.children as HastNode[]) as typeof node.children;
+    }
+    out.push(node);
+  }
+  flush();
+  return out;
 }
 
 // -- Document assembly --------------------------------------------------

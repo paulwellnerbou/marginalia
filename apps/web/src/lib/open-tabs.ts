@@ -142,7 +142,7 @@ function save(tabs: OpenTab[]): OpenTab[] {
   return tabs;
 }
 
-const VALID_FORMATS = new Set<DocumentFormat>(['markdown', 'asciidoc']);
+const VALID_FORMATS = new Set<DocumentFormat>(['markdown', 'asciidoc', 'html']);
 
 function coerceTab(v: unknown): OpenTab[] {
   if (!v || typeof v !== 'object') return [];

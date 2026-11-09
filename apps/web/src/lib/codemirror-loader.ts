@@ -12,7 +12,9 @@ export type EditorBaseDeps = {
 
 export type MarkdownFn = typeof import('@codemirror/lang-markdown').markdown;
 
-export type EditorDeps = EditorBaseDeps & { markdown?: MarkdownFn };
+export type HtmlFn = typeof import('@codemirror/lang-html').html;
+
+export type EditorDeps = EditorBaseDeps & { markdown?: MarkdownFn; html?: HtmlFn };
 
 let baseDepsPromise: Promise<EditorBaseDeps> | null = null;
 let markdownDepPromise: Promise<MarkdownFn> | null = null;
@@ -52,13 +54,20 @@ export function loadMarkdownExt(): Promise<MarkdownFn> {
   return markdownDepPromise;
 }
 
-// Compose what callers need based on document format. Markdown
-// documents pull in the grammar chunk; AsciiDoc gets a plain editor
-// (no asciidoc grammar bundled).
+// Compose what callers need based on document format. Markdown and
+// HTML documents pull in their grammar chunk; AsciiDoc gets a plain
+// editor (no asciidoc grammar bundled).
 export async function loadEditorDeps(format: DocumentFormat): Promise<EditorDeps> {
   if (format === 'markdown') {
     const [base, markdown] = await Promise.all([loadEditorBase(), loadMarkdownExt()]);
     return { ...base, markdown };
+  }
+  if (format === 'html') {
+    const [base, html] = await Promise.all([
+      loadEditorBase(),
+      import('@codemirror/lang-html').then((m) => m.html),
+    ]);
+    return { ...base, html };
   }
   return loadEditorBase();
 }

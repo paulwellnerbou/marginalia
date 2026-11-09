@@ -144,5 +144,10 @@ export function NewFolderDocumentDialog({
 
 /** A heading to start from, since a document cannot be empty. */
 function starterSource(name: string, format: DocumentFormat): string {
+  if (format === 'html') return `<h1>${escapeHtml(name)}</h1>\n`;
   return format === 'asciidoc' ? `= ${name}\n` : `# ${name}\n`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

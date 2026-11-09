@@ -38,9 +38,15 @@ export {
   locateBlockRangeAsciidoc,
   locateBlocksAsciidoc,
 } from './locate-block-asciidoc.js';
+export {
+  locateAllBlocksHtml,
+  locateBlockRangeHtml,
+  locateBlocksHtml,
+} from './locate-block-html.js';
 export type { DocumentFormat } from './render.js';
 export { isDocumentFormat, render, renderDocument } from './render.js';
 export { renderAsciidoc } from './render-asciidoc.js';
+export { renderHtml } from './render-html.js';
 export type { SectionContext } from './section-score.js';
 export { headingSegmentsMatch, scoreSectionMatch } from './section-score.js';
 export type { MarkdownChapter } from './split-markdown-chapters.js';

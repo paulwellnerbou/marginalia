@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import { locateAllBlocks, locateAllBlocksAsciidoc } from '@marginalia/renderer';
+import { locateAllBlocksFor } from './block-locate.js';
 import { columnExists, type DocumentFormat } from './db.js';
 import type { GitStore } from './git-store.js';
 
@@ -128,10 +128,7 @@ export async function backfillProposalBranches(
       rangeStart = row.base_block_start;
       rangeEnd = row.base_block_end;
     } else {
-      const blocks =
-        doc.format === 'asciidoc'
-          ? await locateAllBlocksAsciidoc(baseSource)
-          : locateAllBlocks(baseSource);
+      const blocks = await locateAllBlocksFor(baseSource, doc.format);
       const range = blocks.get(row.anchor_block_id);
       if (!range) {
         skipped += 1;
