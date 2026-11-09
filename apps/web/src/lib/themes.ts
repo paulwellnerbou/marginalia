@@ -30,6 +30,11 @@ export const BUILT_IN_THEMES: ThemeMeta[] = [
   { id: 'book', label: 'Document', blurb: 'Classic serif, narrow column, long-form reading.' },
   { id: 'article', label: 'Article', blurb: 'Magazine-style essay with bold headings.' },
   { id: 'technical', label: 'Technical', blurb: 'Wider column, tight spacing, good for code.' },
+  {
+    id: 'report',
+    label: 'Report',
+    blurb: 'Condensed headings, white cards, a lime accent; for briefings and assessments.',
+  },
   { id: 'serif-print', label: 'Serif (Print)', blurb: 'Print-optimized serif, narrow column.' },
 ];
 
@@ -44,6 +49,7 @@ const themeImports: Record<string, () => Promise<unknown>> = {
   technical: () => import('@marginalia/themes/technical.css?url'),
   beautiful: () => import('@marginalia/themes/beautiful.css?url'),
   'serif-print': () => import('@marginalia/themes/serif-print.css?url'),
+  report: () => import('@marginalia/themes/report.css?url'),
 };
 
 const THEME_LINK_ATTR = 'data-marginalia-theme';

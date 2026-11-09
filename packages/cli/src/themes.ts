@@ -10,6 +10,7 @@ export const BUILT_IN_THEMES = [
   'technical',
   'beautiful',
   'serif-print',
+  'report',
 ] as const;
 export type BuiltInTheme = (typeof BUILT_IN_THEMES)[number];
 

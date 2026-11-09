@@ -46,7 +46,13 @@ export function ViewPage() {
     // Strip the token from the address bar synchronously so copy-pasting the
     // URL no longer leaks the bearer credential, even if the claim request is
     // still in flight or the component later re-renders for a different uid.
-    window.history.replaceState({}, '', `/d/${uid}`);
+    // The query and fragment stay: a shared link carries `?view=full` and
+    // `#comment-…` there, and both are read after this runs.
+    window.history.replaceState(
+      window.history.state,
+      '',
+      `/d/${uid}${window.location.search}${window.location.hash}`,
+    );
     claimInvite(uid, token).catch(() => {
       // 400 (admin invite), 409 (password-protected), 404 (invite gone):
       // fall back to invite-header auth via the token in localStorage.

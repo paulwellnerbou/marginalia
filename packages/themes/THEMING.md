@@ -72,6 +72,7 @@ Built-in themes in this package:
 - `@marginalia/themes/book.css`
 - `@marginalia/themes/article.css`
 - `@marginalia/themes/technical.css`
+- `@marginalia/themes/report.css`
 - `@marginalia/themes/serif-print.css` (intended for PDF export)
 
 ## Non-CSS consumers

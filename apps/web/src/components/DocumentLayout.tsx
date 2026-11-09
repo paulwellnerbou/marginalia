@@ -8,11 +8,14 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   Cross2Icon,
+  EnterFullScreenIcon,
+  ExitFullScreenIcon,
   LetterCaseToggleIcon,
   MagnifyingGlassIcon,
 } from '@radix-ui/react-icons';
 import {
   Badge,
+  Button,
   Flex,
   IconButton,
   SegmentedControl,
@@ -93,6 +96,7 @@ import type { DocMetaLinks } from '../lib/doc-meta-fold.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { shareFolderToken } from '../lib/folder.js';
+import { isFullViewSearch, withFullView, writeFullViewToUrl } from '../lib/full-view.js';
 import { expandAncestors } from '../lib/heading-collapse.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { reportError } from '../lib/log.js';
@@ -399,28 +403,49 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   const [tocOpen, setTocOpen] = useState(!compactViewport);
   const [commentsOpen, setCommentsOpen] = useState(!compactViewport);
   /**
+   * Only the document, its contents and its comment cards: no app bar,
+   * toolbar or Threads/History pane. Lives in the address so the link
+   * can be sent; `commentsOpen` is kept untouched for the way back.
+   */
+  const [fullView, setFullViewState] = useState(() => isFullViewSearch(window.location.search));
+  const setFullView = useCallback((next: boolean) => {
+    setFullViewState(next);
+    writeFullViewToUrl(next);
+  }, []);
+  // Back and Forward can land on an entry made in the other mode, e.g. a
+  // heading link followed in full view.
+  useEffect(() => {
+    const sync = () => setFullViewState(isFullViewSearch(window.location.search));
+    window.addEventListener('popstate', sync);
+    return () => window.removeEventListener('popstate', sync);
+  }, []);
+  // Full view hides the right pane without closing it, so nothing done in
+  // full view touches `commentsOpen`: the pane comes back as it was left.
+  const rightPaneOpen = commentsOpen && !fullView;
+  /**
    * Overlaid, the two panes would stack on top of each other and bury
    * the document between them, so opening one puts the other away.
    */
   const openToc = useCallback(
     (next: boolean) => {
       setTocOpen(next);
-      if (next && overlayPanes) setCommentsOpen(false);
+      if (next && overlayPanes && !fullView) setCommentsOpen(false);
     },
-    [overlayPanes],
+    [overlayPanes, fullView],
   );
   const openComments = useCallback(
     (next: boolean) => {
+      if (fullView) return;
       setCommentsOpen(next);
       if (next && overlayPanes) setTocOpen(false);
     },
-    [overlayPanes],
+    [overlayPanes, fullView],
   );
   const closeOverlayPanes = useCallback(() => {
     setTocOpen(false);
-    setCommentsOpen(false);
-  }, []);
-  const overlayPaneOpen = overlayPanes && (tocOpen || commentsOpen);
+    if (!fullView) setCommentsOpen(false);
+  }, [fullView]);
+  const overlayPaneOpen = overlayPanes && (tocOpen || rightPaneOpen);
 
   // A pane that sat beside the document before a rotation would cover it
   // afterwards. Fold both away as the layout flips rather than dropping a
@@ -489,7 +514,25 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    * longer has — so cards float over the page there regardless of the
    * stored preference, which stays untouched for the way back.
    */
-  const floatingComments = paged || commentsDisplayMode === 'floating';
+  /**
+   * Measured rather than derived from the viewport: both side panes are
+   * resizable, so only the element's own width says what still fits. The
+   * comment column's `@container` query reads `.doc-scroll`'s content box,
+   * which is narrower wherever the platform reserves room for a scrollbar,
+   * so that is the box to measure. 0 means "not measured yet" — the layout
+   * effect further down fills it in before the first paint.
+   */
+  const [commentsHostWidth, setCommentsHostWidth] = useState(0);
+  /** Offering the switch back to the column would be a dead action where
+   *  the stylesheet hides the column outright. */
+  const columnModeAvailable =
+    commentsHostWidth === 0 || commentsHostWidth > COMMENTS_COLUMN_MIN_WIDTH;
+  /**
+   * Full view has no Threads pane to fall back to, so where the column
+   * cannot show, the cards float over the document instead.
+   */
+  const floatingComments =
+    paged || commentsDisplayMode === 'floating' || (fullView && !columnModeAvailable);
   const [rightTab, setRightTab] = useState<RightTab>(() => {
     const saved = localStorage.getItem(RIGHT_TAB_KEY);
     return isRememberedRightTab(saved) ? saved : 'comments';
@@ -2567,9 +2610,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    */
   const railPx = Math.round(COLLAPSED_WIDTH * (uiScale / 100));
   const tocPx = tocOpen && !overlayPanes ? tocWidth : railPx;
-  const commentsPx = commentsOpen && !overlayPanes ? commentsWidth : railPx;
+  const commentsPx = fullView ? 0 : rightPaneOpen && !overlayPanes ? commentsWidth : railPx;
   const tocBody = usePaneBody(tocOpen);
-  const commentsBody = usePaneBody(commentsOpen);
+  const commentsBody = usePaneBody(rightPaneOpen);
   const gridStyle = {
     gridTemplateColumns: `${tocPx}px 1fr ${commentsPx}px`,
     '--pane-collapse-duration': `${PANE_COLLAPSE_MS}ms`,
@@ -2598,16 +2641,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     }
   }, []);
 
-  /**
-   * Measured rather than derived from the viewport: both side panes are
-   * resizable, so only the element's own width says what still fits. The
-   * comment column's `@container` query reads `.doc-scroll`'s content box,
-   * which is narrower wherever the platform reserves room for a scrollbar,
-   * so that is the box to measure. Every way it can change is a window
-   * resize or one of the two side-column widths in the deps. 0 means "not
-   * measured yet" — the layout effect fills it in before the first paint.
-   */
-  const [commentsHostWidth, setCommentsHostWidth] = useState(0);
+  // Every way the measured width can change is a window resize or one of
+  // the two side-column widths in the deps.
   // biome-ignore lint/correctness/useExhaustiveDependencies: tocPx / commentsPx / overlayPanes / panesSettled are the intentional re-measure triggers — the body reads widths only they can have changed.
   useLayoutEffect(() => {
     const measure = () => {
@@ -2618,11 +2653,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
   }, [tocPx, commentsPx, overlayPanes, panesSettled]);
-
-  /** Offering the switch back to the column would be a dead action where
-   *  the stylesheet hides the column outright. */
-  const columnModeAvailable =
-    commentsHostWidth === 0 || commentsHostWidth > COMMENTS_COLUMN_MIN_WIDTH;
 
   /**
    * Everything that repaginates the document, as a single identity: new
@@ -3163,8 +3193,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
       // dropping this would leave a highlight click with nowhere to
       // land whenever the column is hidden or collapsed.
       if (!floatingComments && !inlineCommentsVisible()) {
-        openComments(true);
-        setRightTab('comments');
+        if (fullView) {
+          setInlineCommentsOpen(true);
+        } else {
+          openComments(true);
+          setRightTab('comments');
+        }
       }
 
       if (jumpToAnchor) {
@@ -3178,6 +3212,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     },
     [
       floatingComments,
+      fullView,
       inlineCommentsVisible,
       openComments,
       scrollToAnchor,
@@ -3267,6 +3302,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     setActiveSearchTarget(null);
     setRightTab((prev) => (prev === 'search' ? 'comments' : prev));
   }, []);
+
+  // Search is opened from the toolbar and lists its results in the right
+  // pane; full view has neither.
+  useEffect(() => {
+    if (fullView) closeDocumentSearch();
+  }, [fullView, closeDocumentSearch]);
 
   const toggleDocumentSearch = useCallback(() => {
     if (docSearchOpen) closeDocumentSearch();
@@ -3379,6 +3420,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
           ))}
         </Select.Content>
       </Select.Root>
+
+      <Text size="1" color="gray">
+        Full view
+      </Text>
+      <Button size="1" variant="soft" onClick={() => setFullView(true)}>
+        <EnterFullScreenIcon />
+        Document only
+      </Button>
     </div>
   );
 
@@ -3437,22 +3486,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   return (
     <BookmarkControlsProvider value={bookmarkControls}>
       <ThreadLocationProvider value={threadLocations}>
-        <div className="doc-page">
-          <AppBar
-            docTitle={title}
-            role={doc.role}
-            docUid={doc.uid}
-            passwordProtected={doc.password_protected}
-            onLogout={() => window.location.reload()}
-            format={doc.format}
-          />
+        <div className={`doc-page${fullView ? ' doc-page-full' : ''}`}>
+          {!fullView && (
+            <AppBar
+              docTitle={title}
+              role={doc.role}
+              docUid={doc.uid}
+              passwordProtected={doc.password_protected}
+              onLogout={() => window.location.reload()}
+              format={doc.format}
+            />
+          )}
 
           {pending && (
             <span className="doc-pending" role="progressbar" aria-label="Loading document" />
           )}
 
           <div
-            className={`doc-layout${overlayPanes ? ' doc-layout-overlay' : ''}${pending ? ' doc-layout--pending' : ''}`}
+            className={`doc-layout${overlayPanes ? ' doc-layout-overlay' : ''}${pending ? ' doc-layout--pending' : ''}${fullView ? ' doc-layout-full' : ''}`}
             style={gridStyle}
             onTransitionEnd={onPanesSettled}
             inert={pending}
@@ -3485,8 +3536,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                       folder={doc.folder}
                       currentUid={doc.uid}
                       currentTitle={title}
+                      linkSearch={fullView ? withFullView('', true) : ''}
                       onAdd={
-                        doc.role === 'admin' || doc.role === 'editor'
+                        // The dialog it opens lives in the toolbar.
+                        !fullView && (doc.role === 'admin' || doc.role === 'editor')
                           ? () => newDocumentRef.current?.open()
                           : undefined
                       }
@@ -3501,34 +3554,53 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                   />
                 </div>
               )}
+              {fullView && (
+                <Flex align="center" gap="2" px="2" py="2" className="pane-footer">
+                  <Tooltip content="Back to the normal view">
+                    <IconButton
+                      variant="ghost"
+                      size="1"
+                      aria-label="Exit full view"
+                      onClick={() => setFullView(false)}
+                    >
+                      <ExitFullScreenIcon />
+                    </IconButton>
+                  </Tooltip>
+                  <Text size="1" color="gray" weight="medium" className="pane-header-label">
+                    Exit full view
+                  </Text>
+                </Flex>
+              )}
               {tocOpen && <ResizeHandle side="left" width={tocWidth} onResize={setTocWidth} />}
             </aside>
 
             <main className="pane pane-doc" ref={docPaneRef}>
               {/* Document-specific toolbar lives inside the doc pane so it sits
               only over the document column, not above the side panes. */}
-              <DocumentToolbar
-                doc={doc}
-                rendered={liveRendered}
-                source={liveSource}
-                theme={theme}
-                reviewExportEnabled={inlineCommentsOpen || floatingComments}
-                onDocSettingsChanged={onDocSettingsChanged}
-                newDocumentRef={newDocumentRef}
-                viewControls={displayControls}
-                readAloud={{
-                  docUid: doc.uid,
-                  rootRef: docRef,
-                  htmlKey: liveRendered.html,
-                  frontmatter: liveRendered.frontmatter,
-                  inlineCommentsOffset: inlineCommentsColumnWidth,
-                  dock: readAloudDock,
-                }}
-                searchOpen={docSearchOpen}
-                onToggleSearch={toggleDocumentSearch}
-                uiScale={uiScale}
-                editHref={editHref}
-              />
+              {!fullView && (
+                <DocumentToolbar
+                  doc={doc}
+                  rendered={liveRendered}
+                  source={liveSource}
+                  theme={theme}
+                  reviewExportEnabled={inlineCommentsOpen || floatingComments}
+                  onDocSettingsChanged={onDocSettingsChanged}
+                  newDocumentRef={newDocumentRef}
+                  viewControls={displayControls}
+                  readAloud={{
+                    docUid: doc.uid,
+                    rootRef: docRef,
+                    htmlKey: liveRendered.html,
+                    frontmatter: liveRendered.frontmatter,
+                    inlineCommentsOffset: inlineCommentsColumnWidth,
+                    dock: readAloudDock,
+                  }}
+                  searchOpen={docSearchOpen}
+                  onToggleSearch={toggleDocumentSearch}
+                  uiScale={uiScale}
+                  editHref={editHref}
+                />
+              )}
               {docSearchOpen && (
                 <div
                   className="doc-search-popover"
@@ -3830,8 +3902,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
               )}
             </main>
 
-            <aside className={`pane pane-right ${commentsOpen ? 'open' : 'closed'}`}>
-              {commentsOpen && (
+            <aside className={`pane pane-right ${rightPaneOpen ? 'open' : 'closed'}`}>
+              {rightPaneOpen && (
                 <ResizeHandle side="right" width={commentsWidth} onResize={setCommentsWidth} />
               )}
               {/* Out of flow, so it can cross-fade with a body that is still
