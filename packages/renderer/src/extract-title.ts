@@ -8,7 +8,7 @@
  *   1. YAML frontmatter `title:` (markdown) or `= Title` header
  *      (asciidoc). Matches what the renderer itself treats as the
  *      document title.
- *   2. First top-level heading in the body (`#` / `==`).
+ *   2. First top-level heading in the body (`#`).
  *
  * Returns `null` if neither signal is present. Callers decide what to
  * fall back to (the doc uid, typically).
@@ -104,15 +104,16 @@ function extractAsciidocTitle(source: string): string | null {
   const fm = readYamlFrontmatterTitle(source);
   if (fm) return fm;
 
-  // 2. AsciiDoc document title: `= Title` as the first non-comment,
-  //    non-blank line. Ignore AsciiDoc attribute lines (`:key: value`).
+  // 2. AsciiDoc document title: `= Title` (or Asciidoctor's Markdown-style
+  //    `# Title`) as the first non-comment, non-blank line. Ignore
+  //    AsciiDoc attribute lines (`:key: value`).
   const body = stripFrontmatter(source);
   for (const line of body.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed) continue;
     if (trimmed.startsWith('//')) continue;
     if (trimmed.startsWith(':') && /^:[A-Za-z][\w-]*:/.test(trimmed)) continue;
-    const m = trimmed.match(/^=\s+(.+?)\s*$/);
+    const m = trimmed.match(/^[=#]\s+(.+?)\s*$/);
     return m && m[1] ? sanitize(m[1]) : null;
   }
   return null;
