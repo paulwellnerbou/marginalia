@@ -4,12 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { DocumentLayout } from '../components/DocumentLayout.js';
 import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
-import {
-  ApiError,
-  claimInvite,
-  type Document,
-  type DocumentSettingsResponse,
-} from '../lib/api.js';
+import { ApiError, claimInvite, type Document, type DocumentSettingsResponse } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getDisplayName, setDisplayName } from '../lib/identity.js';
