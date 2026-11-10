@@ -729,7 +729,11 @@ export function openDatabase(path: string): Database {
     // session from this point on is revocable exactly.
     db.exec(`DELETE FROM sessions WHERE invite_role IS NOT NULL AND invite_token IS NULL`);
   }
-  if (ensureColumn(db, 'keyring_agent_invites', 'follows_key', 'INTEGER NOT NULL DEFAULT 1')) {
+  // One transaction: the column's presence is what marks the backfill done.
+  db.transaction(() => {
+    if (!ensureColumn(db, 'keyring_agent_invites', 'follows_key', 'INTEGER NOT NULL DEFAULT 1')) {
+      return;
+    }
     // Keys could not be re-roled yet, so an invite at another role was set
     // in the access panel on purpose.
     db.exec(
@@ -738,7 +742,7 @@ export function openDatabase(path: string): Database {
           SELECT 1 FROM invites i JOIN keyring_agents a ON a.id = keyring_agent_invites.agent_id
            WHERE i.token = keyring_agent_invites.invite_token AND i.role <> a.role)`,
     );
-  }
+  })();
   ensureColumn(db, 'document_assets', 'mime', "TEXT NOT NULL DEFAULT 'application/octet-stream'");
   ensureColumn(db, 'documents', 'repo_dir', "TEXT NOT NULL DEFAULT ''");
   // Backfill per-doc repo subpath. Always = uid for now; the legacy

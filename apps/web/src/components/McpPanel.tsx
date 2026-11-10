@@ -86,9 +86,16 @@ export function McpPanel({ uid, canManageInvites }: Props) {
   useEffect(() => {
     setKeys(null);
     if (!ringToken || !canManageInvites) return;
+    // An answer for a keyring this browser has since left must not land.
+    let current = true;
     listAgentKeys(ringToken, { doc: uid })
-      .then((res) => setKeys(res.agents))
+      .then((res) => {
+        if (current) setKeys(res.agents);
+      })
       .catch((err) => reportError('McpPanel.listAgentKeys', err));
+    return () => {
+      current = false;
+    };
   }, [ringToken, uid, canManageInvites]);
   const keyNames = (keys ?? []).map((k) => k.display_name);
 

@@ -684,4 +684,25 @@ describe('keyring agent keys', () => {
       },
     });
   });
+
+  test('re-roling a link whose agent record outlived its key still succeeds', async () => {
+    const doc = await upload();
+    const { key, agent: wire } = await mintKey(await ringWith(doc));
+    const invite = ((await (await access(key, doc.uid)).json()) as { invite_token: string })
+      .invite_token;
+    app.db.prepare('DELETE FROM keyring_agents WHERE id = ?').run(wire.id);
+
+    const changed = await call(`/api/documents/${doc.uid}/invites/${invite}`, {
+      method: 'PATCH',
+      headers: headersFor(OWNER, { [INVITE_HEADER]: doc.admin_invite.token }),
+      body: { role: 'reader' },
+    });
+    expect(changed.status).toBe(200);
+    expect(await roleWith(doc.uid, invite)).toBe('reader');
+    expect(
+      app.db
+        .prepare('SELECT follows_key FROM keyring_agent_invites WHERE invite_token = ?')
+        .get(invite),
+    ).toEqual({ follows_key: 0 });
+  });
 });
