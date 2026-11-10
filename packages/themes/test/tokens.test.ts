@@ -120,7 +120,7 @@ describe('theme tokens', () => {
       expect(t.fonts.body.families[0]).toBe('Noto Serif');
       expect(t.fonts.heading.families[0]).toBe('Open Sans');
       expectCssContains('asciidoc-article', 'Noto Serif');
-      expectCssContains('asciidoc-article', '#toc > .sectlevel1 > li');
+      expectCssContains('asciidoc-article', '#toc > ul > li + li');
     });
 
     test('report uses Barlow with condensed headings and Plex Mono', () => {
