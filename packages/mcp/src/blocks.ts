@@ -1,5 +1,6 @@
 import type { BlockOccurrence, LocatedBlocks } from '@marginalia/renderer/locate-block';
 import { locateBlocks } from '@marginalia/renderer/locate-block';
+import { htmlSectionSpan, locateBlocksHtml } from '@marginalia/renderer/locate-block-html';
 import { scoreSectionMatch } from '@marginalia/renderer/section-score';
 import type { BlockInfoWire, DocumentFormat, DocumentWire } from './api-types.js';
 
@@ -139,9 +140,13 @@ function buildSections(
   return headings.map((heading, i) => {
     const depth = Math.max(1, heading.headingPath.length);
     const next = headings.slice(i + 1).find((h) => Math.max(1, h.headingPath.length) <= depth);
-    const end = next ? (next.start as number) : doc.source.length;
-    const start = heading.start as number;
-    const source = doc.source.slice(start, end).replace(/\s+$/u, '');
+    const limit = next ? (next.start as number) : doc.source.length;
+    // HTML sections are cut as whole elements, so a replacement can't leave
+    // a wrapper half open; see `htmlSectionSpan`.
+    const span =
+      doc.format === 'html' ? htmlSectionSpan(doc.source, heading.start as number, limit) : null;
+    const start = span?.start ?? (heading.start as number);
+    const source = doc.source.slice(start, span?.end ?? limit).replace(/\s+$/u, '');
     return {
       index: i,
       heading: heading.text,
@@ -338,13 +343,18 @@ export function enclosingTopLevel(map: DocumentBlockMap, block: DocumentBlock): 
 }
 
 /**
- * The markdown or AsciiDoc level of the heading `source` opens with, or
+ * The markdown, AsciiDoc or HTML level of the heading `source` opens with, or
  * null when its first line is not one. Setext underlines count: `===`
  * is level 1, `---` level 2.
  */
 export function headingLevel(source: string, format: DocumentFormat): number | null {
   const [first = '', second = ''] = source.split('\n');
   if (format === 'asciidoc') return /^(={1,6})\s+\S/u.exec(first)?.[1]?.length ?? null;
+  if (format === 'html') {
+    // A section may open with the wrapper its heading leads.
+    const level = /<h([1-6])\b/iu.exec(source)?.[1];
+    return level ? Number(level) : null;
+  }
   const atx = /^ {0,3}(#{1,6})(\s|$)/u.exec(first);
   if (atx) return (atx[1] as string).length;
   if (first.trim() === '') return null;
@@ -358,6 +368,7 @@ async function locateSourceBlocks(source: string, format: DocumentFormat): Promi
     const { locateBlocksAsciidoc } = await import('@marginalia/renderer/locate-block-asciidoc');
     return locateBlocksAsciidoc(source);
   }
+  if (format === 'html') return locateBlocksHtml(source);
   return locateBlocks(source);
 }
 

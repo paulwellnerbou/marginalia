@@ -1,5 +1,5 @@
 import type { BlockOccurrence, BlockSourceRange, LocatedBlocks } from '@marginalia/renderer';
-import { locateBlocks, locateBlocksAsciidoc } from '@marginalia/renderer';
+import { locateBlocksFor } from './block-locate.js';
 import type { DocumentFormat } from './db.js';
 
 /**
@@ -86,8 +86,7 @@ function located(format: DocumentFormat, source: string): Promise<LocatedBlocks>
   }
 
   misses += 1;
-  const blocks =
-    format === 'asciidoc' ? locateBlocksAsciidoc(source) : Promise.resolve(locateBlocks(source));
+  const blocks = locateBlocksFor(source, format);
   // A failed parse must not answer every later caller with the same error.
   blocks.catch(() => {
     if (entries.get(key) === blocks) entries.delete(key);

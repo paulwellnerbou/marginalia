@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS documents (
   -- matches the migration below, which must not close existing docs.
   invite_only          INTEGER NOT NULL DEFAULT 0,
   default_theme        TEXT NOT NULL DEFAULT 'default',
-  -- 'markdown' | 'asciidoc'. Legacy rows without a format are treated
+  -- 'markdown' | 'asciidoc' | 'html'. Legacy rows without a format are treated
   -- as markdown by the route layer (their path column already ends
   -- in ".md").
   format               TEXT NOT NULL DEFAULT 'markdown',
@@ -355,9 +355,13 @@ CREATE INDEX IF NOT EXISTS idx_keyring_agent_invites_gate ON keyring_agent_invit
 `;
 
 /** Document source flavours persisted in `documents.format`. */
-export type DocumentFormat = 'markdown' | 'asciidoc';
+export type DocumentFormat = 'markdown' | 'asciidoc' | 'html';
 
-export const DOCUMENT_FORMATS: readonly DocumentFormat[] = ['markdown', 'asciidoc'] as const;
+export const DOCUMENT_FORMATS: readonly DocumentFormat[] = [
+  'markdown',
+  'asciidoc',
+  'html',
+] as const;
 
 export function isDocumentFormat(v: unknown): v is DocumentFormat {
   return typeof v === 'string' && (DOCUMENT_FORMATS as readonly string[]).includes(v);

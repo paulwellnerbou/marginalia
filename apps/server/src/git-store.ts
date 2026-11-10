@@ -141,7 +141,7 @@ export interface GitStoreMaintenanceOptions {
 /**
  * Per-document git storage. Each document lives in its own repo at
  * `<reposBaseDir>/<uid>/`, with the source pinned to a fixed in-repo
- * filename (`document.md` for markdown, `document.adoc` for asciidoc).
+ * filename (`document.md`, `document.adoc` or `document.html`).
  *
  * Operations take a `DocLocator` ({ uid, format }) so callers can pass
  * a `DocumentRow` directly. All writes for a given uid serialize through
@@ -191,7 +191,8 @@ export class GitStore {
 
   /** Fixed in-repo filename for the given format. */
   private filename(format: DocumentFormat): string {
-    return format === 'asciidoc' ? 'document.adoc' : 'document.md';
+    if (format === 'asciidoc') return 'document.adoc';
+    return format === 'html' ? 'document.html' : 'document.md';
   }
 
   private filepath(doc: DocLocator): string {

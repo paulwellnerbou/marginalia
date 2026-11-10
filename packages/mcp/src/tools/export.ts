@@ -206,7 +206,8 @@ function extensionOf(filename: string | null, format: Format, doc: DocumentWire)
 }
 
 function sourceExtension(doc: DocumentWire): string {
-  return doc.format === 'asciidoc' ? 'adoc' : 'md';
+  if (doc.format === 'asciidoc') return 'adoc';
+  return doc.format === 'html' ? 'html' : 'md';
 }
 
 function fallbackName(doc: DocumentWire): string {

@@ -3,6 +3,7 @@ import { createBundledHighlighter } from 'shiki/core';
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
+import { decodeEntities } from '../html-entities.js';
 import type { Warning } from '../types.js';
 
 export interface ShikiOptions {
@@ -338,13 +339,4 @@ function parseAttrs(rest: string): Record<string, unknown> {
     m = re.exec(rest);
   }
   return out;
-}
-
-function decodeEntities(s: string): string {
-  return s
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
 }

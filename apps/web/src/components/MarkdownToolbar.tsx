@@ -19,6 +19,7 @@ import {
   WrapText,
 } from 'lucide-react';
 import type { RefObject } from 'react';
+import type { DocumentFormat } from '../lib/api.js';
 import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
 
 // ── shared helpers ────────────────────────────────────────────────────────────
@@ -119,7 +120,7 @@ function adocLink(view: EditorView) {
 
 interface Props {
   viewRef: RefObject<EditorView | null>;
-  format: 'markdown' | 'asciidoc';
+  format: DocumentFormat;
   wordWrap: boolean;
   onWordWrapToggle: () => void;
   /**
@@ -144,6 +145,30 @@ export function MarkdownToolbar({
   }
 
   const isAdoc = format === 'asciidoc';
+
+  const wrapToggle = (
+    <IconButton
+      variant={wordWrap ? 'solid' : 'ghost'}
+      color="gray"
+      size="1"
+      onClick={onWordWrapToggle}
+      title="Toggle word wrap"
+      aria-label="Toggle word wrap"
+      aria-pressed={wordWrap}
+    >
+      <WrapText size={14} />
+    </IconButton>
+  );
+
+  // Markup shortcuts would be guesses in a hand-built page.
+  if (format === 'html') {
+    return (
+      <div className="markdown-toolbar" role="toolbar" aria-label="Editor formatting">
+        <div className="markdown-toolbar__spacer" />
+        {wrapToggle}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -273,18 +298,7 @@ export function MarkdownToolbar({
       )}
 
       <div className="markdown-toolbar__spacer" />
-
-      <IconButton
-        variant={wordWrap ? 'solid' : 'ghost'}
-        color="gray"
-        size="1"
-        onClick={onWordWrapToggle}
-        title="Toggle word wrap"
-        aria-label="Toggle word wrap"
-        aria-pressed={wordWrap}
-      >
-        <WrapText size={14} />
-      </IconButton>
+      {wrapToggle}
     </div>
   );
 }

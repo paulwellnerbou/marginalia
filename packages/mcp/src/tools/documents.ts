@@ -143,7 +143,7 @@ export function registerDocumentTools(
           .optional()
           .describe('Document name. Defaults to a title from the content.'),
         format: z
-          .enum(['markdown', 'asciidoc'])
+          .enum(['markdown', 'asciidoc', 'html'])
           .optional()
           .describe('Source flavour. Defaults to markdown, or is inferred from source_path.'),
         password_protected: z
@@ -196,10 +196,7 @@ export function registerDocumentTools(
           );
         }
         const format =
-          args.format ??
-          (allowLocalFiles && args.source_path && /\.adoc$|\.asciidoc$/i.test(args.source_path)
-            ? 'asciidoc'
-            : 'markdown');
+          args.format ?? (allowLocalFiles ? formatOfPath(args.source_path) : 'markdown');
 
         if (args.folder) {
           const name = args.name?.trim();
@@ -603,6 +600,12 @@ export function registerDocumentTools(
         return text(`rendered HTML for ${doc.uid}:`, gutter(doc.rendered.html, ''));
       }),
   );
+}
+
+function formatOfPath(path: string | undefined): 'markdown' | 'asciidoc' | 'html' {
+  if (path && /\.(adoc|asciidoc)$/i.test(path)) return 'asciidoc';
+  if (path && /\.html?$/i.test(path)) return 'html';
+  return 'markdown';
 }
 
 interface AgentDocumentsWire {

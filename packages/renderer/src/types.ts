@@ -159,6 +159,12 @@ export interface Warning {
 
 export interface RenderResult {
   html: string;
+  /**
+   * Stylesheet the document brings along, already scoped to its root
+   * element. Only HTML documents have one; the viewer and the exports
+   * serve it beside `html`, never inside it.
+   */
+  css?: string | undefined;
   anchors: Anchor[];
   toc: TocNode[];
   assets: AssetRef[];

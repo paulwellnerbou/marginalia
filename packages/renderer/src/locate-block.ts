@@ -281,8 +281,9 @@ export function locateBlockRange(
 export function canMergeMultiBlock(
   a: BlockSourceRange,
   b: BlockSourceRange,
-  format: 'markdown' | 'asciidoc',
+  format: 'markdown' | 'asciidoc' | 'html',
 ): boolean {
+  if (format === 'html') return true;
   if (a.kind === 'tableCell' || b.kind === 'tableCell') return false;
   if (a.kind === 'listItem' || b.kind === 'listItem') {
     if (format === 'asciidoc') return false;

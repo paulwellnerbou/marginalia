@@ -1,5 +1,6 @@
 import { Badge } from '@radix-ui/themes';
 import type { DocumentFormat } from '../lib/api.js';
+import { FORMAT_INFO } from '../lib/format-info.js';
 import { appFormatColor } from '../styles/theme.js';
 
 /**
@@ -12,8 +13,7 @@ import { appFormatColor } from '../styles/theme.js';
  * screen readers and on hover.
  */
 export function FormatBadge({ format }: { format: DocumentFormat }) {
-  const asciidoc = format === 'asciidoc';
-  const full = asciidoc ? 'AsciiDoc' : 'Markdown';
+  const { label: full, short } = FORMAT_INFO[format];
   return (
     <Badge
       variant="soft"
@@ -22,7 +22,7 @@ export function FormatBadge({ format }: { format: DocumentFormat }) {
       className="format-badge"
       title={full}
     >
-      <span aria-hidden="true">{asciidoc ? 'adoc' : 'md'}</span>
+      <span aria-hidden="true">{short}</span>
       <span className="sr-only">{full}</span>
     </Badge>
   );

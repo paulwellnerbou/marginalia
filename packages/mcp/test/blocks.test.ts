@@ -31,8 +31,11 @@ Intro paragraph with a distinctive phrase inside it.
 `;
 
 /** A DocumentWire built from the real renderer, matching what the server returns. */
-async function documentFrom(source: string): Promise<DocumentWire> {
-  const rendered = await renderDocument(source, 'markdown');
+async function documentFrom(
+  source: string,
+  format: DocumentWire['format'] = 'markdown',
+): Promise<DocumentWire> {
+  const rendered = await renderDocument(source, format);
   return {
     uid: 'test-uid',
     name: 'Guide',
@@ -46,7 +49,7 @@ async function documentFrom(source: string): Promise<DocumentWire> {
       warnings: rendered.warnings,
     },
     attached_assets: [],
-    format: 'markdown',
+    format,
     default_theme: 'default',
     password_protected: false,
     role: 'admin',
@@ -452,5 +455,17 @@ describe('anchorNeighbourhood', () => {
     const around = anchorNeighbourhood(map, heading, null, 3);
     expect(around?.before).toBeNull();
     expect(around?.afterBlocks).toBe(3);
+  });
+});
+
+describe('HTML sections', () => {
+  test('are cut as whole elements, so replacing one cannot leave a wrapper open', async () => {
+    const html =
+      '<main><section><h2>One</h2><p>a</p><div><p>b</p></div></section>\n' +
+      '<section><h2>Two</h2><p>c</p></section></main>';
+    const map = await buildBlockMap(await documentFrom(html, 'html'));
+    const one = resolveSection(map, 'One');
+    expect(one.source).toBe('<section><h2>One</h2><p>a</p><div><p>b</p></div></section>');
+    expect(resolveSection(map, 'Two').source).toBe('<section><h2>Two</h2><p>c</p></section>');
   });
 });

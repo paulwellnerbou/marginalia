@@ -1,0 +1,61 @@
+/*
+ * Marginalia — Page
+ *
+ * The theme an HTML document is shown with. The page brings its own
+ * stylesheet (scoped to `.mg-html-root` by the renderer), so this sets no
+ * typography, spacing or column width: only the colours the review
+ * chrome paints with, light and dark.
+ */
+@import "./_highlights.css";
+
+.marginalia-theme,
+.marginalia {
+  --md-color-fg: #1c1f23;
+  --md-color-fg-muted: #5c6470;
+  --md-color-bg: transparent;
+  --md-color-accent: #2156a5;
+  --md-color-border: #e4e8ee;
+  --md-color-selection-bg: #cfe0ff;
+  --md-color-comment-highlight-bg: color-mix(in srgb, #f59e0b 22%, transparent);
+  --md-color-comment-highlight-underline: color-mix(in srgb, #d97706 72%, transparent);
+  --md-color-search-highlight-bg: color-mix(in srgb, #86efac 52%, transparent);
+  --md-color-search-highlight-active-bg: color-mix(in srgb, #4ade80 62%, transparent);
+  --md-color-search-highlight-ring: color-mix(in srgb, #15803d 35%, transparent);
+  --md-color-search-highlight-active-ring: color-mix(in srgb, #166534 48%, transparent);
+}
+
+.marginalia-theme {
+  min-height: 100%;
+}
+
+[data-appearance="dark"] .marginalia-theme,
+[data-appearance="dark"] .marginalia {
+  --md-color-fg: #e4e7eb;
+  --md-color-fg-muted: #9aa3b2;
+  --md-color-accent: #6ba3ff;
+  --md-color-border: #262a33;
+  --md-color-selection-bg: #315b95;
+  --md-color-comment-highlight-bg: color-mix(in srgb, #f59e0b 30%, transparent);
+  --md-color-comment-highlight-underline: color-mix(in srgb, #fbbf24 68%, transparent);
+  --md-color-search-highlight-bg: color-mix(in srgb, #4ade80 30%, transparent);
+  --md-color-search-highlight-active-bg: color-mix(in srgb, #22c55e 40%, transparent);
+  --md-color-search-highlight-ring: color-mix(in srgb, #86efac 38%, transparent);
+  --md-color-search-highlight-active-ring: color-mix(in srgb, #bbf7d0 52%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-appearance="auto"] .marginalia-theme,
+  [data-appearance="auto"] .marginalia {
+    --md-color-fg: #e4e7eb;
+    --md-color-fg-muted: #9aa3b2;
+    --md-color-accent: #6ba3ff;
+    --md-color-border: #262a33;
+    --md-color-selection-bg: #315b95;
+    --md-color-comment-highlight-bg: color-mix(in srgb, #f59e0b 30%, transparent);
+    --md-color-comment-highlight-underline: color-mix(in srgb, #fbbf24 68%, transparent);
+    --md-color-search-highlight-bg: color-mix(in srgb, #4ade80 30%, transparent);
+    --md-color-search-highlight-active-bg: color-mix(in srgb, #22c55e 40%, transparent);
+    --md-color-search-highlight-ring: color-mix(in srgb, #86efac 38%, transparent);
+    --md-color-search-highlight-active-ring: color-mix(in srgb, #bbf7d0 52%, transparent);
+  }
+}

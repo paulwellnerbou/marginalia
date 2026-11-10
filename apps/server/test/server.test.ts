@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { locateAllBlocks } from '@marginalia/renderer';
+import { locateAllBlocks, locateAllBlocksHtml } from '@marginalia/renderer';
 import JSZip from 'jszip';
 import { type App, createApp } from '../src/app.js';
 import {
@@ -5630,6 +5630,101 @@ describe('documents API', () => {
     const body = (await res.json()) as { source: string; format: string };
     expect(body.source).toContain('Second para changed');
     expect(body.format).toBe('asciidoc');
+  });
+
+  test('uploads an HTML document with its stylesheet scoped and its blocks commentable', async () => {
+    const src = [
+      '<!doctype html><html><head><title>Offer</title>',
+      '<style>:root { --accent: lime } body { color: #222 } td { padding: 4px }</style>',
+      '<script>alert(1)</script></head>',
+      '<body><main><h1>Offer</h1><p onclick="x()">Intro text.</p>',
+      '<table><tr><td>Effort</td><td>5 days</td></tr></table></main></body></html>',
+    ].join('\n');
+    const created = await upload(CLIENT_A, { source: src, format: 'html' });
+    const headers = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+
+    const res = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, { headers }),
+    );
+    const body = (await res.json()) as {
+      format: string;
+      source: string;
+      rendered: { html: string; css: string; frontmatter: Record<string, unknown> };
+    };
+    expect(body.format).toBe('html');
+    expect(body.source).toBe(src);
+    expect(body.rendered.frontmatter.title).toBe('Offer');
+    expect(body.rendered.html).toContain('data-html-doc');
+    expect(body.rendered.html).not.toContain('<script');
+    expect(body.rendered.html).not.toContain('onclick');
+    expect(body.rendered.css).toContain('@scope (.mg-html-root) {');
+    expect(body.rendered.css).toContain(':scope td {');
+    expect(existsSync(join(dir, 'repos', created.uid, 'document.html'))).toBe(true);
+
+    const sourceRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/export.accepted-source`, { headers }),
+    );
+    expect(sourceRes.headers.get('content-type')).toContain('text/html');
+    expect(sourceRes.headers.get('content-disposition')).toContain('attachment;');
+    expect(sourceRes.headers.get('content-disposition')).toContain('.html"');
+  });
+
+  test('accepting a proposal on an HTML table cell splices that cell and keeps other anchors', async () => {
+    const src =
+      '<h1>Offer</h1>\n<p>Intro text.</p>\n<table><tr><td>Effort</td><td>5 days</td></tr></table>\n';
+    const created = await upload(CLIENT_A, { source: src, format: 'html' });
+    const headers = withInvite(headersFor(CLIENT_A), created.admin_invite.token);
+    const blockOf = (source: string, text: string) => {
+      const id = [...locateAllBlocksHtml(source).entries()].find(([, r]) => r.text === text)?.[0];
+      expect(id).toBeString();
+      return id as string;
+    };
+
+    const commentRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          anchor: { block_id: blockOf(src, 'Intro text.'), quote: 'Intro' },
+          body: 'Shorter?',
+        }),
+      }),
+    );
+    expect(commentRes.status).toBe(201);
+    const comment = (await commentRes.json()) as { thread: { id: string } };
+
+    const proposeRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}/threads`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          anchor: { block_id: blockOf(src, '5 days'), quote: '5 days' },
+          proposal: { proposed_text: '<td class="n">4 days</td>' },
+        }),
+      }),
+    );
+    expect(proposeRes.status).toBe(201);
+    const proposal = (await proposeRes.json()) as { thread: { id: string } };
+
+    const acceptRes = await app.hono.fetch(
+      new Request(
+        `http://test/api/documents/${created.uid}/threads/${proposal.thread.id}/respond`,
+        { method: 'POST', headers, body: JSON.stringify({ action: 'accept' }) },
+      ),
+    );
+    expect(acceptRes.status).toBe(200);
+
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${created.uid}`, { headers }),
+    );
+    const doc = (await docRes.json()) as { source: string };
+    expect(doc.source).toBe(
+      '<h1>Offer</h1>\n<p>Intro text.</p>\n<table><tr><td>Effort</td><td class="n">4 days</td></tr></table>\n',
+    );
+    const stored = app.db
+      .prepare('SELECT anchor_block_id, link_status FROM comments WHERE id = ?')
+      .get(comment.thread.id) as { anchor_block_id: string; link_status: string };
+    expect(stored).toEqual({ anchor_block_id: blockOf(src, 'Intro text.'), link_status: 'linked' });
   });
 
   test('export + import of an AsciiDoc bundle preserves format', async () => {

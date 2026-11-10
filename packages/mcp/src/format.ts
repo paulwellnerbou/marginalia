@@ -122,6 +122,7 @@ export function documentHeader(doc: DocumentWire, ref: DocumentRef, map: Documen
  * proposes against those blocks — or knows how to add one.
  */
 function docMetaLines(doc: DocumentWire): string[] {
+  if (doc.format === 'html') return [];
   const blocks = doc.rendered.blocks.filter(
     (b) => b.docMeta && b.kind !== 'html' && b.kind !== 'listItem' && b.kind !== 'tableCell',
   );

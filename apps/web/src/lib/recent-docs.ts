@@ -242,7 +242,7 @@ function saveRemovalTombstones(removed: Set<string>): void {
 }
 
 const VALID_ROLES = new Set<RecentDoc['role']>(['admin', 'editor', 'collaborator', 'reader']);
-const VALID_FORMATS = new Set<DocumentFormat>(['markdown', 'asciidoc']);
+const VALID_FORMATS = new Set<DocumentFormat>(['markdown', 'asciidoc', 'html']);
 
 /**
  * Validate a stored entry. Returns a one-element array on success,
