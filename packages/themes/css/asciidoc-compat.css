@@ -297,7 +297,8 @@
  *
  * The sanitizer drops the `sectlevelN` classes (rehype-sanitize only
  * lets `contains-task-list` through on <ul>), so levels are addressed
- * by nesting depth instead.
+ * by nesting depth instead. The top list is `ul:not(ul ul)` rather than
+ * `.toc > ul` because the viewer wraps it in a fold.
  *
  * A framed panel with a small label sets the TOC apart from the
  * section headings it lists; the bottom margin wins over the flush
@@ -348,10 +349,10 @@
 }
 
 /* Level 1 (`==`): the chapters. */
-.marginalia .toc > ul > li + li {
+.marginalia .toc ul:not(ul ul) > li + li {
   margin-top: 0.7em;
 }
-.marginalia .toc > ul > li > a {
+.marginalia .toc ul:not(ul ul) > li > a {
   font-family: var(--md-font-heading);
   font-size: 1.08em;
   font-weight: 650;

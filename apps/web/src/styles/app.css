@@ -1331,6 +1331,12 @@ button.primary:disabled {
   letter-spacing: 0.04em;
 }
 
+/* Reserves the cancel button's width so arming doesn't shift the row; it is
+   not a control until armed. */
+.confirm-pair-placeholder {
+  visibility: hidden;
+}
+
 /* Role badges (admin/editor/reader) rendered via Radix <Badge> — uppercase
    presentation is purely cosmetic, not baked into the TS source. */
 .role-badge {
@@ -1760,6 +1766,69 @@ button.primary:disabled {
   .marginalia .collapse-section > .collapse-section-inner,
   .marginalia .collapse-section.is-collapsed > .collapse-section-inner {
     transition: none;
+  }
+}
+
+/* AsciiDoc TOC fold: the title is the toggle, and the list folds away
+   inside the panel. The title-to-list gap moves into the list so it
+   folds with it instead of leaving a gap under a closed TOC. */
+.marginalia .toc.toc-foldable > :is(#toctitle, .toctitle) {
+  margin-bottom: 0;
+}
+.marginalia .toc-fold > .collapse-section-inner > ul {
+  padding-top: 0.75em;
+  transition: transform 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.marginalia .toc-fold.is-collapsed > .collapse-section-inner > ul {
+  transform: translateY(-0.5em);
+}
+.marginalia .toc-toggle {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.45em;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 0.2em;
+}
+.marginalia .toc-toggle:hover {
+  color: var(--md-color-accent, currentColor);
+}
+.marginalia .toc-toggle:focus-visible {
+  outline: 2px solid var(--md-color-accent, currentColor);
+  outline-offset: 2px;
+}
+.marginalia .toc-toggle svg {
+  flex: none;
+  width: 1.15em;
+  height: 1.15em;
+  transform: rotate(90deg);
+  transition: transform 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.marginalia .toc-toggle[aria-expanded="false"] svg {
+  transform: rotate(0deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .marginalia .toc-toggle svg,
+  .marginalia .toc-fold > .collapse-section-inner > ul {
+    transition: none;
+  }
+}
+@media print {
+  .marginalia .toc-toggle svg {
+    display: none;
+  }
+  .marginalia .toc-fold.is-collapsed > .collapse-section-inner > ul {
+    transform: none;
   }
 }
 
@@ -2981,6 +3050,36 @@ button.primary:disabled {
 .created-admin-link {
   flex: 1;
   min-width: 0;
+}
+
+/* Access links and agent keys (AccessList.tsx): the form is a tinted
+   control box, the entries a bordered list, so neither reads as the other. */
+.access-create {
+  background: var(--gray-a2);
+  border: 1px solid var(--gray-a4);
+  border-radius: var(--radius-3);
+  padding: 0.75rem;
+}
+.access-field-label {
+  display: block;
+  margin-bottom: var(--space-1);
+}
+.access-list {
+  border: 1px solid var(--gray-a5);
+  border-radius: var(--radius-3);
+  /* The one-line URLs would otherwise set the dialog's min-content width
+     and push it past a phone viewport. */
+  contain: inline-size;
+}
+.access-list__row,
+.access-list__empty {
+  padding: 0.65rem 0.75rem;
+}
+.access-list__row + .access-list__row {
+  border-top: 1px solid var(--gray-a4);
+}
+.access-explainer {
+  margin-top: var(--space-1);
 }
 
 /* Plain-language anatomy of an access link in Access control. */

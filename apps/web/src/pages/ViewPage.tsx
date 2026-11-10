@@ -4,19 +4,13 @@ import { Link, useParams } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { DocumentLayout } from '../components/DocumentLayout.js';
 import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
-import {
-  ApiError,
-  claimInvite,
-  type Document,
-  type DocumentSettingsResponse,
-  getDocument,
-} from '../lib/api.js';
+import { ApiError, claimInvite, type Document, type DocumentSettingsResponse } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
-import { getDisplayName, setDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
-import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
+import { adoptDocumentName, pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
+import { openDocument } from '../lib/open-document.js';
 import { openTab } from '../lib/open-tabs.js';
 import { recordVisit } from '../lib/recent-docs.js';
 
@@ -32,7 +26,7 @@ export function ViewPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
   const [doc, setDoc] = useState<Document | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Bumped by the error "Try again" button to re-trigger getDocument.
+  // Bumped by the error "Try again" button to re-trigger the load.
   const [reloadNonce, setReloadNonce] = useState(0);
   const [pending, setPending] = useState(false);
 
@@ -75,7 +69,7 @@ export function ViewPage() {
     setError(null);
     (async () => {
       try {
-        const d = await getDocument(uid);
+        const d = await openDocument(uid);
         if (!cancelled) setDoc(d);
       } catch (err) {
         if (cancelled) return;
@@ -129,12 +123,9 @@ export function ViewPage() {
   // Sync localStorage to the server's authoritative name so the header
   // we send matches what the server has, and renames only fire when the
   // user edits via UserMenu. Trade-off: opening someone else's named
-  // invite overwrites the global local name.
+  // invite overwrites the global local name, except in a synced browser.
   useEffect(() => {
-    if (!doc?.display_name) return;
-    if (getDisplayName() !== doc.display_name) {
-      setDisplayName(doc.display_name);
-    }
+    adoptDocumentName(doc?.display_name ?? null);
   }, [doc]);
 
   // What is on screen belongs to the tab being left until the next

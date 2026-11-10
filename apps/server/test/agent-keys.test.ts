@@ -384,6 +384,70 @@ describe('keyring agent keys', () => {
     });
   });
 
+  test('the owner opening a filed admin link is signed as themself, not the agent', async () => {
+    const token = await ringWith(await upload());
+    const { key } = await mintKey(token);
+    const created = await upload(AGENT);
+    await call(`/api/agent/documents/${created.uid}`, {
+      method: 'PUT',
+      headers: agent(key),
+      body: { invite_token: created.admin_invite.token },
+    });
+
+    // Another device of the owner's, before it has adopted the ring's name.
+    const device = { id: 'dddddddddddddddddddd', name: 'Swift Otter' };
+    const opened = await call(`/api/documents/${created.uid}`, {
+      headers: headersFor(device, { [INVITE_HEADER]: created.admin_invite.token }),
+    });
+    expect(((await opened.json()) as { display_name: string }).display_name).toBe(OWNER.name);
+  });
+
+  test('an admin link someone handed the agent keeps its owner’s name when filed', async () => {
+    const token = await ringWith(await upload());
+    const { key } = await mintKey(token);
+    const anns = await upload({ id: 'cccccccccccccccccccc', name: 'Ann' });
+    const filed = await call(`/api/agent/documents/${anns.uid}`, {
+      method: 'PUT',
+      headers: agent(key),
+      body: { invite_token: anns.admin_invite.token },
+    });
+    expect(filed.status).toBe(200);
+    const row = app.db
+      .prepare('SELECT display_name FROM invites WHERE token = ?')
+      .get(anns.admin_invite.token) as { display_name: string };
+    expect(row.display_name).toBe('Ann');
+  });
+
+  test('startup renames admin links agents filed before filing renamed them', async () => {
+    const token = await ringWith(await upload());
+    await mintKey(token);
+    const created = await upload(AGENT);
+    // As filed by a server that did not rename on filing.
+    app.db
+      .prepare(
+        `INSERT INTO keyring_docs (keyring_token, doc_uid, invite_token, title, added_at)
+         VALUES (?, ?, ?, NULL, 0)`,
+      )
+      .run(token, created.uid, created.admin_invite.token);
+
+    // The same link in a second ring, whose agents have other names.
+    const other = await ringWith();
+    app.db
+      .prepare(
+        `INSERT INTO keyring_docs (keyring_token, doc_uid, invite_token, title, added_at)
+         VALUES (?, ?, ?, NULL, 0)`,
+      )
+      .run(other, created.uid, created.admin_invite.token);
+    app.db.prepare('UPDATE keyrings SET display_name = ? WHERE token = ?').run('Ann', other);
+
+    await app.close();
+    app = await createApp(loadConfig({ dataDir: dir, port: 0, webDir }));
+    const row = app.db
+      .prepare('SELECT display_name FROM invites WHERE token = ?')
+      .get(created.admin_invite.token) as { display_name: string };
+    expect(row.display_name).toBe(OWNER.name);
+  });
+
   test('names are unique per ring and roles are capped below admin', async () => {
     const token = await ringWith(await upload());
     await mintKey(token);

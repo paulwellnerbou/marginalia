@@ -18,6 +18,7 @@ import {
 import { renderMermaidIn } from '../lib/mermaid.js';
 import { revealElement } from '../lib/paged-reading.js';
 import { collectTopLevelBlocks } from '../lib/selection.js';
+import { installTocFolds } from '../lib/toc-fold.js';
 import { isAppleWebKit } from '../lib/webkit.js';
 import { ImageLightbox, type LightboxImage } from './ImageLightbox.js';
 
@@ -77,8 +78,8 @@ interface RenderedDocProps {
    */
   onMissingAssetUpload?: ((refName: string, file: File) => void | Promise<void>) | undefined;
   /**
-   * Where the summary / about folds remember their state — the document's
-   * uid. Without it they start open and remember nothing.
+   * Where the summary / about and TOC folds remember their state — the
+   * document's uid. Without it they start open and remember nothing.
    */
   docMetaKey?: string | undefined;
   /**
@@ -185,7 +186,10 @@ export function RenderedDoc({
     replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
     // Folding wraps a heading's siblings in new elements, which an HTML
     // page's own child selectors and grid layouts would not survive.
-    if (!el.querySelector(HTML_DOC_SELECTOR)) installHeadingCollapse(el);
+    if (!el.querySelector(HTML_DOC_SELECTOR)) {
+      installHeadingCollapse(el);
+      installTocFolds(el, docMetaKey ?? null);
+    }
     installDocMetaFolds(el, docMetaKey ?? null, docMetaLinksRef.current ?? null);
     // Replay the current hash after the article is populated. Opening
     // a deep link directly (`/d/...#section`) lets the browser fire
