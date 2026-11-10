@@ -545,9 +545,10 @@ describe('hosted MCP endpoint', () => {
     'x-marginalia-client-name': 'Paul',
   };
 
-  async function ownerDocInRing(): Promise<{
+  async function ownerDocInRing(role = 'collaborator'): Promise<{
     doc: { uid: string; admin_invite: { token: string } };
     key: string;
+    ring: string;
   }> {
     const res = await fetch(`${baseUrl}/api/documents`, {
       method: 'POST',
@@ -566,10 +567,74 @@ describe('hosted MCP endpoint', () => {
     const keyRes = await fetch(`${baseUrl}/api/keyrings/self/agents`, {
       method: 'POST',
       headers: { ...OWNER, 'x-marginalia-keyring': ring },
-      body: JSON.stringify({ display_name: 'Codex', role: 'collaborator' }),
+      body: JSON.stringify({ display_name: 'Codex', role }),
     });
-    return { doc, key: ((await keyRes.json()) as { key: string }).key };
+    return { doc, key: ((await keyRes.json()) as { key: string }).key, ring };
   }
+
+  // A 1×1 PNG.
+  const PIXEL =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+  test('a collaborator agent creates a document with its images attached', async () => {
+    const { key, ring } = await ownerDocInRing();
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const created = await callText(agent, 'create_document', {
+      source: '# Figures\n\n![chart](img/chart.png)\n\n![bad](../x.png)\n',
+      images: [
+        { name: 'img/chart.png', data_base64: `data:image/png;base64,${PIXEL}` },
+        { name: '../x.png', data_base64: PIXEL },
+      ],
+    });
+    const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+    expect(created).toContain('img/chart.png: attached');
+    expect(created).toContain('../x.png: not a usable name');
+    expect(created).toContain('added to the user’s keyring');
+
+    const doc = await callText(agent, 'get_document', { document: uid, include_source: false });
+    expect(doc).toContain('your role: collaborator');
+    const pulled = await fetch(`${baseUrl}/api/keyrings/self`, {
+      headers: { ...OWNER, 'x-marginalia-keyring': ring },
+    });
+    const admin = (
+      (await pulled.json()) as { docs: Array<{ doc_uid: string; invite_token: string }> }
+    ).docs.find((d) => d.doc_uid === uid)?.invite_token as string;
+    const asset = await fetch(`${baseUrl}/api/documents/${uid}/assets/img/chart.png`, {
+      headers: { ...OWNER, 'x-marginalia-invite': admin },
+    });
+    expect(asset.status).toBe(200);
+    expect(asset.headers.get('content-type')).toBe('image/png');
+    expect(Buffer.from(await asset.arrayBuffer()).toString('base64')).toBe(PIXEL);
+    await agent.close();
+  });
+
+  test('upload_image needs editor: a collaborator is told why, an editor attaches', async () => {
+    const collaborator = await ownerDocInRing();
+    const asCollaborator = await connect(`?key=${encodeURIComponent(collaborator.key)}`);
+    const refused = (await asCollaborator.callTool({
+      name: 'upload_image',
+      arguments: { document: collaborator.doc.uid, name: 'a.png', data_base64: PIXEL },
+    })) as { content: Array<{ text?: string }>; isError?: boolean };
+    expect(refused.isError).toBe(true);
+    expect(refused.content.map((c) => c.text).join('')).toContain('needs the editor or admin role');
+    await asCollaborator.close();
+
+    const editor = await ownerDocInRing('editor');
+    const asEditor = await connect(`?key=${encodeURIComponent(editor.key)}`);
+    expect(
+      await callText(asEditor, 'upload_image', {
+        document: editor.doc.uid,
+        name: 'a.png',
+        data_base64: PIXEL,
+      }),
+    ).toContain('a.png: attached');
+    const asset = await fetch(`${baseUrl}/api/documents/${editor.doc.uid}/assets/a.png`, {
+      headers: { ...OWNER, 'x-marginalia-invite': editor.doc.admin_invite.token },
+    });
+    expect(asset.status).toBe(200);
+    expect(Buffer.from(await asset.arrayBuffer()).toString('base64')).toBe(PIXEL);
+    await asEditor.close();
+  });
 
   test('a link handed to a keyed agent is not swapped for its own invite on a refusal', async () => {
     const { doc, key } = await ownerDocInRing();

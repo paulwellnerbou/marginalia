@@ -8,6 +8,7 @@ import type { ToolContext } from './tools/context.js';
 import { registerDocumentTools } from './tools/documents.js';
 import { registerEditingTools } from './tools/editing.js';
 import { registerExportTools } from './tools/export.js';
+import { registerImageTools } from './tools/images.js';
 import { registerReviewTools } from './tools/review.js';
 
 export const SERVER_NAME = 'marginalia';
@@ -115,6 +116,7 @@ export function createMarginaliaMcpServer(
 
   const allowLocalFiles = deps.allowLocalFiles !== false;
   registerDocumentTools(server, context, { allowLocalFiles, agentKey: !!config.agentKey });
+  registerImageTools(server, context, { allowLocalFiles });
   registerReviewTools(server, context);
   registerEditingTools(server, context);
   if (allowLocalFiles) registerExportTools(server, context);

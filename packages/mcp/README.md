@@ -273,7 +273,8 @@ when no password is set.
 | `edit_document` | Search-and-replace edits saved as a revision. `dry_run` shows the diff first. |
 | `update_document` | Replace the whole source — or, with `section`, just one chapter. |
 | `export_document` | Write `source`, `bundle`, `docx`, `pdf` to disk — `formats: ["all"]` for everything. **stdio only.** |
-| `create_document` | Upload markdown/AsciiDoc and get links back. `source_path` reads a local file — **stdio only**. With `folder`, add it beside an existing document instead (see [Folders](#folders)). |
+| `create_document` | Upload markdown/AsciiDoc and get links back. `source_path` reads a local file — **stdio only**. With `folder`, add it beside an existing document instead (see [Folders](#folders)). `images` attaches the images the source references, each as `{ name, data_base64 }` (or `{ name, path }` on stdio); they go on with the creator's access, so an agent key's collaborator cap does not stop them. |
+| `upload_image` | Attach an image to an existing document under the name its source uses (`![](name.png)`, `image::name.png[]`). Needs editor or admin. |
 | `create_invite`, `list_invites`, `authenticate` | Access management. |
 
 ## Folders
