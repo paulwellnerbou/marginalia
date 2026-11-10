@@ -1377,6 +1377,11 @@ button.primary:disabled {
   align-items: center;
   gap: var(--space-2) var(--space-3);
 }
+/* A control with no label of its own, under the one it acts on. */
+.doc-view-grid-control {
+  grid-column: 2;
+  justify-self: start;
+}
 /* `[-] 100% [+] [reset]`. The value column is sized for the widest reading
    any of the three settings produces, so the buttons don't shuffle
    sideways as the number changes under them. */

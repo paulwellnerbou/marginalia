@@ -223,7 +223,7 @@ export function DocumentSettingsDialog({
                 Default theme
               </Text>
               <Text size="1" color="gray">
-                Applied to anyone opening this document for the first time.
+                Shown to everyone who hasn't picked a theme for this document in the View menu.
               </Text>
               <Select.Root value={defaultTheme} onValueChange={setDefaultTheme}>
                 <Select.Trigger />

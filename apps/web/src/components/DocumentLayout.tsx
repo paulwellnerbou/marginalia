@@ -71,6 +71,7 @@ import {
   isBookmark,
   isResolved,
   listThreads,
+  updateDocumentSettings,
   uploadAsset,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
@@ -1247,6 +1248,29 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   useEffect(() => {
     setTheme(getUserThemeOverride(doc.uid) ?? doc.default_theme);
   }, [doc.uid, doc.default_theme]);
+
+  const [savingDefaultTheme, setSavingDefaultTheme] = useState(false);
+  /** Readers without a theme of their own for this document get it. */
+  const makeThemeDocumentDefault = async (next: string) => {
+    const identity = resolveIdentity();
+    if (!identity || !onDocSettingsChanged) return;
+    setSavingDefaultTheme(true);
+    try {
+      const result = await updateDocumentSettings(doc.uid, { default_theme: next }, identity);
+      // Cleared first: the effect above re-reads it once the default lands.
+      setUserThemeOverride(doc.uid, null);
+      onDocSettingsChanged(doc.uid, { default_theme: result.default_theme });
+    } catch (err) {
+      reportError('DocumentLayout.makeThemeDocumentDefault', err, { uid: doc.uid });
+      showToast({
+        title: 'Default theme not changed',
+        body: apiErrorMessage(err, 'Could not change the default theme'),
+        variant: 'error',
+      });
+    } finally {
+      setSavingDefaultTheme(false);
+    }
+  };
 
   useEffect(() => {
     if (!canComment) setPendingDraft(null);
@@ -3472,10 +3496,22 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
               {BUILT_IN_THEMES.map((t) => (
                 <Select.Item key={t.id} value={t.id}>
                   {t.label}
+                  {t.id === doc.default_theme && <Text color="gray"> · document default</Text>}
                 </Select.Item>
               ))}
             </Select.Content>
           </Select.Root>
+          {doc.role === 'admin' && onDocSettingsChanged && theme !== doc.default_theme && (
+            <Button
+              size="1"
+              variant="soft"
+              className="doc-view-grid-control"
+              disabled={savingDefaultTheme}
+              onClick={() => void makeThemeDocumentDefault(theme)}
+            >
+              Make default for everyone
+            </Button>
+          )}
 
           <DocColorControls paperRef={docScrollRef} inkRef={docRef} theme={theme} />
         </>
