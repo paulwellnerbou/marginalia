@@ -1,7 +1,13 @@
 import { DEFAULT_AGENT_NAME, normalizeAgentName } from '@marginalia/mcp/identity';
 import { Box, Button, Callout, Dialog, Flex, Text, TextField } from '@radix-ui/themes';
 import { useCallback, useEffect, useState } from 'react';
-import { type AgentKeyWire, createAgentKey, deleteAgentKey, listAgentKeys } from '../lib/api.js';
+import {
+  type AgentKeyWire,
+  createAgentKey,
+  deleteAgentKey,
+  listAgentKeys,
+  updateAgentKey,
+} from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { formatTimestamp } from '../lib/format-time.js';
 import { loadKeyringToken, onKeyringChange } from '../lib/keyring.js';
@@ -12,15 +18,8 @@ import {
   type McpClient,
   type Setup,
 } from '../lib/mcp-connection.js';
-import { type GrantableRole, roleSummary } from '../lib/roles.js';
-import {
-  AccessCreateForm,
-  AccessField,
-  AccessList,
-  AccessRow,
-  RoleBadge,
-  RoleSelect,
-} from './AccessList.js';
+import { type GrantableRole, roleLabel, roleSummary } from '../lib/roles.js';
+import { AccessCreateForm, AccessField, AccessList, AccessRow, RoleSelect } from './AccessList.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import { McpConnectionSetup } from './McpConnectionSetup.js';
 
@@ -41,6 +40,7 @@ export function AgentKeysPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<{ key: string; agent: AgentKeyWire } | null>(null);
+  const [savingRoles, setSavingRoles] = useState<ReadonlySet<string>>(new Set());
 
   useEffect(() => onKeyringChange(setToken), []);
 
@@ -93,6 +93,30 @@ export function AgentKeysPanel() {
     }
   }
 
+  async function changeRole(id: string, next: GrantableRole) {
+    if (!token) return;
+    setError(null);
+    const previous = agents?.find((a) => a.id === id)?.role;
+    const setRoleOf = (role: AgentKeyWire['role']) =>
+      setAgents((current) => current?.map((a) => (a.id === id ? { ...a, role } : a)) ?? current);
+    // Optimistic, so the select settles under the pointer.
+    setRoleOf(next);
+    setSavingRoles((current) => new Set(current).add(id));
+    try {
+      await updateAgentKey(token, id, { role: next });
+    } catch (err) {
+      reportError('AgentKeysPanel.updateRole', err);
+      if (previous) setRoleOf(previous);
+      setError(apiErrorMessage(err, 'Could not change the agent’s role'));
+    } finally {
+      setSavingRoles((current) => {
+        const rest = new Set(current);
+        rest.delete(id);
+        return rest;
+      });
+    }
+  }
+
   async function revoke(id: string) {
     if (!token) return;
     setError(null);
@@ -115,8 +139,8 @@ export function AgentKeysPanel() {
         </Text>
         <Text size="1" color="gray" as="p">
           Connect an agent to every document here that you administer, with one URL. It signs with
-          its own name, gets at most the role you pick, and revoking its key cuts it off everywhere
-          at once.
+          its own name and gets the role you pick, which a document’s MCP tab can change for that
+          document. Revoking its key cuts it off everywhere at once.
         </Text>
       </Box>
 
@@ -166,7 +190,15 @@ export function AgentKeysPanel() {
           <AccessRow
             key={agent.id}
             name={agent.display_name}
-            role={<RoleBadge role={agent.role} />}
+            role={
+              <RoleSelect
+                look="badge"
+                value={agent.role}
+                onChange={(next) => void changeRole(agent.id, next)}
+                disabled={savingRoles.has(agent.id)}
+                ariaLabel={`Role for ${agent.display_name}: ${roleLabel(agent.role)}`}
+              />
+            }
             meta={
               agent.last_used_at === null
                 ? 'Not used yet'

@@ -1341,9 +1341,14 @@ button.primary:disabled {
    presentation is purely cosmetic, not baked into the TS source. */
 .role-badge {
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-variant: small-caps;
-  font-weight: 600;
+  letter-spacing: 0.04em;
+  font-size: calc(var(--font-size-1) * 0.85);
+  font-weight: 500;
+}
+/* A select standing in for a badge matches its height. */
+.rt-SelectTrigger.role-badge {
+  height: calc(var(--space-4) + var(--space-1));
+  padding-inline: var(--space-2) var(--space-1);
 }
 
 .doc-chrome {

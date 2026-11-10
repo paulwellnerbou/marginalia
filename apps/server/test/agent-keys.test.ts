@@ -479,4 +479,102 @@ describe('keyring agent keys', () => {
     expect(second).not.toBe(first);
     expect(await roleWith(doc.uid, second)).toBe('collaborator');
   });
+
+  async function setDocRole(ringToken: string, agentId: string, uid: string, role: string) {
+    return call(`/api/keyrings/self/agents/${agentId}/documents/${uid}`, {
+      method: 'PUT',
+      headers: ring(ringToken),
+      body: { role },
+    });
+  }
+
+  async function docRoles(ringToken: string, uid: string) {
+    const res = await call(`/api/keyrings/self/agents?doc=${uid}`, { headers: ring(ringToken) });
+    const body = (await res.json()) as {
+      agents: Array<{ display_name: string; document: { role: string; invited: boolean } | null }>;
+    };
+    return Object.fromEntries(body.agents.map((a) => [a.display_name, a.document]));
+  }
+
+  test('re-roling a key moves its invites at the old role and leaves set ones alone', async () => {
+    const a = await upload();
+    const b = await upload();
+    const token = await ringWith(a, b);
+    const { key, agent: wire } = await mintKey(token);
+    const onA = ((await (await access(key, a.uid)).json()) as { invite_token: string })
+      .invite_token;
+    expect((await setDocRole(token, wire.id, b.uid, 'reader')).status).toBe(200);
+    const onB = ((await (await access(key, b.uid)).json()) as { invite_token: string })
+      .invite_token;
+
+    const res = await call(`/api/keyrings/self/agents/${wire.id}`, {
+      method: 'PATCH',
+      headers: ring(token),
+      body: { role: 'editor' },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { agent: { role: string } }).agent.role).toBe('editor');
+    expect(await roleWith(a.uid, onA)).toBe('editor');
+    expect(await roleWith(b.uid, onB)).toBe('reader');
+
+    // A document the agent opens later gets the new role.
+    const c = await upload();
+    await call(`/api/keyrings/self/docs/${c.uid}`, {
+      method: 'PUT',
+      headers: ring(token),
+      body: { invite_token: c.admin_invite.token },
+    });
+    expect(((await (await access(key, c.uid)).json()) as { role: string }).role).toBe('editor');
+
+    const admin = await call(`/api/keyrings/self/agents/${wire.id}`, {
+      method: 'PATCH',
+      headers: ring(token),
+      body: { role: 'admin' },
+    });
+    expect(admin.status).toBe(400);
+    const otherRing = await ringWith(await upload());
+    const foreign = await call(`/api/keyrings/self/agents/${wire.id}`, {
+      method: 'PATCH',
+      headers: ring(otherRing),
+      body: { role: 'reader' },
+    });
+    expect(foreign.status).toBe(404);
+  });
+
+  test('a role set on a document waits for the agent and shows in its lists', async () => {
+    const doc = await upload();
+    const token = await ringWith(doc);
+    const { key, agent: wire } = await mintKey(token);
+    expect(await docRoles(token, doc.uid)).toEqual({
+      Claude: { role: 'collaborator', invited: false },
+    });
+
+    expect((await setDocRole(token, wire.id, doc.uid, 'editor')).status).toBe(200);
+    expect(await docRoles(token, doc.uid)).toEqual({ Claude: { role: 'editor', invited: true } });
+    const listed = (await (await call('/api/agent/documents', { headers: agent(key) })).json()) as {
+      docs: Array<{ doc_uid: string; role: string | null }>;
+    };
+    expect(listed.docs.find((d) => d.doc_uid === doc.uid)?.role).toBe('editor');
+
+    const granted = (await (await access(key, doc.uid)).json()) as {
+      invite_token: string;
+      role: string;
+    };
+    expect(granted.role).toBe('editor');
+    expect((await setDocRole(token, wire.id, doc.uid, 'reader')).status).toBe(200);
+    expect(await roleWith(doc.uid, granted.invite_token)).toBe('reader');
+    expect((await setDocRole(token, wire.id, doc.uid, 'admin')).status).toBe(400);
+  });
+
+  test('a document the ring cannot delegate takes no role', async () => {
+    const mine = await upload();
+    const token = await ringWith(mine);
+    const { agent: wire } = await mintKey(token);
+    const outside = await upload();
+    expect((await setDocRole(token, wire.id, outside.uid, 'editor')).status).toBe(404);
+    expect(await docRoles(token, outside.uid)).toEqual({ Claude: null });
+    expect(app.db.prepare('SELECT count(*) AS n FROM keyring_agent_invites').get()).toEqual({
+      n: 0,
+    });
+  });
 });

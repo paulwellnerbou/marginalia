@@ -1,7 +1,15 @@
 import { DEFAULT_AGENT_NAME, normalizeAgentName } from '@marginalia/mcp/identity';
 import { Badge, Box, Button, Callout, Flex, Text, TextField } from '@radix-ui/themes';
 import { useCallback, useEffect, useState } from 'react';
-import { createInvite, type Invite, listAgentKeys, listInvites } from '../lib/api.js';
+import {
+  type AgentKeyWire,
+  createInvite,
+  type Invite,
+  listAgentKeys,
+  listInvites,
+  setAgentDocumentRole,
+} from '../lib/api.js';
+import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { loadKeyringToken } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
@@ -11,6 +19,8 @@ import {
   type McpClient,
   type Setup,
 } from '../lib/mcp-connection.js';
+import { type GrantableRole, roleLabel } from '../lib/roles.js';
+import { AccessList, AccessRow, RoleSelect } from './AccessList.js';
 import { Copyable } from './Copyable.js';
 import { McpConnectionSetup } from './McpConnectionSetup.js';
 
@@ -40,7 +50,10 @@ const KEYRING_AGENT_NOTE = 'AI agent via keyring';
  */
 export function McpPanel({ uid, canManageInvites }: Props) {
   const [invites, setInvites] = useState<Invite[] | null>(null);
-  const [keyNames, setKeyNames] = useState<string[]>([]);
+  const [ringToken] = useState(() => loadKeyringToken());
+  const [keys, setKeys] = useState<AgentKeyWire[] | null>(null);
+  const [savingKeys, setSavingKeys] = useState<ReadonlySet<string>>(new Set());
+  const [keyError, setKeyError] = useState<string | null>(null);
   const [agentName, setAgentName] = useState(DEFAULT_AGENT_NAME);
   // Per invite token; unset means the guess from the agent's name.
   const [clients, setClients] = useState<Record<string, McpClient>>({});
@@ -68,12 +81,37 @@ export function McpPanel({ uid, canManageInvites }: Props) {
   // A key reaches this document the first time its agent opens it, so
   // its name is spoken for here before it has an invite.
   useEffect(() => {
-    const ring = loadKeyringToken();
-    if (!ring || !canManageInvites) return;
-    listAgentKeys(ring)
-      .then((res) => setKeyNames(res.agents.map((a) => a.display_name)))
+    if (!ringToken || !canManageInvites) return;
+    listAgentKeys(ringToken, { doc: uid })
+      .then((res) => setKeys(res.agents))
       .catch((err) => reportError('McpPanel.listAgentKeys', err));
-  }, [canManageInvites]);
+  }, [ringToken, uid, canManageInvites]);
+  const keyNames = (keys ?? []).map((k) => k.display_name);
+
+  async function changeKeyRole(id: string, next: GrantableRole) {
+    if (!ringToken) return;
+    setKeyError(null);
+    const previous = keys?.find((k) => k.id === id)?.document ?? null;
+    const setDocument = (document: NonNullable<AgentKeyWire['document']> | null) =>
+      setKeys((current) => current?.map((k) => (k.id === id ? { ...k, document } : k)) ?? current);
+    setDocument({ role: next, invited: true });
+    setSavingKeys((current) => new Set(current).add(id));
+    try {
+      await setAgentDocumentRole(ringToken, id, uid, next);
+      // The agent's invite here is an ordinary link, listed with the others.
+      await refresh();
+    } catch (err) {
+      reportError('McpPanel.setAgentDocumentRole', err);
+      setDocument(previous);
+      setKeyError(apiErrorMessage(err, 'Could not change the agent’s role'));
+    } finally {
+      setSavingKeys((current) => {
+        const rest = new Set(current);
+        rest.delete(id);
+        return rest;
+      });
+    }
+  }
 
   const agentInvites = (invites ?? []).filter((i) => i.note === AGENT_NOTE);
 
@@ -149,6 +187,42 @@ export function McpPanel({ uid, canManageInvites }: Props) {
         Let an AI agent read this document, work through your comments, and suggest edits you can
         accept or reject — the same things a human reviewer can do.
       </Text>
+
+      {keys && keys.length > 0 && (
+        <Box mb="5">
+          <AccessList title="Your keyring’s agents" loading={false} empty="">
+            {keys.map((key) => (
+              <AccessRow
+                key={key.id}
+                name={key.display_name}
+                role={
+                  key.document ? (
+                    <RoleSelect
+                      look="badge"
+                      value={key.document.role}
+                      onChange={(next) => void changeKeyRole(key.id, next)}
+                      disabled={savingKeys.has(key.id)}
+                      ariaLabel={`Role for ${key.display_name} on this document: ${roleLabel(key.document.role)}`}
+                    />
+                  ) : null
+                }
+                meta={keyMeta(key)}
+                action={null}
+              />
+            ))}
+          </AccessList>
+          {keyError && (
+            <Text as="p" size="1" color="red" mt="2">
+              {keyError}
+            </Text>
+          )}
+          <Text as="p" size="1" color="gray" mt="2">
+            These connect through your keyring, so they need no link of their own. The role here is
+            for this document only; a key’s role everywhere else is set under “Your devices” on the
+            start page.
+          </Text>
+        </Box>
+      )}
 
       <Flex align="center" gap="2" mb="2">
         <Badge radius="full" color="gray">
@@ -278,4 +352,11 @@ export function McpPanel({ uid, canManageInvites }: Props) {
       </Text>
     </Box>
   );
+}
+
+function keyMeta(key: AgentKeyWire): string {
+  if (!key.document) return 'Your keyring holds no admin link here, so this key cannot open it.';
+  if (key.document.role !== key.role)
+    return `Set for this document · key role ${roleLabel(key.role)}`;
+  return 'Same role as its key';
 }

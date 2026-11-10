@@ -1375,17 +1375,54 @@ export function createKeyringPairing(token: string): Promise<{ code: string; exp
 export interface AgentKeyWire {
   id: string;
   display_name: string;
-  role: Role;
+  /** Never admin: the server caps keys below it. */
+  role: Exclude<Role, 'admin'>;
   created_at: number;
   last_used_at: number | null;
   documents: number;
+  /** Only when listed for one document: the key's role there, null when the ring cannot delegate it. */
+  document?: { role: Exclude<Role, 'admin'>; invited: boolean } | null;
 }
 
-export function listAgentKeys(token: string): Promise<{ agents: AgentKeyWire[] }> {
-  return request('/api/keyrings/self/agents', {
+export function listAgentKeys(
+  token: string,
+  opts: { doc?: string } = {},
+): Promise<{ agents: AgentKeyWire[] }> {
+  const query = opts.doc ? `?doc=${encodeURIComponent(opts.doc)}` : '';
+  return request(`/api/keyrings/self/agents${query}`, {
     method: 'GET',
     headers: { [KEYRING_HEADER]: token },
   });
+}
+
+/** Re-role a key; its documents still at the old role follow, ones set apart keep theirs. */
+export function updateAgentKey(
+  token: string,
+  id: string,
+  payload: { role: Role },
+): Promise<{ agent: AgentKeyWire }> {
+  return request(`/api/keyrings/self/agents/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { [KEYRING_HEADER]: token },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** The key's role on one document, minting its invite there if it has none yet. */
+export function setAgentDocumentRole(
+  token: string,
+  id: string,
+  docUid: string,
+  role: Role,
+): Promise<{ role: Role; invited: boolean }> {
+  return request(
+    `/api/keyrings/self/agents/${encodeURIComponent(id)}/documents/${encodeURIComponent(docUid)}`,
+    {
+      method: 'PUT',
+      headers: { [KEYRING_HEADER]: token },
+      body: JSON.stringify({ role }),
+    },
+  );
 }
 
 export function createAgentKey(
