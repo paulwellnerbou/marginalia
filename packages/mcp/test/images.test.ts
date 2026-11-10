@@ -51,4 +51,16 @@ describe('prepareImage', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('takes a plain percent-encoded data URL, the form an SVG drawn as markup takes', async () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>';
+    for (const url of [
+      `data:image/svg+xml,${encodeURIComponent(svg)}`,
+      `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
+    ]) {
+      const result = await prepareImage({ name: 'd.svg', data_base64: url }, false);
+      expect(result).toMatchObject({ ok: true });
+      if (result.ok) expect(new TextDecoder().decode(result.bytes)).toBe(svg);
+    }
+  });
 });

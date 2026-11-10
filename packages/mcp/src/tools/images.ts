@@ -28,7 +28,10 @@ export function imageSchema(allowLocalFiles: boolean) {
     data_base64: z
       .string()
       .optional()
-      .describe('The image bytes, base64-encoded. A `data:` URL works too.'),
+      .describe(
+        'The image bytes, base64-encoded. A `data:` URL works too, including a plain ' +
+          'percent-encoded one such as `data:image/svg+xml,%3Csvg…`.',
+      ),
     ...(allowLocalFiles
       ? { path: z.string().optional().describe('A local image file to read instead.') }
       : {}),
@@ -80,10 +83,19 @@ export async function prepareImage(input: ImageInput, allowLocalFiles: boolean):
 }
 
 function decodeBase64(raw: string): Uint8Array<ArrayBuffer> | null {
-  const payload = raw
-    .trim()
-    .replace(/^data:[^,]*;base64,/i, '')
-    .replace(/\s+/g, '');
+  const trimmed = raw.trim();
+  // A data URL without `;base64` carries percent-encoded text: the form
+  // an SVG drawn as markup naturally takes.
+  const textual = /^data:[^,;]*(;[^,;=]+=[^,;]*)*,/i.exec(trimmed);
+  if (textual) {
+    try {
+      const bytes = new TextEncoder().encode(decodeURIComponent(trimmed.slice(textual[0].length)));
+      return bytes.length > 0 ? new Uint8Array(bytes) : null;
+    } catch {
+      return null;
+    }
+  }
+  const payload = trimmed.replace(/^data:[^,]*;base64,/i, '').replace(/\s+/g, '');
   if (payload.length === 0 || !/^[A-Za-z0-9+/_-]*={0,2}$/.test(payload)) return null;
   const bytes = Buffer.from(
     payload,
@@ -170,12 +182,17 @@ export async function attachImages(
  * Read from the rendered HTML, which marks every image reference as
  * missing or attached by name, for markdown and AsciiDoc alike.
  * Best-effort: a failed read yields no notes rather than an error.
+ *
+ * Given the `source`, it reads the document back only when there is
+ * something to compare, since that fetches the whole rendered document.
  */
 export async function imageReferenceNotes(
   ctx: ToolContext,
   ref: DocumentRef,
   justAttached: readonly string[],
+  source?: string,
 ): Promise<string[]> {
+  if (source !== undefined && justAttached.length === 0 && !mentionsImages(source)) return [];
   let html: string;
   try {
     const doc = await ctx.client.json<DocumentWire>(
@@ -201,13 +218,21 @@ export async function imageReferenceNotes(
   ];
 }
 
+const NAMED_ENTITIES: Record<string, string> = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>' };
+
+/** The serializer writes `&` and `"` in attributes as `&#x26;` and `&#x22;`. */
 function decodeEntities(s: string): string {
-  return s
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&amp;/g, '&');
+  return s.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (whole, ref: string) => {
+    if (ref[0] !== '#') return NAMED_ENTITIES[ref.toLowerCase()] ?? whole;
+    const code =
+      ref[1] === 'x' || ref[1] === 'X' ? Number.parseInt(ref.slice(2), 16) : Number(ref.slice(1));
+    return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
+  });
+}
+
+/** Whether the source has any image reference for the notes to check. */
+function mentionsImages(source: string): boolean {
+  return /!\[|\bimage::?|<img\b/i.test(source);
 }
 
 export function registerImageTools(

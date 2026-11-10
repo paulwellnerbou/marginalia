@@ -640,6 +640,32 @@ describe('hosted MCP endpoint', () => {
     await agent.close();
   });
 
+  test('names the HTML escapes still match their references', async () => {
+    const { key } = await ownerDocInRing();
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const created = await callText(agent, 'create_document', {
+      source: '# R&D\n\n![chart](r&d.png)\n',
+      images: [{ name: 'r&d.png', data_base64: PIXEL }],
+    });
+    expect(created).toContain('r&d.png: attached');
+    expect(created).not.toContain('no image is attached');
+    expect(created).not.toContain('does not reference it');
+    await agent.close();
+  });
+
+  test('upload_image says when the source does not reference what it attached', async () => {
+    const { doc, key } = await ownerDocInRing('editor');
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const uploaded = await callText(agent, 'upload_image', {
+      document: doc.uid,
+      name: 'unused.png',
+      data_base64: PIXEL,
+    });
+    expect(uploaded).toContain('unused.png: attached');
+    expect(uploaded).toContain('unused.png: attached, but the source does not reference it');
+    await agent.close();
+  });
+
   test('a folder document gets its images with the agent’s access to the folder', async () => {
     const { doc, key } = await ownerDocInRing('editor');
     const agent = await connect(`?key=${encodeURIComponent(key)}`);

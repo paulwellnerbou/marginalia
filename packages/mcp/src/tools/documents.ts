@@ -222,7 +222,7 @@ export function registerDocumentTools(
           ctx.client.rememberDocument(ref);
           ctx.client.shareSession(beside, added.uid);
           const images = await attachImages(ctx, ref, args.images ?? [], allowLocalFiles);
-          const notes = await imageReferenceNotes(ctx, ref, images.attached);
+          const notes = await imageReferenceNotes(ctx, ref, images.attached, source);
           const ignored = [
             args.password_protected !== undefined ? 'password_protected' : null,
             args.invite_only !== undefined ? 'invite_only' : null,
@@ -270,7 +270,7 @@ export function registerDocumentTools(
           await ctx.client.authenticate(ref, created.password).catch(() => undefined);
         }
         const images = await attachImages(ctx, ref, args.images ?? [], allowLocalFiles);
-        const notes = await imageReferenceNotes(ctx, ref, images.attached);
+        const notes = await imageReferenceNotes(ctx, ref, images.attached, source);
         const filed = await fileInKeyring(ctx, ref, created.name ?? args.name ?? null);
         // Only an explicit `true` closes the document — an instance that
         // predates the flag omits the field and serves the bare URL to
