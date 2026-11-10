@@ -76,12 +76,20 @@ export function AgentKeysPanel() {
   const taken = (candidate: string) =>
     (agents ?? []).some((a) => a.display_name.toLowerCase() === candidate.toLowerCase());
   const nameTaken = taken(normalizedName);
+  // An empty field stands for the default name. Warning about it before
+  // anything is typed would greet every visit, so that case is explained
+  // on submit instead of disabling the button without a word.
+  const typedNameTaken = nameTaken && name.trim() !== '';
   // An empty field means the default name, so say so only while it is free.
   const placeholder = taken(DEFAULT_AGENT_NAME) ? 'Name' : DEFAULT_AGENT_NAME;
 
   async function create(event: FormEvent) {
     event.preventDefault();
-    if (!token || nameTaken) return;
+    if (!token || typedNameTaken) return;
+    if (nameTaken) {
+      setError(`“${normalizedName}” already has a key. Give this agent a name of its own.`);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -160,7 +168,10 @@ export function AgentKeysPanel() {
               Agent name
               <TextField.Root
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setError(null);
+                }}
                 placeholder={placeholder}
                 size="1"
                 mt="1"
@@ -185,7 +196,7 @@ export function AgentKeysPanel() {
               </Select.Root>
             </Box>
           </Box>
-          <Button size="1" type="submit" variant="soft" loading={busy} disabled={nameTaken}>
+          <Button size="1" type="submit" variant="soft" loading={busy} disabled={typedNameTaken}>
             Create agent key
           </Button>
         </Flex>
@@ -194,7 +205,7 @@ export function AgentKeysPanel() {
         As {ROLES.find((r) => r.value === role)?.label.toLowerCase()}, it{' '}
         {ROLES.find((r) => r.value === role)?.description}.
       </Text>
-      {nameTaken && name.trim() !== '' && (
+      {typedNameTaken && (
         <Text as="p" size="1" color="orange" mt="2">
           “{normalizedName}” already has a key. Agents are told apart by name in comments, so pick
           another.
