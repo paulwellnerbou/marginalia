@@ -19,8 +19,9 @@ import {
 /**
  * The reader's theme for this document, with the document's default
  * marked in the list. An admin whose pick differs from the default can
- * make it the default for everyone. Renders the select and, when offered,
- * the button as siblings, so the caller's grid or row places them.
+ * make it the document's default for every reader. Renders the select
+ * and, when offered, the button as siblings, so the caller's grid or row
+ * places them.
  */
 export function ThemeSelect({
   id,
@@ -92,10 +93,11 @@ export function ThemeSelect({
             size="1"
             variant="soft"
             className="doc-view-grid-control"
+            title="Every reader of this document sees this theme unless they pick another"
             disabled={saving}
             onClick={() => void makeDefault()}
           >
-            Make default for everyone
+            Make document default
           </Button>
         )}
     </>
