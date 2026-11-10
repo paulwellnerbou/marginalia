@@ -344,7 +344,9 @@ export function publicUrl(c: Context, trustedHops: number): URL {
       .split(',')
       .map((v) => v.trim())
       .filter(Boolean);
-    return values[Math.max(0, values.length - trustedHops)] ?? null;
+    // As in `clientKey`: a chain shorter than configured cannot tell a
+    // real proxy's entry from one the caller wrote.
+    return values.length >= trustedHops ? (values[values.length - trustedHops] ?? null) : null;
   };
   const forwardedProto = vouched('x-forwarded-proto');
   const proto = forwardedProto === 'http' || forwardedProto === 'https' ? forwardedProto : null;

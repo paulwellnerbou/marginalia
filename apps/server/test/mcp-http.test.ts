@@ -6,6 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { type App, createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
+import { publicUrl } from '../src/routes/mcp.js';
 
 /**
  * The hosted MCP endpoint, driven by a real MCP client over real HTTP.
@@ -836,5 +837,31 @@ describe('hosted MCP endpoint', () => {
     expect(res.isError).toBe(true);
     expect(res.content.map((c) => c.text).join('')).toContain('not in MARGINALIA_ALLOWED_HOSTS');
     await client.close();
+  });
+});
+
+describe('publicUrl', () => {
+  async function originFor(hops: number, headers: Record<string, string>): Promise<string> {
+    const { Hono } = await import('hono');
+    const app = new Hono().get('/mcp', (c) => c.text(publicUrl(c, hops).origin));
+    return (await app.fetch(new Request('http://internal:8080/mcp', { headers }))).text();
+  }
+
+  test('takes the scheme and host the trusted proxy vouched for', async () => {
+    const forwarded = { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'marginalia.example' };
+    expect(await originFor(1, forwarded)).toBe('https://marginalia.example');
+    expect(await originFor(0, forwarded)).toBe('http://internal:8080');
+  });
+
+  test('ignores a chain shorter than the configured hops, which the caller could have written', async () => {
+    expect(
+      await originFor(2, { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'evil.example' }),
+    ).toBe('http://internal:8080');
+    expect(
+      await originFor(2, {
+        'x-forwarded-proto': 'https, http',
+        'x-forwarded-host': 'marginalia.example, caddy.internal',
+      }),
+    ).toBe('https://marginalia.example');
   });
 });
