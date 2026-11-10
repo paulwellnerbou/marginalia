@@ -2,7 +2,7 @@
 
 import { expect, test } from 'bun:test';
 import type { DocumentFolder, FolderDocument } from './api.js';
-import { folderLinkTarget } from './folder-links.js';
+import { folderLinkTarget, isFolderLink, resolveFolderLinks } from './folder-links.js';
 
 function doc(uid: string, name: string | null, title: string | null, main = false): FolderDocument {
   return { uid, name, title, format: 'markdown', main, created_at: 0, updated_at: 0 };
@@ -78,4 +78,50 @@ test('a name no document has resolves to nothing', () => {
 
 test('malformed escapes do not throw', () => {
   expect(uidOf('OUT%E0LINE')).toBeNull();
+});
+
+/** Just enough of an anchor and its root for `resolveFolderLinks`. */
+function fakeLinks(hrefs: string[]) {
+  const links = hrefs.map((href) => {
+    const attrs = new Map<string, string>([['href', href]]);
+    return {
+      getAttribute: (k: string) => attrs.get(k) ?? null,
+      setAttribute: (k: string, v: string) => void attrs.set(k, v),
+    };
+  });
+  const root = { querySelectorAll: () => links } as unknown as ParentNode;
+  const anchors = links as unknown as HTMLAnchorElement[];
+  return { root, anchors, hrefs: () => anchors.map((a) => a.getAttribute('href')) };
+}
+
+test('links naming a folder document are pointed at it, others left alone', () => {
+  const { root, anchors, hrefs } = fakeLinks(['OUTLINE#act-two', 'Appendix', 'https://x.org']);
+  resolveFolderLinks(root, folder, '?full');
+  expect(hrefs()).toEqual(['/d/outline?full#act-two', 'Appendix', 'https://x.org']);
+  expect(anchors.map(isFolderLink)).toEqual([true, false, false]);
+});
+
+test('a later pass re-resolves from what was written, and restores it when nothing matches', () => {
+  const { root, anchors, hrefs } = fakeLinks(['OUTLINE']);
+  resolveFolderLinks(root, folder, '');
+  resolveFolderLinks(root, folder, '?full');
+  expect(hrefs()).toEqual(['/d/outline?full']);
+
+  const renamed: DocumentFolder = {
+    ...folder,
+    documents: folder.documents.filter((d) => d.uid !== 'outline'),
+  };
+  resolveFolderLinks(root, renamed, '');
+  expect(hrefs()).toEqual(['OUTLINE']);
+  expect(isFolderLink(anchors[0]!)).toBe(false);
+});
+
+test('an attribute in the markup never supplies the href', () => {
+  // The sanitizer keeps data-* attributes, so one an author planted must not be read back.
+  const { root, hrefs } = fakeLinks(['/d/elsewhere']);
+  const link = (root.querySelectorAll('a') as unknown as HTMLAnchorElement[])[0]!;
+  link.setAttribute('data-folder-href', 'javascript:alert(1)');
+  resolveFolderLinks(root, folder, '');
+  resolveFolderLinks(root, null, '');
+  expect(hrefs()).toEqual(['/d/elsewhere']);
 });

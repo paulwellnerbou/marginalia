@@ -9,7 +9,7 @@ import { spanElements } from '../lib/block-span.js';
 import { isInjectedChromeText } from '../lib/block-text.js';
 import { type BookmarkMarkerSpec, syncBookmarkMarkers } from '../lib/bookmark-markers.js';
 import { type DocMetaLinks, installDocMetaFolds } from '../lib/doc-meta-fold.js';
-import { FOLDER_UID_ATTR, resolveFolderLinks } from '../lib/folder-links.js';
+import { isFolderLink, resolveFolderLinks } from '../lib/folder-links.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import {
   type HighlightRange,
@@ -463,11 +463,12 @@ export function RenderedDoc({
 
       // A modified click opens a tab of the reader's choosing; a plain one
       // stays in the app instead of reloading it.
-      const folderLink = target.closest<HTMLAnchorElement>(`a[${FOLDER_UID_ATTR}]`);
+      const folderLink = target.closest<HTMLAnchorElement>('a[href]');
       const navigateTo = folderLinksRef.current?.navigate;
       if (
         folderLink &&
         navigateTo &&
+        isFolderLink(folderLink) &&
         !folderLink.hasAttribute('target') &&
         e instanceof MouseEvent &&
         e.button === 0 &&

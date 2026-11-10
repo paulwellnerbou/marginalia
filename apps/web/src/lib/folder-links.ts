@@ -67,10 +67,18 @@ export function folderLinkTarget(href: string, folder: DocumentFolder): FolderLi
   return match ? { uid: match.uid, hash } : null;
 }
 
-/** Holds the href as written, so a later pass can resolve it again. */
-const SOURCE_ATTR = 'data-folder-href';
-/** Marks a resolved link: the uid it leads to. */
-export const FOLDER_UID_ATTR = 'data-folder-uid';
+/**
+ * The href each resolved link was written with. Kept off the DOM: the
+ * sanitizer passes `data-*` attributes through, so anything stored there
+ * an author could have planted — and restoring an href from it would
+ * bypass the sanitizer's URL check.
+ */
+const writtenHref = new WeakMap<HTMLAnchorElement, string>();
+
+/** True for a link `resolveFolderLinks` pointed at a folder document. */
+export function isFolderLink(link: HTMLAnchorElement): boolean {
+  return writtenHref.has(link);
+}
 
 /**
  * Point every link under `root` that names a folder document at its route,
@@ -84,16 +92,13 @@ export function resolveFolderLinks(
   search: string,
 ): void {
   for (const link of Array.from(root.querySelectorAll<HTMLAnchorElement>('a[href]'))) {
-    const written = link.getAttribute(SOURCE_ATTR) ?? link.getAttribute('href') ?? '';
+    const written = writtenHref.get(link) ?? link.getAttribute('href') ?? '';
     const target = folder ? folderLinkTarget(written, folder) : null;
     if (target) {
-      link.setAttribute(SOURCE_ATTR, written);
-      link.setAttribute(FOLDER_UID_ATTR, target.uid);
+      writtenHref.set(link, written);
       link.setAttribute('href', `/d/${target.uid}${search}${target.hash}`);
-    } else if (link.hasAttribute(SOURCE_ATTR)) {
+    } else if (writtenHref.delete(link)) {
       link.setAttribute('href', written);
-      link.removeAttribute(SOURCE_ATTR);
-      link.removeAttribute(FOLDER_UID_ATTR);
     }
   }
 }
