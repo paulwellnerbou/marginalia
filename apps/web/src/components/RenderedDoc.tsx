@@ -42,6 +42,8 @@ interface RenderedDocProps {
   elRef?: RefObject<HTMLElement | null>;
   /** Max reading column width, in `ch`. Overrides the theme default. */
   maxWidthCh?: number;
+  /** The reader's paper/ink overrides, from `docColorStyle`. */
+  colorStyle?: React.CSSProperties | undefined;
   /** Multiplier applied to the active theme's base text size. */
   textZoom?: number;
   /** Exact text ranges to keep visibly highlighted in the rendered document. */
@@ -114,6 +116,7 @@ export function RenderedDoc({
   rendered,
   elRef,
   maxWidthCh,
+  colorStyle,
   textZoom,
   highlights = [],
   bookmarks = NO_BOOKMARKS,
@@ -497,8 +500,9 @@ export function RenderedDoc({
   }, [appearance, rendered.html, ref]);
 
   const style: React.CSSProperties | undefined =
-    maxWidthCh || textZoom
+    maxWidthCh || textZoom || colorStyle
       ? {
+          ...colorStyle,
           ...(maxWidthCh ? { ['--md-max-width' as string]: `${maxWidthCh}ch` } : {}),
           ...(textZoom ? { fontSize: `calc(var(--md-font-size) * ${textZoom})` } : {}),
         }
@@ -507,7 +511,7 @@ export function RenderedDoc({
   // No `dangerouslySetInnerHTML` — see comment above.
   return (
     <>
-      <div className="marginalia-theme">
+      <div className="marginalia-theme" style={colorStyle}>
         {rendered.css ? <style>{rendered.css}</style> : null}
         <article ref={ref} className="marginalia" style={style} />
       </div>

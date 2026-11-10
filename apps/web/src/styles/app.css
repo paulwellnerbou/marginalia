@@ -1401,6 +1401,42 @@ button.primary:disabled {
   margin: 0;
   margin-inline-start: var(--space-1);
 }
+/* Paper / ink: the native color input, trimmed to a swatch the size of
+   the stepper buttons so the rows line up. */
+.doc-color-swatch {
+  box-sizing: border-box;
+  width: var(--space-5);
+  height: var(--space-5);
+  padding: 0;
+  border: 1px solid var(--gray-a7);
+  border-radius: var(--radius-1);
+  background: none;
+  cursor: pointer;
+}
+.doc-color-swatch::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+.doc-color-swatch::-webkit-color-swatch {
+  border: none;
+  border-radius: calc(var(--radius-1) - 1px);
+}
+.doc-color-swatch::-moz-color-swatch {
+  border: none;
+  border-radius: calc(var(--radius-1) - 1px);
+}
+.doc-color-swatch:focus-visible {
+  outline: 2px solid var(--focus-8);
+  outline-offset: 1px;
+}
+.doc-color-value {
+  min-width: 7ch;
+  font-family: var(--code-font-family, ui-monospace, monospace);
+  font-size: var(--font-size-1);
+  color: var(--gray-12);
+}
+.doc-color-value-theme {
+  color: var(--gray-10);
+}
 
 /* Statistics dialog: a tile per headline number, the two conversions it
    rests on, then a chapter table. */
