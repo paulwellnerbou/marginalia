@@ -92,6 +92,7 @@ import {
 } from '../lib/chapter-reading.js';
 import { chapterEditQuery } from '../lib/chapter-scope.js';
 import { buildCommentHighlights } from '../lib/comment-highlights.js';
+import { useDocColorStyle } from '../lib/doc-colors.js';
 import type { DocMetaLinks } from '../lib/doc-meta-fold.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
@@ -165,6 +166,7 @@ import { AppBar } from './AppBar.js';
 import { BlockActions } from './BlockActions.js';
 import { ChapterPager } from './ChapterPager.js';
 import { DisplayStepper } from './DisplayStepper.js';
+import { DocColorControls } from './DocColorControls.js';
 import {
   type DocumentSearchResult,
   DocumentSearchResultsPane,
@@ -1235,8 +1237,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   useEffect(() => {
     if (isRememberedRightTab(rightTab)) localStorage.setItem(RIGHT_TAB_KEY, rightTab);
   }, [rightTab]);
-  // An HTML page styles itself: no theme, width or text-size controls.
+  // An HTML page styles itself: no theme, width, text-size or color controls.
   const isHtml = doc.format === 'html';
+  const docColorOverride = useDocColorStyle(doc.format);
   useEffect(() => {
     void applyTheme(themeForDocument(doc.format, theme));
   }, [theme, doc.format]);
@@ -3466,6 +3469,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
               ))}
             </Select.Content>
           </Select.Root>
+
+          <DocColorControls paperRef={docScrollRef} inkRef={docRef} theme={theme} />
         </>
       )}
 
@@ -3800,6 +3805,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                     paged ? ` ${pagedVertical ? PAGED_VERTICAL_CLASS : PAGED_CLASS}` : ''
                   }`}
                   ref={docScrollRef}
+                  style={docColorOverride}
                 >
                   <div
                     className={`doc-row${!floatingComments && inlineCommentsOpen ? ' doc-row-with-inline' : ''}${rowHostsPopover ? ' doc-row-floating' : ''}`}
@@ -3816,6 +3822,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                         rendered={liveRendered}
                         elRef={docRef}
                         maxWidthCh={maxWidth}
+                        colorStyle={docColorOverride}
                         textZoom={textZoom / 100}
                         highlights={commentHighlights}
                         bookmarks={bookmarkMarkers}

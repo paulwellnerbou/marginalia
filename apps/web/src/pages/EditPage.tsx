@@ -37,6 +37,7 @@ import {
   type SectionBalancer,
 } from '../lib/chapter-scope.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
+import { useDocColorStyle } from '../lib/doc-colors.js';
 import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
@@ -242,6 +243,7 @@ export function EditPage() {
     localStorage.setItem(LS_WORD_WRAP, String(wordWrap));
   }, [wordWrap]);
   const isHtml = doc?.format === 'html';
+  const docColorOverride = useDocColorStyle(doc?.format);
   useEffect(() => {
     void applyTheme(themeForDocument(doc?.format ?? 'markdown', theme));
   }, [theme, doc?.format]);
@@ -1034,6 +1036,7 @@ export function EditPage() {
             {rendered ? (
               <RenderedDoc
                 rendered={rendered}
+                colorStyle={docColorOverride}
                 textZoom={textZoom / 100}
                 onMissingAssetUpload={canEdit ? uploadAndAttach : undefined}
               />
