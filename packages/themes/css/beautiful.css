@@ -233,12 +233,14 @@
 
 /* --- Code --------------------------------------------------------- */
 
+/* A dotted underline would read as an <abbr>. The tint is mixed from the
+   ink into transparent rather than taken from --md-color-code-bg (white
+   here), so it sits on any paper, the reader's own and dark mode's. */
 .marginalia :not(pre) > code {
   font-size: 0.88em;
-  background: transparent;
-  border-bottom: 1px dotted var(--md-color-fg-muted);
-  padding: 0 0.05em;
-  border-radius: 0;
+  background: color-mix(in srgb, var(--md-color-fg) 7%, transparent);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
   color: var(--md-color-fg);
 }
 .marginalia pre {
