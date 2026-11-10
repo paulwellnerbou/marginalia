@@ -3,13 +3,16 @@
  *
  * The theme an HTML document is shown with. The page brings its own
  * stylesheet (scoped to `.mg-html-root` by the renderer), so this sets no
- * typography, spacing or column width: only the colours the review
- * chrome paints with, light and dark.
+ * typography or spacing: only the colours the review chrome paints with,
+ * light and dark, and no column width.
  */
 @import "./_highlights.css";
 
 .marginalia-theme,
 .marginalia {
+  /* Lifts the 72ch cap of `default.css`, which the app always loads.
+     `100%` rather than `none`: the inline comments column subtracts it. */
+  --md-max-width: 100%;
   --md-color-fg: #1c1f23;
   --md-color-fg-muted: #5c6470;
   --md-color-bg: transparent;

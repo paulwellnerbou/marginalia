@@ -197,6 +197,8 @@ import { Toc } from './Toc.js';
 const MAX_WIDTH_KEY = 'marginalia.maxWidth';
 /** How wide images, tables, code and diagrams may grow; at or below the reading width, they don't. */
 const BLOCK_WIDTH_KEY = 'marginalia.blockWidth';
+/** Width cap for HTML pages, in px; 0 is no cap. Kept apart from the reading width, which is in `ch` of the app's text. */
+const HTML_WIDTH_KEY = 'marginalia.htmlWidth';
 const TEXT_ZOOM_KEY = 'marginalia.textZoom';
 const TOC_WIDTH_KEY = 'marginalia.tocWidth';
 const COMMENTS_WIDTH_KEY = 'marginalia.commentsWidth';
@@ -219,6 +221,10 @@ const TEXT_ZOOM_MIN = 80;
 const TEXT_ZOOM_MAX = 220;
 const DEFAULT_MAX_WIDTH = 72;
 const BLOCK_WIDTH_MAX = 200;
+const HTML_WIDTH_MIN = 480;
+const HTML_WIDTH_STEP = 160;
+/** One step past the widest cap, 1600px; the stepper shows it as "Full". */
+const HTML_WIDTH_FULL = 1760;
 /** How long a pane takes to fold away. Published to the stylesheet, which
  *  runs the animation, so the two can't drift apart. */
 const PANE_COLLAPSE_MS = 240;
@@ -562,6 +568,10 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   const [blockWidth, setBlockWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(BLOCK_WIDTH_KEY));
     return Number.isFinite(saved) && saved > maxWidth ? Math.min(saved, BLOCK_WIDTH_MAX) : 0;
+  });
+  const [htmlWidth, setHtmlWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem(HTML_WIDTH_KEY));
+    return Number.isFinite(saved) && saved >= HTML_WIDTH_MIN && saved < HTML_WIDTH_FULL ? saved : 0;
   });
   // Not in pages: a page is exactly as wide as the screen, and the tap
   // zones that turn it sit in the gutters a wide block would grow into.
@@ -1195,6 +1205,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     localStorage.setItem(BLOCK_WIDTH_KEY, String(blockWidth));
   }, [blockWidth]);
   useEffect(() => {
+    localStorage.setItem(HTML_WIDTH_KEY, String(htmlWidth));
+  }, [htmlWidth]);
+  useEffect(() => {
     localStorage.setItem(TEXT_ZOOM_KEY, String(textZoom));
   }, [textZoom]);
   useEffect(() => {
@@ -1231,8 +1244,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   useEffect(() => {
     if (isRememberedRightTab(rightTab)) localStorage.setItem(RIGHT_TAB_KEY, rightTab);
   }, [rightTab]);
-  // An HTML page styles itself: no theme, width, text-size or color controls.
+  // An HTML page styles itself: no theme, text-size or color controls, and
+  // a width of its own in px rather than the reading width.
   const isHtml = doc.format === 'html';
+  /* `100%` rather than `none`: the inline comments column subtracts this
+     from the row width. */
+  const readingWidth = isHtml ? (htmlWidth ? `${htmlWidth}px` : '100%') : `${maxWidth}ch`;
   const docColorOverride = useDocColorStyle(doc.format);
   useEffect(() => {
     void applyTheme(themeForDocument(doc.format, theme));
@@ -2691,8 +2708,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    * leave, so `panesSettled` asks for the answer again at rest.
    */
   const pageLayoutKey = useMemo(
-    () => [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx, panesSettled],
-    [liveRendered.html, maxWidth, textZoom, uiScale, theme, tocPx, commentsPx, panesSettled],
+    () => [
+      liveRendered.html,
+      readingWidth,
+      textZoom,
+      uiScale,
+      theme,
+      tocPx,
+      commentsPx,
+      panesSettled,
+    ],
+    [liveRendered.html, readingWidth, textZoom, uiScale, theme, tocPx, commentsPx, panesSettled],
   );
   const pages = usePagedReading(docScrollRef, paged, pageLayoutKey, pagedVertical);
 
@@ -3375,7 +3401,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         <SegmentedControl.Item value="chapters">Chapters</SegmentedControl.Item>
       </SegmentedControl.Root>
 
-      {!isHtml && (
+      {isHtml ? (
+        <>
+          <Text size="1" color="gray">
+            Page width
+          </Text>
+          <DisplayStepper
+            ariaLabel="Page width"
+            min={HTML_WIDTH_MIN}
+            max={HTML_WIDTH_FULL}
+            step={HTML_WIDTH_STEP}
+            defaultValue={HTML_WIDTH_FULL}
+            value={htmlWidth || HTML_WIDTH_FULL}
+            format={(v) => (v < HTML_WIDTH_FULL ? `${v}px` : 'Full')}
+            onCommit={(next) => setHtmlWidth(next < HTML_WIDTH_FULL ? next : 0)}
+            onReset={() => setHtmlWidth(0)}
+          />
+        </>
+      ) : (
         <>
           <Text size="1" color="gray">
             Reading width
@@ -3782,10 +3825,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
               so the edge tap zones — siblings of the scrollport, not
               descendants — can size themselves to the gutter it leaves.
               Everything that read it inside the row still inherits it. */}
-              <div
-                className="doc-viewport"
-                style={{ ['--md-max-width' as string]: `${maxWidth}ch` }}
-              >
+              <div className="doc-viewport" style={{ ['--md-max-width' as string]: readingWidth }}>
                 {/* `marginalia-theme` is applied here (not just inside the
               article) so the inline comments column inherits the
               document's themed background — otherwise it would sit on
@@ -3812,9 +3852,9 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                       <RenderedDoc
                         rendered={liveRendered}
                         elRef={docRef}
-                        maxWidthCh={maxWidth}
+                        maxWidth={readingWidth}
                         colorStyle={docColorOverride}
-                        textZoom={textZoom / 100}
+                        textZoom={isHtml ? 1 : textZoom / 100}
                         highlights={commentHighlights}
                         bookmarks={bookmarkMarkers}
                         searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}

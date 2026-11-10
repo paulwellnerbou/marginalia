@@ -42,8 +42,8 @@ interface RenderedDocProps {
   rendered: Pick<RenderResult, 'html' | 'css'>;
   /** Optional external ref — lets the parent reach the article DOM node. */
   elRef?: RefObject<HTMLElement | null>;
-  /** Max reading column width, in `ch`. Overrides the theme default. */
-  maxWidthCh?: number;
+  /** Max reading column width, as a CSS length. Overrides the theme default. */
+  maxWidth?: string;
   /** The reader's paper/ink overrides, from `docColorStyle`. */
   colorStyle?: React.CSSProperties | undefined;
   /** Multiplier applied to the active theme's base text size. */
@@ -129,7 +129,7 @@ const NO_BOOKMARKS: readonly BookmarkMarkerSpec[] = [];
 export function RenderedDoc({
   rendered,
   elRef,
-  maxWidthCh,
+  maxWidth,
   colorStyle,
   textZoom,
   highlights = [],
@@ -555,10 +555,10 @@ export function RenderedDoc({
   }, [appearance, rendered.html, ref]);
 
   const style: React.CSSProperties | undefined =
-    maxWidthCh || textZoom || colorStyle
+    maxWidth || textZoom || colorStyle
       ? {
           ...colorStyle,
-          ...(maxWidthCh ? { ['--md-max-width' as string]: `${maxWidthCh}ch` } : {}),
+          ...(maxWidth ? { ['--md-max-width' as string]: maxWidth } : {}),
           ...(textZoom ? { fontSize: `calc(var(--md-font-size) * ${textZoom})` } : {}),
         }
       : undefined;
