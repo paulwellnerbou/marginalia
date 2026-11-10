@@ -194,7 +194,7 @@ import {
 } from './inline-comments/threadLocation.js';
 import { McpPanel } from './McpPanel.js';
 import { PageJump } from './PageJump.js';
-import { type DocumentSearchOptions, RenderedDoc } from './RenderedDoc.js';
+import { type DocumentSearchOptions, type FolderLinks, RenderedDoc } from './RenderedDoc.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
 import { ProposalComposer, ProposalEditComposer } from './ThreadComposer.js';
@@ -2330,6 +2330,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         : undefined,
     [canComment, canEdit, editHref, doc.uid, doc.format, navigate],
   );
+  const folderLinks = useMemo<FolderLinks | undefined>(
+    () =>
+      doc.folder
+        ? { folder: doc.folder, search: fullView ? withFullView('', true) : '', navigate }
+        : undefined,
+    [doc.folder, fullView, navigate],
+  );
 
   // Editors can fill missing-asset placeholders directly in view mode
   // without navigating to the editor. Upload, then re-fetch so the
@@ -3837,6 +3844,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                         onMissingAssetUpload={canEdit ? onMissingAssetUpload : undefined}
                         docMetaKey={doc.uid}
                         docMetaLinks={docMetaLinks}
+                        folderLinks={folderLinks}
                       />
                       {canComment && blockRangesReady && (
                         <SelectionToolbar

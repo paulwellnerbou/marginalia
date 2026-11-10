@@ -583,6 +583,19 @@ that name as a heading. The home page gives a folder one card, the main
 document's, with the others listed on it; one whose main document this
 browser has never opened keeps a card of its own.
 
+A link in a document can name another document of its folder instead of
+spelling out its uid: `[the outline](OUTLINE)`, `[notes](<My Notes>)`,
+`[act two](outline.md#act-two)`, or in AsciiDoc `xref:OUTLINE.adoc[]`.
+The name is matched without regard to case, spacing, punctuation or a
+file extension, first against each document's name, then against its
+title — which is how the main document, usually unnamed, is reached:
+`[back to the story](the-long-night)`. The viewer and the editor preview
+resolve these links, not the renderer, since a rename or a new folder
+document changes where they lead without changing the source; a plain
+click moves within the app (in the editor preview, to a new tab). A name
+no folder document has is left as written. Exports and the rendered HTML
+an agent fetches keep the names unresolved.
+
 A folder document has no access of its own. Its password, invite-only
 flag, invites and sessions are the main document's — `authorize()` reads
 every gate off the main document and records only the visitor's identity

@@ -3,12 +3,13 @@ import { DOC_META_ATTR } from '@marginalia/renderer/doc-meta';
 import type { RenderResult } from '@marginalia/renderer/types';
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import { type AnchorSection, resolveAnchorElement } from '../lib/anchor-target.js';
-import type { ThreadState } from '../lib/api.js';
+import type { DocumentFolder, ThreadState } from '../lib/api.js';
 import { useAppearance } from '../lib/appearance.js';
 import { spanElements } from '../lib/block-span.js';
 import { isInjectedChromeText } from '../lib/block-text.js';
 import { type BookmarkMarkerSpec, syncBookmarkMarkers } from '../lib/bookmark-markers.js';
 import { type DocMetaLinks, installDocMetaFolds } from '../lib/doc-meta-fold.js';
+import { isFolderLink, resolveFolderLinks } from '../lib/folder-links.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import {
   type HighlightRange,
@@ -87,6 +88,18 @@ interface RenderedDocProps {
    * folds, and for editors an offer of the missing ones under the title.
    */
   docMetaLinks?: DocMetaLinks | undefined;
+  /**
+   * The folder the document belongs to: links naming one of its documents
+   * lead there, and a plain click on one goes through `navigate`.
+   */
+  folderLinks?: FolderLinks | undefined;
+}
+
+export interface FolderLinks {
+  folder: DocumentFolder;
+  /** Query the resolved links carry, as the folder list's do. */
+  search: string;
+  navigate: (path: string) => void;
 }
 
 /** The root the HTML renderer wraps a page's body in. */
@@ -130,6 +143,7 @@ export function RenderedDoc({
   onMissingAssetUpload,
   docMetaKey,
   docMetaLinks,
+  folderLinks,
 }: RenderedDocProps) {
   const internal = useRef<HTMLElement>(null);
   const ref = elRef ?? internal;
@@ -155,6 +169,12 @@ export function RenderedDoc({
     docMetaLinksRef.current = docMetaLinks;
   }, [docMetaLinks]);
   const docMetaOffer = docMetaLinks ? (docMetaLinks.canAdd ? 'add' : 'edit') : 'none';
+  const folderLinksRef = useRef(folderLinks);
+  useEffect(() => {
+    folderLinksRef.current = folderLinks;
+  }, [folderLinks]);
+  const linkFolder = folderLinks?.folder ?? null;
+  const linkSearch = folderLinks?.search ?? '';
 
   // Apply `rendered.html` to the article's innerHTML exactly once per
   // unique html value, then run mermaid + replace missing-asset markers
@@ -182,6 +202,11 @@ export function RenderedDoc({
       el.removeAttribute('data-collapse-installed');
     }
     lastHtml.current = rendered.html;
+    resolveFolderLinks(
+      el,
+      folderLinksRef.current?.folder ?? null,
+      folderLinksRef.current?.search ?? '',
+    );
     void renderMermaidIn(el);
     replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
     // Folding wraps a heading's siblings in new elements, which an HTML
@@ -229,6 +254,14 @@ export function RenderedDoc({
     if (!el || lastHtml.current === null) return;
     installDocMetaFolds(el, docMetaKey ?? null, docMetaLinksRef.current ?? null);
   }, [ref, docMetaKey, docMetaOffer]);
+
+  // A rename or a document joining the folder changes where links lead
+  // without changing the markup.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || lastHtml.current === null) return;
+    resolveFolderLinks(el, linkFolder, linkSearch);
+  }, [ref, linkFolder, linkSearch]);
 
   // If canUploadMissing flips while `rendered.html` stays the same
   // (e.g. invite upgraded mid-session so the user gains editor role),
@@ -425,6 +458,24 @@ export function RenderedDoc({
       if (threadId && onHighlightClick) {
         e.preventDefault();
         onHighlightClick(threadId);
+        return;
+      }
+
+      // A modified click opens a tab of the reader's choosing; a plain one
+      // stays in the app instead of reloading it.
+      const folderLink = target.closest<HTMLAnchorElement>('a[href]');
+      const navigateTo = folderLinksRef.current?.navigate;
+      if (
+        folderLink &&
+        navigateTo &&
+        isFolderLink(folderLink) &&
+        !folderLink.hasAttribute('target') &&
+        e instanceof MouseEvent &&
+        e.button === 0 &&
+        !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+      ) {
+        e.preventDefault();
+        navigateTo(folderLink.getAttribute('href') ?? '');
         return;
       }
 

@@ -303,6 +303,11 @@ the server's session covers the whole folder, so the login is filed
 under the rest the same way. The list stops after twelve and says how
 many it left out.
 
+To link from one folder document to another, write the other's name as
+the link target — `[the outline](OUTLINE)`, `[notes](<My Notes>)`,
+`[act two](OUTLINE#act-two)` — or the main document's title. The viewer
+turns it into a link to that document; no uid needs to go into the source.
+
 To start one, or add to it:
 
 ```
