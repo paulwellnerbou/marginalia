@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { DocumentWire } from '../api-types.js';
 import { MarginaliaApiError } from '../client.js';
 import type { DocumentRef } from '../document-ref.js';
+import { timestamp } from '../format.js';
 import { documentArg, failure, guard, type ToolContext, text } from './context.js';
 
 /** The server serves an asset's type from its name's extension alone. */
@@ -47,20 +48,27 @@ type Prepared =
   | { ok: true; name: string; bytes: Uint8Array<ArrayBuffer> }
   | { ok: false; line: string };
 
-/** Validate one image and load its bytes, without touching the network. */
-export async function prepareImage(input: ImageInput, allowLocalFiles: boolean): Promise<Prepared> {
-  const name = normalizeRefName(input.name);
-  const label = input.name.trim() || '(unnamed)';
+/** An image name as the server will store it, or why it cannot be one. */
+function checkImageName(raw: string): { ok: true; name: string } | { ok: false; line: string } {
+  const name = normalizeRefName(raw);
   if (!name) {
     return {
       ok: false,
-      line: `${label}: not a usable name — no leading /, \\, ?, #, :, or empty, . or .. segments`,
+      line: `${raw.trim() || '(unnamed)'}: not a usable name — no leading /, \\, ?, #, :, or empty, . or .. segments`,
     };
   }
   const ext = name.toLowerCase().split('.').pop() ?? '';
   if (!IMAGE_EXTENSIONS.includes(ext)) {
     return { ok: false, line: `${name}: name must end in .${IMAGE_EXTENSIONS.join(', .')}` };
   }
+  return { ok: true, name };
+}
+
+/** Validate one image and load its bytes, without touching the network. */
+export async function prepareImage(input: ImageInput, allowLocalFiles: boolean): Promise<Prepared> {
+  const checked = checkImageName(input.name);
+  if (!checked.ok) return checked;
+  const { name } = checked;
   if (input.data_base64 !== undefined) {
     const bytes = decodeBase64(input.data_base64);
     if (!bytes) return { ok: false, line: `${name}: data_base64 is not valid base64` };
@@ -179,8 +187,7 @@ export async function attachImages(
 /**
  * Where the source and its images disagree: a reference nothing is
  * attached under, or an image just attached that nothing references.
- * Read from the rendered HTML, which marks every image reference as
- * missing or attached by name, for markdown and AsciiDoc alike.
+ * Works for markdown and AsciiDoc alike, from the rendered HTML.
  * Best-effort: a failed read yields no notes rather than an error.
  *
  * Given the `source`, it reads the document back only when there is
@@ -190,8 +197,9 @@ export async function imageReferenceNotes(
   ctx: ToolContext,
   ref: DocumentRef,
   justAttached: readonly string[],
-  source?: string,
+  opts: { source?: string; pending?: readonly string[] } = {},
 ): Promise<string[]> {
+  const { source, pending = [] } = opts;
   if (source !== undefined && justAttached.length === 0 && !mentionsImages(source)) return [];
   let html: string;
   try {
@@ -203,6 +211,31 @@ export async function imageReferenceNotes(
   } catch {
     return [];
   }
+  const { missing, referenced } = imageRefs(html);
+  return [
+    ...missingLines([...missing].filter((name) => !pending.includes(name))),
+    ...unusedLines(justAttached.filter((name) => !referenced.has(name))),
+  ];
+}
+
+/**
+ * The whole document's image state, for get_document: what the source
+ * references with nothing attached, and images attached under a name
+ * nothing references. The cover and its thumbnail are attached without
+ * being referenced by design, so they never count as unused.
+ */
+export function imageStatusLines(doc: DocumentWire): string[] {
+  const { missing, referenced } = imageRefs(doc.rendered.html);
+  const unused = doc.attached_assets
+    .filter((a) => a.mime.startsWith('image/') && !referenced.has(a.ref_name))
+    .map((a) => a.ref_name)
+    .filter((name) => !/^cover\.[a-z]+$/.test(name) && !name.startsWith('__marginalia-'));
+  const lines = [...missingLines([...missing]), ...unusedLines(unused)];
+  return lines.length > 0 ? ['images:', ...lines.map((l) => `  ${l}`)] : [];
+}
+
+/** Read from the rendered HTML, which marks every image reference as missing or attached by name. */
+function imageRefs(html: string): { missing: Set<string>; referenced: Set<string> } {
   const missing = new Set(
     [...html.matchAll(/data-missing-asset="([^"]*)"/g)].map((m) => decodeEntities(m[1] ?? '')),
   );
@@ -210,12 +243,17 @@ export async function imageReferenceNotes(
   for (const m of html.matchAll(/data-asset-ref="([^"]*)"/g)) {
     referenced.add(decodeEntities(m[1] ?? ''));
   }
-  return [
-    ...[...missing].map((name) => `${name}: the source references it, but no image is attached`),
-    ...justAttached
-      .filter((name) => !referenced.has(name))
-      .map((name) => `${name}: attached, but the source does not reference it under that name`),
-  ];
+  return { missing, referenced };
+}
+
+function missingLines(names: readonly string[]): string[] {
+  return names.map((name) => `${name}: the source references it, but no image is attached`);
+}
+
+function unusedLines(names: readonly string[]): string[] {
+  return names.map(
+    (name) => `${name}: attached, but the source does not reference it under that name`,
+  );
 }
 
 const NAMED_ENTITIES: Record<string, string> = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>' };
@@ -233,6 +271,56 @@ function decodeEntities(s: string): string {
 /** Whether the source has any image reference for the notes to check. */
 function mentionsImages(source: string): boolean {
   return /!\[|\bimage::?|<img\b/i.test(source);
+}
+
+/**
+ * One single-use upload URL per name, for files the agent has on disk:
+ * cheaper and exact, where base64 in a tool call is neither. Minted with
+ * `ref`'s access, which needs editor or admin; the URL keeps working
+ * after that access is dropped, but not after it, or the agent key, is
+ * revoked.
+ */
+export async function requestUploadUrls(
+  ctx: ToolContext,
+  ref: DocumentRef,
+  rawNames: readonly string[],
+): Promise<{ lines: string[]; pending: string[] }> {
+  const lines: string[] = [];
+  const names: string[] = [];
+  for (const raw of rawNames) {
+    const checked = checkImageName(raw);
+    if (!checked.ok) lines.push(checked.line);
+    else if (!names.includes(checked.name)) names.push(checked.name);
+  }
+  if (names.length === 0) return { lines, pending: [] };
+  try {
+    const minted = await ctx.client.json<{
+      uploads: Array<{ ref_name: string; url: string; expires_at: number }>;
+      max_bytes: number;
+    }>(ref, `/api/documents/${encodeURIComponent(ref.uid)}/assets/uploads`, {
+      method: 'POST',
+      body: { names },
+      withAgentKey: true,
+    });
+    for (const upload of minted.uploads) {
+      lines.push(
+        `${upload.ref_name}: curl -sS -F "file=@<path to the file>" '${ref.baseUrl}${upload.url}'`,
+      );
+    }
+    const expires = Math.min(...minted.uploads.map((u) => u.expires_at));
+    lines.push(
+      `(one file per URL, up to ${formatBytes(minted.max_bytes)}, until ${timestamp(expires)}. ` +
+        'curl prints the attached image as JSON; get_document then lists any image the ' +
+        'source still lacks.)',
+    );
+    return { lines, pending: minted.uploads.map((u) => u.ref_name) };
+  } catch (err) {
+    return { lines: [...lines, `upload URLs: ${describeUploadError(err)}`], pending: [] };
+  }
+}
+
+export function uploadUrlLines(lines: readonly string[]): string[] {
+  return lines.length > 0 ? ['upload URLs:', ...lines.map((l) => `  ${l}`)] : [];
 }
 
 export function registerImageTools(
@@ -264,6 +352,35 @@ export function registerImageTools(
         if (!result.ok) return failure(result.line);
         const notes = await imageReferenceNotes(ctx, ref, [prepared.name]);
         return text(result.line, ...notes);
+      }),
+  );
+
+  server.registerTool(
+    'request_image_uploads',
+    {
+      title: 'Get upload URLs for images on disk',
+      description:
+        'For images you have as files: one upload URL per name, to send each file with ' +
+        '`curl -F file=@<path>` instead of passing its bytes as base64. Use this for more than ' +
+        `a few small images, or any large one. ${IMAGES_HINT} Needs the editor or admin role ` +
+        'on the document. For a document you are creating, pass `image_uploads` to ' +
+        'create_document instead, which works whatever your role is afterwards.',
+      inputSchema: {
+        document: documentArg,
+        names: z
+          .array(z.string())
+          .min(1)
+          .max(50)
+          .describe('The names the source uses for the images, e.g. `screens/login.jpg`.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (args) =>
+      guard(async () => {
+        const ref = ctx.client.resolve(args.document);
+        const { lines, pending } = await requestUploadUrls(ctx, ref, args.names);
+        const listed = uploadUrlLines(lines);
+        return pending.length > 0 ? text(listed.join('\n')) : failure(lines.join('\n'));
       }),
   );
 }

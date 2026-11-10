@@ -27,7 +27,15 @@ import {
   type ToolContext,
   text,
 } from './context.js';
-import { attachImages, IMAGES_HINT, imageReferenceNotes, imageSchema } from './images.js';
+import {
+  attachImages,
+  IMAGES_HINT,
+  imageReferenceNotes,
+  imageSchema,
+  imageStatusLines,
+  requestUploadUrls,
+  uploadUrlLines,
+} from './images.js';
 
 export function registerDocumentTools(
   server: McpServer,
@@ -126,9 +134,12 @@ export function registerDocumentTools(
         `reviewer link. ${allowLocalFiles ? 'Pass either `source` or `source_path`.' : 'Pass the text as `source`.'}\n\n` +
         'With `folder`, it is added beside an existing document instead — an outline or ' +
         'background notes for a story — and opens with that document’s links and roles.\n\n' +
-        'Pass its images in `images`. A new document’s go on with the admin link it is ' +
-        'created with, so your role on it afterwards does not matter; a folder document’s go ' +
-        `on with your access to the folder, which adding to it already needs. ${IMAGES_HINT}`,
+        'Pass its images in `images` as base64, or, for files you have on disk, their names ' +
+        'in `image_uploads`: that returns one curl-ready upload URL per name, so the bytes ' +
+        'never pass through a tool call. Use it for more than a few small images. A new ' +
+        'document’s images go on with the admin link it is created with, so your role on it ' +
+        'afterwards does not matter; a folder document’s with your access to the folder, which ' +
+        `adding to it already needs. ${IMAGES_HINT}`,
       inputSchema: {
         source: z.string().optional().describe('The document text.'),
         // Reading a local file is only meaningful when this server runs
@@ -179,6 +190,14 @@ export function registerDocumentTools(
           .array(imageSchema(allowLocalFiles))
           .optional()
           .describe('Images the source references, attached to the new document.'),
+        image_uploads: z
+          .array(z.string())
+          .max(50)
+          .optional()
+          .describe(
+            'Names of images you will upload from disk yourself, e.g. `screens/login.jpg`: ' +
+              'each gets an upload URL for `curl -F file=@<path>`.',
+          ),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -222,7 +241,11 @@ export function registerDocumentTools(
           ctx.client.rememberDocument(ref);
           ctx.client.shareSession(beside, added.uid);
           const images = await attachImages(ctx, ref, args.images ?? [], allowLocalFiles);
-          const notes = await imageReferenceNotes(ctx, ref, images.attached, source);
+          const uploads = await requestUploadUrls(ctx, ref, args.image_uploads ?? []);
+          const notes = await imageReferenceNotes(ctx, ref, images.attached, {
+            source,
+            pending: uploads.pending,
+          });
           const ignored = [
             args.password_protected !== undefined ? 'password_protected' : null,
             args.invite_only !== undefined ? 'invite_only' : null,
@@ -240,6 +263,7 @@ export function registerDocumentTools(
               `share url: ${viewerUrl(ref)} — opens for everyone who can open the folder, with the role they have there`,
               `access: the folder's — ${added.password_protected ? 'password-protected' : 'no password gate'}, ${added.invite_only ? 'invite-only' : 'readable by URL'}`,
               ...imageLines([...images.lines, ...notes]),
+              ...uploadUrlLines(uploads.lines),
             ].join('\n'),
             ignored.length > 0
               ? `note: ${ignored.join(', ')} ignored — a folder document takes its access and instance from the folder.`
@@ -266,11 +290,16 @@ export function registerDocumentTools(
         // gate holds even for the admin link, so open it first; the
         // password is in this response only, so a failure here must not
         // throw it away.
-        if (created.password && args.images?.length) {
+        if (created.password && (args.images?.length || args.image_uploads?.length)) {
           await ctx.client.authenticate(ref, created.password).catch(() => undefined);
         }
         const images = await attachImages(ctx, ref, args.images ?? [], allowLocalFiles);
-        const notes = await imageReferenceNotes(ctx, ref, images.attached, source);
+        // Minted under the admin link too: the URLs outlive dropping it.
+        const uploads = await requestUploadUrls(ctx, ref, args.image_uploads ?? []);
+        const notes = await imageReferenceNotes(ctx, ref, images.attached, {
+          source,
+          pending: uploads.pending,
+        });
         const filed = await fileInKeyring(ctx, ref, created.name ?? args.name ?? null);
         // Only an explicit `true` closes the document — an instance that
         // predates the flag omits the field and serves the bare URL to
@@ -298,6 +327,7 @@ export function registerDocumentTools(
               ? `password (shown once, store it now): ${created.password}`
               : 'no password gate',
             ...imageLines([...images.lines, ...notes]),
+            ...uploadUrlLines(uploads.lines),
           ].join('\n'),
           filed.ok
             ? 'From here on you work on it with your own invite, at your agent key’s role.'
@@ -349,8 +379,10 @@ export function registerDocumentTools(
         const section = args.section ? resolveSection(blocks, args.section) : null;
         const showOutline = args.include_outline ?? section === null;
         const body = section ? section.source : doc.source;
+        const images = imageStatusLines(doc);
         return text(
           documentHeader(doc, ref, blocks),
+          images.length > 0 ? images.join('\n') : null,
           section ? sectionHeader(section) : null,
           showOutline ? `outline:\n${outline(blocks.sections)}` : null,
           blockDriftNote(blocks),

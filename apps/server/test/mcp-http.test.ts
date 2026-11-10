@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -679,6 +679,136 @@ describe('hosted MCP endpoint', () => {
     expect(added).toContain('n.png: attached');
     expect(added).not.toContain('no image is attached');
     await agent.close();
+  });
+
+  test('image_uploads hands a collaborator agent curl-ready URLs for files on disk', async () => {
+    const { key, ring } = await ownerDocInRing();
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const created = await callText(agent, 'create_document', {
+      source: '# Screens\n\n![login](screens/login.png)\n\n![home](screens/home.png)\n',
+      image_uploads: ['screens/login.png', 'screens/home.png'],
+    });
+    const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+    expect(created).toContain('added to the user’s keyring');
+    // Not yet uploaded is not missing.
+    expect(created).not.toContain('no image is attached');
+    const urls = Object.fromEntries(
+      [...created.matchAll(/^ {2}(\S+): curl -sS -F "file=@<path to the file>" '(\S+)'$/gm)].map(
+        (m) => [m[1], m[2]],
+      ),
+    ) as Record<string, string>;
+    expect(Object.keys(urls).sort()).toEqual(['screens/home.png', 'screens/login.png']);
+    expect(urls['screens/login.png']?.startsWith(`${baseUrl}/api/asset-uploads/`)).toBe(true);
+
+    // The agent has only its collaborator invite now; the URL needs nothing else.
+    const file = join(dir, 'login.png');
+    writeFileSync(file, Buffer.from(PIXEL, 'base64'));
+    // The printed command itself, where curl exists; the server runs in
+    // this process, so it must not be spawned synchronously.
+    const curl = Bun.which('curl');
+    let sent: string;
+    if (curl) {
+      const proc = Bun.spawn([
+        curl,
+        '-sS',
+        '-F',
+        `file=@${file}`,
+        urls['screens/login.png'] as string,
+      ]);
+      sent = await new Response(proc.stdout).text();
+      await proc.exited;
+    } else {
+      const form = new FormData();
+      form.set('file', new Blob([Buffer.from(PIXEL, 'base64')]), 'login.png');
+      const res = await fetch(urls['screens/login.png'] as string, { method: 'POST', body: form });
+      sent = await res.text();
+    }
+    expect(JSON.parse(sent).asset.ref_name).toBe('screens/login.png');
+
+    const pulled = await fetch(`${baseUrl}/api/keyrings/self`, {
+      headers: { ...OWNER, 'x-marginalia-keyring': ring },
+    });
+    const admin = (
+      (await pulled.json()) as { docs: Array<{ doc_uid: string; invite_token: string }> }
+    ).docs.find((d) => d.doc_uid === uid)?.invite_token as string;
+    const asset = await fetch(`${baseUrl}/api/documents/${uid}/assets/screens/login.png`, {
+      headers: { ...OWNER, 'x-marginalia-invite': admin },
+    });
+    expect(Buffer.from(await asset.arrayBuffer()).toString('base64')).toBe(PIXEL);
+
+    // get_document says what is still missing once the uploads are done.
+    const status = await callText(agent, 'get_document', { document: uid, include_source: false });
+    expect(status).toContain(
+      'screens/home.png: the source references it, but no image is attached',
+    );
+    expect(status).not.toContain('screens/login.png:');
+    await agent.close();
+  });
+
+  test('upload URLs for a password-protected document work without the password', async () => {
+    const { key } = await ownerDocInRing();
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const created = await callText(agent, 'create_document', {
+      source: '# Locked\n\n![a](a.png)\n',
+      password_protected: true,
+      image_uploads: ['a.png'],
+    });
+    const url = /a\.png: curl -sS -F "file=@<path to the file>" '(\S+)'/.exec(
+      created,
+    )?.[1] as string;
+    expect(url).toBeTruthy();
+    const form = new FormData();
+    form.set('file', new Blob([Buffer.from(PIXEL, 'base64')]), 'a.png');
+    expect((await fetch(url, { method: 'POST', body: form })).status).toBe(201);
+    await agent.close();
+  });
+
+  test('behind a trusted proxy, upload URLs carry the public https origin', async () => {
+    http.stop(true);
+    await app.close();
+    app = await createApp(
+      loadConfig({ dataDir: dir, port: 0, webDir: join(dir, 'web'), trustedProxyHops: 1 }),
+    );
+    http = Bun.serve({ port: 0, fetch: app.hono.fetch, websocket: app.websocket });
+    baseUrl = `http://localhost:${http.port}`;
+    const { key } = await ownerDocInRing();
+    const agent = await connect(`?key=${encodeURIComponent(key)}`, {
+      'x-forwarded-proto': 'https',
+      'x-forwarded-host': 'marginalia.example',
+    });
+    const created = await callText(agent, 'create_document', {
+      source: '# Shots\n\n![a](a.png)\n',
+      image_uploads: ['a.png'],
+    });
+    expect(created).toContain("'https://marginalia.example/api/asset-uploads/");
+    await agent.close();
+  });
+
+  test('request_image_uploads needs editor on an existing document', async () => {
+    const collaborator = await ownerDocInRing();
+    const asCollaborator = await connect(`?key=${encodeURIComponent(collaborator.key)}`);
+    const refused = (await asCollaborator.callTool({
+      name: 'request_image_uploads',
+      arguments: { document: collaborator.doc.uid, names: ['a.png'] },
+    })) as { content: Array<{ text?: string }>; isError?: boolean };
+    expect(refused.isError).toBe(true);
+    expect(refused.content.map((c) => c.text).join('')).toContain('needs the editor or admin role');
+    await asCollaborator.close();
+
+    const editor = await ownerDocInRing('editor');
+    const asEditor = await connect(`?key=${encodeURIComponent(editor.key)}`);
+    const granted = await callText(asEditor, 'request_image_uploads', {
+      document: editor.doc.uid,
+      names: ['a.png', '../bad.png'],
+    });
+    expect(granted).toContain('../bad.png: not a usable name');
+    const url = /a\.png: curl -sS -F "file=@<path to the file>" '(\S+)'/.exec(
+      granted,
+    )?.[1] as string;
+    const form = new FormData();
+    form.set('file', new Blob([Buffer.from(PIXEL, 'base64')]), 'a.png');
+    expect((await fetch(url, { method: 'POST', body: form })).status).toBe(201);
+    await asEditor.close();
   });
 
   test('upload_image needs editor: a collaborator is told why, an editor attaches', async () => {
