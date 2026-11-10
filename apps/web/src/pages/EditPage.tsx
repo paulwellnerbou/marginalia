@@ -10,7 +10,7 @@ import { AssetsPanel } from '../components/AssetsPanel.js';
 import { EditToolbar } from '../components/EditToolbar.js';
 import { MarkdownToolbar } from '../components/MarkdownToolbar.js';
 import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
-import { RenderedDoc } from '../components/RenderedDoc.js';
+import { type FolderLinks, RenderedDoc } from '../components/RenderedDoc.js';
 import { ResizeHandle } from '../components/ResizeHandle.js';
 import {
   ApiError,
@@ -268,6 +268,19 @@ export function EditPage() {
   }, [doc]);
 
   const attachedRefs = useMemo(() => new Set(attached.map((a) => a.ref_name)), [attached]);
+  // A new tab, so following a link from the preview keeps unsaved edits.
+  const folder = doc?.folder ?? null;
+  const folderLinks = useMemo<FolderLinks | undefined>(
+    () =>
+      folder
+        ? {
+            folder,
+            search: '',
+            navigate: (path) => window.open(path, '_blank', 'noopener'),
+          }
+        : undefined,
+    [folder],
+  );
   const assetVersions = useMemo(
     () => new Map(attached.map((a) => [a.ref_name, a.asset_id])),
     [attached],
@@ -1039,6 +1052,7 @@ export function EditPage() {
                 colorStyle={docColorOverride}
                 textZoom={textZoom / 100}
                 onMissingAssetUpload={canEdit ? uploadAndAttach : undefined}
+                folderLinks={folderLinks}
               />
             ) : (
               <Text color="gray" size="2" as="p" mx="4" mt="4">
