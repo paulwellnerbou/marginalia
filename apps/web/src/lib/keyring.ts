@@ -228,6 +228,17 @@ export async function pairWithCode(code: string): Promise<RecentDoc[]> {
  * fight through the server's rename propagation, and a rename would
  * bounce between them forever.
  */
+/**
+ * Take a document's name for this browser, the way the viewer keeps the
+ * header it sends in step with the server. Not in a synced browser: its
+ * name is the ring's, and one document's (an invite seeded for someone
+ * else, say) must not replace it.
+ */
+export function adoptDocumentName(name: string | null): void {
+  if (!name || hasKeyring()) return;
+  if (getDisplayName() !== name) setDisplayName(name);
+}
+
 function adoptIdentity(ring: KeyringWire): void {
   if (ring.client_id && ring.client_id !== getClientId()) setClientId(ring.client_id);
   if (ring.display_name && ring.display_name !== getDisplayName()) {

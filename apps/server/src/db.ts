@@ -309,6 +309,7 @@ CREATE TABLE IF NOT EXISTS keyring_docs (
   added_at      INTEGER NOT NULL,
   PRIMARY KEY (keyring_token, doc_uid)
 );
+CREATE INDEX IF NOT EXISTS idx_keyring_docs_invite ON keyring_docs(invite_token);
 
 -- Short-lived single-use handoff for adding a device. The keyring token
 -- itself is a standing credential for every document in it, so it is
@@ -733,7 +734,9 @@ export function openDatabase(path: string): Database {
 /**
  * Admin links an agent filed in a ring before filing renamed them still
  * carry the agent's name, which signs the owner's next new device as the
- * agent. Idempotent: a renamed link no longer matches an agent's name.
+ * agent. The name is the ring whose agent it is named after, not just
+ * any ring holding the link. Idempotent: a renamed link no longer
+ * matches an agent's name.
  */
 function renameAgentFiledAdminLinks(db: Database): void {
   db.exec(
@@ -741,7 +744,10 @@ function renameAgentFiledAdminLinks(db: Database): void {
         SET display_name = (
           SELECT k.display_name FROM keyring_docs kd
             JOIN keyrings k ON k.token = kd.keyring_token
+            JOIN keyring_agents a ON a.keyring_token = kd.keyring_token
            WHERE kd.invite_token = invites.token
+             AND lower(a.display_name) = lower(invites.display_name)
+           ORDER BY kd.added_at
            LIMIT 1)
       WHERE kind = 'admin'
         AND EXISTS (

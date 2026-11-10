@@ -430,6 +430,16 @@ describe('keyring agent keys', () => {
       )
       .run(token, created.uid, created.admin_invite.token);
 
+    // The same link in a second ring, whose agents have other names.
+    const other = await ringWith();
+    app.db
+      .prepare(
+        `INSERT INTO keyring_docs (keyring_token, doc_uid, invite_token, title, added_at)
+         VALUES (?, ?, ?, NULL, 0)`,
+      )
+      .run(other, created.uid, created.admin_invite.token);
+    app.db.prepare('UPDATE keyrings SET display_name = ? WHERE token = ?').run('Ann', other);
+
     await app.close();
     app = await createApp(loadConfig({ dataDir: dir, port: 0, webDir }));
     const row = app.db

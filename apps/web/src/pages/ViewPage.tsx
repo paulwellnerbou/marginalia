@@ -13,9 +13,8 @@ import {
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
-import { getDisplayName, setDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
-import { hasKeyring, pushDoc as keyringPushDoc } from '../lib/keyring.js';
+import { adoptDocumentName, pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { openTab } from '../lib/open-tabs.js';
 import { recordVisit } from '../lib/recent-docs.js';
@@ -129,13 +128,9 @@ export function ViewPage() {
   // Sync localStorage to the server's authoritative name so the header
   // we send matches what the server has, and renames only fire when the
   // user edits via UserMenu. Trade-off: opening someone else's named
-  // invite overwrites the global local name. A synced browser's name is
-  // the keyring's, so no single document's name may replace it.
+  // invite overwrites the global local name, except in a synced browser.
   useEffect(() => {
-    if (!doc?.display_name || hasKeyring()) return;
-    if (getDisplayName() !== doc.display_name) {
-      setDisplayName(doc.display_name);
-    }
+    adoptDocumentName(doc?.display_name ?? null);
   }, [doc]);
 
   // What is on screen belongs to the tab being left until the next
