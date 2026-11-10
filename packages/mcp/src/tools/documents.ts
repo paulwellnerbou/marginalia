@@ -27,6 +27,7 @@ import {
   type ToolContext,
   text,
 } from './context.js';
+import { attachImages, IMAGES_HINT, imageReferenceNotes, imageSchema } from './images.js';
 
 export function registerDocumentTools(
   server: McpServer,
@@ -124,7 +125,10 @@ export function registerDocumentTools(
         'the browser. Returns the admin link (keep private) and instructions for sharing a ' +
         `reviewer link. ${allowLocalFiles ? 'Pass either `source` or `source_path`.' : 'Pass the text as `source`.'}\n\n` +
         'With `folder`, it is added beside an existing document instead — an outline or ' +
-        'background notes for a story — and opens with that document’s links and roles.',
+        'background notes for a story — and opens with that document’s links and roles.\n\n' +
+        'Pass its images in `images`. A new document’s go on with the admin link it is ' +
+        'created with, so your role on it afterwards does not matter; a folder document’s go ' +
+        `on with your access to the folder, which adding to it already needs. ${IMAGES_HINT}`,
       inputSchema: {
         source: z.string().optional().describe('The document text.'),
         // Reading a local file is only meaningful when this server runs
@@ -171,6 +175,10 @@ export function registerDocumentTools(
               'admin or editor there, and a `name`. password_protected, invite_only and ' +
               'base_url do not apply — the folder decides them.',
           ),
+        images: z
+          .array(imageSchema(allowLocalFiles))
+          .optional()
+          .describe('Images the source references, attached to the new document.'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
     },
@@ -213,6 +221,8 @@ export function registerDocumentTools(
           const ref = { ...beside, uid: added.uid, commentId: null };
           ctx.client.rememberDocument(ref);
           ctx.client.shareSession(beside, added.uid);
+          const images = await attachImages(ctx, ref, args.images ?? [], allowLocalFiles);
+          const notes = await imageReferenceNotes(ctx, ref, images.attached, source);
           const ignored = [
             args.password_protected !== undefined ? 'password_protected' : null,
             args.invite_only !== undefined ? 'invite_only' : null,
@@ -229,6 +239,7 @@ export function registerDocumentTools(
                 : []),
               `share url: ${viewerUrl(ref)} — opens for everyone who can open the folder, with the role they have there`,
               `access: the folder's — ${added.password_protected ? 'password-protected' : 'no password gate'}, ${added.invite_only ? 'invite-only' : 'readable by URL'}`,
+              ...imageLines([...images.lines, ...notes]),
             ].join('\n'),
             ignored.length > 0
               ? `note: ${ignored.join(', ')} ignored — a folder document takes its access and instance from the folder.`
@@ -250,6 +261,16 @@ export function registerDocumentTools(
 
         const ref = { baseUrl: base.baseUrl, uid: created.uid, token: created.admin_invite.token };
         ctx.client.rememberDocument(ref);
+        // Before filing: that drops the admin link for an agent key's
+        // capped invite, and attaching needs editor or admin. A password
+        // gate holds even for the admin link, so open it first; the
+        // password is in this response only, so a failure here must not
+        // throw it away.
+        if (created.password && args.images?.length) {
+          await ctx.client.authenticate(ref, created.password).catch(() => undefined);
+        }
+        const images = await attachImages(ctx, ref, args.images ?? [], allowLocalFiles);
+        const notes = await imageReferenceNotes(ctx, ref, images.attached, source);
         const filed = await fileInKeyring(ctx, ref, created.name ?? args.name ?? null);
         // Only an explicit `true` closes the document — an instance that
         // predates the flag omits the field and serves the bare URL to
@@ -263,13 +284,20 @@ export function registerDocumentTools(
               ? 'admin link: added to the user’s keyring — it is in their document list on every ' +
                 'synced device, so it is not repeated here'
               : `admin link (full control — keep private): ${base.baseUrl}${created.admin_invite.url}`,
-            inviteOnly
-              ? `token-free link: ${base.baseUrl}/d/${created.uid} — invite-only, so it opens ` +
-                'nothing until you mint that person their own access link'
-              : `read-only link: ${base.baseUrl}/d/${created.uid}`,
+            // The viewer fetches a ring's link for a bare URL, so on the
+            // user's synced devices this opens with their admin access.
+            filed.ok
+              ? `link for the user: ${base.baseUrl}/d/${created.uid} — opens with full access on ` +
+                'their synced devices; to anyone else it opens ' +
+                (inviteOnly ? 'nothing (invite-only)' : 'read-only')
+              : inviteOnly
+                ? `token-free link: ${base.baseUrl}/d/${created.uid} — invite-only, so it opens ` +
+                  'nothing until you mint that person their own access link'
+                : `read-only link: ${base.baseUrl}/d/${created.uid}`,
             created.password
               ? `password (shown once, store it now): ${created.password}`
               : 'no password gate',
+            ...imageLines([...images.lines, ...notes]),
           ].join('\n'),
           filed.ok
             ? 'From here on you work on it with your own invite, at your agent key’s role.'
@@ -645,4 +673,8 @@ async function fileInKeyring(
       note: `note: it could not be added to the keyring — ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+}
+
+function imageLines(lines: string[]): string[] {
+  return lines.length > 0 ? ['images:', ...lines.map((l) => `  ${l}`)] : [];
 }

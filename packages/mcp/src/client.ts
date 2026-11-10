@@ -38,6 +38,8 @@ export type FetchLike = (input: URL | RequestInfo, init?: RequestInit) => Promis
 export interface RequestOptions {
   method?: string;
   body?: unknown;
+  /** Sent as multipart instead of `body`; fetch sets the boundary. */
+  form?: FormData;
   query?: Record<string, string | undefined>;
 }
 
@@ -320,8 +322,8 @@ export class MarginaliaClient {
   }
 
   private async dispatch(url: URL, headers: Headers, options: RequestOptions): Promise<Response> {
-    let body: BodyInit | null = null;
-    if (options.body !== undefined) {
+    let body: BodyInit | null = options.form ?? null;
+    if (!options.form && options.body !== undefined) {
       headers.set('content-type', 'application/json');
       body = JSON.stringify(options.body);
     }

@@ -28,11 +28,21 @@ import {
   rotateKeyring as rotateKeyringRequest,
 } from './api.js';
 import { getClientId, getDisplayName, setClientId, setDisplayName } from './identity.js';
+import { saveInviteToken } from './invite.js';
 import { reportError } from './log.js';
 import { loadRecentDocs, mergeKeyringDocs, type RecentDoc } from './recent-docs.js';
 
 const KEY = 'marginalia.keyring';
 const KEYRING_EVENT = 'marginalia:keyring-change';
+/**
+ * Set when a pull finds the ring gone, until the home page says so. The
+ * viewer pulls too, and the notice is the home page's to show.
+ */
+const DROPPED_KEY = 'marginalia.keyring.dropped';
+/** Per tab: uids a pull did not find in the ring, with when. */
+const MISSES_KEY = 'marginalia.keyring.misses';
+/** A miss is believed this long; a document can join the ring meanwhile. */
+const MISS_TTL_MS = 10 * 60 * 1000;
 let pullRequestGeneration = 0;
 
 export function loadKeyringToken(): string | null {
@@ -44,8 +54,12 @@ export function hasKeyring(): boolean {
 }
 
 function storeKeyringToken(token: string | null): void {
-  if (token) localStorage.setItem(KEY, token);
-  else localStorage.removeItem(KEY);
+  if (token) {
+    localStorage.setItem(KEY, token);
+    localStorage.removeItem(DROPPED_KEY);
+  } else {
+    localStorage.removeItem(KEY);
+  }
   window.dispatchEvent(new CustomEvent(KEYRING_EVENT, { detail: token }));
 }
 
@@ -156,10 +170,86 @@ export async function pullKeyring(): Promise<KeyringPull> {
     // Drop a dead token rather than retrying it on every page load.
     if (isNotFound(err)) {
       storeKeyringToken(null);
+      localStorage.setItem(DROPPED_KEY, '1');
       return { docs: null, dropped: true, idleTtlMs: null };
     }
     reportError('keyring.pull', err);
     return { docs: null, dropped: false, idleTtlMs: null };
+  }
+}
+
+/** Whether a pull found the ring gone since the home page last asked. */
+export function takeKeyringDropped(): boolean {
+  const dropped = localStorage.getItem(DROPPED_KEY) !== null;
+  localStorage.removeItem(DROPPED_KEY);
+  return dropped;
+}
+
+export interface KeyringInvite {
+  token: string | null;
+  /** The token comes from a pull just made, not from what this browser already held. */
+  fromPull: boolean;
+}
+
+/**
+ * The ring's link for one document, stored where the viewer looks for
+ * it. For a bare `/d/<uid>` link to a document this browser holds no
+ * token for, but the ring does: one created on another device, or by an
+ * agent, since the last pull. No token without a ring, or when it has none.
+ *
+ * Any earlier pull has already put the ring's tokens in the local list,
+ * so that is asked first; the network only when it knows nothing, and
+ * then not again for a while for a document the ring did not have.
+ * `refresh` skips both, for a token that has stopped working.
+ */
+export async function inviteFromKeyring(
+  uid: string,
+  opts: { refresh?: boolean } = {},
+): Promise<KeyringInvite> {
+  if (!hasKeyring()) return { token: null, fromPull: false };
+  if (!opts.refresh) {
+    const known = loadRecentDocs().find((doc) => doc.uid === uid)?.invite_token;
+    if (known) {
+      saveInviteToken(uid, known);
+      return { token: known, fromPull: false };
+    }
+    if (recentlyMissed(uid)) return { token: null, fromPull: false };
+  }
+  const pull = await pullKeyring();
+  // A pull another one overtook returns nothing, but the newer one merges
+  // into the same list.
+  const docs = pull.docs ?? loadRecentDocs();
+  const token = docs.find((doc) => doc.uid === uid)?.invite_token ?? null;
+  if (token) saveInviteToken(uid, token);
+  // Only a pull that answered is a miss; a failed one says nothing.
+  else if (pull.docs) rememberMiss(uid);
+  return { token, fromPull: pull.docs !== null };
+}
+
+function readMisses(): Record<string, number> {
+  try {
+    const raw = sessionStorage.getItem(MISSES_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function recentlyMissed(uid: string): boolean {
+  const at = readMisses()[uid];
+  return typeof at === 'number' && Date.now() - at < MISS_TTL_MS;
+}
+
+function rememberMiss(uid: string): void {
+  try {
+    const now = Date.now();
+    const kept = Object.fromEntries(
+      Object.entries(readMisses()).filter(([, at]) => now - at < MISS_TTL_MS),
+    );
+    sessionStorage.setItem(MISSES_KEY, JSON.stringify({ ...kept, [uid]: now }));
+  } catch {
+    // Without session storage every visit asks again; still correct.
   }
 }
 
@@ -228,6 +318,17 @@ export async function pairWithCode(code: string): Promise<RecentDoc[]> {
  * fight through the server's rename propagation, and a rename would
  * bounce between them forever.
  */
+/**
+ * Take a document's name for this browser, the way the viewer keeps the
+ * header it sends in step with the server. Not in a synced browser: its
+ * name is the ring's, and one document's (an invite seeded for someone
+ * else, say) must not replace it.
+ */
+export function adoptDocumentName(name: string | null): void {
+  if (!name || hasKeyring()) return;
+  if (getDisplayName() !== name) setDisplayName(name);
+}
+
 function adoptIdentity(ring: KeyringWire): void {
   if (ring.client_id && ring.client_id !== getClientId()) setClientId(ring.client_id);
   if (ring.display_name && ring.display_name !== getDisplayName()) {
