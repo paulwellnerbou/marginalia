@@ -608,6 +608,52 @@ describe('hosted MCP endpoint', () => {
     await agent.close();
   });
 
+  test('images reach a new password-protected document', async () => {
+    const { key } = await ownerDocInRing();
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const created = await callText(agent, 'create_document', {
+      source: '# Locked\n\n![a](a.png)\n',
+      password_protected: true,
+      images: [{ name: 'a.png', data_base64: PIXEL }],
+    });
+    expect(created).toContain('a.png: attached');
+    expect(created).toMatch(/password \(shown once, store it now\): \S+/);
+    await agent.close();
+  });
+
+  test('says where images and references disagree, and skips a repeated name', async () => {
+    const { key } = await ownerDocInRing();
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const created = await callText(agent, 'create_document', {
+      source: '# Figures\n\n![one](figure-1.png)\n\n![two](figure-2.png)\n',
+      images: [
+        { name: 'figure-1.png', data_base64: PIXEL },
+        { name: 'figure-1.png', data_base64: PIXEL },
+        { name: 'figure1.png', data_base64: PIXEL },
+      ],
+    });
+    expect(created).toContain('figure-1.png: attached');
+    expect(created).toContain('figure-1.png: skipped — the same name appears earlier');
+    expect(created).toContain('figure-2.png: the source references it, but no image is attached');
+    expect(created).toContain('figure1.png: attached, but the source does not reference it');
+    expect(created).not.toContain('figure-1.png: attached, but');
+    await agent.close();
+  });
+
+  test('a folder document gets its images with the agent’s access to the folder', async () => {
+    const { doc, key } = await ownerDocInRing('editor');
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const added = await callText(agent, 'create_document', {
+      source: '# Notes\n\n![n](n.png)\n',
+      name: 'NOTES',
+      folder: doc.uid,
+      images: [{ name: 'n.png', data_base64: PIXEL }],
+    });
+    expect(added).toContain('n.png: attached');
+    expect(added).not.toContain('no image is attached');
+    await agent.close();
+  });
+
   test('upload_image needs editor: a collaborator is told why, an editor attaches', async () => {
     const collaborator = await ownerDocInRing();
     const asCollaborator = await connect(`?key=${encodeURIComponent(collaborator.key)}`);

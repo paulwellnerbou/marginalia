@@ -27,7 +27,7 @@ import {
   type ToolContext,
   text,
 } from './context.js';
-import { attachImages, IMAGES_HINT, imageSchema } from './images.js';
+import { attachImages, IMAGES_HINT, imageReferenceNotes, imageSchema } from './images.js';
 
 export function registerDocumentTools(
   server: McpServer,
@@ -126,8 +126,9 @@ export function registerDocumentTools(
         `reviewer link. ${allowLocalFiles ? 'Pass either `source` or `source_path`.' : 'Pass the text as `source`.'}\n\n` +
         'With `folder`, it is added beside an existing document instead — an outline or ' +
         'background notes for a story — and opens with that document’s links and roles.\n\n' +
-        `Pass its images in \`images\`: they are attached as part of creating it, under the ` +
-        `creator's full access, whatever your role is later. ${IMAGES_HINT}`,
+        'Pass its images in `images`. A new document’s go on with the admin link it is ' +
+        'created with, so your role on it afterwards does not matter; a folder document’s go ' +
+        `on with your access to the folder, which adding to it already needs. ${IMAGES_HINT}`,
       inputSchema: {
         source: z.string().optional().describe('The document text.'),
         // Reading a local file is only meaningful when this server runs
@@ -220,7 +221,8 @@ export function registerDocumentTools(
           const ref = { ...beside, uid: added.uid, commentId: null };
           ctx.client.rememberDocument(ref);
           ctx.client.shareSession(beside, added.uid);
-          const attached = await attachImages(ctx, ref, args.images ?? [], allowLocalFiles);
+          const images = await attachImages(ctx, ref, args.images ?? [], allowLocalFiles);
+          const notes = await imageReferenceNotes(ctx, ref, images.attached);
           const ignored = [
             args.password_protected !== undefined ? 'password_protected' : null,
             args.invite_only !== undefined ? 'invite_only' : null,
@@ -237,7 +239,7 @@ export function registerDocumentTools(
                 : []),
               `share url: ${viewerUrl(ref)} — opens for everyone who can open the folder, with the role they have there`,
               `access: the folder's — ${added.password_protected ? 'password-protected' : 'no password gate'}, ${added.invite_only ? 'invite-only' : 'readable by URL'}`,
-              ...imageLines(attached),
+              ...imageLines([...images.lines, ...notes]),
             ].join('\n'),
             ignored.length > 0
               ? `note: ${ignored.join(', ')} ignored — a folder document takes its access and instance from the folder.`
@@ -260,8 +262,15 @@ export function registerDocumentTools(
         const ref = { baseUrl: base.baseUrl, uid: created.uid, token: created.admin_invite.token };
         ctx.client.rememberDocument(ref);
         // Before filing: that drops the admin link for an agent key's
-        // capped invite, and attaching needs editor or admin.
-        const attached = await attachImages(ctx, ref, args.images ?? [], allowLocalFiles);
+        // capped invite, and attaching needs editor or admin. A password
+        // gate holds even for the admin link, so open it first; the
+        // password is in this response only, so a failure here must not
+        // throw it away.
+        if (created.password && args.images?.length) {
+          await ctx.client.authenticate(ref, created.password).catch(() => undefined);
+        }
+        const images = await attachImages(ctx, ref, args.images ?? [], allowLocalFiles);
+        const notes = await imageReferenceNotes(ctx, ref, images.attached);
         const filed = await fileInKeyring(ctx, ref, created.name ?? args.name ?? null);
         // Only an explicit `true` closes the document — an instance that
         // predates the flag omits the field and serves the bare URL to
@@ -282,7 +291,7 @@ export function registerDocumentTools(
             created.password
               ? `password (shown once, store it now): ${created.password}`
               : 'no password gate',
-            ...imageLines(attached),
+            ...imageLines([...images.lines, ...notes]),
           ].join('\n'),
           filed.ok
             ? 'From here on you work on it with your own invite, at your agent key’s role.'

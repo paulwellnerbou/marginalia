@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { normalizeRefName } from '@marginalia/renderer/asset-rewrite';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import type { DocumentWire } from '../api-types.js';
 import { MarginaliaApiError } from '../client.js';
 import type { DocumentRef } from '../document-ref.js';
 import { documentArg, failure, guard, type ToolContext, text } from './context.js';
@@ -39,7 +40,9 @@ export const IMAGES_HINT =
   'them, so reference each one by its `name` (`![alt](diagram.png)` in markdown, ' +
   '`image::diagram.png[]` in AsciiDoc). An image at a full https:// address needs no upload.';
 
-type Prepared = { ok: true; name: string; bytes: Uint8Array } | { ok: false; line: string };
+type Prepared =
+  | { ok: true; name: string; bytes: Uint8Array<ArrayBuffer> }
+  | { ok: false; line: string };
 
 /** Validate one image and load its bytes, without touching the network. */
 export async function prepareImage(input: ImageInput, allowLocalFiles: boolean): Promise<Prepared> {
@@ -76,7 +79,7 @@ export async function prepareImage(input: ImageInput, allowLocalFiles: boolean):
   };
 }
 
-function decodeBase64(raw: string): Uint8Array | null {
+function decodeBase64(raw: string): Uint8Array<ArrayBuffer> | null {
   const payload = raw
     .trim()
     .replace(/^data:[^,]*;base64,/i, '')
@@ -93,15 +96,11 @@ function decodeBase64(raw: string): Uint8Array | null {
 export async function uploadImage(
   ctx: ToolContext,
   ref: DocumentRef,
-  image: { name: string; bytes: Uint8Array },
+  image: { name: string; bytes: Uint8Array<ArrayBuffer> },
 ): Promise<{ ok: boolean; line: string }> {
   const form = new FormData();
   form.set('ref_name', image.name);
-  form.set(
-    'file',
-    new Blob([Uint8Array.from(image.bytes)]),
-    image.name.split('/').pop() ?? image.name,
-  );
+  form.set('file', new Blob([image.bytes]), image.name.split('/').pop() ?? image.name);
   try {
     await ctx.client.json(ref, `/api/documents/${encodeURIComponent(ref.uid)}/assets`, {
       method: 'POST',
@@ -141,17 +140,74 @@ export async function attachImages(
   ref: DocumentRef,
   images: readonly ImageInput[],
   allowLocalFiles: boolean,
-): Promise<string[]> {
+): Promise<{ lines: string[]; attached: string[] }> {
   const lines: string[] = [];
+  const attached: string[] = [];
+  const seen = new Set<string>();
   for (const input of images) {
     const prepared = await prepareImage(input, allowLocalFiles);
     if (!prepared.ok) {
       lines.push(prepared.line);
       continue;
     }
-    lines.push((await uploadImage(ctx, ref, prepared)).line);
+    // A second upload under one name replaces the first, so both would
+    // report "attached" while only one survives.
+    if (seen.has(prepared.name)) {
+      lines.push(`${prepared.name}: skipped — the same name appears earlier in the list`);
+      continue;
+    }
+    seen.add(prepared.name);
+    const result = await uploadImage(ctx, ref, prepared);
+    lines.push(result.line);
+    if (result.ok) attached.push(prepared.name);
   }
-  return lines;
+  return { lines, attached };
+}
+
+/**
+ * Where the source and its images disagree: a reference nothing is
+ * attached under, or an image just attached that nothing references.
+ * Read from the rendered HTML, which marks every image reference as
+ * missing or attached by name, for markdown and AsciiDoc alike.
+ * Best-effort: a failed read yields no notes rather than an error.
+ */
+export async function imageReferenceNotes(
+  ctx: ToolContext,
+  ref: DocumentRef,
+  justAttached: readonly string[],
+): Promise<string[]> {
+  let html: string;
+  try {
+    const doc = await ctx.client.json<DocumentWire>(
+      ref,
+      `/api/documents/${encodeURIComponent(ref.uid)}`,
+    );
+    html = doc.rendered.html;
+  } catch {
+    return [];
+  }
+  const missing = new Set(
+    [...html.matchAll(/data-missing-asset="([^"]*)"/g)].map((m) => decodeEntities(m[1] ?? '')),
+  );
+  const referenced = new Set(missing);
+  for (const m of html.matchAll(/data-asset-ref="([^"]*)"/g)) {
+    referenced.add(decodeEntities(m[1] ?? ''));
+  }
+  return [
+    ...[...missing].map((name) => `${name}: the source references it, but no image is attached`),
+    ...justAttached
+      .filter((name) => !referenced.has(name))
+      .map((name) => `${name}: attached, but the source does not reference it under that name`),
+  ];
+}
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
 }
 
 export function registerImageTools(
@@ -180,7 +236,9 @@ export function registerImageTools(
         const prepared = await prepareImage(args, allowLocalFiles);
         if (!prepared.ok) return failure(prepared.line);
         const result = await uploadImage(ctx, ref, prepared);
-        return result.ok ? text(result.line) : failure(result.line);
+        if (!result.ok) return failure(result.line);
+        const notes = await imageReferenceNotes(ctx, ref, [prepared.name]);
+        return text(result.line, ...notes);
       }),
   );
 }
