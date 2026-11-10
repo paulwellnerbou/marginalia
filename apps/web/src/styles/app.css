@@ -945,7 +945,7 @@ button.primary:disabled {
   max-width: var(--md-wide-lane);
   margin-left: 50%;
   margin-right: calc(50% - var(--md-wide-lane));
-  translate: -50%;
+  transform: translateX(-50%);
 }
 /* A table's auto width already shrinks to fit; the themes' `width: 100%`
    would pin it to the lane instead. An AsciiDoc table that isn't
