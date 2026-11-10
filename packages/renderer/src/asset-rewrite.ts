@@ -114,7 +114,7 @@ function isAbsoluteUrl(src: string): boolean {
  * change to one must be mirrored in the other — covered by tests on both
  * sides.
  */
-function normalizeRefName(src: string): string | null {
+export function normalizeRefName(src: string): string | null {
   const trimmed = src.trim();
   if (!trimmed || trimmed.length > 200) return null;
   if (trimmed.includes('\\') || trimmed.includes('?') || trimmed.includes('#')) {

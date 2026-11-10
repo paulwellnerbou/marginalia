@@ -201,6 +201,7 @@ describe('marginalia MCP server', () => {
         'respond_to_thread',
         'update_document',
         'update_proposal',
+        'upload_image',
       ].sort(),
     );
     for (const tool of tools) {

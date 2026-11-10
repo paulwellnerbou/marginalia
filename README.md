@@ -411,6 +411,11 @@ in AsciiDoc. Those names resolve against a per-document *asset store*.
 - Uploads happen through the editor: drop or paste an image into the
   editor pane, or click the dropzone that replaces a missing-image
   reference. The file is bound to the exact name used in source.
+- An MCP agent attaches them through the same endpoint:
+  `create_document` takes `images` and uploads them right after
+  creating the document, while it still holds the admin link — so an
+  agent key capped at collaborator can still create a document with
+  its figures — and `upload_image` adds one later, as editor or admin.
 - Viewers request assets through `/api/documents/:uid/assets/:refName`,
   which goes through the same authorization check as the document
   itself — a user without access to the document cannot fetch its
