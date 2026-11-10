@@ -314,49 +314,14 @@
   text-shadow: 0 1px 2px rgb(0 0 0 / 10%);
 }
 
-.marginalia #toc {
-  border-bottom: 1px solid #e7e7e9;
-  padding-bottom: 0.5em;
-}
-
-.marginalia #toc > ul {
-  margin-left: 0.125em;
-}
-
-.marginalia #toc ul {
-  font-family: var(--md-font-heading);
-  list-style: none;
-  padding-left: 0;
-  margin-bottom: 0;
-}
-
-.marginalia #toc li {
-  line-height: 1.3334;
-  margin-top: 0.3334em;
-}
-
-.marginalia #toc a {
-  text-decoration: none;
-}
-
-.marginalia #toc a:active {
-  text-decoration: underline;
-}
-
+/* Asciidoctor's signature title colour on the shared TOC panel. */
 .marginalia #toctitle {
   color: #7a2518;
-  font-size: 1.2em;
-  font-weight: 300;
 }
 
-.marginalia #toc > .sectlevel1 > li {
+.marginalia #toc > ul > li + li {
   border-top: 1px solid var(--md-color-border);
-  padding-top: 1em;
-}
-
-.marginalia #toc > .sectlevel1 > li > a {
-  font-size: 1.1em;
-  font-weight: bold;
+  padding-top: 0.7em;
 }
 
 .marginalia .admonitionblock {
@@ -464,8 +429,7 @@
     font-size: 2.3125em;
   }
 
-  .marginalia h3,
-  .marginalia #toctitle {
+  .marginalia h3 {
     font-size: 1.6875em;
   }
 

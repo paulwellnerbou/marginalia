@@ -292,47 +292,88 @@
  * Asciidoctor emits `:toc:` as
  *   <div id="toc" class="toc">
  *     <div id="toctitle">Table of Contents</div>
- *     <ul class="sectlevel1">…</ul>
+ *     <ul class="sectlevel1"><li><a>…</a><ul class="sectlevel2">…
  *   </div>
  *
- * Render the title with h2-equivalent weight/size so it reads as a
- * proper section header, and tighten list spacing so the TOC doesn't
- * inherit regular-paragraph line-height.
+ * The sanitizer drops the `sectlevelN` classes (rehype-sanitize only
+ * lets `contains-task-list` through on <ul>), so levels are addressed
+ * by nesting depth instead.
+ *
+ * A framed panel with a small label sets the TOC apart from the
+ * section headings it lists; the bottom margin wins over the flush
+ * `#preamble` that usually follows.
  */
 .marginalia #toc.toc,
 .marginalia .toc {
-  margin-top: var(--md-space-block);
+  margin: var(--md-space-block) 0 calc(var(--md-space-block) * 2.25);
+  padding: 1.1em 1.4em 1.2em;
+  background: var(--md-color-block-bg, color-mix(in srgb, var(--md-color-fg) 4%, transparent));
+  border: 1px solid var(--md-color-border);
+  border-radius: 6px;
+  font-size: 0.95em;
+  line-height: 1.4;
 }
 .marginalia #toctitle,
 .marginalia .toctitle {
   font-family: var(--md-font-heading);
-  font-size: 1.55em;
-  font-weight: var(--md-heading-weight);
-  line-height: var(--md-heading-line-height);
-  letter-spacing: var(--md-heading-letter-spacing);
-  color: var(--md-color-fg);
-  margin: 0 0 0.5em;
-  padding-bottom: 0.2em;
-  border-bottom: 1px solid var(--md-color-border);
+  font-size: 0.8em;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--md-color-fg-muted);
+  margin: 0 0 0.9em;
+  padding: 0;
+  border: 0;
 }
 .marginalia .toc ul {
   list-style: none;
   padding-left: 0;
   margin: 0;
 }
-.marginalia .toc ul ul {
-  padding-left: 1.2em;
-}
 .marginalia .toc li {
-  margin: 0.15em 0;
+  margin: 0;
 }
+/* Some themes underline links with a border or background gradient. */
 .marginalia .toc li a {
   color: var(--md-color-fg);
   text-decoration: none;
+  border-bottom: 0;
+  background: none;
 }
 .marginalia .toc li a:hover {
+  color: var(--md-color-accent);
   text-decoration: underline;
   text-decoration-color: var(--md-color-accent);
+}
+
+/* Level 1 (`==`): the chapters. */
+.marginalia .toc > ul > li + li {
+  margin-top: 0.7em;
+}
+.marginalia .toc > ul > li > a {
+  font-family: var(--md-font-heading);
+  font-size: 1.08em;
+  font-weight: 650;
+}
+
+/* Level 2 and deeper: indented under a guide line. */
+.marginalia .toc ul ul {
+  margin: 0.35em 0 0 0.15em;
+  padding-left: 1em;
+  border-left: 1px solid var(--md-color-border);
+}
+.marginalia .toc ul ul li + li {
+  margin-top: 0.25em;
+}
+
+/* Level 3 and deeper: smaller and muted. */
+.marginalia .toc ul ul ul {
+  margin-top: 0.25em;
+  font-size: 0.94em;
+}
+.marginalia .toc ul ul ul a {
+  color: var(--md-color-fg-muted);
 }
 
 /* --- UI-element macros (kbd / btn / menu) ----------------------- */

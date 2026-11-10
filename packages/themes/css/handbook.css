@@ -126,18 +126,12 @@
   box-shadow: none;
 }
 
-.marginalia .toc > .sectlevel1 > li {
+.marginalia .toc > ul > li + li {
   border-top: 1px solid var(--md-color-border);
-  padding-top: 0.75em;
-  margin-top: 0.75em;
+  padding-top: 0.7em;
 }
 
-.marginalia .toc > .sectlevel1 > li:first-child {
-  margin-top: 0;
-}
-
-.marginalia .toc > .sectlevel1 > li > a {
-  font-size: 1.05em;
+.marginalia .toc > ul > li > a {
   font-weight: 700;
 }
 
