@@ -216,9 +216,9 @@ test('a bare link finds its token in the ring and keeps it for the viewer', asyn
     ],
   });
 
-  expect(await inviteFromKeyring('fresh-doc')).toBe('admin-token');
+  expect((await inviteFromKeyring('fresh-doc')).token).toBe('admin-token');
   expect(localStorage.getItem('marginalia.invite.fresh-doc')).toBe('admin-token');
-  expect(await inviteFromKeyring('not-in-ring')).toBeNull();
+  expect((await inviteFromKeyring('not-in-ring')).token).toBeNull();
   expect(localStorage.getItem('marginalia.invite.not-in-ring')).toBeNull();
 });
 
@@ -230,7 +230,7 @@ test('without a ring, a bare link asks nobody', async () => {
     fetched = true;
     return Promise.reject(new Error('no request expected'));
   };
-  expect(await inviteFromKeyring('any-doc')).toBeNull();
+  expect((await inviteFromKeyring('any-doc')).token).toBeNull();
   expect(fetched).toBe(false);
 });
 
@@ -261,7 +261,7 @@ test('a token an earlier pull left in the local list needs no request', async ()
   await pullKeyring();
   const before = fetches;
 
-  expect(await inviteFromKeyring('known')).toBe('from-ring');
+  expect((await inviteFromKeyring('known')).token).toBe('from-ring');
   expect(fetches).toBe(before);
 });
 
@@ -270,8 +270,8 @@ test('a document the ring does not have is not asked about again soon', async ()
   localStorage.setItem('marginalia.keyring', 'tok');
   stubFetch(200, ringWith([]));
 
-  expect(await inviteFromKeyring('public-doc')).toBeNull();
-  expect(await inviteFromKeyring('public-doc')).toBeNull();
+  expect((await inviteFromKeyring('public-doc')).token).toBeNull();
+  expect((await inviteFromKeyring('public-doc')).token).toBeNull();
   expect(fetches).toBe(1);
   // A token that stopped working still gets a fresh answer.
   await inviteFromKeyring('public-doc', { refresh: true });
@@ -283,7 +283,7 @@ test('a ring the viewer finds gone is still announced on the home page, once', a
   localStorage.setItem('marginalia.keyring', 'tok');
   stubFetch(404, { error: 'not-found' });
 
-  expect(await inviteFromKeyring('any')).toBeNull();
+  expect((await inviteFromKeyring('any')).token).toBeNull();
   expect(takeKeyringDropped()).toBe(true);
   expect(takeKeyringDropped()).toBe(false);
 });
@@ -318,4 +318,62 @@ test('without a token of its own, a refused bare link asks the ring only once', 
     }),
   ).rejects.toThrow();
   expect(fetches).toBe(1);
+});
+
+test('a pull that failed is not remembered as the ring lacking the document', async () => {
+  const { inviteFromKeyring } = await import('./keyring.js');
+  localStorage.setItem('marginalia.keyring', 'tok');
+  stubFetch(503, { error: 'unavailable' });
+  expect((await inviteFromKeyring('doc')).token).toBeNull();
+
+  stubFetch(200, ringWith([{ uid: 'doc', token: 'from-ring' }]));
+  expect((await inviteFromKeyring('doc')).token).toBe('from-ring');
+});
+
+test('the home page’s own drop is announced once, not again on the next load', async () => {
+  const { pullKeyring, takeKeyringDropped } = await import('./keyring.js');
+  localStorage.setItem('marginalia.keyring', 'tok');
+  stubFetch(404, { error: 'not-found' });
+
+  const pull = await pullKeyring();
+  const droppedElsewhere = takeKeyringDropped();
+  expect(pull.dropped || droppedElsewhere).toBe(true);
+  // The next load: no ring, no pull, and nothing left to announce.
+  expect(takeKeyringDropped()).toBe(false);
+});
+
+test('a stale token from the local list is replaced from the ring', async () => {
+  const { openDocument } = await import('./open-document.js');
+  const { ApiError } = await import('./api.js');
+  localStorage.setItem('marginalia.keyring', 'tok');
+  // An earlier pull left a link that has since been rotated away.
+  stubFetch(200, ringWith([{ uid: 'doc', token: 'rotated-away' }]));
+  const { pullKeyring } = await import('./keyring.js');
+  await pullKeyring();
+  stubFetch(200, ringWith([{ uid: 'doc', token: 'current' }]));
+
+  const seen: Array<string | null> = [];
+  await openDocument('doc', async () => {
+    const token = localStorage.getItem('marginalia.invite.doc');
+    seen.push(token);
+    if (token !== 'current') throw new ApiError(401, 'invite-required');
+    return { uid: 'doc', role: 'admin' } as never;
+  });
+  expect(seen).toEqual(['rotated-away', 'current']);
+});
+
+test('a document that opens only as a reader where it was known as more asks the ring', async () => {
+  const { openDocument } = await import('./open-document.js');
+  localStorage.setItem('marginalia.keyring', 'tok');
+  localStorage.setItem('marginalia.invite.doc', 'rotated-away');
+  stubFetch(200, ringWith([{ uid: 'doc', token: 'rotated-away' }]));
+  const { pullKeyring } = await import('./keyring.js');
+  await pullKeyring();
+  stubFetch(200, ringWith([{ uid: 'doc', token: 'current' }]));
+
+  const doc = await openDocument('doc', async () => {
+    const token = localStorage.getItem('marginalia.invite.doc');
+    return { uid: 'doc', role: token === 'current' ? 'admin' : 'reader' } as never;
+  });
+  expect((doc as { role: string }).role).toBe('admin');
 });

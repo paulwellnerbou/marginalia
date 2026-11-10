@@ -185,11 +185,17 @@ export function takeKeyringDropped(): boolean {
   return dropped;
 }
 
+export interface KeyringInvite {
+  token: string | null;
+  /** The token comes from a pull just made, not from what this browser already held. */
+  fromPull: boolean;
+}
+
 /**
  * The ring's link for one document, stored where the viewer looks for
  * it. For a bare `/d/<uid>` link to a document this browser holds no
  * token for, but the ring does: one created on another device, or by an
- * agent, since the last pull. Null without a ring, or when it has none.
+ * agent, since the last pull. No token without a ring, or when it has none.
  *
  * Any earlier pull has already put the ring's tokens in the local list,
  * so that is asked first; the network only when it knows nothing, and
@@ -199,15 +205,15 @@ export function takeKeyringDropped(): boolean {
 export async function inviteFromKeyring(
   uid: string,
   opts: { refresh?: boolean } = {},
-): Promise<string | null> {
-  if (!hasKeyring()) return null;
+): Promise<KeyringInvite> {
+  if (!hasKeyring()) return { token: null, fromPull: false };
   if (!opts.refresh) {
     const known = loadRecentDocs().find((doc) => doc.uid === uid)?.invite_token;
     if (known) {
       saveInviteToken(uid, known);
-      return known;
+      return { token: known, fromPull: false };
     }
-    if (recentlyMissed(uid)) return null;
+    if (recentlyMissed(uid)) return { token: null, fromPull: false };
   }
   const pull = await pullKeyring();
   // A pull another one overtook returns nothing, but the newer one merges
@@ -215,8 +221,9 @@ export async function inviteFromKeyring(
   const docs = pull.docs ?? loadRecentDocs();
   const token = docs.find((doc) => doc.uid === uid)?.invite_token ?? null;
   if (token) saveInviteToken(uid, token);
-  else rememberMiss(uid);
-  return token;
+  // Only a pull that answered is a miss; a failed one says nothing.
+  else if (pull.docs) rememberMiss(uid);
+  return { token, fromPull: pull.docs !== null };
 }
 
 function readMisses(): Record<string, number> {

@@ -156,7 +156,9 @@ export function HomePage() {
     void pullKeyring().then((pull) => {
       if (cancelled) return;
       if (pull.docs) setRecent(pull.docs);
-      if (pull.dropped || takeKeyringDropped()) setKeyringDropped(true);
+      // Taken every time: the flag is also set by this very pull.
+      const droppedElsewhere = takeKeyringDropped();
+      if (pull.dropped || droppedElsewhere) setKeyringDropped(true);
       if (pull.idleTtlMs !== null) setKeyringIdleTtlMs(pull.idleTtlMs);
     });
     return () => {
