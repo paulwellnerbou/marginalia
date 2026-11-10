@@ -34,6 +34,15 @@ import { loadRecentDocs, mergeKeyringDocs, type RecentDoc } from './recent-docs.
 
 const KEY = 'marginalia.keyring';
 const KEYRING_EVENT = 'marginalia:keyring-change';
+/**
+ * Set when a pull finds the ring gone, until the home page says so. The
+ * viewer pulls too, and the notice is the home page's to show.
+ */
+const DROPPED_KEY = 'marginalia.keyring.dropped';
+/** Per tab: uids a pull did not find in the ring, with when. */
+const MISSES_KEY = 'marginalia.keyring.misses';
+/** A miss is believed this long; a document can join the ring meanwhile. */
+const MISS_TTL_MS = 10 * 60 * 1000;
 let pullRequestGeneration = 0;
 
 export function loadKeyringToken(): string | null {
@@ -45,8 +54,12 @@ export function hasKeyring(): boolean {
 }
 
 function storeKeyringToken(token: string | null): void {
-  if (token) localStorage.setItem(KEY, token);
-  else localStorage.removeItem(KEY);
+  if (token) {
+    localStorage.setItem(KEY, token);
+    localStorage.removeItem(DROPPED_KEY);
+  } else {
+    localStorage.removeItem(KEY);
+  }
   window.dispatchEvent(new CustomEvent(KEYRING_EVENT, { detail: token }));
 }
 
@@ -157,6 +170,7 @@ export async function pullKeyring(): Promise<KeyringPull> {
     // Drop a dead token rather than retrying it on every page load.
     if (isNotFound(err)) {
       storeKeyringToken(null);
+      localStorage.setItem(DROPPED_KEY, '1');
       return { docs: null, dropped: true, idleTtlMs: null };
     }
     reportError('keyring.pull', err);
@@ -164,18 +178,72 @@ export async function pullKeyring(): Promise<KeyringPull> {
   }
 }
 
+/** Whether a pull found the ring gone since the home page last asked. */
+export function takeKeyringDropped(): boolean {
+  const dropped = localStorage.getItem(DROPPED_KEY) !== null;
+  localStorage.removeItem(DROPPED_KEY);
+  return dropped;
+}
+
 /**
  * The ring's link for one document, stored where the viewer looks for
  * it. For a bare `/d/<uid>` link to a document this browser holds no
  * token for, but the ring does: one created on another device, or by an
  * agent, since the last pull. Null without a ring, or when it has none.
+ *
+ * Any earlier pull has already put the ring's tokens in the local list,
+ * so that is asked first; the network only when it knows nothing, and
+ * then not again for a while for a document the ring did not have.
+ * `refresh` skips both, for a token that has stopped working.
  */
-export async function inviteFromKeyring(uid: string): Promise<string | null> {
+export async function inviteFromKeyring(
+  uid: string,
+  opts: { refresh?: boolean } = {},
+): Promise<string | null> {
   if (!hasKeyring()) return null;
+  if (!opts.refresh) {
+    const known = loadRecentDocs().find((doc) => doc.uid === uid)?.invite_token;
+    if (known) {
+      saveInviteToken(uid, known);
+      return known;
+    }
+    if (recentlyMissed(uid)) return null;
+  }
   const pull = await pullKeyring();
-  const token = pull.docs?.find((doc) => doc.uid === uid)?.invite_token ?? null;
+  // A pull another one overtook returns nothing, but the newer one merges
+  // into the same list.
+  const docs = pull.docs ?? loadRecentDocs();
+  const token = docs.find((doc) => doc.uid === uid)?.invite_token ?? null;
   if (token) saveInviteToken(uid, token);
+  else rememberMiss(uid);
   return token;
+}
+
+function readMisses(): Record<string, number> {
+  try {
+    const raw = sessionStorage.getItem(MISSES_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function recentlyMissed(uid: string): boolean {
+  const at = readMisses()[uid];
+  return typeof at === 'number' && Date.now() - at < MISS_TTL_MS;
+}
+
+function rememberMiss(uid: string): void {
+  try {
+    const now = Date.now();
+    const kept = Object.fromEntries(
+      Object.entries(readMisses()).filter(([, at]) => now - at < MISS_TTL_MS),
+    );
+    sessionStorage.setItem(MISSES_KEY, JSON.stringify({ ...kept, [uid]: now }));
+  } catch {
+    // Without session storage every visit asks again; still correct.
+  }
 }
 
 /**

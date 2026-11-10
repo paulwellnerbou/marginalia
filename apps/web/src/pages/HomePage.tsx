@@ -57,6 +57,7 @@ import {
   pushDoc as keyringPushDoc,
   removeDoc as keyringRemoveDoc,
   pullKeyring,
+  takeKeyringDropped,
 } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import {
@@ -155,7 +156,7 @@ export function HomePage() {
     void pullKeyring().then((pull) => {
       if (cancelled) return;
       if (pull.docs) setRecent(pull.docs);
-      if (pull.dropped) setKeyringDropped(true);
+      if (pull.dropped || takeKeyringDropped()) setKeyringDropped(true);
       if (pull.idleTtlMs !== null) setKeyringIdleTtlMs(pull.idleTtlMs);
     });
     return () => {
