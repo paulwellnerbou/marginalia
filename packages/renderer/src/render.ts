@@ -21,6 +21,7 @@ import { remarkDocMetaSections } from './plugins/doc-meta.js';
 import { remarkExtractFrontmatter } from './plugins/frontmatter.js';
 import { preprocessGridTables } from './plugins/grid-tables.js';
 import { rehypeHeadingAnchors } from './plugins/heading-anchors.js';
+import { rehypeMarkImageParagraphs } from './plugins/image-paragraphs.js';
 import { remarkMermaid } from './plugins/mermaid.js';
 import { sanitizeSchema } from './plugins/sanitize-schema.js';
 import { rehypeShikiHighlight } from './plugins/shiki.js';
@@ -104,6 +105,7 @@ export async function render(markdown: string, options: RenderOptions = {}): Pro
     // and carries over only the <pre>'s properties.
     .use(rehypeHoistCodeBlockIds)
     .use(rehypeShikiHighlight, options.highlight ?? {})
+    .use(rehypeMarkImageParagraphs)
     // Last, so block text is read off the markup the client receives, and
     // so the surviving ids are the ones the client will actually see.
     .use(rehypeBlockText)
