@@ -1,12 +1,7 @@
 import { DEFAULT_AGENT_NAME, normalizeAgentName } from '@marginalia/mcp/identity';
 import { Box, Button, Callout, Dialog, Flex, Text, TextField } from '@radix-ui/themes';
 import { useCallback, useEffect, useState } from 'react';
-import {
-  type AgentKeyWire,
-  createAgentKey,
-  deleteAgentKey,
-  listAgentKeys,
-} from '../lib/api.js';
+import { type AgentKeyWire, createAgentKey, deleteAgentKey, listAgentKeys } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { formatTimestamp } from '../lib/format-time.js';
 import { loadKeyringToken, onKeyringChange } from '../lib/keyring.js';
