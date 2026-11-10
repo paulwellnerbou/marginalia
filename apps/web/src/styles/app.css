@@ -938,19 +938,29 @@ button.primary:disabled {
      margin is what lets the block's available width be the lane rather
      than the column. */
   box-sizing: border-box;
-  width: fit-content;
   min-width: 100%;
   /* `fit-content` gives way to min-content, and unwrapped code has
      nothing narrower than its longest line. */
   max-width: var(--md-wide-lane);
   margin-left: 50%;
   margin-right: calc(50% - var(--md-wide-lane));
-  transform: translateX(-50%);
+  /* Never back past the lane's start: a table whose narrowest layout is
+     still wider than the lane would otherwise overflow to the left, out
+     of scroll reach. It overflows to the right instead, as it does
+     without wide blocks. */
+  transform: translateX(max(-50%, var(--md-wide-lane) / -2));
 }
-/* A table's auto width already shrinks to fit; the themes' `width: 100%`
-   would pin it to the lane instead. An AsciiDoc table that isn't
-   `stretch` was sized by its author (autowidth or a percentage), so it
-   keeps that and is only centred. */
+.doc-body-wide
+  :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
+  > :is(pre, figure, p[data-block-kind="image"], .mermaid, .imageblock, .listingblock) {
+  width: fit-content;
+}
+/* Not `fit-content` for tables: WebKit ignores `max-width` on a table,
+   which then runs to its max-content width past both pane edges. Auto
+   width shrinks to fit the lane the margins leave in every engine; the
+   themes' `width: 100%` would pin it to the column instead. An AsciiDoc
+   table that isn't `stretch` was sized by its author (autowidth or a
+   percentage), so it keeps that and is only centred. */
 .doc-body-wide
   :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
   > table {
