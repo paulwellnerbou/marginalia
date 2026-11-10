@@ -3182,12 +3182,24 @@ async function updateInvite(c: Context, deps: AppDeps) {
 
   if (row.role === role) return c.json({ invite: toInviteWire(row) });
 
-  db.prepare('UPDATE invites SET role = ? WHERE token = ?').run(role, token);
-  // Sessions claimed from this invite move with it, so an open tab is
-  // re-roled without its holder having to do anything.
-  db.prepare('UPDATE sessions SET invite_role = ? WHERE invite_token = ?').run(role, token);
+  setInviteRole(db, token, role);
 
   return c.json({ invite: toInviteWire({ ...row, role }) });
+}
+
+/**
+ * Re-role an invite. Sessions claimed from it move with it, so an open
+ * tab is re-roled without its holder doing anything. An agent key's
+ * invite set apart from the key's role stops following the key.
+ */
+export function setInviteRole(db: Database, token: string, role: InviteRole): void {
+  db.prepare('UPDATE invites SET role = ? WHERE token = ?').run(role, token);
+  db.prepare('UPDATE sessions SET invite_role = ? WHERE invite_token = ?').run(role, token);
+  db.prepare(
+    `UPDATE keyring_agent_invites
+        SET follows_key = (? = (SELECT role FROM keyring_agents WHERE id = agent_id))
+      WHERE invite_token = ?`,
+  ).run(role, token);
 }
 
 /**

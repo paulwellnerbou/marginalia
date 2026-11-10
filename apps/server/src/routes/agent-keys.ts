@@ -4,15 +4,9 @@ import { normalizeAgentName } from '@marginalia/mcp';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import { revokeInviteSessions } from '../auth.js';
-import type {
-  DocumentFormat,
-  DocumentRow,
-  InviteRole,
-  KeyringAgentRow,
-  KeyringRow,
-} from '../db.js';
+import type { DocumentFormat, InviteRole, KeyringAgentRow, KeyringRow } from '../db.js';
 import { newAgentId, newAgentKey } from '../ids.js';
-import { createInviteRow } from './documents.js';
+import { createInviteRow, setInviteRole } from './documents.js';
 import { readKeyringRow, safeJson, touchKeyringIfStale, upsertKeyringDoc } from './keyrings.js';
 
 /**
@@ -22,7 +16,7 @@ import { readKeyringRow, safeJson, touchKeyringIfStale, upsertKeyringDoc } from 
  * secret for every link in the ring, and an MCP connection string ends up
  * in config files and third-party connector settings. An agent key is a
  * separate credential minted from the ring, revocable on its own, with a
- * role ceiling and a name of its own.
+ * default role and a name of its own.
  *
  * It still authorizes nothing directly: `authorize()` never reads these
  * tables. The agent exchanges the key for an ordinary named invite per
@@ -92,6 +86,12 @@ interface AgentDocumentRoleWire {
   role: InviteRole;
   /** False until the agent opens the document or a role is set here; `role` is then the key's. */
   invited: boolean;
+  /** False once the role here was set apart from the key's: re-roling the key leaves it. */
+  follows_key: boolean;
+  /** The ring's admin link here was rotated elsewhere: the invite still works, its role can't change. */
+  link_stale: boolean;
+  /** The document shares its links with others in a folder, so a role set here covers them too. */
+  folder: boolean;
 }
 
 function toAgentWire(db: Database, row: KeyringAgentRow): AgentWire {
@@ -119,16 +119,26 @@ function listAgents(c: Context, db: Database) {
   if (!ring) return c.json({ error: 'not-found' }, 404);
   const docUid = c.req.query('doc');
   const gateUid = docUid ? gateOf(db, docUid) : null;
-  const delegable = gateUid !== null && ringCoverage(db, ring.token, gateUid) === 'admin';
-  const agents = ringAgents(db, ring.token).map((a) => {
+  const coverage = gateUid ? ringCoverage(db, ring.token, gateUid) : 'none';
+  const folder =
+    gateUid !== null &&
+    (gateUid !== docUid ||
+      db.prepare('SELECT 1 FROM documents WHERE folder_uid = ? LIMIT 1').get(gateUid) !== null);
+  const agents = ringAgents(db, ring.token).map((a): AgentWire => {
     const wire = toAgentWire(db, a);
     if (!docUid) return wire;
-    if (!delegable || !gateUid) return { ...wire, document: null };
-    const invite = agentInvite(db, a.id, gateUid);
-    return {
-      ...wire,
-      document: { role: invite?.role ?? a.role, invited: invite !== null },
-    };
+    const invite = gateUid ? agentInvite(db, a.id, gateUid) : null;
+    if (coverage === 'admin' || (coverage === 'stale' && invite)) {
+      const document = {
+        role: invite?.role ?? a.role,
+        invited: invite !== null,
+        follows_key: invite === null || invite.follows_key === 1,
+        link_stale: coverage === 'stale',
+        folder,
+      };
+      return { ...wire, document };
+    }
+    return { ...wire, document: null };
   });
   c.header('Cache-Control', 'no-store');
   return c.json({ agents });
@@ -153,9 +163,9 @@ function asAgentRole(value: unknown): InviteRole | null {
 }
 
 /**
- * Re-role a key. Its invites still at the old role move with it; one set
- * to something else, here or in a document's access panel, was a choice
- * for that document and stays.
+ * Re-role a key. Its invites that follow it move along; one given another
+ * role, here or in a document's access panel, was a choice for that
+ * document and stays.
  */
 async function updateAgent(c: Context, db: Database) {
   const found = readRingAgent(db, c);
@@ -165,22 +175,26 @@ async function updateAgent(c: Context, db: Database) {
   const role = asAgentRole(body.role);
   if (!role) return c.json({ error: 'invalid-role' }, 400);
 
-  const { agent } = found;
-  if (role !== agent.role) {
-    db.transaction(() => {
-      const following = db
-        .prepare(
-          `SELECT i.token FROM keyring_agent_invites ai
-             JOIN invites i ON i.token = ai.invite_token AND i.doc_uid = ai.gate_uid
-            WHERE ai.agent_id = ? AND i.role = ?`,
-        )
-        .all(agent.id, agent.role) as Array<{ token: string }>;
-      for (const { token } of following) setInviteRole(db, token, role);
-      db.prepare('UPDATE keyring_agents SET role = ? WHERE id = ?').run(role, agent.id);
-    })();
-  }
+  const { id } = found.agent;
+  const updated = db.transaction(() => {
+    // Re-read: the body was awaited, and a concurrent re-role may have landed.
+    const agent = db.prepare('SELECT * FROM keyring_agents WHERE id = ?').get(id) as
+      | KeyringAgentRow
+      | undefined;
+    if (!agent) return null;
+    if (agent.role === role) return agent;
+    db.prepare('UPDATE keyring_agents SET role = ? WHERE id = ?').run(role, id);
+    const following = db
+      .prepare(
+        `SELECT invite_token FROM keyring_agent_invites WHERE agent_id = ? AND follows_key = 1`,
+      )
+      .all(id) as Array<{ invite_token: string }>;
+    for (const { invite_token } of following) setInviteRole(db, invite_token, role);
+    return { ...agent, role };
+  })();
+  if (!updated) return c.json({ error: 'not-found' }, 404);
   c.header('Cache-Control', 'no-store');
-  return c.json({ agent: toAgentWire(db, { ...agent, role }) });
+  return c.json({ agent: toAgentWire(db, updated) });
 }
 
 /**
@@ -203,11 +217,18 @@ async function setAgentDocumentRole(c: Context, db: Database) {
   if (coverage === 'not-admin') return c.json({ error: 'not-delegable' }, 403);
   if (coverage === 'stale') return c.json({ error: 'keyring-link-stale' }, 409);
 
-  db.transaction(() => {
-    const invite = agentInvite(db, found.agent.id, gateUid);
+  const done = db.transaction(() => {
+    // Re-read: the key may have been re-roled or revoked while the body was awaited.
+    const agent = db.prepare('SELECT * FROM keyring_agents WHERE id = ?').get(found.agent.id) as
+      | KeyringAgentRow
+      | undefined;
+    if (!agent) return false;
+    const invite = agentInvite(db, agent.id, gateUid);
     if (invite) setInviteRole(db, invite.token, role);
-    else mintAgentInvite(db, found.agent, found.ring, gateUid, role);
+    else mintAgentInvite(db, agent, found.ring, gateUid, role);
+    return true;
   })();
+  if (!done) return c.json({ error: 'not-found' }, 404);
   c.header('Cache-Control', 'no-store');
   return c.json({ role, invited: true });
 }
@@ -221,10 +242,8 @@ async function createAgent(c: Context, db: Database) {
   const displayName = normalizeAgentName(
     typeof body.display_name === 'string' ? body.display_name : null,
   );
-  const role = body.role === undefined ? 'collaborator' : body.role;
-  if (typeof role !== 'string' || !(AGENT_ROLES as readonly string[]).includes(role)) {
-    return c.json({ error: 'invalid-role' }, 400);
-  }
+  const role = body.role === undefined ? 'collaborator' : asAgentRole(body.role);
+  if (!role) return c.json({ error: 'invalid-role' }, 400);
 
   const existing = ringAgents(db, ring.token);
   if (existing.length >= MAX_AGENTS_PER_RING) return c.json({ error: 'too-many-agents' }, 409);
@@ -240,7 +259,7 @@ async function createAgent(c: Context, db: Database) {
     key_hash: hashAgentKey(key),
     keyring_token: ring.token,
     display_name: displayName,
-    role: role as InviteRole,
+    role,
     created_at: Date.now(),
     last_used_at: null,
   };
@@ -323,15 +342,18 @@ function agentDocuments(c: Context, db: Database) {
   const rows = db
     .prepare(
       `SELECT kd.doc_uid, COALESCE(kd.title, d.name) AS title, d.format, d.updated_at,
-              d.folder_uid, gate.uid AS gate_uid, gate.password_hash, i.kind AS kind
+              d.folder_uid, gate.uid AS gate_uid, gate.password_hash, i.kind AS kind,
+              mine.role AS agent_role
          FROM keyring_docs kd
          JOIN documents d ON d.uid = kd.doc_uid
          JOIN documents gate ON gate.uid = COALESCE(d.folder_uid, d.uid)
          LEFT JOIN invites i ON i.token = kd.invite_token AND i.doc_uid = gate.uid
+         LEFT JOIN keyring_agent_invites ai ON ai.agent_id = ? AND ai.gate_uid = gate.uid
+         LEFT JOIN invites mine ON mine.token = ai.invite_token AND mine.doc_uid = gate.uid
         WHERE kd.keyring_token = ?
         ORDER BY d.updated_at DESC`,
     )
-    .all(caller.ring.token) as Array<{
+    .all(caller.agent.id, caller.ring.token) as Array<{
     doc_uid: string;
     title: string | null;
     format: DocumentFormat;
@@ -340,6 +362,7 @@ function agentDocuments(c: Context, db: Database) {
     gate_uid: string;
     password_hash: string | null;
     kind: string | null;
+    agent_role: InviteRole | null;
   }>;
   // One admin link opens the whole folder, so coverage is per gate.
   const kindsByGate = new Map<string, Array<string | null>>();
@@ -348,10 +371,7 @@ function agentDocuments(c: Context, db: Database) {
 
   const docs: AgentDocumentWire[] = rows.map((r) => {
     const coverage = coverageOf(kindsByGate.get(r.gate_uid) ?? []);
-    const role =
-      coverage === 'admin'
-        ? (agentInvite(db, caller.agent.id, r.gate_uid)?.role ?? caller.agent.role)
-        : null;
+    const role = coverage === 'admin' ? (r.agent_role ?? caller.agent.role) : null;
     return {
       doc_uid: r.doc_uid,
       title: r.title,
@@ -376,11 +396,8 @@ function agentAccess(c: Context, db: Database) {
   const caller = readAgent(db, c);
   if (!caller) return c.json({ error: 'agent-key-invalid' }, 401);
 
-  const doc = db.prepare('SELECT * FROM documents WHERE uid = ?').get(c.req.param('uid') ?? '') as
-    | DocumentRow
-    | undefined;
-  if (!doc) return c.json({ error: 'not-found' }, 404);
-  const gateUid = doc.folder_uid ?? doc.uid;
+  const gateUid = gateOf(db, c.req.param('uid') ?? '');
+  if (!gateUid) return c.json({ error: 'not-found' }, 404);
 
   const coverage = ringCoverage(db, caller.ring.token, gateUid);
   if (coverage === 'none') return c.json({ error: 'not-in-keyring' }, 404);
@@ -466,15 +483,16 @@ function agentInvite(
   db: Database,
   agentId: string,
   gateUid: string,
-): { token: string; role: InviteRole } | null {
+): { token: string; role: InviteRole; follows_key: number } | null {
   return (
     (db
       .prepare(
-        `SELECT i.token, i.role FROM keyring_agent_invites ai
+        `SELECT i.token, i.role, ai.follows_key FROM keyring_agent_invites ai
            JOIN invites i ON i.token = ai.invite_token AND i.doc_uid = ai.gate_uid
           WHERE ai.agent_id = ? AND ai.gate_uid = ?`,
       )
-      .get(agentId, gateUid) as { token: string; role: InviteRole } | null) ?? null
+      .get(agentId, gateUid) as { token: string; role: InviteRole; follows_key: number } | null) ??
+    null
   );
 }
 
@@ -494,18 +512,13 @@ function mintAgentInvite(
     createdByName: ring.display_name,
   });
   db.prepare(
-    `INSERT INTO keyring_agent_invites (agent_id, gate_uid, invite_token, created_at)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO keyring_agent_invites (agent_id, gate_uid, invite_token, created_at, follows_key)
+     VALUES (?, ?, ?, ?, ?)
      ON CONFLICT(agent_id, gate_uid)
-       DO UPDATE SET invite_token = excluded.invite_token, created_at = excluded.created_at`,
-  ).run(agent.id, gateUid, invite.token, invite.created_at);
+       DO UPDATE SET invite_token = excluded.invite_token, created_at = excluded.created_at,
+                     follows_key = excluded.follows_key`,
+  ).run(agent.id, gateUid, invite.token, invite.created_at, role === agent.role ? 1 : 0);
   return invite.token;
-}
-
-/** Sessions claimed from the invite snapshotted its role, so they move with it. */
-function setInviteRole(db: Database, token: string, role: InviteRole): void {
-  db.prepare('UPDATE invites SET role = ? WHERE token = ?').run(role, token);
-  db.prepare('UPDATE sessions SET invite_role = ? WHERE invite_token = ?').run(role, token);
 }
 
 // --- lifecycle --------------------------------------------------------
@@ -564,11 +577,8 @@ export function revokeRingAgents(db: Database, ringToken: string): void {
  * there too. Agent access follows the ring; it never outlives it.
  */
 export function revokeUncoveredAgentInvites(db: Database, ringToken: string, docUid: string): void {
-  const doc = db.prepare('SELECT uid, folder_uid FROM documents WHERE uid = ?').get(docUid) as
-    | { uid: string; folder_uid: string | null }
-    | undefined;
-  if (!doc) return;
-  const gateUid = doc.folder_uid ?? doc.uid;
+  const gateUid = gateOf(db, docUid);
+  if (!gateUid) return;
   if (ringCoverage(db, ringToken, gateUid) === 'admin') return;
   const minted = db
     .prepare(

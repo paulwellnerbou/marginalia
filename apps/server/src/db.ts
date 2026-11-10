@@ -343,8 +343,9 @@ CREATE INDEX IF NOT EXISTS idx_keyring_pairings_token
 
 -- A revocable credential that lets an MCP agent work across a keyring
 -- without holding the keyring token. Only the SHA-256 of the key is kept:
--- it is shown once at creation and never again. role caps what the agent
--- gets on any document; display_name is what it signs as.
+-- it is shown once at creation and never again. role is what the agent
+-- gets on a document unless one was set there; display_name is what it
+-- signs as.
 CREATE TABLE IF NOT EXISTS keyring_agents (
   id            TEXT PRIMARY KEY,
   key_hash      TEXT NOT NULL UNIQUE,
@@ -359,12 +360,15 @@ CREATE INDEX IF NOT EXISTS idx_keyring_agents_ring ON keyring_agents(keyring_tok
 
 -- The ordinary named invite minted for an agent on one access gate (a
 -- folder's main document, or a standalone one). Revoking the agent deletes
--- these invites, which is what actually cuts its access.
+-- these invites, which is what actually cuts its access. follows_key is
+-- 0 once the invite was given a role other than the key's, which then
+-- stays when the key is re-roled.
 CREATE TABLE IF NOT EXISTS keyring_agent_invites (
   agent_id      TEXT NOT NULL,
   gate_uid      TEXT NOT NULL,
   invite_token  TEXT NOT NULL,
   created_at    INTEGER NOT NULL,
+  follows_key   INTEGER NOT NULL DEFAULT 1,
   PRIMARY KEY (agent_id, gate_uid)
 );
 
@@ -724,6 +728,16 @@ export function openDatabase(path: string): Database {
     // 90 days: the holder re-claims from a link that still works, and every
     // session from this point on is revocable exactly.
     db.exec(`DELETE FROM sessions WHERE invite_role IS NOT NULL AND invite_token IS NULL`);
+  }
+  if (ensureColumn(db, 'keyring_agent_invites', 'follows_key', 'INTEGER NOT NULL DEFAULT 1')) {
+    // Keys could not be re-roled yet, so an invite at another role was set
+    // in the access panel on purpose.
+    db.exec(
+      `UPDATE keyring_agent_invites SET follows_key = 0
+        WHERE EXISTS (
+          SELECT 1 FROM invites i JOIN keyring_agents a ON a.id = keyring_agent_invites.agent_id
+           WHERE i.token = keyring_agent_invites.invite_token AND i.role <> a.role)`,
+    );
   }
   ensureColumn(db, 'document_assets', 'mime', "TEXT NOT NULL DEFAULT 'application/octet-stream'");
   ensureColumn(db, 'documents', 'repo_dir', "TEXT NOT NULL DEFAULT ''");

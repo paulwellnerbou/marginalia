@@ -2,6 +2,7 @@ import { DEFAULT_AGENT_NAME, normalizeAgentName } from '@marginalia/mcp/identity
 import { Badge, Box, Button, Callout, Flex, Text, TextField } from '@radix-ui/themes';
 import { useCallback, useEffect, useState } from 'react';
 import {
+  type AgentKeyDocumentWire,
   type AgentKeyWire,
   createInvite,
   type Invite,
@@ -11,7 +12,7 @@ import {
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
-import { loadKeyringToken } from '../lib/keyring.js';
+import { loadKeyringToken, onKeyringChange } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import {
   type ClaudeScope,
@@ -20,7 +21,7 @@ import {
   type Setup,
 } from '../lib/mcp-connection.js';
 import { type GrantableRole, roleLabel } from '../lib/roles.js';
-import { AccessList, AccessRow, RoleSelect } from './AccessList.js';
+import { AccessList, AccessRow, RoleBadge, RoleSelect } from './AccessList.js';
 import { Copyable } from './Copyable.js';
 import { McpConnectionSetup } from './McpConnectionSetup.js';
 
@@ -50,7 +51,7 @@ const KEYRING_AGENT_NOTE = 'AI agent via keyring';
  */
 export function McpPanel({ uid, canManageInvites }: Props) {
   const [invites, setInvites] = useState<Invite[] | null>(null);
-  const [ringToken] = useState(() => loadKeyringToken());
+  const [ringToken, setRingToken] = useState(() => loadKeyringToken());
   const [keys, setKeys] = useState<AgentKeyWire[] | null>(null);
   const [savingKeys, setSavingKeys] = useState<ReadonlySet<string>>(new Set());
   const [keyError, setKeyError] = useState<string | null>(null);
@@ -80,7 +81,10 @@ export function McpPanel({ uid, canManageInvites }: Props) {
 
   // A key reaches this document the first time its agent opens it, so
   // its name is spoken for here before it has an invite.
+  useEffect(() => onKeyringChange(setRingToken), []);
+
   useEffect(() => {
+    setKeys(null);
     if (!ringToken || !canManageInvites) return;
     listAgentKeys(ringToken, { doc: uid })
       .then((res) => setKeys(res.agents))
@@ -91,10 +95,13 @@ export function McpPanel({ uid, canManageInvites }: Props) {
   async function changeKeyRole(id: string, next: GrantableRole) {
     if (!ringToken) return;
     setKeyError(null);
-    const previous = keys?.find((k) => k.id === id)?.document ?? null;
-    const setDocument = (document: NonNullable<AgentKeyWire['document']> | null) =>
+    const key = keys?.find((k) => k.id === id);
+    const previous = key?.document;
+    if (!key || !previous) return;
+    const setDocument = (document: AgentKeyDocumentWire) =>
       setKeys((current) => current?.map((k) => (k.id === id ? { ...k, document } : k)) ?? current);
-    setDocument({ role: next, invited: true });
+    // Mirrors the server: a document set to the key's own role follows the key again.
+    setDocument({ ...previous, role: next, invited: true, follows_key: next === key.role });
     setSavingKeys((current) => new Set(current).add(id));
     try {
       await setAgentDocumentRole(ringToken, id, uid, next);
@@ -196,7 +203,9 @@ export function McpPanel({ uid, canManageInvites }: Props) {
                 key={key.id}
                 name={key.display_name}
                 role={
-                  key.document ? (
+                  key.document?.link_stale ? (
+                    <RoleBadge role={key.document.role} />
+                  ) : key.document ? (
                     <RoleSelect
                       look="badge"
                       value={key.document.role}
@@ -218,8 +227,11 @@ export function McpPanel({ uid, canManageInvites }: Props) {
           )}
           <Text as="p" size="1" color="gray" mt="2">
             These connect through your keyring, so they need no link of their own. The role here is
-            for this document only; a key’s role everywhere else is set under “Your devices” on the
-            start page.
+            for{' '}
+            {keys.some((k) => k.document?.folder)
+              ? 'this document and the others that share its links'
+              : 'this document only'}
+            ; a key’s role everywhere else is set under “Your devices” on the start page.
           </Text>
         </Box>
       )}
@@ -356,7 +368,9 @@ export function McpPanel({ uid, canManageInvites }: Props) {
 
 function keyMeta(key: AgentKeyWire): string {
   if (!key.document) return 'Your keyring holds no admin link here, so this key cannot open it.';
-  if (key.document.role !== key.role)
-    return `Set for this document · key role ${roleLabel(key.role)}`;
-  return 'Same role as its key';
+  if (key.document.link_stale) {
+    return 'This document’s admin link was replaced on another device. Sync there to change the role.';
+  }
+  if (key.document.follows_key) return 'Follows its key';
+  return `Set here · key role ${roleLabel(key.role)}`;
 }

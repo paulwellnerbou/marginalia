@@ -237,11 +237,13 @@ the old token could have minted a key of their own. Deleting one agent
 invite from a document's access panel removes that link only — the key
 mints a new one on next use; revoke the key to stop it.
 
-The key's role can be changed later from the same list. Its invites
-still at the old role move with it; one set to something else — from a
-document's **MCP** tab, which sets the key's role for that document (and
-its folder) and mints the invite if the agent has none there yet, or
-from the access panel — stays as it was set.
+The key's role can be changed later from the same list, and its invites
+move with it. An invite given another role — from a document's **MCP**
+tab, which sets the key's role for that document (and its folder) and
+mints the invite if the agent has none there yet, or from the access
+panel — is marked as set apart and stays as it was; setting it back to
+the key's role makes it follow again. While the ring's admin link for a
+document is dead, its role can't be changed from the ring.
 
 A device pushes the link it opened a document with, and an owner opening
 their own document through a reviewer's link must not demote the ring:
@@ -252,7 +254,8 @@ is not minted a new one until a synced device opens the document again.
 
 Documents the agent creates go into the ring under their admin link, so
 they show up on every device, and the agent then works on them with its
-own capped invite rather than the creator's admin link. Filing renames
+own invite, at the role the user chose, rather than the creator's admin
+link. Filing renames
 that admin link to the ring's display name: an admin link's name seeds
 whoever opens it first, and the owner opening it must not be signed as
 the agent. Its client id is
@@ -267,8 +270,8 @@ Managed with the keyring token (`X-Marginalia-Keyring`):
   `document` role there (null where the ring cannot delegate it)
 - `POST   /api/keyrings/self/agents` — `display_name` + `role`; returns
   the key once. Names are unique per ring
-- `PATCH  /api/keyrings/self/agents/:id` — `role`; invites still at the
-  old role follow
+- `PATCH  /api/keyrings/self/agents/:id` — `role`; invites that follow
+  the key move with it
 - `PUT    /api/keyrings/self/agents/:id/documents/:uid` — `role` on one
   document, minting the invite if needed
 - `DELETE /api/keyrings/self/agents/:id` — revoke it and its invites
@@ -426,7 +429,7 @@ in AsciiDoc. Those names resolve against a per-document *asset store*.
 - An MCP agent attaches them through the same endpoint:
   `create_document` takes `images` and uploads them right after
   creating the document, while it still holds the admin link — so an
-  agent key capped at collaborator can still create a document with
+  agent key at collaborator can still create a document with
   its figures — and `upload_image` adds one later, as editor or admin.
 - Files an agent has on disk go by **upload URL** instead of base64
   in a tool call: `create_document`'s `image_uploads` and the

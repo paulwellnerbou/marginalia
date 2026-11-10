@@ -1380,8 +1380,19 @@ export interface AgentKeyWire {
   created_at: number;
   last_used_at: number | null;
   documents: number;
-  /** Only when listed for one document: the key's role there, null when the ring cannot delegate it. */
-  document?: { role: Exclude<Role, 'admin'>; invited: boolean } | null;
+  /** Only when listed for one document: the key's standing there, null when it cannot open it. */
+  document?: AgentKeyDocumentWire | null;
+}
+
+export interface AgentKeyDocumentWire {
+  role: Exclude<Role, 'admin'>;
+  invited: boolean;
+  /** False once the role here was set apart from the key's. */
+  follows_key: boolean;
+  /** The ring's admin link here was rotated elsewhere: the role can't be changed until it syncs. */
+  link_stale: boolean;
+  /** Shares its links with other documents, so the role covers them too. */
+  folder: boolean;
 }
 
 export function listAgentKeys(
@@ -1395,7 +1406,7 @@ export function listAgentKeys(
   });
 }
 
-/** Re-role a key; its documents still at the old role follow, ones set apart keep theirs. */
+/** Re-role a key; its documents that follow it move along, ones set apart keep theirs. */
 export function updateAgentKey(
   token: string,
   id: string,
