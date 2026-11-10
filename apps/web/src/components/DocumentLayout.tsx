@@ -564,7 +564,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   });
   const [blockWidth, setBlockWidth] = useState<number>(() => {
     const saved = Number(localStorage.getItem(BLOCK_WIDTH_KEY));
-    return Number.isFinite(saved) && saved > maxWidth ? saved : 0;
+    return Number.isFinite(saved) && saved > maxWidth ? Math.min(saved, BLOCK_WIDTH_MAX) : 0;
   });
   // Not in pages: a page is exactly as wide as the screen, and the tap
   // zones that turn it sit in the gutters a wide block would grow into.
