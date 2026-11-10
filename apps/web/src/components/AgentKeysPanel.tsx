@@ -6,7 +6,6 @@ import {
   createAgentKey,
   deleteAgentKey,
   listAgentKeys,
-  type Role,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { formatTimestamp } from '../lib/format-time.js';
@@ -18,7 +17,7 @@ import {
   type McpClient,
   type Setup,
 } from '../lib/mcp-connection.js';
-import { roleSummary } from '../lib/roles.js';
+import { type GrantableRole, roleSummary } from '../lib/roles.js';
 import {
   AccessCreateForm,
   AccessField,
@@ -42,7 +41,7 @@ export function AgentKeysPanel() {
   const [token, setToken] = useState(() => loadKeyringToken());
   const [agents, setAgents] = useState<AgentKeyWire[] | null>(null);
   const [name, setName] = useState('');
-  const [role, setRole] = useState<Role>('collaborator');
+  const [role, setRole] = useState<GrantableRole>('collaborator');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<{ key: string; agent: AgentKeyWire } | null>(null);

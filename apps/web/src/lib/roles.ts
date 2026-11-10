@@ -1,7 +1,9 @@
 import type { Role } from './api.js';
 
+export type GrantableRole = Exclude<Role, 'admin'>;
+
 /** The roles a link or an agent key can be given; admin is only ever minted with the document. */
-export const GRANTABLE_ROLES: readonly { value: Exclude<Role, 'admin'>; summary: string }[] = [
+export const GRANTABLE_ROLES: readonly { value: GrantableRole; summary: string }[] = [
   { value: 'reader', summary: 'Readers only read.' },
   { value: 'collaborator', summary: 'Collaborators comment and suggest edits.' },
   { value: 'editor', summary: 'Editors also edit directly and accept suggestions.' },

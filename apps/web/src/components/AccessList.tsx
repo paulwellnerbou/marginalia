@@ -1,7 +1,7 @@
 import { Badge, Box, Flex, Select, Text } from '@radix-ui/themes';
 import { Children, type FormEvent, type ReactNode } from 'react';
 import type { Role } from '../lib/api.js';
-import { GRANTABLE_ROLES, roleLabel } from '../lib/roles.js';
+import { GRANTABLE_ROLES, type GrantableRole, roleLabel } from '../lib/roles.js';
 import { appRoleColor } from '../styles/theme.js';
 
 /**
@@ -165,8 +165,8 @@ export function RoleSelect({
   ariaLabel,
   disabled,
 }: {
-  value: Role;
-  onChange: (role: Exclude<Role, 'admin'>) => void;
+  value: GrantableRole;
+  onChange: (role: GrantableRole) => void;
   look: 'field' | 'badge';
   id?: string;
   ariaLabel?: string;
@@ -175,7 +175,7 @@ export function RoleSelect({
   return (
     <Select.Root
       value={value}
-      onValueChange={(v) => onChange(v as Exclude<Role, 'admin'>)}
+      onValueChange={(v) => onChange(v as GrantableRole)}
       size={look === 'field' ? '2' : '1'}
       disabled={disabled}
     >

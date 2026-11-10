@@ -31,7 +31,7 @@ import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { updateOpenTabToken } from '../lib/open-tabs.js';
 import { updateRecentDocToken } from '../lib/recent-docs.js';
-import { roleLabel, roleSummary } from '../lib/roles.js';
+import { type GrantableRole, roleLabel, roleSummary } from '../lib/roles.js';
 import {
   AccessCreateForm,
   AccessField,
@@ -151,7 +151,7 @@ export function InvitesPanel({
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<'named' | 'generic'>('named');
   const [name, setName] = useState('');
-  const [role, setRole] = useState<Role>('reader');
+  const [role, setRole] = useState<GrantableRole>('reader');
   const [submitting, setSubmitting] = useState(false);
   const [rotating, setRotating] = useState(false);
   const [shareFullView, setShareFullView] = useState(false);
@@ -455,7 +455,7 @@ export function InvitesPanel({
             key={inv.token}
             name={inv.display_name ?? <i>Any visitor</i>}
             role={
-              inv.kind === 'admin' ? (
+              inv.kind === 'admin' || inv.role === 'admin' ? (
                 // Fixed: the document's own admin link is rotated, never re-roled.
                 <RoleBadge role={inv.role} />
               ) : (
@@ -503,7 +503,7 @@ function inviteMeta(inv: Invite): string {
     case 'admin':
       return 'Admin link · can be replaced, not revoked';
     case 'named':
-      return `Personal link · opens as ${inv.display_name}`;
+      return `Personal link · opens as ${inv.display_name ?? 'its recipient'}`;
     case 'generic':
       return 'Open link · visitors use their own name';
   }
