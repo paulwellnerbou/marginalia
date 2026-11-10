@@ -29,6 +29,19 @@ export function newKeyringToken(): string {
 }
 
 /**
+ * Agent key for a keyring. Prefixed so a key pasted somewhere it should
+ * not be is recognisable for what it is, and by secret scanners.
+ */
+export function newAgentKey(): string {
+  return `mak_${randomBytes(32).toString('base64url')}`;
+}
+
+/** Public id of an agent key, for listing and revoking it. */
+export function newAgentId(): string {
+  return randomBytes(9).toString('base64url');
+}
+
+/**
  * Device-pairing code: 8 characters of the same unambiguous alphabet the
  * generated document passwords use (no I/O/0/1), grouped for reading
  * aloud. 40 bits, which is thin for a standing secret and ample for one

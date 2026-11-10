@@ -11,6 +11,7 @@ import { closeExportBrowser } from './export/pdf.js';
 import { GitStore } from './git-store.js';
 import { backfillProposalBranches } from './proposal-branch-backfill.js';
 import { Realtime } from './realtime.js';
+import { agentKeysRouter } from './routes/agent-keys.js';
 import { assetsRouter } from './routes/assets.js';
 import { documentsRouter } from './routes/documents.js';
 import { eventsRouter } from './routes/events.js';
@@ -88,9 +89,10 @@ export async function createApp(config: ServerConfig): Promise<App> {
   // pairing code is by definition not a request from a device that has
   // a keyring, so it lives outside that prefix.
   hono.route('/api', keyringsRouter({ db, config }));
+  hono.route('/api', agentKeysRouter({ db }));
   // Marginalia's own MCP endpoint. Mounted after the API routes because
   // it dispatches tool calls back through this same app.
-  hono.route('/mcp', mcpRouter({ hono }));
+  hono.route('/mcp', mcpRouter({ hono, trustedProxyHops: config.trustedProxyHops }));
   hono.get('*', async (c) => {
     const fileResponse = await serveWebAsset(config.webDir, c.req.path);
     return fileResponse ?? c.notFound();

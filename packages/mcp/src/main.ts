@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { adoptAgentIdentity, agentKeyClientId } from './agent-key.js';
 import { type FetchLike, MarginaliaClient } from './client.js';
 import { loadMcpConfig, type McpConfig } from './config.js';
 import { McpState } from './state.js';
@@ -48,6 +49,14 @@ function instructions(config: McpConfig): string {
     '     change implies, anchored where they occur.',
     '  5. reply_to_thread — answer questions and explain decisions in the thread itself.',
     '',
+    ...(config.agentKey
+      ? [
+          'This connection carries an agent key for the user’s keyring: list_documents shows',
+          'their documents, and a bare uid from it works in every tool without a link. Documents',
+          'you create are added to the keyring, so the user sees them on all their devices.',
+          '',
+        ]
+      : []),
     'Read a chapter at a time. These are long documents — books, specs, reports — and',
     'pulling the whole source to work on one part wastes the context you need for the work.',
     'get_document with `include_source: false` returns just the outline: every section with',
@@ -92,7 +101,10 @@ export function createMarginaliaMcpServer(
   server: McpServer;
   context: ToolContext;
 } {
-  const state = new McpState(config.stateDir, config.clientId);
+  const state = new McpState(
+    config.stateDir,
+    config.clientId ?? (config.agentKey ? agentKeyClientId(config.agentKey) : null),
+  );
   const client = new MarginaliaClient(config, state, deps.fetchImpl ?? fetch);
   const context: ToolContext = { client, config, state };
 
@@ -102,7 +114,7 @@ export function createMarginaliaMcpServer(
   );
 
   const allowLocalFiles = deps.allowLocalFiles !== false;
-  registerDocumentTools(server, context, { allowLocalFiles });
+  registerDocumentTools(server, context, { allowLocalFiles, agentKey: !!config.agentKey });
   registerReviewTools(server, context);
   registerEditingTools(server, context);
   if (allowLocalFiles) registerExportTools(server, context);
@@ -111,7 +123,7 @@ export function createMarginaliaMcpServer(
 }
 
 export async function main(): Promise<void> {
-  const { server } = createMarginaliaMcpServer();
+  const { server } = createMarginaliaMcpServer(await adoptAgentIdentity(loadMcpConfig()));
   await server.connect(new StdioServerTransport());
   // stdout belongs to the JSON-RPC channel; anything human-facing goes to stderr.
   console.error(`[marginalia-mcp] ready (${SERVER_VERSION})`);

@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  adoptAgentIdentity,
+  agentKeyClientId,
   createMarginaliaMcpServer,
   MAX_CLIENT_ID_LENGTH,
   normalizeAgentName,
@@ -36,10 +38,10 @@ import { Hono } from 'hono';
  * here and unguessable, so one caller cannot address another's, which
  * makes a session as isolated as a separate stdio process.
  */
-export function mcpRouter(deps: { hono: Hono }): Hono {
+export function mcpRouter(deps: { hono: Hono; trustedProxyHops: number }): Hono {
   const r = new Hono();
   const sessions = new SessionStore();
-  r.all('/', async (c) => handleMcp(c, deps.hono, sessions));
+  r.all('/', async (c) => handleMcp(c, deps, sessions));
   return r;
 }
 
@@ -119,7 +121,11 @@ class SessionStore {
   }
 }
 
-async function handleMcp(c: Context, app: Hono, sessions: SessionStore): Promise<Response> {
+async function handleMcp(
+  c: Context,
+  deps: { hono: Hono; trustedProxyHops: number },
+  sessions: SessionStore,
+): Promise<Response> {
   const existingId = c.req.header(SESSION_HEADER);
   if (existingId) {
     const session = sessions.get(existingId);
@@ -158,7 +164,7 @@ async function handleMcp(c: Context, app: Hono, sessions: SessionStore): Promise
 
   // No session id: an initialize request, or a malformed one the
   // transport will reject on its own.
-  const { server, transport } = buildSession(new URL(c.req.url), app);
+  const { server, transport } = await buildSession(publicUrl(c, deps.trustedProxyHops), deps.hono);
   let keep = false;
   try {
     await server.connect(transport);
@@ -261,20 +267,21 @@ function notFoundSession(): Response {
  * from, and letting them change mid-session would mean an agent's
  * authorship shifting under it.
  */
-function buildSession(
+async function buildSession(
   url: URL,
   app: Hono,
-): { server: McpServer; transport: WebStandardStreamableHTTPServerTransport } {
-  const displayName = readDisplayName(url);
-
-  const { server } = createMarginaliaMcpServer(
+): Promise<{ server: McpServer; transport: WebStandardStreamableHTTPServerTransport }> {
+  const fetchImpl = async (input: URL | RequestInfo, init?: RequestInit) =>
+    app.fetch(new Request(input as URL | string, init));
+  const agentKey = readAgentKey(url);
+  const config = await adoptAgentIdentity(
     {
       // Document URLs the agent passes carry their own origin; this is
       // only the fallback for a bare uid, and this instance is the one
       // sensible answer.
       baseUrl: url.origin,
-      displayName,
-      clientId: readClientId(url, displayName),
+      displayName: readDisplayName(url),
+      clientId: null,
       // A hosted endpoint must not reach other instances on behalf of
       // whoever connects to it.
       allowedHosts: [url.hostname],
@@ -286,6 +293,10 @@ function buildSession(
       // folder; anything else is learned during the session from the
       // links the agent is handed.
       defaultToken: readToken(url),
+      // The whole keyring, document by document: each is exchanged for an
+      // invite of the agent's own on first use. The key carries the
+      // agent's name, which replaces `?name=`.
+      agentKey,
       // In-memory for the life of the session. Nothing may be written to
       // the server's disk on behalf of a caller, and a token learned
       // here must not outlive the connection that supplied it.
@@ -293,8 +304,12 @@ function buildSession(
       // Unused: `allowLocalFiles: false` keeps the filesystem tools off.
       downloadDir: '',
     },
+    fetchImpl,
+  );
+  const { server } = createMarginaliaMcpServer(
+    { ...config, clientId: readClientId(url, config.displayName, agentKey) },
     {
-      fetchImpl: async (input, init) => app.fetch(new Request(input as URL | string, init)),
+      fetchImpl,
       // The filesystem here is the Marginalia host's, not the caller's.
       // Creating a document needs no invite, so leaving these on would
       // let anyone who can reach this endpoint read the server's files
@@ -312,6 +327,39 @@ function buildSession(
   });
 
   return { server, transport };
+}
+
+/**
+ * The URL as the caller addressed it. Behind a TLS-terminating proxy the
+ * request arrives as http, and the agent compares the links it is handed
+ * against this origin, so only the forwarded scheme and host make an
+ * https document link count as this instance. Read only from proxies the
+ * deployment trusts, as `clientKey` does with the address.
+ */
+export function publicUrl(c: Context, trustedHops: number): URL {
+  const url = new URL(c.req.url);
+  if (trustedHops === 0) return url;
+  const vouched = (header: string): string | null => {
+    const values = (c.req.header(header) ?? '')
+      .split(',')
+      .map((v) => v.trim())
+      .filter(Boolean);
+    // As in `clientKey`: a chain shorter than configured cannot tell a
+    // real proxy's entry from one the caller wrote.
+    return values.length >= trustedHops ? (values[values.length - trustedHops] ?? null) : null;
+  };
+  const forwardedProto = vouched('x-forwarded-proto');
+  const proto = forwardedProto === 'http' || forwardedProto === 'https' ? forwardedProto : null;
+  const own = url.protocol.slice(0, -1);
+  const scheme = proto ?? own;
+  // The request's own host carries the internal port, which the public
+  // origin must not keep once the scheme changes.
+  const host = vouched('x-forwarded-host') ?? (scheme !== own ? url.hostname : url.host);
+  try {
+    return new URL(`${url.pathname}${url.search}`, `${scheme}://${host}`);
+  } catch {
+    return url;
+  }
 }
 
 function readDisplayName(url: URL): string {
@@ -332,6 +380,12 @@ function readToken(url: URL): string | null {
   return raw.length > 0 ? raw : null;
 }
 
+/** Optional `?key=`: an agent key for the caller's keyring. Replayed only to this instance. */
+function readAgentKey(url: URL): string | null {
+  const raw = sanitizeIdentityValue(url.searchParams.get('key'), MAX_CLIENT_ID_LENGTH);
+  return raw.length > 0 ? raw : null;
+}
+
 /**
  * The marker Marginalia uses to decide who may edit or delete a comment.
  *
@@ -342,8 +396,10 @@ function readToken(url: URL): string | null {
  * makes, where `clientId` is an unverified header a caller supplies.
  * Pass `client_id` explicitly to keep separate agents apart.
  */
-function readClientId(url: URL, displayName: string): string {
+function readClientId(url: URL, displayName: string, agentKey: string | null): string {
   const explicit = sanitizeIdentityValue(url.searchParams.get('client_id'), MAX_CLIENT_ID_LENGTH);
   if (explicit.length >= 8) return explicit;
+  // A key is one agent, whatever it is called.
+  if (agentKey) return agentKeyClientId(agentKey);
   return `mcp-${createHash('sha256').update(displayName).digest('hex').slice(0, 28)}`;
 }

@@ -6,6 +6,7 @@
  * behind an HTTP endpoint. Anything either entry point needs is exported
  * here.
  */
+export { adoptAgentIdentity, agentKeyClientId } from './agent-key.js';
 export type { FetchLike } from './client.js';
 export type { McpConfig } from './config.js';
 export { loadMcpConfig } from './config.js';

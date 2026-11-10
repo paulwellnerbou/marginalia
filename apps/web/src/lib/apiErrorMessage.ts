@@ -11,6 +11,10 @@ import { isTransientError } from './retry.js';
  * generic failure for anyone reporting a bug.
  */
 const MESSAGES: Record<string, string> = {
+  // Agent keys
+  'agent-name-taken':
+    'An agent key with that name already exists. Agents are told apart by name in comments, so pick another.',
+  'too-many-agents': 'This keyring has as many agent keys as it can hold. Revoke one first.',
   // Proposal workflow
   'proposal-conflict':
     'This proposal no longer applies: the document changed where it edits. Use “Resolve conflict” to settle it against the current text, or reject it.',

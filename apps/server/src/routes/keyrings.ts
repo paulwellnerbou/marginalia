@@ -7,6 +7,7 @@ import { COVER_THUMBNAIL_REF } from '../cover.js';
 import type { DocumentFormat, InviteRole, KeyringRow } from '../db.js';
 import { newKeyringToken, newPairingCode } from '../ids.js';
 import { clientKey, FixedWindowRateLimiter } from '../rate-limit.js';
+import { revokeRingAgents, revokeUncoveredAgentInvites } from './agent-keys.js';
 
 /**
  * Keyrings — one person's documents across their several devices.
@@ -111,7 +112,7 @@ export function keyringsRouter(deps: KeyringDeps): Hono {
 }
 
 /** Resolve the caller's keyring from the header, or null. */
-function readKeyringRow(db: Database, c: Context): KeyringRow | null {
+export function readKeyringRow(db: Database, c: Context): KeyringRow | null {
   const token = c.req.header(KEYRING_HEADER);
   if (!token) return null;
   const row = db.prepare('SELECT * FROM keyrings WHERE token = ?').get(token) as
@@ -124,7 +125,12 @@ function touch(db: Database, token: string): void {
   db.prepare('UPDATE keyrings SET updated_at = ? WHERE token = ?').run(Date.now(), token);
 }
 
-async function safeJson(c: Context): Promise<Record<string, unknown> | null> {
+/** The liveness heartbeat a pull gives a ring, at most once a day. */
+export function touchKeyringIfStale(db: Database, ring: KeyringRow): void {
+  if (Date.now() - ring.updated_at > KEYRING_TOUCH_INTERVAL_MS) touch(db, ring.token);
+}
+
+export async function safeJson(c: Context): Promise<Record<string, unknown> | null> {
   try {
     const body = (await c.req.json()) as unknown;
     if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
@@ -194,7 +200,7 @@ async function createKeyring(c: Context, { db, config }: KeyringDeps, limits: Li
 async function readKeyring(c: Context, { db, config }: KeyringDeps) {
   const ring = readKeyringRow(db, c);
   if (!ring) return c.json({ error: 'not-found' }, 404);
-  if (Date.now() - ring.updated_at > KEYRING_TOUCH_INTERVAL_MS) touch(db, ring.token);
+  touchKeyringIfStale(db, ring);
   c.header('Cache-Control', 'no-store');
   return c.json({
     client_id: ring.client_id,
@@ -265,9 +271,9 @@ async function deleteKeyring(c: Context, { db }: KeyringDeps) {
  * remove.
  *
  * Insert-then-move-then-delete, so the rows are never briefly ownerless.
- * Outstanding pairing codes die with the old token: a rotation is a
- * response to compromise, and a code minted before it should not still
- * open the door.
+ * Outstanding pairing codes and agent keys die with the old token: a
+ * rotation is a response to compromise, and whoever held the token could
+ * have minted either.
  */
 async function rotateKeyring(c: Context, { db }: KeyringDeps) {
   const ring = readKeyringRow(db, c);
@@ -284,6 +290,7 @@ async function rotateKeyring(c: Context, { db }: KeyringDeps) {
       fresh,
       ring.token,
     );
+    revokeRingAgents(db, ring.token);
     db.prepare('DELETE FROM keyring_pairings WHERE keyring_token = ?').run(ring.token);
     db.prepare('DELETE FROM keyrings WHERE token = ?').run(ring.token);
   })();
@@ -310,29 +317,23 @@ async function putKeyringDoc(c: Context, { db }: KeyringDeps) {
   // authorization check — anyone holding the token could use it directly
   // — just a guard against junk rows that would 404 on another device
   // with no way to tell why.
-  if (!inviteMatchesDoc(db, docUid, inviteToken)) {
-    return c.json({ error: 'invite-not-found' }, 404);
-  }
+  const kind = inviteKind(db, docUid, inviteToken);
+  if (!kind) return c.json({ error: 'invite-not-found' }, 404);
 
-  const existing = db
-    .prepare('SELECT 1 FROM keyring_docs WHERE keyring_token = ? AND doc_uid = ?')
-    .get(ring.token, docUid);
-  if (!existing) {
-    const { n } = db
-      .prepare('SELECT count(*) AS n FROM keyring_docs WHERE keyring_token = ?')
-      .get(ring.token) as { n: number };
-    if (n >= MAX_KEYRING_DOCS) return c.json({ error: 'keyring-full' }, 409);
-  }
+  // Owners open their own documents through a lesser link to see what a
+  // reviewer sees, and every view pushes the link it used. Taking that
+  // over a live admin link would demote every device and the ring's agents.
+  const held = db
+    .prepare('SELECT invite_token FROM keyring_docs WHERE keyring_token = ? AND doc_uid = ?')
+    .get(ring.token, docUid) as { invite_token: string } | null;
+  const keep = kind !== 'admin' && !!held && inviteKind(db, docUid, held.invite_token) === 'admin';
 
   const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) || null : null;
-  db.prepare(
-    `INSERT INTO keyring_docs (keyring_token, doc_uid, invite_token, title, added_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(keyring_token, doc_uid)
-       DO UPDATE SET invite_token = excluded.invite_token,
-                     title = COALESCE(excluded.title, keyring_docs.title)`,
-  ).run(ring.token, docUid, inviteToken, title, Date.now());
-  touch(db, ring.token);
+  const stored = keep && held ? held.invite_token : inviteToken;
+  if (upsertKeyringDoc(db, ring.token, docUid, stored, title) === 'full') {
+    return c.json({ error: 'keyring-full' }, 409);
+  }
+  revokeUncoveredAgentInvites(db, ring.token, docUid);
 
   return c.json({ ok: true }, 200);
 }
@@ -350,6 +351,7 @@ async function deleteKeyringDoc(c: Context, { db }: KeyringDeps) {
     ring.token,
     docUid,
   );
+  revokeUncoveredAgentInvites(db, ring.token, docUid);
   touch(db, ring.token);
   return c.body(null, 204);
 }
@@ -477,6 +479,7 @@ function moveThreadBookmarks(db: Database, from: string, to: string): void {
 /** Erase one ring and everything hanging off it. */
 function purgeKeyring(db: Database, token: string): void {
   db.transaction(() => {
+    revokeRingAgents(db, token);
     db.prepare('DELETE FROM keyring_docs WHERE keyring_token = ?').run(token);
     db.prepare('DELETE FROM keyring_pairings WHERE keyring_token = ?').run(token);
     db.prepare('DELETE FROM keyrings WHERE token = ?').run(token);
@@ -503,6 +506,8 @@ function sweepIdleKeyrings(db: Database, idleTtlMs: number): void {
   const cutoff = Date.now() - idleTtlMs;
   const stale = 'SELECT token FROM keyrings WHERE updated_at < ?';
   db.transaction(() => {
+    const tokens = db.prepare(stale).all(cutoff) as Array<{ token: string }>;
+    for (const { token } of tokens) revokeRingAgents(db, token);
     db.prepare(`DELETE FROM keyring_docs WHERE keyring_token IN (${stale})`).run(cutoff);
     db.prepare(`DELETE FROM keyring_pairings WHERE keyring_token IN (${stale})`).run(cutoff);
     db.prepare('DELETE FROM keyrings WHERE updated_at < ?').run(cutoff);
@@ -591,16 +596,51 @@ function listKeyringDocs(db: Database, keyringToken: string): KeyringDocWire[] {
   }));
 }
 
+/**
+ * Record (or refresh) one document in a ring. The title only ever
+ * improves: a push without one keeps the title already held.
+ */
+export function upsertKeyringDoc(
+  db: Database,
+  ringToken: string,
+  docUid: string,
+  inviteToken: string,
+  title: string | null,
+): 'ok' | 'full' {
+  const existing = db
+    .prepare('SELECT 1 FROM keyring_docs WHERE keyring_token = ? AND doc_uid = ?')
+    .get(ringToken, docUid);
+  if (!existing) {
+    const { n } = db
+      .prepare('SELECT count(*) AS n FROM keyring_docs WHERE keyring_token = ?')
+      .get(ringToken) as { n: number };
+    if (n >= MAX_KEYRING_DOCS) return 'full';
+  }
+  db.prepare(
+    `INSERT INTO keyring_docs (keyring_token, doc_uid, invite_token, title, added_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(keyring_token, doc_uid)
+       DO UPDATE SET invite_token = excluded.invite_token,
+                     title = COALESCE(excluded.title, keyring_docs.title)`,
+  ).run(ringToken, docUid, inviteToken, title, Date.now());
+  touch(db, ringToken);
+  return 'ok';
+}
+
 /** A folder document's invites are its main document's. */
-function inviteMatchesDoc(db: Database, docUid: string, inviteToken: string): boolean {
+function inviteKind(db: Database, docUid: string, inviteToken: string): string | null {
   const row = db
     .prepare(
-      `SELECT 1 FROM invites i
+      `SELECT i.kind FROM invites i
          JOIN documents d ON d.uid = ?
         WHERE i.token = ? AND i.doc_uid = COALESCE(d.folder_uid, d.uid)`,
     )
-    .get(docUid, inviteToken);
-  return !!row;
+    .get(docUid, inviteToken) as { kind: string } | undefined;
+  return row?.kind ?? null;
+}
+
+function inviteMatchesDoc(db: Database, docUid: string, inviteToken: string): boolean {
+  return inviteKind(db, docUid, inviteToken) !== null;
 }
 
 function parseDocSeeds(
