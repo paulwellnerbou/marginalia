@@ -1727,6 +1727,69 @@ button.primary:disabled {
   }
 }
 
+/* AsciiDoc TOC fold: the title is the toggle, and the list folds away
+   inside the panel. The title-to-list gap moves into the list so it
+   folds with it instead of leaving a gap under a closed TOC. */
+.marginalia .toc.toc-foldable > :is(#toctitle, .toctitle) {
+  margin-bottom: 0;
+}
+.marginalia .toc-fold > .collapse-section-inner > ul {
+  padding-top: 0.75em;
+  transition: transform 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.marginalia .toc-fold.is-collapsed > .collapse-section-inner > ul {
+  transform: translateY(-0.5em);
+}
+.marginalia .toc-toggle {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.45em;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 0.2em;
+}
+.marginalia .toc-toggle:hover {
+  color: var(--md-color-accent, currentColor);
+}
+.marginalia .toc-toggle:focus-visible {
+  outline: 2px solid var(--md-color-accent, currentColor);
+  outline-offset: 2px;
+}
+.marginalia .toc-toggle svg {
+  flex: none;
+  width: 1.15em;
+  height: 1.15em;
+  transform: rotate(90deg);
+  transition: transform 360ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.marginalia .toc-toggle[aria-expanded="false"] svg {
+  transform: rotate(0deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .marginalia .toc-toggle svg,
+  .marginalia .toc-fold > .collapse-section-inner > ul {
+    transition: none;
+  }
+}
+@media print {
+  .marginalia .toc-toggle svg {
+    display: none;
+  }
+  .marginalia .toc-fold.is-collapsed > .collapse-section-inner > ul {
+    transform: none;
+  }
+}
+
 /* Summary / about folds: a labelled toggle over a region set slightly
    apart, since it is about the book rather than part of it. */
 .marginalia .doc-meta-header {
