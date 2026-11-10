@@ -19,7 +19,6 @@ import {
   Flex,
   IconButton,
   SegmentedControl,
-  Select,
   Tabs,
   Text,
   TextField,
@@ -135,13 +134,7 @@ import {
   threadTouchesSections,
 } from '../lib/section-filter.js';
 import { BOOKMARK_QUOTE_LIMIT, captureBlockAnchor } from '../lib/selection.js';
-import {
-  applyTheme,
-  BUILT_IN_THEMES,
-  getUserThemeOverride,
-  setUserThemeOverride,
-  themeForDocument,
-} from '../lib/themes.js';
+import { applyTheme, getUserThemeOverride, themeForDocument } from '../lib/themes.js';
 import {
   mergeArchiveThreads,
   mergeOpenThreads,
@@ -197,6 +190,7 @@ import { PageJump } from './PageJump.js';
 import { type DocumentSearchOptions, type FolderLinks, RenderedDoc } from './RenderedDoc.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
+import { ThemeSelect } from './ThemeSelect.js';
 import { ProposalComposer, ProposalEditComposer } from './ThreadComposer.js';
 import { Toc } from './Toc.js';
 
@@ -3459,23 +3453,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
           <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
             Theme
           </Text>
-          <Select.Root
-            value={theme}
-            size="1"
-            onValueChange={(next) => {
-              setTheme(next);
-              setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
-            }}
-          >
-            <Select.Trigger id="doc-theme-select" variant="soft" />
-            <Select.Content position="popper" style={{ maxHeight: 360 }}>
-              {BUILT_IN_THEMES.map((t) => (
-                <Select.Item key={t.id} value={t.id}>
-                  {t.label}
-                </Select.Item>
-              ))}
-            </Select.Content>
-          </Select.Root>
+          <ThemeSelect
+            id="doc-theme-select"
+            doc={doc}
+            theme={theme}
+            onThemeChange={setTheme}
+            onDocSettingsChanged={onDocSettingsChanged}
+          />
 
           <DocColorControls paperRef={docScrollRef} inkRef={docRef} theme={theme} />
         </>

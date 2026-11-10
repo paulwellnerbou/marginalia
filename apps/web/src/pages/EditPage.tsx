@@ -1,7 +1,7 @@
 import { isDocMetaKind } from '@marginalia/renderer/doc-meta';
 import { insertAfterBlock } from '@marginalia/renderer/insertion';
 import type { RenderResult } from '@marginalia/renderer/types';
-import { Button, Container, Flex, Select, Slider, Text } from '@radix-ui/themes';
+import { Button, Container, Flex, Slider, Text } from '@radix-ui/themes';
 import type { EditorView } from 'codemirror';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
@@ -12,6 +12,7 @@ import { MarkdownToolbar } from '../components/MarkdownToolbar.js';
 import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
 import { type FolderLinks, RenderedDoc } from '../components/RenderedDoc.js';
 import { ResizeHandle } from '../components/ResizeHandle.js';
+import { ThemeSelect } from '../components/ThemeSelect.js';
 import {
   ApiError,
   type AttachedAsset,
@@ -46,13 +47,7 @@ import { reportError } from '../lib/log.js';
 import { openTab } from '../lib/open-tabs.js';
 import { revealOnOpen } from '../lib/pending-reveal.js';
 import { loadRenderer } from '../lib/renderer-loader.js';
-import {
-  applyTheme,
-  BUILT_IN_THEMES,
-  getUserThemeOverride,
-  setUserThemeOverride,
-  themeForDocument,
-} from '../lib/themes.js';
+import { applyTheme, getUserThemeOverride, themeForDocument } from '../lib/themes.js';
 
 const ASSETS_COLLAPSED_WIDTH = 36;
 const LS_ASSETS_OPEN = 'marginalia.editAssetsOpen';
@@ -1025,23 +1020,19 @@ export function EditPage() {
                 <Text size="1" color="gray" as="label" htmlFor="edit-theme-select">
                   Theme
                 </Text>
-                <Select.Root
-                  value={theme}
-                  size="1"
-                  onValueChange={(next) => {
-                    setTheme(next);
-                    setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
-                  }}
-                >
-                  <Select.Trigger id="edit-theme-select" variant="soft" />
-                  <Select.Content position="popper" style={{ maxHeight: 360 }}>
-                    {BUILT_IN_THEMES.map((t) => (
-                      <Select.Item key={t.id} value={t.id}>
-                        {t.label}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select.Root>
+                <ThemeSelect
+                  id="edit-theme-select"
+                  doc={doc}
+                  theme={theme}
+                  onThemeChange={setTheme}
+                  onDocSettingsChanged={(uid, settings) =>
+                    setDoc((d) =>
+                      d && d.uid === uid && settings.default_theme
+                        ? { ...d, default_theme: settings.default_theme }
+                        : d,
+                    )
+                  }
+                />
               </Flex>
             </div>
           )}

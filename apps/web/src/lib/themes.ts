@@ -8,7 +8,7 @@
  * document's default theme is used.
  */
 
-import type { DocumentFormat } from './api.js';
+import type { DocumentFormat, Role } from './api.js';
 
 export interface ThemeMeta {
   id: string;
@@ -109,4 +109,18 @@ export function setUserThemeOverride(docUid: string, id: string | null): void {
   const key = themeLocalStorageKey(docUid);
   if (id === null) localStorage.removeItem(key);
   else localStorage.setItem(key, id);
+}
+
+/** What to store for a pick: nothing when it is the document's default. */
+export function themeOverrideFor(next: string, defaultTheme: string): string | null {
+  return next === defaultTheme ? null : next;
+}
+
+/** Only an admin can change the default, and only to something else. */
+export function canOfferThemeAsDefault(args: {
+  role: Role;
+  theme: string;
+  defaultTheme: string;
+}): boolean {
+  return args.role === 'admin' && args.theme !== args.defaultTheme;
 }
