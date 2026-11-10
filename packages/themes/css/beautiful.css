@@ -2,7 +2,7 @@
  * Marginalia — Beautiful
  *
  * An opinionated editorial theme. Meant to be beautiful out of the box:
- * book-quality serif body, Fraunces display face for headings, warm ivory
+ * book-quality serif body, Fraunces display face for headings, neutral grey
  * paper, a single deep ink-blue accent, optical details (drop cap, small
  * caps, ornamental rules, italic blockquotes without bars).
  *
@@ -16,17 +16,18 @@
 
 .marginalia-theme,
 .marginalia {
-  /* --- Palette (ivory paper, ink, deep blue) ---------------------- */
+  /* --- Palette (grey paper, ink, deep blue) ----------------------- */
   --md-color-fg: #1a1712;
   --md-color-fg-muted: #736a5c;
-  --md-color-bg: #fbf8f2;
+  --md-color-bg: #f6f5f1;
   --md-color-accent: #1f3864; /* deep editorial ink-blue */
   --md-color-accent-muted: #c9d1e0;
   --md-color-border: #e2dccd;
-  --md-color-code-bg: #f3ede0;
+  --md-color-code-bg: #ffffff;
   --md-color-code-fg: #22201b;
   --md-color-quote-bar: transparent;
-  --md-color-table-stripe: #f5efe3;
+  --md-color-table-stripe: #ffffff;
+  --md-color-block-bg: #ffffff;
   --md-color-selection-bg: #d5e2ff;
 
   /* --- Typography ------------------------------------------------- */

@@ -316,17 +316,17 @@ const beautifulTokens: ThemeTokens = {
   colors: {
     fg: '#1a1712',
     fgMuted: '#736a5c',
-    bg: '#fbf8f2',
+    bg: '#f6f5f1',
     accent: '#1f3864',
     accentMuted: '#c9d1e0',
     border: '#e2dccd',
-    codeBg: '#f3ede0',
+    codeBg: '#efede7',
     codeFg: '#22201b',
     // CSS sets quote-bar transparent for a no-bar pull-quote look; keep
     // an accent-tinted value here so if a consumer ignores hasBar=false
     // it still reads as intentional.
     quoteBar: '#1f3864',
-    tableStripe: '#f5efe3',
+    tableStripe: '#f6f5f1',
   },
   spacing: { blockEm: 1.25, headingTopEm: 2.4, listItemEm: 0.3 },
   page: { size: 'A4', marginPt: 90 },
@@ -361,14 +361,14 @@ const bookTokens: ThemeTokens = {
   colors: {
     fg: '#1a1915',
     fgMuted: '#6a655a',
-    bg: '#fbf9f5',
+    bg: '#f6f5f1',
     accent: '#3a2c1e',
     accentMuted: '#c9b99a',
     border: '#d9cfb8',
-    codeBg: '#f3ecdd',
+    codeBg: '#efede7',
     codeFg: '#202326',
     quoteBar: '#bbae95',
-    tableStripe: '#f5efe1',
+    tableStripe: '#f6f5f1',
   },
   spacing: { blockEm: 1.3, headingTopEm: 2.4, listItemEm: 0.3 },
   // A4 with generous inner margins. A5 would be truer to the "book"
@@ -407,15 +407,15 @@ const articleTokens: ThemeTokens = {
   colors: {
     fg: '#1c1812',
     fgMuted: '#736a60',
-    bg: '#fffdf9',
+    bg: '#f6f5f1',
     accent: '#b8360a',
     accentMuted: '#f5d3c2',
     border: '#e8ded0',
-    codeBg: '#f6efe2',
+    codeBg: '#efede7',
     codeFg: '#202326',
     // CSS: --md-color-quote-bar: var(--md-color-accent)
     quoteBar: '#b8360a',
-    tableStripe: '#faf4e9',
+    tableStripe: '#f6f5f1',
   },
   spacing: { blockEm: 1.2, headingTopEm: 2, listItemEm: 0.3 },
   page: { size: 'A4', marginPt: 72 },

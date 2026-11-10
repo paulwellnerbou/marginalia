@@ -24,13 +24,14 @@
 
   --md-color-fg: #1c1812;
   --md-color-fg-muted: #736a60;
-  --md-color-bg: #fffdf9;
+  --md-color-bg: #f6f5f1;
   --md-color-accent: #b8360a;
   --md-color-accent-muted: #f5d3c2;
   --md-color-border: #e8ded0;
-  --md-color-code-bg: #f6efe2;
+  --md-color-code-bg: #ffffff;
   --md-color-quote-bar: var(--md-color-accent);
-  --md-color-table-stripe: #faf4e9;
+  --md-color-table-stripe: #ffffff;
+  --md-color-block-bg: #ffffff;
 }
 
 .marginalia h1 {
