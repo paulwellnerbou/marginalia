@@ -123,6 +123,29 @@ with a clickable URL rather than a bare id. These links are deliberately token-f
 opening `/d/<uid>/<token>` claims that invite, so a link carrying the agent's token would
 hand the agent's identity to whoever clicks it.
 
+### Your whole keyring — an agent key
+
+The connections above reach the documents you hand the agent links to. If you sync your
+documents with a [keyring](../../README.md#keyrings-your-documents-on-more-than-one-device),
+an **agent key** reaches all of them: on the home page, open **Your devices → AI agents**,
+pick a name and a role, and copy the URL it shows once:
+
+```bash
+claude mcp add --transport http --scope user marginalia 'https://marginalia.example.com/mcp?key=mak_…'
+```
+
+The connection then has a `list_documents` tool, and a bare uid works in every tool. On
+first use of a document the key is exchanged for the agent's own named invite there, at
+the key's role, so it shows in that document's access panel like any other. Documents the
+agent creates are added to your keyring, so they appear on all your devices; the tool
+result says so instead of printing the admin link, and the agent carries on with its own
+invite. Only documents you administer are reachable — for one shared with you, hand the
+agent its link as usual.
+
+The key carries the agent's name, so `?name=` is not needed, and its client id is derived
+from the key. Revoking the key in the same panel deletes every invite it was given. Over
+stdio, set `MARGINALIA_AGENT_KEY` and `MARGINALIA_BASE_URL` instead.
+
 ### Over stdio — for local development
 
 Runs the server as a local process instead, against any instance you name. Useful when
@@ -158,6 +181,7 @@ The hosted endpoint takes its settings from the URL; these apply to the stdio se
 | `MARGINALIA_DISPLAY_NAME` | `Claude` | The name every comment and proposal is signed with. |
 | `MARGINALIA_ALLOWED_HOSTS` | *(unset — any host)* | Comma-separated allowlist. When set, a URL pointing anywhere else is refused. |
 | `MARGINALIA_PASSWORD` | *(unset)* | Password for password-protected documents, so it never has to be typed into a chat. |
+| `MARGINALIA_AGENT_KEY` | *(unset)* | Agent key for your keyring: every document you administer there works by bare uid, and `list_documents` lists them. Replaces `MARGINALIA_DISPLAY_NAME` with the key's name. |
 | `MARGINALIA_INVITE_TOKEN` | *(unset)* | Invite token applied to a document reference that carries none — the stdio equivalent of `&token=`. |
 | `MARGINALIA_CLIENT_ID` | *(generated once)* | Identity marker. Override to share one identity across machines. |
 | `MARGINALIA_MCP_STATE_DIR` | `~/.config/marginalia-mcp` | Where the client id and per-document links are cached (mode 0600). |
@@ -220,6 +244,7 @@ when no password is set.
 | Tool | |
 | --- | --- |
 | `get_identity` | Who the server acts as, which instance, which documents it has links for. |
+| `list_documents` | Only with an agent key: the documents in your keyring, with the role the agent gets on each. |
 | `get_document` | Metadata, your role, the outline, and the source — whole document or one `section`. |
 | `list_blocks` | Every anchorable block with its id, section, line range and verbatim source. Filter with `section` or `query`. |
 | `get_rendered_html` | The HTML the browser viewer shows. |

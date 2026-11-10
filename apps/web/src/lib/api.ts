@@ -1371,6 +1371,42 @@ export function createKeyringPairing(token: string): Promise<{ code: string; exp
   });
 }
 
+/** An agent key as the keyring lists it. The key itself is only ever in `createAgentKey`'s answer. */
+export interface AgentKeyWire {
+  id: string;
+  display_name: string;
+  role: Role;
+  created_at: number;
+  last_used_at: number | null;
+  documents: number;
+}
+
+export function listAgentKeys(token: string): Promise<{ agents: AgentKeyWire[] }> {
+  return request('/api/keyrings/self/agents', {
+    method: 'GET',
+    headers: { [KEYRING_HEADER]: token },
+  });
+}
+
+export function createAgentKey(
+  token: string,
+  payload: { display_name: string; role: Role },
+): Promise<{ key: string; agent: AgentKeyWire }> {
+  return request('/api/keyrings/self/agents', {
+    method: 'POST',
+    headers: { [KEYRING_HEADER]: token },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Revoke a key and every invite it was given. */
+export function deleteAgentKey(token: string, id: string): Promise<void> {
+  return request<void>(`/api/keyrings/self/agents/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { [KEYRING_HEADER]: token },
+  });
+}
+
 /** Exchange a pairing code for the keyring it names. No credential needed. */
 export function redeemKeyringPairing(code: string): Promise<KeyringWire & { token: string }> {
   return request('/api/pairings/redeem', {

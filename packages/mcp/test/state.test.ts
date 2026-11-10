@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { agentKeyClientId } from '../src/agent-key.js';
 import { loadMcpConfig } from '../src/config.js';
 import { McpState } from '../src/state.js';
 
@@ -133,6 +134,14 @@ describe('loadMcpConfig', () => {
 
   test('falls back to Claude when the name is only control characters', () => {
     expect(loadMcpConfig({ MARGINALIA_DISPLAY_NAME: '\r\n\t' }).displayName).toBe('Claude');
+  });
+
+  test('reads an agent key, whose client id is stable and distinct per key', () => {
+    expect(loadMcpConfig({}).agentKey).toBeNull();
+    expect(loadMcpConfig({ MARGINALIA_AGENT_KEY: ' mak_abc ' }).agentKey).toBe('mak_abc');
+    expect(agentKeyClientId('mak_a')).toBe(agentKeyClientId('mak_a'));
+    expect(agentKeyClientId('mak_a')).not.toBe(agentKeyClientId('mak_b'));
+    expect(agentKeyClientId('mak_a')).not.toContain('mak_a');
   });
 
   test('MARGINALIA_MCP_NO_PERSIST disables the state file', () => {
