@@ -1,17 +1,24 @@
 import postcss, { type AtRule, type ChildNode, type Container, type Rule } from 'postcss';
+import selectorParser from 'postcss-selector-parser';
 import type { Warning } from './types.js';
 
 /**
  * Confining an HTML document's own stylesheet to the document.
  *
  * The page is not in an iframe — comment selection, highlights and the
- * floating cards all need it in the app's DOM — so its CSS has to be
- * rewritten to match nothing outside the root element the renderer wraps
- * the body in:
+ * floating cards all need it in the app's DOM — so its CSS has to match
+ * nothing outside the root element the renderer wraps the body in:
  *
- *   - every selector is prefixed with the root; a leading `:root`, `html`
- *     or `body` compound becomes the root itself, so `:root { --bg }` and
- *     `body { background }` land on the document, not the app;
+ *   - every style rule goes inside `@scope (.mg-html-root)`, so the browser
+ *     itself keeps it from matching anything outside the root, whatever
+ *     the selector says — escapes, nesting with `&` and nested `@scope`
+ *     included. Global at-rules (`@keyframes`, `@font-face`, `@page`) stay
+ *     outside, where every engine honours them;
+ *   - selectors are rewritten with a real selector parser: a leading
+ *     `:root`, `html` or `body` compound becomes `:scope`, the root itself,
+ *     so `:root { --bg }` and `body { background }` land on the document;
+ *     every other selector gets an explicit `:scope ` so it keeps the
+ *     specificity of the class prefix it used to carry;
  *   - `prefers-color-scheme` queries become `[data-theme]` on the root,
  *     which the viewer sets from the app's appearance, so the document
  *     follows the in-app light/dark toggle rather than the OS;
@@ -118,12 +125,12 @@ export function scopeHtmlCss(sources: readonly string[], fontLinks: readonly str
     root.walkAtRules(/^(charset|namespace)$/i, (rule) => {
       rule.remove();
     });
-    scopeContainer(root, null);
+    scopeContainer(root, null, warnings);
     applyRenames(root, renames);
     root.walkDecls((decl) => {
       if (isUnsafeValue(decl.value) || /^(behavior|-moz-binding)$/i.test(decl.prop)) decl.remove();
     });
-    bodies.push(root.toString());
+    bodies.push(wrapInScope(root));
   }
 
   const css = [...imports, BASE_CSS, ...bodies, printGridOverride(printGrids)].join('\n');
@@ -241,9 +248,35 @@ function insidePrintMedia(node: postcss.Node): boolean {
 }
 
 function printGridOverride(selectors: readonly string[]): string {
-  if (selectors.length === 0) return '';
-  const scoped = selectors.map((sel) => scopeSelectorList(sel, null)).join(', ');
-  return `@media print{${scoped}{display:flex;flex-direction:column;align-items:stretch;}}`;
+  const scoped = selectors.map((sel) => scopeSelectorList(sel, null)).filter(Boolean);
+  if (scoped.length === 0) return '';
+  return `@scope (${ROOT}) {@media print{${scoped.join(', ')}{display:flex;flex-direction:column;align-items:stretch;}}}`;
+}
+
+/**
+ * The page's rules inside `@scope (.mg-html-root)`, in their original
+ * order, with each run of global at-rules lifted out between the blocks.
+ * postcss serializes from the parsed tree, so a page cannot close the
+ * block early: a stray `}` or an unclosed string fails the parse instead.
+ */
+function wrapInScope(root: postcss.Root): string {
+  const parts: string[] = [];
+  let pending: string[] = [];
+  const flush = () => {
+    if (pending.length > 0) parts.push(`@scope (${ROOT}) {\n${pending.join('\n')}\n}`);
+    pending = [];
+  };
+  root.each((node) => {
+    if (node.type === 'comment') return;
+    if (node.type === 'atrule' && OPAQUE_AT_RULES.has(node.name.toLowerCase())) {
+      flush();
+      parts.push(node.toString());
+    } else {
+      pending.push(node.toString());
+    }
+  });
+  flush();
+  return parts.join('\n');
 }
 
 /** Strip what an inline `style` attribute must not carry. */
@@ -270,30 +303,26 @@ function importHref(params: string): string | null {
   return m ? m[1]! : null;
 }
 
-function scopeContainer(container: Container, scheme: Scheme | null): void {
+function scopeContainer(container: Container, scheme: Scheme | null, warnings: Warning[]): void {
   for (const node of [...(container.nodes ?? [])] as ChildNode[]) {
     if (node.type === 'rule') {
-      scopeRule(node, scheme);
+      scopeRule(node, scheme, warnings);
     } else if (node.type === 'atrule') {
-      scopeAtRule(node, scheme);
+      scopeAtRule(node, scheme, warnings);
     }
   }
 }
 
-function scopeAtRule(rule: AtRule, scheme: Scheme | null): void {
+function scopeAtRule(rule: AtRule, scheme: Scheme | null, warnings: Warning[]): void {
   const name = rule.name.toLowerCase();
   if (OPAQUE_AT_RULES.has(name)) return;
-  if (name === 'scope') {
-    rule.params = rule.params.replace(
-      /\(([^)]*)\)/,
-      (_m, sel: string) => `(${scopeSelectorList(sel, scheme)})`,
-    );
-    return;
-  }
+  // A page's own @scope nests inside ours and stays confined by it; its
+  // selectors are relative to its own root, so they are left as written.
+  if (name === 'scope') return;
   if (name === 'media') {
     const split = splitColorScheme(rule.params);
     if (split) {
-      scopeContainer(rule, split.scheme);
+      scopeContainer(rule, split.scheme, warnings);
       if (split.rest === null) {
         rule.replaceWith(...(rule.nodes ?? []));
       } else {
@@ -302,12 +331,21 @@ function scopeAtRule(rule: AtRule, scheme: Scheme | null): void {
       return;
     }
   }
-  if (GROUPING_AT_RULES.has(name) || rule.nodes) scopeContainer(rule, scheme);
+  if (GROUPING_AT_RULES.has(name) || rule.nodes) scopeContainer(rule, scheme, warnings);
 }
 
-function scopeRule(rule: Rule, scheme: Scheme | null): void {
-  rule.selector = scopeSelectorList(rule.selector, scheme);
-  // Nested rules are relative to this one and already scoped through it.
+function scopeRule(rule: Rule, scheme: Scheme | null, warnings: Warning[]): void {
+  const scoped = scopeSelectorList(rule.selector, scheme);
+  if (scoped) {
+    rule.selector = scoped;
+  } else {
+    warnings.push({
+      kind: 'sanitized-element',
+      message: `Dropped a rule whose selector does not parse: ${rule.selector}`,
+    });
+    rule.remove();
+  }
+  // Nested rules are relative to this one, and confined by @scope either way.
 }
 
 /**
@@ -315,7 +353,7 @@ function scopeRule(rule: Rule, scheme: Scheme | null): void {
  * is what is left of the query, or null when nothing is.
  */
 function splitColorScheme(params: string): { scheme: Scheme; rest: string | null } | null {
-  if (splitTopLevel(params, ',').length !== 1) return null;
+  if (postcss.list.comma(params).length !== 1) return null;
   const feature = /\(\s*prefers-color-scheme\s*:\s*(dark|light)\s*\)/i;
   const m = feature.exec(params);
   if (!m || /\bnot\b/i.test(params)) return null;
@@ -329,85 +367,72 @@ function splitColorScheme(params: string): { scheme: Scheme; rest: string | null
 }
 
 function rootFor(scheme: Scheme | null): string {
-  if (scheme === 'dark') return `${ROOT}[data-theme="dark"]`;
+  if (scheme === 'dark') return ':scope[data-theme="dark"]';
   // Light is the default: exports and first paint carry no attribute.
-  if (scheme === 'light') return `${ROOT}:not([data-theme="dark"])`;
-  return ROOT;
+  if (scheme === 'light') return ':scope:not([data-theme="dark"])';
+  return ':scope';
 }
 
+/**
+ * A selector list rewritten for use inside `@scope (.mg-html-root)`, or
+ * '' when it does not parse. The parser handles escapes, strings and
+ * nested pseudo-classes, so a list splits exactly where the browser
+ * splits it.
+ */
 export function scopeSelectorList(list: string, scheme: Scheme | null): string {
-  return splitTopLevel(list, ',')
-    .map((sel) => scopeSelector(sel.trim(), rootFor(scheme)))
-    .filter(Boolean)
-    .join(', ');
+  const root = rootFor(scheme);
+  let out: string[];
+  try {
+    out = [];
+    selectorParser((selectors) => {
+      selectors.each((selector) => {
+        const scoped = scopeSelector(selector, root);
+        if (scoped) out.push(scoped);
+      });
+    }).processSync(list);
+  } catch {
+    return '';
+  }
+  return out.join(', ');
 }
 
-const ROOTISH_RE = /^(?::root|:host|html|body)(?![\w-])/i;
+type SelectorNode = selectorParser.Node;
 
-function scopeSelector(selector: string, root: string): string {
-  if (!selector) return '';
-  let rest = selector;
+function isRootish(node: SelectorNode | undefined): boolean {
+  if (!node) return false;
+  if (node.type === 'tag') return /^(html|body)$/i.test(node.value);
+  if (node.type === 'pseudo')
+    return /^:(root|host|scope)$/i.test(node.value) && node.nodes.length === 0;
+  return false;
+}
+
+/**
+ * `html body.x > main`, `html > body` → `:scope.x > main`, `:scope`: every
+ * leading root-ish compound collapses into the one root element. Anything
+ * else is placed under it, `:scope p`.
+ */
+function scopeSelector(selector: selectorParser.Selector, root: string): string {
+  const nodes = selector.nodes;
+  if (nodes.length === 0) return '';
+  let i = 0;
   let suffix = '';
-  let matchedRoot = false;
-  // `html body.x > main`, `html > body` → root.x > main, root: every
-  // leading root-ish compound collapses into the one root element.
-  for (;;) {
-    const m = ROOTISH_RE.exec(rest);
-    if (!m) break;
-    matchedRoot = true;
-    const compoundEnd = endOfCompound(rest);
-    suffix += rest.slice(m[0].length, compoundEnd);
-    rest = rest.slice(compoundEnd);
-    const combinator = /^(?:\s*>\s*|\s+)(?=[\w:.#[*-])/.exec(rest);
-    if (combinator && ROOTISH_RE.test(rest.slice(combinator[0].length))) {
-      rest = rest.slice(combinator[0].length);
+  let matched = false;
+  while (isRootish(nodes[i])) {
+    matched = true;
+    i++;
+    while (i < nodes.length && nodes[i]!.type !== 'combinator') suffix += nodes[i++]!.toString();
+    const combinator = nodes[i];
+    const joiner = combinator?.type === 'combinator' ? combinator.value.trim() : null;
+    if ((joiner === '' || joiner === '>') && isRootish(nodes[i + 1])) {
+      i++;
       continue;
     }
     break;
   }
-  if (matchedRoot) return `${root}${suffix}${rest}`;
-  return `${root} ${selector}`;
-}
-
-/** Index where the first compound selector of `sel` ends. */
-function endOfCompound(sel: string): number {
-  let depth = 0;
-  let quote: string | null = null;
-  for (let i = 0; i < sel.length; i++) {
-    const ch = sel[i]!;
-    if (quote) {
-      if (ch === '\\') i++;
-      else if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'") quote = ch;
-    else if (ch === '(' || ch === '[') depth++;
-    else if (ch === ')' || ch === ']') depth--;
-    else if (depth === 0 && /[\s>+~]/.test(ch)) return i;
-  }
-  return sel.length;
-}
-
-function splitTopLevel(input: string, separator: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let quote: string | null = null;
-  let start = 0;
-  for (let i = 0; i < input.length; i++) {
-    const ch = input[i]!;
-    if (quote) {
-      if (ch === '\\') i++;
-      else if (ch === quote) quote = null;
-      continue;
-    }
-    if (ch === '"' || ch === "'") quote = ch;
-    else if (ch === '(' || ch === '[') depth++;
-    else if (ch === ')' || ch === ']') depth--;
-    else if (depth === 0 && ch === separator) {
-      parts.push(input.slice(start, i));
-      start = i + 1;
-    }
-  }
-  parts.push(input.slice(start));
-  return parts;
+  if (!matched) return `${root} ${selector.toString().trim()}`;
+  const rest = nodes
+    .slice(i)
+    .map((n) => n.toString())
+    .join('');
+  return `${root}${suffix.trim()}${rest}`.trim();
 }

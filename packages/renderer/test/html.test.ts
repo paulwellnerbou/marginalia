@@ -134,7 +134,7 @@ describe('HTML documents: block model', () => {
     const r = await renderDocument('<title>T</title><style>p{color:red}</style><p>Hi</p>', 'html');
     expect(r.frontmatter.title).toBe('T');
     expect(r.blocks.map((b) => b.text)).toEqual(['Hi']);
-    expect(r.css).toContain('.mg-html-root p{color:red}');
+    expect(r.css).toContain('@scope (.mg-html-root) {\n:scope p{color:red}\n}');
     expect(r.html).not.toContain('color:red');
   });
 });
@@ -189,12 +189,12 @@ describe('HTML documents: sanitizing', () => {
 describe('HTML documents: stylesheet scoping', () => {
   test('root-ish selectors become the scope root, the rest is prefixed', () => {
     expect(scopeSelectorList(':root, html, body.dark > main, html body .x', null)).toBe(
-      '.mg-html-root, .mg-html-root, .mg-html-root.dark > main, .mg-html-root .x',
+      ':scope, :scope, :scope.dark > main, :scope .x',
     );
     expect(scopeSelectorList('a:is(.b, .c), td[data-x="a,b"]', null)).toBe(
-      '.mg-html-root a:is(.b, .c), .mg-html-root td[data-x="a,b"]',
+      ':scope a:is(.b, .c), :scope td[data-x="a,b"]',
     );
-    expect(scopeSelectorList('bodyguard p', null)).toBe('.mg-html-root bodyguard p');
+    expect(scopeSelectorList('bodyguard p', null)).toBe(':scope bodyguard p');
   });
 
   test('colour-scheme queries follow the root data-theme instead of the OS', () => {
@@ -206,11 +206,9 @@ describe('HTML documents: stylesheet scoping', () => {
       [],
     );
     expect(css).not.toContain('prefers-color-scheme');
-    expect(css).toContain(
-      '.mg-html-root[data-theme="dark"]:not([data-theme="light"]) { --bg: #000 }',
-    );
-    expect(css).toContain('.mg-html-root[data-theme="dark"] .card');
-    expect(css).toContain('@media (min-width: 600px) { .mg-html-root:not([data-theme="dark"]) p');
+    expect(css).toContain(':scope[data-theme="dark"]:not([data-theme="light"]) { --bg: #000 }');
+    expect(css).toContain(':scope[data-theme="dark"] .card');
+    expect(css).toContain('@media (min-width: 600px) { :scope:not([data-theme="dark"]) p');
   });
 
   test('imports and links survive only for font services', () => {
@@ -320,7 +318,7 @@ describe('HTML documents: review fixes', () => {
 
   test('html > body collapses into the root like a descendant chain', () => {
     expect(scopeSelectorList('html > body, :root>body .x, html>body>main', null)).toBe(
-      '.mg-html-root, .mg-html-root .x, .mg-html-root>main',
+      ':scope, :scope .x, :scope>main',
     );
   });
 
@@ -357,7 +355,81 @@ describe('HTML documents: print', () => {
     );
     const print = css.slice(css.lastIndexOf('@media print{'));
     expect(print).toBe(
-      '@media print{.mg-html-root .col, .mg-html-root section{display:flex;flex-direction:column;align-items:stretch;}}',
+      '@media print{:scope .col, :scope section{display:flex;flex-direction:column;align-items:stretch;}}}',
     );
+  });
+});
+
+describe('HTML documents: the @scope boundary', () => {
+  /** Every top-level piece of the page CSS, after our own base rule and imports. */
+  function pageRules(css: string): string {
+    return css.slice(css.indexOf('}@media print{.mg-html-root{contain:none;}}') + 44);
+  }
+
+  test('every style rule sits inside @scope (.mg-html-root)', () => {
+    const { css } = scopeHtmlCss(
+      [
+        'p { color: red } @media (min-width: 1px) { .a { color: blue } } @supports (display: grid) { .b { display: block } }',
+      ],
+      [],
+    );
+    const rest = pageRules(css).trim();
+    expect(rest).toStartWith('@scope (.mg-html-root) {');
+    expect(rest).toEndWith('}');
+    expect(rest.match(/@scope/g)).toHaveLength(1);
+  });
+
+  test('escaped characters split where the browser splits them', () => {
+    expect(scopeSelectorList('.a\\[, .app-toolbar', null)).toBe(
+      ':scope .a\\[, :scope .app-toolbar',
+    );
+    expect(scopeSelectorList('.a\\(, .b', null)).toBe(':scope .a\\(, :scope .b');
+  });
+
+  test('nested rules stay inside the scope block, & and all', () => {
+    const { css } = scopeHtmlCss(['.x { .app-chrome:not(&) { display: none } }'], []);
+    expect(pageRules(css).trim()).toBe(
+      '@scope (.mg-html-root) {\n:scope .x { .app-chrome:not(&) { display: none } }\n}',
+    );
+  });
+
+  test('global at-rules are lifted out between scope blocks, in order', () => {
+    const { css } = scopeHtmlCss(
+      [
+        'p { color: red } @keyframes spin { to { rotate: 1turn } } @font-face { font-family: X; src: local(Arial) } .a { animation: spin 1s }',
+      ],
+      [],
+    );
+    expect(pageRules(css).trim()).toBe(
+      [
+        '@scope (.mg-html-root) {\n:scope p { color: red }\n}',
+        '@keyframes mg-page-spin { to { rotate: 1turn } }',
+        '@font-face { font-family: X; src: local(Arial) }',
+        '@scope (.mg-html-root) {\n:scope .a { animation: mg-page-spin 1s }\n}',
+      ].join('\n'),
+    );
+  });
+
+  test("a page's own @scope is left as written, inside ours", () => {
+    const { css } = scopeHtmlCss(['@scope (.card) { img { border: 0 } }'], []);
+    expect(pageRules(css).trim()).toBe(
+      '@scope (.mg-html-root) {\n@scope (.card) { img { border: 0 } }\n}',
+    );
+  });
+
+  test('a stylesheet that would close the block early is dropped, not emitted', () => {
+    const { css, warnings } = scopeHtmlCss(
+      ['p { color: red } } .app-toolbar { display: none }'],
+      [],
+    );
+    expect(css).not.toContain('app-toolbar');
+    expect(warnings).toHaveLength(1);
+  });
+
+  test('a selector that does not parse drops its rule', () => {
+    const { css, warnings } = scopeHtmlCss(['!x { color: red } .ok { color: blue }'], []);
+    expect(css).not.toContain('color: red');
+    expect(css).toContain(':scope .ok');
+    expect(warnings.length).toBeGreaterThan(0);
   });
 });

@@ -5657,8 +5657,8 @@ describe('documents API', () => {
     expect(body.rendered.html).toContain('data-html-doc');
     expect(body.rendered.html).not.toContain('<script');
     expect(body.rendered.html).not.toContain('onclick');
-    expect(body.rendered.css).toContain('.mg-html-root {');
-    expect(body.rendered.css).toContain('.mg-html-root td {');
+    expect(body.rendered.css).toContain('@scope (.mg-html-root) {');
+    expect(body.rendered.css).toContain(':scope td {');
     expect(existsSync(join(dir, 'repos', created.uid, 'document.html'))).toBe(true);
 
     const sourceRes = await app.hono.fetch(
