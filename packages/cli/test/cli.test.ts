@@ -113,6 +113,6 @@ describe('marginalia CLI', () => {
     expect(r.code).toBe(0);
     expect(r.stdout).not.toMatch(/@import\s+["'][^"']*default\.css["']/);
     expect(r.stdout).toContain('Noto Serif');
-    expect(r.stdout).toContain('#toc > .sectlevel1 > li');
+    expect(r.stdout).toContain('#toc > ul > li + li');
   });
 });
