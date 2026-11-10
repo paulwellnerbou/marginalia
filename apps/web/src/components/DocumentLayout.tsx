@@ -19,7 +19,6 @@ import {
   Flex,
   IconButton,
   SegmentedControl,
-  Select,
   Tabs,
   Text,
   TextField,
@@ -71,7 +70,6 @@ import {
   isBookmark,
   isResolved,
   listThreads,
-  updateDocumentSettings,
   uploadAsset,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
@@ -136,13 +134,7 @@ import {
   threadTouchesSections,
 } from '../lib/section-filter.js';
 import { BOOKMARK_QUOTE_LIMIT, captureBlockAnchor } from '../lib/selection.js';
-import {
-  applyTheme,
-  BUILT_IN_THEMES,
-  getUserThemeOverride,
-  setUserThemeOverride,
-  themeForDocument,
-} from '../lib/themes.js';
+import { applyTheme, getUserThemeOverride, themeForDocument } from '../lib/themes.js';
 import {
   mergeArchiveThreads,
   mergeOpenThreads,
@@ -198,6 +190,7 @@ import { PageJump } from './PageJump.js';
 import { type DocumentSearchOptions, type FolderLinks, RenderedDoc } from './RenderedDoc.js';
 import { ResizeHandle } from './ResizeHandle.js';
 import { type ProposalTarget, SelectionToolbar } from './SelectionToolbar.js';
+import { ThemeSelect } from './ThemeSelect.js';
 import { ProposalComposer, ProposalEditComposer } from './ThreadComposer.js';
 import { Toc } from './Toc.js';
 
@@ -1248,29 +1241,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   useEffect(() => {
     setTheme(getUserThemeOverride(doc.uid) ?? doc.default_theme);
   }, [doc.uid, doc.default_theme]);
-
-  const [savingDefaultTheme, setSavingDefaultTheme] = useState(false);
-  /** Readers without a theme of their own for this document get it. */
-  const makeThemeDocumentDefault = async (next: string) => {
-    const identity = resolveIdentity();
-    if (!identity || !onDocSettingsChanged) return;
-    setSavingDefaultTheme(true);
-    try {
-      const result = await updateDocumentSettings(doc.uid, { default_theme: next }, identity);
-      // Cleared first: the effect above re-reads it once the default lands.
-      setUserThemeOverride(doc.uid, null);
-      onDocSettingsChanged(doc.uid, { default_theme: result.default_theme });
-    } catch (err) {
-      reportError('DocumentLayout.makeThemeDocumentDefault', err, { uid: doc.uid });
-      showToast({
-        title: 'Default theme not changed',
-        body: apiErrorMessage(err, 'Could not change the default theme'),
-        variant: 'error',
-      });
-    } finally {
-      setSavingDefaultTheme(false);
-    }
-  };
 
   useEffect(() => {
     if (!canComment) setPendingDraft(null);
@@ -3483,35 +3453,13 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
           <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
             Theme
           </Text>
-          <Select.Root
-            value={theme}
-            size="1"
-            onValueChange={(next) => {
-              setTheme(next);
-              setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
-            }}
-          >
-            <Select.Trigger id="doc-theme-select" variant="soft" />
-            <Select.Content position="popper" style={{ maxHeight: 360 }}>
-              {BUILT_IN_THEMES.map((t) => (
-                <Select.Item key={t.id} value={t.id}>
-                  {t.label}
-                  {t.id === doc.default_theme && <Text color="gray"> · document default</Text>}
-                </Select.Item>
-              ))}
-            </Select.Content>
-          </Select.Root>
-          {doc.role === 'admin' && onDocSettingsChanged && theme !== doc.default_theme && (
-            <Button
-              size="1"
-              variant="soft"
-              className="doc-view-grid-control"
-              disabled={savingDefaultTheme}
-              onClick={() => void makeThemeDocumentDefault(theme)}
-            >
-              Make default for everyone
-            </Button>
-          )}
+          <ThemeSelect
+            id="doc-theme-select"
+            doc={doc}
+            theme={theme}
+            onThemeChange={setTheme}
+            onDocSettingsChanged={onDocSettingsChanged}
+          />
 
           <DocColorControls paperRef={docScrollRef} inkRef={docRef} theme={theme} />
         </>
