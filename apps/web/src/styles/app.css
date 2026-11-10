@@ -964,12 +964,18 @@ button.primary:disabled {
    width shrinks to fit the lane the margins leave in every engine; the
    themes' `width: 100%` would pin it to the column instead. An AsciiDoc
    table that isn't `stretch` was sized by its author (autowidth or a
-   percentage), so it keeps that and is only centred. The `stretch`
-   selector outranks Report's `table.tableblock.stretch { width: 100% }`. */
+   percentage), so it keeps that and is only centred. The separate
+   `stretch` selector is needed because Report's
+   `.marginalia table.tableblock.stretch { width: 100% }` ties the plain
+   one and loads later. */
 .pane-doc
   .doc-body-wide
   :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
-  > :is(table, table.tableblock.stretch) {
+  > table,
+.pane-doc
+  .doc-body-wide
+  :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
+  > table.tableblock.stretch {
   width: auto;
 }
 .pane-doc
