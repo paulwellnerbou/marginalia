@@ -1,6 +1,6 @@
 import { ResetIcon } from '@radix-ui/react-icons';
 import { Flex, IconButton, Text, Tooltip } from '@radix-ui/themes';
-import { type RefObject, useLayoutEffect, useState } from 'react';
+import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   type DocColorRole,
   effectiveBackground,
@@ -102,6 +102,43 @@ function ColorRow({
   onChange: (hex: string) => void;
   onReset: () => void;
 }) {
+  // A drag fires an input event per mouse move, and each commit restyles
+  // the whole document, which on a long one takes longer than a frame. The
+  // swatch follows the draft at once; the document gets the latest value
+  // at most once per frame.
+  const [draft, setDraft] = useState<string | null>(null);
+  const pending = useRef<string | null>(null);
+  const frame = useRef(0);
+  const commit = useRef(onChange);
+  commit.current = onChange;
+
+  const flush = () => {
+    frame.current = 0;
+    const next = pending.current;
+    pending.current = null;
+    if (next) commit.current(next);
+    setDraft(null);
+  };
+
+  const schedule = (hex: string) => {
+    setDraft(hex);
+    pending.current = hex;
+    if (!frame.current) frame.current = requestAnimationFrame(flush);
+  };
+
+  // Closing the menu mid-drag still keeps the last color.
+  useEffect(
+    () => () => {
+      if (!frame.current) return;
+      cancelAnimationFrame(frame.current);
+      frame.current = 0;
+      if (pending.current) commit.current(pending.current);
+    },
+    [],
+  );
+
+  const shown = draft ?? value;
+
   return (
     <>
       <Text size="1" color="gray">
@@ -112,14 +149,14 @@ function ColorRow({
           type="color"
           className="doc-color-swatch"
           aria-label={ariaLabel}
-          value={value}
-          onChange={(e) => onChange(e.currentTarget.value)}
+          value={shown}
+          onChange={(e) => schedule(e.currentTarget.value)}
         />
         <span
-          className={`doc-color-value${overridden ? '' : ' doc-color-value-theme'}`}
-          title={overridden ? undefined : "The theme's color"}
+          className={`doc-color-value${overridden || draft ? '' : ' doc-color-value-theme'}`}
+          title={overridden || draft ? undefined : "The theme's color"}
         >
-          {value}
+          {shown}
         </span>
         <Tooltip content={resetLabel}>
           <IconButton

@@ -7,6 +7,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { formatAnchorQuote } from '../lib/anchor-quote.js';
 import type { AttachedAsset, DocumentFormat, Thread } from '../lib/api.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
+import { useDocColorStyle } from '../lib/doc-colors.js';
 import { FORMAT_INFO } from '../lib/format-info.js';
 import { reportError } from '../lib/log.js';
 import { loadRenderer } from '../lib/renderer-loader.js';
@@ -561,6 +562,7 @@ function ProposalComposerBody({
   const [rationale, setRationale] = useState('');
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const colorStyle = useDocColorStyle(docFormat);
   const { rendered, reset: resetPreview } = useProposalPreview({
     value,
     expanded,
@@ -703,7 +705,7 @@ function ProposalComposerBody({
         </div>
         <div className="proposal-composer-preview">
           {rendered ? (
-            <RenderedDoc rendered={rendered} />
+            <RenderedDoc rendered={rendered} colorStyle={colorStyle} />
           ) : (
             <Text color="gray" size="2" as="p">
               Preview…
@@ -830,6 +832,7 @@ function ProposalEditBody({
   const [comment, setComment] = useState('');
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const colorStyle = useDocColorStyle(docFormat);
   const { rendered } = useProposalPreview({
     value,
     expanded,
@@ -942,7 +945,7 @@ function ProposalEditBody({
         </div>
         <div className="proposal-composer-preview">
           {rendered ? (
-            <RenderedDoc rendered={rendered} />
+            <RenderedDoc rendered={rendered} colorStyle={colorStyle} />
           ) : (
             <Text color="gray" size="2" as="p">
               Preview…

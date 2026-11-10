@@ -92,7 +92,7 @@ import {
 } from '../lib/chapter-reading.js';
 import { chapterEditQuery } from '../lib/chapter-scope.js';
 import { buildCommentHighlights } from '../lib/comment-highlights.js';
-import { docColorStyle, useDocColors } from '../lib/doc-colors.js';
+import { useDocColorStyle } from '../lib/doc-colors.js';
 import type { DocMetaLinks } from '../lib/doc-meta-fold.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
@@ -1239,8 +1239,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   }, [rightTab]);
   // An HTML page styles itself: no theme, width, text-size or color controls.
   const isHtml = doc.format === 'html';
-  const { colors: docColors } = useDocColors();
-  const docColorOverride = isHtml ? undefined : docColorStyle(docColors);
+  const docColorOverride = useDocColorStyle(doc.format);
   useEffect(() => {
     void applyTheme(themeForDocument(doc.format, theme));
   }, [theme, doc.format]);

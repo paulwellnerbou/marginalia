@@ -1,4 +1,5 @@
-import { type CSSProperties, useSyncExternalStore } from 'react';
+import { type CSSProperties, useMemo, useSyncExternalStore } from 'react';
+import type { DocumentFormat } from './api.js';
 import { useAppearance } from './appearance.js';
 
 /**
@@ -117,6 +118,22 @@ export function docColorStyle(colors: DocColors): CSSProperties | undefined {
     ...(colors.bg ? { ['--md-color-bg' as string]: colors.bg } : {}),
     ...(colors.fg ? { ['--md-color-fg' as string]: colors.fg } : {}),
   };
+}
+
+/**
+ * The style every rendering of a document carries, so previews match the
+ * reader's paper. HTML pages bring their own look and get none.
+ */
+export function useDocColorStyle(format: DocumentFormat | undefined): CSSProperties | undefined {
+  const { colors } = useDocColors();
+  const { bg, fg } = colors;
+  return useMemo(
+    () =>
+      format === 'html'
+        ? undefined
+        : docColorStyle({ ...(bg ? { bg } : {}), ...(fg ? { fg } : {}) }),
+    [format, bg, fg],
+  );
 }
 
 /**
