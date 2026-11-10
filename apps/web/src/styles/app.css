@@ -928,7 +928,10 @@ button.primary:disabled {
      same margin to the pane edge that the text has on a narrow screen. */
   --md-wide-lane: max(0px, min(var(--md-wide-width), 100cqw - 3rem));
 }
-.doc-body-wide
+/* `.pane-doc` lifts these over the themes' own `.marginalia table…`
+   rules, which load after this file and would win every tie. */
+.pane-doc
+  .doc-body-wide
   :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
   > :is(table, pre, figure, p[data-block-kind="image"], .mermaid, .imageblock, .listingblock) {
   /* Shrink-to-fit within the lane, never narrower than the column. The
@@ -950,7 +953,8 @@ button.primary:disabled {
      without wide blocks. */
   transform: translateX(max(-50%, var(--md-wide-lane) / -2));
 }
-.doc-body-wide
+.pane-doc
+  .doc-body-wide
   :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
   > :is(pre, figure, p[data-block-kind="image"], .mermaid, .imageblock, .listingblock) {
   width: fit-content;
@@ -960,21 +964,31 @@ button.primary:disabled {
    width shrinks to fit the lane the margins leave in every engine; the
    themes' `width: 100%` would pin it to the column instead. An AsciiDoc
    table that isn't `stretch` was sized by its author (autowidth or a
-   percentage), so it keeps that and is only centred. */
-.doc-body-wide
+   percentage), so it keeps that and is only centred. The separate
+   `stretch` selector is needed because Report's
+   `.marginalia table.tableblock.stretch { width: 100% }` ties the plain
+   one and loads later. */
+.pane-doc
+  .doc-body-wide
   :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
-  > table {
+  > table,
+.pane-doc
+  .doc-body-wide
+  :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
+  > table.tableblock.stretch {
   width: auto;
 }
-.doc-body-wide
-  :is(.sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
+.pane-doc
+  .doc-body-wide
+  :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
   > table.tableblock:not(.stretch) {
   min-width: 0;
 }
 /* Mermaid sizes its SVG as a percentage of the box with a max-width, so
    the box has no content width to shrink to: give it the whole lane and
    let the diagram centre in it, up to its own natural size. */
-.doc-body-wide
+.pane-doc
+  .doc-body-wide
   :is(.marginalia, .collapse-section-inner, .sectionbody, .sect2, .sect3, .sect4, .sect5, .sect6)
   > .mermaid:not(.mermaid-error) {
   width: var(--md-wide-lane);
