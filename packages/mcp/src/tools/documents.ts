@@ -32,6 +32,7 @@ import {
   IMAGES_HINT,
   imageReferenceNotes,
   imageSchema,
+  imageStatusLines,
   requestUploadUrls,
   uploadUrlLines,
 } from './images.js';
@@ -378,8 +379,10 @@ export function registerDocumentTools(
         const section = args.section ? resolveSection(blocks, args.section) : null;
         const showOutline = args.include_outline ?? section === null;
         const body = section ? section.source : doc.source;
+        const images = imageStatusLines(doc);
         return text(
           documentHeader(doc, ref, blocks),
+          images.length > 0 ? images.join('\n') : null,
           section ? sectionHeader(section) : null,
           showOutline ? `outline:\n${outline(blocks.sections)}` : null,
           blockDriftNote(blocks),

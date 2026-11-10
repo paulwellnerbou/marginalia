@@ -314,13 +314,16 @@ CREATE INDEX IF NOT EXISTS idx_keyring_docs_invite ON keyring_docs(invite_token)
 -- Single-use URLs for uploading one asset under a set name, for an agent
 -- that holds the file on disk and cannot pass it through a tool call.
 -- Minted by an editor or admin; the URL itself is the capability, so
--- only its hash is kept.
+-- only its hash is kept. A URL dies with the invite that minted it, and
+-- with the agent key behind the request, so revoking either revokes it.
 CREATE TABLE IF NOT EXISTS asset_upload_tickets (
-  token_hash TEXT PRIMARY KEY,
-  doc_uid    TEXT NOT NULL,
-  ref_name   TEXT NOT NULL,
-  created_by TEXT NOT NULL,
-  expires_at INTEGER NOT NULL
+  token_hash   TEXT PRIMARY KEY,
+  doc_uid      TEXT NOT NULL,
+  ref_name     TEXT NOT NULL,
+  created_by   TEXT NOT NULL,
+  invite_token TEXT,
+  agent_id     TEXT,
+  expires_at   INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_asset_upload_tickets_doc ON asset_upload_tickets(doc_uid);
 

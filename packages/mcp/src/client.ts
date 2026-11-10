@@ -40,6 +40,11 @@ export interface RequestOptions {
   body?: unknown;
   /** Sent as multipart instead of `body`; fetch sets the boundary. */
   form?: FormData;
+  /**
+   * Also send the agent key, so the server can tie what it mints here to
+   * the key and end it when the key is revoked. Only to this instance.
+   */
+  withAgentKey?: boolean;
   query?: Record<string, string | undefined>;
 }
 
@@ -283,6 +288,9 @@ export class MarginaliaClient {
     const headers = this.identityHeaders();
     const token = ref.token ?? (await this.agentToken(ref));
     if (token) headers.set(INVITE_HEADER, token);
+    if (options.withAgentKey && this.config.agentKey && ref.baseUrl === this.config.baseUrl) {
+      headers.set(AGENT_KEY_HEADER, this.config.agentKey);
+    }
     const session = this.sessions.get(sessionKey(ref));
     if (session) headers.set('cookie', `${SESSION_COOKIE}=${session}`);
 

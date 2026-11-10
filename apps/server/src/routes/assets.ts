@@ -24,6 +24,7 @@ import {
 import type { AssetKind, AssetRow, DocumentAssetRow, DocumentRow } from '../db.js';
 import { isAssetKind } from '../db.js';
 import { newUploadToken } from '../ids.js';
+import { AGENT_KEY_HEADER, hashAgentKey } from './agent-keys.js';
 
 export interface AssetsDeps {
   db: Database;
@@ -67,6 +68,18 @@ export function assetUploadsRouter(deps: AssetsDeps): Hono {
 const UPLOAD_URL_TTL_MS = 15 * 60 * 1000;
 /** Per request; a document's figures, not a bulk import. */
 const MAX_UPLOAD_URLS = 50;
+/** Unused URLs one document may have at once, against a minting loop. */
+const MAX_OPEN_UPLOAD_URLS = 200;
+
+interface UploadTicketRow {
+  token_hash: string;
+  doc_uid: string;
+  ref_name: string;
+  created_by: string;
+  invite_token: string | null;
+  agent_id: string | null;
+  expires_at: number;
+}
 
 function hashUploadToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -109,17 +122,44 @@ async function mintUploadUrls(c: Context, { db, config }: AssetsDeps) {
   const now = Date.now();
   const expiresAt = now + UPLOAD_URL_TTL_MS;
   const createdBy = decision.identity.displayName;
+  const inviteToken = decision.invite?.token ?? null;
+  // The invite may be the creator's admin link, which outlives the agent
+  // that used it; the key is what revoking the agent ends.
+  const agentKey = c.req.header(AGENT_KEY_HEADER);
+  const agent = agentKey
+    ? (db
+        .prepare('SELECT id FROM keyring_agents WHERE key_hash = ?')
+        .get(hashAgentKey(agentKey)) as {
+        id: string;
+      } | null)
+    : null;
   const uploads = db.transaction(() => {
     db.prepare('DELETE FROM asset_upload_tickets WHERE expires_at < ?').run(now);
+    const { open } = db
+      .prepare('SELECT count(*) AS open FROM asset_upload_tickets WHERE doc_uid = ?')
+      .get(doc.uid) as { open: number };
+    if (open + refNames.length > MAX_OPEN_UPLOAD_URLS) return null;
     return refNames.map((refName) => {
       const token = newUploadToken();
       db.prepare(
-        `INSERT INTO asset_upload_tickets (token_hash, doc_uid, ref_name, created_by, expires_at)
-         VALUES (?, ?, ?, ?, ?)`,
-      ).run(hashUploadToken(token), doc.uid, refName, createdBy, expiresAt);
+        `INSERT INTO asset_upload_tickets
+           (token_hash, doc_uid, ref_name, created_by, invite_token, agent_id, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        hashUploadToken(token),
+        doc.uid,
+        refName,
+        createdBy,
+        inviteToken,
+        agent?.id ?? null,
+        expiresAt,
+      );
       return { ref_name: refName, url: `/api/asset-uploads/${token}`, expires_at: expiresAt };
     });
   })();
+  if (!uploads) {
+    return c.json({ error: 'too-many-upload-urls', max: MAX_OPEN_UPLOAD_URLS }, 429);
+  }
 
   c.header('Cache-Control', 'no-store');
   return c.json({ uploads, max_bytes: config.maxAssetBytes }, 201);
@@ -130,13 +170,16 @@ async function uploadByUrl(c: Context, { db, blobs, config }: AssetsDeps) {
   const hash = hashUploadToken(c.req.param('token') ?? '');
   const ticket = db
     .prepare('SELECT * FROM asset_upload_tickets WHERE token_hash = ?')
-    .get(hash) as {
-    doc_uid: string;
-    ref_name: string;
-    created_by: string;
-    expires_at: number;
-  } | null;
+    .get(hash) as UploadTicketRow | null;
   if (!ticket || ticket.expires_at < Date.now()) {
+    return c.json({ error: 'upload-url-invalid' }, 404);
+  }
+  // Deleting the invite that minted it revokes the URL with it.
+  if (
+    ticket.invite_token &&
+    !db.prepare('SELECT 1 FROM invites WHERE token = ?').get(ticket.invite_token)
+  ) {
+    db.prepare('DELETE FROM asset_upload_tickets WHERE token_hash = ?').run(hash);
     return c.json({ error: 'upload-url-invalid' }, 404);
   }
   const doc = loadDoc(db, ticket.doc_uid);
@@ -161,14 +204,32 @@ async function uploadByUrl(c: Context, { db, blobs, config }: AssetsDeps) {
   if (claimed.changes !== 1) return c.json({ error: 'upload-url-invalid' }, 404);
 
   const mime = inferMime(ticket.ref_name);
-  await attachBlob(db, blobs, {
-    docUid: doc.uid,
-    refName: ticket.ref_name,
-    bytes: new Uint8Array(await file.arrayBuffer()),
-    mime,
-    kind: inferKind(mime, ticket.ref_name),
-    createdBy: ticket.created_by,
-  });
+  try {
+    await attachBlob(db, blobs, {
+      docUid: doc.uid,
+      refName: ticket.ref_name,
+      bytes: new Uint8Array(await file.arrayBuffer()),
+      mime,
+      kind: inferKind(mime, ticket.ref_name),
+      createdBy: ticket.created_by,
+    });
+  } catch (err) {
+    // Nothing was attached, so the URL is handed back for a retry.
+    db.prepare(
+      `INSERT OR IGNORE INTO asset_upload_tickets
+         (token_hash, doc_uid, ref_name, created_by, invite_token, agent_id, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      ticket.token_hash,
+      ticket.doc_uid,
+      ticket.ref_name,
+      ticket.created_by,
+      ticket.invite_token,
+      ticket.agent_id,
+      ticket.expires_at,
+    );
+    throw err;
+  }
   return c.json({ asset: loadAttached(db, doc.uid, ticket.ref_name) }, 201);
 }
 

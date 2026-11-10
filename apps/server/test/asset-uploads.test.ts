@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type App, createApp } from '../src/app.js';
 import { CLIENT_HEADER, CLIENT_NAME_HEADER, INVITE_HEADER } from '../src/auth.js';
 import { loadConfig } from '../src/config.js';
+import { AGENT_KEY_HEADER } from '../src/routes/agent-keys.js';
+import { KEYRING_HEADER } from '../src/routes/keyrings.js';
 
 const ALICE = { id: 'aaaaaaaaaaaaaaaaaaaa', name: 'Alice' };
 const PIXEL = Buffer.from(
@@ -54,12 +56,20 @@ describe('asset upload URLs', () => {
     return { uid: body.uid, admin: body.admin_invite.token };
   }
 
-  async function mint(uid: string, invite: string, names: unknown) {
+  async function mint(uid: string, invite: string, names: unknown, agentKey?: string) {
+    const h = headers(invite);
+    if (agentKey) h.set(AGENT_KEY_HEADER, agentKey);
     return call(`/api/documents/${uid}/assets/uploads`, {
       method: 'POST',
-      headers: headers(invite),
+      headers: h,
       body: JSON.stringify({ names }),
     });
+  }
+
+  async function urlFor(uid: string, invite: string, agentKey?: string): Promise<string> {
+    const minted = await mint(uid, invite, ['a.png'], agentKey);
+    expect(minted.status).toBe(201);
+    return ((await minted.json()) as { uploads: Array<{ url: string }> }).uploads[0]?.url as string;
   }
 
   function send(url: string, bytes: Uint8Array = PIXEL) {
@@ -144,5 +154,73 @@ describe('asset upload URLs', () => {
       n: number;
     };
     expect(n).toBe(0);
+  });
+
+  test('deleting the invite that minted a URL revokes the URL', async () => {
+    const { uid, admin } = await createDoc();
+    const created = await call(`/api/documents/${uid}/invites`, {
+      method: 'POST',
+      headers: headers(admin),
+      body: JSON.stringify({ kind: 'named', display_name: 'Bot', role: 'editor' }),
+    });
+    const editor = ((await created.json()) as { invite: { token: string } }).invite.token;
+    const url = await urlFor(uid, editor);
+
+    await call(`/api/documents/${uid}/invites/${editor}`, {
+      method: 'DELETE',
+      headers: headers(admin),
+    });
+    expect((await send(url)).status).toBe(404);
+  });
+
+  test('revoking the agent key behind a mint revokes its URLs, even under an admin link', async () => {
+    const { uid, admin } = await createDoc();
+    const ring = await call('/api/keyrings', {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ docs: [{ doc_uid: uid, invite_token: admin }] }),
+    });
+    const ringToken = ((await ring.json()) as { token: string }).token;
+    const ringHeaders = headers();
+    ringHeaders.set(KEYRING_HEADER, ringToken);
+    const minted = await call('/api/keyrings/self/agents', {
+      method: 'POST',
+      headers: ringHeaders,
+      body: JSON.stringify({ display_name: 'Claude' }),
+    });
+    const { key, agent } = (await minted.json()) as { key: string; agent: { id: string } };
+
+    const url = await urlFor(uid, admin, key);
+    const kept = await urlFor(uid, admin);
+    await call(`/api/keyrings/self/agents/${agent.id}`, { method: 'DELETE', headers: ringHeaders });
+    expect((await send(url)).status).toBe(404);
+    // A URL the owner minted without the key is not the agent's to lose.
+    expect((await send(kept)).status).toBe(201);
+  });
+
+  test.skipIf(process.getuid?.() === 0)(
+    'a URL whose upload failed to store is handed back for a retry',
+    async () => {
+      const { uid, admin } = await createDoc();
+      const url = await urlFor(uid, admin);
+      const blobs = join(dir, 'blobs');
+      mkdirSync(blobs, { recursive: true });
+      chmodSync(blobs, 0o500);
+      try {
+        expect((await send(url)).status).toBe(500);
+      } finally {
+        chmodSync(blobs, 0o700);
+      }
+      expect((await send(url)).status).toBe(201);
+    },
+  );
+
+  test('a document has at most 200 unused URLs at once', async () => {
+    const { uid, admin } = await createDoc();
+    for (let batch = 0; batch < 4; batch++) {
+      const names = Array.from({ length: 50 }, (_, i) => `${batch}-${i}.png`);
+      expect((await mint(uid, admin, names)).status).toBe(201);
+    }
+    expect((await mint(uid, admin, ['one-more.png'])).status).toBe(429);
   });
 });

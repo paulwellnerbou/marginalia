@@ -421,8 +421,12 @@ in AsciiDoc. Those names resolve against a per-document *asset store*.
   `request_image_uploads` tool hand back one URL per name, sent with
   `curl -F file=@<path>`. Each URL is good for one file under its name
   for 15 minutes, needs no other credential, and keeps working after
-  the agent's access drops to its key's cap. Minting needs what
-  uploading needs; the server keeps only the URLs' hashes.
+  the agent's access drops to its key's cap — but not after the invite
+  that minted it is deleted or the agent key behind the request is
+  revoked. Minting needs what uploading needs, a document holds at most
+  200 unused URLs, a URL whose file failed to store stays usable, and
+  the server keeps only the URLs' hashes. `get_document` lists images
+  the source still lacks.
 - Viewers request assets through `/api/documents/:uid/assets/:refName`,
   which goes through the same authorization check as the document
   itself — a user without access to the document cannot fetch its

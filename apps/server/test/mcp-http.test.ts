@@ -693,7 +693,7 @@ describe('hosted MCP endpoint', () => {
     // Not yet uploaded is not missing.
     expect(created).not.toContain('no image is attached');
     const urls = Object.fromEntries(
-      [...created.matchAll(/^ {2}(\S+): curl -sS -F file=@<path to the file> '(\S+)'$/gm)].map(
+      [...created.matchAll(/^ {2}(\S+): curl -sS -F "file=@<path to the file>" '(\S+)'$/gm)].map(
         (m) => [m[1], m[2]],
       ),
     ) as Record<string, string>;
@@ -735,6 +735,52 @@ describe('hosted MCP endpoint', () => {
       headers: { ...OWNER, 'x-marginalia-invite': admin },
     });
     expect(Buffer.from(await asset.arrayBuffer()).toString('base64')).toBe(PIXEL);
+
+    // get_document says what is still missing once the uploads are done.
+    const status = await callText(agent, 'get_document', { document: uid, include_source: false });
+    expect(status).toContain(
+      'screens/home.png: the source references it, but no image is attached',
+    );
+    expect(status).not.toContain('screens/login.png:');
+    await agent.close();
+  });
+
+  test('upload URLs for a password-protected document work without the password', async () => {
+    const { key } = await ownerDocInRing();
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const created = await callText(agent, 'create_document', {
+      source: '# Locked\n\n![a](a.png)\n',
+      password_protected: true,
+      image_uploads: ['a.png'],
+    });
+    const url = /a\.png: curl -sS -F "file=@<path to the file>" '(\S+)'/.exec(
+      created,
+    )?.[1] as string;
+    expect(url).toBeTruthy();
+    const form = new FormData();
+    form.set('file', new Blob([Buffer.from(PIXEL, 'base64')]), 'a.png');
+    expect((await fetch(url, { method: 'POST', body: form })).status).toBe(201);
+    await agent.close();
+  });
+
+  test('behind a trusted proxy, upload URLs carry the public https origin', async () => {
+    http.stop(true);
+    await app.close();
+    app = await createApp(
+      loadConfig({ dataDir: dir, port: 0, webDir: join(dir, 'web'), trustedProxyHops: 1 }),
+    );
+    http = Bun.serve({ port: 0, fetch: app.hono.fetch, websocket: app.websocket });
+    baseUrl = `http://localhost:${http.port}`;
+    const { key } = await ownerDocInRing();
+    const agent = await connect(`?key=${encodeURIComponent(key)}`, {
+      'x-forwarded-proto': 'https',
+      'x-forwarded-host': 'marginalia.example',
+    });
+    const created = await callText(agent, 'create_document', {
+      source: '# Shots\n\n![a](a.png)\n',
+      image_uploads: ['a.png'],
+    });
+    expect(created).toContain("'https://marginalia.example/api/asset-uploads/");
     await agent.close();
   });
 
@@ -756,7 +802,9 @@ describe('hosted MCP endpoint', () => {
       names: ['a.png', '../bad.png'],
     });
     expect(granted).toContain('../bad.png: not a usable name');
-    const url = /a\.png: curl -sS -F file=@<path to the file> '(\S+)'/.exec(granted)?.[1] as string;
+    const url = /a\.png: curl -sS -F "file=@<path to the file>" '(\S+)'/.exec(
+      granted,
+    )?.[1] as string;
     const form = new FormData();
     form.set('file', new Blob([Buffer.from(PIXEL, 'base64')]), 'a.png');
     expect((await fetch(url, { method: 'POST', body: form })).status).toBe(201);
