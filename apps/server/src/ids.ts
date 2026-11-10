@@ -65,3 +65,8 @@ export function newPairingCode(): string {
   }
   return `${chars.slice(0, 4).join('')}-${chars.slice(4).join('')}`;
 }
+
+/** Single-use asset upload URL token. */
+export function newUploadToken(): string {
+  return randomBytes(24).toString('base64url');
+}

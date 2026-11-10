@@ -416,6 +416,13 @@ in AsciiDoc. Those names resolve against a per-document *asset store*.
   creating the document, while it still holds the admin link — so an
   agent key capped at collaborator can still create a document with
   its figures — and `upload_image` adds one later, as editor or admin.
+- Files an agent has on disk go by **upload URL** instead of base64
+  in a tool call: `create_document`'s `image_uploads` and the
+  `request_image_uploads` tool hand back one URL per name, sent with
+  `curl -F file=@<path>`. Each URL is good for one file under its name
+  for 15 minutes, needs no other credential, and keeps working after
+  the agent's access drops to its key's cap. Minting needs what
+  uploading needs; the server keeps only the URLs' hashes.
 - Viewers request assets through `/api/documents/:uid/assets/:refName`,
   which goes through the same authorization check as the document
   itself — a user without access to the document cannot fetch its
@@ -436,6 +443,10 @@ Asset endpoints (all gated by per-document authz; writes require
   `Content-Disposition: attachment`)
 - `DELETE /api/documents/:uid/assets/:refName` — detach (and GC the
   blob if nothing else references it)
+- `POST   /api/documents/:uid/assets/uploads` — `{ names }` (up to 50);
+  one single-use upload URL per name, valid 15 minutes
+- `POST   /api/asset-uploads/:token` — multipart `file`, attached under
+  the name the URL was minted for; no invite or identity needed
 
 Upload size defaults to 16 MiB; override with `maxAssetBytes` in
 [config.ts](apps/server/src/config.ts).

@@ -1176,6 +1176,7 @@ async function purgeDocument(deps: AppDeps, doc: DocumentRow): Promise<void> {
   db.prepare('DELETE FROM keyring_docs WHERE doc_uid = ?').run(doc.uid);
   // The invites these pointed at went with the doc's invites above.
   db.prepare('DELETE FROM keyring_agent_invites WHERE gate_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM asset_upload_tickets WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
 
   for (const id of attachedAssetIds) {

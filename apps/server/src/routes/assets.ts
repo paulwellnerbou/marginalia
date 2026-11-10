@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { createHash } from 'node:crypto';
 import type { Context } from 'hono';
 import { Hono } from 'hono';
 import {
@@ -22,6 +23,7 @@ import {
 } from '../cover.js';
 import type { AssetKind, AssetRow, DocumentAssetRow, DocumentRow } from '../db.js';
 import { isAssetKind } from '../db.js';
+import { newUploadToken } from '../ids.js';
 
 export interface AssetsDeps {
   db: Database;
@@ -34,6 +36,7 @@ export function assetsRouter(deps: AssetsDeps): Hono {
 
   r.get('/:uid/assets', async (c) => listAssets(c, deps));
   r.post('/:uid/assets', async (c) => uploadAsset(c, deps));
+  r.post('/:uid/assets/uploads', async (c) => mintUploadUrls(c, deps));
   r.put('/:uid/cover', async (c) => uploadCover(c, deps));
   r.delete('/:uid/cover', async (c) => deleteCover(c, deps));
   // Ref names can contain dots and slashes; Hono's default param matcher
@@ -42,6 +45,131 @@ export function assetsRouter(deps: AssetsDeps): Hono {
   r.delete('/:uid/assets/:refName{.+}', async (c) => deleteAsset(c, deps));
 
   return r;
+}
+
+/**
+ * Upload by URL, for whoever holds the file on disk but cannot carry its
+ * bytes through the channel it talks to the server over: an agent, whose
+ * tool calls would need the image pasted in as base64. Mounted at `/api`,
+ * outside `/documents`: the request carries no invite, the URL is the
+ * whole capability.
+ */
+export function assetUploadsRouter(deps: AssetsDeps): Hono {
+  const r = new Hono();
+  r.post('/asset-uploads/:token', async (c) => uploadByUrl(c, deps));
+  return r;
+}
+
+/**
+ * Long enough for a batch of uploads, short enough that a URL left in a
+ * transcript or a shell history is dead by the time anyone reads it.
+ */
+const UPLOAD_URL_TTL_MS = 15 * 60 * 1000;
+/** Per request; a document's figures, not a bulk import. */
+const MAX_UPLOAD_URLS = 50;
+
+function hashUploadToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+/**
+ * POST /:uid/assets/uploads — one upload URL per name, each good for a
+ * single file within `UPLOAD_URL_TTL_MS`. Needs what uploading itself
+ * needs, editor or admin, and binds the name and the uploader's identity
+ * at minting, so the URL cannot put anything else anywhere else.
+ */
+async function mintUploadUrls(c: Context, { db, config }: AssetsDeps) {
+  const doc = loadDoc(db, c.req.param('uid'));
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+
+  const decision = authorizeDoc(c, db, doc);
+  if (!decision.ok) return c.json({ error: decision.reason }, 401);
+  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
+
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'invalid-body' }, 400);
+  }
+  const names = (body as { names?: unknown } | null)?.names;
+  if (!Array.isArray(names) || names.length === 0 || names.length > MAX_UPLOAD_URLS) {
+    return c.json({ error: 'names-required', max: MAX_UPLOAD_URLS }, 400);
+  }
+  const refNames: string[] = [];
+  for (const raw of names) {
+    const refName = typeof raw === 'string' ? normalizeRefName(raw) : null;
+    if (!refName || refName === COVER_THUMBNAIL_REF) {
+      return c.json({ error: 'ref_name-invalid', ref_name: raw }, 400);
+    }
+    if (!refNames.includes(refName)) refNames.push(refName);
+  }
+
+  const now = Date.now();
+  const expiresAt = now + UPLOAD_URL_TTL_MS;
+  const createdBy = decision.identity.displayName;
+  const uploads = db.transaction(() => {
+    db.prepare('DELETE FROM asset_upload_tickets WHERE expires_at < ?').run(now);
+    return refNames.map((refName) => {
+      const token = newUploadToken();
+      db.prepare(
+        `INSERT INTO asset_upload_tickets (token_hash, doc_uid, ref_name, created_by, expires_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      ).run(hashUploadToken(token), doc.uid, refName, createdBy, expiresAt);
+      return { ref_name: refName, url: `/api/asset-uploads/${token}`, expires_at: expiresAt };
+    });
+  })();
+
+  c.header('Cache-Control', 'no-store');
+  return c.json({ uploads, max_bytes: config.maxAssetBytes }, 201);
+}
+
+/** POST /api/asset-uploads/:token — multipart `file`, attached under the URL's name. */
+async function uploadByUrl(c: Context, { db, blobs, config }: AssetsDeps) {
+  const hash = hashUploadToken(c.req.param('token') ?? '');
+  const ticket = db
+    .prepare('SELECT * FROM asset_upload_tickets WHERE token_hash = ?')
+    .get(hash) as {
+    doc_uid: string;
+    ref_name: string;
+    created_by: string;
+    expires_at: number;
+  } | null;
+  if (!ticket || ticket.expires_at < Date.now()) {
+    return c.json({ error: 'upload-url-invalid' }, 404);
+  }
+  const doc = loadDoc(db, ticket.doc_uid);
+  if (!doc) return c.json({ error: 'upload-url-invalid' }, 404);
+
+  let form: FormData;
+  try {
+    form = await c.req.raw.formData();
+  } catch {
+    return c.json({ error: 'invalid-form' }, 400);
+  }
+  const file = form.get('file');
+  if (!(file instanceof File)) return c.json({ error: 'file-required' }, 400);
+  if (file.size > config.maxAssetBytes) {
+    return c.json({ error: 'file-too-large', limit: config.maxAssetBytes }, 413);
+  }
+
+  // Claimed only once the file is acceptable, so a refused one leaves the
+  // URL good for a corrected retry; claimed by the delete itself, so two
+  // racing uploads cannot both use it.
+  const claimed = db.prepare('DELETE FROM asset_upload_tickets WHERE token_hash = ?').run(hash);
+  if (claimed.changes !== 1) return c.json({ error: 'upload-url-invalid' }, 404);
+
+  const mime = inferMime(ticket.ref_name);
+  await attachBlob(db, blobs, {
+    docUid: doc.uid,
+    refName: ticket.ref_name,
+    bytes: new Uint8Array(await file.arrayBuffer()),
+    mime,
+    kind: inferKind(mime, ticket.ref_name),
+    createdBy: ticket.created_by,
+  });
+  return c.json({ asset: loadAttached(db, doc.uid, ticket.ref_name) }, 201);
 }
 
 async function listAssets(c: Context, { db }: AssetsDeps) {

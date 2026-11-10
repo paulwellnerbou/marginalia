@@ -12,7 +12,7 @@ import { GitStore } from './git-store.js';
 import { backfillProposalBranches } from './proposal-branch-backfill.js';
 import { Realtime } from './realtime.js';
 import { agentKeysRouter } from './routes/agent-keys.js';
-import { assetsRouter } from './routes/assets.js';
+import { assetsRouter, assetUploadsRouter } from './routes/assets.js';
 import { documentsRouter } from './routes/documents.js';
 import { eventsRouter } from './routes/events.js';
 import { keyringsRouter } from './routes/keyrings.js';
@@ -83,6 +83,7 @@ export async function createApp(config: ServerConfig): Promise<App> {
   const deps = { db, store, blobs, config, realtime };
   hono.route('/api/documents', documentsRouter(deps));
   hono.route('/api/documents', assetsRouter({ db, blobs, config }));
+  hono.route('/api', assetUploadsRouter({ db, blobs, config }));
   hono.route('/api/documents', threadsRouter(deps));
   hono.route('/api/documents', eventsRouter({ db, realtime, upgradeWebSocket }));
   // Mounted at /api rather than /api/keyrings because redeeming a

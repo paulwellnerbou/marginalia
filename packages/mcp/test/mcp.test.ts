@@ -198,6 +198,7 @@ describe('marginalia MCP server', () => {
         'react_to_comment',
         'reply_to_thread',
         'repair_proposal_anchor',
+        'request_image_uploads',
         'respond_to_thread',
         'update_document',
         'update_proposal',
