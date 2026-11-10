@@ -350,6 +350,13 @@ async function agentAddDocument(c: Context, db: Database) {
   const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) || null : null;
   const outcome = upsertKeyringDoc(db, caller.ring.token, docUid, inviteToken, title);
   if (outcome === 'full') return c.json({ error: 'keyring-full' }, 409);
+  // The link now belongs to the ring's owner. An admin link's name seeds
+  // whoever opens it first, and left as the agent's, the owner's first
+  // visit would sign them as the agent.
+  db.prepare('UPDATE invites SET display_name = ? WHERE token = ?').run(
+    caller.ring.display_name,
+    inviteToken,
+  );
   return c.json({ ok: true }, 200);
 }
 

@@ -384,6 +384,24 @@ describe('keyring agent keys', () => {
     });
   });
 
+  test('the owner opening a filed admin link is signed as themself, not the agent', async () => {
+    const token = await ringWith(await upload());
+    const { key } = await mintKey(token);
+    const created = await upload(AGENT);
+    await call(`/api/agent/documents/${created.uid}`, {
+      method: 'PUT',
+      headers: agent(key),
+      body: { invite_token: created.admin_invite.token },
+    });
+
+    // Another device of the owner's, before it has adopted the ring's name.
+    const device = { id: 'dddddddddddddddddddd', name: 'Swift Otter' };
+    const opened = await call(`/api/documents/${created.uid}`, {
+      headers: headersFor(device, { [INVITE_HEADER]: created.admin_invite.token }),
+    });
+    expect(((await opened.json()) as { display_name: string }).display_name).toBe(OWNER.name);
+  });
+
   test('names are unique per ring and roles are capped below admin', async () => {
     const token = await ringWith(await upload());
     await mintKey(token);
