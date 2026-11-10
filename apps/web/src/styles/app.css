@@ -1333,6 +1333,12 @@ button.primary:disabled {
 
 /* Role badges (admin/editor/reader) rendered via Radix <Badge> — uppercase
    presentation is purely cosmetic, not baked into the TS source. */
+/* Reserves the cancel button's width so arming doesn't shift the row; it is
+   not a control until armed. */
+.confirm-pair-placeholder {
+  visibility: hidden;
+}
+
 .role-badge {
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -2945,6 +2951,36 @@ button.primary:disabled {
 .created-admin-link {
   flex: 1;
   min-width: 0;
+}
+
+/* Access links and agent keys (AccessList.tsx): the form is a tinted
+   control box, the entries a bordered list, so neither reads as the other. */
+.access-create {
+  background: var(--gray-a2);
+  border: 1px solid var(--gray-a4);
+  border-radius: var(--radius-3);
+  padding: 0.75rem;
+}
+.access-field-label {
+  display: block;
+  margin-bottom: var(--space-1);
+}
+.access-list {
+  border: 1px solid var(--gray-a5);
+  border-radius: var(--radius-3);
+  /* The one-line URLs would otherwise set the dialog's min-content width
+     and push it past a phone viewport. */
+  contain: inline-size;
+}
+.access-list__row,
+.access-list__empty {
+  padding: 0.65rem 0.75rem;
+}
+.access-list__row + .access-list__row {
+  border-top: 1px solid var(--gray-a4);
+}
+.access-explainer {
+  margin-top: var(--space-1);
 }
 
 /* Plain-language anatomy of an access link in Access control. */

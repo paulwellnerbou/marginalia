@@ -1,17 +1,6 @@
 import { DEFAULT_AGENT_NAME, normalizeAgentName } from '@marginalia/mcp/identity';
-import { TrashIcon } from '@radix-ui/react-icons';
-import {
-  Badge,
-  Box,
-  Button,
-  Callout,
-  Dialog,
-  Flex,
-  Select,
-  Text,
-  TextField,
-} from '@radix-ui/themes';
-import { type FormEvent, useCallback, useEffect, useState } from 'react';
+import { Box, Button, Callout, Dialog, Flex, Text, TextField } from '@radix-ui/themes';
+import { useCallback, useEffect, useState } from 'react';
 import {
   type AgentKeyWire,
   createAgentKey,
@@ -29,14 +18,17 @@ import {
   type McpClient,
   type Setup,
 } from '../lib/mcp-connection.js';
-import { ArmedButton } from './ArmedButton.js';
+import { roleSummary } from '../lib/roles.js';
+import {
+  AccessCreateForm,
+  AccessField,
+  AccessList,
+  AccessRow,
+  RoleBadge,
+  RoleSelect,
+} from './AccessList.js';
+import { ConfirmButton } from './ConfirmButton.js';
 import { McpConnectionSetup } from './McpConnectionSetup.js';
-
-const ROLES: { value: Role; label: string; description: string }[] = [
-  { value: 'collaborator', label: 'Collaborator', description: 'comments and suggests edits' },
-  { value: 'editor', label: 'Editor', description: 'also edits and accepts suggestions' },
-  { value: 'reader', label: 'Reader', description: 'only reads' },
-];
 
 /**
  * One MCP connection for the whole keyring.
@@ -83,8 +75,7 @@ export function AgentKeysPanel() {
   // An empty field means the default name, so say so only while it is free.
   const placeholder = taken(DEFAULT_AGENT_NAME) ? 'Name' : DEFAULT_AGENT_NAME;
 
-  async function create(event: FormEvent) {
-    event.preventDefault();
+  async function create() {
     if (!token || typedNameTaken) return;
     if (nameTaken) {
       setError(`“${normalizedName}” already has a key. Give this agent a name of its own.`);
@@ -120,102 +111,76 @@ export function AgentKeysPanel() {
   if (!token) return null;
 
   return (
-    <Box>
-      <Text size="2" weight="medium" as="p" mb="1">
-        AI agents
-      </Text>
-      <Text size="1" color="gray" as="p" mb="3">
-        Connect an agent to every document here that you administer, with one URL. It signs with its
-        own name, gets at most the role you pick, and revoking its key cuts it off everywhere at
-        once.
-      </Text>
+    <Flex direction="column" gap="3">
+      <Box>
+        <Text size="2" weight="medium" as="p" mb="1">
+          AI agents
+        </Text>
+        <Text size="1" color="gray" as="p">
+          Connect an agent to every document here that you administer, with one URL. It signs with
+          its own name, gets at most the role you pick, and revoking its key cuts it off everywhere
+          at once.
+        </Text>
+      </Box>
 
-      {agents && agents.length > 0 && (
-        <Flex direction="column" gap="2" mb="3">
-          {agents.map((agent) => (
-            <Flex key={agent.id} gap="3" align="center" justify="between" wrap="wrap">
-              <Box style={{ minWidth: 0 }}>
-                <Flex gap="2" align="center">
-                  <Text size="2" weight="medium">
-                    {agent.display_name}
-                  </Text>
-                  <Badge variant="soft" color="gray">
-                    {agent.role}
-                  </Badge>
-                </Flex>
-                <Text size="1" color="gray">
-                  {agent.last_used_at === null
-                    ? 'Not used yet'
-                    : `Last used ${formatTimestamp(agent.last_used_at)} · ${agent.documents} document${agent.documents === 1 ? '' : 's'}`}
-                </Text>
-              </Box>
-              <ArmedButton
-                label="Revoke"
-                confirmLabel="Revoke everywhere"
-                color="red"
-                icon={<TrashIcon />}
-                onConfirm={() => revoke(agent.id)}
-              />
-            </Flex>
-          ))}
-        </Flex>
-      )}
-
-      <form onSubmit={create}>
-        <Flex gap="2" align="end" wrap="wrap">
-          <Box style={{ flex: '1 1 10rem', minWidth: 0 }}>
-            <Text as="label" size="1" color="gray">
-              Agent name
-              <TextField.Root
-                value={name}
-                onChange={(e) => {
-                  setName(e.target.value);
-                  setError(null);
-                }}
-                placeholder={placeholder}
-                size="1"
-                mt="1"
-                disabled={busy}
-              />
-            </Text>
-          </Box>
-          <Box>
-            <Text as="label" size="1" color="gray" htmlFor="agent-key-role">
-              Role
-            </Text>
-            <Box mt="1">
-              <Select.Root size="1" value={role} onValueChange={(v) => setRole(v as Role)}>
-                <Select.Trigger id="agent-key-role" />
-                <Select.Content position="popper">
-                  {ROLES.map((r) => (
-                    <Select.Item key={r.value} value={r.value}>
-                      {r.label}
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select.Root>
-            </Box>
-          </Box>
-          <Button size="1" type="submit" variant="soft" loading={busy} disabled={typedNameTaken}>
-            Create agent key
-          </Button>
-        </Flex>
-      </form>
-      <Text as="p" size="1" color="gray" mt="1">
-        As {ROLES.find((r) => r.value === role)?.label.toLowerCase()}, it{' '}
-        {ROLES.find((r) => r.value === role)?.description}.
-      </Text>
+      <AccessCreateForm
+        title="New agent key"
+        onSubmit={() => void create()}
+        hint={roleSummary(role)}
+      >
+        <AccessField label="Agent name" htmlFor="agent-key-name" grow>
+          <TextField.Root
+            id="agent-key-name"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setError(null);
+            }}
+            placeholder={placeholder}
+            size="2"
+            disabled={busy}
+          />
+        </AccessField>
+        <AccessField label="Role" htmlFor="agent-key-role">
+          <RoleSelect id="agent-key-role" look="field" value={role} onChange={setRole} />
+        </AccessField>
+        <Button type="submit" loading={busy} disabled={typedNameTaken}>
+          Create agent key
+        </Button>
+      </AccessCreateForm>
       {typedNameTaken && (
-        <Text as="p" size="1" color="orange" mt="2">
+        <Text as="p" size="1" color="orange">
           “{normalizedName}” already has a key. Agents are told apart by name in comments, so pick
           another.
         </Text>
       )}
       {error && (
-        <Callout.Root color="red" size="1" mt="2">
+        <Callout.Root color="red" size="1">
           <Callout.Text>{error}</Callout.Text>
         </Callout.Root>
       )}
+
+      <AccessList title="Your agents" loading={agents === null} empty="No agent keys yet.">
+        {(agents ?? []).map((agent) => (
+          <AccessRow
+            key={agent.id}
+            name={agent.display_name}
+            role={<RoleBadge role={agent.role} />}
+            meta={
+              agent.last_used_at === null
+                ? 'Not used yet'
+                : `Last used ${formatTimestamp(agent.last_used_at)} · ${agent.documents} document${agent.documents === 1 ? '' : 's'}`
+            }
+            action={
+              <ConfirmButton
+                label={`Revoke ${agent.display_name}’s key`}
+                confirmLabel="Revoke everywhere"
+                onConfirm={() => revoke(agent.id)}
+              />
+            }
+          />
+        ))}
+      </AccessList>
 
       <AgentKeyDialog
         created={created}
@@ -223,7 +188,7 @@ export function AgentKeysPanel() {
           if (!open) setCreated(null);
         }}
       />
-    </Box>
+    </Flex>
   );
 }
 
