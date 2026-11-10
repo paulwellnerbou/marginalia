@@ -28,6 +28,7 @@ import {
   locateDocumentBlocksCached,
 } from '../block-cache.js';
 import {
+  type DocumentFormat,
   type DocumentRow,
   type EditProposalThreadRow,
   PROPOSAL_ANSWERS_JSON_SQL,
@@ -82,7 +83,7 @@ export function reanchorProposals(
   db: Database,
   docUid: string,
   blocks: ReadonlyMap<string, BlockSourceRange>,
-  format: 'markdown' | 'asciidoc',
+  format: DocumentFormat,
   now: number,
   broadcast?: (row: EditProposalThreadRow) => void,
 ): EditProposalThreadRow[] {
@@ -115,7 +116,7 @@ export function reanchorProposal(
   docUid: string,
   p: EditProposalThreadRow,
   blocks: ReadonlyMap<string, BlockSourceRange>,
-  format: 'markdown' | 'asciidoc',
+  format: DocumentFormat,
   now: number,
 ): EditProposalThreadRow | null {
   if (!isAnchorLost(p, blocks, format)) return null;
@@ -126,7 +127,7 @@ export function reanchorProposal(
 function isAnchorLost(
   p: EditProposalThreadRow,
   blocks: ReadonlyMap<string, BlockSourceRange>,
-  format: 'markdown' | 'asciidoc',
+  format: DocumentFormat,
 ): boolean {
   // Whole-document proposals replace the entire source — there's no
   // anchor block whose disappearance should orphan them.

@@ -4,6 +4,7 @@ import type { RenderResult } from '@marginalia/renderer/types';
 import { type RefObject, useEffect, useRef, useState } from 'react';
 import { type AnchorSection, resolveAnchorElement } from '../lib/anchor-target.js';
 import type { ThreadState } from '../lib/api.js';
+import { useAppearance } from '../lib/appearance.js';
 import { spanElements } from '../lib/block-span.js';
 import { isInjectedChromeText } from '../lib/block-text.js';
 import { type BookmarkMarkerSpec, syncBookmarkMarkers } from '../lib/bookmark-markers.js';
@@ -36,7 +37,7 @@ export interface DocumentSearchOptions {
 }
 
 interface RenderedDocProps {
-  rendered: Pick<RenderResult, 'html'>;
+  rendered: Pick<RenderResult, 'html' | 'css'>;
   /** Optional external ref — lets the parent reach the article DOM node. */
   elRef?: RefObject<HTMLElement | null>;
   /** Max reading column width, in `ch`. Overrides the theme default. */
@@ -84,6 +85,9 @@ interface RenderedDocProps {
    */
   docMetaLinks?: DocMetaLinks | undefined;
 }
+
+/** The root the HTML renderer wraps a page's body in. */
+const HTML_DOC_SELECTOR = '[data-html-doc]';
 
 /** Default for `bookmarks`, held so the sync effect doesn't re-run on every render. */
 const NO_BOOKMARKS: readonly BookmarkMarkerSpec[] = [];
@@ -176,7 +180,9 @@ export function RenderedDoc({
     lastHtml.current = rendered.html;
     void renderMermaidIn(el);
     replaceMissingAssetMarkers(el, canUploadMissing, uploadCbRef);
-    installHeadingCollapse(el);
+    // Folding wraps a heading's siblings in new elements, which an HTML
+    // page's own child selectors and grid layouts would not survive.
+    if (!el.querySelector(HTML_DOC_SELECTOR)) installHeadingCollapse(el);
     installDocMetaFolds(el, docMetaKey ?? null, docMetaLinksRef.current ?? null);
     // Replay the current hash after the article is populated. Opening
     // a deep link directly (`/d/...#section`) lets the browser fire
@@ -482,6 +488,14 @@ export function RenderedDoc({
     };
   }, [onHighlightClick, ref]);
 
+  // An HTML page's dark rules are keyed to this attribute (see the
+  // renderer's html-css.ts), so it follows the app's toggle, not the OS.
+  const { resolved: appearance } = useAppearance();
+  // biome-ignore lint/correctness/useExhaustiveDependencies: rendered.html replaces the root element the attribute lives on.
+  useEffect(() => {
+    ref.current?.querySelector(HTML_DOC_SELECTOR)?.setAttribute('data-theme', appearance);
+  }, [appearance, rendered.html, ref]);
+
   const style: React.CSSProperties | undefined =
     maxWidthCh || textZoom
       ? {
@@ -494,6 +508,7 @@ export function RenderedDoc({
   return (
     <>
       <div className="marginalia-theme">
+        {rendered.css ? <style>{rendered.css}</style> : null}
         <article ref={ref} className="marginalia" style={style} />
       </div>
       <ImageLightbox image={lightbox} onClose={() => setLightbox(null)} />
@@ -693,6 +708,9 @@ function docMetaRegionOf(el: Element): string | null {
 function patchChangedBlocks(root: HTMLElement, nextHtml: string): HTMLElement[] | null {
   const staging = document.createElement('div');
   staging.innerHTML = nextHtml;
+  // An HTML page's blocks sit inside layout the block diff can't see — a
+  // changed class on a wrapper would be silently left behind.
+  if (staging.querySelector(HTML_DOC_SELECTOR)) return null;
 
   const live = collectTopLevelBlocks(root);
   const fresh = collectTopLevelBlocks(staging);

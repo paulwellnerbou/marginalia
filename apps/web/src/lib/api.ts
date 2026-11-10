@@ -15,6 +15,8 @@ export interface TocNode extends Anchor {
 
 export interface RenderedDocument {
   html: string;
+  /** The HTML format's own stylesheet, scoped to its root. */
+  css?: string | undefined;
   anchors: Anchor[];
   toc: TocNode[];
   frontmatter: Record<string, unknown>;
@@ -81,7 +83,7 @@ export interface ExportedComment {
   } | null;
 }
 
-export type DocumentFormat = 'markdown' | 'asciidoc';
+export type DocumentFormat = 'markdown' | 'asciidoc' | 'html';
 
 /**
  * Mermaid renderer used for DOCX/PDF exports.
@@ -97,7 +99,7 @@ export type MermaidRenderer = 'mmdr' | 'chromium';
 export const MERMAID_RENDERERS: readonly MermaidRenderer[] = ['mmdr', 'chromium'] as const;
 
 export function isDocumentFormat(v: unknown): v is DocumentFormat {
-  return v === 'markdown' || v === 'asciidoc';
+  return v === 'markdown' || v === 'asciidoc' || v === 'html';
 }
 
 export interface DocumentBundle {
@@ -1365,6 +1367,42 @@ export function deleteKeyringDoc(token: string, uid: string): Promise<void> {
 export function createKeyringPairing(token: string): Promise<{ code: string; expires_at: number }> {
   return request('/api/keyrings/self/pairings', {
     method: 'POST',
+    headers: { [KEYRING_HEADER]: token },
+  });
+}
+
+/** An agent key as the keyring lists it. The key itself is only ever in `createAgentKey`'s answer. */
+export interface AgentKeyWire {
+  id: string;
+  display_name: string;
+  role: Role;
+  created_at: number;
+  last_used_at: number | null;
+  documents: number;
+}
+
+export function listAgentKeys(token: string): Promise<{ agents: AgentKeyWire[] }> {
+  return request('/api/keyrings/self/agents', {
+    method: 'GET',
+    headers: { [KEYRING_HEADER]: token },
+  });
+}
+
+export function createAgentKey(
+  token: string,
+  payload: { display_name: string; role: Role },
+): Promise<{ key: string; agent: AgentKeyWire }> {
+  return request('/api/keyrings/self/agents', {
+    method: 'POST',
+    headers: { [KEYRING_HEADER]: token },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Revoke a key and every invite it was given. */
+export function deleteAgentKey(token: string, id: string): Promise<void> {
+  return request<void>(`/api/keyrings/self/agents/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
     headers: { [KEYRING_HEADER]: token },
   });
 }

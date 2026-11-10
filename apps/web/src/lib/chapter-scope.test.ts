@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { locateBlocks } from '@marginalia/renderer/locate-block';
 import { locateBlocksAsciidoc } from '@marginalia/renderer/locate-block-asciidoc';
+import { htmlSectionSpan, locateBlocksHtml } from '@marginalia/renderer/locate-block-html';
 import { renderDocument } from '@marginalia/renderer/render';
 import {
   chapterCopyParam,
@@ -181,5 +182,34 @@ describe('resolveDocMetaScope', () => {
     expect(
       await scopeOf('= Book\n\n[.summary]\n--\n--\n\nText.\n', 'summary', 'asciidoc'),
     ).toBeNull();
+  });
+});
+
+describe('resolveChapterScopeFromBlocks on HTML', () => {
+  const html =
+    '<section><h2>One</h2><p>a</p><div class="box"><p>b</p></div></section>\n<hr>\n' +
+    '<section><h2>Two</h2><p>c</p></section>';
+  const { occurrences } = locateBlocksHtml(html);
+  const ordered = [...occurrences.values()].flat().sort((a, b) => a.start - b.start);
+  const blocks = ordered.map((o) => ({
+    id: o.id,
+    headingLevel: o.kind === 'heading' ? 2 : null,
+  }));
+  const idOf = (text: string) => ordered.find((o) => o.text === text)!.id;
+  const balance = (start: number, limit: number) => htmlSectionSpan(html, start, limit);
+
+  test('widens the chapter to whole elements and keeps the extra out of proposals', () => {
+    const scope = resolveChapterScopeFromBlocks(html, occurrences, blocks, idOf('One'), 0, balance);
+    expect(scope?.source).toBe(
+      '<section><h2>One</h2><p>a</p><div class="box"><p>b</p></div></section>\n<hr>',
+    );
+    expect(scope?.endBlockId).toBe(idOf('b'));
+    expect(scope?.proposalTrim).toEqual({ before: '<section>', after: '</div></section>\n<hr>' });
+  });
+
+  test('without a balancer the span still runs heading to last block', () => {
+    const scope = resolveChapterScopeFromBlocks(html, occurrences, blocks, idOf('One'));
+    expect(scope?.source).toBe('<h2>One</h2><p>a</p><div class="box"><p>b</p>');
+    expect(scope?.proposalTrim).toBeUndefined();
   });
 });

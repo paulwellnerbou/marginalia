@@ -14,7 +14,9 @@
     "./article.css": "./css/article.css",
     "./technical.css": "./css/technical.css",
     "./beautiful.css": "./css/beautiful.css",
-    "./report.css": "./css/report.css"
+    "./report.css": "./css/report.css",
+    "./page.css": "./css/page.css",
+    "./_highlights.css": "./css/_highlights.css"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

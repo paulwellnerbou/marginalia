@@ -66,6 +66,8 @@ let coalesced = 0;
 function sizeOf(result: RenderResult): number {
   return (
     result.html.length * 2 +
+    // An HTML page's stylesheet can carry base64 fonts and images.
+    (result.css?.length ?? 0) * 2 +
     (result.anchors.length + result.blocks.length + result.toc.length) * 256 +
     1024
   );

@@ -25,7 +25,19 @@ export interface ChapterScope {
    * blocks, so it sends them back around the edited text.
    */
   proposalWrap?: { before: string; after: string };
+  /**
+   * Source `start`/`end` cover beyond the blocks: an HTML chapter widened
+   * to whole elements (its wrapper's tags, a trailing divider). A proposal
+   * replaces the blocks only, so these come off the edited text again.
+   */
+  proposalTrim?: { before: string; after: string };
 }
+
+/** Widens a heading's section to whole elements; see `htmlSectionSpan`. */
+export type SectionBalancer = (
+  headingStart: number,
+  limit: number,
+) => { start: number; end: number } | null;
 
 interface RenderedBlock {
   id: string;
@@ -59,6 +71,7 @@ export function resolveChapterScope(
   occurrences: ReadonlyMap<string, readonly BlockOccurrence[]>,
   headingBlockId: string,
   headingCopy = 0,
+  balance?: SectionBalancer,
 ): ChapterScope | null {
   const parser = new DOMParser();
   const rendered = parser.parseFromString(renderedHtml, 'text/html');
@@ -70,7 +83,14 @@ export function resolveChapterScope(
       return [{ id, headingLevel: heading ? Number(heading[1]) : null }];
     },
   );
-  return resolveChapterScopeFromBlocks(source, occurrences, blocks, headingBlockId, headingCopy);
+  return resolveChapterScopeFromBlocks(
+    source,
+    occurrences,
+    blocks,
+    headingBlockId,
+    headingCopy,
+    balance,
+  );
 }
 
 /** Exported separately so the boundary rules can be tested without a DOM. */
@@ -80,6 +100,7 @@ export function resolveChapterScopeFromBlocks(
   blocks: readonly RenderedBlock[],
   headingBlockId: string,
   headingCopy = 0,
+  balance?: SectionBalancer,
 ): ChapterScope | null {
   // The n-th rendered element with an id is that id's n-th source
   // occurrence: the renderer and the locator walk the document alike.
@@ -108,10 +129,24 @@ export function resolveChapterScopeFromBlocks(
     }
   }
 
-  const scopedBlocks = located.slice(startIndex, boundaryIndex).filter((block) => block.range);
+  let span: { start: number; end: number } | null = null;
+  if (balance) {
+    span = balance(startRange.start, located[boundaryIndex]?.range?.start ?? source.length);
+    if (!span) return null;
+  }
+  const inSpan = span;
+  const scopedBlocks = located
+    .slice(startIndex, boundaryIndex)
+    .filter((block) => block.range && (!inSpan || block.range.end <= inSpan.end));
   const last = scopedBlocks.at(-1);
   const endRange = last?.range;
   if (!last || !endRange || endRange.end < startRange.start) return null;
+  const start = span?.start ?? startRange.start;
+  const end = span?.end ?? endRange.end;
+  const trim = {
+    before: source.slice(start, startRange.start),
+    after: source.slice(endRange.end, end),
+  };
 
   return {
     headingBlockId,
@@ -124,9 +159,10 @@ export function resolveChapterScopeFromBlocks(
     endBlockId: last.id,
     blockIds: scopedBlocks.map((block) => block.id),
     title: startRange.text,
-    start: startRange.start,
-    end: endRange.end,
-    source: source.slice(startRange.start, endRange.end),
+    start,
+    end,
+    source: source.slice(start, end),
+    ...(trim.before || trim.after ? { proposalTrim: trim } : {}),
   };
 }
 

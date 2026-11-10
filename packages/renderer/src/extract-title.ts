@@ -5,18 +5,39 @@
  * on every download request — or client-side in the UI.
  *
  * Priority:
- *   1. YAML frontmatter `title:` (markdown) or `= Title` header
- *      (asciidoc). Matches what the renderer itself treats as the
+ *   1. YAML frontmatter `title:` (markdown), `= Title` header
+ *      (asciidoc) or `<title>` (html). Matches what the renderer itself treats as the
  *      document title.
  *   2. First top-level heading in the body (`#`).
  *
  * Returns `null` if neither signal is present. Callers decide what to
  * fall back to (the doc uid, typically).
  */
+import { decodeEntities } from './html-entities.js';
 import type { DocumentFormat } from './render.js';
 
 export function extractDocumentTitle(source: string, format: DocumentFormat): string | null {
-  return format === 'asciidoc' ? extractAsciidocTitle(source) : extractMarkdownTitle(source);
+  if (format === 'asciidoc') return extractAsciidocTitle(source);
+  if (format === 'html') return extractHtmlTitle(source);
+  return extractMarkdownTitle(source);
+}
+
+/**
+ * `<title>`, else the first `<h1>`. An SVG's `<title>` is its accessible
+ * name, not the page's, so SVGs and comments are cut out first.
+ */
+function extractHtmlTitle(source: string): string | null {
+  const page = source.replace(/<svg\b[\s\S]*?<\/svg>|<!--[\s\S]*?-->/gi, '');
+  for (const re of [/<title\b[^>]*>([\s\S]*?)<\/title>/i, /<h1\b[^>]*>([\s\S]*?)<\/h1>/i]) {
+    const m = re.exec(page);
+    const text = m
+      ? decodeEntities(m[1]!.replace(/<[^>]+>/g, ''))
+          .replace(/\s+/g, ' ')
+          .trim()
+      : '';
+    if (text) return text;
+  }
+  return null;
 }
 
 /**

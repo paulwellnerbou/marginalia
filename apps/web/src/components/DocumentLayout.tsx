@@ -139,6 +139,7 @@ import {
   BUILT_IN_THEMES,
   getUserThemeOverride,
   setUserThemeOverride,
+  themeForDocument,
 } from '../lib/themes.js';
 import {
   mergeArchiveThreads,
@@ -568,7 +569,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   });
   // Not in pages: a page is exactly as wide as the screen, and the tap
   // zones that turn it sit in the gutters a wide block would grow into.
-  const wideBlocks = blockWidth > maxWidth && !paged;
+  // Not for an HTML page either, which sets its own widths.
+  const wideBlocks = blockWidth > maxWidth && !paged && doc.format !== 'html';
   /** Mirrors the stored interface size so the stepper has something to show. */
   const [uiScale, setUiScaleState] = useState<number>(readUiScale);
   /* Live rather than read once, so what the reset advertises and what it
@@ -1233,9 +1235,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   useEffect(() => {
     if (isRememberedRightTab(rightTab)) localStorage.setItem(RIGHT_TAB_KEY, rightTab);
   }, [rightTab]);
+  // An HTML page styles itself: no theme, width or text-size controls.
+  const isHtml = doc.format === 'html';
   useEffect(() => {
-    void applyTheme(theme);
-  }, [theme]);
+    void applyTheme(themeForDocument(doc.format, theme));
+  }, [theme, doc.format]);
 
   useEffect(() => {
     setTheme(getUserThemeOverride(doc.uid) ?? doc.default_theme);
@@ -2314,14 +2318,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   // are offered the missing regions.
   const docMetaLinks = useMemo<DocMetaLinks | undefined>(
     () =>
-      canComment
+      canComment && doc.format !== 'html'
         ? {
             href: (kind) => `/d/${doc.uid}/edit?meta=${kind}`,
             open: (kind) => navigate(`/d/${doc.uid}/edit?meta=${kind}`),
             canAdd: canEdit && !!editHref,
           }
         : undefined,
-    [canComment, canEdit, editHref, doc.uid, navigate],
+    [canComment, canEdit, editHref, doc.uid, doc.format, navigate],
   );
 
   // Editors can fill missing-asset placeholders directly in view mode
@@ -3367,56 +3371,60 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         <SegmentedControl.Item value="chapters">Chapters</SegmentedControl.Item>
       </SegmentedControl.Root>
 
-      <Text size="1" color="gray">
-        Reading width
-      </Text>
-      <DisplayStepper
-        ariaLabel="Reading width"
-        min={40}
-        max={120}
-        step={4}
-        defaultValue={DEFAULT_MAX_WIDTH}
-        value={maxWidth}
-        format={(v) => `${v}ch`}
-        onCommit={(next) => {
-          setMaxWidth(next);
-          // A block width the text has caught up with reads as "Text", so
-          // it must be off too, or narrowing the text again revives it.
-          setBlockWidth((b) => (b > next ? b : 0));
-        }}
-      />
+      {!isHtml && (
+        <>
+          <Text size="1" color="gray">
+            Reading width
+          </Text>
+          <DisplayStepper
+            ariaLabel="Reading width"
+            min={40}
+            max={120}
+            step={4}
+            defaultValue={DEFAULT_MAX_WIDTH}
+            value={maxWidth}
+            format={(v) => `${v}ch`}
+            onCommit={(next) => {
+              setMaxWidth(next);
+              // A block width the text has caught up with reads as "Text", so
+              // it must be off too, or narrowing the text again revives it.
+              setBlockWidth((b) => (b > next ? b : 0));
+            }}
+          />
 
-      <Text size="1" color="gray">
-        Block width
-      </Text>
-      {/* Kept apart from the reading width rather than relative to it, so
-          widening the text never drags the blocks along. Anything at or
-          under the reading width reads as "Text" and is stored as off. */}
-      <DisplayStepper
-        ariaLabel="Block width"
-        min={maxWidth}
-        max={Math.max(maxWidth, BLOCK_WIDTH_MAX)}
-        step={8}
-        defaultValue={maxWidth}
-        value={Math.max(blockWidth, maxWidth)}
-        format={(v) => (v > maxWidth ? `${v}ch` : 'Text')}
-        onCommit={(next) => setBlockWidth(next > maxWidth ? next : 0)}
-        onReset={() => setBlockWidth(0)}
-      />
+          <Text size="1" color="gray">
+            Block width
+          </Text>
+          {/* Kept apart from the reading width rather than relative to it, so
+              widening the text never drags the blocks along. Anything at or
+              under the reading width reads as "Text" and is stored as off. */}
+          <DisplayStepper
+            ariaLabel="Block width"
+            min={maxWidth}
+            max={Math.max(maxWidth, BLOCK_WIDTH_MAX)}
+            step={8}
+            defaultValue={maxWidth}
+            value={Math.max(blockWidth, maxWidth)}
+            format={(v) => (v > maxWidth ? `${v}ch` : 'Text')}
+            onCommit={(next) => setBlockWidth(next > maxWidth ? next : 0)}
+            onReset={() => setBlockWidth(0)}
+          />
 
-      <Text size="1" color="gray">
-        Text size
-      </Text>
-      <DisplayStepper
-        ariaLabel="Text size"
-        min={TEXT_ZOOM_MIN}
-        max={TEXT_ZOOM_MAX}
-        step={5}
-        defaultValue={100}
-        value={textZoom}
-        format={(v) => `${v}%`}
-        onCommit={setTextZoom}
-      />
+          <Text size="1" color="gray">
+            Text size
+          </Text>
+          <DisplayStepper
+            ariaLabel="Text size"
+            min={TEXT_ZOOM_MIN}
+            max={TEXT_ZOOM_MAX}
+            step={5}
+            defaultValue={100}
+            value={textZoom}
+            format={(v) => `${v}%`}
+            onCommit={setTextZoom}
+          />
+        </>
+      )}
 
       <Text size="1" color="gray">
         Interface size
@@ -3436,26 +3444,30 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         onReset={() => setUiScaleState(resetUiScale())}
       />
 
-      <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
-        Theme
-      </Text>
-      <Select.Root
-        value={theme}
-        size="1"
-        onValueChange={(next) => {
-          setTheme(next);
-          setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
-        }}
-      >
-        <Select.Trigger id="doc-theme-select" variant="soft" />
-        <Select.Content position="popper" style={{ maxHeight: 360 }}>
-          {BUILT_IN_THEMES.map((t) => (
-            <Select.Item key={t.id} value={t.id}>
-              {t.label}
-            </Select.Item>
-          ))}
-        </Select.Content>
-      </Select.Root>
+      {!isHtml && (
+        <>
+          <Text size="1" color="gray" as="label" htmlFor="doc-theme-select">
+            Theme
+          </Text>
+          <Select.Root
+            value={theme}
+            size="1"
+            onValueChange={(next) => {
+              setTheme(next);
+              setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
+            }}
+          >
+            <Select.Trigger id="doc-theme-select" variant="soft" />
+            <Select.Content position="popper" style={{ maxHeight: 360 }}>
+              {BUILT_IN_THEMES.map((t) => (
+                <Select.Item key={t.id} value={t.id}>
+                  {t.label}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+        </>
+      )}
 
       <Text size="1" color="gray">
         Full view
@@ -3585,7 +3597,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                     nodes={liveRendered.toc}
                     activeId={activeHeadingId}
                     filterIds={sectionFilter}
-                    onToggleFilter={toggleSectionFilter}
+                    // Focusing folds the other sections, and HTML pages have no folds.
+                    onToggleFilter={isHtml ? undefined : toggleSectionFilter}
                     onClearFilter={clearSectionFilter}
                   />
                 </div>

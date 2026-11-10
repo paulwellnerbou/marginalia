@@ -2,6 +2,7 @@ import { extractDocumentTitle } from '@marginalia/renderer/extract-title';
 import { Box, Flex, SegmentedControl, Text, TextArea, TextField } from '@radix-ui/themes';
 import { useRef, useState } from 'react';
 import type { DocumentFormat } from '../lib/api.js';
+import { FORMAT_INFO } from '../lib/format-info.js';
 import {
   deriveDisplayName,
   getClientId,
@@ -46,7 +47,9 @@ export function useNewDocumentFields(defaults: {
     ? ''
     : format === 'asciidoc'
       ? deriveAsciidocTitle(source)
-      : deriveDisplayName(source);
+      : format === 'html'
+        ? (extractDocumentTitle(source, 'html') ?? '')
+        : deriveDisplayName(source);
 
   return {
     source,
@@ -141,7 +144,7 @@ export function NewDocumentFields({
       <Box>
         <Flex align="center" justify="between" gap="3">
           <Text as="label" size="2" htmlFor="markdown-source">
-            {format === 'asciidoc' ? 'AsciiDoc source' : 'Markdown source'}
+            {FORMAT_INFO[format].label} source
           </Text>
           <SegmentedControl.Root
             size="1"
@@ -151,6 +154,7 @@ export function NewDocumentFields({
           >
             <SegmentedControl.Item value="markdown">Markdown</SegmentedControl.Item>
             <SegmentedControl.Item value="asciidoc">AsciiDoc</SegmentedControl.Item>
+            <SegmentedControl.Item value="html">HTML</SegmentedControl.Item>
           </SegmentedControl.Root>
         </Flex>
         <SourceDropZone accepts={accepts} onFile={onFile} bundles={bundles}>
@@ -173,15 +177,15 @@ export function NewDocumentFields({
         onFile={onFile}
         label={
           bundles
-            ? 'Drop a Markdown, AsciiDoc, or JSON bundle file — or click to browse'
-            : 'Drop a Markdown or AsciiDoc file — or click to browse'
+            ? 'Drop a Markdown, AsciiDoc, HTML, or JSON bundle file — or click to browse'
+            : 'Drop a Markdown, AsciiDoc, or HTML file — or click to browse'
         }
       />
     </>
   );
 }
 
-const SOURCE_ACCEPT = '.md,.markdown,.mdx,.adoc,.asciidoc,text/markdown';
+const SOURCE_ACCEPT = '.md,.markdown,.mdx,.adoc,.asciidoc,.html,.htm,text/markdown,text/html';
 
 /**
  * The browser's `accept` attribute only gates the native file picker — a
@@ -189,14 +193,16 @@ const SOURCE_ACCEPT = '.md,.markdown,.mdx,.adoc,.asciidoc,text/markdown';
  * so they cannot drift into accepting different files.
  */
 function isSourceFile(file: File): boolean {
-  if (file.type === 'text/markdown') return true;
+  if (file.type === 'text/markdown' || file.type === 'text/html') return true;
   const n = file.name.toLowerCase();
   return (
     n.endsWith('.md') ||
     n.endsWith('.markdown') ||
     n.endsWith('.mdx') ||
     n.endsWith('.adoc') ||
-    n.endsWith('.asciidoc')
+    n.endsWith('.asciidoc') ||
+    n.endsWith('.html') ||
+    n.endsWith('.htm')
   );
 }
 
@@ -207,6 +213,7 @@ function isBundleFile(file: File): boolean {
 function formatFromFilename(name: string): DocumentFormat {
   const n = name.toLowerCase();
   if (n.endsWith('.adoc') || n.endsWith('.asciidoc')) return 'asciidoc';
+  if (n.endsWith('.html') || n.endsWith('.htm')) return 'html';
   return 'markdown';
 }
 

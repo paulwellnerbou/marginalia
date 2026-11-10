@@ -6,8 +6,6 @@ import {
   exportDocx,
   extractDocMeta,
   extractDocumentTitle,
-  locateAllBlocks,
-  locateAllBlocksAsciidoc,
   rewriteAssetReferences,
   sanitizeDocumentFilename,
   spanHead,
@@ -45,6 +43,7 @@ import {
   verifyPassword,
 } from '../auth.js';
 import type { BlobStore } from '../blob-store.js';
+import { locateAllBlocksFor } from '../block-locate.js';
 import { mapWithConcurrency } from '../concurrency.js';
 import type { ServerConfig } from '../config.js';
 import { COVER_MAX_BYTES, loadCoverDescriptor, loadStoredCover, sniffCoverMime } from '../cover.js';
@@ -955,16 +954,10 @@ async function updateDocument(c: Context, deps: AppDeps) {
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
   const rendered = await renderDocumentCached(nextSource, doc.format);
-  const previousBlocks =
-    doc.format === 'asciidoc'
-      ? await locateAllBlocksAsciidoc(previousSource)
-      : locateAllBlocks(previousSource);
+  const previousBlocks = await locateAllBlocksFor(previousSource, doc.format);
   // Include sub-block ids so comments and proposals on list items / table
   // cells see the same before/after transition as top-level blocks.
-  const knownBlocks =
-    doc.format === 'asciidoc'
-      ? await locateAllBlocksAsciidoc(nextSource)
-      : locateAllBlocks(nextSource);
+  const knownBlocks = await locateAllBlocksFor(nextSource, doc.format);
   const blockReplacements = prepareBlockReplacements({
     before: previousBlocks,
     after: knownBlocks,
@@ -1181,6 +1174,8 @@ async function purgeDocument(deps: AppDeps, doc: DocumentRow): Promise<void> {
   // already drop rows whose document is gone, so this is about not
   // leaving dead credentials in the store, not about correctness.
   db.prepare('DELETE FROM keyring_docs WHERE doc_uid = ?').run(doc.uid);
+  // The invites these pointed at went with the doc's invites above.
+  db.prepare('DELETE FROM keyring_agent_invites WHERE gate_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
 
   for (const id of attachedAssetIds) {
@@ -1610,6 +1605,13 @@ function wantsReviewExport(c: Context): boolean {
 
 // --- GET /api/documents/:uid/export.accepted-source ------------------
 
+const SOURCE_FILE: Record<DocumentFormat, { ext: string; type: string }> = {
+  markdown: { ext: 'md', type: 'text/markdown' },
+  asciidoc: { ext: 'adoc', type: 'text/asciidoc' },
+  // An attachment with nosniff: never rendered as a page on our origin.
+  html: { ext: 'html', type: 'text/html' },
+};
+
 /**
  * Source export that folds open edit proposals into a temporary
  * snapshot without mutating the stored document. Conflicting or missing
@@ -1627,8 +1629,7 @@ async function exportDocumentSourceWithAcceptedProposals(c: Context, deps: AppDe
   const applied = await sourceWithAcceptedProposals(deps, doc, store.read(doc));
   const derivedTitle = doc.name ?? extractDocumentTitle(applied.source, doc.format);
   const filename = `${sanitizeDocumentFilename(derivedTitle, doc.uid)}${acceptedProposalsFilenameSuffix(applied)}`;
-  const ext = doc.format === 'asciidoc' ? 'adoc' : 'md';
-  const type = doc.format === 'asciidoc' ? 'text/asciidoc' : 'text/markdown';
+  const { ext, type } = SOURCE_FILE[doc.format];
   c.header('Content-Type', `${type}; charset=utf-8`);
   c.header('Content-Disposition', `attachment; filename="${filename}.${ext}"`);
   c.header('Cache-Control', 'private, no-store');
@@ -2075,7 +2076,11 @@ async function exportDocumentAsPdf(c: Context, deps: AppDeps) {
     }
   }
 
-  const [themeCss, printCss] = await Promise.all([loadThemeCss(theme), loadPrintCss()]);
+  // An HTML document brings its own look; no theme is layered under it.
+  const [themeCss, printCss] = await Promise.all([
+    doc.format === 'html' ? (rendered.css ?? '') : loadThemeCss(theme),
+    loadPrintCss(),
+  ]);
 
   let buf: Uint8Array;
   try {
@@ -2239,10 +2244,7 @@ async function importDocument(c: Context, deps: AppDeps) {
   // a column that's no longer in the schema). Single base read per doc.
   const importBaseOid = await store.mainOid({ uid, format });
   const importBaseSource = docSpec.source;
-  const importBlocks =
-    format === 'asciidoc'
-      ? await locateAllBlocksAsciidoc(importBaseSource)
-      : locateAllBlocks(importBaseSource);
+  const importBlocks = await locateAllBlocksFor(importBaseSource, format);
   for (const raw of commentRows) {
     const row = raw as Record<string, unknown>;
     if (
@@ -2805,14 +2807,8 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
   const rendered = await renderDocumentCached(restoredSource, doc.format);
-  const previousBlocks =
-    doc.format === 'asciidoc'
-      ? await locateAllBlocksAsciidoc(previousSource)
-      : locateAllBlocks(previousSource);
-  const knownBlocks =
-    doc.format === 'asciidoc'
-      ? await locateAllBlocksAsciidoc(restoredSource)
-      : locateAllBlocks(restoredSource);
+  const previousBlocks = await locateAllBlocksFor(previousSource, doc.format);
+  const knownBlocks = await locateAllBlocksFor(restoredSource, doc.format);
   const blockReplacements = prepareBlockReplacements({
     before: previousBlocks,
     after: knownBlocks,
@@ -2874,14 +2870,8 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
     db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(now, doc.uid);
 
     const rendered = await renderDocumentCached(reverted.after, doc.format);
-    const previousBlocks =
-      doc.format === 'asciidoc'
-        ? await locateAllBlocksAsciidoc(reverted.before)
-        : locateAllBlocks(reverted.before);
-    const knownBlocks =
-      doc.format === 'asciidoc'
-        ? await locateAllBlocksAsciidoc(reverted.after)
-        : locateAllBlocks(reverted.after);
+    const previousBlocks = await locateAllBlocksFor(reverted.before, doc.format);
+    const knownBlocks = await locateAllBlocksFor(reverted.after, doc.format);
     const blockReplacements = prepareBlockReplacements({
       before: previousBlocks,
       after: knownBlocks,
@@ -3309,7 +3299,7 @@ async function rotateAdminInvite(c: Context, deps: AppDeps) {
   });
 }
 
-function createInviteRow(
+export function createInviteRow(
   db: Database,
   opts: {
     docUid: string;

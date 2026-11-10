@@ -1,6 +1,7 @@
 import type { Element, Root } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
+import { decodeEntities } from '../html-entities.js';
 import type { BlockMap } from '../types.js';
 
 /**
@@ -159,16 +160,7 @@ export function renderedBlockIdsFromHtml(html: string): Set<string> {
   const found = new Set<string>();
   const re = /\bdata-(?:sub)?block="([^"]*)"/g;
   for (let m = re.exec(html); m !== null; m = re.exec(html)) {
-    found.add(decodeAttr(m[1]!));
+    found.add(decodeEntities(m[1]!));
   }
   return found;
-}
-
-function decodeAttr(value: string): string {
-  return value
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#x27;|&#39;/g, "'")
-    .replace(/&amp;/g, '&');
 }

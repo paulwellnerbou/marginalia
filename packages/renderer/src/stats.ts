@@ -82,7 +82,7 @@ const NON_PROSE_KINDS = new Set([
 const CODE_KINDS = new Set(['code', 'listing', 'literal']);
 
 /** Prose that is never sentences: titles and cells. */
-const SENTENCE_FREE_KINDS = new Set(['heading', 'table']);
+const SENTENCE_FREE_KINDS = new Set(['heading', 'table', 'cell']);
 
 /** Raw markup whose block text still carries its tags. */
 const MARKUP_KINDS = new Set(['html', 'pass']);

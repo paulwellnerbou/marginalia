@@ -8,6 +8,8 @@
  * document's default theme is used.
  */
 
+import type { DocumentFormat } from './api.js';
+
 export interface ThemeMeta {
   id: string;
   label: string;
@@ -38,6 +40,18 @@ export const BUILT_IN_THEMES: ThemeMeta[] = [
   { id: 'serif-print', label: 'Serif (Print)', blurb: 'Print-optimized serif, narrow column.' },
 ];
 
+/** What HTML documents are shown with; not offered in the theme picker. */
+const HTML_PAGE_THEME = 'page';
+
+/**
+ * The stylesheet a document is shown with: the reader's or the document's
+ * theme, except for an HTML page, which brings its own look and gets only
+ * the review chrome's colours.
+ */
+export function themeForDocument(format: DocumentFormat, theme: string): string {
+  return format === 'html' ? HTML_PAGE_THEME : theme;
+}
+
 // Eagerly-declared imports so Vite bundles all themes and we can switch
 // between them at runtime without issuing a fresh network request.
 const themeImports: Record<string, () => Promise<unknown>> = {
@@ -50,6 +64,7 @@ const themeImports: Record<string, () => Promise<unknown>> = {
   beautiful: () => import('@marginalia/themes/beautiful.css?url'),
   'serif-print': () => import('@marginalia/themes/serif-print.css?url'),
   report: () => import('@marginalia/themes/report.css?url'),
+  [HTML_PAGE_THEME]: () => import('@marginalia/themes/page.css?url'),
 };
 
 const THEME_LINK_ATTR = 'data-marginalia-theme';

@@ -71,6 +71,8 @@ export function findDocMetaRegion(
   format: DocumentFormat,
   kind: DocMetaKind,
 ): DocMetaSpan | null {
+  // The HTML renderer has no summary / about regions.
+  if (format === 'html') return null;
   const spans =
     format === 'asciidoc' ? findAsciidocDocMetaRegions(source) : markdownRegions(source);
   return spans.find((s) => s.kind === kind) ?? null;

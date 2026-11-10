@@ -32,6 +32,12 @@ export interface McpConfig {
    * it cannot leak sideways.
    */
   defaultToken: string | null;
+  /**
+   * Agent key for the user's keyring. Exchanged per document for an invite
+   * the server mints for this agent, so every document in the ring that the
+   * user administers works by bare uid.
+   */
+  agentKey?: string | null;
   /** Where the client id + per-document invite tokens are cached. Null disables persistence. */
   stateDir: string | null;
   /** Default destination for `export_document`. */
@@ -53,6 +59,7 @@ export function loadMcpConfig(env: Record<string, string | undefined> = process.
     defaultToken: nonEmpty(
       sanitizeIdentityValue(env.MARGINALIA_INVITE_TOKEN, MAX_CLIENT_ID_LENGTH),
     ),
+    agentKey: nonEmpty(sanitizeIdentityValue(env.MARGINALIA_AGENT_KEY, MAX_CLIENT_ID_LENGTH)),
     stateDir: isTruthy(env.MARGINALIA_MCP_NO_PERSIST)
       ? null
       : (nonEmpty(env.MARGINALIA_MCP_STATE_DIR) ?? join(homedir(), '.config', 'marginalia-mcp')),

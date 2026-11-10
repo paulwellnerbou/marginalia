@@ -19,6 +19,7 @@ import {
   createDocumentProposal,
   createEditProposal,
   type Document,
+  type DocumentFormat,
   deleteAttachedAsset,
   getDocument,
   updateDocument,
@@ -33,6 +34,7 @@ import {
   chapterEditQuery,
   resolveChapterScope,
   resolveDocMetaScope,
+  type SectionBalancer,
 } from '../lib/chapter-scope.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
@@ -48,6 +50,7 @@ import {
   BUILT_IN_THEMES,
   getUserThemeOverride,
   setUserThemeOverride,
+  themeForDocument,
 } from '../lib/themes.js';
 
 const ASSETS_COLLAPSED_WIDTH = 36;
@@ -69,7 +72,17 @@ const LS_WORD_WRAP = 'marginalia.editWordWrap';
  * Not used by the preview rewrite — that path takes the authoritative
  * attached-asset set from the server's `attached_assets` payload.
  */
-function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'): Set<string> {
+/** HTML chapters are widened to whole elements; the locator is loaded only for them. */
+async function sectionBalancer(
+  source: string,
+  format: DocumentFormat,
+): Promise<SectionBalancer | undefined> {
+  if (format !== 'html') return undefined;
+  const { htmlSectionSpan } = await import('@marginalia/renderer/locate-block-html');
+  return (headingStart, limit) => htmlSectionSpan(source, headingStart, limit);
+}
+
+function collectReferencedRefs(source: string, format: DocumentFormat): Set<string> {
   const out = new Set<string>();
   // Markdown: ![alt](src), ignore reference-style. Keep it narrow —
   // we'd rather miss an edge case than offer a false "match" on
@@ -77,7 +90,9 @@ function collectReferencedRefs(source: string, format: 'markdown' | 'asciidoc'):
   const mdRe = /!\[[^\]]*\]\(([^)\s"']+)/g;
   // AsciiDoc: image::src[]  /  image:src[] (inline) / include::src[]
   const adocRe = /(?:^|\s)(?:image::|image:|include::)([^\s[]+)/g;
-  const re = format === 'asciidoc' ? adocRe : mdRe;
+  // HTML: src="…" on any element; not `data-src`, which nothing loads.
+  const htmlRe = /(?<![\w-])src\s*=\s*["']([^"']+)["']/gi;
+  const re = format === 'asciidoc' ? adocRe : format === 'html' ? htmlRe : mdRe;
   let m = re.exec(source);
   while (m !== null) {
     const raw = m[1];
@@ -153,7 +168,7 @@ export function EditPage() {
   const [source, setSource] = useState('');
   const [savedSource, setSavedSource] = useState('');
   const [chapterScope, setChapterScope] = useState<ChapterScope | null>(null);
-  const [rendered, setRendered] = useState<Pick<RenderResult, 'html'> | null>(null);
+  const [rendered, setRendered] = useState<Pick<RenderResult, 'html' | 'css'> | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attached, setAttached] = useState<AttachedAsset[]>([]);
@@ -226,9 +241,10 @@ export function EditPage() {
   useEffect(() => {
     localStorage.setItem(LS_WORD_WRAP, String(wordWrap));
   }, [wordWrap]);
+  const isHtml = doc?.format === 'html';
   useEffect(() => {
-    void applyTheme(theme);
-  }, [theme]);
+    void applyTheme(themeForDocument(doc?.format ?? 'markdown', theme));
+  }, [theme, doc?.format]);
 
   const editorEl = useRef<HTMLDivElement>(null);
   const previewEl = useRef<HTMLDivElement>(null);
@@ -322,6 +338,7 @@ export function EditPage() {
             located.occurrences,
             chapterBlockId,
             chapterCopy,
+            await sectionBalancer(d.source, d.format),
           );
           if (!scope) {
             setError('This chapter could not be found. It may have changed or been removed.');
@@ -337,7 +354,7 @@ export function EditPage() {
         setDoc(d);
         setSource(initialSource);
         setSavedSource(initialSource);
-        setRendered(scope || appending ? null : { html: d.rendered.html });
+        setRendered(scope || appending ? null : { html: d.rendered.html, css: d.rendered.css });
         setAttached(d.attached_assets ?? []);
       } catch (err) {
         if (cancelled) return;
@@ -368,7 +385,8 @@ export function EditPage() {
       (deps) => {
         if (disposed || !editorEl.current || viewRef.current) return;
         editorDepsRef.current = deps;
-        const { EditorState, Compartment, EditorView, basicSetup, markdown, lineWrapping } = deps;
+        const { EditorState, Compartment, EditorView, basicSetup, markdown, html, lineWrapping } =
+          deps;
         const wrapCompartment = new Compartment();
         wrapCompartmentRef.current = wrapCompartment;
         const extensions: import('@codemirror/state').Extension[] = [
@@ -386,13 +404,17 @@ export function EditPage() {
         // gets a plain editor — no asciidoc grammar bundled, and the
         // markdown grammar mistokenizes `image::foo[]` etc.
         if (markdown) extensions.push(markdown());
+        if (html) extensions.push(html());
         const state = EditorState.create({
           doc: appending ? '' : (chapterScope?.source ?? doc.source),
           extensions,
         });
         viewRef.current = new EditorView({ state, parent: editorEl.current });
         if (appending) viewRef.current.focus();
-        if (openMeta && !chapterScope) showDocMetaInEditor(viewRef.current, doc.format, openMeta);
+        // HTML has no summary / about regions; a stray `?meta=` opens the page.
+        if (openMeta && !chapterScope && doc.format !== 'html') {
+          showDocMetaInEditor(viewRef.current, doc.format, openMeta);
+        }
       },
       (err) => {
         reportError('EditPage.editor', err, { uid });
@@ -435,7 +457,7 @@ export function EditPage() {
       source === savedSource &&
       attachedKey === serverAttachedKey
     ) {
-      setRendered({ html: doc.rendered.html });
+      setRendered({ html: doc.rendered.html, css: doc.rendered.css });
       return;
     }
     const handle = setTimeout(async () => {
@@ -458,7 +480,7 @@ export function EditPage() {
           assetVersions,
         });
         if (previewRequestRef.current !== requestId) return;
-        setRendered({ html });
+        setRendered({ html, css: r.css });
       } catch (err) {
         reportError('EditPage.preview', err);
       }
@@ -613,7 +635,11 @@ export function EditPage() {
         const ext = file.type.split('/')[1]?.split(/[;+]/)[0] || 'png';
         const refName = `pasted-${Date.now()}.${ext}`;
         const insertion =
-          doc?.format === 'asciidoc' ? `\nimage::${refName}[]\n` : `\n![](${refName})\n`;
+          doc?.format === 'asciidoc'
+            ? `\nimage::${refName}[]\n`
+            : doc?.format === 'html'
+              ? `<img src="${refName}" alt="">`
+              : `\n![](${refName})\n`;
         const view = viewRef.current;
         if (view) {
           const { from, to } = view.state.selection.main;
@@ -671,6 +697,7 @@ export function EditPage() {
               latestBlocks.occurrences,
               chapterScope.headingBlockId,
               chapterScope.headingCopy,
+              await sectionBalancer(latest.source, latest.format),
             );
         if (!latestScope || latestScope.source !== savedSource) {
           setError(
@@ -782,10 +809,25 @@ export function EditPage() {
           return;
         }
         const wrap = chapterScope.proposalWrap;
+        const trim = chapterScope.proposalTrim;
+        let proposed = wrap ? wrap.before + source + wrap.after : source;
+        if (trim) {
+          const kept =
+            source.length >= trim.before.length + trim.after.length &&
+            source.startsWith(trim.before) &&
+            source.endsWith(trim.after);
+          if (!kept) {
+            setError(
+              `This change reaches past the text of ${scopeNoun(chapterScope)} (its wrapping tags or trailing elements). Propose it on the whole document instead.`,
+            );
+            return;
+          }
+          proposed = source.slice(trim.before.length, source.length - trim.after.length);
+        }
         await createEditProposal(
           targetUid,
           {
-            proposed_text: wrap ? wrap.before + source + wrap.after : source,
+            proposed_text: proposed,
             rationale: rationale.trim() || null,
             anchor_block_id: chapterScope.headingBlockId,
             anchor_section: chapterScope.section,
@@ -936,55 +978,58 @@ export function EditPage() {
           />
         </div>
         <div className="edit-preview-pane">
-          <div className="edit-preview-chrome">
-            <Flex align="center" gap="2">
-              <Text size="1" color="gray">
-                Text size
-              </Text>
-              <Slider
-                size="1"
-                style={{ width: 80 }}
-                min={80}
-                max={140}
-                step={1}
-                value={[textZoom]}
-                onValueChange={(v) => setTextZoom(v[0] ?? textZoom)}
-              />
-              <Text size="1" color="gray" style={{ minWidth: '3.5ch', flexShrink: 0 }}>
-                {textZoom}%
-              </Text>
-              <Button
-                size="1"
-                variant="ghost"
-                onClick={() => setTextZoom(100)}
-                disabled={textZoom === 100}
-              >
-                Reset
-              </Button>
-            </Flex>
-            <Flex align="center" gap="2">
-              <Text size="1" color="gray" as="label" htmlFor="edit-theme-select">
-                Theme
-              </Text>
-              <Select.Root
-                value={theme}
-                size="1"
-                onValueChange={(next) => {
-                  setTheme(next);
-                  setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
-                }}
-              >
-                <Select.Trigger id="edit-theme-select" variant="soft" />
-                <Select.Content position="popper" style={{ maxHeight: 360 }}>
-                  {BUILT_IN_THEMES.map((t) => (
-                    <Select.Item key={t.id} value={t.id}>
-                      {t.label}
-                    </Select.Item>
-                  ))}
-                </Select.Content>
-              </Select.Root>
-            </Flex>
-          </div>
+          {/* An HTML page sets its own type and look. */}
+          {!isHtml && (
+            <div className="edit-preview-chrome">
+              <Flex align="center" gap="2">
+                <Text size="1" color="gray">
+                  Text size
+                </Text>
+                <Slider
+                  size="1"
+                  style={{ width: 80 }}
+                  min={80}
+                  max={140}
+                  step={1}
+                  value={[textZoom]}
+                  onValueChange={(v) => setTextZoom(v[0] ?? textZoom)}
+                />
+                <Text size="1" color="gray" style={{ minWidth: '3.5ch', flexShrink: 0 }}>
+                  {textZoom}%
+                </Text>
+                <Button
+                  size="1"
+                  variant="ghost"
+                  onClick={() => setTextZoom(100)}
+                  disabled={textZoom === 100}
+                >
+                  Reset
+                </Button>
+              </Flex>
+              <Flex align="center" gap="2">
+                <Text size="1" color="gray" as="label" htmlFor="edit-theme-select">
+                  Theme
+                </Text>
+                <Select.Root
+                  value={theme}
+                  size="1"
+                  onValueChange={(next) => {
+                    setTheme(next);
+                    setUserThemeOverride(doc.uid, next === doc.default_theme ? null : next);
+                  }}
+                >
+                  <Select.Trigger id="edit-theme-select" variant="soft" />
+                  <Select.Content position="popper" style={{ maxHeight: 360 }}>
+                    {BUILT_IN_THEMES.map((t) => (
+                      <Select.Item key={t.id} value={t.id}>
+                        {t.label}
+                      </Select.Item>
+                    ))}
+                  </Select.Content>
+                </Select.Root>
+              </Flex>
+            </div>
+          )}
           <div className="edit-preview" ref={previewEl}>
             {rendered ? (
               <RenderedDoc

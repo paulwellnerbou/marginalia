@@ -28,7 +28,11 @@ export function loadLocatedBlocks(source: string, format: DocumentFormat): Promi
         ? import('@marginalia/renderer/locate-block-asciidoc').then(
             (module) => module.locateBlocksAsciidoc,
           )
-        : import('@marginalia/renderer/locate-block').then((module) => module.locateBlocks);
+        : format === 'html'
+          ? import('@marginalia/renderer/locate-block-html').then(
+              (module) => module.locateBlocksHtml,
+            )
+          : import('@marginalia/renderer/locate-block').then((module) => module.locateBlocks);
     locatorPromises.set(format, promise);
     promise.catch(() => {
       if (locatorPromises.get(format) === promise) locatorPromises.delete(format);

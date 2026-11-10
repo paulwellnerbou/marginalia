@@ -105,7 +105,23 @@ console.log('hello');
 ----
 `;
 
-const SAMPLES = { markdown: MARKDOWN_SAMPLE, asciidoc: ASCIIDOC_SAMPLE };
+const HTML_SAMPLE = `<!doctype html>
+<title>Welcome</title>
+<style>
+  body { font: 17px/1.6 system-ui, sans-serif; max-width: 40rem; margin: 0 auto; padding: 2rem 1rem; }
+  .note { border-left: 4px solid #2156a5; padding-left: 1rem; }
+</style>
+<h1>Welcome</h1>
+<p>This is an HTML page. It keeps its own layout and styles. Edit me, then save.</p>
+<h2>Features</h2>
+<ul>
+  <li>Your own CSS, tables, images and SVG</li>
+  <li>Comments on any paragraph, list item or table cell</li>
+</ul>
+<p class="note">Scripts are removed; everything else you can style.</p>
+`;
+
+const SAMPLES = { markdown: MARKDOWN_SAMPLE, asciidoc: ASCIIDOC_SAMPLE, html: HTML_SAMPLE };
 
 const GITHUB_REPO_URL = 'https://github.com/paulwellnerbou/marginalia';
 

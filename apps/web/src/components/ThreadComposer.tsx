@@ -7,6 +7,7 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { formatAnchorQuote } from '../lib/anchor-quote.js';
 import type { AttachedAsset, DocumentFormat, Thread } from '../lib/api.js';
 import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
+import { FORMAT_INFO } from '../lib/format-info.js';
 import { reportError } from '../lib/log.js';
 import { loadRenderer } from '../lib/renderer-loader.js';
 import { RenderedDoc } from './RenderedDoc.js';
@@ -148,7 +149,7 @@ function ProposalSourceField({
     const container = containerRef.current;
     const deps = depsRef.current;
     if (!container || !deps) return;
-    const { EditorState, EditorView, basicSetup, markdown } = deps;
+    const { EditorState, EditorView, basicSetup, markdown, html } = deps;
     const extensions: import('@codemirror/state').Extension[] = [
       basicSetup,
       EditorView.lineWrapping,
@@ -167,6 +168,7 @@ function ProposalSourceField({
     // don't bundle an asciidoc grammar, so asciidoc proposals get a
     // plain editor — better than mis-tokenizing `image::foo[]` etc.
     if (markdown) extensions.push(markdown());
+    if (html) extensions.push(html());
     // Set id on the contenteditable so <label htmlFor={id}> resolves
     // to a real element after the swap, and use aria-labelledby so AT
     // sees the visible label as the field's accessible name.
@@ -609,7 +611,7 @@ function ProposalComposerBody({
     }
   }
 
-  const formatLabel = docFormat === 'asciidoc' ? 'AsciiDoc' : 'Markdown';
+  const formatLabel = FORMAT_INFO[docFormat].label;
   const blockNoun = target.block_count > 1 ? `${target.block_count} blocks` : 'this block';
 
   return (
@@ -856,7 +858,7 @@ function ProposalEditBody({
     }
   }
 
-  const formatLabel = docFormat === 'asciidoc' ? 'AsciiDoc' : 'Markdown';
+  const formatLabel = FORMAT_INFO[docFormat].label;
   const scopeNoun = thread.proposal?.whole_document ? 'the whole document' : 'the anchored text';
   const anchorQuote = formatAnchorQuote(thread.anchor.quote, 240);
 

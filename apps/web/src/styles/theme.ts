@@ -10,6 +10,7 @@ export const APP_THEME = {
 export const APP_ACCENT_COLOR = APP_THEME.accentColor;
 
 export function appFormatColor(format: DocumentFormat) {
+  if (format === 'html') return 'orange';
   return format === 'asciidoc' ? 'plum' : APP_ACCENT_COLOR;
 }
 

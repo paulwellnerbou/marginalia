@@ -1,30 +1,18 @@
 import { DEFAULT_AGENT_NAME, normalizeAgentName } from '@marginalia/mcp/identity';
-import {
-  Badge,
-  Box,
-  Button,
-  Callout,
-  Flex,
-  SegmentedControl,
-  Select,
-  Text,
-  TextField,
-} from '@radix-ui/themes';
+import { Badge, Box, Button, Callout, Flex, Text, TextField } from '@radix-ui/themes';
 import { useCallback, useEffect, useState } from 'react';
-import { createInvite, type Invite, listInvites } from '../lib/api.js';
+import { createInvite, type Invite, listAgentKeys, listInvites } from '../lib/api.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
+import { loadKeyringToken } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import {
-  CLAUDE_SCOPES,
   type ClaudeScope,
-  connectionSetups,
   guessClient,
-  MCP_CLIENTS,
   type McpClient,
-  SETUP_LABELS,
   type Setup,
 } from '../lib/mcp-connection.js';
 import { Copyable } from './Copyable.js';
+import { McpConnectionSetup } from './McpConnectionSetup.js';
 
 interface Props {
   uid: string;
@@ -39,6 +27,9 @@ interface Props {
  */
 const AGENT_NOTE = 'AI agent';
 
+/** The server's note on invites it mints for a keyring's agent keys. */
+const KEYRING_AGENT_NOTE = 'AI agent via keyring';
+
 /**
  * "Connect an agent" — the two things a user has to do, in order.
  *
@@ -49,6 +40,7 @@ const AGENT_NOTE = 'AI agent';
  */
 export function McpPanel({ uid, canManageInvites }: Props) {
   const [invites, setInvites] = useState<Invite[] | null>(null);
+  const [keyNames, setKeyNames] = useState<string[]>([]);
   const [agentName, setAgentName] = useState(DEFAULT_AGENT_NAME);
   // Per invite token; unset means the guess from the agent's name.
   const [clients, setClients] = useState<Record<string, McpClient>>({});
@@ -73,6 +65,16 @@ export function McpPanel({ uid, canManageInvites }: Props) {
     void refresh();
   }, [refresh]);
 
+  // A key reaches this document the first time its agent opens it, so
+  // its name is spoken for here before it has an invite.
+  useEffect(() => {
+    const ring = loadKeyringToken();
+    if (!ring || !canManageInvites) return;
+    listAgentKeys(ring)
+      .then((res) => setKeyNames(res.agents.map((a) => a.display_name)))
+      .catch((err) => reportError('McpPanel.listAgentKeys', err));
+  }, [canManageInvites]);
+
   const agentInvites = (invites ?? []).filter((i) => i.note === AGENT_NOTE);
 
   // Normalize exactly as the server will before comparing or minting.
@@ -83,12 +85,18 @@ export function McpPanel({ uid, canManageInvites }: Props) {
   // and then collapse onto "Claude" server-side. People may share a
   // name; agents must not.
   const normalizedName = normalizeAgentName(agentName);
-  const nameTaken = agentInvites.some(
-    (i) => normalizeAgentName(i.display_name).toLowerCase() === normalizedName.toLowerCase(),
-  );
+  const sameName = (name: string | null) =>
+    normalizeAgentName(name).toLowerCase() === normalizedName.toLowerCase();
+  const nameTaken = agentInvites.some((i) => sameName(i.display_name));
+  // Different client ids, so no shared authorship, but one name in
+  // comments and @-mentions for two agents nobody can tell apart.
+  const keyNameTaken =
+    !nameTaken &&
+    (keyNames.some(sameName) ||
+      (invites ?? []).some((i) => i.note === KEYRING_AGENT_NOTE && sameName(i.display_name)));
 
   async function mint() {
-    if (nameTaken) return;
+    if (nameTaken || keyNameTaken) return;
     setCreating(true);
     setError(null);
     try {
@@ -178,7 +186,12 @@ export function McpPanel({ uid, canManageInvites }: Props) {
                 />
               </Text>
             </Box>
-            <Button size="1" onClick={() => void mint()} loading={creating} disabled={nameTaken}>
+            <Button
+              size="1"
+              onClick={() => void mint()}
+              loading={creating}
+              disabled={nameTaken || keyNameTaken}
+            >
               Create link
             </Button>
           </Flex>
@@ -187,6 +200,13 @@ export function McpPanel({ uid, canManageInvites }: Props) {
               “{normalizedName}” already has a link on this document. Agents are identified by name,
               so two sharing one would count as the same participant and could edit each other’s
               comments. Pick a different name.
+            </Text>
+          )}
+          {keyNameTaken && (
+            <Text as="p" size="1" color="orange" mb="2">
+              “{normalizedName}” is an agent key in your keyring, which works on this document under
+              that name. Two agents sharing it could not be told apart in comments. Pick a different
+              name.
             </Text>
           )}
           {error && (
@@ -222,86 +242,21 @@ export function McpPanel({ uid, canManageInvites }: Props) {
           // derives from it, whatever is stored.
           const inviteName = normalizeAgentName(invite.display_name);
           const client = clients[invite.token] ?? guessClient(inviteName);
-          const setups = connectionSetups(
-            client,
-            connectionUrl(inviteName, invite.token),
-            claudeScope,
-          );
-          const snippet = setups.find((s) => s.setup === setup) ?? setups[0];
-          const showScope = client === 'claude' && snippet.setup === 'cli';
           return (
             <Box key={invite.token} mb="4">
               <Text as="p" size="2" weight="bold" mb="1">
                 {inviteName}
               </Text>
-              <Flex align="center" gap="2" mb="2">
-                <Text as="label" size="1" color="gray" htmlFor={`mcp-client-${invite.token}`}>
-                  Connect it from
-                </Text>
-                <Select.Root
-                  size="1"
-                  value={client}
-                  onValueChange={(v) =>
-                    setClients((prev) => ({ ...prev, [invite.token]: v as McpClient }))
-                  }
-                >
-                  <Select.Trigger id={`mcp-client-${invite.token}`} />
-                  <Select.Content position="popper">
-                    {MCP_CLIENTS.map((c) => (
-                      <Select.Item key={c.value} value={c.value}>
-                        {c.label}
-                      </Select.Item>
-                    ))}
-                  </Select.Content>
-                </Select.Root>
-              </Flex>
-              {setups.length > 1 && (
-                <SegmentedControl.Root
-                  size="1"
-                  value={snippet.setup}
-                  onValueChange={(v) => setSetup(v as Setup)}
-                  mb="2"
-                >
-                  {setups.map((s) => (
-                    <SegmentedControl.Item key={s.setup} value={s.setup}>
-                      {SETUP_LABELS[s.setup]}
-                    </SegmentedControl.Item>
-                  ))}
-                </SegmentedControl.Root>
-              )}
-              {showScope && (
-                <Flex align="center" gap="2" mb="2" wrap="wrap">
-                  <Text as="label" size="1" color="gray" htmlFor={`mcp-scope-${invite.token}`}>
-                    Scope
-                  </Text>
-                  <Select.Root
-                    size="1"
-                    value={claudeScope}
-                    onValueChange={(v) => setClaudeScope(v as ClaudeScope)}
-                  >
-                    <Select.Trigger id={`mcp-scope-${invite.token}`} />
-                    <Select.Content position="popper">
-                      {CLAUDE_SCOPES.map((s) => (
-                        <Select.Item key={s.value} value={s.value}>
-                          {s.label}
-                        </Select.Item>
-                      ))}
-                    </Select.Content>
-                  </Select.Root>
-                  <Text size="1" color="gray">
-                    {CLAUDE_SCOPES.find((s) => s.value === claudeScope)?.description}
-                  </Text>
-                </Flex>
-              )}
-              <Text as="p" size="1" color="gray" mb="1">
-                {snippet.instruction}
-              </Text>
-              <Copyable text={snippet.text} multiline size="1" />
-              {snippet.note && (
-                <Text as="p" size="1" color="orange" mt="1">
-                  {snippet.note}
-                </Text>
-              )}
+              <McpConnectionSetup
+                url={connectionUrl(inviteName, invite.token)}
+                idPrefix={`mcp-${invite.token}`}
+                client={client}
+                onClientChange={(v) => setClients((prev) => ({ ...prev, [invite.token]: v }))}
+                setup={setup}
+                onSetupChange={setSetup}
+                claudeScope={claudeScope}
+                onClaudeScopeChange={setClaudeScope}
+              />
               <Text as="p" size="1" color="gray" mt="2" mb="1">
                 Then give it this link to the document:
               </Text>

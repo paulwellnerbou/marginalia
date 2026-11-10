@@ -39,15 +39,15 @@ import type {
 } from './types.js';
 
 /** Document source flavours supported by the renderer. */
-export type DocumentFormat = 'markdown' | 'asciidoc';
+export type DocumentFormat = 'markdown' | 'asciidoc' | 'html';
 
 export function isDocumentFormat(v: unknown): v is DocumentFormat {
-  return v === 'markdown' || v === 'asciidoc';
+  return v === 'markdown' || v === 'asciidoc' || v === 'html';
 }
 
 /**
- * Format-agnostic entry point. Delegates to the markdown or asciidoc
- * pipeline; both return the same RenderResult shape, so downstream
+ * Format-agnostic entry point. Delegates to the markdown, asciidoc or
+ * html pipeline; all return the same RenderResult shape, so downstream
  * consumers (comment anchoring, TOC, search) don't care which path ran.
  */
 export async function renderDocument(
@@ -60,6 +60,10 @@ export async function renderDocument(
     // Markdown browser bundle and load it only for documents that need it.
     const { renderAsciidoc } = await import('./render-asciidoc.js');
     return renderAsciidoc(source, options);
+  }
+  if (format === 'html') {
+    const { renderHtml } = await import('./render-html.js');
+    return renderHtml(source, options);
   }
   return render(source, options);
 }

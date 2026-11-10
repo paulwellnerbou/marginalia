@@ -1,0 +1,433 @@
+import type { Database } from 'bun:sqlite';
+import { createHash } from 'node:crypto';
+import { normalizeAgentName } from '@marginalia/mcp';
+import type { Context } from 'hono';
+import { Hono } from 'hono';
+import { revokeInviteSessions } from '../auth.js';
+import type {
+  DocumentFormat,
+  DocumentRow,
+  InviteRole,
+  KeyringAgentRow,
+  KeyringRow,
+} from '../db.js';
+import { newAgentId, newAgentKey } from '../ids.js';
+import { createInviteRow } from './documents.js';
+import { readKeyringRow, safeJson, touchKeyringIfStale, upsertKeyringDoc } from './keyrings.js';
+
+/**
+ * Agent keys — one MCP connection for a whole keyring.
+ *
+ * The keyring token is never handed to an agent. It is the standing
+ * secret for every link in the ring, and an MCP connection string ends up
+ * in config files and third-party connector settings. An agent key is a
+ * separate credential minted from the ring, revocable on its own, with a
+ * role ceiling and a name of its own.
+ *
+ * It still authorizes nothing directly: `authorize()` never reads these
+ * tables. The agent exchanges the key for an ordinary named invite per
+ * document, minted here from the admin link the ring holds, at the key's
+ * role. Those invites show in each document's access panel like any
+ * other, and revoking the key deletes them — which is what cuts the
+ * agent off, wherever it cached them.
+ *
+ * Only documents the ring holds an admin link for are reachable: minting
+ * an invite is an admin act, and handing the agent a lesser link of the
+ * ring's own would mean it signing under someone else's invite with no
+ * way to take that back.
+ */
+
+export const AGENT_KEY_HEADER = 'x-marginalia-agent-key';
+
+/** Marks the invites minted here in a document's access panel. */
+export const AGENT_INVITE_NOTE = 'AI agent via keyring';
+
+const AGENT_ROLES: readonly InviteRole[] = ['editor', 'collaborator', 'reader'];
+
+/** Keys per ring. A person has a handful of agents, not hundreds. */
+const MAX_AGENTS_PER_RING = 20;
+
+/** How stale `last_used_at` may get before a request refreshes it. */
+const LAST_USED_INTERVAL_MS = 60 * 60 * 1000;
+
+export function hashAgentKey(key: string): string {
+  return createHash('sha256').update(key).digest('hex');
+}
+
+export function agentKeysRouter(deps: { db: Database }): Hono {
+  const r = new Hono();
+  const { db } = deps;
+
+  // Managed with the keyring token, from a synced device.
+  r.get('/keyrings/self/agents', (c) => listAgents(c, db));
+  r.post('/keyrings/self/agents', async (c) => createAgent(c, db));
+  r.delete('/keyrings/self/agents/:id', (c) => deleteAgent(c, db));
+
+  // Used with the agent key, by the MCP server.
+  r.get('/agent/self', (c) => agentSelf(c, db));
+  r.get('/agent/documents', (c) => agentDocuments(c, db));
+  r.post('/agent/documents/:uid/access', (c) => agentAccess(c, db));
+  r.put('/agent/documents/:uid', async (c) => agentAddDocument(c, db));
+
+  return r;
+}
+
+// --- ring side --------------------------------------------------------
+
+interface AgentWire {
+  id: string;
+  display_name: string;
+  role: InviteRole;
+  created_at: number;
+  last_used_at: number | null;
+  /** Documents it has been given an invite on so far. */
+  documents: number;
+}
+
+function toAgentWire(db: Database, row: KeyringAgentRow): AgentWire {
+  const { n } = db
+    .prepare('SELECT count(*) AS n FROM keyring_agent_invites WHERE agent_id = ?')
+    .get(row.id) as { n: number };
+  return {
+    id: row.id,
+    display_name: row.display_name,
+    role: row.role,
+    created_at: row.created_at,
+    last_used_at: row.last_used_at,
+    documents: n,
+  };
+}
+
+function ringAgents(db: Database, ringToken: string): KeyringAgentRow[] {
+  return db
+    .prepare('SELECT * FROM keyring_agents WHERE keyring_token = ? ORDER BY created_at')
+    .all(ringToken) as KeyringAgentRow[];
+}
+
+function listAgents(c: Context, db: Database) {
+  const ring = readKeyringRow(db, c);
+  if (!ring) return c.json({ error: 'not-found' }, 404);
+  c.header('Cache-Control', 'no-store');
+  return c.json({ agents: ringAgents(db, ring.token).map((a) => toAgentWire(db, a)) });
+}
+
+async function createAgent(c: Context, db: Database) {
+  const ring = readKeyringRow(db, c);
+  if (!ring) return c.json({ error: 'not-found' }, 404);
+
+  const body = await safeJson(c);
+  if (!body) return c.json({ error: 'invalid-body' }, 400);
+  const displayName = normalizeAgentName(
+    typeof body.display_name === 'string' ? body.display_name : null,
+  );
+  const role = body.role === undefined ? 'collaborator' : body.role;
+  if (typeof role !== 'string' || !(AGENT_ROLES as readonly string[]).includes(role)) {
+    return c.json({ error: 'invalid-role' }, 400);
+  }
+
+  const existing = ringAgents(db, ring.token);
+  if (existing.length >= MAX_AGENTS_PER_RING) return c.json({ error: 'too-many-agents' }, 409);
+  // Two keys under one name would put two participants called "Claude" on
+  // the same document, indistinguishable in comments and @-mentions.
+  if (existing.some((a) => a.display_name.toLowerCase() === displayName.toLowerCase())) {
+    return c.json({ error: 'agent-name-taken' }, 409);
+  }
+
+  const key = newAgentKey();
+  const row: KeyringAgentRow = {
+    id: newAgentId(),
+    key_hash: hashAgentKey(key),
+    keyring_token: ring.token,
+    display_name: displayName,
+    role: role as InviteRole,
+    created_at: Date.now(),
+    last_used_at: null,
+  };
+  db.prepare(
+    `INSERT INTO keyring_agents
+       (id, key_hash, keyring_token, display_name, role, created_at, last_used_at)
+     VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+  ).run(row.id, row.key_hash, row.keyring_token, row.display_name, row.role, row.created_at);
+
+  c.header('Cache-Control', 'no-store');
+  return c.json({ key, agent: toAgentWire(db, row) }, 201);
+}
+
+function deleteAgent(c: Context, db: Database) {
+  const ring = readKeyringRow(db, c);
+  if (!ring) return c.json({ error: 'not-found' }, 404);
+  const agent = db
+    .prepare('SELECT * FROM keyring_agents WHERE id = ? AND keyring_token = ?')
+    .get(c.req.param('id') ?? '', ring.token) as KeyringAgentRow | undefined;
+  if (!agent) return c.json({ error: 'not-found' }, 404);
+  revokeAgent(db, agent.id);
+  return c.body(null, 204);
+}
+
+// --- agent side -------------------------------------------------------
+
+interface AgentCaller {
+  agent: KeyringAgentRow;
+  ring: KeyringRow;
+}
+
+function readAgent(db: Database, c: Context): AgentCaller | null {
+  const key = c.req.header(AGENT_KEY_HEADER);
+  if (!key) return null;
+  const agent = db
+    .prepare('SELECT * FROM keyring_agents WHERE key_hash = ?')
+    .get(hashAgentKey(key)) as KeyringAgentRow | undefined;
+  if (!agent) return null;
+  const ring = db.prepare('SELECT * FROM keyrings WHERE token = ?').get(agent.keyring_token) as
+    | KeyringRow
+    | undefined;
+  if (!ring) return null;
+
+  const now = Date.now();
+  if (agent.last_used_at === null || now - agent.last_used_at > LAST_USED_INTERVAL_MS) {
+    db.prepare('UPDATE keyring_agents SET last_used_at = ? WHERE id = ?').run(now, agent.id);
+    agent.last_used_at = now;
+  }
+  // An agent working the ring is the ring in use, so it keeps the idle
+  // sweep away as a device's pull would.
+  touchKeyringIfStale(db, ring);
+  return { agent, ring };
+}
+
+function agentSelf(c: Context, db: Database) {
+  const caller = readAgent(db, c);
+  if (!caller) return c.json({ error: 'agent-key-invalid' }, 401);
+  c.header('Cache-Control', 'no-store');
+  return c.json({ display_name: caller.agent.display_name, role: caller.agent.role });
+}
+
+interface AgentDocumentWire {
+  doc_uid: string;
+  title: string | null;
+  format: DocumentFormat;
+  folder_uid: string | null;
+  password_protected: boolean;
+  updated_at: number;
+  /** The role the agent gets here, or null when the ring holds no admin link for it. */
+  role: InviteRole | null;
+  /** The ring's only links here no longer exist: rotated on a device that has not synced. */
+  link_stale: boolean;
+}
+
+/**
+ * The ring's documents, without a single token in them: the agent gets
+ * access one document at a time through `/access`, so that every invite
+ * it ends up holding is one the server minted for it and can revoke.
+ */
+function agentDocuments(c: Context, db: Database) {
+  const caller = readAgent(db, c);
+  if (!caller) return c.json({ error: 'agent-key-invalid' }, 401);
+
+  const rows = db
+    .prepare(
+      `SELECT kd.doc_uid, COALESCE(kd.title, d.name) AS title, d.format, d.updated_at,
+              d.folder_uid, gate.uid AS gate_uid, gate.password_hash, i.kind AS kind
+         FROM keyring_docs kd
+         JOIN documents d ON d.uid = kd.doc_uid
+         JOIN documents gate ON gate.uid = COALESCE(d.folder_uid, d.uid)
+         LEFT JOIN invites i ON i.token = kd.invite_token AND i.doc_uid = gate.uid
+        WHERE kd.keyring_token = ?
+        ORDER BY d.updated_at DESC`,
+    )
+    .all(caller.ring.token) as Array<{
+    doc_uid: string;
+    title: string | null;
+    format: DocumentFormat;
+    updated_at: number;
+    folder_uid: string | null;
+    gate_uid: string;
+    password_hash: string | null;
+    kind: string | null;
+  }>;
+  // One admin link opens the whole folder, so coverage is per gate.
+  const kindsByGate = new Map<string, Array<string | null>>();
+  for (const r of rows)
+    kindsByGate.set(r.gate_uid, [...(kindsByGate.get(r.gate_uid) ?? []), r.kind]);
+
+  const docs: AgentDocumentWire[] = rows.map((r) => {
+    const coverage = coverageOf(kindsByGate.get(r.gate_uid) ?? []);
+    return {
+      doc_uid: r.doc_uid,
+      title: r.title,
+      format: r.format,
+      folder_uid: r.folder_uid,
+      password_protected: r.password_hash !== null,
+      updated_at: r.updated_at,
+      role: coverage === 'admin' ? caller.agent.role : null,
+      link_stale: coverage === 'stale',
+    };
+  });
+  c.header('Cache-Control', 'no-store');
+  return c.json({ display_name: caller.agent.display_name, role: caller.agent.role, docs });
+}
+
+/**
+ * The agent's own invite on one document, minted on first use and reused
+ * after. Re-minted when the old one is gone — an admin deleting it from
+ * the access panel removes that link, not the key's standing to ask.
+ */
+function agentAccess(c: Context, db: Database) {
+  const caller = readAgent(db, c);
+  if (!caller) return c.json({ error: 'agent-key-invalid' }, 401);
+
+  const doc = db.prepare('SELECT * FROM documents WHERE uid = ?').get(c.req.param('uid') ?? '') as
+    | DocumentRow
+    | undefined;
+  if (!doc) return c.json({ error: 'not-found' }, 404);
+  const gateUid = doc.folder_uid ?? doc.uid;
+
+  const coverage = ringCoverage(db, caller.ring.token, gateUid);
+  if (coverage === 'none') return c.json({ error: 'not-in-keyring' }, 404);
+  if (coverage === 'not-admin') return c.json({ error: 'not-delegable' }, 403);
+
+  const { agent } = caller;
+  const token = db.transaction(() => {
+    const mapped = db
+      .prepare(
+        `SELECT ai.invite_token FROM keyring_agent_invites ai
+           JOIN invites i ON i.token = ai.invite_token AND i.doc_uid = ai.gate_uid
+          WHERE ai.agent_id = ? AND ai.gate_uid = ?`,
+      )
+      .get(agent.id, gateUid) as { invite_token: string } | null;
+    if (mapped) return mapped.invite_token;
+    // A dead admin link proves nothing about who administers the document
+    // now, so it is good for keeping an invite but not for minting one.
+    if (coverage === 'stale') return null;
+
+    const invite = createInviteRow(db, {
+      docUid: gateUid,
+      displayName: agent.display_name,
+      role: agent.role,
+      kind: 'named',
+      note: AGENT_INVITE_NOTE,
+      createdByName: caller.ring.display_name,
+    });
+    db.prepare(
+      `INSERT INTO keyring_agent_invites (agent_id, gate_uid, invite_token, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(agent_id, gate_uid)
+         DO UPDATE SET invite_token = excluded.invite_token, created_at = excluded.created_at`,
+    ).run(agent.id, gateUid, invite.token, invite.created_at);
+    return invite.token;
+  })();
+  if (!token) return c.json({ error: 'keyring-link-stale' }, 409);
+
+  const role = (
+    db.prepare('SELECT role FROM invites WHERE token = ?').get(token) as { role: InviteRole }
+  ).role;
+  c.header('Cache-Control', 'no-store');
+  return c.json({ invite_token: token, role, gate_uid: gateUid });
+}
+
+/**
+ * Record a document the agent created in the ring, so it reaches the
+ * owner's devices. Only its admin link: that is what a creator holds, and
+ * accepting anything else would let a key fill the ring with links to
+ * documents nobody in it owns.
+ */
+async function agentAddDocument(c: Context, db: Database) {
+  const caller = readAgent(db, c);
+  if (!caller) return c.json({ error: 'agent-key-invalid' }, 401);
+
+  const docUid = c.req.param('uid') ?? '';
+  const body = await safeJson(c);
+  if (!body) return c.json({ error: 'invalid-body' }, 400);
+  const inviteToken = typeof body.invite_token === 'string' ? body.invite_token : '';
+  const admin = db
+    .prepare(
+      `SELECT 1 FROM invites i
+         JOIN documents d ON d.uid = ?
+        WHERE i.token = ? AND i.kind = 'admin' AND i.doc_uid = COALESCE(d.folder_uid, d.uid)`,
+    )
+    .get(docUid, inviteToken);
+  if (!admin) return c.json({ error: 'admin-invite-required' }, 403);
+
+  const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) || null : null;
+  const outcome = upsertKeyringDoc(db, caller.ring.token, docUid, inviteToken, title);
+  if (outcome === 'full') return c.json({ error: 'keyring-full' }, 409);
+  return c.json({ ok: true }, 200);
+}
+
+// --- lifecycle --------------------------------------------------------
+
+type RingCoverage = 'admin' | 'stale' | 'not-admin' | 'none';
+
+/**
+ * What a ring holds for a gate: a live admin link, only links that no
+ * longer exist (rotated on a device that has not synced since), some
+ * other live link, or nothing.
+ */
+function ringCoverage(db: Database, ringToken: string, gateUid: string): RingCoverage {
+  const rows = db
+    .prepare(
+      `SELECT i.kind FROM keyring_docs kd
+         JOIN documents d ON d.uid = kd.doc_uid
+         LEFT JOIN invites i ON i.token = kd.invite_token AND i.doc_uid = ?
+        WHERE kd.keyring_token = ? AND COALESCE(d.folder_uid, d.uid) = ?`,
+    )
+    .all(gateUid, ringToken, gateUid) as Array<{ kind: string | null }>;
+  return coverageOf(rows.map((r) => r.kind));
+}
+
+function coverageOf(kinds: Array<string | null>): RingCoverage {
+  if (kinds.length === 0) return 'none';
+  if (kinds.includes('admin')) return 'admin';
+  return kinds.every((k) => k === null) ? 'stale' : 'not-admin';
+}
+
+function deleteAgentInvite(db: Database, inviteToken: string): void {
+  db.prepare('DELETE FROM invites WHERE token = ?').run(inviteToken);
+  revokeInviteSessions(db, inviteToken);
+}
+
+/** Delete one agent and every invite minted for it. */
+export function revokeAgent(db: Database, agentId: string): void {
+  db.transaction(() => {
+    const minted = db
+      .prepare('SELECT invite_token FROM keyring_agent_invites WHERE agent_id = ?')
+      .all(agentId) as Array<{ invite_token: string }>;
+    for (const { invite_token } of minted) deleteAgentInvite(db, invite_token);
+    db.prepare('DELETE FROM keyring_agent_invites WHERE agent_id = ?').run(agentId);
+    db.prepare('DELETE FROM keyring_agents WHERE id = ?').run(agentId);
+  })();
+}
+
+/** A ring that ends takes its agents' access with it. */
+export function revokeRingAgents(db: Database, ringToken: string): void {
+  for (const agent of ringAgents(db, ringToken)) revokeAgent(db, agent.id);
+}
+
+/**
+ * After a ring stops holding an admin link for a document — forgotten
+ * ring-wide, or replaced by a lesser link — its agents lose their invites
+ * there too. Agent access follows the ring; it never outlives it.
+ */
+export function revokeUncoveredAgentInvites(db: Database, ringToken: string, docUid: string): void {
+  const doc = db.prepare('SELECT uid, folder_uid FROM documents WHERE uid = ?').get(docUid) as
+    | { uid: string; folder_uid: string | null }
+    | undefined;
+  if (!doc) return;
+  const gateUid = doc.folder_uid ?? doc.uid;
+  if (ringCoverage(db, ringToken, gateUid) === 'admin') return;
+  const minted = db
+    .prepare(
+      `SELECT ai.agent_id, ai.invite_token FROM keyring_agent_invites ai
+         JOIN keyring_agents a ON a.id = ai.agent_id
+        WHERE a.keyring_token = ? AND ai.gate_uid = ?`,
+    )
+    .all(ringToken, gateUid) as Array<{ agent_id: string; invite_token: string }>;
+  db.transaction(() => {
+    for (const row of minted) {
+      deleteAgentInvite(db, row.invite_token);
+      db.prepare('DELETE FROM keyring_agent_invites WHERE agent_id = ? AND gate_uid = ?').run(
+        row.agent_id,
+        gateUid,
+      );
+    }
+  })();
+}

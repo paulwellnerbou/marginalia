@@ -6,6 +6,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { type App, createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
+import { publicUrl } from '../src/routes/mcp.js';
 
 /**
  * The hosted MCP endpoint, driven by a real MCP client over real HTTP.
@@ -31,11 +32,13 @@ describe('hosted MCP endpoint', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  async function connect(query = ''): Promise<Client> {
+  async function connect(query = '', headers: Record<string, string> = {}): Promise<Client> {
     const client = new Client({ name: 'test', version: '0' });
     // The SDK's client transport declares `sessionId?: string`, which the
     // repo's exactOptionalPropertyTypes rejects against `Transport`.
-    const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp${query}`));
+    const transport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp${query}`), {
+      requestInit: { headers },
+    });
     await client.connect(transport as unknown as Parameters<Client['connect']>[0]);
     return client;
   }
@@ -419,6 +422,207 @@ describe('hosted MCP endpoint', () => {
     await withToken.close();
   });
 
+  test('an agent key opens the whole keyring by bare uid, and files what it creates', async () => {
+    const owner = {
+      'content-type': 'application/json',
+      'x-marginalia-client': 'owner-client-0001',
+      'x-marginalia-client-name': 'Paul',
+    };
+    const upload = async (title: string) => {
+      const res = await fetch(`${baseUrl}/api/documents`, {
+        method: 'POST',
+        headers: owner,
+        body: JSON.stringify({ markdown: `# ${title}\n\nAlpha.\n` }),
+      });
+      return (await res.json()) as { uid: string; admin_invite: { token: string } };
+    };
+    const one = await upload('One');
+    const two = await upload('Two');
+    const ringRes = await fetch(`${baseUrl}/api/keyrings`, {
+      method: 'POST',
+      headers: owner,
+      body: JSON.stringify({
+        docs: [one, two].map((d) => ({ doc_uid: d.uid, invite_token: d.admin_invite.token })),
+      }),
+    });
+    const ring = ((await ringRes.json()) as { token: string }).token;
+    const keyRes = await fetch(`${baseUrl}/api/keyrings/self/agents`, {
+      method: 'POST',
+      headers: { ...owner, 'x-marginalia-keyring': ring },
+      body: JSON.stringify({ display_name: 'Codex', role: 'collaborator' }),
+    });
+    const { key } = (await keyRes.json()) as { key: string };
+
+    // No `?name=`: the key carries it.
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    expect(await callText(agent, 'get_identity')).toContain('display name: Codex');
+    const listed = await callText(agent, 'list_documents');
+    expect(listed).toContain(one.uid);
+    expect(listed).toContain(two.uid);
+    expect(listed).not.toContain(one.admin_invite.token);
+
+    expect(
+      await callText(agent, 'get_document', { document: two.uid, include_source: false }),
+    ).toContain('your role: collaborator');
+    await callText(agent, 'create_comment', {
+      document: two.uid,
+      anchor_text: 'Alpha.',
+      body: 'through the agent key',
+    });
+    const threads = await callText(agent, 'list_threads', { document: two.uid });
+    expect(threads).toContain('Codex');
+
+    const created = await callText(agent, 'create_document', { source: '# Fresh\n\nNew.\n' });
+    const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
+    expect(created).toContain('added to the user’s keyring');
+    expect(
+      await callText(agent, 'get_document', { document: uid, include_source: false }),
+    ).toContain('your role: collaborator');
+    const pulled = await fetch(`${baseUrl}/api/keyrings/self`, {
+      headers: { ...owner, 'x-marginalia-keyring': ring },
+    });
+    const docs = ((await pulled.json()) as { docs: Array<{ doc_uid: string; role: string }> }).docs;
+    expect(docs.find((d) => d.doc_uid === uid)?.role).toBe('admin');
+
+    // The owner deletes the agent's invite on `two`; the session's
+    // remembered token dies with it, and the key mints a fresh one.
+    const listing = await fetch(`${baseUrl}/api/documents/${two.uid}/invites`, {
+      headers: { ...owner, 'x-marginalia-invite': two.admin_invite.token },
+    });
+    const agentInvite = (
+      (await listing.json()) as { invites: Array<{ token: string; kind: string }> }
+    ).invites.find((i) => i.kind === 'named');
+    await fetch(`${baseUrl}/api/documents/${two.uid}/invites/${agentInvite?.token}`, {
+      method: 'DELETE',
+      headers: { ...owner, 'x-marginalia-invite': two.admin_invite.token },
+    });
+    await callText(agent, 'create_comment', {
+      document: two.uid,
+      anchor_text: 'Alpha.',
+      body: 'after the invite was deleted',
+    });
+    await agent.close();
+  });
+
+  test('a document outside the keyring says why the agent key could not open it', async () => {
+    const owner = {
+      'content-type': 'application/json',
+      'x-marginalia-client': 'owner-client-0001',
+      'x-marginalia-client-name': 'Paul',
+    };
+    const res = await fetch(`${baseUrl}/api/documents`, {
+      method: 'POST',
+      headers: owner,
+      body: JSON.stringify({ markdown: '# Elsewhere\n' }),
+    });
+    const outside = (await res.json()) as { uid: string };
+    const ringRes = await fetch(`${baseUrl}/api/keyrings`, {
+      method: 'POST',
+      headers: owner,
+      body: JSON.stringify({ docs: [] }),
+    });
+    const ring = ((await ringRes.json()) as { token: string }).token;
+    const keyRes = await fetch(`${baseUrl}/api/keyrings/self/agents`, {
+      method: 'POST',
+      headers: { ...owner, 'x-marginalia-keyring': ring },
+      body: JSON.stringify({}),
+    });
+    const { key } = (await keyRes.json()) as { key: string };
+
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const failed = (await agent.callTool({
+      name: 'get_document',
+      arguments: { document: outside.uid },
+    })) as { content: Array<{ text?: string }>; isError?: boolean };
+    expect(failed.isError).toBe(true);
+    expect(failed.content.map((c) => c.text).join('')).toContain('not in the user’s keyring');
+    await agent.close();
+  });
+
+  const OWNER = {
+    'content-type': 'application/json',
+    'x-marginalia-client': 'owner-client-0001',
+    'x-marginalia-client-name': 'Paul',
+  };
+
+  async function ownerDocInRing(): Promise<{
+    doc: { uid: string; admin_invite: { token: string } };
+    key: string;
+  }> {
+    const res = await fetch(`${baseUrl}/api/documents`, {
+      method: 'POST',
+      headers: OWNER,
+      body: JSON.stringify({ markdown: '# Ring\n\nAlpha.\n' }),
+    });
+    const doc = (await res.json()) as { uid: string; admin_invite: { token: string } };
+    const ringRes = await fetch(`${baseUrl}/api/keyrings`, {
+      method: 'POST',
+      headers: OWNER,
+      body: JSON.stringify({
+        docs: [{ doc_uid: doc.uid, invite_token: doc.admin_invite.token }],
+      }),
+    });
+    const ring = ((await ringRes.json()) as { token: string }).token;
+    const keyRes = await fetch(`${baseUrl}/api/keyrings/self/agents`, {
+      method: 'POST',
+      headers: { ...OWNER, 'x-marginalia-keyring': ring },
+      body: JSON.stringify({ display_name: 'Codex', role: 'collaborator' }),
+    });
+    return { doc, key: ((await keyRes.json()) as { key: string }).key };
+  }
+
+  test('a link handed to a keyed agent is not swapped for its own invite on a refusal', async () => {
+    const { doc, key } = await ownerDocInRing();
+    const editorRes = await fetch(`${baseUrl}/api/documents/${doc.uid}/invites`, {
+      method: 'POST',
+      headers: { ...OWNER, 'x-marginalia-invite': doc.admin_invite.token },
+      body: JSON.stringify({ kind: 'named', display_name: 'Codex', role: 'editor' }),
+    });
+    const editor = ((await editorRes.json()) as { invite: { token: string } }).invite.token;
+
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    expect(
+      await callText(agent, 'get_document', {
+        document: `${baseUrl}/d/${doc.uid}/${editor}`,
+        include_source: false,
+      }),
+    ).toContain('your role: editor');
+    const refused = (await agent.callTool({
+      name: 'create_invite',
+      arguments: { document: doc.uid, role: 'reader' },
+    })) as { isError?: boolean };
+    expect(refused.isError).toBe(true);
+    expect(
+      await callText(agent, 'get_document', { document: doc.uid, include_source: false }),
+    ).toContain('your role: editor');
+    await agent.close();
+  });
+
+  test('behind a trusted proxy, the public https origin is the one it knows', async () => {
+    http.stop(true);
+    await app.close();
+    app = await createApp(
+      loadConfig({ dataDir: dir, port: 0, webDir: join(dir, 'web'), trustedProxyHops: 1 }),
+    );
+    http = Bun.serve({ port: 0, fetch: app.hono.fetch, websocket: app.websocket });
+    baseUrl = `http://localhost:${http.port}`;
+    const { doc, key } = await ownerDocInRing();
+
+    const agent = await connect(`?key=${encodeURIComponent(key)}`, {
+      'x-forwarded-proto': 'https',
+      'x-forwarded-host': 'marginalia.example',
+    });
+    const listed = await callText(agent, 'list_documents');
+    expect(listed).toContain(`url: https://marginalia.example/d/${doc.uid}`);
+    expect(
+      await callText(agent, 'get_document', {
+        document: `https://marginalia.example/d/${doc.uid}`,
+        include_source: false,
+      }),
+    ).toContain('your role: collaborator');
+    await agent.close();
+  });
+
   test('a #comment- link selects that thread, opener or reply', async () => {
     const admin = await connect('?name=Paul');
     const created = await callText(admin, 'create_document', {
@@ -633,5 +837,31 @@ describe('hosted MCP endpoint', () => {
     expect(res.isError).toBe(true);
     expect(res.content.map((c) => c.text).join('')).toContain('not in MARGINALIA_ALLOWED_HOSTS');
     await client.close();
+  });
+});
+
+describe('publicUrl', () => {
+  async function originFor(hops: number, headers: Record<string, string>): Promise<string> {
+    const { Hono } = await import('hono');
+    const app = new Hono().get('/mcp', (c) => c.text(publicUrl(c, hops).origin));
+    return (await app.fetch(new Request('http://internal:8080/mcp', { headers }))).text();
+  }
+
+  test('takes the scheme and host the trusted proxy vouched for', async () => {
+    const forwarded = { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'marginalia.example' };
+    expect(await originFor(1, forwarded)).toBe('https://marginalia.example');
+    expect(await originFor(0, forwarded)).toBe('http://internal:8080');
+  });
+
+  test('ignores a chain shorter than the configured hops, which the caller could have written', async () => {
+    expect(
+      await originFor(2, { 'x-forwarded-proto': 'https', 'x-forwarded-host': 'evil.example' }),
+    ).toBe('http://internal:8080');
+    expect(
+      await originFor(2, {
+        'x-forwarded-proto': 'https, http',
+        'x-forwarded-host': 'marginalia.example, caddy.internal',
+      }),
+    ).toBe('https://marginalia.example');
   });
 });
