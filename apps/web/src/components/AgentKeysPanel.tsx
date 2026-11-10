@@ -35,6 +35,7 @@ import { McpConnectionSetup } from './McpConnectionSetup.js';
 export function AgentKeysPanel() {
   const [token, setToken] = useState(() => loadKeyringToken());
   const [agents, setAgents] = useState<AgentKeyWire[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [name, setName] = useState('');
   const [role, setRole] = useState<GrantableRole>('collaborator');
   const [busy, setBusy] = useState(false);
@@ -47,9 +48,11 @@ export function AgentKeysPanel() {
     if (!token) return;
     try {
       setAgents((await listAgentKeys(token)).agents);
+      setLoadFailed(false);
     } catch (err) {
       reportError('AgentKeysPanel.list', err);
       setAgents([]);
+      setLoadFailed(true);
     }
   }, [token]);
 
@@ -154,7 +157,11 @@ export function AgentKeysPanel() {
         </Callout.Root>
       )}
 
-      <AccessList title="Your agents" loading={agents === null} empty="No agent keys yet.">
+      <AccessList
+        title="Your agents"
+        loading={agents === null}
+        empty={loadFailed ? 'Could not load your agent keys.' : 'No agent keys yet.'}
+      >
         {(agents ?? []).map((agent) => (
           <AccessRow
             key={agent.id}

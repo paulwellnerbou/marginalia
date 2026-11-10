@@ -388,9 +388,8 @@ export function InvitesPanel({
       </Box>
 
       <AccessCreateForm title="New link" onSubmit={() => void addInvite()} hint={roleSummary(role)}>
-        <AccessField label="Kind" htmlFor="invite-kind">
+        <AccessField label="Kind">
           <SegmentedControl.Root
-            id="invite-kind"
             size="2"
             value={kind}
             onValueChange={(v) => setKind(v as 'named' | 'generic')}
@@ -494,11 +493,16 @@ export function InvitesPanel({
   );
 }
 
-/** Mirrors the server's `AGENT_INVITE_NOTE`, set on links an agent key opened. */
+/**
+ * Mirrors the server's `AGENT_INVITE_NOTE`. A copied document carries the
+ * note onto links no agent key owns, so it marks an agent, not a key.
+ */
 const AGENT_INVITE_NOTE = 'AI agent via keyring';
 
 function inviteMeta(inv: Invite): string {
-  if (inv.note === AGENT_INVITE_NOTE) return 'AI agent · connected with an agent key';
+  if (inv.note === AGENT_INVITE_NOTE) {
+    return `AI agent · opens as ${inv.display_name ?? 'the agent'}`;
+  }
   switch (inv.kind) {
     case 'admin':
       return 'Admin link · can be replaced, not revoked';

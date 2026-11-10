@@ -52,15 +52,22 @@ export function AccessField({
   children,
 }: {
   label: ReactNode;
-  htmlFor: string;
+  /** Omit for a control that labels itself (a segmented control is no `<label>` target). */
+  htmlFor?: string;
   grow?: boolean;
   children: ReactNode;
 }) {
   return (
     <Box style={grow ? { flex: '1 1 10rem', minWidth: 0 } : undefined}>
-      <Text as="label" size="1" color="gray" htmlFor={htmlFor} className="access-field-label">
-        {label}
-      </Text>
+      {htmlFor ? (
+        <Text as="label" size="1" color="gray" htmlFor={htmlFor} className="access-field-label">
+          {label}
+        </Text>
+      ) : (
+        <Text as="div" size="1" color="gray" className="access-field-label" aria-hidden="true">
+          {label}
+        </Text>
+      )}
       {children}
     </Box>
   );

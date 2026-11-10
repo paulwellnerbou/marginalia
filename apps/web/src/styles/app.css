@@ -1331,14 +1331,14 @@ button.primary:disabled {
   letter-spacing: 0.04em;
 }
 
-/* Role badges (admin/editor/reader) rendered via Radix <Badge> — uppercase
-   presentation is purely cosmetic, not baked into the TS source. */
 /* Reserves the cancel button's width so arming doesn't shift the row; it is
    not a control until armed. */
 .confirm-pair-placeholder {
   visibility: hidden;
 }
 
+/* Role badges (admin/editor/reader) rendered via Radix <Badge> — uppercase
+   presentation is purely cosmetic, not baked into the TS source. */
 .role-badge {
   text-transform: uppercase;
   letter-spacing: 0.06em;
