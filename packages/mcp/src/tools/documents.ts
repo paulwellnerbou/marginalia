@@ -263,10 +263,16 @@ export function registerDocumentTools(
               ? 'admin link: added to the user’s keyring — it is in their document list on every ' +
                 'synced device, so it is not repeated here'
               : `admin link (full control — keep private): ${base.baseUrl}${created.admin_invite.url}`,
-            inviteOnly
-              ? `token-free link: ${base.baseUrl}/d/${created.uid} — invite-only, so it opens ` +
-                'nothing until you mint that person their own access link'
-              : `read-only link: ${base.baseUrl}/d/${created.uid}`,
+            // The viewer fetches a ring's link for a bare URL, so on the
+            // user's synced devices this opens with their admin access.
+            filed.ok
+              ? `link for the user: ${base.baseUrl}/d/${created.uid} — opens with full access on ` +
+                'their synced devices; to anyone else it opens ' +
+                (inviteOnly ? 'nothing (invite-only)' : 'read-only')
+              : inviteOnly
+                ? `token-free link: ${base.baseUrl}/d/${created.uid} — invite-only, so it opens ` +
+                  'nothing until you mint that person their own access link'
+                : `read-only link: ${base.baseUrl}/d/${created.uid}`,
             created.password
               ? `password (shown once, store it now): ${created.password}`
               : 'no password gate',

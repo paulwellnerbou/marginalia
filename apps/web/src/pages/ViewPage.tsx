@@ -4,18 +4,13 @@ import { Link, useParams } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { DocumentLayout } from '../components/DocumentLayout.js';
 import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
-import {
-  ApiError,
-  claimInvite,
-  type Document,
-  type DocumentSettingsResponse,
-  getDocument,
-} from '../lib/api.js';
+import { ApiError, claimInvite, type Document, type DocumentSettingsResponse } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
 import { adoptDocumentName, pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
+import { openDocument } from '../lib/open-document.js';
 import { openTab } from '../lib/open-tabs.js';
 import { recordVisit } from '../lib/recent-docs.js';
 
@@ -31,7 +26,7 @@ export function ViewPage() {
   const { uid, token } = useParams<{ uid: string; token?: string }>();
   const [doc, setDoc] = useState<Document | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Bumped by the error "Try again" button to re-trigger getDocument.
+  // Bumped by the error "Try again" button to re-trigger the load.
   const [reloadNonce, setReloadNonce] = useState(0);
   const [pending, setPending] = useState(false);
 
@@ -74,7 +69,7 @@ export function ViewPage() {
     setError(null);
     (async () => {
       try {
-        const d = await getDocument(uid);
+        const d = await openDocument(uid);
         if (!cancelled) setDoc(d);
       } catch (err) {
         if (cancelled) return;
