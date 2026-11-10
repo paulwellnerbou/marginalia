@@ -5,7 +5,7 @@ import {
   exportDocx,
   extractDocumentTitle,
   htmlSectionSpan,
-  locateBlockRangeHtml,
+  locateAnchorSpan,
   locateBlocksHtml,
   renderDocument,
 } from '../src/index.js';
@@ -95,10 +95,11 @@ describe('HTML documents: block model', () => {
   });
 
   test('a span covers both blocks and the markup between them', () => {
-    const located = locateBlocksHtml(page);
-    const id = (text: string) => [...located.byId].find(([, r]) => r.text === text)?.[0] ?? '';
+    const { occurrences } = locateBlocksHtml(page);
+    const id = (text: string) =>
+      [...occurrences.values()].flat().find((o) => o.text === text)?.id ?? '';
     // Endpoints in either order.
-    const span = locateBlockRangeHtml(page, id('5'), id('Erstens'));
+    const span = locateAnchorSpan(occurrences, id('5'), id('Erstens'), null, 'html');
     expect(span && page.slice(span.start, span.end)).toStartWith('<li>Erstens');
     expect(span && page.slice(span.start, span.end)).toEndWith('<td class="n">5</td>');
     expect(
@@ -108,6 +109,25 @@ describe('HTML documents: block model', () => {
         'html',
       ),
     ).toBe(true);
+  });
+
+  test("a repeated cell resolves to the copy in the anchor's section, not the first", () => {
+    const src =
+      '<h2>A</h2><table><tr><td>ja</td></tr></table><h2>B</h2><table><tr><td>ja</td></tr></table>';
+    const { occurrences } = locateBlocksHtml(src);
+    const copies = [...occurrences.values()].flat().filter((o) => o.text === 'ja');
+    expect(copies).toHaveLength(2);
+    expect(copies[0]?.id).toBe(copies[1]?.id);
+    const second = copies[1]!;
+    const range = locateAnchorSpan(
+      occurrences,
+      second.id,
+      null,
+      { headingPath: second.headingPath, sectionIndexPath: second.sectionIndexPath },
+      'html',
+    );
+    expect(range?.start).toBe(second.start);
+    expect(range?.start).toBe(src.lastIndexOf('<td>ja</td>'));
   });
 
   test('a fragment without html/head/body renders the same way', async () => {

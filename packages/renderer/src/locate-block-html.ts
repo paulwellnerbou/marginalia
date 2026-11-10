@@ -26,30 +26,6 @@ export function locateAllBlocksHtml(source: string): Map<string, BlockSourceRang
 }
 
 /**
- * Span of two blocks, earlier start to later end. Any two blocks may be
- * merged: unlike a Markdown table row, HTML markup between them survives
- * a splice as long as the replacement keeps it, and the composer shows it.
- */
-export function locateBlockRangeHtml(
-  source: string,
-  startId: string,
-  endId: string | null,
-): BlockSourceRange | null {
-  const all = locateAllBlocksHtml(source);
-  const a = all.get(startId);
-  if (!a) return null;
-  if (!endId || endId === startId) return a;
-  const b = all.get(endId);
-  if (!b) return null;
-  return {
-    start: Math.min(a.start, b.start),
-    end: Math.max(a.end, b.end),
-    kind: 'multi',
-    text: '',
-  };
-}
-
-/**
  * The source span of the section a heading opens, as whole elements: from
  * the heading — or the wrapper it leads, `<section><h2>` — through every
  * following sibling that ends before `limit` (the next same-or-higher

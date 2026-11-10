@@ -41,7 +41,6 @@ export {
 export {
   htmlSectionSpan,
   locateAllBlocksHtml,
-  locateBlockRangeHtml,
   locateBlocksHtml,
 } from './locate-block-html.js';
 export type { DocumentFormat } from './render.js';
