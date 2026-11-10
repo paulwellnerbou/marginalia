@@ -115,9 +115,9 @@ export class MarginaliaClient {
 
   /**
    * File a document this agent created in the user's keyring, then drop
-   * its admin link: the key's role is the ceiling the user chose, and the
-   * creator's link would otherwise sit above it for as long as it is
-   * remembered. From then on the key's own invite is used.
+   * its admin link: the user chose the key's role, and the creator's link
+   * would otherwise sit above it for as long as it is remembered. From
+   * then on the key's own invite is used.
    */
   async fileInKeyring(ref: DocumentRef, title: string | null): Promise<void> {
     await this.agentJson(`/api/agent/documents/${encodeURIComponent(ref.uid)}`, {

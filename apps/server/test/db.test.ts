@@ -145,6 +145,42 @@ describe('openDatabase migrations', () => {
     db2.close();
   });
 
+  test('agent invites already set apart from their key stop following it on upgrade', () => {
+    {
+      const seed = openDatabase(dbPath);
+      seed.exec('ALTER TABLE keyring_agent_invites DROP COLUMN follows_key');
+      seed
+        .prepare(
+          `INSERT INTO keyring_agents (id, key_hash, keyring_token, display_name, role, created_at)
+           VALUES ('agent-1', 'hash', 'ring', 'Claude', 'collaborator', 0)`,
+        )
+        .run();
+      const invite = seed.prepare(
+        `INSERT INTO invites (token, doc_uid, display_name, role, note, created_at, created_by_name)
+         VALUES (?, ?, 'Claude', ?, NULL, 0, 'Paul')`,
+      );
+      invite.run('same', 'doc-1', 'collaborator');
+      invite.run('other', 'doc-2', 'reader');
+      const mapping = seed.prepare(
+        `INSERT INTO keyring_agent_invites (agent_id, gate_uid, invite_token, created_at)
+         VALUES ('agent-1', ?, ?, 0)`,
+      );
+      mapping.run('doc-1', 'same');
+      mapping.run('doc-2', 'other');
+      seed.close();
+    }
+
+    const db = openDatabase(dbPath);
+    const rows = db
+      .prepare('SELECT invite_token, follows_key FROM keyring_agent_invites ORDER BY invite_token')
+      .all();
+    expect(rows).toEqual([
+      { invite_token: 'other', follows_key: 0 },
+      { invite_token: 'same', follows_key: 1 },
+    ]);
+    db.close();
+  });
+
   test('documents schema: legacy tables get nullable name column on open', () => {
     {
       const seed = new Database(dbPath);

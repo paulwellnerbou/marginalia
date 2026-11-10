@@ -15,6 +15,12 @@ const MESSAGES: Record<string, string> = {
   'agent-name-taken':
     'An agent key with that name already exists. Agents are told apart by name in comments, so pick another.',
   'too-many-agents': 'This keyring has as many agent keys as it can hold. Revoke one first.',
+  'invalid-role': 'An agent can be a reader, collaborator or editor.',
+  'not-in-keyring': 'This document is not in your keyring, so your agent keys cannot reach it.',
+  'not-delegable':
+    'Your keyring holds no admin link for this document, so it cannot give your agents access here.',
+  'keyring-link-stale':
+    'The admin link your keyring holds for this document was rotated on another device. Open the document there, or sync, and try again.',
   // Proposal workflow
   'proposal-conflict':
     'This proposal no longer applies: the document changed where it edits. Use “Resolve conflict” to settle it against the current text, or reject it.',

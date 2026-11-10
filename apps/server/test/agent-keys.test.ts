@@ -479,4 +479,230 @@ describe('keyring agent keys', () => {
     expect(second).not.toBe(first);
     expect(await roleWith(doc.uid, second)).toBe('collaborator');
   });
+
+  async function setDocRole(ringToken: string, agentId: string, uid: string, role: string) {
+    return call(`/api/keyrings/self/agents/${agentId}/documents/${uid}`, {
+      method: 'PUT',
+      headers: ring(ringToken),
+      body: { role },
+    });
+  }
+
+  async function docRoles(ringToken: string, uid: string) {
+    const res = await call(`/api/keyrings/self/agents?doc=${uid}`, { headers: ring(ringToken) });
+    const body = (await res.json()) as {
+      agents: Array<{
+        display_name: string;
+        document: {
+          role: string;
+          invited: boolean;
+          follows_key: boolean;
+          link_stale: boolean;
+          folder: boolean;
+        } | null;
+      }>;
+    };
+    return Object.fromEntries(body.agents.map((a) => [a.display_name, a.document]));
+  }
+
+  test('re-roling a key moves its invites at the old role and leaves set ones alone', async () => {
+    const a = await upload();
+    const b = await upload();
+    const token = await ringWith(a, b);
+    const { key, agent: wire } = await mintKey(token);
+    const onA = ((await (await access(key, a.uid)).json()) as { invite_token: string })
+      .invite_token;
+    expect((await setDocRole(token, wire.id, b.uid, 'reader')).status).toBe(200);
+    const onB = ((await (await access(key, b.uid)).json()) as { invite_token: string })
+      .invite_token;
+
+    const res = await call(`/api/keyrings/self/agents/${wire.id}`, {
+      method: 'PATCH',
+      headers: ring(token),
+      body: { role: 'editor' },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { agent: { role: string } }).agent.role).toBe('editor');
+    expect(await roleWith(a.uid, onA)).toBe('editor');
+    expect(await roleWith(b.uid, onB)).toBe('reader');
+
+    // A document the agent opens later gets the new role.
+    const c = await upload();
+    await call(`/api/keyrings/self/docs/${c.uid}`, {
+      method: 'PUT',
+      headers: ring(token),
+      body: { invite_token: c.admin_invite.token },
+    });
+    expect(((await (await access(key, c.uid)).json()) as { role: string }).role).toBe('editor');
+
+    const admin = await call(`/api/keyrings/self/agents/${wire.id}`, {
+      method: 'PATCH',
+      headers: ring(token),
+      body: { role: 'admin' },
+    });
+    expect(admin.status).toBe(400);
+    const otherRing = await ringWith(await upload());
+    const foreign = await call(`/api/keyrings/self/agents/${wire.id}`, {
+      method: 'PATCH',
+      headers: ring(otherRing),
+      body: { role: 'reader' },
+    });
+    expect(foreign.status).toBe(404);
+  });
+
+  test('a role set on a document waits for the agent and shows in its lists', async () => {
+    const doc = await upload();
+    const token = await ringWith(doc);
+    const { key, agent: wire } = await mintKey(token);
+    const fresh = { link_stale: false, folder: false };
+    expect(await docRoles(token, doc.uid)).toEqual({
+      Claude: { role: 'collaborator', invited: false, follows_key: true, ...fresh },
+    });
+
+    expect((await setDocRole(token, wire.id, doc.uid, 'editor')).status).toBe(200);
+    expect(await docRoles(token, doc.uid)).toEqual({
+      Claude: { role: 'editor', invited: true, follows_key: false, ...fresh },
+    });
+    const listed = (await (await call('/api/agent/documents', { headers: agent(key) })).json()) as {
+      docs: Array<{ doc_uid: string; role: string | null }>;
+    };
+    expect(listed.docs.find((d) => d.doc_uid === doc.uid)?.role).toBe('editor');
+
+    const granted = (await (await access(key, doc.uid)).json()) as {
+      invite_token: string;
+      role: string;
+    };
+    expect(granted.role).toBe('editor');
+    expect((await setDocRole(token, wire.id, doc.uid, 'reader')).status).toBe(200);
+    expect(await roleWith(doc.uid, granted.invite_token)).toBe('reader');
+    expect((await setDocRole(token, wire.id, doc.uid, 'admin')).status).toBe(400);
+  });
+
+  test('a document the ring cannot delegate takes no role', async () => {
+    const mine = await upload();
+    const token = await ringWith(mine);
+    const { agent: wire } = await mintKey(token);
+    const outside = await upload();
+    expect((await setDocRole(token, wire.id, outside.uid, 'editor')).status).toBe(404);
+    expect(await docRoles(token, outside.uid)).toEqual({ Claude: null });
+    expect(app.db.prepare('SELECT count(*) AS n FROM keyring_agent_invites').get()).toEqual({
+      n: 0,
+    });
+  });
+
+  async function reRole(ringToken: string, agentId: string, role: string) {
+    const res = await call(`/api/keyrings/self/agents/${agentId}`, {
+      method: 'PATCH',
+      headers: ring(ringToken),
+      body: { role },
+    });
+    expect(res.status).toBe(200);
+  }
+
+  test('a role set on a document stays set, even once the key passes through it', async () => {
+    const doc = await upload();
+    const token = await ringWith(doc);
+    const { key, agent: wire } = await mintKey(token);
+    await setDocRole(token, wire.id, doc.uid, 'editor');
+    const invite = ((await (await access(key, doc.uid)).json()) as { invite_token: string })
+      .invite_token;
+
+    await reRole(token, wire.id, 'editor');
+    await reRole(token, wire.id, 'reader');
+    expect(await roleWith(doc.uid, invite)).toBe('editor');
+
+    // Setting it back to the key's role makes it follow the key again.
+    await setDocRole(token, wire.id, doc.uid, 'reader');
+    await reRole(token, wire.id, 'collaborator');
+    expect(await roleWith(doc.uid, invite)).toBe('collaborator');
+  });
+
+  test('a role changed in the access panel stays when the key is re-roled', async () => {
+    const doc = await upload();
+    const token = await ringWith(doc);
+    const { key, agent: wire } = await mintKey(token);
+    const invite = ((await (await access(key, doc.uid)).json()) as { invite_token: string })
+      .invite_token;
+    const changed = await call(`/api/documents/${doc.uid}/invites/${invite}`, {
+      method: 'PATCH',
+      headers: headersFor(OWNER, { [INVITE_HEADER]: doc.admin_invite.token }),
+      body: { role: 'reader' },
+    });
+    expect(changed.status).toBe(200);
+
+    await reRole(token, wire.id, 'editor');
+    await reRole(token, wire.id, 'reader');
+    await reRole(token, wire.id, 'collaborator');
+    expect(await roleWith(doc.uid, invite)).toBe('reader');
+  });
+
+  test('a rotated admin link still shows the agent’s invite there, but takes no role', async () => {
+    const doc = await upload();
+    const token = await ringWith(doc);
+    const holder = await mintKey(token);
+    await access(holder.key, doc.uid);
+    // A key that never opened the document has nothing there to show.
+    await mintKey(token, { display_name: 'Codex' });
+    await call(`/api/documents/${doc.uid}/invites/admin/rotate`, {
+      method: 'POST',
+      headers: headersFor(OWNER, { [INVITE_HEADER]: doc.admin_invite.token }),
+    });
+
+    expect(await docRoles(token, doc.uid)).toEqual({
+      Claude: {
+        role: 'collaborator',
+        invited: true,
+        follows_key: true,
+        link_stale: true,
+        folder: false,
+      },
+      Codex: null,
+    });
+    expect((await setDocRole(token, holder.agent.id, doc.uid, 'editor')).status).toBe(409);
+  });
+
+  test('a role set on one document of a folder covers the folder', async () => {
+    const story = await upload();
+    const added = await call('/api/documents', {
+      method: 'POST',
+      headers: headersFor(OWNER, { [INVITE_HEADER]: story.admin_invite.token }),
+      body: { folder: story.uid, name: 'OUTLINE', source: '# Outline\n' },
+    });
+    const outline = (await added.json()) as { uid: string };
+    const token = await ringWith(story);
+    const { agent: wire } = await mintKey(token);
+
+    expect((await docRoles(token, story.uid)).Claude?.folder).toBe(true);
+    await setDocRole(token, wire.id, outline.uid, 'reader');
+    expect(await docRoles(token, story.uid)).toEqual({
+      Claude: {
+        role: 'reader',
+        invited: true,
+        follows_key: false,
+        link_stale: false,
+        folder: true,
+      },
+    });
+  });
+
+  test('re-roling a link whose agent record outlived its key still succeeds', async () => {
+    const doc = await upload();
+    const { key, agent: wire } = await mintKey(await ringWith(doc));
+    const invite = ((await (await access(key, doc.uid)).json()) as { invite_token: string })
+      .invite_token;
+    app.db.prepare('DELETE FROM keyring_agents WHERE id = ?').run(wire.id);
+
+    const changed = await call(`/api/documents/${doc.uid}/invites/${invite}`, {
+      method: 'PATCH',
+      headers: headersFor(OWNER, { [INVITE_HEADER]: doc.admin_invite.token }),
+      body: { role: 'reader' },
+    });
+    expect(changed.status).toBe(200);
+    expect(await roleWith(doc.uid, invite)).toBe('reader');
+    expect(
+      app.db
+        .prepare('SELECT follows_key FROM keyring_agent_invites WHERE invite_token = ?')
+        .get(invite),
+    ).toEqual({ follows_key: 0 });
+  });
 });
