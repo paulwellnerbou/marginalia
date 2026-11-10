@@ -126,12 +126,12 @@
   box-shadow: none;
 }
 
-.marginalia .toc > ul > li + li {
+.marginalia .toc ul:not(ul ul) > li + li {
   border-top: 1px solid var(--md-color-border);
   padding-top: 0.7em;
 }
 
-.marginalia .toc > ul > li > a {
+.marginalia .toc ul:not(ul ul) > li > a {
   font-weight: 700;
 }
 

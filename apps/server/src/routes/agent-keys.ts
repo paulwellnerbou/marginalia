@@ -350,7 +350,26 @@ async function agentAddDocument(c: Context, db: Database) {
   const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) || null : null;
   const outcome = upsertKeyringDoc(db, caller.ring.token, docUid, inviteToken, title);
   if (outcome === 'full') return c.json({ error: 'keyring-full' }, 409);
+  renameAgentAdminLink(db, inviteToken, caller.agent.display_name, caller.ring.display_name);
   return c.json({ ok: true }, 200);
+}
+
+/**
+ * Give an admin link the agent created to the ring's owner. An admin
+ * link's name seeds whoever opens it first, so left as the agent's, the
+ * owner's first visit would sign them as the agent. Only a link named
+ * after the agent: one someone else handed it keeps its owner's name.
+ */
+function renameAgentAdminLink(
+  db: Database,
+  inviteToken: string,
+  agentName: string,
+  ownerName: string,
+): void {
+  db.prepare(
+    `UPDATE invites SET display_name = ?
+      WHERE token = ? AND kind = 'admin' AND lower(display_name) = lower(?)`,
+  ).run(ownerName, inviteToken, agentName);
 }
 
 // --- lifecycle --------------------------------------------------------

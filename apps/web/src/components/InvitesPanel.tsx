@@ -1,6 +1,5 @@
 import { CheckIcon, Cross2Icon, UpdateIcon } from '@radix-ui/react-icons';
 import {
-  Badge,
   Box,
   Button,
   Callout,
@@ -9,8 +8,6 @@ import {
   Flex,
   IconButton,
   SegmentedControl,
-  Select,
-  Separator,
   Text,
   TextField,
   Tooltip,
@@ -34,9 +31,18 @@ import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { updateOpenTabToken } from '../lib/open-tabs.js';
 import { updateRecentDocToken } from '../lib/recent-docs.js';
-import { appInviteKindColor, appRoleColor } from '../styles/theme.js';
+import { type GrantableRole, roleLabel, roleSummary } from '../lib/roles.js';
+import {
+  AccessCreateForm,
+  AccessField,
+  AccessList,
+  AccessRow,
+  RoleBadge,
+  RoleSelect,
+} from './AccessList.js';
 import { ConfirmButton } from './ConfirmButton.js';
 import { Copyable } from './Copyable.js';
+import { Disclosure } from './Disclosure.js';
 
 /**
  * Two-step inline confirm for the admin-rotate action. Kept local because
@@ -129,19 +135,6 @@ function RotateAdminButton({
   );
 }
 
-function roleLabel(role: Role): string {
-  switch (role) {
-    case 'admin':
-      return 'Admin';
-    case 'editor':
-      return 'Editor';
-    case 'collaborator':
-      return 'Collaborator';
-    case 'reader':
-      return 'Reader';
-  }
-}
-
 /**
  * `sharedWith`: the other documents of this one's folder, which open with
  * the same links — a rotated admin token has to reach them too.
@@ -158,10 +151,11 @@ export function InvitesPanel({
   const [error, setError] = useState<string | null>(null);
   const [kind, setKind] = useState<'named' | 'generic'>('named');
   const [name, setName] = useState('');
-  const [role, setRole] = useState<Role>('reader');
+  const [role, setRole] = useState<GrantableRole>('reader');
   const [submitting, setSubmitting] = useState(false);
   const [rotating, setRotating] = useState(false);
   const [shareFullView, setShareFullView] = useState(false);
+  const [explainOpen, setExplainOpen] = useState(false);
   // A set rather than one token: role changes on different rows overlap, and
   // a single slot would let the second one re-enable the first row's select
   // and then clear the flag out from under it while it is still in flight.
@@ -350,43 +344,51 @@ export function InvitesPanel({
 
   return (
     <Flex direction="column" gap="3">
-      <Text size="2" weight="medium">
-        Access links
-      </Text>
-      <Text size="1" color="gray">
-        Each link is a shareable URL. A <b>named</b> link sets the recipient's display name and is
-        only meant to be used by a specific person (useful for personal invites); a <b>generic</b>{' '}
-        link lets the visitor bring their own name (useful for "anyone with this URL can comment").
-      </Text>
-      <Box className="access-link-anatomy">
-        <Text as="div" size="1" color="gray" mb="2">
-          The URL combines the document's address with a secret access key:
+      <Box>
+        <Text size="2" weight="medium" as="p" mb="1">
+          Access links
         </Text>
-        <Flex align="center" wrap="wrap" className="access-link-anatomy__url">
-          <Code size="1">https://…/d/</Code>
-          <Code size="1" className="access-link-anatomy__document">
-            Document ID
-          </Code>
-          <Code size="1">/</Code>
-          <Code size="1" className="access-link-anatomy__token">
-            Access token
-          </Code>
-        </Flex>
-        <Text as="div" size="1" color="gray" mt="2">
-          The <b>Document ID</b> finds the document. The <b>access token</b> is the secret key that
-          lets the link holder in with the role shown below.
+        <Text size="1" color="gray" as="p">
+          Share the document with a link. Each link carries a role; changing it keeps the URL and,
+          like revoking, applies at once — even for anyone who has the document open.
         </Text>
-        <Text as="div" size="1" color="gray" mt="2">
-          Changing a role below keeps the same URL and applies right away, including to anyone who
-          already has the document open. Revoking takes effect just as immediately.
-        </Text>
+        <Disclosure
+          summary="How links work"
+          open={explainOpen}
+          onOpenChange={setExplainOpen}
+          className="access-explainer"
+        >
+          <Box className="access-link-anatomy">
+            <Text as="p" size="1" color="gray" mb="2">
+              A <b>named</b> link sets the recipient's display name and is meant for one person; a{' '}
+              <b>generic</b> link lets each visitor bring their own name, for “anyone with this URL
+              can comment”.
+            </Text>
+            <Flex align="center" wrap="wrap" className="access-link-anatomy__url">
+              <Code size="1">https://…/d/</Code>
+              <Code size="1" className="access-link-anatomy__document">
+                Document ID
+              </Code>
+              <Code size="1">/</Code>
+              <Code size="1" className="access-link-anatomy__token">
+                Access token
+              </Code>
+            </Flex>
+            <Text as="p" size="1" color="gray" mt="2">
+              The <b>Document ID</b> finds the document. The <b>access token</b> is the secret key
+              that lets the link holder in with the link's role.
+            </Text>
+            <Text as="p" size="1" color="gray" mt="2">
+              <b>Open links in full view</b> adds <Code size="1">?view=full</Code> to the links and
+              QR codes: the recipient sees only the document, its contents and the comments, and can
+              leave full view from the contents pane.
+            </Text>
+          </Box>
+        </Disclosure>
       </Box>
 
-      <Flex gap="2" align="end" wrap="wrap" className="invite-create-form">
-        <Box>
-          <Text as="div" size="1" color="gray" mb="1">
-            Kind
-          </Text>
+      <AccessCreateForm title="New link" onSubmit={() => void addInvite()} hint={roleSummary(role)}>
+        <AccessField label="Kind">
           <SegmentedControl.Root
             size="2"
             value={kind}
@@ -400,11 +402,12 @@ export function InvitesPanel({
               Generic
             </SegmentedControl.Item>
           </SegmentedControl.Root>
-        </Box>
-        <Box style={{ flex: 1, minWidth: 160 }}>
-          <Text as="label" size="1" color="gray" mb="1" htmlFor="invite-name">
-            Recipient name {kind === 'generic' && <i>(not used for generic)</i>}
-          </Text>
+        </AccessField>
+        <AccessField
+          label={kind === 'named' ? 'Recipient name' : 'Recipient name (visitors bring their own)'}
+          htmlFor="invite-name"
+          grow
+        >
           <TextField.Root
             id="invite-name"
             size="2"
@@ -414,33 +417,14 @@ export function InvitesPanel({
             maxLength={80}
             disabled={kind === 'generic'}
           />
-        </Box>
-        <Box>
-          <Text as="div" size="1" color="gray" mb="1">
-            Role
-          </Text>
-          <Select.Root value={role} onValueChange={(v) => setRole(v as Role)} size="2">
-            <Select.Trigger variant="soft" aria-label={`Role: ${roleLabel(role)}`}>
-              <Text as="span">{roleLabel(role)}</Text>
-            </Select.Trigger>
-            <Select.Content position="popper">
-              <Select.Item value="reader">Reader (view only)</Select.Item>
-              <Select.Item value="collaborator">Collaborator (comment + propose edits)</Select.Item>
-              <Select.Item value="editor">Editor (can edit directly)</Select.Item>
-              {/* 'admin' is intentionally absent — admin invites are minted
-                  at document creation and rotated via the per-row action
-                  below, never granted to third parties through this form. */}
-            </Select.Content>
-          </Select.Root>
-        </Box>
-        <Button
-          size="2"
-          disabled={submitting || (kind === 'named' && !name.trim())}
-          onClick={addInvite}
-        >
+        </AccessField>
+        <AccessField label="Role" htmlFor="invite-role">
+          <RoleSelect id="invite-role" look="field" value={role} onChange={setRole} />
+        </AccessField>
+        <Button type="submit" disabled={submitting || (kind === 'named' && !name.trim())}>
           Create link
         </Button>
-      </Flex>
+      </AccessCreateForm>
 
       {error && (
         <Callout.Root color="red" size="1">
@@ -448,102 +432,83 @@ export function InvitesPanel({
         </Callout.Root>
       )}
 
-      <Separator size="4" />
-
-      <Flex direction="column" gap="1">
-        <Text as="label" size="2">
-          <Flex align="center" gap="2">
-            <Checkbox
-              checked={shareFullView}
-              onCheckedChange={(c) => setShareFullView(c === true)}
-            />
-            Open links in full view
-          </Flex>
-        </Text>
-        <Flex pl="6">
-          <Text size="1" color="gray">
-            Adds <Code size="1">?view=full</Code> to the links and QR codes below: the recipient
-            sees only the document, its contents and the comments, and can leave full view from the
-            contents pane.
-          </Text>
-        </Flex>
-      </Flex>
-
-      {!invites ? (
-        <Text size="1" color="gray">
-          Loading…
-        </Text>
-      ) : invites.length === 0 ? (
-        <Text size="1" color="gray">
-          No invites yet.
-        </Text>
-      ) : (
-        <Flex direction="column" gap="2">
-          {invites.map((inv) => (
-            <Flex key={inv.token} direction="column" gap="2" p="2" className="invite-card">
-              <Flex align="start" justify="between" gap="2" className="invite-header">
-                <Flex align="baseline" gap="2" wrap="wrap" className="invite-header-meta">
-                  <Text size="2" weight="medium">
-                    {inv.display_name ?? <span style={{ fontStyle: 'italic' }}>Any visitor</span>}
-                  </Text>
-                  {inv.kind === 'admin' ? (
-                    // The document's own admin row: fixed, like its delete
-                    // and its absence from the create form's role list.
-                    <Badge
-                      size="1"
-                      color={appRoleColor(inv.role)}
-                      variant="soft"
-                      className="role-badge"
-                    >
-                      {inv.role}
-                    </Badge>
-                  ) : (
-                    <Select.Root
-                      value={inv.role}
-                      onValueChange={(v) => void changeRole(inv.token, v as Role)}
-                      size="1"
-                      disabled={savingRoles.has(inv.token)}
-                    >
-                      <Select.Trigger
-                        variant="soft"
-                        color={appRoleColor(inv.role)}
-                        className="role-badge"
-                        aria-label={`Role for ${inv.display_name ?? 'any visitor'}: ${roleLabel(inv.role)}`}
-                      />
-                      <Select.Content position="popper">
-                        <Select.Item value="reader">Reader</Select.Item>
-                        <Select.Item value="collaborator">Collaborator</Select.Item>
-                        <Select.Item value="editor">Editor</Select.Item>
-                      </Select.Content>
-                    </Select.Root>
-                  )}
-                  <Badge size="1" color={appInviteKindColor(inv.kind)} variant="surface">
-                    {inv.kind}
-                  </Badge>
-                </Flex>
-                <Box className="invite-header-action">
-                  {inv.kind === 'admin' ? (
-                    // Admin link: rotation, not deletion. Two-step confirm (inline
-                    // below) so a stray click doesn't orphan the admin's active
-                    // URL before they've had a chance to copy the new one.
-                    <RotateAdminButton onConfirm={rotateAdmin} disabled={rotating} />
-                  ) : (
-                    <ConfirmButton label="Revoke invite" onConfirm={() => remove(inv.token)} />
-                  )}
-                </Box>
-              </Flex>
-              <Copyable
-                text={linkWithFullView(window.location.origin + inv.url, shareFullView)}
-                multiline
-                ariaLabel="Copy invite link"
+      <AccessList
+        title="Links"
+        loading={invites === null}
+        empty="No links yet."
+        aside={
+          <Text as="label" size="1">
+            <Flex align="center" gap="2">
+              <Checkbox
                 size="1"
-                qrCode
-                className="copyable-access-link"
+                checked={shareFullView}
+                onCheckedChange={(c) => setShareFullView(c === true)}
               />
+              Open links in full view
             </Flex>
-          ))}
-        </Flex>
-      )}
+          </Text>
+        }
+      >
+        {(invites ?? []).map((inv) => (
+          <AccessRow
+            key={inv.token}
+            name={inv.display_name ?? <i>Any visitor</i>}
+            role={
+              inv.kind === 'admin' || inv.role === 'admin' ? (
+                // Fixed: the document's own admin link is rotated, never re-roled.
+                <RoleBadge role={inv.role} />
+              ) : (
+                <RoleSelect
+                  look="badge"
+                  value={inv.role}
+                  onChange={(next) => void changeRole(inv.token, next)}
+                  disabled={savingRoles.has(inv.token)}
+                  ariaLabel={`Role for ${inv.display_name ?? 'any visitor'}: ${roleLabel(inv.role)}`}
+                />
+              )
+            }
+            meta={inviteMeta(inv)}
+            action={
+              inv.kind === 'admin' ? (
+                // Rotation, not deletion, with a two-step confirm so a stray
+                // click doesn't orphan the admin's active URL.
+                <RotateAdminButton onConfirm={rotateAdmin} disabled={rotating} />
+              ) : (
+                <ConfirmButton label="Revoke link" onConfirm={() => remove(inv.token)} />
+              )
+            }
+          >
+            <Copyable
+              text={linkWithFullView(window.location.origin + inv.url, shareFullView)}
+              multiline
+              ariaLabel="Copy invite link"
+              size="1"
+              qrCode
+              className="copyable-access-link"
+            />
+          </AccessRow>
+        ))}
+      </AccessList>
     </Flex>
   );
+}
+
+/**
+ * Mirrors the server's `AGENT_INVITE_NOTE`. A copied document carries the
+ * note onto links no agent key owns, so it marks an agent, not a key.
+ */
+const AGENT_INVITE_NOTE = 'AI agent via keyring';
+
+function inviteMeta(inv: Invite): string {
+  if (inv.note === AGENT_INVITE_NOTE) {
+    return `AI agent · opens as ${inv.display_name ?? 'the agent'}`;
+  }
+  switch (inv.kind) {
+    case 'admin':
+      return 'Admin link · can be replaced, not revoked';
+    case 'named':
+      return `Personal link · opens as ${inv.display_name ?? 'its recipient'}`;
+    case 'generic':
+      return 'Open link · visitors use their own name';
+  }
 }

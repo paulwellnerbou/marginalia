@@ -193,6 +193,20 @@ test('an unsubscribed listener stops hearing changes', async () => {
   expect(seen).toEqual([null]);
 });
 
+test('a synced browser keeps the ring’s name when a document names it otherwise', async () => {
+  const { adoptDocumentName } = await import('./keyring.js');
+  const { getDisplayName, setDisplayName } = await import('./identity.js');
+  setDisplayName('Paul');
+
+  localStorage.setItem('marginalia.keyring', 'tok');
+  adoptDocumentName('Claude');
+  expect(getDisplayName()).toBe('Paul');
+
+  localStorage.removeItem('marginalia.keyring');
+  adoptDocumentName('Ann');
+  expect(getDisplayName()).toBe('Ann');
+});
+
 test('a bare link finds its token in the ring and keeps it for the viewer', async () => {
   const { inviteFromKeyring } = await import('./keyring.js');
 
