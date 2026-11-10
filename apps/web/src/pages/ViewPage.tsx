@@ -15,7 +15,7 @@ import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getDisplayName, setDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
-import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
+import { inviteFromKeyring, pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { openTab } from '../lib/open-tabs.js';
 import { recordVisit } from '../lib/recent-docs.js';
@@ -75,6 +75,10 @@ export function ViewPage() {
     setError(null);
     (async () => {
       try {
+        // Without a token a bare link opens an invite-only document not at
+        // all, and any other only as a reader, even when it is one of ours.
+        if (!loadInviteToken(uid)) await inviteFromKeyring(uid);
+        if (cancelled) return;
         const d = await getDocument(uid);
         if (!cancelled) setDoc(d);
       } catch (err) {

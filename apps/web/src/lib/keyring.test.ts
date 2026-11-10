@@ -179,3 +179,44 @@ test('an unsubscribed listener stops hearing changes', async () => {
   disconnectKeyring();
   expect(seen).toEqual([null]);
 });
+
+test('a bare link finds its token in the ring and keeps it for the viewer', async () => {
+  const { inviteFromKeyring } = await import('./keyring.js');
+
+  localStorage.setItem('marginalia.keyring', 'tok');
+  stubFetch(200, {
+    client_id: 'aaaaaaaaaaaaaaaaaaaa',
+    display_name: 'Paul',
+    docs: [
+      {
+        doc_uid: 'fresh-doc',
+        invite_token: 'admin-token',
+        title: 'Made by an agent',
+        role: 'admin',
+        format: 'markdown',
+        password_protected: false,
+        folder_uid: null,
+        updated_at: 1,
+        added_at: 1,
+        cover: null,
+      },
+    ],
+  });
+
+  expect(await inviteFromKeyring('fresh-doc')).toBe('admin-token');
+  expect(localStorage.getItem('marginalia.invite.fresh-doc')).toBe('admin-token');
+  expect(await inviteFromKeyring('not-in-ring')).toBeNull();
+  expect(localStorage.getItem('marginalia.invite.not-in-ring')).toBeNull();
+});
+
+test('without a ring, a bare link asks nobody', async () => {
+  const { inviteFromKeyring } = await import('./keyring.js');
+
+  let fetched = false;
+  (globalThis as { fetch?: unknown }).fetch = () => {
+    fetched = true;
+    return Promise.reject(new Error('no request expected'));
+  };
+  expect(await inviteFromKeyring('any-doc')).toBeNull();
+  expect(fetched).toBe(false);
+});

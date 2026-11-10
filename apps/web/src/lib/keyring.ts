@@ -28,6 +28,7 @@ import {
   rotateKeyring as rotateKeyringRequest,
 } from './api.js';
 import { getClientId, getDisplayName, setClientId, setDisplayName } from './identity.js';
+import { saveInviteToken } from './invite.js';
 import { reportError } from './log.js';
 import { loadRecentDocs, mergeKeyringDocs, type RecentDoc } from './recent-docs.js';
 
@@ -161,6 +162,20 @@ export async function pullKeyring(): Promise<KeyringPull> {
     reportError('keyring.pull', err);
     return { docs: null, dropped: false, idleTtlMs: null };
   }
+}
+
+/**
+ * The ring's link for one document, stored where the viewer looks for
+ * it. For a bare `/d/<uid>` link to a document this browser holds no
+ * token for, but the ring does: one created on another device, or by an
+ * agent, since the last pull. Null without a ring, or when it has none.
+ */
+export async function inviteFromKeyring(uid: string): Promise<string | null> {
+  if (!hasKeyring()) return null;
+  const pull = await pullKeyring();
+  const token = pull.docs?.find((doc) => doc.uid === uid)?.invite_token ?? null;
+  if (token) saveInviteToken(uid, token);
+  return token;
 }
 
 /**
