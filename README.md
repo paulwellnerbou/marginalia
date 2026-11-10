@@ -246,7 +246,10 @@ is not minted a new one until a synced device opens the document again.
 
 Documents the agent creates go into the ring under their admin link, so
 they show up on every device, and the agent then works on them with its
-own capped invite rather than the creator's admin link. Its client id is
+own capped invite rather than the creator's admin link. Filing renames
+that admin link to the ring's display name: an admin link's name seeds
+whoever opens it first, and the owner opening it must not be signed as
+the agent. Its client id is
 derived from the key, so two keys never share comment ownership, and
 using a key counts as using the ring for the idle sweep.
 

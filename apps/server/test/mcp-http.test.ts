@@ -475,6 +475,7 @@ describe('hosted MCP endpoint', () => {
     const created = await callText(agent, 'create_document', { source: '# Fresh\n\nNew.\n' });
     const uid = /^uid: (\S+)$/m.exec(created)?.[1] as string;
     expect(created).toContain('added to the user’s keyring');
+    expect(created).toContain(`link for the user: ${baseUrl}/d/${uid} — opens with full access`);
     expect(
       await callText(agent, 'get_document', { document: uid, include_source: false }),
     ).toContain('your role: collaborator');
