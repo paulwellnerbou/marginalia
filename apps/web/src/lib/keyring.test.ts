@@ -734,3 +734,19 @@ test('a ring that failed to answer may hold the document, so it is not a miss', 
   stubRings({ 'tok-a': [], 'tok-b': [{ uid: 'in-b', token: 't-b' }] });
   expect((await inviteFromKeyring('in-b')).token).toBe('t-b');
 });
+
+test('a token another tab on an older version writes is taken in and announced', async () => {
+  const { onKeyringChange } = await import('./keyring.js');
+  const seen: string[][] = [];
+  const unsubscribe = onKeyringChange((rings) => seen.push(rings.map((r) => r.token)));
+
+  localStorage.setItem('marginalia.keyring', 'from-old-tab');
+  window.dispatchEvent({
+    type: 'storage',
+    key: 'marginalia.keyring',
+    newValue: 'from-old-tab',
+  } as unknown as Event);
+  expect(seen).toEqual([['from-old-tab']]);
+  expect(localStorage.getItem('marginalia.keyring')).toBeNull();
+  unsubscribe();
+});

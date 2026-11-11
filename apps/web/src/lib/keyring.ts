@@ -183,7 +183,11 @@ function coerceRing(v: unknown): Keyring[] {
 export function onKeyringChange(fn: (rings: Keyring[]) => void): () => void {
   const inApp = () => fn(listKeyrings());
   const crossTab = (e: StorageEvent) => {
-    if (e.key === RINGS_KEY) fn(listKeyrings());
+    // A tab on an older version writes the single token; reading the list
+    // takes it in.
+    if (e.key === RINGS_KEY || (e.key === LEGACY_KEY && e.newValue !== null)) {
+      fn(listKeyrings());
+    }
   };
   window.addEventListener(KEYRING_EVENT, inApp);
   window.addEventListener('storage', crossTab);
