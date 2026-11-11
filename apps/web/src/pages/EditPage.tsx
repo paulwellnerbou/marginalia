@@ -922,7 +922,8 @@ export function EditPage() {
   return (
     <div className="edit-page">
       <PasswordPromptDialog docUid={doc.uid} docName={doc.name} />
-      <NamePromptDialog docUid={doc.uid} />
+      {/* Keyed so a dialog left open does not carry over to the next document. */}
+      <NamePromptDialog key={`name-${doc.uid}`} docUid={doc.uid} />
       <AppBar
         docTitle={`Editing: ${documentTitle(doc)}`}
         {...(chapterScope
