@@ -1,5 +1,11 @@
 import type { AnchorSection } from './anchor-target.js';
-import { getClientId, getDisplayName, getDisplayNameSetAt, type Identity } from './identity.js';
+import {
+  getClientId,
+  getDisplayName,
+  getDisplayNameFor,
+  getDisplayNameSetAtFor,
+  type Identity,
+} from './identity.js';
 import { loadInviteToken, pendingInviteClaim } from './invite.js';
 import { markTransportFailure } from './retry.js';
 
@@ -585,7 +591,7 @@ async function request<T>(
   }
 
   const identity = init.identity ?? fallbackIdentity();
-  setIdentityHeaders(headers, identity);
+  setIdentityHeaders(headers, identity, init.docUid);
 
   if (init.docUid) {
     const token = loadInviteToken(init.docUid);
@@ -647,7 +653,7 @@ async function requestBinary(
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   const identity = init.identity ?? fallbackIdentity();
-  setIdentityHeaders(headers, identity);
+  setIdentityHeaders(headers, identity, init.docUid);
   if (init.docUid) {
     const token = loadInviteToken(init.docUid);
     if (token) headers.set('x-marginalia-invite', token);
@@ -678,13 +684,17 @@ async function requestBinary(
   return res;
 }
 
-function setIdentityHeaders(headers: Headers, identity: Identity | null): void {
+function setIdentityHeaders(headers: Headers, identity: Identity | null, docUid?: string): void {
   headers.set('x-marginalia-client', identity?.clientId ?? getClientId());
   if (!identity?.displayName) return;
-  headers.set('x-marginalia-client-name', encodeHeaderValue(identity.displayName));
+  // The stored name stands for whichever name the document's keyring uses,
+  // which can differ from the page's while one document replaces another.
+  const stored = identity.displayName === getDisplayName();
+  const name = stored ? getDisplayNameFor(docUid) : identity.displayName;
+  headers.set('x-marginalia-client-name', encodeHeaderValue(name));
   // Only the stored name has a known time; a name a caller passes in that
   // differs from it is not dated and so never renames a personal link.
-  const setAt = identity.displayName === getDisplayName() ? getDisplayNameSetAt() : null;
+  const setAt = stored ? getDisplayNameSetAtFor(docUid) : null;
   if (setAt !== null) headers.set('x-marginalia-name-set-at', String(setAt));
 }
 

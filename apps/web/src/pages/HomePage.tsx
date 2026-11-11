@@ -55,6 +55,7 @@ import {
 import { formatTimestampLong } from '../lib/format-time.js';
 import { saveInviteToken } from '../lib/invite.js';
 import {
+  claimRingView,
   getRingView,
   type Keyring,
   keyringLabel,
@@ -155,6 +156,7 @@ export function HomePage() {
   }
 
   useEffect(() => {
+    claimRingView();
     const unsubscribeRings = onKeyringChange((next) => {
       setRings(next);
       setRecent(loadRecentDocs());
@@ -356,6 +358,9 @@ export function HomePage() {
           companions={companions}
           projects={
             several && shownView === 'all' ? rings.filter((ring) => r.rings?.includes(ring.id)) : []
+          }
+          removeLabel={
+            several && r.rings?.length ? 'Remove here and from its projects' : 'Remove from recent'
           }
           projectMenu={
             <ProjectMenu
@@ -632,6 +637,7 @@ function RecentCard({
   companions,
   projects,
   projectMenu,
+  removeLabel,
   onRemove,
 }: {
   doc: RecentDoc;
@@ -640,6 +646,8 @@ function RecentCard({
   /** The projects it is in, when the list mixes several. */
   projects: Keyring[];
   projectMenu: React.ReactNode;
+  /** Says what the ✕ also removes: the document leaves every ring holding it. */
+  removeLabel: string;
   onRemove: () => void;
 }) {
   const updatedSinceVisit = doc.updated_at > doc.visited_at;
@@ -670,12 +678,12 @@ function RecentCard({
                 />
               )}
               {projectMenu}
-              <Tooltip content="Remove from recent">
+              <Tooltip content={removeLabel}>
                 <IconButton
                   variant="ghost"
                   size="1"
                   color="gray"
-                  aria-label="Remove from recent"
+                  aria-label={removeLabel}
                   className="recent-card-action"
                   onClick={(e) => {
                     e.preventDefault();

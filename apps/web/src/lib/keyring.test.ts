@@ -651,3 +651,86 @@ test('a name typed in one project keeps its own time and reaches only that ring'
   ]);
   scopeIdentityTo(null);
 });
+
+test('a browser left with one of several rings keeps the client id it authors under', async () => {
+  const { disconnectKeyring, pullKeyring } = await import('./keyring.js');
+  const { getClientId } = await import('./identity.js');
+  storeTwoRings();
+  const mine = getClientId();
+  stubRings({ 'tok-a': [], 'tok-b': [] });
+  disconnectKeyring('ring-a');
+  (globalThis as { fetch?: unknown }).fetch = async () =>
+    new Response(JSON.stringify({ ...ringWith([]), client_id: 'someone-else' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  await pullKeyring();
+  expect(getClientId()).toBe(mine);
+});
+
+test('a tab that chose no project files nothing, whatever another tab chose last', async () => {
+  const { claimRingView, filingKeyring } = await import('./keyring.js');
+  storeTwoRings();
+  // Chosen in another tab: this tab's session storage has never seen it.
+  localStorage.setItem('marginalia.keyrings.view', 'ring-a');
+  expect(filingKeyring()).toBeNull();
+  // The home page shows that project's documents, so it takes the choice on.
+  claimRingView();
+  expect(filingKeyring()?.id).toBe('ring-a');
+});
+
+test('a request for a document signs with its own ring’s name, whatever page is in front', async () => {
+  const { pullKeyring, scopeIdentityTo, setRingView } = await import('./keyring.js');
+  const { getDisplayName, getDisplayNameFor } = await import('./identity.js');
+  storeTwoRings();
+  stubRings({ 'tok-a': [{ uid: 'a1', token: 't-a1' }], 'tok-b': [{ uid: 'b1', token: 't-b1' }] });
+  await pullKeyring();
+  setRingView('all');
+
+  scopeIdentityTo('b1');
+  expect(getDisplayName()).toBe('display name of tok-b');
+  // Still on screen while b1 loads: a request for a1 keeps a1's name.
+  expect(getDisplayNameFor('a1')).toBe('display name of tok-a');
+  scopeIdentityTo(null);
+});
+
+test('a ring that never held a removed document does not let another ring revive it', async () => {
+  const { pullKeyring } = await import('./keyring.js');
+  const { loadRecentDocs, removeFromRecent } = await import('./recent-docs.js');
+  // B listed first, so its snapshot is merged before A's.
+  localStorage.setItem(
+    'marginalia.keyrings',
+    JSON.stringify([
+      { id: 'ring-b', token: 'tok-b', label: 'Beta', displayName: 'Paul' },
+      { id: 'ring-a', token: 'tok-a', label: 'Acme', displayName: 'Paul' },
+    ]),
+  );
+  const server: Record<string, Array<{ uid: string; token: string }>> = {
+    'tok-a': [{ uid: 'gone', token: 't' }],
+    'tok-b': [],
+  };
+  stubRings(server);
+  await pullKeyring();
+  removeFromRecent('gone');
+
+  // A's DELETE has not landed yet: A still lists it.
+  await pullKeyring();
+  expect(loadRecentDocs().some((d) => d.uid === 'gone')).toBe(false);
+  await pullKeyring();
+  expect(loadRecentDocs().some((d) => d.uid === 'gone')).toBe(false);
+});
+
+test('a ring that failed to answer may hold the document, so it is not a miss', async () => {
+  const { inviteFromKeyring } = await import('./keyring.js');
+  storeTwoRings();
+  stubRings({ 'tok-a': [] });
+  const ok = globalThis.fetch;
+  (globalThis as { fetch?: unknown }).fetch = (path: string, init: RequestInit = {}) =>
+    new Headers(init.headers).get('x-marginalia-keyring') === 'tok-b'
+      ? Promise.resolve(new Response(JSON.stringify({ error: 'unavailable' }), { status: 503 }))
+      : ok(path, init);
+  expect((await inviteFromKeyring('in-b')).token).toBeNull();
+
+  stubRings({ 'tok-a': [], 'tok-b': [{ uid: 'in-b', token: 't-b' }] });
+  expect((await inviteFromKeyring('in-b')).token).toBe('t-b');
+});

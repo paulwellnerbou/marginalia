@@ -39,13 +39,17 @@ import {
   getDisplayName,
   getDisplayNameSetAt,
   isGeneratedDisplayName,
+  type NameScope,
+  randomHex,
   setClientId,
   setDisplayName,
+  setDocumentNameScopes,
   setNameScope,
 } from './identity.js';
 import { saveInviteToken } from './invite.js';
 import { reportError } from './log.js';
 import {
+  acknowledgeRemovals,
   dropRingMembership,
   loadRecentDocs,
   mergeKeyringDocs,
@@ -69,7 +73,7 @@ export interface Keyring {
 export type RingView = 'all' | 'unfiled' | string;
 
 const RINGS_KEY = 'marginalia.keyrings';
-/** The single token a browser held before it could hold several. */
+/** Single-token key still written by tabs running an older version; read into the list. */
 const LEGACY_KEY = 'marginalia.keyring';
 const KEYRING_EVENT = 'marginalia:keyring-change';
 /** Per tab, with the last choice as the default for the next tab. */
@@ -87,6 +91,8 @@ const MISS_TTL_MS = 10 * 60 * 1000;
 let pullRequestGeneration = 0;
 /** The ring whose name is in use, for a rename to reach. */
 let scopedRingId: string | null = null;
+/** What the page last scoped to (a document, or null for the home page), to re-scope when rings change. */
+let scopeTarget: string | null | undefined;
 
 // --- the list of rings ------------------------------------------------
 
@@ -121,6 +127,7 @@ function storeRings(rings: Keyring[]): void {
     setRingView('all');
   }
   window.dispatchEvent(new CustomEvent(KEYRING_EVENT, { detail: rings }));
+  if (scopeTarget !== undefined) scopeIdentityTo(scopeTarget);
 }
 
 function updateRing(id: string, changes: Partial<Omit<Keyring, 'id'>>): void {
@@ -151,9 +158,7 @@ function migrateLegacyToken(): void {
 }
 
 function newRingId(): string {
-  const bytes = new Uint8Array(6);
-  crypto.getRandomValues(bytes);
-  return `ring-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`;
+  return `ring-${randomHex(6)}`;
 }
 
 function coerceRing(v: unknown): Keyring[] {
@@ -191,13 +196,24 @@ export function onKeyringChange(fn: (rings: Keyring[]) => void): () => void {
 // --- which ring is in front --------------------------------------------
 
 export function getRingView(): RingView {
-  let view: string | null = null;
+  return tabRingView() ?? localStorage.getItem(VIEW_KEY) ?? 'all';
+}
+
+/** The view chosen in this tab, as opposed to the default it inherited. */
+function tabRingView(): RingView | null {
   try {
-    view = sessionStorage.getItem(VIEW_KEY);
+    return sessionStorage.getItem(VIEW_KEY);
   } catch {
-    // Without session storage every tab follows the last choice.
+    return null;
   }
-  return view ?? localStorage.getItem(VIEW_KEY) ?? 'all';
+}
+
+/**
+ * Make the view this tab shows its own choice. For the home page, which
+ * lists the inherited view's documents and should file new ones there.
+ */
+export function claimRingView(): void {
+  if (tabRingView() === null) setRingView(getRingView());
 }
 
 export function setRingView(view: RingView): void {
@@ -218,14 +234,16 @@ export function onRingViewChange(fn: (view: RingView) => void): () => void {
 
 /**
  * Where a document that is in no ring goes when it is created or opened
- * here: the only ring, or the one in front. Looking at every ring at once,
- * it goes nowhere — filing a client's document under another client is
- * the mistake worth not making on a guess.
+ * here: the only ring, or the one chosen in this tab. Looking at every
+ * ring at once, it goes nowhere — filing a client's document under
+ * another client is the mistake worth not making on a guess. So does a
+ * tab that chose none: a link opened from mail lands in a new tab, and
+ * the project last picked in some other tab says nothing about it.
  */
 export function filingKeyring(): Keyring | null {
   const rings = listKeyrings();
   if (rings.length === 1) return rings[0] ?? null;
-  const view = getRingView();
+  const view = tabRingView();
   return rings.find((ring) => ring.id === view) ?? null;
 }
 
@@ -252,20 +270,30 @@ export function keyringForDoc(uid: string): Keyring | null {
  * browser's own name is the ring's, so nothing is scoped.
  */
 export function scopeIdentityTo(uid: string | null): void {
+  scopeTarget = uid;
   const ring = uid ? keyringForDoc(uid) : filingKeyring();
-  if (!ring || listKeyrings().length < 2) {
-    scopedRingId = null;
-    setNameScope(null);
-    return;
-  }
-  scopedRingId = ring.id;
-  setNameScope({
-    read: () => findKeyring(ring.id)?.displayName ?? null,
-    readSetAt: () => findKeyring(ring.id)?.displayNameSetAt ?? null,
-    write: (name, setAt) => updateRing(ring.id, { displayName: name, displayNameSetAt: setAt }),
-    storageKey: RINGS_KEY,
-  });
+  const id = ring && listKeyrings().length > 1 ? ring.id : null;
+  if (id === scopedRingId) return;
+  scopedRingId = id;
+  setNameScope(id ? ringNameScope(id) : null);
 }
+
+function ringNameScope(id: string): NameScope {
+  return {
+    read: () => findKeyring(id)?.displayName ?? null,
+    readSetAt: () => findKeyring(id)?.displayNameSetAt ?? null,
+    write: (name, setAt) => updateRing(id, { displayName: name, displayNameSetAt: setAt }),
+    storageKey: RINGS_KEY,
+  };
+}
+
+// Each request signs with the name of its own document's ring, whichever
+// page is on screen when it is sent.
+setDocumentNameScopes((docUid) => {
+  if (listKeyrings().length < 2) return null;
+  const ring = keyringForDoc(docUid);
+  return ring ? ringNameScope(ring.id) : null;
+});
 
 // --- creating, joining and leaving -------------------------------------
 
@@ -298,7 +326,7 @@ export async function connectKeyring(label: string | null = null): Promise<Keyri
     displayNameSetAt: ringNameSetAt(wire),
   };
   storeRings([...listKeyrings(), ring]);
-  mergeKeyringDocs(wire.docs, ring.id);
+  mergeKeyringDocs(wire.docs, ring.id, { acknowledgeRemovals: !existing.length });
   if (existing.length) setRingView(ring.id);
   return ring;
 }
@@ -317,7 +345,6 @@ function forgetRing(id: string): void {
   pullRequestGeneration++;
   storeRings(listKeyrings().filter((ring) => ring.id !== id));
   dropRingMembership(id);
-  if (scopedRingId === id) scopeIdentityTo(null);
 }
 
 /**
@@ -383,11 +410,11 @@ export async function pairWithCode(code: string): Promise<Paired> {
     displayNameSetAt: ringNameSetAt(wire),
   };
   storeRings(known ? existing.map((r) => (r.id === ring.id ? ring : r)) : [...existing, ring]);
-  if (!existing.length) adoptIdentity(wire);
+  if (!existing.length) adoptIdentity(wire, { clientId: true });
   if (listKeyrings().length > 1) setRingView(ring.id);
   return {
     ring,
-    docs: mergeKeyringDocs(wire.docs, ring.id),
+    docs: mergeKeyringDocs(wire.docs, ring.id, { acknowledgeRemovals: !existing.length }),
     identityKept: existing.length > 0 && wire.client_id !== getClientId(),
   };
 }
@@ -408,6 +435,8 @@ export interface KeyringPull {
   dropped: string[];
   /** The server's idle-expiry window. Null until a pull has succeeded. */
   idleTtlMs: number | null;
+  /** Every ring answered, so a document none of them listed is in none. */
+  complete: boolean;
 }
 
 /**
@@ -416,7 +445,7 @@ export interface KeyringPull {
  * unused, and a ring someone switched away from is still in use.
  */
 export async function pullKeyring(): Promise<KeyringPull> {
-  const nothing: KeyringPull = { docs: null, dropped: [], idleTtlMs: null };
+  const nothing: KeyringPull = { docs: null, dropped: [], idleTtlMs: null, complete: false };
   const rings = listKeyrings();
   if (!rings.length) return nothing;
   const generation = ++pullRequestGeneration;
@@ -434,22 +463,29 @@ export async function pullKeyring(): Promise<KeyringPull> {
   // regress localStorage or the identity adopted from the ring.
   if (generation !== pullRequestGeneration) return nothing;
 
-  const pull: KeyringPull = { docs: null, dropped: [], idleTtlMs: null };
+  const pull: KeyringPull = { docs: null, dropped: [], idleTtlMs: null, complete: true };
+  const present = new Set<string>();
   for (const { ring, wire, err } of results) {
     const current = findKeyring(ring.id);
-    if (!current || current.token !== ring.token) continue;
+    if (!current || current.token !== ring.token) {
+      pull.complete = false;
+      continue;
+    }
     if (wire) {
       adoptRing(current, wire);
-      pull.docs = mergeKeyringDocs(wire.docs, current.id);
+      for (const entry of wire.docs) present.add(entry.doc_uid);
+      pull.docs = mergeKeyringDocs(wire.docs, current.id, { acknowledgeRemovals: false });
       pull.idleTtlMs = wire.idle_ttl_ms ?? pull.idleTtlMs;
     } else if (isNotFound(err)) {
       // Drop a dead token rather than retrying it on every page load.
       forgetRing(current.id);
       pull.dropped.push(keyringLabel(current));
     } else {
+      pull.complete = false;
       reportError('keyring.pull', err);
     }
   }
+  if (pull.complete && pull.docs) acknowledgeRemovals(present);
   if (pull.dropped.length) {
     localStorage.setItem(DROPPED_KEY, JSON.stringify([...readDropped(), ...pull.dropped]));
   }
@@ -508,8 +544,8 @@ export async function inviteFromKeyring(
   const docs = pull.docs ?? loadRecentDocs();
   const token = docs.find((doc) => doc.uid === uid)?.invite_token ?? null;
   if (token) saveInviteToken(uid, token);
-  // Only a pull that answered is a miss; a failed one says nothing.
-  else if (pull.docs) rememberMiss(uid);
+  // Only a pull every ring answered is a miss; a failed ring may hold it.
+  else if (pull.complete && pull.docs) rememberMiss(uid);
   return { token, fromPull: pull.docs !== null };
 }
 
@@ -562,6 +598,8 @@ export function pushDoc(
   const holding = keyringsOf(uid);
   const filing = filingKeyring();
   const targets = opts.into ?? (holding.length ? holding : filing ? [filing] : []);
+  // A pull on the wire predates the PUT and would take a new ring's membership away.
+  if (targets.some((ring) => !holding.some((h) => h.id === ring.id))) pullRequestGeneration++;
   for (const ring of targets) {
     setRingMembership([uid], ring.id, true);
     void putKeyringDoc(ring.token, uid, {
@@ -703,7 +741,9 @@ function adoptRing(ring: Keyring, wire: KeyringWire): void {
   ) {
     updateRing(ring.id, { label, displayName, displayNameSetAt });
   }
-  if (listKeyrings().length === 1) adoptIdentity(wire);
+  // Never the client id: pairing settled that, and a browser left with one
+  // of several rings still authors under the id it kept for all of them.
+  if (listKeyrings().length === 1) adoptIdentity(wire, { clientId: false });
 }
 
 /**
@@ -716,8 +756,10 @@ function ringNameSetAt(wire: KeyringWire): number | null {
   return wire.display_name_set_at ?? fallback;
 }
 
-function adoptIdentity(wire: KeyringWire): void {
-  if (wire.client_id && wire.client_id !== getClientId()) setClientId(wire.client_id);
+function adoptIdentity(wire: KeyringWire, opts: { clientId: boolean }): void {
+  if (opts.clientId && wire.client_id && wire.client_id !== getClientId()) {
+    setClientId(wire.client_id);
+  }
   if (wire.display_name && wire.display_name !== getDisplayName()) {
     setDisplayName(wire.display_name, { setAt: ringNameSetAt(wire) });
   }

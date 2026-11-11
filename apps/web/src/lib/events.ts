@@ -5,7 +5,7 @@
  * exponential backoff, and pushes decoded events into a callback. Identity
  * travels in the URL because browser WebSocket can't set custom headers.
  */
-import { getClientId, getDisplayName } from './identity.js';
+import { getClientId, getDisplayNameFor } from './identity.js';
 import { loadInviteToken } from './invite.js';
 import { reportError } from './log.js';
 
@@ -53,7 +53,7 @@ export function subscribeToDocumentEvents(
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const params = new URLSearchParams();
     params.set('client_id', getClientId());
-    const name = getDisplayName();
+    const name = getDisplayNameFor(uid);
     if (name) params.set('client_name', name);
     const inviteToken = loadInviteToken(uid);
     if (inviteToken) params.set('invite', inviteToken);

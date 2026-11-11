@@ -146,6 +146,8 @@ export function ViewPage() {
   // user edits via UserMenu. Trade-off: opening someone else's named
   // invite overwrites the global local name, except in a synced browser.
   useEffect(() => {
+    // Loading may have pulled the rings and learned which one holds it.
+    if (doc) scopeIdentityTo(doc.uid);
     adoptDocumentName(doc?.display_name ?? null, {
       provisional: doc?.name_provisional === true,
       setAt: doc?.name_set_at ?? null,

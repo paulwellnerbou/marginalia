@@ -208,23 +208,16 @@ export function removeFromRecent(uid: string): void {
  * Documents in the ring but never opened here sort by when they were
  * added, which lands them below anything actually read on this device.
  */
-export function mergeKeyringDocs(incoming: KeyringDocEntry[], ringId?: string): RecentDoc[] {
+export function mergeKeyringDocs(
+  incoming: KeyringDocEntry[],
+  ringId?: string,
+  opts: { acknowledgeRemovals?: boolean } = {},
+): RecentDoc[] {
   const byUid = new Map(loadRecentDocs().map((d) => [d.uid, d]));
   const incomingUids = new Set(incoming.map((entry) => entry.doc_uid));
+  if (opts.acknowledgeRemovals !== false) acknowledgeRemovals(incomingUids);
   const removed = loadRemovalTombstones();
-
-  // Absence from a successful server snapshot acknowledges the deletion.
-  // Entries still present may come from a pull that began before the delete;
-  // keep filtering those until a later pull confirms the server caught up.
-  let tombstonesChanged = false;
-  for (const uid of removed) {
-    byUid.delete(uid);
-    if (!incomingUids.has(uid)) {
-      removed.delete(uid);
-      tombstonesChanged = true;
-    }
-  }
-  if (tombstonesChanged) saveRemovalTombstones(removed);
+  for (const uid of removed) byUid.delete(uid);
 
   for (const entry of incoming) {
     if (removed.has(entry.doc_uid)) continue;
@@ -276,6 +269,24 @@ export function mergeKeyringDocs(incoming: KeyringDocEntry[], ringId?: string): 
   }
 
   return save([...byUid.values()].sort((a, b) => b.visited_at - a.visited_at));
+}
+
+/**
+ * Absence from a successful server snapshot acknowledges a deletion.
+ * Entries still present may come from a pull that began before the
+ * delete; they stay filtered until a later pull confirms the server
+ * caught up. With several rings, `present` has to cover all of them: a
+ * ring that never held the document says nothing about one that did.
+ */
+export function acknowledgeRemovals(present: ReadonlySet<string>): void {
+  const removed = loadRemovalTombstones();
+  let changed = false;
+  for (const uid of removed) {
+    if (present.has(uid)) continue;
+    removed.delete(uid);
+    changed = true;
+  }
+  if (changed) saveRemovalTombstones(removed);
 }
 
 function loadRemovalTombstones(): Set<string> {

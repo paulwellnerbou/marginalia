@@ -159,18 +159,35 @@ export function guessClient(agentName: string): McpClient {
   return 'claude';
 }
 
+interface McpProject {
+  id: string;
+  label: string | null;
+}
+
 /**
  * The server name to register a keyring's agent under. One per project,
  * so that connecting a second client's keyring adds a server instead of
- * replacing the first.
+ * replacing the first. A label that leaves no slug, or the same slug as
+ * another project's, takes a piece of the project's id as well.
  */
-export function mcpServerName(projectLabel: string | null): string {
-  const slug = (projectLabel ?? '')
+export function mcpServerName(
+  project: McpProject | null,
+  others: readonly McpProject[] = [],
+): string {
+  if (!project) return 'marginalia';
+  const slug = projectSlug(project.label);
+  const clash = !slug || others.some((o) => o.id !== project.id && projectSlug(o.label) === slug);
+  return ['marginalia', slug, clash ? project.id.slice(-4) : '']
+    .filter((part) => part !== '')
+    .join('-');
+}
+
+function projectSlug(label: string | null): string {
+  return (label ?? '')
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 40);
-  return slug ? `marginalia-${slug}` : 'marginalia';
 }

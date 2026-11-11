@@ -131,12 +131,39 @@ export interface NameScope {
 }
 
 let nameScope: NameScope | null = null;
+/** The scope one document's requests use, which can differ from the page's. */
+let docNameScope: ((docUid: string) => NameScope | null) | null = null;
 
 /** Point reads and writes of the display name at `scope`, or back at the browser's own. */
 export function setNameScope(scope: NameScope | null): void {
   if (scope === nameScope) return;
   nameScope = scope;
   window.dispatchEvent(new CustomEvent(DISPLAY_NAME_EVENT, { detail: getDisplayName() }));
+}
+
+/** How to find the scope a given document's requests sign with. */
+export function setDocumentNameScopes(
+  resolve: ((docUid: string) => NameScope | null) | null,
+): void {
+  docNameScope = resolve;
+}
+
+/**
+ * The name a request for `docUid` signs with: its own keyring's, so a
+ * request still running for the document being left does not carry the
+ * next one's name. Without a document, or a name for it, the page's.
+ */
+export function getDisplayNameFor(docUid?: string): string {
+  const scope = docUid ? docNameScope?.(docUid) : null;
+  return normalizeDisplayName(scope?.read() ?? '') || getDisplayName();
+}
+
+/** When `getDisplayNameFor(docUid)` was chosen. */
+export function getDisplayNameSetAtFor(docUid?: string): number | null {
+  const scope = docUid ? docNameScope?.(docUid) : null;
+  return scope && normalizeDisplayName(scope.read() ?? '')
+    ? scope.readSetAt()
+    : getDisplayNameSetAt();
 }
 
 /** Get or create a persistent clientId. */
@@ -333,7 +360,12 @@ export function deriveDisplayName(markdown: string): string {
 }
 
 function generateClientId(): string {
-  const bytes = new Uint8Array(16);
+  return randomHex(16);
+}
+
+/** `byteCount` random bytes as lowercase hex. */
+export function randomHex(byteCount: number): string {
+  const bytes = new Uint8Array(byteCount);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }

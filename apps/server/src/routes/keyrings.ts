@@ -162,13 +162,14 @@ async function createKeyring(c: Context, { db, config }: KeyringDeps, limits: Li
 
   const identity = readIdentity(c.req.raw.headers);
   if (!identity) return c.json({ error: 'identity-required' }, 400);
+  const body = (await safeJson(c)) ?? {};
+  // Refused before it counts: a bad label creates nothing.
+  const label = parseLabel(body.label);
+  if (label === undefined) return c.json({ error: 'invalid-label' }, 400);
   limits.createPerClient.record(who);
   sweepIdleKeyrings(db, config.keyringIdleTtlMs);
 
-  const body = (await safeJson(c)) ?? {};
   const seeds = parseDocSeeds(body.docs);
-  const label = parseLabel(body.label);
-  if (label === undefined) return c.json({ error: 'invalid-label' }, 400);
 
   const token = newKeyringToken();
   const now = Date.now();

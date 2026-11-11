@@ -10,7 +10,7 @@ import {
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { formatTimestamp } from '../lib/format-time.js';
-import { type Keyring, keyringLabel } from '../lib/keyring.js';
+import { type Keyring, keyringLabel, listKeyrings } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import {
   type ClaudeScope,
@@ -257,7 +257,7 @@ function AgentKeyDialog({
             <McpConnectionSetup
               url={url}
               idPrefix="agent-key"
-              serverName={mcpServerName(project?.label ?? null)}
+              serverName={mcpServerName(project, listKeyrings())}
               client={client ?? guessClient(name)}
               onClientChange={setClient}
               setup={setup}
