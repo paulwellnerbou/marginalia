@@ -8,6 +8,9 @@ interface Props {
   width: number;
   /** Called with the new width while dragging. */
   onResize: (px: number) => void;
+  /** Called once with the width a drag or key step settled on — the place
+   *  to persist it, rather than on every pixel of the drag. */
+  onResizeEnd?: (px: number) => void;
   /** Allowed range. */
   min?: number;
   max?: number;
@@ -36,11 +39,12 @@ export function ResizeHandle({
   side,
   width,
   onResize,
+  onResizeEnd,
   min = 160,
   max = 640,
   label = 'Resize pane',
 }: Props) {
-  const dragging = useRef<{ startX: number; startWidth: number } | null>(null);
+  const dragging = useRef<{ startX: number; startWidth: number; last: number } | null>(null);
 
   useEffect(() => {
     function onMove(e: MouseEvent) {
@@ -49,11 +53,14 @@ export function ResizeHandle({
       const deltaX = e.clientX - d.startX;
       const signed = side === 'left' ? deltaX : -deltaX;
       const next = Math.max(min, Math.min(max, d.startWidth + signed));
+      d.last = next;
       onResize(next);
     }
     function onUp() {
-      if (!dragging.current) return;
+      const d = dragging.current;
+      if (!d) return;
       dragging.current = null;
+      if (d.last !== d.startWidth) onResizeEnd?.(d.last);
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
       markResizing(false);
@@ -70,7 +77,7 @@ export function ResizeHandle({
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('blur', onUp);
     };
-  }, [side, onResize, min, max]);
+  }, [side, onResize, onResizeEnd, min, max]);
 
   // Unmounting mid-drag (the handle goes away with the pane it resizes)
   // would otherwise leave the whole layout unanimated.
@@ -93,22 +100,20 @@ export function ResizeHandle({
       tabIndex={0}
       onMouseDown={(e) => {
         e.preventDefault();
-        dragging.current = { startX: e.clientX, startWidth: width };
+        dragging.current = { startX: e.clientX, startWidth: width, last: width };
         document.body.style.cursor = 'col-resize';
         document.body.style.userSelect = 'none';
         markResizing(true);
       }}
       onKeyDown={(e) => {
         const step = e.shiftKey ? STEP_LARGE : STEP;
-        if (e.key === 'ArrowRight') {
-          e.preventDefault();
-          markResizing(true);
-          onResize(clamp(width + (side === 'left' ? step : -step)));
-        } else if (e.key === 'ArrowLeft') {
-          e.preventDefault();
-          markResizing(true);
-          onResize(clamp(width + (side === 'left' ? -step : step)));
-        }
+        const delta = e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : null;
+        if (delta === null) return;
+        e.preventDefault();
+        markResizing(true);
+        const next = clamp(width + (side === 'left' ? delta : -delta));
+        onResize(next);
+        onResizeEnd?.(next);
       }}
       onKeyUp={() => markResizing(false)}
       onBlur={() => markResizing(false)}

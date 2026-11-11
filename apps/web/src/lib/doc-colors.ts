@@ -58,22 +58,28 @@ export function withDocColor(
   return next;
 }
 
-function load(docUid: string): DocColorOverrides {
-  return parseDocColors(readDocViewPref(docUid, 'docColors'));
+interface Cached {
+  raw: string | null;
+  value: DocColorOverrides;
+}
+
+function load(docUid: string): Cached {
+  const raw = readDocViewPref(docUid, 'docColors');
+  return { raw, value: parseDocColors(raw) };
 }
 
 const NONE: DocColorOverrides = {};
 /** Per uid, so a snapshot keeps its identity between renders. */
-const cache = new Map<string, DocColorOverrides>();
+const cache = new Map<string, Cached>();
 const listeners = new Set<() => void>();
 
 function snapshot(docUid: string): DocColorOverrides {
-  let value = cache.get(docUid);
-  if (!value) {
-    value = load(docUid);
-    cache.set(docUid, value);
+  let entry = cache.get(docUid);
+  if (!entry) {
+    entry = load(docUid);
+    cache.set(docUid, entry);
   }
-  return value;
+  return entry.value;
 }
 
 function subscribe(listener: () => void): () => void {
@@ -85,13 +91,20 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-/** Another tab changed a document's view settings, or cleared storage. */
+/**
+ * Another tab changed a document's view settings, or cleared storage.
+ * The entry holds every view setting, and a pane drag elsewhere writes
+ * it repeatedly, so only a change to the colors themselves re-renders.
+ */
 function onStorage(event: StorageEvent): void {
   if (event.key === null) cache.clear();
   else {
     const uid = docViewUidOf(event.key);
-    if (uid === null) return;
-    cache.delete(uid);
+    const entry = uid === null ? undefined : cache.get(uid);
+    if (uid === null || !entry) return;
+    const fresh = load(uid);
+    if (fresh.raw === entry.raw) return;
+    cache.set(uid, fresh);
   }
   for (const l of listeners) l();
 }
@@ -103,8 +116,9 @@ export function setDocColor(
   value: string | null,
 ): void {
   const next = withDocColor(snapshot(docUid), mode, role, value);
-  cache.set(docUid, next);
-  writeDocViewPref(docUid, 'docColors', Object.keys(next).length > 0 ? JSON.stringify(next) : null);
+  const raw = Object.keys(next).length > 0 ? JSON.stringify(next) : null;
+  cache.set(docUid, { raw, value: next });
+  writeDocViewPref(docUid, 'docColors', raw);
   for (const l of listeners) l();
 }
 

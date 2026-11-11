@@ -5,6 +5,7 @@ import {
   docViewKey,
   docViewUidOf,
   forgetDocViewPrefs,
+  persistStep,
   readDocViewPref,
   writeDocViewPref,
 } from './doc-view-prefs.js';
@@ -68,4 +69,28 @@ test('docViewUidOf recognises only view entries', () => {
   expect(docViewUidOf(docViewKey('abc'))).toBe('abc');
   expect(docViewUidOf('marginalia.theme.abc')).toBeNull();
   expect(docViewUidOf(null)).toBeNull();
+});
+
+test('opening a document stores nothing; a change for it does', () => {
+  const opened = { uid: 'a', value: '100' };
+  expect(persistStep(opened, 'a', '100').write).toBe(false);
+  const changed = persistStep(opened, 'a', '110');
+  expect(changed.write).toBe(true);
+  // Back to where it started is a change too, not a no-op.
+  expect(persistStep(changed.next, 'a', '100').write).toBe(true);
+});
+
+test("switching documents in place does not write the new one's own value back", () => {
+  const step = persistStep({ uid: 'a', value: '130' }, 'b', '100');
+  expect(step.write).toBe(false);
+  expect(step.next).toEqual({ uid: 'b', value: '100' });
+  expect(persistStep(step.next, 'b', '105').write).toBe(true);
+});
+
+test('undefined leaves the stored value, so returning to it writes nothing', () => {
+  const opened = { uid: 'a', value: 'history' };
+  const away = persistStep(opened, 'a', undefined);
+  expect(away).toEqual({ write: false, next: opened });
+  expect(persistStep(away.next, 'a', 'history').write).toBe(false);
+  expect(persistStep(away.next, 'a', 'comments').write).toBe(true);
 });

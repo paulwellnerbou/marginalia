@@ -22,10 +22,6 @@ export function loadThreadSortMode(docUid: string): ThreadSortMode {
   return saved === 'document' || saved === 'latest' ? saved : DEFAULT_THREAD_SORT_MODE;
 }
 
-export function saveThreadSortMode(docUid: string, mode: ThreadSortMode): void {
-  writeDocViewPref(docUid, 'threadListSort', mode);
-}
-
 /** Each dimension falls back on its own, so one unreadable key can't reset the other. */
 export function loadThreadFilters(docUid: string): ThreadFilters {
   const status = readDocViewPref(docUid, 'threadListStatus');

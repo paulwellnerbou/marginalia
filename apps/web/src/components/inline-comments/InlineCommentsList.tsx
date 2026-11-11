@@ -20,6 +20,7 @@ import {
 import type { AnchorSection } from '../../lib/anchor-target.js';
 import type { Thread } from '../../lib/api.js';
 import { isBookmark, isProposal, proposalStatus } from '../../lib/api.js';
+import { usePersistDocViewPref } from '../../lib/doc-view-prefs.js';
 import { getClientId } from '../../lib/identity.js';
 import {
   buildThreadCollapseState,
@@ -45,7 +46,6 @@ import {
   loadThreadFilters,
   loadThreadSortMode,
   saveThreadFilters,
-  saveThreadSortMode,
   type ThreadSortMode,
 } from './threadListPrefs.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
@@ -276,12 +276,7 @@ export function InlineCommentsList({
   const [listResetNonce, setListResetNonce] = useState(0);
   const resetListScroll = useCallback(() => setListResetNonce((n) => n + 1), []);
 
-  const storedSortMode = useRef(sortMode);
-  useEffect(() => {
-    if (sortMode === storedSortMode.current) return;
-    storedSortMode.current = sortMode;
-    saveThreadSortMode(uid, sortMode);
-  }, [uid, sortMode]);
+  usePersistDocViewPref(uid, 'threadListSort', sortMode);
 
   /*
    * Ask for the archive when the reader asks to see settled work.

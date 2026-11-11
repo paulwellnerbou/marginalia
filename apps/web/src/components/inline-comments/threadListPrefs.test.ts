@@ -1,13 +1,13 @@
 /// <reference types="bun" />
 
 import { beforeEach, expect, test } from 'bun:test';
+import { writeDocViewPref } from '../../lib/doc-view-prefs.js';
 import {
   DEFAULT_THREAD_FILTERS,
   DEFAULT_THREAD_SORT_MODE,
   loadThreadFilters,
   loadThreadSortMode,
   saveThreadFilters,
-  saveThreadSortMode,
 } from './threadListPrefs.js';
 
 // Bun has no Web Storage — the module reads it lazily, so a plain stub is enough.
@@ -33,7 +33,7 @@ test('an untouched browser gets the shipped defaults', () => {
 });
 
 test('round-trips every setting', () => {
-  saveThreadSortMode('d1', 'document');
+  writeDocViewPref('d1', 'threadListSort', 'document');
   saveThreadFilters('d1', { status: 'all', kind: 'proposals', replies: 'unanswered' });
 
   expect(loadThreadSortMode('d1')).toBe('document');
@@ -71,7 +71,7 @@ test('a browser with no stored replies filter keeps every thread', () => {
 });
 
 test('each document keeps its own sort and filters', () => {
-  saveThreadSortMode('d1', 'document');
+  writeDocViewPref('d1', 'threadListSort', 'document');
   saveThreadFilters('d1', { status: 'all', kind: 'proposals', replies: 'unanswered' });
 
   expect(loadThreadSortMode('d2')).toBe('latest');

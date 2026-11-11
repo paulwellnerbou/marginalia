@@ -1192,8 +1192,6 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   usePersistDocViewPref(doc.uid, 'blockWidth', String(blockWidth));
   usePersistDocViewPref(doc.uid, 'htmlWidth', String(htmlWidth));
   usePersistDocViewPref(doc.uid, 'textZoom', String(textZoom));
-  usePersistDocViewPref(doc.uid, 'tocWidth', String(tocWidth));
-  usePersistDocViewPref(doc.uid, 'commentsWidth', String(commentsWidth));
   usePersistDocViewPref(doc.uid, 'inlineCommentsOpen', String(inlineCommentsOpen));
   usePersistDocViewPref(doc.uid, 'inlineCommentsStacking', String(inlineCommentsStacking));
   usePersistDocViewPref(doc.uid, 'readingMode', readingMode);
@@ -1205,12 +1203,24 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     localStorage.removeItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
   }, []);
   // Search isn't remembered, so it leaves the stored tab as it was.
-  const storedRightTab = useRef(rightTab);
+  usePersistDocViewPref(doc.uid, 'rightTab', isRememberedRightTab(rightTab) ? rightTab : undefined);
+  // Only an explicit choice is kept (see the state), so a value nothing
+  // can read is dropped rather than left for every later read to skip.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a check of what was stored on opening, not of later choices.
   useEffect(() => {
-    if (rightTab === storedRightTab.current || !isRememberedRightTab(rightTab)) return;
-    storedRightTab.current = rightTab;
-    writeDocViewPref(doc.uid, 'rightTab', rightTab);
-  }, [doc.uid, rightTab]);
+    if (readDocViewPref(doc.uid, 'commentsDisplayMode') !== null && !storedCommentsDisplayMode) {
+      writeDocViewPref(doc.uid, 'commentsDisplayMode', null);
+    }
+  }, [doc.uid]);
+  // Persisted when a drag ends, not on every pixel of it.
+  const persistTocWidth = useCallback(
+    (px: number) => writeDocViewPref(doc.uid, 'tocWidth', String(px)),
+    [doc.uid],
+  );
+  const persistCommentsWidth = useCallback(
+    (px: number) => writeDocViewPref(doc.uid, 'commentsWidth', String(px)),
+    [doc.uid],
+  );
   // An HTML page styles itself: no theme, text-size or color controls, and
   // a width of its own in px rather than the reading width.
   const isHtml = doc.format === 'html';
@@ -3631,7 +3641,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                   </Text>
                 </Flex>
               )}
-              {tocOpen && <ResizeHandle side="left" width={tocWidth} onResize={setTocWidth} />}
+              {tocOpen && (
+                <ResizeHandle
+                  side="left"
+                  width={tocWidth}
+                  onResize={setTocWidth}
+                  onResizeEnd={persistTocWidth}
+                />
+              )}
             </aside>
 
             <main className="pane pane-doc" ref={docPaneRef}>
@@ -3971,7 +3988,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
 
             <aside className={`pane pane-right ${rightPaneOpen ? 'open' : 'closed'}`}>
               {rightPaneOpen && (
-                <ResizeHandle side="right" width={commentsWidth} onResize={setCommentsWidth} />
+                <ResizeHandle
+                  side="right"
+                  width={commentsWidth}
+                  onResize={setCommentsWidth}
+                  onResizeEnd={persistCommentsWidth}
+                />
               )}
               {/* Out of flow, so it can cross-fade with a body that is still
               on its way out. */}

@@ -7,32 +7,14 @@ import { useEffect, useRef } from 'react';
  * interface size stays per browser (`ui-scale.ts`), and so does the
  * light/dark appearance.
  *
- * These were per browser once, under `marginalia.<name>`. A document
- * without an entry of its own still reads those, so nobody's sizes reset;
- * its first change copies them in, and from then on the entry alone
- * decides — which lets a cleared value mean "unset" rather than "back to
- * the old global".
+ * A document without an entry of its own reads the per-browser
+ * `marginalia.<name>` keys, so a reader's existing sizes carry over
+ * instead of resetting. Its first change copies them in, and from then
+ * on the entry alone decides — which lets a cleared value mean "unset"
+ * rather than "back to the per-browser one".
  */
 
-export type DocViewPref =
-  | 'readingMode'
-  | 'maxWidth'
-  | 'blockWidth'
-  | 'htmlWidth'
-  | 'textZoom'
-  | 'tocWidth'
-  | 'commentsWidth'
-  | 'inlineCommentsOpen'
-  | 'inlineCommentsStacking'
-  | 'commentsDisplayMode'
-  | 'rightTab'
-  | 'docColors'
-  | 'threadListSort'
-  | 'threadListStatus'
-  | 'threadListKind'
-  | 'threadListReplies';
-
-const PREFS: readonly DocViewPref[] = [
+const PREFS = [
   'readingMode',
   'maxWidth',
   'blockWidth',
@@ -49,7 +31,9 @@ const PREFS: readonly DocViewPref[] = [
   'threadListStatus',
   'threadListKind',
   'threadListReplies',
-];
+] as const;
+
+export type DocViewPref = (typeof PREFS)[number];
 
 type PrefStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 type Prefs = Partial<Record<DocViewPref, string>>;
@@ -131,17 +115,40 @@ export function forgetDocViewPrefs(uid: string, storage: PrefStorage = localStor
   storage.removeItem(docViewKey(uid));
 }
 
+interface Persisted {
+  uid: string;
+  value: string | null;
+}
+
+/**
+ * Whether a value seen after `prev` is a change to store: only for the
+ * same document, since a new uid arrives with that document's own value.
+ * `undefined` is a state not worth remembering and leaves the stored one.
+ */
+export function persistStep(
+  prev: Persisted,
+  uid: string,
+  value: string | null | undefined,
+): { write: boolean; next: Persisted } {
+  if (value === undefined) return { write: false, next: prev };
+  const next = { uid, value };
+  return { write: prev.uid === uid && prev.value !== value, next };
+}
+
 /**
  * Stores `value` when it changes for the same document, so merely
  * opening one writes nothing and it keeps following the defaults until
- * the reader changes something. A new `uid` arrives with that document's
- * own value, which needs no writing back.
+ * the reader changes something.
  */
-export function usePersistDocViewPref(uid: string, name: DocViewPref, value: string | null): void {
-  const last = useRef({ uid, value });
+export function usePersistDocViewPref(
+  uid: string,
+  name: DocViewPref,
+  value: string | null | undefined,
+): void {
+  const last = useRef<Persisted>({ uid, value: value ?? null });
   useEffect(() => {
-    const prev = last.current;
-    last.current = { uid, value };
-    if (prev.uid === uid && prev.value !== value) writeDocViewPref(uid, name, value);
+    const { write, next } = persistStep(last.current, uid, value);
+    last.current = next;
+    if (write) writeDocViewPref(uid, name, value ?? null);
   }, [uid, name, value]);
 }
