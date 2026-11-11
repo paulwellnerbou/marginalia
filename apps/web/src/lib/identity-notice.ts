@@ -1,7 +1,7 @@
 import { ApiError, type Document } from './api.js';
 import { apiErrorMessage } from './apiErrorMessage.js';
 import { onDisplayNameChange } from './identity.js';
-import type { InviteLinkOutcome } from './invite-link.js';
+import { type InviteLinkOutcome, linkRefusal } from './invite-link.js';
 import { dismissToast, showErrorToast, showToast } from './notifications.js';
 
 export const OPEN_NAME_DIALOG_EVENT = 'marginalia:name-dialog';
@@ -27,13 +27,14 @@ const placeholderNoticed = new Set<string>();
  * blocking dialog — the name is only required once they write something.
  */
 export function showIdentityNotice(doc: Document, opened: InviteLinkOutcome | null): void {
-  if (opened?.kind === 'refused') {
+  const refusal = linkRefusal(opened);
+  if (refusal) {
     // Someone whose own link (or its session) still opens the document has
     // lost nothing; only a visitor left as an anonymous reader needs telling.
     if (doc.display_name !== null) return;
     showErrorToast(
       'This link gives no access of its own',
-      apiErrorMessage(new ApiError(410, opened.code), 'This link no longer hands out access.'),
+      apiErrorMessage(new ApiError(410, refusal), 'This link no longer hands out access.'),
     );
     return;
   }

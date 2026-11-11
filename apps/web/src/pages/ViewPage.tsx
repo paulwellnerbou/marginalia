@@ -10,7 +10,7 @@ import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { showIdentityNotice } from '../lib/identity-notice.js';
 import { loadInviteToken } from '../lib/invite.js';
-import { type InviteLinkOutcome, openInviteLink } from '../lib/invite-link.js';
+import { type InviteLinkOutcome, linkRefusal, openInviteLink } from '../lib/invite-link.js';
 import { adoptDocumentName, pushDoc as keyringPushDoc } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { openDocument } from '../lib/open-document.js';
@@ -80,13 +80,11 @@ export function ViewPage() {
         reportError('ViewPage.load', err, { uid });
         const opened = linkOutcome.current?.uid === uid ? await linkOutcome.current.outcome : null;
         if (cancelled) return;
-        if (opened?.kind === 'refused' && err instanceof ApiError && err.status === 401) {
+        const refusal = linkRefusal(opened);
+        if (refusal && err instanceof ApiError && err.status === 401) {
           // The group link handed out nothing; say why rather than "not public".
           setError(
-            apiErrorMessage(
-              new ApiError(410, opened.code),
-              'This link no longer opens the document',
-            ),
+            apiErrorMessage(new ApiError(410, refusal), 'This link no longer opens the document'),
           );
           return;
         }

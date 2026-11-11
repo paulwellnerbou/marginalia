@@ -210,6 +210,14 @@ describe('opening a link from the address bar', () => {
     expect(loadInviteToken('doc')).toBe('held');
   });
 
+  test('a dismissed password prompt is not explained as a refused link', async () => {
+    const { linkRefusal } = await import('./invite-link.js');
+    expect(linkRefusal({ kind: 'refused', code: 'password-required' })).toBeNull();
+    expect(linkRefusal({ kind: 'refused', code: 'group-link-off' })).toBe('group-link-off');
+    expect(linkRefusal({ kind: 'plain' })).toBeNull();
+    expect(linkRefusal(null)).toBeNull();
+  });
+
   test('an ordinary link is kept as it is, claimable or not', async () => {
     const { openInviteLink } = await import('./invite-link.js');
     const { loadInviteToken } = await import('./invite.js');

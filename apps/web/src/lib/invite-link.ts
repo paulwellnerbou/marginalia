@@ -16,6 +16,16 @@ export type InviteLinkOutcome =
   | { kind: 'personal'; token: string; reused: boolean }
   | { kind: 'refused'; code: string };
 
+/**
+ * The code to explain when a group link handed out nothing, or null. A
+ * dismissed password prompt is not the link's doing: the password message
+ * says what is missing there.
+ */
+export function linkRefusal(outcome: InviteLinkOutcome | null): string | null {
+  if (outcome?.kind !== 'refused' || outcome.code === 'password-required') return null;
+  return outcome.code;
+}
+
 const REFUSALS = new Set([
   'group-link-off',
   'group-link-full',
