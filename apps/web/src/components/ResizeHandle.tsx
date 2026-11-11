@@ -112,6 +112,8 @@ export function ResizeHandle({
         e.preventDefault();
         markResizing(true);
         const next = clamp(width + (side === 'left' ? delta : -delta));
+        // Already at the limit: nothing moved, so nothing to store.
+        if (next === width) return;
         onResize(next);
         onResizeEnd?.(next);
       }}
