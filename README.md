@@ -158,8 +158,8 @@ token becomes the first entry).
 - **Which documents a ring holds** is recorded on each entry of the
   local list (`rings`), from that ring's last pull and from changes made
   here. The home page filters by it: every project, one, or the
-  documents in none. The 50-entry cap of the local list applies only to
-  documents in no ring.
+  documents in none. The list has no cap: an entry is the way back to a
+  document's access link, so only the card's ✕ removes one.
 - **Filing.** A visit pushes a document only to the rings that already
   hold it. One in no ring goes into the project selected in that tab, or
   the only ring there is — and nowhere while every project is shown,

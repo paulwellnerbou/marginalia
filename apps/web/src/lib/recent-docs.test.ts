@@ -214,21 +214,27 @@ test('a rotated token replaces the one a card would re-open with', () => {
   expect(loadRecentDocs().map((d) => [d.uid, d.invite_token])).toEqual([['doc-1', 'new']]);
 });
 
-test('the cap trims documents in no ring, never a ring’s own', () => {
-  const ringDocs = Array.from({ length: 60 }, (_, i) =>
-    entry({ doc_uid: `ring-${i}`, added_at: i }),
+test('no document falls off the list, however many there are', () => {
+  mergeKeyringDocs(
+    Array.from({ length: 60 }, (_, i) => entry({ doc_uid: `ring-${i}`, added_at: i })),
+    'ring-a',
   );
-  mergeKeyringDocs(ringDocs, 'ring-a');
   for (let i = 0; i < 60; i++) {
     recordVisit(local({ uid: `loose-${i}`, visited_at: 10_000 + i }));
   }
+  expect(loadRecentDocs()).toHaveLength(120);
+});
+
+test('leaving a ring keeps its documents on the list', async () => {
+  const { dropRingMembership } = await import('./recent-docs.js');
+  mergeKeyringDocs(
+    Array.from({ length: 80 }, (_, i) => entry({ doc_uid: `ring-${i}`, added_at: i })),
+    'ring-a',
+  );
+  dropRingMembership('ring-a');
   const docs = loadRecentDocs();
-  expect(docs.filter((d) => d.rings?.includes('ring-a'))).toHaveLength(60);
-  const loose = docs.filter((d) => !d.rings?.length);
-  expect(loose).toHaveLength(50);
-  // The newest are the ones kept.
-  expect(loose.some((d) => d.uid === 'loose-59')).toBe(true);
-  expect(loose.some((d) => d.uid === 'loose-0')).toBe(false);
+  expect(docs).toHaveLength(80);
+  expect(docs.every((d) => !d.rings)).toBe(true);
 });
 
 test('a visit keeps the rings a document is in', () => {

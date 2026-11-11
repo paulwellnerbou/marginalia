@@ -10,8 +10,9 @@ import type { DocumentCover, DocumentCoverImage, DocumentFormat, KeyringDocEntry
 
 const KEY = 'marginalia.recentDocs';
 const REMOVED_KEY = 'marginalia.recentDocs.removed';
-/** Cap on documents in no keyring. A ring's documents are its own list, capped by the server. */
-const MAX = 50;
+// Uncapped on purpose: each entry is the way back to a document's access
+// link, and a dropped one leaves the link stored with nothing listing it.
+// The card's ✕ is how the list gets shorter.
 
 export interface RecentDoc {
   uid: string;
@@ -104,16 +105,13 @@ export function recordVisit(doc: RecentDoc): void {
   save(list);
 }
 
-/** Persist, keeping every ring's document and the newest of the rest. */
 function save(list: RecentDoc[]): RecentDoc[] {
-  let unfiled = 0;
-  const kept = list.filter((d) => (d.rings?.length ? true : ++unfiled <= MAX));
   try {
-    localStorage.setItem(KEY, JSON.stringify(kept));
+    localStorage.setItem(KEY, JSON.stringify(list));
   } catch {
     /* quota exceeded — best-effort */
   }
-  return kept;
+  return list;
 }
 
 /**

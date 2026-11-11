@@ -3,7 +3,7 @@
  * localStorage so the strip survives a reload.
  *
  * Deliberately not derived from `recent-docs`. Recents are a history:
- * everything this browser ever opened, fifty entries deep, ordered by
+ * everything this browser ever opened, ordered by
  * when you last looked at it. Tabs are a working set the reader curates
  * — opening a document adds one, the ✕ takes it away, and closing a tab
  * never forgets the document.
