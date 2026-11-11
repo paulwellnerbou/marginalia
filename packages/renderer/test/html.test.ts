@@ -498,4 +498,29 @@ describe('HTML documents: text size', () => {
     expect(scaleFontLengths('large', null)).toBe('large');
     expect(scaleFontLengths('larger', 'font-size')).toBe('larger');
   });
+
+  test('a size keyword counts only where the size goes, never in a family name', () => {
+    expect(scaleFontLengths('500 14px Inter Medium', 'font')).toBe(`500 ${z('14px')} Inter Medium`);
+    expect(scaleFontLengths('large Roboto Medium', 'font')).toBe(`${z('18px')} Roboto Medium`);
+    expect(scaleFontLengths('bold x-large/1.2 "Small Caps"', 'font')).toBe(
+      `bold ${z('24px')}/1.2 "Small Caps"`,
+    );
+    expect(scaleFontLengths('120% Medium', 'font')).toBe('120% Medium');
+  });
+
+  test('inline custom properties read only for type scale too', async () => {
+    const r = await renderDocument(
+      [
+        '<style>.t { font-size: var(--size) } .w { width: var(--w) }</style>',
+        '<p class="t" style="--size: 20px; --w: 300px">a</p>',
+      ].join(''),
+      'html',
+    );
+    expect(r.html).toContain(`style="--size: ${z('20px')}; --w: 300px"`);
+  });
+
+  test('text inside an SVG keeps its size against the drawing', () => {
+    const { css } = scopeHtmlCss(['svg text { font-size: 11px }'], []);
+    expect(css).toContain('.mg-html-root svg{--mg-text-zoom:1;}');
+  });
 });

@@ -46,7 +46,9 @@ const FONT_HOSTS = new Set([
 
 // Paint containment is for the app around the page; on paper there is
 // none, and a contained box may not break across pages.
-const BASE_CSS = `${ROOT}{contain:paint;position:relative;display:flow-root;}@media print{${ROOT}{contain:none;}}`;
+// An SVG's text is laid out against its own geometry, so text size stops
+// at its edge, as it does for a markdown diagram.
+const BASE_CSS = `${ROOT}{contain:paint;position:relative;display:flow-root;}${ROOT} svg{--mg-text-zoom:1;}@media print{${ROOT}{contain:none;}}`;
 
 /** Rules whose children are not selectors. */
 const OPAQUE_AT_RULES = new Set([
@@ -68,6 +70,8 @@ type Scheme = 'dark' | 'light';
 export interface ScopedCss {
   css: string;
   warnings: Warning[];
+  /** Custom properties whose lengths scale with the text, for `sanitizeInlineStyle`. */
+  fontTokens: ReadonlySet<string>;
 }
 
 export function isFontStylesheet(href: string): boolean {
@@ -147,7 +151,7 @@ export function scopeHtmlCss(
   }
 
   const css = [...imports, BASE_CSS, ...bodies, printGridOverride(printGrids)].join('\n');
-  return { css: escapeStyleText(css), warnings };
+  return { css: escapeStyleText(css), warnings, fontTokens };
 }
 
 /**
@@ -293,15 +297,19 @@ function wrapInScope(root: postcss.Root): string {
 }
 
 /** Strip what an inline `style` attribute must not carry, and scale its font sizes. */
-export function sanitizeInlineStyle(style: string): string | null {
+export function sanitizeInlineStyle(
+  style: string,
+  fontTokens: ReadonlySet<string> = new Set(),
+): string | null {
   const cleaned = style
     .split(';')
     .filter((decl) => !isUnsafeValue(decl) && !/^\s*(behavior|-moz-binding)\s*:/i.test(decl))
     .map((decl) => {
       const m = /^(\s*)([\w-]+)(\s*:)([\s\S]*)$/.exec(decl);
-      return m && FONT_PROPS.test(m[2]!)
-        ? `${m[1]}${m[2]}${m[3]}${scaleFontLengths(m[4]!, m[2]!)}`
-        : decl;
+      if (!m) return decl;
+      const prop = m[2]!;
+      if (!FONT_PROPS.test(prop) && !fontTokens.has(prop)) return decl;
+      return `${m[1]}${prop}${m[3]}${scaleFontLengths(m[4]!, fontTokens.has(prop) ? null : prop)}`;
     })
     .join(';')
     .trim();
@@ -334,34 +342,43 @@ const SIZE_KEYWORDS: Record<string, number> = {
   'xx-large': 32,
   'xxx-large': 48,
 };
-const SIZE_KEYWORD = new RegExp(
-  `(?<![\\w-])(${Object.keys(SIZE_KEYWORDS).join('|')})(?![\\w-])`,
-  'gi',
+/** The first of these in a value is its font size: a length, a percentage or a keyword. */
+const SIZE_TOKEN = new RegExp(
+  `(?<![\\w.#-])(?:[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?(?:%|[a-z]+)|${Object.keys(SIZE_KEYWORDS).join('|')})(?![\\w-])`,
+  'i',
 );
 /** Strings and `url()`, which are left as written. */
 const OPAQUE_VALUE_PARTS = /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|url\([^)]*\))/i;
 
 /**
  * `value` with its absolute lengths multiplied by the text zoom. `prop`
- * decides whether size keywords count: they do in `font-size` and `font`,
+ * decides whether a size keyword counts: in `font-size` and `font`, as
+ * the value's first size, so `font: 14px Inter Medium` keeps its family;
  * not in `line-height` or a custom property (null), where `large` may
  * mean anything.
  */
 export function scaleFontLengths(value: string, prop: string | null): string {
-  const keywords = prop !== null && /^font(-size)?$/i.test(prop);
+  let keywordDue = prop !== null && /^font(-size)?$/i.test(prop);
   return value
     .split(OPAQUE_VALUE_PARTS)
     .map((part, i) => {
       if (i % 2 === 1) return part;
-      let out = part.replace(SCALED_LENGTH, (_m, n: string, unit: string) => {
-        return `calc(${n}${unit} * ${TEXT_ZOOM})`;
-      });
-      if (keywords) {
-        out = out.replace(SIZE_KEYWORD, (m) => {
-          return `calc(${SIZE_KEYWORDS[m.toLowerCase()]}px * ${TEXT_ZOOM})`;
-        });
+      let keyword: RegExpExecArray | null = null;
+      if (keywordDue) {
+        const first = SIZE_TOKEN.exec(part);
+        if (first) {
+          keywordDue = false;
+          if (first[0].toLowerCase() in SIZE_KEYWORDS) keyword = first;
+        }
       }
-      return out;
+      const scale = (text: string) =>
+        text.replace(SCALED_LENGTH, (_m, n: string, unit: string) => {
+          return `calc(${n}${unit} * ${TEXT_ZOOM})`;
+        });
+      if (!keyword) return scale(part);
+      const px = SIZE_KEYWORDS[keyword[0].toLowerCase()];
+      const end = keyword.index + keyword[0].length;
+      return `${scale(part.slice(0, keyword.index))}calc(${px}px * ${TEXT_ZOOM})${scale(part.slice(end))}`;
     })
     .join('');
 }
