@@ -49,7 +49,9 @@ export async function renderHtml(
 
   const styles: string[] = [];
   const links: string[] = [];
+  const inlineStyles: string[] = [];
   visit(tree, 'element', (node: Element) => {
+    if (typeof node.properties?.style === 'string') inlineStyles.push(node.properties.style);
     if (node.tagName === 'style') styles.push(rawText(node));
     else if (node.tagName === 'link' && relOf(node).includes('stylesheet')) {
       const href = node.properties?.href;
@@ -104,7 +106,7 @@ export async function renderHtml(
   const finished = (await processor.run(out, file)) as Root;
   const html = processor.stringify(finished);
 
-  const scoped = scopeHtmlCss(styles, links);
+  const scoped = scopeHtmlCss(styles, links, inlineStyles);
   warnings.push(...scoped.warnings);
 
   return {

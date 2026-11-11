@@ -559,7 +559,13 @@ export function RenderedDoc({
       ? {
           ...colorStyle,
           ...(maxWidth ? { ['--md-max-width' as string]: maxWidth } : {}),
-          ...(textZoom ? { fontSize: `calc(var(--md-font-size) * ${textZoom})` } : {}),
+          ...(textZoom
+            ? {
+                fontSize: `calc(var(--md-font-size) * ${textZoom})`,
+                // Read by an HTML page's own font sizes; see the renderer's html-css.ts.
+                ['--mg-text-zoom' as string]: String(textZoom),
+              }
+            : {}),
         }
       : undefined;
 
