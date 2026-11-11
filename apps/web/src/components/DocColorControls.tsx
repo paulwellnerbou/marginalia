@@ -10,6 +10,7 @@ import {
 } from '../lib/doc-colors.js';
 
 interface Props {
+  docUid: string;
   /** The themed scrollport, whose background is the paper. */
   paperRef: RefObject<HTMLElement | null>;
   /** The rendered article, whose text color is the ink. */
@@ -28,8 +29,8 @@ const ROWS: { role: DocColorRole; label: string }[] = [
  * plus a reset to the theme. Edits the colors of the appearance on screen;
  * the other appearance keeps its own.
  */
-export function DocColorControls({ paperRef, inkRef, theme }: Props) {
-  const { mode, colors } = useDocColors();
+export function DocColorControls({ docUid, paperRef, inkRef, theme }: Props) {
+  const { mode, colors } = useDocColors(docUid);
   const [themeColors, setThemeColors] = useState<Partial<Record<DocColorRole, string>>>({});
 
   // What the theme shows without an override, so the swatch starts there.
@@ -76,8 +77,8 @@ export function DocColorControls({ paperRef, inkRef, theme }: Props) {
             value={value}
             overridden={!!override}
             resetLabel={`Reset ${noun} to the theme's`}
-            onChange={(next) => setDocColor(mode, role, next)}
-            onReset={() => setDocColor(mode, role, null)}
+            onChange={(next) => setDocColor(docUid, mode, role, next)}
+            onReset={() => setDocColor(docUid, mode, role, null)}
           />
         );
       })}

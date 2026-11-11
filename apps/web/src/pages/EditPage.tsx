@@ -41,6 +41,7 @@ import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { useDocColorStyle } from '../lib/doc-colors.js';
 import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
 import { documentTitle } from '../lib/doc-title.js';
+import { readDocViewPref, usePersistDocViewPref } from '../lib/doc-view-prefs.js';
 import { adoptServerName, getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { loadInviteToken } from '../lib/invite.js';
 import { openInviteLink } from '../lib/invite-link.js';
@@ -54,7 +55,6 @@ const ASSETS_COLLAPSED_WIDTH = 36;
 const LS_ASSETS_OPEN = 'marginalia.editAssetsOpen';
 const LS_ASSETS_WIDTH = 'marginalia.editAssetsWidth';
 const LS_EDITOR_WIDTH = 'marginalia.editEditorWidth';
-const LS_TEXT_ZOOM = 'marginalia.textZoom';
 const LS_WORD_WRAP = 'marginalia.editWordWrap';
 
 /**
@@ -119,6 +119,11 @@ function scopeNoun(scope: ChapterScope, sentenceStart = false): string {
         ? 'the about text'
         : 'this chapter';
   return sentenceStart ? noun[0]?.toUpperCase() + noun.slice(1) : noun;
+}
+
+function storedEditorTextZoom(uid: string | undefined): number {
+  const saved = uid ? Number(readDocViewPref(uid, 'textZoom')) : Number.NaN;
+  return Number.isFinite(saved) && saved >= 80 && saved <= 140 ? saved : 100;
 }
 
 export function EditPage() {
@@ -214,10 +219,13 @@ export function EditPage() {
     return Number.isFinite(saved) && saved >= 200 ? saved : 500;
   });
 
-  const [textZoom, setTextZoom] = useState<number>(() => {
-    const saved = Number(localStorage.getItem(LS_TEXT_ZOOM));
-    return Number.isFinite(saved) && saved >= 80 && saved <= 140 ? saved : 100;
-  });
+  // The viewer's text size for this document, within the editor's narrower range.
+  const [textZoom, setTextZoom] = useState<number>(() => storedEditorTextZoom(uid));
+  const [textZoomUid, setTextZoomUid] = useState(uid);
+  if (textZoomUid !== uid) {
+    setTextZoomUid(uid);
+    setTextZoom(storedEditorTextZoom(uid));
+  }
   const [theme, setTheme] = useState('default');
 
   useEffect(() => {
@@ -229,14 +237,12 @@ export function EditPage() {
   useEffect(() => {
     localStorage.setItem(LS_EDITOR_WIDTH, String(editorWidth));
   }, [editorWidth]);
-  useEffect(() => {
-    localStorage.setItem(LS_TEXT_ZOOM, String(textZoom));
-  }, [textZoom]);
+  usePersistDocViewPref(uid ?? '', 'textZoom', String(textZoom));
   useEffect(() => {
     localStorage.setItem(LS_WORD_WRAP, String(wordWrap));
   }, [wordWrap]);
   const isHtml = doc?.format === 'html';
-  const docColorOverride = useDocColorStyle(doc?.format);
+  const docColorOverride = useDocColorStyle(uid, doc?.format);
   useEffect(() => {
     void applyTheme(themeForDocument(doc?.format ?? 'markdown', theme));
   }, [theme, doc?.format]);

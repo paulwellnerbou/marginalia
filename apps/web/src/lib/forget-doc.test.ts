@@ -87,6 +87,7 @@ function seed(): void {
   store.set(`marginalia.invite.${UID}`, 'tok');
   store.set(`marginalia.password.${UID}`, 'hunter2');
   store.set(`marginalia.theme.${UID}`, 'sepia');
+  store.set(`marginalia.view.${UID}`, '{"textZoom":"120"}');
   // A second document's state, to prove the purge is scoped by uid.
   store.set('marginalia.invite.doc-2', 'tok-2');
   store.set('marginalia.password.doc-2', 'other');
@@ -101,6 +102,7 @@ test('clears every per-document key for the deleted doc', () => {
   expect(store.get(`marginalia.invite.${UID}`)).toBeUndefined();
   expect(store.get(`marginalia.password.${UID}`)).toBeUndefined();
   expect(store.get(`marginalia.theme.${UID}`)).toBeUndefined();
+  expect(store.get(`marginalia.view.${UID}`)).toBeUndefined();
 
   const recent = JSON.parse(store.get('marginalia.recentDocs') ?? '[]') as Array<{ uid: string }>;
   expect(recent.map((d) => d.uid)).toEqual(['doc-2']);
@@ -143,4 +145,5 @@ test('survives a store that throws, and still clears the rest', () => {
   expect(store.get(`marginalia.invite.${UID}`)).toBeUndefined();
   expect(store.get(`marginalia.password.${UID}`)).toBeUndefined();
   expect(store.get(`marginalia.theme.${UID}`)).toBeUndefined();
+  expect(store.get(`marginalia.view.${UID}`)).toBeUndefined();
 });

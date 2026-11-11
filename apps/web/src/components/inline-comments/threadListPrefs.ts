@@ -1,12 +1,8 @@
+import { readDocViewPref, writeDocViewPref } from '../../lib/doc-view-prefs.js';
 import type { ThreadFilters } from './threadFilters.js';
 
 /** Threads-tab ordering: appearance in the document, or latest activity first. */
 export type ThreadSortMode = 'document' | 'latest';
-
-const SORT_KEY = 'marginalia.threadListSort';
-const STATUS_KEY = 'marginalia.threadListStatus';
-const KIND_KEY = 'marginalia.threadListKind';
-const REPLIES_KEY = 'marginalia.threadListReplies';
 
 /**
  * How the Threads tab opens before the reader has touched it: what
@@ -21,20 +17,20 @@ export const DEFAULT_THREAD_FILTERS: ThreadFilters = {
   replies: 'all',
 };
 
-export function loadThreadSortMode(): ThreadSortMode {
-  const saved = localStorage.getItem(SORT_KEY);
+export function loadThreadSortMode(docUid: string): ThreadSortMode {
+  const saved = readDocViewPref(docUid, 'threadListSort');
   return saved === 'document' || saved === 'latest' ? saved : DEFAULT_THREAD_SORT_MODE;
 }
 
-export function saveThreadSortMode(mode: ThreadSortMode): void {
-  localStorage.setItem(SORT_KEY, mode);
+export function saveThreadSortMode(docUid: string, mode: ThreadSortMode): void {
+  writeDocViewPref(docUid, 'threadListSort', mode);
 }
 
 /** Each dimension falls back on its own, so one unreadable key can't reset the other. */
-export function loadThreadFilters(): ThreadFilters {
-  const status = localStorage.getItem(STATUS_KEY);
-  const kind = localStorage.getItem(KIND_KEY);
-  const replies = localStorage.getItem(REPLIES_KEY);
+export function loadThreadFilters(docUid: string): ThreadFilters {
+  const status = readDocViewPref(docUid, 'threadListStatus');
+  const kind = readDocViewPref(docUid, 'threadListKind');
+  const replies = readDocViewPref(docUid, 'threadListReplies');
   return {
     status: status === 'all' || status === 'unresolved' ? status : DEFAULT_THREAD_FILTERS.status,
     kind: kind === 'all' || kind === 'proposals' ? kind : DEFAULT_THREAD_FILTERS.kind,
@@ -43,8 +39,8 @@ export function loadThreadFilters(): ThreadFilters {
   };
 }
 
-export function saveThreadFilters(filters: ThreadFilters): void {
-  localStorage.setItem(STATUS_KEY, filters.status);
-  localStorage.setItem(KIND_KEY, filters.kind);
-  localStorage.setItem(REPLIES_KEY, filters.replies);
+export function saveThreadFilters(docUid: string, filters: ThreadFilters): void {
+  writeDocViewPref(docUid, 'threadListStatus', filters.status);
+  writeDocViewPref(docUid, 'threadListKind', filters.kind);
+  writeDocViewPref(docUid, 'threadListReplies', filters.replies);
 }
