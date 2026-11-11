@@ -69,6 +69,14 @@ function installWindow(): void {
       for (const fn of [...(listeners.get(e.type) ?? [])]) fn(e);
       return true;
     },
+    setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+    clearTimeout: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
+  };
+  const session = new Map<string, string>();
+  (globalThis as { sessionStorage?: unknown }).sessionStorage = {
+    getItem: (key: string) => session.get(key) ?? null,
+    setItem: (key: string, value: string) => void session.set(key, value),
+    removeItem: (key: string) => void session.delete(key),
   };
 }
 
@@ -212,5 +220,63 @@ describe('opening a link from the address bar', () => {
     stubFetch([{ status: 400, body: { error: 'admin-invite-not-claimable' } }]);
     expect(await openInviteLink('doc2', 'admin')).toEqual({ kind: 'plain' });
     expect(loadInviteToken('doc2')).toBe('admin');
+  });
+});
+
+describe('the keyring', () => {
+  test('a link the ring holds is offered to a group link, with the ring name and its time', async () => {
+    const { openInviteLink } = await import('./invite-link.js');
+    const { getDisplayName, getDisplayNameSetAt } = await import('./identity.js');
+    store.set('marginalia.keyring', 'ring-token');
+    const sent = stubFetch([
+      {
+        status: 200,
+        body: {
+          client_id: 'ring-client-0000000000',
+          display_name: 'Paul W.',
+          display_name_set_at: 2000,
+          docs: [
+            {
+              doc_uid: 'doc-ring',
+              invite_token: 'ring-personal',
+              title: 'Doc',
+              role: 'collaborator',
+              format: 'markdown',
+              password_protected: false,
+              updated_at: 1,
+              added_at: 1,
+              cover: null,
+            },
+          ],
+        },
+      },
+      { status: 200, body: { token: 'ring-personal', role: 'collaborator', reused: true } },
+    ]);
+    const outcome = await openInviteLink('doc-ring', 'group');
+    expect(sent[0]!.url).toContain('/api/keyrings/self');
+    expect(sent[1]!.body).toEqual({ held_token: 'ring-personal' });
+    expect(outcome).toEqual({ kind: 'personal', token: 'ring-personal', reused: true });
+    expect(getDisplayName()).toBe('Paul W.');
+    expect(getDisplayNameSetAt()).toBe(2000);
+  });
+});
+
+describe('the identity notice', () => {
+  test('a placeholder notice shows once per document', async () => {
+    const { showIdentityNotice } = await import('./identity-notice.js');
+    const { onToasts } = await import('./notifications.js');
+    let shown = 0;
+    const stop = onToasts((toasts) => {
+      shown = toasts.filter((t) => t.title === 'You appear as Amber Fox').length;
+    });
+    const doc = {
+      uid: 'doc-notice',
+      display_name: 'Amber Fox',
+      name_provisional: true,
+    } as unknown as Parameters<typeof showIdentityNotice>[0];
+    showIdentityNotice(doc, null);
+    showIdentityNotice(doc, null);
+    expect(shown).toBe(1);
+    stop();
   });
 });

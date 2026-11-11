@@ -295,6 +295,17 @@ describe('group links', () => {
     expect(foreign.status).toBe(201);
   });
 
+  test('a browser that lost its stored token is known by its session cookie', async () => {
+    const doc = await upload();
+    const group = await createGroup(doc.uid, doc.admin);
+    const first = await claim(doc.uid, group.token, VISITOR);
+    const token = (first.json as { token: string }).token;
+    const again = await claim(doc.uid, group.token, VISITOR, { cookie: first.cookie });
+    expect(again.status).toBe(200);
+    expect(again.json).toMatchObject({ token, reused: true });
+    expect((await listInvites(doc.uid, doc.admin)).filter((i) => i.source_token)).toHaveLength(1);
+  });
+
   test('turning the link off stops minting but keeps personal links working', async () => {
     const doc = await upload();
     const group = await createGroup(doc.uid, doc.admin);
@@ -479,6 +490,27 @@ describe('group links', () => {
       expect(row.previous_names).toEqual(['Amber Fox']);
     });
 
+    test('a reader is refused for its role, not asked for a name', async () => {
+      const doc = await upload();
+      const group = await createGroup(doc.uid, doc.admin, 'reader');
+      const minted = await mint(doc.uid, group.token, VISITOR);
+      const blockId = await firstBlockId(doc.uid, doc.admin);
+      const res = await postThread(doc.uid, VISITOR, minted.token, blockId);
+      expect(res.status).toBe(403);
+      expect(res.json.error).toBe('forbidden');
+    });
+
+    test('keeping the placeholder on purpose is no previous name', async () => {
+      const doc = await upload();
+      const group = await createGroup(doc.uid, doc.admin);
+      const minted = await mint(doc.uid, group.token, VISITOR);
+      await getDoc(doc.uid, VISITOR, minted.token, 4000);
+      const row = await personal(doc.uid, doc.admin, minted.token);
+      expect(row.name_provisional).toBe(false);
+      expect(row.display_name).toBe('Amber Fox');
+      expect(row.previous_names).toEqual([]);
+    });
+
     test('an undated name never lifts the placeholder', async () => {
       const doc = await upload();
       const group = await createGroup(doc.uid, doc.admin);
@@ -641,7 +673,9 @@ describe('group links', () => {
   test('placeholders are left out of mention suggestions', async () => {
     const doc = await upload();
     const group = await createGroup(doc.uid, doc.admin);
-    await mint(doc.uid, group.token, VISITOR);
+    const minted = await mint(doc.uid, group.token, VISITOR);
+    // Opening the document registers the visitor, placeholder and all.
+    expect((await getDoc(doc.uid, VISITOR, minted.token)).status).toBe(200);
     await mint(doc.uid, group.token, { ...OTHER, name: 'Paul' }, 1000);
     const names = listDocUserNames(app.db, doc.uid);
     expect(names).toContain('Paul');
@@ -670,6 +704,33 @@ describe('group links', () => {
     expect(groups[0]!.token).not.toBe(group.token);
     expect(groups[0]!.enabled).toBe(false);
     expect(invites.filter((i) => i.source_token !== null)).toHaveLength(0);
+  });
+
+  test('a keyring keeps when its name was chosen', async () => {
+    const created = await call('/api/keyrings', {
+      method: 'POST',
+      headers: headers({ ...VISITOR, name: 'Paul' }, { setAt: 1000 }),
+      body: { docs: [] },
+    });
+    expect(created.json.display_name_set_at).toBe(1000);
+    const ringToken = created.json.token as string;
+    const ringHeaders = headers(VISITOR, { extra: { [KEYRING_HEADER]: ringToken } });
+    const renamed = await call('/api/keyrings/self', {
+      method: 'PATCH',
+      headers: ringHeaders,
+      body: { display_name: 'Paul W.', display_name_set_at: 2000 },
+    });
+    expect(renamed.json.display_name_set_at).toBe(2000);
+    const pulled = await call('/api/keyrings/self', { headers: ringHeaders });
+    expect(pulled.json).toMatchObject({ display_name: 'Paul W.', display_name_set_at: 2000 });
+    // Undated: chosen now.
+    const before = Date.now();
+    const plain = await call('/api/keyrings/self', {
+      method: 'PATCH',
+      headers: ringHeaders,
+      body: { display_name: 'Paula' },
+    });
+    expect(plain.json.display_name_set_at as number).toBeGreaterThanOrEqual(before);
   });
 
   test('a keyring refuses to store a group link', async () => {

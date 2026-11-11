@@ -151,7 +151,7 @@ export function InvitesPanel({
   const displayName = useDisplayName();
   const [invites, setInvites] = useState<Invite[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Generic links are no longer created: a group link does what they did
+  // No generic kind to create: a group link covers "anyone with the link"
   // and keeps each visitor apart. Existing generic links still list below.
   const [kind, setKind] = useState<'named' | 'group'>('named');
   const [name, setName] = useState('');

@@ -428,31 +428,12 @@ export function isAuthPending(docUid: string): boolean {
 }
 
 function waitForAuth(docUid: string): Promise<void> {
-  const existing = authGates.get(docUid);
-  if (existing) return existing;
-
-  const gate = new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      window.removeEventListener(AUTH_RESOLVED, onResolved as EventListener);
-      window.removeEventListener(AUTH_CANCELLED, onCancelled as EventListener);
-      authGates.delete(docUid);
-    };
-    const onResolved = (e: CustomEvent<{ docUid: string }>) => {
-      if (e.detail?.docUid !== docUid) return;
-      cleanup();
-      resolve();
-    };
-    const onCancelled = (e: CustomEvent<{ docUid: string }>) => {
-      if (e.detail?.docUid !== docUid) return;
-      cleanup();
-      reject(new ApiError(401, 'password-required'));
-    };
-    window.addEventListener(AUTH_RESOLVED, onResolved as EventListener);
-    window.addEventListener(AUTH_CANCELLED, onCancelled as EventListener);
-    window.dispatchEvent(new CustomEvent(AUTH_REQUIRED, { detail: { docUid } }));
-  });
-  authGates.set(docUid, gate);
-  return gate;
+  return waitForPrompt(
+    authGates,
+    docUid,
+    { required: AUTH_REQUIRED, resolved: AUTH_RESOLVED, cancelled: AUTH_CANCELLED },
+    () => new ApiError(401, 'password-required'),
+  );
 }
 
 /**
@@ -481,20 +462,37 @@ export function isNamePending(docUid: string): boolean {
   return nameGates.has(docUid);
 }
 
-/** Ask for a name before a write, without waiting for the server to refuse it. */
-export function requestName(docUid: string): Promise<void> {
-  return waitForName(docUid);
+function waitForName(docUid: string): Promise<void> {
+  return waitForPrompt(
+    nameGates,
+    docUid,
+    {
+      required: NAME_REQUIRED_EVENT,
+      resolved: NAME_RESOLVED_EVENT,
+      cancelled: NAME_CANCELLED_EVENT,
+    },
+    () => new ApiError(409, 'display-name-required'),
+  );
 }
 
-function waitForName(docUid: string): Promise<void> {
-  const existing = nameGates.get(docUid);
+/**
+ * One prompt per document for every request waiting on it: announce
+ * `required`, then settle on `resolved` or reject on `cancelled`.
+ */
+function waitForPrompt(
+  gates: Map<string, Promise<void>>,
+  docUid: string,
+  events: { required: string; resolved: string; cancelled: string },
+  rejection: () => ApiError,
+): Promise<void> {
+  const existing = gates.get(docUid);
   if (existing) return existing;
 
   const gate = new Promise<void>((resolve, reject) => {
     const cleanup = () => {
-      window.removeEventListener(NAME_RESOLVED_EVENT, onResolved as EventListener);
-      window.removeEventListener(NAME_CANCELLED_EVENT, onCancelled as EventListener);
-      nameGates.delete(docUid);
+      window.removeEventListener(events.resolved, onResolved as EventListener);
+      window.removeEventListener(events.cancelled, onCancelled as EventListener);
+      gates.delete(docUid);
     };
     const onResolved = (e: CustomEvent<{ docUid: string }>) => {
       if (e.detail?.docUid !== docUid) return;
@@ -504,16 +502,16 @@ function waitForName(docUid: string): Promise<void> {
     const onCancelled = (e: CustomEvent<{ docUid: string }>) => {
       if (e.detail?.docUid !== docUid) return;
       cleanup();
-      reject(new ApiError(409, 'display-name-required'));
+      reject(rejection());
     };
-    window.addEventListener(NAME_RESOLVED_EVENT, onResolved as EventListener);
-    window.addEventListener(NAME_CANCELLED_EVENT, onCancelled as EventListener);
+    window.addEventListener(events.resolved, onResolved as EventListener);
+    window.addEventListener(events.cancelled, onCancelled as EventListener);
   });
-  // Registered before the announcement: a listener that answers at once
-  // would otherwise settle the gate before it is stored, leaving a settled
-  // gate behind that every later refusal would pass straight through.
-  nameGates.set(docUid, gate);
-  window.dispatchEvent(new CustomEvent(NAME_REQUIRED_EVENT, { detail: { docUid } }));
+  // Stored before the announcement: a listener that answers at once would
+  // otherwise settle the gate before it is stored, leaving a settled gate
+  // behind that every later refusal would pass straight through.
+  gates.set(docUid, gate);
+  window.dispatchEvent(new CustomEvent(events.required, { detail: { docUid } }));
   return gate;
 }
 
@@ -1399,6 +1397,8 @@ const KEYRING_HEADER = 'x-marginalia-keyring';
 export interface KeyringWire {
   client_id: string;
   display_name: string;
+  /** When the ring's name was chosen; null or absent when unknown. */
+  display_name_set_at?: number | null;
   updated_at?: number;
   /** How long an unused ring lasts before the server sweeps it. */
   idle_ttl_ms?: number;
@@ -1449,11 +1449,15 @@ export function fetchKeyring(token: string): Promise<KeyringWire> {
 export function renameKeyring(
   token: string,
   displayName: string,
-): Promise<{ display_name: string }> {
+  setAt: number | null = null,
+): Promise<{ display_name: string; display_name_set_at?: number }> {
   return request('/api/keyrings/self', {
     method: 'PATCH',
     headers: { [KEYRING_HEADER]: token },
-    body: JSON.stringify({ display_name: displayName }),
+    body: JSON.stringify({
+      display_name: displayName,
+      ...(setAt !== null ? { display_name_set_at: setAt } : {}),
+    }),
   });
 }
 

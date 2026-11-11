@@ -30,6 +30,7 @@ import {
 import {
   getClientId,
   getDisplayName,
+  getDisplayNameSetAt,
   isGeneratedDisplayName,
   setClientId,
   setDisplayName,
@@ -295,7 +296,8 @@ export function removeDoc(uid: string): void {
 export function pushDisplayName(name: string): void {
   const token = loadKeyringToken();
   if (!token) return;
-  void renameKeyring(token, name).catch((err) => {
+  const setAt = name === getDisplayName() ? getDisplayNameSetAt() : null;
+  void renameKeyring(token, name, setAt).catch((err) => {
     if (isNotFound(err)) return;
     reportError('keyring.pushDisplayName', err);
   });
@@ -344,11 +346,11 @@ export function adoptDocumentName(
 function adoptIdentity(ring: KeyringWire): void {
   if (ring.client_id && ring.client_id !== getClientId()) setClientId(ring.client_id);
   if (ring.display_name && ring.display_name !== getDisplayName()) {
-    // The ring holds no time; a name some device typed counts as chosen,
-    // but older than any name dated since.
-    setDisplayName(ring.display_name, {
-      setAt: isGeneratedDisplayName(ring.display_name) ? null : 0,
-    });
+    // The ring's time travels with its name, so a rename typed on another
+    // device still out-dates an older name on a personal link here. A ring
+    // from before it kept one: a typed name counts as chosen, but oldest.
+    const fallback = isGeneratedDisplayName(ring.display_name) ? null : 0;
+    setDisplayName(ring.display_name, { setAt: ring.display_name_set_at ?? fallback });
   }
 }
 

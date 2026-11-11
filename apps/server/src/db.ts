@@ -521,6 +521,7 @@ export interface KeyringRow {
   token: string;
   client_id: string;
   display_name: string;
+  display_name_set_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -795,6 +796,9 @@ export function openDatabase(path: string): Database {
   // A group link that was turned off: it mints nothing, its personal links live on.
   ensureColumn(db, 'invites', 'disabled_at', 'INTEGER');
   ensureColumn(db, 'invites', 'last_used_at', 'INTEGER');
+  // When the ring's name was chosen, so a device adopting it can still win
+  // over an older name on a personal link. NULL: unknown, or generated.
+  ensureColumn(db, 'keyrings', 'display_name_set_at', 'INTEGER');
   migrateEditProposalsToCommentExtensions(db);
   migrateProposalDecisionColumnsToComments(db);
   migrateCommentReactionsPrimaryKey(db);

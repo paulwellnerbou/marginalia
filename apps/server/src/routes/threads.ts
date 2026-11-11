@@ -346,7 +346,6 @@ async function createThread(c: Context, deps: AppDeps) {
   // realtime channel has any use for it.
   const hidden = bookmark || body.hidden === true;
   if (hidden && proposal) return c.json({ error: 'hidden-proposal-forbidden' }, 400);
-  if (!hidden && needsName(decision)) return nameRequired(c);
   const storedRootBody = proposal
     ? (rootBody.body ?? DEFAULT_PROPOSAL_BODY)
     : (rootBody.body ?? '');
@@ -362,6 +361,8 @@ async function createThread(c: Context, deps: AppDeps) {
       }
     }
   }
+  // After the role checks: asking a reader for a name it cannot use helps nobody.
+  if (!hidden && needsName(decision)) return nameRequired(c);
 
   if (bookmark) {
     // One bookmark per passage per reader: a tab that hasn't yet read a
@@ -1821,10 +1822,10 @@ async function toggleCommentReaction(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
-  if (needsName(decision)) return nameRequired(c);
   // `react` shares the comment gate (see the `react: canReply` field in
   // toThreadWire) — readers can't react, anyone who can reply can.
   if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
+  if (needsName(decision)) return nameRequired(c);
   const identity = decision.identity;
 
   const tid = c.req.param('tid');

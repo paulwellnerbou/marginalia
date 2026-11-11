@@ -1,5 +1,6 @@
 import { ApiError, claimInvite } from './api.js';
 import { loadInviteToken, saveInviteToken, setPendingInviteClaim } from './invite.js';
+import { inviteFromKeyring } from './keyring.js';
 
 /**
  * What opening a link from the address bar came to.
@@ -36,8 +37,7 @@ export function openInviteLink(uid: string, token: string): Promise<InviteLinkOu
   const key = `${uid}/${token}`;
   const running = inFlight.get(key);
   if (running) return running;
-  const held = loadInviteToken(uid);
-  const outcome = claimAndStore(uid, token, held && held !== token ? held : null);
+  const outcome = claimAndStore(uid, token);
   inFlight.set(key, outcome);
   void outcome.finally(() => inFlight.delete(key));
   setPendingInviteClaim(uid, outcome);
@@ -46,13 +46,12 @@ export function openInviteLink(uid: string, token: string): Promise<InviteLinkOu
 
 const inFlight = new Map<string, Promise<InviteLinkOutcome>>();
 
-async function claimAndStore(
-  uid: string,
-  token: string,
-  held: string | null,
-): Promise<InviteLinkOutcome> {
+async function claimAndStore(uid: string, token: string): Promise<InviteLinkOutcome> {
+  // The ring may hold this person's personal link from another device;
+  // without it a group link would hand this device a second identity.
+  const held = loadInviteToken(uid) ?? (await inviteFromKeyring(uid)).token;
   try {
-    const claimed = await claimInvite(uid, token, held);
+    const claimed = await claimInvite(uid, token, held && held !== token ? held : null);
     if (claimed.token && claimed.token !== token) {
       saveInviteToken(uid, claimed.token);
       return { kind: 'personal', token: claimed.token, reused: claimed.reused === true };

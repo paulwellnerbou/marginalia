@@ -3301,18 +3301,23 @@ async function claimInvite(c: Context, deps: AppDeps, groupLinkLimiter: FixedWin
 
   // Mint an invite session. The invite row is NOT deleted so the user can
   // re-claim from another browser using the original URL.
-  const sessionToken = createSession(db, doc.uid, config.namedInviteSessionTtlMs, true, {
+  setInviteSessionCookie(c, deps, doc, invite);
+  return c.json({ display_name: invite.display_name, role: invite.role }, 201);
+}
+
+function setInviteSessionCookie(c: Context, deps: AppDeps, doc: DocumentRow, invite: InviteRow) {
+  const ttlMs = deps.config.namedInviteSessionTtlMs;
+  const sessionToken = createSession(deps.db, doc.uid, ttlMs, true, {
     token: invite.token,
     display_name: invite.display_name,
     role: invite.role,
     kind: invite.kind,
   });
-  const maxAge = Math.floor(config.namedInviteSessionTtlMs / 1000);
+  const maxAge = Math.floor(ttlMs / 1000);
   c.header(
     'Set-Cookie',
     `${INVITE_SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
   );
-  return c.json({ display_name: invite.display_name, role: invite.role }, 201);
 }
 
 /**
@@ -3351,17 +3356,24 @@ async function claimGroupLink(
 
   const body = (await safeJson(c)) ?? {};
   const heldToken = typeof body.held_token === 'string' ? body.held_token : null;
-  const held = heldToken
-    ? (db
-        .prepare('SELECT * FROM invites WHERE token = ? AND doc_uid = ?')
-        .get(heldToken, doc.uid) as InviteRow | null)
-    : null;
-  if (
-    held &&
-    held.kind !== 'group' &&
-    (held.source_token === group.token || roleAtLeast(held.role, group.role))
-  ) {
-    return c.json({ token: held.token, role: held.role, reused: true });
+  // The invite session counts as held too: a browser that lost its stored
+  // token still carries the cookie of the personal link it was given, and
+  // minting again would list the same person twice.
+  const sessionToken = parseCookie(headers.get('cookie'), INVITE_SESSION_COOKIE);
+  const session = sessionToken ? readSession(db, sessionToken) : null;
+  const sessionInvite = session?.doc_uid === doc.uid ? session.invite_token : null;
+  for (const candidate of [heldToken, sessionInvite]) {
+    if (!candidate) continue;
+    const held = db
+      .prepare('SELECT * FROM invites WHERE token = ? AND doc_uid = ?')
+      .get(candidate, doc.uid) as InviteRow | null;
+    if (
+      held &&
+      held.kind !== 'group' &&
+      (held.source_token === group.token || roleAtLeast(held.role, group.role))
+    ) {
+      return c.json({ token: held.token, role: held.role, reused: true });
+    }
   }
 
   // After reuse: someone reopening the mail still gets back in once the
@@ -3387,19 +3399,7 @@ async function claimGroupLink(
 
   // Same session cookie an ordinary claim sets; on a password document the
   // password gate would refuse it anyway, so the header carries access.
-  if (doc.password_hash === null) {
-    const sessionToken = createSession(db, doc.uid, config.namedInviteSessionTtlMs, true, {
-      token: minted.token,
-      display_name: minted.display_name,
-      role: minted.role,
-      kind: minted.kind,
-    });
-    const maxAge = Math.floor(config.namedInviteSessionTtlMs / 1000);
-    c.header(
-      'Set-Cookie',
-      `${INVITE_SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
-    );
-  }
+  if (doc.password_hash === null) setInviteSessionCookie(c, deps, doc, minted);
   return c.json(
     {
       token: minted.token,

@@ -126,13 +126,16 @@ export function previousNamesByInvite(db: Database, docUid: string): Map<string,
     )
     .all(docUid) as Array<{ invite_token: string; display_name: string }>;
   const out = new Map<string, string[]>();
-  const firstSeen = new Set<string>();
+  const current = new Map<string, string>();
   for (const row of rows) {
-    // The newest row is the current name, which the invite row already says.
-    if (!firstSeen.has(row.invite_token)) {
-      firstSeen.add(row.invite_token);
+    // The newest row is the current name, which the invite row already says;
+    // keeping a placeholder records it a second time, and that is no change.
+    const now = current.get(row.invite_token);
+    if (now === undefined) {
+      current.set(row.invite_token, row.display_name);
       continue;
     }
+    if (row.display_name === now) continue;
     const list = out.get(row.invite_token) ?? [];
     if (list[list.length - 1] !== row.display_name) list.push(row.display_name);
     out.set(row.invite_token, list);

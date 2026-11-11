@@ -18,6 +18,9 @@ export function openNameDialog(docUid: string): void {
  */
 const PLACEHOLDER_NOTICE_MS = 10 * 60 * 1000;
 
+/** Documents whose placeholder notice this page already showed. */
+const placeholderNoticed = new Set<string>();
+
 /**
  * Tell a visitor how others see them: after opening a group link, and on
  * every visit while their name is still the made-up placeholder. Never a
@@ -37,6 +40,10 @@ export function showIdentityNotice(doc: Document, opened: InviteLinkOutcome | nu
   const name = doc.display_name;
   if (!name) return;
   if (doc.name_provisional) {
+    // Once per document per page: switching tabs back and forth would
+    // otherwise pile up copies of a notice that is still on screen.
+    if (placeholderNoticed.has(doc.uid)) return;
+    placeholderNoticed.add(doc.uid);
     const id = showToast(
       {
         title: `You appear as ${name}`,
