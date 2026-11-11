@@ -620,3 +620,34 @@ test('the name in use is the one of the ring the document is in', async () => {
   scopeIdentityTo(null);
   expect(getDisplayName()).toBe('Paul W');
 });
+
+test('a name typed in one project keeps its own time and reaches only that ring', async () => {
+  const { findKeyring, pullKeyring, pushDisplayName, scopeIdentityTo, setRingView } = await import(
+    './keyring.js'
+  );
+  const { getDisplayNameSetAt, setDisplayName } = await import('./identity.js');
+  storeTwoRings();
+  const seen = stubRings({ 'tok-a': [{ uid: 'a1', token: 't-a1' }], 'tok-b': [] });
+  await pullKeyring();
+  setRingView('all');
+  seen.length = 0;
+
+  scopeIdentityTo('a1');
+  const before = Date.now();
+  setDisplayName('Paul for Acme');
+  pushDisplayName('Paul for Acme');
+
+  const acme = findKeyring('ring-a');
+  expect(acme?.displayName).toBe('Paul for Acme');
+  expect(acme?.displayNameSetAt).toBeGreaterThanOrEqual(before);
+  expect(getDisplayNameSetAt()).toBe(acme?.displayNameSetAt ?? -1);
+  expect(findKeyring('ring-b')?.displayName).toBe('display name of tok-b');
+  expect(seen.map((s) => [s.method, s.ring, s.body])).toEqual([
+    [
+      'PATCH',
+      'tok-a',
+      { display_name: 'Paul for Acme', display_name_set_at: acme?.displayNameSetAt },
+    ],
+  ]);
+  scopeIdentityTo(null);
+});

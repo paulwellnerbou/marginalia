@@ -21,3 +21,26 @@ export function loadInviteToken(uid: string): string | null {
 export function clearInviteToken(uid: string): void {
   localStorage.removeItem(PREFIX + uid);
 }
+
+/**
+ * A link opened from the address bar is claimed before the document is
+ * loaded: a group link answers with a different token to keep, and a
+ * load sent with the group token would be refused. `getDocument` waits
+ * on this.
+ */
+const pending = new Map<string, Promise<unknown>>();
+
+export function setPendingInviteClaim(uid: string, claim: Promise<unknown>): void {
+  const settled = claim.then(
+    () => undefined,
+    () => undefined,
+  );
+  pending.set(uid, settled);
+  void settled.then(() => {
+    if (pending.get(uid) === settled) pending.delete(uid);
+  });
+}
+
+export function pendingInviteClaim(uid: string): Promise<unknown> | undefined {
+  return pending.get(uid);
+}

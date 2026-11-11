@@ -3102,6 +3102,11 @@ button.primary:disabled {
 .access-list__row + .access-list__row {
   border-top: 1px solid var(--gray-a4);
 }
+/* The personal links a group link handed out, nested under its row. */
+.access-sublist {
+  border: 1px solid var(--gray-a4);
+  border-radius: var(--radius-2);
+}
 .access-explainer {
   margin-top: var(--space-1);
 }

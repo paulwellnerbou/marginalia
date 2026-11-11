@@ -59,6 +59,15 @@ const MESSAGES: Record<string, string> = {
   'forbidden-accepted': 'Accepted proposals can only be changed by an admin.',
   'identity-required': 'Please set your display name first.',
   'password-required': 'This document is password protected.',
+  // Group links
+  'group-link-off':
+    'This link no longer hands out access. Ask the person who shared it for a new link.',
+  'group-link-full':
+    'This link has handed out as many personal links as it can. Ask the person who shared it.',
+  'group-link-not-storable': 'A group link cannot be kept in a keyring; your personal link is.',
+  'not-a-group-link': 'Only a group link can be turned on or off.',
+  'too-many-requests': 'Too many attempts from here. Wait a while and try again.',
+  'display-name-required': 'Give your name first: others see it with what you write.',
   'invite-required':
     'This document is restricted to people with an access link. Ask the document’s owner for one.',
   'wrong-password': 'That password was not accepted.',

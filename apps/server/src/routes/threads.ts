@@ -23,6 +23,7 @@ import {
   canPropose,
   type Identity,
   INVITE_SESSION_COOKIE,
+  needsName,
   parseCookie,
   SESSION_COOKIE,
 } from '../auth.js';
@@ -360,6 +361,8 @@ async function createThread(c: Context, deps: AppDeps) {
       }
     }
   }
+  // After the role checks: asking a reader for a name it cannot use helps nobody.
+  if (!hidden && needsName(decision)) return nameRequired(c);
 
   if (bookmark) {
     // One bookmark per passage per reader: a tab that hasn't yet read a
@@ -653,6 +656,7 @@ async function repairThreadAnchor(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (needsName(decision)) return nameRequired(c);
   const identity = decision.identity;
   if (!canPropose(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
@@ -835,6 +839,7 @@ async function editThreadRoot(c: Context, deps: AppDeps) {
     if (next.body) return c.json({ error: 'bookmark-body-forbidden' }, 400);
   }
   if (nextHidden !== undefined && !isAuthor) return c.json({ error: 'forbidden' }, 403);
+  if (!(nextHidden ?? row.is_hidden === 1) && needsName(decision)) return nameRequired(c);
   const parsedComment = parseOptionalBody(body.comment);
   if (!parsedComment.ok) return c.json({ error: 'invalid-body' }, 400);
   const revisionComment = parsedComment.body;
@@ -1285,6 +1290,7 @@ async function resolveThreadConflict(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (needsName(decision)) return nameRequired(c);
   const identity = decision.identity;
 
   const tid = c.req.param('tid');
@@ -1596,6 +1602,7 @@ async function editThreadReply(c: Context, deps: AppDeps) {
   const next = parseOptionalBody(body.body);
   if (!next.ok) return c.json({ error: 'invalid-body' }, 400);
   if (!next.body && nextHidden === undefined) return c.json({ error: 'body-required' }, 400);
+  if (!(nextHidden ?? reply.is_hidden === 1) && needsName(decision)) return nameRequired(c);
 
   const now = Date.now();
   db.exec('BEGIN');
@@ -1818,6 +1825,7 @@ async function toggleCommentReaction(c: Context, deps: AppDeps) {
   // `react` shares the comment gate (see the `react: canReply` field in
   // toThreadWire) — readers can't react, anyone who can reply can.
   if (!canComment(decision.role)) return c.json({ error: 'forbidden' }, 403);
+  if (needsName(decision)) return nameRequired(c);
   const identity = decision.identity;
 
   const tid = c.req.param('tid');
@@ -1970,6 +1978,8 @@ async function respondToThread(c: Context, deps: AppDeps) {
   if (!row) return c.json({ error: 'not-found' }, 404);
   if (!canViewThread(row, identity)) return c.json({ error: 'not-found' }, 404);
   if (row.is_bookmark === 1) return c.json({ error: 'bookmark-discussion-forbidden' }, 400);
+  // A private thread is the author's own notebook; nobody else sees the name.
+  if (row.is_hidden === 0 && needsName(decision)) return nameRequired(c);
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
@@ -2694,6 +2704,14 @@ function authorizeRequest(c: Context, deps: AppDeps, doc: DocumentRow) {
   const sessionToken = parseCookie(cookie, SESSION_COOKIE);
   const inviteSessionToken = parseCookie(cookie, INVITE_SESSION_COOKIE);
   return authorize(deps.db, doc, c.req.raw.headers, sessionToken, inviteSessionToken);
+}
+
+/**
+ * A personal link on its placeholder name (see group-links.ts). 409, not
+ * 403: the request is fine, the name is what has to change first.
+ */
+function nameRequired(c: Context) {
+  return c.json({ error: 'display-name-required' }, 409);
 }
 
 /** Hidden comments are private even from document admins. */

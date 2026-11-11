@@ -50,6 +50,11 @@ export interface ServerConfig {
   /** Keyring creations tolerated per client per window. */
   keyringCreatePerClient: number;
   keyringCreateWindowMs: number;
+  /** Personal links one client may mint from group links per window. */
+  groupLinkMintPerClient: number;
+  groupLinkMintWindowMs: number;
+  /** Personal links one group link hands out at most. */
+  groupLinkMaxPeople: number;
   /** Upload size ceiling for asset binaries. Defaults to 16 MiB. */
   maxAssetBytes: number;
   /**
@@ -112,6 +117,11 @@ export function loadConfig(overrides: Partial<ServerConfig> = {}): ServerConfig 
     pairingRedeemWindowMs: overrides.pairingRedeemWindowMs ?? 10 * 60 * 1000, // 10min
     keyringCreatePerClient: overrides.keyringCreatePerClient ?? 20,
     keyringCreateWindowMs: overrides.keyringCreateWindowMs ?? 60 * 60 * 1000, // 1h
+    // A browser normally mints once per group link and then reuses it;
+    // 30 an hour leaves room for several devices and cleared storage.
+    groupLinkMintPerClient: overrides.groupLinkMintPerClient ?? 30,
+    groupLinkMintWindowMs: overrides.groupLinkMintWindowMs ?? 60 * 60 * 1000, // 1h
+    groupLinkMaxPeople: overrides.groupLinkMaxPeople ?? 500,
     maxAssetBytes: overrides.maxAssetBytes ?? 16 * 1024 * 1024,
     blobStorage,
     ...(s3 ? { s3 } : {}),

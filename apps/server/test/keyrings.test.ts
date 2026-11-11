@@ -33,6 +33,7 @@ interface KeyringWire {
   client_id: string;
   display_name: string;
   label?: string | null;
+  display_name_set_at?: number | null;
   docs: Array<{
     doc_uid: string;
     invite_token: string;
@@ -550,7 +551,10 @@ describe('keyrings API', () => {
     );
     expect(renamed.status).toBe(200);
     // A label alone leaves the person's name as it was.
-    expect(await renamed.json()).toEqual({ display_name: 'Paul', label: 'Acme GmbH' });
+    const body = (await renamed.json()) as KeyringWire & { display_name_set_at: number | null };
+    expect(body).toMatchObject({ display_name: 'Paul', label: 'Acme GmbH' });
+    // Nor does it make the name look freshly chosen.
+    expect(body.display_name_set_at).toBe(ring.display_name_set_at ?? null);
 
     const rotated = await app.hono.fetch(
       new Request('http://test/api/keyrings/self/rotate', {

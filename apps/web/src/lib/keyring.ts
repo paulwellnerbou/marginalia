@@ -34,8 +34,11 @@ import {
   rotateKeyring as rotateKeyringRequest,
 } from './api.js';
 import {
+  adoptServerName,
   getClientId,
   getDisplayName,
+  getDisplayNameSetAt,
+  isGeneratedDisplayName,
   setClientId,
   setDisplayName,
   setNameScope,
@@ -58,6 +61,8 @@ export interface Keyring {
   label: string | null;
   /** The name this person goes by in this ring's documents. */
   displayName: string | null;
+  /** When that name was chosen; null for unknown or a placeholder. */
+  displayNameSetAt: number | null;
 }
 
 /** Which documents the home page lists: every one, one ring's, or those in none. */
@@ -135,7 +140,13 @@ function migrateLegacyToken(): void {
     // Unreadable: the legacy token becomes the list.
   }
   if (rings.flatMap(coerceRing).some((ring) => ring.token === legacy)) return;
-  const ring: Keyring = { id: newRingId(), token: legacy, label: null, displayName: null };
+  const ring: Keyring = {
+    id: newRingId(),
+    token: legacy,
+    label: null,
+    displayName: null,
+    displayNameSetAt: null,
+  };
   localStorage.setItem(RINGS_KEY, JSON.stringify([...rings, ring]));
 }
 
@@ -155,6 +166,10 @@ function coerceRing(v: unknown): Keyring[] {
       token: r.token,
       label: typeof r.label === 'string' && r.label ? r.label : null,
       displayName: typeof r.displayName === 'string' && r.displayName ? r.displayName : null,
+      displayNameSetAt:
+        typeof r.displayNameSetAt === 'number' && Number.isFinite(r.displayNameSetAt)
+          ? r.displayNameSetAt
+          : null,
     },
   ];
 }
@@ -246,7 +261,8 @@ export function scopeIdentityTo(uid: string | null): void {
   scopedRingId = ring.id;
   setNameScope({
     read: () => findKeyring(ring.id)?.displayName ?? null,
-    write: (name) => updateRing(ring.id, { displayName: name }),
+    readSetAt: () => findKeyring(ring.id)?.displayNameSetAt ?? null,
+    write: (name, setAt) => updateRing(ring.id, { displayName: name, displayNameSetAt: setAt }),
     storageKey: RINGS_KEY,
   });
 }
@@ -279,6 +295,7 @@ export async function connectKeyring(label: string | null = null): Promise<Keyri
     token: wire.token,
     label: wire.label ?? label,
     displayName: wire.display_name,
+    displayNameSetAt: ringNameSetAt(wire),
   };
   storeRings([...listKeyrings(), ring]);
   mergeKeyringDocs(wire.docs, ring.id);
@@ -363,6 +380,7 @@ export async function pairWithCode(code: string): Promise<Paired> {
     token: wire.token,
     label: wire.label ?? null,
     displayName: wire.display_name,
+    displayNameSetAt: ringNameSetAt(wire),
   };
   storeRings(known ? existing.map((r) => (r.id === ring.id ? ring : r)) : [...existing, ring]);
   if (!existing.length) adoptIdentity(wire);
@@ -641,8 +659,12 @@ export function pushDisplayName(name: string): void {
   const rings = listKeyrings();
   const ring = rings.length === 1 ? rings[0] : rings.find((r) => r.id === scopedRingId);
   if (!ring) return;
-  updateRing(ring.id, { displayName: name });
-  void renameKeyring(ring.token, { display_name: name }).catch((err) => {
+  const setAt = name === getDisplayName() ? getDisplayNameSetAt() : null;
+  updateRing(ring.id, { displayName: name, displayNameSetAt: setAt });
+  void renameKeyring(ring.token, {
+    display_name: name,
+    display_name_set_at: setAt,
+  }).catch((err) => {
     if (isNotFound(err)) return;
     reportError('keyring.pushDisplayName', err);
   });
@@ -654,9 +676,12 @@ export function pushDisplayName(name: string): void {
  * name is the ring's, and one document's (an invite seeded for someone
  * else, say) must not replace it.
  */
-export function adoptDocumentName(name: string | null): void {
+export function adoptDocumentName(
+  name: string | null,
+  opts: { provisional?: boolean; setAt?: number | null } = {},
+): void {
   if (!name || hasKeyring()) return;
-  if (getDisplayName() !== name) setDisplayName(name);
+  adoptServerName(name, { provisional: opts.provisional === true, setAt: opts.setAt ?? null });
 }
 
 /**
@@ -670,16 +695,31 @@ export function adoptDocumentName(name: string | null): void {
 function adoptRing(ring: Keyring, wire: KeyringWire): void {
   const label = wire.label === undefined ? ring.label : (wire.label ?? null);
   const displayName = wire.display_name || ring.displayName;
-  if (label !== ring.label || displayName !== ring.displayName) {
-    updateRing(ring.id, { label, displayName });
+  const displayNameSetAt = wire.display_name ? ringNameSetAt(wire) : ring.displayNameSetAt;
+  if (
+    label !== ring.label ||
+    displayName !== ring.displayName ||
+    displayNameSetAt !== ring.displayNameSetAt
+  ) {
+    updateRing(ring.id, { label, displayName, displayNameSetAt });
   }
   if (listKeyrings().length === 1) adoptIdentity(wire);
+}
+
+/**
+ * The ring's time travels with its name, so a rename typed on another
+ * device still out-dates an older name on a personal link here. A ring
+ * from before it kept one: a typed name counts as chosen, but oldest.
+ */
+function ringNameSetAt(wire: KeyringWire): number | null {
+  const fallback = isGeneratedDisplayName(wire.display_name) ? null : 0;
+  return wire.display_name_set_at ?? fallback;
 }
 
 function adoptIdentity(wire: KeyringWire): void {
   if (wire.client_id && wire.client_id !== getClientId()) setClientId(wire.client_id);
   if (wire.display_name && wire.display_name !== getDisplayName()) {
-    setDisplayName(wire.display_name);
+    setDisplayName(wire.display_name, { setAt: ringNameSetAt(wire) });
   }
 }
 

@@ -5,6 +5,7 @@ import { readClientId, readIdentity } from '../auth.js';
 import type { ServerConfig } from '../config.js';
 import { COVER_THUMBNAIL_REF } from '../cover.js';
 import type { DocumentFormat, InviteRole, KeyringRow } from '../db.js';
+import { readNameSetAt } from '../group-links.js';
 import { newKeyringToken, newPairingCode } from '../ids.js';
 import { clientKey, FixedWindowRateLimiter } from '../rate-limit.js';
 import { revokeRingAgents, revokeUncoveredAgentInvites } from './agent-keys.js';
@@ -171,10 +172,12 @@ async function createKeyring(c: Context, { db, config }: KeyringDeps, limits: Li
 
   const token = newKeyringToken();
   const now = Date.now();
+  const nameSetAt = readNameSetAt(c.req.raw.headers, now);
   db.prepare(
-    `INSERT INTO keyrings (token, client_id, display_name, created_at, updated_at, label)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(token, identity.clientId, identity.displayName, now, now, label);
+    `INSERT INTO keyrings
+       (token, client_id, display_name, display_name_set_at, created_at, updated_at, label)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(token, identity.clientId, identity.displayName, nameSetAt, now, now, label);
 
   for (const seed of seeds.slice(0, MAX_KEYRING_DOCS)) {
     if (!inviteMatchesDoc(db, seed.doc_uid, seed.invite_token)) continue;
@@ -191,6 +194,7 @@ async function createKeyring(c: Context, { db, config }: KeyringDeps, limits: Li
       token,
       client_id: identity.clientId,
       display_name: identity.displayName,
+      display_name_set_at: nameSetAt,
       label,
       docs: listKeyringDocs(db, token),
     },
@@ -208,6 +212,7 @@ async function readKeyring(c: Context, { db, config }: KeyringDeps) {
   return c.json({
     client_id: ring.client_id,
     display_name: ring.display_name,
+    display_name_set_at: ring.display_name_set_at ?? null,
     label: ring.label,
     updated_at: ring.updated_at,
     // So the client can say how long an unused ring lasts without
@@ -236,10 +241,19 @@ async function renameKeyring(c: Context, { db }: KeyringDeps) {
     return c.json({ error: 'invalid-body' }, 400);
   }
 
+  const now = Date.now();
   let name = ring.display_name;
+  let setAt = ring.display_name_set_at ?? null;
   if ('display_name' in body) {
     name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
     if (name.length < 1 || name.length > 80) return c.json({ error: 'invalid-display-name' }, 400);
+    // A rename is chosen now unless the device says when; clamped like the
+    // per-document header, so a fast clock cannot win every later dispute.
+    const raw = body.display_name_set_at;
+    setAt =
+      typeof raw === 'number' && Number.isFinite(raw) && raw >= 0
+        ? Math.min(Math.floor(raw), now)
+        : now;
   }
   let label = ring.label;
   if ('label' in body) {
@@ -248,13 +262,11 @@ async function renameKeyring(c: Context, { db }: KeyringDeps) {
     label = parsed;
   }
 
-  db.prepare('UPDATE keyrings SET display_name = ?, label = ?, updated_at = ? WHERE token = ?').run(
-    name,
-    label,
-    Date.now(),
-    ring.token,
-  );
-  return c.json({ display_name: name, label });
+  db.prepare(
+    `UPDATE keyrings SET display_name = ?, display_name_set_at = ?, label = ?, updated_at = ?
+      WHERE token = ?`,
+  ).run(name, setAt, label, now, ring.token);
+  return c.json({ display_name: name, display_name_set_at: setAt, label });
 }
 
 // --- DELETE /api/keyrings/self ---------------------------------------
@@ -302,9 +314,18 @@ async function rotateKeyring(c: Context, { db }: KeyringDeps) {
   const now = Date.now();
   db.transaction(() => {
     db.prepare(
-      `INSERT INTO keyrings (token, client_id, display_name, created_at, updated_at, label)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(fresh, ring.client_id, ring.display_name, ring.created_at, now, ring.label);
+      `INSERT INTO keyrings
+         (token, client_id, display_name, display_name_set_at, created_at, updated_at, label)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      fresh,
+      ring.client_id,
+      ring.display_name,
+      ring.display_name_set_at ?? null,
+      ring.created_at,
+      now,
+      ring.label,
+    );
     db.prepare('UPDATE keyring_docs SET keyring_token = ? WHERE keyring_token = ?').run(
       fresh,
       ring.token,
@@ -343,6 +364,9 @@ async function putKeyringDoc(c: Context, { db }: KeyringDeps) {
   // with no way to tell why.
   const kind = inviteKind(db, docUid, inviteToken);
   if (!kind) return c.json({ error: 'invite-not-found' }, 404);
+  // A group link opens nothing on another device; the personal link it
+  // minted is what belongs in the ring.
+  if (kind === 'group') return c.json({ error: 'group-link-not-storable' }, 400);
 
   // Owners open their own documents through a lesser link to see what a
   // reviewer sees, and every view pushes the link it used. Taking that
@@ -485,6 +509,7 @@ async function redeemPairing(c: Context, { db, config }: KeyringDeps, limits: Li
     token: ring.token,
     client_id: ring.client_id,
     display_name: ring.display_name,
+    display_name_set_at: ring.display_name_set_at ?? null,
     label: ring.label,
     docs: listKeyringDocs(db, ring.token),
   });
@@ -678,7 +703,8 @@ function inviteKind(db: Database, docUid: string, inviteToken: string): string |
 }
 
 function inviteMatchesDoc(db: Database, docUid: string, inviteToken: string): boolean {
-  return inviteKind(db, docUid, inviteToken) !== null;
+  const kind = inviteKind(db, docUid, inviteToken);
+  return kind !== null && kind !== 'group';
 }
 
 function parseDocSeeds(

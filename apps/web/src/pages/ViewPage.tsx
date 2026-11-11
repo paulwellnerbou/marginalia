@@ -1,13 +1,16 @@
 import { Button, Container, Flex, Text } from '@radix-ui/themes';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { AppBar } from '../components/AppBar.js';
 import { DocumentLayout } from '../components/DocumentLayout.js';
+import { NamePromptDialog } from '../components/NamePromptDialog.js';
 import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
-import { ApiError, claimInvite, type Document, type DocumentSettingsResponse } from '../lib/api.js';
+import { ApiError, type Document, type DocumentSettingsResponse } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
-import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
+import { showIdentityNotice } from '../lib/identity-notice.js';
+import { loadInviteToken } from '../lib/invite.js';
+import { type InviteLinkOutcome, linkRefusal, openInviteLink } from '../lib/invite-link.js';
 import { adoptDocumentName, pushDoc as keyringPushDoc, scopeIdentityTo } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { openDocument } from '../lib/open-document.js';
@@ -29,6 +32,9 @@ export function ViewPage() {
   // Bumped by the error "Try again" button to re-trigger the load.
   const [reloadNonce, setReloadNonce] = useState(0);
   const [pending, setPending] = useState(false);
+  // What opening the link in the address bar came to, for the load's error
+  // message and the identity notice. Null when no link was opened.
+  const linkOutcome = useRef<{ uid: string; outcome: Promise<InviteLinkOutcome> } | null>(null);
 
   // Ahead of every request below: each one carries the display name, and
   // the name is the one this person uses in the document's keyring.
@@ -36,13 +42,15 @@ export function ViewPage() {
     if (uid) scopeIdentityTo(uid);
   }, [uid]);
 
-  // Persist the URL-supplied invite token, then claim it to mint a session
-  // cookie, then strip the token from the address bar so copy-pasting the
-  // URL no longer leaks it. The invite row is kept server-side so the same
-  // user can re-claim from another browser via the original URL.
+  // Claim the URL-supplied invite token (a session cookie, or for a group
+  // link the personal link to keep), store the token the claim says to,
+  // then strip it from the address bar so copy-pasting the URL no longer
+  // leaks it. The invite row is kept server-side so the same user can
+  // re-claim from another browser via the original URL. The load below
+  // waits for the claim (see `getDocument`).
   useEffect(() => {
     if (!uid || !token) return;
-    saveInviteToken(uid, token);
+    linkOutcome.current = { uid, outcome: openInviteLink(uid, token) };
     // Strip the token from the address bar synchronously so copy-pasting the
     // URL no longer leaks the bearer credential, even if the claim request is
     // still in flight or the component later re-renders for a different uid.
@@ -53,10 +61,6 @@ export function ViewPage() {
       '',
       `/d/${uid}${window.location.search}${window.location.hash}`,
     );
-    claimInvite(uid, token).catch(() => {
-      // 400 (admin invite), 409 (password-protected), 404 (invite gone):
-      // fall back to invite-header auth via the token in localStorage.
-    });
   }, [uid, token]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: token / reloadNonce are explicit refetch triggers — token swap drives re-auth and reloadNonce is bumped by the "Try again" button on the error screen to retry the load.
@@ -80,6 +84,16 @@ export function ViewPage() {
       } catch (err) {
         if (cancelled) return;
         reportError('ViewPage.load', err, { uid });
+        const opened = linkOutcome.current?.uid === uid ? await linkOutcome.current.outcome : null;
+        if (cancelled) return;
+        const refusal = linkRefusal(opened);
+        if (refusal && err instanceof ApiError && err.status === 401) {
+          // The group link handed out nothing; say why rather than "not public".
+          setError(
+            apiErrorMessage(new ApiError(410, refusal), 'This link no longer opens the document'),
+          );
+          return;
+        }
         if (err instanceof ApiError && err.status === 404) {
           setError('Document not found');
         } else if (err instanceof ApiError && err.code === 'invite-required') {
@@ -132,7 +146,23 @@ export function ViewPage() {
   // user edits via UserMenu. Trade-off: opening someone else's named
   // invite overwrites the global local name, except in a synced browser.
   useEffect(() => {
-    adoptDocumentName(doc?.display_name ?? null);
+    adoptDocumentName(doc?.display_name ?? null, {
+      provisional: doc?.name_provisional === true,
+      setAt: doc?.name_set_at ?? null,
+    });
+  }, [doc]);
+
+  // Say who the visitor appears as: after opening a group link, and on
+  // every visit while the name is still a placeholder.
+  const noticedUid = useRef<string | null>(null);
+  useEffect(() => {
+    if (!doc || noticedUid.current === doc.uid) return;
+    noticedUid.current = doc.uid;
+    const opened = linkOutcome.current?.uid === doc.uid ? linkOutcome.current.outcome : null;
+    void (async () => {
+      const outcome = opened ? await opened : null;
+      showIdentityNotice(doc, outcome);
+    })();
   }, [doc]);
 
   // What is on screen belongs to the tab being left until the next
@@ -206,6 +236,7 @@ export function ViewPage() {
         docUid={uid ?? doc.uid}
         {...(loading ? {} : { docName: doc.name })}
       />
+      <NamePromptDialog key={`name-${doc.uid}`} docUid={doc.uid} />
       {/* Keyed by uid so the arriving document mounts fresh, exactly as
           it did back when the shell was torn down between the two. */}
       <DocumentLayout
