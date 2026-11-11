@@ -28,6 +28,7 @@ import {
   rotateKeyring as rotateKeyringRequest,
 } from './api.js';
 import {
+  adoptServerName,
   getClientId,
   getDisplayName,
   getDisplayNameSetAt,
@@ -337,10 +338,7 @@ export function adoptDocumentName(
   opts: { provisional?: boolean; setAt?: number | null } = {},
 ): void {
   if (!name || hasKeyring()) return;
-  if (getDisplayName() === name && !opts.provisional) return;
-  // A placeholder stays undated so it never renames anyone; any other
-  // server name keeps the server's time, or 0 for an admin-given name.
-  setDisplayName(name, { setAt: opts.provisional ? null : (opts.setAt ?? 0) });
+  adoptServerName(name, { provisional: opts.provisional === true, setAt: opts.setAt ?? null });
 }
 
 function adoptIdentity(ring: KeyringWire): void {

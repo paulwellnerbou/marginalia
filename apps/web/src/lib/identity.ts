@@ -175,6 +175,29 @@ export function getDisplayNameSetAt(): number | null {
   return isGeneratedDisplayName(name) ? null : 0;
 }
 
+/**
+ * Take the name a document's server resolved for this browser, with its
+ * time: none for a placeholder, so it never renames anyone, and 0 for a
+ * name an admin gave, which is chosen but older than any typed since.
+ *
+ * The same name only teaches an undated local copy its time. Without
+ * that, a name chosen on another device stays "made up" here, and the
+ * next group link this browser opens would ask for it all over again.
+ */
+export function adoptServerName(
+  name: string,
+  server: { provisional: boolean; setAt: number | null },
+): void {
+  const serverSetAt = server.provisional ? null : (server.setAt ?? 0);
+  if (getDisplayName() !== name) {
+    setDisplayName(name, { setAt: serverSetAt });
+    return;
+  }
+  if (getDisplayNameSetAt() === null && serverSetAt !== null) {
+    setDisplayName(name, { setAt: serverSetAt });
+  }
+}
+
 /** Is this the placeholder name this browser would make up for itself? */
 export function isGeneratedDisplayName(name: string): boolean {
   return normalizeDisplayName(name) === generateDisplayName(getClientId());

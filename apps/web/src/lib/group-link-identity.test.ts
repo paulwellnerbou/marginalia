@@ -121,6 +121,26 @@ describe('when a name was chosen', () => {
     expect(getDisplayNameSetAt()).toBeNull();
   });
 
+  test("a server's chosen time reaches a local copy still marked made-up", async () => {
+    const { adoptServerName, getDisplayName, getDisplayNameSetAt, setDisplayName } = await import(
+      './identity.js'
+    );
+    setDisplayName('Amber Fox', { setAt: null });
+    adoptServerName('Amber Fox', { provisional: false, setAt: 3000 });
+    expect(getDisplayNameSetAt()).toBe(3000);
+    // A placeholder from the server never dates it, and a dated local copy stays.
+    setDisplayName('Amber Fox', { setAt: null });
+    adoptServerName('Amber Fox', { provisional: true, setAt: null });
+    expect(getDisplayNameSetAt()).toBeNull();
+    setDisplayName('Paul', { setAt: 5000 });
+    adoptServerName('Paul', { provisional: false, setAt: 1000 });
+    expect(getDisplayNameSetAt()).toBe(5000);
+    // A different name is taken with the server's time, 0 for an admin-given one.
+    adoptServerName('Bob', { provisional: false, setAt: null });
+    expect(getDisplayName()).toBe('Bob');
+    expect(getDisplayNameSetAt()).toBe(0);
+  });
+
   test('requests carry the time only for a chosen name', async () => {
     const { claimInvite } = await import('./api.js');
     const { getDisplayName, setDisplayName } = await import('./identity.js');

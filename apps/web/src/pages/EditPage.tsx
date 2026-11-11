@@ -41,7 +41,7 @@ import { type EditorDeps, loadEditorDeps } from '../lib/codemirror-loader.js';
 import { useDocColorStyle } from '../lib/doc-colors.js';
 import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
 import { documentTitle } from '../lib/doc-title.js';
-import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
+import { adoptServerName, getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { loadInviteToken } from '../lib/invite.js';
 import { openInviteLink } from '../lib/invite-link.js';
 import { reportError } from '../lib/log.js';
@@ -380,11 +380,13 @@ export function EditPage() {
   // name so the shared UserMenu label and save identity match the
   // invite-seeded identity.
   const serverName = doc?.display_name ?? null;
-  const serverNameSetAt = doc?.name_provisional ? null : (doc?.name_set_at ?? 0);
+  const serverNameProvisional = doc?.name_provisional === true;
+  const serverNameSetAt = doc?.name_set_at ?? null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: displayName is the trigger to re-sync after a local rename; the adoption reads storage itself.
   useEffect(() => {
     if (!serverName) return;
-    if (displayName !== serverName) setDisplayName(serverName, { setAt: serverNameSetAt });
-  }, [displayName, serverName, serverNameSetAt]);
+    adoptServerName(serverName, { provisional: serverNameProvisional, setAt: serverNameSetAt });
+  }, [displayName, serverName, serverNameProvisional, serverNameSetAt]);
 
   useEffect(() => {
     if (!editorEl.current || doc === null || viewRef.current) return;
