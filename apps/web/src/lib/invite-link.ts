@@ -47,7 +47,9 @@ export function openInviteLink(uid: string, token: string): Promise<InviteLinkOu
   const key = `${uid}/${token}`;
   const running = inFlight.get(key);
   if (running) return running;
-  const outcome = claimAndStore(uid, token);
+  const generation = (latest.get(uid) ?? 0) + 1;
+  latest.set(uid, generation);
+  const outcome = claimAndStore(uid, token, () => latest.get(uid) === generation);
   inFlight.set(key, outcome);
   void outcome.finally(() => inFlight.delete(key));
   setPendingInviteClaim(uid, outcome);
@@ -56,14 +58,28 @@ export function openInviteLink(uid: string, token: string): Promise<InviteLinkOu
 
 const inFlight = new Map<string, Promise<InviteLinkOutcome>>();
 
-async function claimAndStore(uid: string, token: string): Promise<InviteLinkOutcome> {
+/**
+ * The newest link opened per document. Claims of two links for one
+ * document can finish in either order, and only the one opened last may
+ * store its token, or an earlier answer would overwrite the later link.
+ */
+const latest = new Map<string, number>();
+
+async function claimAndStore(
+  uid: string,
+  token: string,
+  isLatest: () => boolean,
+): Promise<InviteLinkOutcome> {
+  const store = (kept: string) => {
+    if (isLatest()) saveInviteToken(uid, kept);
+  };
   // The ring may hold this person's personal link from another device;
   // without it a group link would hand this device a second identity.
   const held = loadInviteToken(uid) ?? (await inviteFromKeyring(uid)).token;
   try {
     const claimed = await claimInvite(uid, token, held && held !== token ? held : null);
     if (claimed.token && claimed.token !== token) {
-      saveInviteToken(uid, claimed.token);
+      store(claimed.token);
       return { kind: 'personal', token: claimed.token, reused: claimed.reused === true };
     }
   } catch (err) {
@@ -80,6 +96,6 @@ async function claimAndStore(uid: string, token: string): Promise<InviteLinkOutc
     // so it never replaces a link this browser already holds.
     if (!usableAsHeader && held) return { kind: 'plain' };
   }
-  saveInviteToken(uid, token);
+  store(token);
   return { kind: 'plain' };
 }

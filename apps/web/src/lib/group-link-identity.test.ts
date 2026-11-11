@@ -218,6 +218,28 @@ describe('opening a link from the address bar', () => {
     expect(a).toEqual(b);
   });
 
+  test('of two links opened for one document, the later one is kept', async () => {
+    const { openInviteLink } = await import('./invite-link.js');
+    const { loadInviteToken } = await import('./invite.js');
+    const answers: Array<(r: Response) => void> = [];
+    (globalThis as { fetch?: unknown }).fetch = () =>
+      new Promise<Response>((resolve) => answers.push(resolve));
+    const reply = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      });
+    const first = openInviteLink('doc-order', 'older');
+    const second = openInviteLink('doc-order', 'newer');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(answers).toHaveLength(2);
+    answers[1]!(reply({ role: 'editor' }));
+    await second;
+    answers[0]!(reply({ role: 'reader' }));
+    await first;
+    expect(loadInviteToken('doc-order')).toBe('newer');
+  });
+
   test('a refused group link leaves what the browser held', async () => {
     const { openInviteLink } = await import('./invite-link.js');
     const { loadInviteToken } = await import('./invite.js');
