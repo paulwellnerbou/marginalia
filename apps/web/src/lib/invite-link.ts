@@ -70,8 +70,15 @@ async function claimAndStore(uid: string, token: string): Promise<InviteLinkOutc
     if (err instanceof ApiError && REFUSALS.has(err.code)) {
       return { kind: 'refused', code: err.code };
     }
-    // 400 (admin invite), 409 (password-protected), 404 (invite gone):
-    // fall back to invite-header auth via the token in localStorage.
+    // These two say the link is an ordinary credential that just cannot be
+    // claimed into a session; it still works as the invite header.
+    const usableAsHeader =
+      err instanceof ApiError &&
+      (err.code === 'admin-invite-not-claimable' || err.code === 'password-protected');
+    // Any other failure (gone, a server error, no network) says nothing
+    // about what the link is. It may be a group link, which opens nothing,
+    // so it never replaces a link this browser already holds.
+    if (!usableAsHeader && held) return { kind: 'plain' };
   }
   saveInviteToken(uid, token);
   return { kind: 'plain' };

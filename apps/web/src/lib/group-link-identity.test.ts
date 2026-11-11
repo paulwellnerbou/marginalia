@@ -210,6 +210,29 @@ describe('opening a link from the address bar', () => {
     expect(loadInviteToken('doc')).toBe('held');
   });
 
+  test('a failed claim never replaces the link this browser holds', async () => {
+    const { openInviteLink } = await import('./invite-link.js');
+    const { loadInviteToken } = await import('./invite.js');
+    store.set('marginalia.invite.doc-fail', 'held');
+    stubFetch([{ status: 500, body: { error: 'boom' } }]);
+    expect(await openInviteLink('doc-fail', 'group')).toEqual({ kind: 'plain' });
+    expect(loadInviteToken('doc-fail')).toBe('held');
+
+    // With nothing held there is nothing to lose: keep the link to try as a header.
+    stubFetch([{ status: 404, body: { error: 'not-found' } }]);
+    await openInviteLink('doc-fresh', 'maybe');
+    expect(loadInviteToken('doc-fresh')).toBe('maybe');
+  });
+
+  test('a link that cannot be claimed but works as a header replaces the held one', async () => {
+    const { openInviteLink } = await import('./invite-link.js');
+    const { loadInviteToken } = await import('./invite.js');
+    store.set('marginalia.invite.doc-pw', 'held');
+    stubFetch([{ status: 409, body: { error: 'password-protected' } }]);
+    await openInviteLink('doc-pw', 'named');
+    expect(loadInviteToken('doc-pw')).toBe('named');
+  });
+
   test('a dismissed password prompt is not explained as a refused link', async () => {
     const { linkRefusal } = await import('./invite-link.js');
     expect(linkRefusal({ kind: 'refused', code: 'password-required' })).toBeNull();
