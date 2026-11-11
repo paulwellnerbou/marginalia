@@ -1,5 +1,5 @@
 import { ApiError, type Document, getDocument } from './api.js';
-import { loadInviteToken } from './invite.js';
+import { loadInviteToken, pendingInviteClaim } from './invite.js';
 import { hasKeyring, inviteFromKeyring } from './keyring.js';
 import { loadRecentDocs } from './recent-docs.js';
 
@@ -18,6 +18,9 @@ type Load = (uid: string) => Promise<Document>;
  * it as more.
  */
 export async function openDocument(uid: string, load: Load = getDocument): Promise<Document> {
+  // A link just opened from the address bar decides the token first; the
+  // ring fallback below would otherwise race it for the same slot.
+  await pendingInviteClaim(uid);
   let fromPull = false;
   if (!loadInviteToken(uid)) fromPull = (await inviteFromKeyring(uid)).fromPull;
   const used = loadInviteToken(uid);

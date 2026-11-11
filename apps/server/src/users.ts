@@ -89,22 +89,31 @@ export function listDocUserNames(db: Database, docUid: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
 
+  // A visitor still on a group link's placeholder name is registered like
+  // anyone who opened the document, but that name is nobody's to mention.
   const users = db
     .prepare(
       `SELECT display_name FROM doc_users
          WHERE doc_uid = ?
+           AND display_name NOT IN (
+             SELECT display_name FROM invites
+              WHERE doc_uid = (SELECT COALESCE(folder_uid, uid) FROM documents WHERE uid = ?)
+                AND name_provisional = 1
+                AND display_name IS NOT NULL)
          ORDER BY last_seen_at DESC`,
     )
-    .all(docUid) as Array<{ display_name: string }>;
+    .all(docUid, docUid) as Array<{ display_name: string }>;
   for (const row of users) addName(out, seen, row.display_name);
 
-  // Generic invites have display_name NULL; admin + named carry one. A
+  // Generic and group invites have display_name NULL; admin + named carry
+  // one. A personal link's generated placeholder is nobody's name. A
   // folder document's invites are its main document's.
   const invited = db
     .prepare(
       `SELECT display_name FROM invites
          WHERE doc_uid = (SELECT COALESCE(folder_uid, uid) FROM documents WHERE uid = ?)
            AND display_name IS NOT NULL
+           AND name_provisional = 0
          ORDER BY created_at ASC`,
     )
     .all(docUid) as Array<{ display_name: string | null }>;

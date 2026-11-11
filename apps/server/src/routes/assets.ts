@@ -7,6 +7,7 @@ import {
   canEdit,
   headersWithInviteCookie,
   INVITE_SESSION_COOKIE,
+  needsName,
   parseCookie,
   SESSION_COOKIE,
 } from '../auth.js';
@@ -98,6 +99,7 @@ async function mintUploadUrls(c: Context, { db, config }: AssetsDeps) {
   const decision = authorizeDoc(c, db, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (needsName(decision)) return c.json({ error: 'display-name-required' }, 409);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   let body: unknown;
@@ -250,6 +252,7 @@ async function uploadAsset(c: Context, { db, blobs, config }: AssetsDeps) {
   const decision = authorizeDoc(c, db, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (needsName(decision)) return c.json({ error: 'display-name-required' }, 409);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   let form: FormData;
@@ -381,6 +384,7 @@ async function uploadCover(c: Context, { db, blobs }: AssetsDeps) {
   const decision = authorizeDoc(c, db, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (needsName(decision)) return c.json({ error: 'display-name-required' }, 409);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   let form: FormData;
@@ -443,6 +447,7 @@ async function deleteCover(c: Context, { db, blobs }: AssetsDeps) {
   const decision = authorizeDoc(c, db, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (needsName(decision)) return c.json({ error: 'display-name-required' }, 409);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   if (doc.cover_ref) {
@@ -564,6 +569,7 @@ async function deleteAsset(c: Context, { db, blobs }: AssetsDeps) {
   // name can't delete — same gate as updateDocument + uploadAsset, so
   // audit logs stay attributable.
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (needsName(decision)) return c.json({ error: 'display-name-required' }, 409);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   const refName = decodeRefName(c.req.param('refName'));

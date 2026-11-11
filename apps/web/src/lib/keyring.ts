@@ -27,7 +27,15 @@ import {
   renameKeyring,
   rotateKeyring as rotateKeyringRequest,
 } from './api.js';
-import { getClientId, getDisplayName, setClientId, setDisplayName } from './identity.js';
+import {
+  adoptServerName,
+  getClientId,
+  getDisplayName,
+  getDisplayNameSetAt,
+  isGeneratedDisplayName,
+  setClientId,
+  setDisplayName,
+} from './identity.js';
 import { saveInviteToken } from './invite.js';
 import { reportError } from './log.js';
 import { loadRecentDocs, mergeKeyringDocs, type RecentDoc } from './recent-docs.js';
@@ -289,7 +297,8 @@ export function removeDoc(uid: string): void {
 export function pushDisplayName(name: string): void {
   const token = loadKeyringToken();
   if (!token) return;
-  void renameKeyring(token, name).catch((err) => {
+  const setAt = name === getDisplayName() ? getDisplayNameSetAt() : null;
+  void renameKeyring(token, name, setAt).catch((err) => {
     if (isNotFound(err)) return;
     reportError('keyring.pushDisplayName', err);
   });
@@ -324,15 +333,22 @@ export async function pairWithCode(code: string): Promise<RecentDoc[]> {
  * name is the ring's, and one document's (an invite seeded for someone
  * else, say) must not replace it.
  */
-export function adoptDocumentName(name: string | null): void {
+export function adoptDocumentName(
+  name: string | null,
+  opts: { provisional?: boolean; setAt?: number | null } = {},
+): void {
   if (!name || hasKeyring()) return;
-  if (getDisplayName() !== name) setDisplayName(name);
+  adoptServerName(name, { provisional: opts.provisional === true, setAt: opts.setAt ?? null });
 }
 
 function adoptIdentity(ring: KeyringWire): void {
   if (ring.client_id && ring.client_id !== getClientId()) setClientId(ring.client_id);
   if (ring.display_name && ring.display_name !== getDisplayName()) {
-    setDisplayName(ring.display_name);
+    // The ring's time travels with its name, so a rename typed on another
+    // device still out-dates an older name on a personal link here. A ring
+    // from before it kept one: a typed name counts as chosen, but oldest.
+    const fallback = isGeneratedDisplayName(ring.display_name) ? null : 0;
+    setDisplayName(ring.display_name, { setAt: ring.display_name_set_at ?? fallback });
   }
 }
 
