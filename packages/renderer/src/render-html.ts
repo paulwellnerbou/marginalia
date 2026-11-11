@@ -49,7 +49,9 @@ export async function renderHtml(
 
   const styles: string[] = [];
   const links: string[] = [];
+  const inlineStyles: string[] = [];
   visit(tree, 'element', (node: Element) => {
+    if (typeof node.properties?.style === 'string') inlineStyles.push(node.properties.style);
     if (node.tagName === 'style') styles.push(rawText(node));
     else if (node.tagName === 'link' && relOf(node).includes('stylesheet')) {
       const href = node.properties?.href;
@@ -80,6 +82,9 @@ export async function renderHtml(
     };
   });
 
+  const scoped = scopeHtmlCss(styles, links, inlineStyles);
+  warnings.push(...scoped.warnings);
+
   const root: Element = {
     type: 'element',
     tagName: 'div',
@@ -88,7 +93,7 @@ export async function renderHtml(
       dataHtmlDoc: '',
       ...langOf(htmlEl, body),
     },
-    children: body ? cleanChildren(body.children) : [],
+    children: body ? cleanChildren(body.children, scoped.fontTokens) : [],
   };
 
   const out: Root = { type: 'root', children: [root] };
@@ -103,9 +108,6 @@ export async function renderHtml(
   };
   const finished = (await processor.run(out, file)) as Root;
   const html = processor.stringify(finished);
-
-  const scoped = scopeHtmlCss(styles, links);
-  warnings.push(...scoped.warnings);
 
   return {
     html,
@@ -176,7 +178,10 @@ function ensureHeadingId(node: Element, text: string, used: Set<string>): string
  * CSS, a `<title>`), narrow `data:` sources to images and filter inline
  * styles. The sanitizer still runs afterwards and has the last word.
  */
-function cleanChildren(children: ElementContent[]): ElementContent[] {
+function cleanChildren(
+  children: ElementContent[],
+  fontTokens: ReadonlySet<string>,
+): ElementContent[] {
   const out: ElementContent[] = [];
   for (const child of children) {
     if (child.type === 'comment') continue;
@@ -201,11 +206,11 @@ function cleanChildren(children: ElementContent[]): ElementContent[] {
       props.rel = [...new Set([...rel, 'noopener', 'noreferrer'])];
     }
     if (typeof props.style === 'string') {
-      const style = sanitizeInlineStyle(props.style);
+      const style = sanitizeInlineStyle(props.style, fontTokens);
       if (style) props.style = style;
       else delete props.style;
     }
-    child.children = cleanChildren(child.children);
+    child.children = cleanChildren(child.children, fontTokens);
     out.push(child);
   }
   return out;

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { scopeHtmlCss, scopeSelectorList } from '../src/html-css.js';
+import { scaleFontLengths, scopeHtmlCss, scopeSelectorList } from '../src/html-css.js';
 import {
   canMergeMultiBlock,
   exportDocx,
@@ -431,5 +431,96 @@ describe('HTML documents: the @scope boundary', () => {
     expect(css).not.toContain('color: red');
     expect(css).toContain(':scope .ok');
     expect(warnings.length).toBeGreaterThan(0);
+  });
+});
+
+describe('HTML documents: text size', () => {
+  const z = (len: string) => `calc(${len} * var(--mg-text-zoom, 1))`;
+
+  test('absolute font lengths scale, relative ones and layout lengths stay', () => {
+    const { css } = scopeHtmlCss(
+      [
+        'body { font-size: 16px; line-height: 24px; padding: 16px }',
+        'h1 { font-size: clamp(1.5rem, 4vw, 3rem); line-height: 1.2 }',
+        '.lede { font-size: 1.25em; line-height: 150% }',
+        '.k { font: italic 600 12pt/1.4 "Iowan 12px", serif }',
+        '.s { font-size: small } .l { line-height: normal }',
+      ],
+      [],
+    );
+    expect(css).toContain(`font-size: ${z('16px')}; line-height: ${z('24px')}; padding: 16px`);
+    expect(css).toContain(
+      `font-size: clamp(${z('1.5rem')}, ${z('4vw')}, ${z('3rem')}); line-height: 1.2`,
+    );
+    expect(css).toContain('font-size: 1.25em; line-height: 150%');
+    expect(css).toContain(`font: italic 600 ${z('12pt')}/1.4 "Iowan 12px", serif`);
+    expect(css).toContain(`font-size: ${z('13px')}`);
+    expect(css).toContain('line-height: normal');
+  });
+
+  test('a custom property read only for type scales; one also read for layout does not', () => {
+    const { css } = scopeHtmlCss(
+      [
+        ':root { --fs-base: 18px; --fs-h1: calc(var(--fs-base) * 2); --space: 16px; --unused: 4px }',
+        'p { font-size: var(--fs-base) } h1 { font-size: var(--fs-h1); margin: var(--space) }',
+        '.n { font-size: var(--space) }',
+      ],
+      [],
+    );
+    expect(css).toContain(`--fs-base: ${z('18px')}`);
+    expect(css).toContain('--fs-h1: calc(var(--fs-base) * 2)');
+    expect(css).toContain('--space: 16px');
+    expect(css).toContain('--unused: 4px');
+    // The literal was scaled at its definition; the reference is not scaled again.
+    expect(css).toContain('font-size: var(--fs-base)');
+  });
+
+  test('inline styles count as readers and scale their own font sizes', async () => {
+    const r = await renderDocument(
+      [
+        '<style>:root { --fs: 14px; --w: 20px }</style>',
+        '<p style="font-size: 20px; width: 300px">a</p>',
+        '<p style="font-size: var(--fs); max-width: var(--w)">b</p>',
+        '<p style="font-size: var(--w)">c</p>',
+      ].join(''),
+      'html',
+    );
+    expect(r.html).toContain(`style="font-size: ${z('20px')}; width: 300px"`);
+    expect(r.css).toContain(`--fs: ${z('14px')}`);
+    expect(r.css).toContain('--w: 20px');
+  });
+
+  test('strings, urls and lookalike tokens are left alone', () => {
+    expect(scaleFontLengths('16px "a 2px b" url(x-3px.woff)', 'font')).toBe(
+      `${z('16px')} "a 2px b" url(x-3px.woff)`,
+    );
+    expect(scaleFontLengths('var(--size-12px)', 'font-size')).toBe('var(--size-12px)');
+    expect(scaleFontLengths('large', null)).toBe('large');
+    expect(scaleFontLengths('larger', 'font-size')).toBe('larger');
+  });
+
+  test('a size keyword counts only where the size goes, never in a family name', () => {
+    expect(scaleFontLengths('500 14px Inter Medium', 'font')).toBe(`500 ${z('14px')} Inter Medium`);
+    expect(scaleFontLengths('large Roboto Medium', 'font')).toBe(`${z('18px')} Roboto Medium`);
+    expect(scaleFontLengths('bold x-large/1.2 "Small Caps"', 'font')).toBe(
+      `bold ${z('24px')}/1.2 "Small Caps"`,
+    );
+    expect(scaleFontLengths('120% Medium', 'font')).toBe('120% Medium');
+  });
+
+  test('inline custom properties read only for type scale too', async () => {
+    const r = await renderDocument(
+      [
+        '<style>.t { font-size: var(--size) } .w { width: var(--w) }</style>',
+        '<p class="t" style="--size: 20px; --w: 300px">a</p>',
+      ].join(''),
+      'html',
+    );
+    expect(r.html).toContain(`style="--size: ${z('20px')}; --w: 300px"`);
+  });
+
+  test('text inside an SVG keeps its size against the drawing', () => {
+    const { css } = scopeHtmlCss(['svg text { font-size: 11px }'], []);
+    expect(css).toContain('.mg-html-root svg{--mg-text-zoom:1;}');
   });
 });

@@ -1221,8 +1221,8 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     (px: number) => writeDocViewPref(doc.uid, 'commentsWidth', String(px)),
     [doc.uid],
   );
-  // An HTML page styles itself: no theme, text-size or color controls, and
-  // a width of its own in px rather than the reading width.
+  // An HTML page styles itself: no theme or color controls, and a width
+  // of its own in px rather than the reading width.
   const isHtml = doc.format === 'html';
   /* `100%` rather than `none`: the inline comments column subtracts this
      from the row width. */
@@ -3433,22 +3433,22 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
             onCommit={(next) => setBlockWidth(next > maxWidth ? next : 0)}
             onReset={() => setBlockWidth(0)}
           />
-
-          <Text size="1" color="gray">
-            Text size
-          </Text>
-          <DisplayStepper
-            ariaLabel="Text size"
-            min={TEXT_ZOOM_MIN}
-            max={TEXT_ZOOM_MAX}
-            step={5}
-            defaultValue={100}
-            value={textZoom}
-            format={(v) => `${v}%`}
-            onCommit={setTextZoom}
-          />
         </>
       )}
+
+      <Text size="1" color="gray">
+        Text size
+      </Text>
+      <DisplayStepper
+        ariaLabel="Text size"
+        min={TEXT_ZOOM_MIN}
+        max={TEXT_ZOOM_MAX}
+        step={5}
+        defaultValue={100}
+        value={textZoom}
+        format={(v) => `${v}%`}
+        onCommit={setTextZoom}
+      />
 
       <Text size="1" color="gray">
         Interface size
@@ -3843,7 +3843,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                         elRef={docRef}
                         maxWidth={readingWidth}
                         colorStyle={docColorOverride}
-                        textZoom={isHtml ? 1 : textZoom / 100}
+                        textZoom={textZoom / 100}
                         highlights={commentHighlights}
                         bookmarks={bookmarkMarkers}
                         searchQuery={docSearchOpen ? deferredDocSearchQuery : ''}

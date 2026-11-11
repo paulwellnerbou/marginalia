@@ -23,7 +23,9 @@ import type { Warning } from './types.js';
  *     which the viewer sets from the app's appearance, so the document
  *     follows the in-app light/dark toggle rather than the OS;
  *   - `@import` survives only for font services, everything else that
- *     could pull in unscoped rules is dropped.
+ *     could pull in unscoped rules is dropped;
+ *   - absolute lengths in font sizes and line heights are multiplied by
+ *     `--mg-text-zoom`, the viewer's text size (see `scaleFontLengths`).
  *
  * The root itself gets `contain: paint`, which makes it the containing
  * block for fixed-position descendants and clips them, so nothing the
@@ -44,7 +46,9 @@ const FONT_HOSTS = new Set([
 
 // Paint containment is for the app around the page; on paper there is
 // none, and a contained box may not break across pages.
-const BASE_CSS = `${ROOT}{contain:paint;position:relative;display:flow-root;}@media print{${ROOT}{contain:none;}}`;
+// An SVG's text is laid out against its own geometry, so text size stops
+// at its edge, as it does for a markdown diagram.
+const BASE_CSS = `${ROOT}{contain:paint;position:relative;display:flow-root;}${ROOT} svg{--mg-text-zoom:1;}@media print{${ROOT}{contain:none;}}`;
 
 /** Rules whose children are not selectors. */
 const OPAQUE_AT_RULES = new Set([
@@ -66,6 +70,8 @@ type Scheme = 'dark' | 'light';
 export interface ScopedCss {
   css: string;
   warnings: Warning[];
+  /** Custom properties whose lengths scale with the text, for `sanitizeInlineStyle`. */
+  fontTokens: ReadonlySet<string>;
 }
 
 export function isFontStylesheet(href: string): boolean {
@@ -82,7 +88,11 @@ export function isFontStylesheet(href: string): boolean {
  * document root. `fontLinks` are `<link rel="stylesheet">` hrefs, kept
  * as imports when they point at a font service.
  */
-export function scopeHtmlCss(sources: readonly string[], fontLinks: readonly string[]): ScopedCss {
+export function scopeHtmlCss(
+  sources: readonly string[],
+  fontLinks: readonly string[],
+  inlineStyles: readonly string[] = [],
+): ScopedCss {
   const warnings: Warning[] = [];
   const imports: string[] = [];
   for (const href of fontLinks) {
@@ -110,6 +120,7 @@ export function scopeHtmlCss(sources: readonly string[], fontLinks: readonly str
   const renames = globalNameRenames(roots, warnings);
 
   const printGrids = singleColumnGridSelectors(roots);
+  const fontTokens = fontOnlyCustomProperties(roots, inlineStyles);
   const bodies: string[] = [];
   for (const root of roots) {
     root.walkAtRules('import', (rule) => {
@@ -128,13 +139,19 @@ export function scopeHtmlCss(sources: readonly string[], fontLinks: readonly str
     scopeContainer(root, null, warnings);
     applyRenames(root, renames);
     root.walkDecls((decl) => {
-      if (isUnsafeValue(decl.value) || /^(behavior|-moz-binding)$/i.test(decl.prop)) decl.remove();
+      if (isUnsafeValue(decl.value) || /^(behavior|-moz-binding)$/i.test(decl.prop)) {
+        decl.remove();
+      } else if (FONT_PROPS.test(decl.prop)) {
+        decl.value = scaleFontLengths(decl.value, decl.prop);
+      } else if (fontTokens.has(decl.prop)) {
+        decl.value = scaleFontLengths(decl.value, null);
+      }
     });
     bodies.push(wrapInScope(root));
   }
 
   const css = [...imports, BASE_CSS, ...bodies, printGridOverride(printGrids)].join('\n');
-  return { css: escapeStyleText(css), warnings };
+  return { css: escapeStyleText(css), warnings, fontTokens };
 }
 
 /**
@@ -279,14 +296,136 @@ function wrapInScope(root: postcss.Root): string {
   return parts.join('\n');
 }
 
-/** Strip what an inline `style` attribute must not carry. */
-export function sanitizeInlineStyle(style: string): string | null {
+/** Strip what an inline `style` attribute must not carry, and scale its font sizes. */
+export function sanitizeInlineStyle(
+  style: string,
+  fontTokens: ReadonlySet<string> = new Set(),
+): string | null {
   const cleaned = style
     .split(';')
     .filter((decl) => !isUnsafeValue(decl) && !/^\s*(behavior|-moz-binding)\s*:/i.test(decl))
+    .map((decl) => {
+      const m = /^(\s*)([\w-]+)(\s*:)([\s\S]*)$/.exec(decl);
+      if (!m) return decl;
+      const prop = m[2]!;
+      if (!FONT_PROPS.test(prop) && !fontTokens.has(prop)) return decl;
+      return `${m[1]}${prop}${m[3]}${scaleFontLengths(m[4]!, fontTokens.has(prop) ? null : prop)}`;
+    })
     .join(';')
     .trim();
   return cleaned || null;
+}
+
+/**
+ * Text size for an HTML page. A page sizes its text in px far more often
+ * than in em, so scaling the root's font size (as markdown does) would
+ * leave most pages as they were, and CSS `zoom` throws the comment
+ * chrome off: WebKit reports client rects inside a zoomed box divided by
+ * the zoom. So the page's own font lengths are multiplied by a variable
+ * the viewer sets; everything relative to them (em, %, unitless line
+ * heights) follows, and layout lengths stay put, as they do for
+ * markdown. Without the variable (exports, print) the factor is 1.
+ */
+const TEXT_ZOOM = 'var(--mg-text-zoom, 1)';
+const FONT_PROPS = /^(font|font-size|line-height)$/i;
+/** Absolute and viewport-relative units; em, ex, ch, % and lh follow the parent. */
+const SCALED_LENGTH =
+  /(?<![\w.#-])([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)(px|pt|pc|in|cm|mm|q|rem|[sld]?v(?:w|h|i|b|min|max)|cq(?:w|h|i|b|min|max))(?![\w-])/gi;
+/** CSS's absolute size keywords, in px at the default 16px `medium`. */
+const SIZE_KEYWORDS: Record<string, number> = {
+  'xx-small': 9,
+  'x-small': 10,
+  small: 13,
+  medium: 16,
+  large: 18,
+  'x-large': 24,
+  'xx-large': 32,
+  'xxx-large': 48,
+};
+/** The first of these in a value is its font size: a length, a percentage or a keyword. */
+const SIZE_TOKEN = new RegExp(
+  `(?<![\\w.#-])(?:[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?(?:%|[a-z]+)|${Object.keys(SIZE_KEYWORDS).join('|')})(?![\\w-])`,
+  'i',
+);
+/** Strings and `url()`, which are left as written. */
+const OPAQUE_VALUE_PARTS = /("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|url\([^)]*\))/i;
+
+/**
+ * `value` with its absolute lengths multiplied by the text zoom. `prop`
+ * decides whether a size keyword counts: in `font-size` and `font`, as
+ * the value's first size, so `font: 14px Inter Medium` keeps its family;
+ * not in `line-height` or a custom property (null), where `large` may
+ * mean anything.
+ */
+export function scaleFontLengths(value: string, prop: string | null): string {
+  let keywordDue = prop !== null && /^font(-size)?$/i.test(prop);
+  return value
+    .split(OPAQUE_VALUE_PARTS)
+    .map((part, i) => {
+      if (i % 2 === 1) return part;
+      let keyword: RegExpExecArray | null = null;
+      if (keywordDue) {
+        const first = SIZE_TOKEN.exec(part);
+        if (first) {
+          keywordDue = false;
+          if (first[0].toLowerCase() in SIZE_KEYWORDS) keyword = first;
+        }
+      }
+      const scale = (text: string) =>
+        text.replace(SCALED_LENGTH, (_m, n: string, unit: string) => {
+          return `calc(${n}${unit} * ${TEXT_ZOOM})`;
+        });
+      if (!keyword) return scale(part);
+      const px = SIZE_KEYWORDS[keyword[0].toLowerCase()];
+      const end = keyword.index + keyword[0].length;
+      return `${scale(part.slice(0, keyword.index))}calc(${px}px * ${TEXT_ZOOM})${scale(part.slice(end))}`;
+    })
+    .join('');
+}
+
+/**
+ * Custom properties used only for type: read by `font`, `font-size` or
+ * `line-height`, or by other such properties, and by nothing else. Their
+ * own lengths scale with the text, so a page that keeps its type scale in
+ * `--text-lg: 20px` grows like one that writes sizes out. One also read
+ * for spacing or widths is left alone, as is one nothing reads.
+ */
+function fontOnlyCustomProperties(
+  roots: readonly postcss.Root[],
+  inlineStyles: readonly string[],
+): Set<string> {
+  // Every context each property is read in: 'font', 'other', or the
+  // custom property whose value reads it.
+  const readers = new Map<string, Set<string>>();
+  const note = (prop: string, value: string) => {
+    const context = prop.startsWith('--') ? prop : FONT_PROPS.test(prop) ? 'font' : 'other';
+    for (const m of value.matchAll(/var\(\s*(--[\w-]+)/g)) {
+      const name = m[1]!;
+      const set = readers.get(name) ?? new Set<string>();
+      set.add(context);
+      readers.set(name, set);
+    }
+  };
+  for (const root of roots) root.walkDecls((decl) => note(decl.prop, decl.value));
+  for (const style of inlineStyles) {
+    for (const decl of style.split(';')) {
+      const m = /^\s*([\w-]+)\s*:([\s\S]*)$/.exec(decl);
+      if (m) note(m[1]!, m[2]!);
+    }
+  }
+  const fontOnly = new Set(readers.keys());
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const name of fontOnly) {
+      for (const context of readers.get(name)!) {
+        if (context === 'font' || (context.startsWith('--') && fontOnly.has(context))) continue;
+        fontOnly.delete(name);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return fontOnly;
 }
 
 function isUnsafeValue(value: string): boolean {
