@@ -49,6 +49,7 @@
 
   --md-space-block: 1.2em;
   --md-space-heading-top: 2em;
+  --md-space-heading-stacked: 0.75em;
   --md-space-list-item: 0.3em;
 
   --md-color-fg: #1c1f23;
@@ -172,6 +173,24 @@
 
 .marginalia > :is(h1, h2, h3, h4, h5, h6):first-child {
   margin-top: 0;
+}
+
+/* A heading straight under another belongs with it. The lower one may
+   sit first in the app's collapse-section wrapper or in Asciidoctor's
+   section divs. The wrapper is a grid, so there its margin adds to the
+   upper heading's margin-bottom instead of collapsing into it. */
+.marginalia :is(h1, h2, h3, h4, h5, h6) + :is(h1, h2, h3, h4, h5, h6),
+.marginalia
+  :is(h1, h2, h3, h4, h5, h6)
+  + .collapse-section
+  > .collapse-section-inner
+  > :is(h1, h2, h3, h4, h5, h6):first-child,
+.marginalia
+  :is(h1, h2, h3, h4, h5, h6)
+  + .sectionbody
+  > :first-child
+  > :is(h1, h2, h3, h4, h5, h6):first-child {
+  margin-top: var(--md-space-heading-stacked);
 }
 
 /* Use `em` so viewer-level text zoom on `.marginalia` scales headings too. */
