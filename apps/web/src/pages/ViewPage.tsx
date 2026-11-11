@@ -8,7 +8,7 @@ import { ApiError, claimInvite, type Document, type DocumentSettingsResponse } f
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
-import { adoptDocumentName, pushDoc as keyringPushDoc } from '../lib/keyring.js';
+import { adoptDocumentName, pushDoc as keyringPushDoc, scopeIdentityTo } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { openDocument } from '../lib/open-document.js';
 import { openTab } from '../lib/open-tabs.js';
@@ -29,6 +29,12 @@ export function ViewPage() {
   // Bumped by the error "Try again" button to re-trigger the load.
   const [reloadNonce, setReloadNonce] = useState(0);
   const [pending, setPending] = useState(false);
+
+  // Ahead of every request below: each one carries the display name, and
+  // the name is the one this person uses in the document's keyring.
+  useEffect(() => {
+    if (uid) scopeIdentityTo(uid);
+  }, [uid]);
 
   // Persist the URL-supplied invite token, then claim it to mint a session
   // cookie, then strip the token from the address bar so copy-pasting the
@@ -99,7 +105,6 @@ export function ViewPage() {
     // Opening a document from a link is also how it joins the keyring, so
     // a link someone sends you reaches your other devices by being used
     // once — no separate "add to my documents" step.
-    if (stored) keyringPushDoc(doc.uid, stored, documentTitle(doc));
     recordVisit({
       uid: doc.uid,
       title: documentTitle(doc),
@@ -112,6 +117,8 @@ export function ViewPage() {
       ...(doc.cover ? { cover: doc.cover } : {}),
       ...(doc.folder && doc.folder.main_uid !== doc.uid ? { folder_uid: doc.folder.main_uid } : {}),
     });
+    // After the visit is recorded, which is where ring membership lives.
+    if (stored) keyringPushDoc(doc.uid, stored, documentTitle(doc));
     openTab({
       uid: doc.uid,
       title: documentTitle(doc),

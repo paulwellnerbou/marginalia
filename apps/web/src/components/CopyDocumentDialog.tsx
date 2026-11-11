@@ -19,7 +19,7 @@ import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
 import { saveInviteToken } from '../lib/invite.js';
-import { pushDoc as keyringPushDoc } from '../lib/keyring.js';
+import { pushDoc as keyringPushDoc, keyringsOf } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { recordVisit } from '../lib/recent-docs.js';
 import { Copyable } from './Copyable.js';
@@ -72,7 +72,6 @@ export function CopyDocumentDialog({
       // control, and this response is the only time we are handed it.
       // Persist and sync it before anything else can throw.
       saveInviteToken(res.uid, res.admin_invite.token);
-      keyringPushDoc(res.uid, res.admin_invite.token, title);
       recordVisit({
         uid: res.uid,
         title,
@@ -83,6 +82,9 @@ export function CopyDocumentDialog({
         updated_at: Date.now(),
         invite_token: res.admin_invite.token,
       });
+      // Where the original is, so a copy of a client's document stays with that client.
+      const rings = keyringsOf(doc.uid);
+      keyringPushDoc(res.uid, res.admin_invite.token, title, rings.length ? { into: rings } : {});
       setCreated(res);
     } catch (err) {
       reportError('CopyDocumentDialog.copy', err, { uid: doc.uid });

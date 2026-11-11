@@ -166,13 +166,15 @@ async function createKeyring(c: Context, { db, config }: KeyringDeps, limits: Li
 
   const body = (await safeJson(c)) ?? {};
   const seeds = parseDocSeeds(body.docs);
+  const label = parseLabel(body.label);
+  if (label === undefined) return c.json({ error: 'invalid-label' }, 400);
 
   const token = newKeyringToken();
   const now = Date.now();
   db.prepare(
-    `INSERT INTO keyrings (token, client_id, display_name, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?)`,
-  ).run(token, identity.clientId, identity.displayName, now, now);
+    `INSERT INTO keyrings (token, client_id, display_name, created_at, updated_at, label)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(token, identity.clientId, identity.displayName, now, now, label);
 
   for (const seed of seeds.slice(0, MAX_KEYRING_DOCS)) {
     if (!inviteMatchesDoc(db, seed.doc_uid, seed.invite_token)) continue;
@@ -189,6 +191,7 @@ async function createKeyring(c: Context, { db, config }: KeyringDeps, limits: Li
       token,
       client_id: identity.clientId,
       display_name: identity.displayName,
+      label,
       docs: listKeyringDocs(db, token),
     },
     201,
@@ -205,6 +208,7 @@ async function readKeyring(c: Context, { db, config }: KeyringDeps) {
   return c.json({
     client_id: ring.client_id,
     display_name: ring.display_name,
+    label: ring.label,
     updated_at: ring.updated_at,
     // So the client can say how long an unused ring lasts without
     // hardcoding a number that a deployment is free to change.
@@ -216,10 +220,11 @@ async function readKeyring(c: Context, { db, config }: KeyringDeps) {
 // --- PATCH /api/keyrings/self ----------------------------------------
 
 /**
- * The keyring is authoritative for the display name, so a rename has to
- * land here to reach the other devices — they adopt it on their next
- * pull. Renaming *within* a document still goes through the per-document
- * path in authorize(); this only keeps the shared identity in step.
+ * The keyring is authoritative for the display name and its label, so a
+ * rename has to land here to reach the other devices — they adopt it on
+ * their next pull. Renaming *within* a document still goes through the
+ * per-document path in authorize(); this only keeps the ring in step.
+ * Either field may come alone.
  */
 async function renameKeyring(c: Context, { db }: KeyringDeps) {
   const ring = readKeyringRow(db, c);
@@ -227,15 +232,29 @@ async function renameKeyring(c: Context, { db }: KeyringDeps) {
 
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
-  const name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
-  if (name.length < 1 || name.length > 80) return c.json({ error: 'invalid-display-name' }, 400);
+  if (!('display_name' in body) && !('label' in body)) {
+    return c.json({ error: 'invalid-body' }, 400);
+  }
 
-  db.prepare('UPDATE keyrings SET display_name = ?, updated_at = ? WHERE token = ?').run(
+  let name = ring.display_name;
+  if ('display_name' in body) {
+    name = typeof body.display_name === 'string' ? body.display_name.trim() : '';
+    if (name.length < 1 || name.length > 80) return c.json({ error: 'invalid-display-name' }, 400);
+  }
+  let label = ring.label;
+  if ('label' in body) {
+    const parsed = parseLabel(body.label);
+    if (parsed === undefined) return c.json({ error: 'invalid-label' }, 400);
+    label = parsed;
+  }
+
+  db.prepare('UPDATE keyrings SET display_name = ?, label = ?, updated_at = ? WHERE token = ?').run(
     name,
+    label,
     Date.now(),
     ring.token,
   );
-  return c.json({ display_name: name });
+  return c.json({ display_name: name, label });
 }
 
 // --- DELETE /api/keyrings/self ---------------------------------------
@@ -283,9 +302,9 @@ async function rotateKeyring(c: Context, { db }: KeyringDeps) {
   const now = Date.now();
   db.transaction(() => {
     db.prepare(
-      `INSERT INTO keyrings (token, client_id, display_name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).run(fresh, ring.client_id, ring.display_name, ring.created_at, now);
+      `INSERT INTO keyrings (token, client_id, display_name, created_at, updated_at, label)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(fresh, ring.client_id, ring.display_name, ring.created_at, now, ring.label);
     db.prepare('UPDATE keyring_docs SET keyring_token = ? WHERE keyring_token = ?').run(
       fresh,
       ring.token,
@@ -296,7 +315,12 @@ async function rotateKeyring(c: Context, { db }: KeyringDeps) {
   })();
 
   c.header('Cache-Control', 'no-store');
-  return c.json({ token: fresh, client_id: ring.client_id, display_name: ring.display_name });
+  return c.json({
+    token: fresh,
+    client_id: ring.client_id,
+    display_name: ring.display_name,
+    label: ring.label,
+  });
 }
 
 // --- PUT /api/keyrings/self/docs/:uid --------------------------------
@@ -449,9 +473,10 @@ async function redeemPairing(c: Context, { db, config }: KeyringDeps, limits: Li
 
   // The device leaves its own client id for the ring's. Thread bookmarks are
   // kept per client id, so the ones it set before pairing come along rather
-  // than staying behind under an id nothing sends any more.
+  // than staying behind under an id nothing sends any more. A device that
+  // already authors under another ring's id keeps it, and its bookmarks.
   const previousClientId = readClientId(c.req.raw.headers);
-  if (previousClientId && previousClientId !== ring.client_id) {
+  if (body.keep_client_id !== true && previousClientId && previousClientId !== ring.client_id) {
     moveThreadBookmarks(db, previousClientId, ring.client_id);
   }
 
@@ -460,11 +485,24 @@ async function redeemPairing(c: Context, { db, config }: KeyringDeps, limits: Li
     token: ring.token,
     client_id: ring.client_id,
     display_name: ring.display_name,
+    label: ring.label,
     docs: listKeyringDocs(db, ring.token),
   });
 }
 
 // --- helpers ---------------------------------------------------------
+
+/** Longest label accepted; it is a tab name, not a description. */
+const MAX_LABEL_LENGTH = 60;
+
+/** A label, null for none (absent or blank), undefined when unacceptable. */
+function parseLabel(raw: unknown): string | null | undefined {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'string') return undefined;
+  const label = raw.trim();
+  if (!label) return null;
+  return label.length > MAX_LABEL_LENGTH ? undefined : label;
+}
 
 function moveThreadBookmarks(db: Database, from: string, to: string): void {
   db.transaction(() => {

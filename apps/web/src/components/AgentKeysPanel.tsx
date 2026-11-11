@@ -10,12 +10,13 @@ import {
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { formatTimestamp } from '../lib/format-time.js';
-import { loadKeyringToken, onKeyringChange } from '../lib/keyring.js';
+import { type Keyring, keyringLabel } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import {
   type ClaudeScope,
   guessClient,
   type McpClient,
+  mcpServerName,
   type Setup,
 } from '../lib/mcp-connection.js';
 import { type GrantableRole, roleLabel, roleSummary } from '../lib/roles.js';
@@ -24,15 +25,15 @@ import { ConfirmButton } from './ConfirmButton.js';
 import { McpConnectionSetup } from './McpConnectionSetup.js';
 
 /**
- * One MCP connection for the whole keyring.
+ * One MCP connection for a whole keyring.
  *
  * The keyring token never leaves this browser; the agent gets a key of
  * its own, which the server swaps for an ordinary invite per document it
  * opens. The key is in the create response and nowhere else, so the
  * dialog that shows it is the only chance to copy it.
  */
-export function AgentKeysPanel() {
-  const [token, setToken] = useState(() => loadKeyringToken());
+export function AgentKeysPanel({ ring, several }: { ring: Keyring; several: boolean }) {
+  const token = ring.token;
   const [agents, setAgents] = useState<AgentKeyWire[] | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [name, setName] = useState('');
@@ -42,10 +43,7 @@ export function AgentKeysPanel() {
   const [created, setCreated] = useState<{ key: string; agent: AgentKeyWire } | null>(null);
   const [savingRoles, setSavingRoles] = useState<ReadonlySet<string>>(new Set());
 
-  useEffect(() => onKeyringChange(setToken), []);
-
   const refresh = useCallback(async () => {
-    if (!token) return;
     try {
       setAgents((await listAgentKeys(token)).agents);
       setLoadFailed(false);
@@ -73,7 +71,7 @@ export function AgentKeysPanel() {
   const placeholder = taken(DEFAULT_AGENT_NAME) ? 'Name' : DEFAULT_AGENT_NAME;
 
   async function create() {
-    if (!token || typedNameTaken) return;
+    if (typedNameTaken) return;
     if (nameTaken) {
       setError(`“${normalizedName}” already has a key. Give this agent a name of its own.`);
       return;
@@ -94,7 +92,6 @@ export function AgentKeysPanel() {
   }
 
   async function changeRole(id: string, next: GrantableRole) {
-    if (!token) return;
     setError(null);
     const previous = agents?.find((a) => a.id === id)?.role;
     const setRoleOf = (role: AgentKeyWire['role']) =>
@@ -118,7 +115,6 @@ export function AgentKeysPanel() {
   }
 
   async function revoke(id: string) {
-    if (!token) return;
     setError(null);
     try {
       await deleteAgentKey(token, id);
@@ -129,8 +125,6 @@ export function AgentKeysPanel() {
     }
   }
 
-  if (!token) return null;
-
   return (
     <Flex direction="column" gap="3">
       <Box>
@@ -138,9 +132,10 @@ export function AgentKeysPanel() {
           AI agents
         </Text>
         <Text size="1" color="gray" as="p">
-          Connect an agent to every document here that you administer, with one URL. It signs with
-          its own name and gets the role you pick, which a document’s MCP tab can change for that
-          document. Revoking its key cuts it off everywhere at once.
+          Connect an agent to every document {several ? 'in this project' : 'here'} that you
+          administer, with one URL. It signs with its own name and gets the role you pick, which a
+          document’s MCP tab can change for that document. Revoking its key cuts it off everywhere
+          at once.
         </Text>
       </Box>
 
@@ -217,6 +212,7 @@ export function AgentKeysPanel() {
 
       <AgentKeyDialog
         created={created}
+        project={several ? ring : null}
         onOpenChange={(open) => {
           if (!open) setCreated(null);
         }}
@@ -227,9 +223,12 @@ export function AgentKeysPanel() {
 
 function AgentKeyDialog({
   created,
+  project,
   onOpenChange,
 }: {
   created: { key: string; agent: AgentKeyWire } | null;
+  /** The ring the key is for, when there are several to tell apart. */
+  project: Keyring | null;
   onOpenChange: (open: boolean) => void;
 }) {
   const [client, setClient] = useState<McpClient | null>(null);
@@ -249,15 +248,16 @@ function AgentKeyDialog({
         <div className="dialog-scroll-body">
           <Dialog.Title>Connect {name}</Dialog.Title>
           <Dialog.Description size="2" color="gray" mb="3">
-            This URL is shown once — set it up now. It works for every document in your keyring that
-            you administer, and for the documents {name} creates, which land in your list on all
-            your devices.
+            This URL is shown once — set it up now. It works for every document in{' '}
+            {project ? `“${keyringLabel(project)}”` : 'your keyring'} that you administer, and for
+            the documents {name} creates, which land there on all your devices.
           </Dialog.Description>
 
           {created && (
             <McpConnectionSetup
               url={url}
               idPrefix="agent-key"
+              serverName={mcpServerName(project?.label ?? null)}
               client={client ?? guessClient(name)}
               onClientChange={setClient}
               setup={setup}

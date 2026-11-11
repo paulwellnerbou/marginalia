@@ -10,7 +10,7 @@ import { redeemErrorMessage } from '../lib/pairing-error.js';
 type State =
   | { phase: 'entering'; error: string | null }
   | { phase: 'redeeming' }
-  | { phase: 'done'; count: number };
+  | { phase: 'done'; count: number; label: string | null; identityKept: boolean };
 
 /**
  * Lands a device on the other end of a pairing code — scanned from the
@@ -56,12 +56,17 @@ export function PairPage() {
     inFlight.current = true;
     setState({ phase: 'redeeming' });
     try {
-      const docs = await pairWithCode(raw.trim());
+      const paired = await pairWithCode(raw.trim());
       // Strip the code from the address bar. It is spent, so this is
       // tidiness rather than secrecy — but a spent code left in history
       // is a confusing thing to re-open later.
       window.history.replaceState({}, '', '/k');
-      setState({ phase: 'done', count: docs.length });
+      setState({
+        phase: 'done',
+        count: paired.docs.filter((doc) => doc.rings?.includes(paired.ring.id)).length,
+        label: paired.ring.label,
+        identityKept: paired.identityKept,
+      });
     } catch (err) {
       reportError('PairPage.redeem', err);
       setState({ phase: 'entering', error: redeemErrorMessage(err) });
@@ -86,10 +91,17 @@ export function PairPage() {
               <CheckCircledIcon />
             </Callout.Icon>
             <Callout.Text>
-              This device is now syncing.{' '}
+              This device is now syncing{state.label ? ` “${state.label}”` : ''}.{' '}
               {state.count === 1 ? '1 document is' : `${state.count} documents are`} available here.
             </Callout.Text>
           </Callout.Root>
+          {state.identityKept && (
+            <Text size="2" color="gray" as="p" mb="4">
+              You keep the identity this browser already uses for your other projects, so comments
+              you write in this project's documents here can only be edited from this browser and
+              devices paired with it.
+            </Text>
+          )}
           <Button onClick={() => navigate('/')}>Go to your documents</Button>
         </Container>
       </>

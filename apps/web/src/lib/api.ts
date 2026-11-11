@@ -1270,6 +1270,8 @@ const KEYRING_HEADER = 'x-marginalia-keyring';
 export interface KeyringWire {
   client_id: string;
   display_name: string;
+  /** What the person calls this ring. Absent from older servers. */
+  label?: string | null;
   updated_at?: number;
   /** How long an unused ring lasts before the server sweeps it. */
   idle_ttl_ms?: number;
@@ -1302,10 +1304,11 @@ export interface KeyringSeed {
 export function createKeyring(
   seeds: KeyringSeed[],
   identity: Identity,
+  label: string | null = null,
 ): Promise<KeyringWire & { token: string }> {
   return request('/api/keyrings', {
     method: 'POST',
-    body: JSON.stringify({ docs: seeds }),
+    body: JSON.stringify({ docs: seeds, ...(label ? { label } : {}) }),
     identity,
   });
 }
@@ -1319,12 +1322,12 @@ export function fetchKeyring(token: string): Promise<KeyringWire> {
 
 export function renameKeyring(
   token: string,
-  displayName: string,
-): Promise<{ display_name: string }> {
+  changes: { display_name?: string; label?: string | null },
+): Promise<{ display_name: string; label?: string | null }> {
   return request('/api/keyrings/self', {
     method: 'PATCH',
     headers: { [KEYRING_HEADER]: token },
-    body: JSON.stringify({ display_name: displayName }),
+    body: JSON.stringify(changes),
   });
 }
 
@@ -1338,7 +1341,7 @@ export function deleteKeyring(token: string): Promise<void> {
 
 export function rotateKeyring(
   token: string,
-): Promise<{ token: string; client_id: string; display_name: string }> {
+): Promise<{ token: string; client_id: string; display_name: string; label?: string | null }> {
   return request('/api/keyrings/self/rotate', {
     method: 'POST',
     headers: { [KEYRING_HEADER]: token },
@@ -1456,10 +1459,14 @@ export function deleteAgentKey(token: string, id: string): Promise<void> {
 }
 
 /** Exchange a pairing code for the keyring it names. No credential needed. */
-export function redeemKeyringPairing(code: string): Promise<KeyringWire & { token: string }> {
+/** `keepClientId`: this browser already authors under another ring's id and stays with it. */
+export function redeemKeyringPairing(
+  code: string,
+  opts: { keepClientId?: boolean } = {},
+): Promise<KeyringWire & { token: string }> {
   return request('/api/pairings/redeem', {
     method: 'POST',
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, ...(opts.keepClientId ? { keep_client_id: true } : {}) }),
   });
 }
 

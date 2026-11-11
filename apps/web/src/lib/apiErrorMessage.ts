@@ -21,6 +21,10 @@ const MESSAGES: Record<string, string> = {
     'Your keyring holds no admin link for this document, so it cannot give your agents access here.',
   'keyring-link-stale':
     'The admin link your keyring holds for this document was rotated on another device. Open the document there, or sync, and try again.',
+  // Keyrings
+  'keyring-full': 'That project holds as many documents as it can. Remove some from it first.',
+  'invite-not-found':
+    'The link this browser holds for that document no longer works. Open the document once, then try again.',
   // Proposal workflow
   'proposal-conflict':
     'This proposal no longer applies: the document changed where it edits. Use “Resolve conflict” to settle it against the current text, or reject it.',

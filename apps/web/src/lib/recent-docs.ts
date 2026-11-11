@@ -10,6 +10,7 @@ import type { DocumentCover, DocumentCoverImage, DocumentFormat, KeyringDocEntry
 
 const KEY = 'marginalia.recentDocs';
 const REMOVED_KEY = 'marginalia.recentDocs.removed';
+/** Cap on documents in no keyring. A ring's documents are its own list, capped by the server. */
 const MAX = 50;
 
 export interface RecentDoc {
@@ -38,6 +39,11 @@ export interface RecentDoc {
    * document itself. The landing page lists it on the main document's card.
    */
   folder_uid?: string;
+  /**
+   * Local ids of the keyrings holding this document, as of their last
+   * pull or of a change made here. Absent means none.
+   */
+  rings?: string[];
 }
 
 /** Build the URL we should navigate to when re-opening a recent doc. */
@@ -90,14 +96,55 @@ export function loadRecentDocs(): RecentDoc[] {
 export function recordVisit(doc: RecentDoc): void {
   const removed = loadRemovalTombstones();
   if (removed.delete(doc.uid)) saveRemovalTombstones(removed);
-  const list = loadRecentDocs().filter((d) => d.uid !== doc.uid);
-  list.unshift(doc);
-  const trimmed = list.slice(0, MAX);
+  const all = loadRecentDocs();
+  // The visit says nothing about which rings hold the document.
+  const rings = doc.rings ?? all.find((d) => d.uid === doc.uid)?.rings;
+  const list = all.filter((d) => d.uid !== doc.uid);
+  list.unshift({ ...doc, ...(rings?.length ? { rings } : {}) });
+  save(list);
+}
+
+/** Persist, keeping every ring's document and the newest of the rest. */
+function save(list: RecentDoc[]): RecentDoc[] {
+  let unfiled = 0;
+  const kept = list.filter((d) => (d.rings?.length ? true : ++unfiled <= MAX));
   try {
-    localStorage.setItem(KEY, JSON.stringify(trimmed));
+    localStorage.setItem(KEY, JSON.stringify(kept));
   } catch {
     /* quota exceeded — best-effort */
   }
+  return kept;
+}
+
+/**
+ * Record that these documents are now in (`add`) or out of a ring,
+ * after a change made from this browser, ahead of the next pull.
+ */
+export function setRingMembership(uids: readonly string[], ringId: string, add: boolean): void {
+  const wanted = new Set(uids);
+  const list = loadRecentDocs().map((d) => {
+    if (!wanted.has(d.uid)) return d;
+    const rest = (d.rings ?? []).filter((id) => id !== ringId);
+    return withRings(d, add ? [...rest, ringId] : rest);
+  });
+  save(list);
+}
+
+/** Forget a ring on every entry; its documents stay, in no ring. */
+export function dropRingMembership(ringId: string): void {
+  save(
+    loadRecentDocs().map((d) =>
+      withRings(
+        d,
+        (d.rings ?? []).filter((id) => id !== ringId),
+      ),
+    ),
+  );
+}
+
+function withRings(doc: RecentDoc, rings: string[]): RecentDoc {
+  const { rings: _, ...rest } = doc;
+  return rings.length ? { ...rest, rings } : rest;
 }
 
 /**
@@ -161,7 +208,7 @@ export function removeFromRecent(uid: string): void {
  * Documents in the ring but never opened here sort by when they were
  * added, which lands them below anything actually read on this device.
  */
-export function mergeKeyringDocs(incoming: KeyringDocEntry[]): RecentDoc[] {
+export function mergeKeyringDocs(incoming: KeyringDocEntry[], ringId?: string): RecentDoc[] {
   const byUid = new Map(loadRecentDocs().map((d) => [d.uid, d]));
   const incomingUids = new Set(incoming.map((entry) => entry.doc_uid));
   const removed = loadRemovalTombstones();
@@ -210,16 +257,25 @@ export function mergeKeyringDocs(incoming: KeyringDocEntry[]): RecentDoc[] {
           ? { folder_uid: local.folder_uid }
           : {}),
     };
-    byUid.set(entry.doc_uid, merged);
+    const rings = (local?.rings ?? []).filter((id) => id !== ringId);
+    byUid.set(entry.doc_uid, withRings(merged, ringId ? [...rings, ringId] : rings));
   }
 
-  const merged = [...byUid.values()].sort((a, b) => b.visited_at - a.visited_at).slice(0, MAX);
-  try {
-    localStorage.setItem(KEY, JSON.stringify(merged));
-  } catch {
-    /* quota exceeded — best-effort */
+  // The snapshot is the whole ring: a document it lacks has left it.
+  if (ringId) {
+    for (const [uid, doc] of byUid) {
+      if (incomingUids.has(uid) || !doc.rings?.includes(ringId)) continue;
+      byUid.set(
+        uid,
+        withRings(
+          doc,
+          doc.rings.filter((id) => id !== ringId),
+        ),
+      );
+    }
   }
-  return merged;
+
+  return save([...byUid.values()].sort((a, b) => b.visited_at - a.visited_at));
 }
 
 function loadRemovalTombstones(): Set<string> {
@@ -280,7 +336,10 @@ function coerceRecentDoc(v: unknown): RecentDoc[] {
     ...(cover ? { cover } : {}),
     ...(typeof r.folder_uid === 'string' ? { folder_uid: r.folder_uid } : {}),
   };
-  return [out];
+  const rings = Array.isArray(r.rings)
+    ? r.rings.filter((id): id is string => typeof id === 'string')
+    : [];
+  return [rings.length ? { ...out, rings } : out];
 }
 
 function coerceCover(v: unknown): DocumentCover | null {

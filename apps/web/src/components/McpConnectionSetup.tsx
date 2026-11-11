@@ -24,6 +24,7 @@ export function McpConnectionSetup({
   onSetupChange,
   claudeScope,
   onClaudeScopeChange,
+  serverName,
 }: {
   url: string;
   /** Unique per connection on the page, for the labels' `htmlFor`. */
@@ -34,8 +35,10 @@ export function McpConnectionSetup({
   onSetupChange: (setup: Setup) => void;
   claudeScope: ClaudeScope;
   onClaudeScopeChange: (scope: ClaudeScope) => void;
+  /** What the client registers the server as; one per keyring. */
+  serverName?: string;
 }) {
-  const setups = connectionSetups(client, url, claudeScope);
+  const setups = connectionSetups(client, url, claudeScope, serverName);
   const snippet = setups.find((s) => s.setup === setup) ?? setups[0];
   const showScope = client === 'claude' && snippet.setup === 'cli';
 

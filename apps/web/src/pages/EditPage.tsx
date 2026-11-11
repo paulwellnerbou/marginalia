@@ -43,6 +43,7 @@ import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
+import { scopeIdentityTo } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { openTab } from '../lib/open-tabs.js';
 import { revealOnOpen } from '../lib/pending-reveal.js';
@@ -138,6 +139,11 @@ export function EditPage() {
    */
   const metaParam = searchParams.get('meta');
   const openMeta = !chapterBlockId && !appending && isDocMetaKind(metaParam) ? metaParam : null;
+
+  // Before any request: each carries the name used in the document's keyring.
+  useEffect(() => {
+    if (uid) scopeIdentityTo(uid);
+  }, [uid]);
 
   useEffect(() => {
     if (!uid || !token) return;

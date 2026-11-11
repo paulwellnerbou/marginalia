@@ -283,7 +283,9 @@ CREATE TABLE IF NOT EXISTS keyrings (
   client_id     TEXT NOT NULL,
   display_name  TEXT NOT NULL,
   created_at    INTEGER NOT NULL,
-  updated_at    INTEGER NOT NULL
+  updated_at    INTEGER NOT NULL,
+  -- What the person calls this ring ("Acme"), when they keep several.
+  label         TEXT
 );
 
 -- The sweep's only predicate, and this table grows until swept — unlike
@@ -499,6 +501,7 @@ export interface KeyringRow {
   display_name: string;
   created_at: number;
   updated_at: number;
+  label: string | null;
 }
 
 export interface KeyringDocRow {
@@ -743,6 +746,7 @@ export function openDatabase(path: string): Database {
            WHERE i.token = keyring_agent_invites.invite_token AND i.role <> a.role)`,
     );
   })();
+  ensureColumn(db, 'keyrings', 'label', 'TEXT');
   ensureColumn(db, 'document_assets', 'mime', "TEXT NOT NULL DEFAULT 'application/octet-stream'");
   ensureColumn(db, 'documents', 'repo_dir', "TEXT NOT NULL DEFAULT ''");
   // Backfill per-doc repo subpath. Always = uid for now; the legacy
