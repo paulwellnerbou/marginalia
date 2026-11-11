@@ -562,7 +562,7 @@ function ProposalComposerBody({
   const [rationale, setRationale] = useState('');
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const colorStyle = useDocColorStyle(docFormat);
+  const colorStyle = useDocColorStyle(docUid, docFormat);
   const { rendered, reset: resetPreview } = useProposalPreview({
     value,
     expanded,
@@ -832,7 +832,7 @@ function ProposalEditBody({
   const [comment, setComment] = useState('');
   const [name, setName] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const colorStyle = useDocColorStyle(docFormat);
+  const colorStyle = useDocColorStyle(docUid, docFormat);
   const { rendered } = useProposalPreview({
     value,
     expanded,

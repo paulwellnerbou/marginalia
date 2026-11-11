@@ -94,6 +94,7 @@ import { buildCommentHighlights } from '../lib/comment-highlights.js';
 import { useDocColorStyle } from '../lib/doc-colors.js';
 import type { DocMetaLinks } from '../lib/doc-meta-fold.js';
 import { documentTitle } from '../lib/doc-title.js';
+import { readDocViewPref, usePersistDocViewPref, writeDocViewPref } from '../lib/doc-view-prefs.js';
 import { subscribeToDocumentEvents } from '../lib/events.js';
 import { shareFolderToken } from '../lib/folder.js';
 import { isFullViewSearch, withFullView, writeFullViewToUrl } from '../lib/full-view.js';
@@ -194,22 +195,9 @@ import { ThemeSelect } from './ThemeSelect.js';
 import { ProposalComposer, ProposalEditComposer } from './ThreadComposer.js';
 import { Toc } from './Toc.js';
 
-const MAX_WIDTH_KEY = 'marginalia.maxWidth';
-/** How wide images, tables, code and diagrams may grow; at or below the reading width, they don't. */
-const BLOCK_WIDTH_KEY = 'marginalia.blockWidth';
-/** Width cap for HTML pages, in px; 0 is no cap. Kept apart from the reading width, which is in `ch` of the app's text. */
-const HTML_WIDTH_KEY = 'marginalia.htmlWidth';
-const TEXT_ZOOM_KEY = 'marginalia.textZoom';
-const TOC_WIDTH_KEY = 'marginalia.tocWidth';
-const COMMENTS_WIDTH_KEY = 'marginalia.commentsWidth';
-const INLINE_COMMENTS_OPEN_KEY = 'marginalia.inlineCommentsOpen';
-const INLINE_COMMENTS_STACKING_KEY = 'marginalia.inlineCommentsStacking';
 const INLINE_COMMENTS_HIDE_RESOLVED_KEY = 'marginalia.inlineCommentsHideResolved';
-const COMMENTS_DISPLAY_MODE_KEY = 'marginalia.commentsDisplayMode';
-const READING_MODE_KEY = 'marginalia.readingMode';
 /** Per document: the heading id of the chapter last on screen in chapter reading. */
 const CHAPTER_KEY_PREFIX = 'marginalia.chapter.';
-const RIGHT_TAB_KEY = 'marginalia.rightTab';
 const COLLAPSED_WIDTH = 36;
 /**
  * Text-size range, as a percentage of the theme's own size. The ceiling
@@ -319,8 +307,8 @@ type CommentsDisplayMode = 'column' | 'floating';
  */
 type ReadingMode = 'scroll' | 'paged' | 'chapters';
 
-function storedReadingMode(): ReadingMode {
-  const saved = localStorage.getItem(READING_MODE_KEY);
+function storedReadingMode(docUid: string): ReadingMode {
+  const saved = readDocViewPref(docUid, 'readingMode');
   return saved === 'paged' || saved === 'chapters' ? saved : 'scroll';
 }
 
@@ -473,11 +461,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [overlayPaneOpen, closeOverlayPanes]);
   const [inlineCommentsOpen, setInlineCommentsOpen] = useState<boolean>(() => {
-    const saved = localStorage.getItem(INLINE_COMMENTS_OPEN_KEY);
+    const saved = readDocViewPref(doc.uid, 'inlineCommentsOpen');
     return saved === null ? true : saved === 'true';
   });
   const [inlineCommentsStacking, setInlineCommentsStacking] = useState<boolean>(() => {
-    const saved = localStorage.getItem(INLINE_COMMENTS_STACKING_KEY);
+    const saved = readDocViewPref(doc.uid, 'inlineCommentsStacking');
     return saved === null ? true : saved === 'true';
   });
   /**
@@ -496,11 +484,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
    */
   const [storedCommentsDisplayMode, setCommentsDisplayMode] = useState<CommentsDisplayMode | null>(
     () => {
-      const saved = localStorage.getItem(COMMENTS_DISPLAY_MODE_KEY);
+      const saved = readDocViewPref(doc.uid, 'commentsDisplayMode');
       return saved === 'floating' || saved === 'column' ? saved : null;
     },
   );
-  const [readingMode, setReadingMode] = useState<ReadingMode>(storedReadingMode);
+  const [readingMode, setReadingMode] = useState<ReadingMode>(() => storedReadingMode(doc.uid));
   /**
    * Set when this engine turns out not to paint the sideways pagination
    * (see the effect below), which switches the reader to vertical pages.
@@ -540,7 +528,7 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   const floatingComments =
     paged || commentsDisplayMode === 'floating' || (fullView && !columnModeAvailable);
   const [rightTab, setRightTab] = useState<RightTab>(() => {
-    const saved = localStorage.getItem(RIGHT_TAB_KEY);
+    const saved = readDocViewPref(doc.uid, 'rightTab');
     return isRememberedRightTab(saved) ? saved : 'comments';
   });
   const [historyVersion, setHistoryVersion] = useState(0);
@@ -562,15 +550,17 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   } | null>(null);
 
   const [maxWidth, setMaxWidth] = useState<number>(() => {
-    const saved = Number(localStorage.getItem(MAX_WIDTH_KEY));
+    const saved = Number(readDocViewPref(doc.uid, 'maxWidth'));
     return Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_MAX_WIDTH;
   });
+  /** How wide images, tables, code and diagrams may grow; at or below the reading width, they don't. */
   const [blockWidth, setBlockWidth] = useState<number>(() => {
-    const saved = Number(localStorage.getItem(BLOCK_WIDTH_KEY));
+    const saved = Number(readDocViewPref(doc.uid, 'blockWidth'));
     return Number.isFinite(saved) && saved > maxWidth ? Math.min(saved, BLOCK_WIDTH_MAX) : 0;
   });
+  /** Width cap for HTML pages, in px; 0 is no cap. Kept apart from the reading width, which is in `ch` of the app's text. */
   const [htmlWidth, setHtmlWidth] = useState<number>(() => {
-    const saved = Number(localStorage.getItem(HTML_WIDTH_KEY));
+    const saved = Number(readDocViewPref(doc.uid, 'htmlWidth'));
     return Number.isFinite(saved) && saved >= HTML_WIDTH_MIN && saved < HTML_WIDTH_FULL ? saved : 0;
   });
   // Not in pages: a page is exactly as wide as the screen, and the tap
@@ -586,15 +576,15 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
     ? UI_SCALE_TOUCH_DEFAULT
     : UI_SCALE_POINTER_DEFAULT;
   const [textZoom, setTextZoom] = useState<number>(() => {
-    const saved = Number(localStorage.getItem(TEXT_ZOOM_KEY));
+    const saved = Number(readDocViewPref(doc.uid, 'textZoom'));
     return Number.isFinite(saved) && saved >= TEXT_ZOOM_MIN && saved <= TEXT_ZOOM_MAX ? saved : 100;
   });
   const [tocWidth, setTocWidth] = useState<number>(() => {
-    const saved = Number(localStorage.getItem(TOC_WIDTH_KEY));
+    const saved = Number(readDocViewPref(doc.uid, 'tocWidth'));
     return Number.isFinite(saved) && saved >= 160 ? saved : 260;
   });
   const [commentsWidth, setCommentsWidth] = useState<number>(() => {
-    const saved = Number(localStorage.getItem(COMMENTS_WIDTH_KEY));
+    const saved = Number(readDocViewPref(doc.uid, 'commentsWidth'));
     return Number.isFinite(saved) && saved >= 160 ? saved : 320;
   });
 
@@ -1198,59 +1188,46 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
   const docSearchInputRef = useRef<HTMLInputElement>(null);
   const [inlineCommentsColumnWidth, setInlineCommentsColumnWidth] = useState(0);
 
-  useEffect(() => {
-    localStorage.setItem(MAX_WIDTH_KEY, String(maxWidth));
-  }, [maxWidth]);
-  useEffect(() => {
-    localStorage.setItem(BLOCK_WIDTH_KEY, String(blockWidth));
-  }, [blockWidth]);
-  useEffect(() => {
-    localStorage.setItem(HTML_WIDTH_KEY, String(htmlWidth));
-  }, [htmlWidth]);
-  useEffect(() => {
-    localStorage.setItem(TEXT_ZOOM_KEY, String(textZoom));
-  }, [textZoom]);
-  useEffect(() => {
-    localStorage.setItem(TOC_WIDTH_KEY, String(tocWidth));
-  }, [tocWidth]);
-  useEffect(() => {
-    localStorage.setItem(COMMENTS_WIDTH_KEY, String(commentsWidth));
-  }, [commentsWidth]);
-  useEffect(() => {
-    localStorage.setItem(INLINE_COMMENTS_OPEN_KEY, String(inlineCommentsOpen));
-  }, [inlineCommentsOpen]);
-  useEffect(() => {
-    localStorage.setItem(INLINE_COMMENTS_STACKING_KEY, String(inlineCommentsStacking));
-  }, [inlineCommentsStacking]);
+  usePersistDocViewPref(doc.uid, 'maxWidth', String(maxWidth));
+  usePersistDocViewPref(doc.uid, 'blockWidth', String(blockWidth));
+  usePersistDocViewPref(doc.uid, 'htmlWidth', String(htmlWidth));
+  usePersistDocViewPref(doc.uid, 'textZoom', String(textZoom));
+  usePersistDocViewPref(doc.uid, 'inlineCommentsOpen', String(inlineCommentsOpen));
+  usePersistDocViewPref(doc.uid, 'inlineCommentsStacking', String(inlineCommentsStacking));
+  usePersistDocViewPref(doc.uid, 'readingMode', readingMode);
+  usePersistDocViewPref(doc.uid, 'commentsDisplayMode', storedCommentsDisplayMode);
   // Deliberately not persisted — see the state declaration. Drop what
   // earlier builds stored so a remembered "show resolved" can't outlive
   // them.
   useEffect(() => {
     localStorage.removeItem(INLINE_COMMENTS_HIDE_RESOLVED_KEY);
   }, []);
+  // Search isn't remembered, so it leaves the stored tab as it was.
+  usePersistDocViewPref(doc.uid, 'rightTab', isRememberedRightTab(rightTab) ? rightTab : undefined);
+  // Only an explicit choice is kept (see the state), so a value nothing
+  // can read is dropped rather than left for every later read to skip.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a check of what was stored on opening, not of later choices.
   useEffect(() => {
-    localStorage.setItem(READING_MODE_KEY, readingMode);
-  }, [readingMode]);
-  // The key exists exactly when there is an explicit choice to remember,
-  // so a value written by an older build — or by hand — is cleared rather
-  // than left behind for every later read to step over.
-  useEffect(() => {
-    if (storedCommentsDisplayMode) {
-      localStorage.setItem(COMMENTS_DISPLAY_MODE_KEY, storedCommentsDisplayMode);
-    } else {
-      localStorage.removeItem(COMMENTS_DISPLAY_MODE_KEY);
+    if (readDocViewPref(doc.uid, 'commentsDisplayMode') !== null && !storedCommentsDisplayMode) {
+      writeDocViewPref(doc.uid, 'commentsDisplayMode', null);
     }
-  }, [storedCommentsDisplayMode]);
-  useEffect(() => {
-    if (isRememberedRightTab(rightTab)) localStorage.setItem(RIGHT_TAB_KEY, rightTab);
-  }, [rightTab]);
+  }, [doc.uid]);
+  // Persisted when a drag ends, not on every pixel of it.
+  const persistTocWidth = useCallback(
+    (px: number) => writeDocViewPref(doc.uid, 'tocWidth', String(px)),
+    [doc.uid],
+  );
+  const persistCommentsWidth = useCallback(
+    (px: number) => writeDocViewPref(doc.uid, 'commentsWidth', String(px)),
+    [doc.uid],
+  );
   // An HTML page styles itself: no theme, text-size or color controls, and
   // a width of its own in px rather than the reading width.
   const isHtml = doc.format === 'html';
   /* `100%` rather than `none`: the inline comments column subtracts this
      from the row width. */
   const readingWidth = isHtml ? (htmlWidth ? `${htmlWidth}px` : '100%') : `${maxWidth}ch`;
-  const docColorOverride = useDocColorStyle(doc.format);
+  const docColorOverride = useDocColorStyle(doc.uid, doc.format);
   useEffect(() => {
     void applyTheme(themeForDocument(doc.format, theme));
   }, [theme, doc.format]);
@@ -2860,11 +2837,11 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
         : null;
     return countThreadListCards(
       buildThreadListCards(sectionVisibleThreads).cards,
-      loadThreadFilters(),
+      loadThreadFilters(doc.uid),
       getClientId(),
       unhonoured,
     );
-  }, [threadTabFallbackNeeded, sectionVisibleThreads, focusedThread]);
+  }, [threadTabFallbackNeeded, sectionVisibleThreads, focusedThread, doc.uid]);
   const threadCount = threadTabReportedCount ?? threadTabFallbackCount;
   const onThreadTabVisibleCountChange = useCallback(
     (count: number | null) => {
@@ -3504,7 +3481,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
             onDocSettingsChanged={onDocSettingsChanged}
           />
 
-          <DocColorControls paperRef={docScrollRef} inkRef={docRef} theme={theme} />
+          <DocColorControls
+            docUid={doc.uid}
+            paperRef={docScrollRef}
+            inkRef={docRef}
+            theme={theme}
+          />
         </>
       )}
 
@@ -3659,7 +3641,14 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
                   </Text>
                 </Flex>
               )}
-              {tocOpen && <ResizeHandle side="left" width={tocWidth} onResize={setTocWidth} />}
+              {tocOpen && (
+                <ResizeHandle
+                  side="left"
+                  width={tocWidth}
+                  onResize={setTocWidth}
+                  onResizeEnd={persistTocWidth}
+                />
+              )}
             </aside>
 
             <main className="pane pane-doc" ref={docPaneRef}>
@@ -3999,7 +3988,12 @@ export function DocumentLayout({ doc, onDocSettingsChanged, editHref, pending }:
 
             <aside className={`pane pane-right ${rightPaneOpen ? 'open' : 'closed'}`}>
               {rightPaneOpen && (
-                <ResizeHandle side="right" width={commentsWidth} onResize={setCommentsWidth} />
+                <ResizeHandle
+                  side="right"
+                  width={commentsWidth}
+                  onResize={setCommentsWidth}
+                  onResizeEnd={persistCommentsWidth}
+                />
               )}
               {/* Out of flow, so it can cross-fade with a body that is still
               on its way out. */}

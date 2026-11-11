@@ -731,6 +731,18 @@ description. Source downloads, chapter ZIPs, copies and JSON bundles
 keep them as written. MCP's `get_document` says where each region is,
 or how to add one.
 
+## View settings
+
+What the **View** menu sets — layout, reading, block and page width,
+text size, theme, paper and ink — is remembered per document, in this
+browser, and so are the open side tab, the pane widths, how comments
+show and the Threads tab's sort and filters. Setting a book to large
+type in pages leaves every other document as it was. **Interface size**
+and the light/dark appearance apply to the whole app.
+
+A document never changed in this browser starts from what the view
+settings were when they still applied to every document.
+
 ## Full view
 
 View → **Document only** shows the document with nothing of the app

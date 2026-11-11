@@ -20,6 +20,7 @@ import {
 import type { AnchorSection } from '../../lib/anchor-target.js';
 import type { Thread } from '../../lib/api.js';
 import { isBookmark, isProposal, proposalStatus } from '../../lib/api.js';
+import { usePersistDocViewPref } from '../../lib/doc-view-prefs.js';
 import { getClientId } from '../../lib/identity.js';
 import {
   buildThreadCollapseState,
@@ -45,7 +46,6 @@ import {
   loadThreadFilters,
   loadThreadSortMode,
   saveThreadFilters,
-  saveThreadSortMode,
   type ThreadSortMode,
 } from './threadListPrefs.js';
 import { type ThreadRefApi, threadRefIndex } from './threadRefs.js';
@@ -248,9 +248,9 @@ export function InlineCommentsList({
 
   const bookmarks = variant === 'bookmarks';
 
-  // Remembered per browser, so the pane opens the way it was left.
-  const [sortMode, setSortMode] = useState<ThreadSortMode>(loadThreadSortMode);
-  const [filters, setFilters] = useState<ThreadFilters>(loadThreadFilters);
+  // Remembered per document, so the pane opens the way it was left.
+  const [sortMode, setSortMode] = useState<ThreadSortMode>(() => loadThreadSortMode(uid));
+  const [filters, setFilters] = useState<ThreadFilters>(() => loadThreadFilters(uid));
   const [searchQuery, setSearchQuery] = useState('');
   const searchNeedle = useMemo(() => normalizeThreadSearch(searchQuery), [searchQuery]);
   // The Bookmarks tab shows every bookmarked thread it is given — the
@@ -276,9 +276,7 @@ export function InlineCommentsList({
   const [listResetNonce, setListResetNonce] = useState(0);
   const resetListScroll = useCallback(() => setListResetNonce((n) => n + 1), []);
 
-  useEffect(() => {
-    saveThreadSortMode(sortMode);
-  }, [sortMode]);
+  usePersistDocViewPref(uid, 'threadListSort', sortMode);
 
   /*
    * Ask for the archive when the reader asks to see settled work.
@@ -301,8 +299,8 @@ export function InlineCommentsList({
       onNeedResolvedThreads?.();
       return;
     }
-    if (loadThreadFilters().status === 'all') onNeedResolvedThreads?.();
-  }, [bookmarks, onNeedResolvedThreads]);
+    if (loadThreadFilters(uid).status === 'all') onNeedResolvedThreads?.();
+  }, [uid, bookmarks, onNeedResolvedThreads]);
 
   // A search that silently skipped the archive would read as "that comment
   // is gone" rather than "not loaded yet".
@@ -760,7 +758,7 @@ export function InlineCommentsList({
                         // Saved from the reader's own click and nowhere
                         // else, so nothing the list does on its own can
                         // change what the pane opens with next time.
-                        saveThreadFilters(next);
+                        saveThreadFilters(uid, next);
                         setRevealed(null);
                         resetListScroll();
                       }}
