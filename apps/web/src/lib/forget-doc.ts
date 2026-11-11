@@ -1,13 +1,14 @@
 /**
  * Drop every trace of one document from this browser.
  *
- * The per-document state is spread across four independent stores plus
+ * The per-document state is spread across several independent stores plus
  * the keyring, each written by whichever feature owns it. Collecting the
  * removals here means a caller that has just destroyed a document
  * server-side doesn't have to know that list — and doesn't leave a dead
  * invite token or a saved password for a uid that no longer resolves.
  */
 
+import { forgetDocViewPrefs } from './doc-view-prefs.js';
 import { clearInviteToken } from './invite.js';
 import { removeDoc as removeKeyringDoc } from './keyring.js';
 import { reportError } from './log.js';
@@ -29,6 +30,7 @@ export function forgetDocumentLocally(uid: string): void {
   attempt(uid, 'password', () => clearSavedPassword(uid));
   attempt(uid, 'theme', () => setUserThemeOverride(uid, null));
   attempt(uid, 'readingPosition', () => forgetReadingPosition(uid));
+  attempt(uid, 'viewPrefs', () => forgetDocViewPrefs(uid));
 }
 
 /**
@@ -36,7 +38,7 @@ export function forgetDocumentLocally(uid: string): void {
  * every one of them runs *after* the server has destroyed the document.
  * A browser that refuses to write — private mode, blocked storage, full
  * quota — must not be able to make a completed delete report as failed,
- * nor let one dead store leave the other four untouched. Logged, not
+ * nor let one dead store leave the others untouched. Logged, not
  * swallowed silently: leftover local state is a real (if harmless) bug
  * worth seeing in the console.
  */

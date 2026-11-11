@@ -1,12 +1,13 @@
 import { type CSSProperties, useMemo, useSyncExternalStore } from 'react';
 import type { DocumentFormat } from './api.js';
 import { useAppearance } from './appearance.js';
+import { docViewUidOf, readDocViewPref, writeDocViewPref } from './doc-view-prefs.js';
 
 /**
  * The reader's own paper and ink, overriding the theme's
  * `--md-color-bg` / `--md-color-fg`. Kept per appearance, since a paper
- * picked for light mode is wrong in dark mode, and per browser, like the
- * other display settings, rather than per document or theme.
+ * picked for light mode is wrong in dark mode, and per document, like the
+ * other view settings, rather than per theme.
  */
 
 export type DocColorRole = 'bg' | 'fg';
@@ -14,7 +15,6 @@ export type DocColorMode = 'light' | 'dark';
 export type DocColors = Partial<Record<DocColorRole, string>>;
 export type DocColorOverrides = Partial<Record<DocColorMode, DocColors>>;
 
-const KEY = 'marginalia.docColors';
 const HEX = /^#[0-9a-f]{6}$/;
 const ROLES: readonly DocColorRole[] = ['bg', 'fg'];
 const MODES: readonly DocColorMode[] = ['light', 'dark'];
@@ -58,20 +58,28 @@ export function withDocColor(
   return next;
 }
 
-function load(): DocColorOverrides {
-  try {
-    return parseDocColors(localStorage.getItem(KEY));
-  } catch {
-    return {};
-  }
+interface Cached {
+  raw: string | null;
+  value: DocColorOverrides;
 }
 
-let current: DocColorOverrides | null = null;
+function load(docUid: string): Cached {
+  const raw = readDocViewPref(docUid, 'docColors');
+  return { raw, value: parseDocColors(raw) };
+}
+
+const NONE: DocColorOverrides = {};
+/** Per uid, so a snapshot keeps its identity between renders. */
+const cache = new Map<string, Cached>();
 const listeners = new Set<() => void>();
 
-function snapshot(): DocColorOverrides {
-  current ??= load();
-  return current;
+function snapshot(docUid: string): DocColorOverrides {
+  let entry = cache.get(docUid);
+  if (!entry) {
+    entry = load(docUid);
+    cache.set(docUid, entry);
+  }
+  return entry.value;
 }
 
 function subscribe(listener: () => void): () => void {
@@ -83,27 +91,44 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
+/**
+ * Another tab changed a document's view settings, or cleared storage.
+ * The entry holds every view setting, and a pane drag elsewhere writes
+ * it repeatedly, so only a change to the colors themselves re-renders.
+ */
 function onStorage(event: StorageEvent): void {
-  if (event.key !== KEY && event.key !== null) return;
-  current = load();
-  for (const l of listeners) l();
-}
-
-export function setDocColor(mode: DocColorMode, role: DocColorRole, value: string | null): void {
-  current = withDocColor(snapshot(), mode, role, value);
-  try {
-    if (Object.keys(current).length > 0) localStorage.setItem(KEY, JSON.stringify(current));
-    else localStorage.removeItem(KEY);
-  } catch {
-    // Private mode / quota: the choice still holds for this page.
+  if (event.key === null) cache.clear();
+  else {
+    const uid = docViewUidOf(event.key);
+    const entry = uid === null ? undefined : cache.get(uid);
+    if (uid === null || !entry) return;
+    const fresh = load(uid);
+    if (fresh.raw === entry.raw) return;
+    cache.set(uid, fresh);
   }
   for (const l of listeners) l();
 }
 
+export function setDocColor(
+  docUid: string,
+  mode: DocColorMode,
+  role: DocColorRole,
+  value: string | null,
+): void {
+  const next = withDocColor(snapshot(docUid), mode, role, value);
+  const raw = Object.keys(next).length > 0 ? JSON.stringify(next) : null;
+  cache.set(docUid, { raw, value: next });
+  writeDocViewPref(docUid, 'docColors', raw);
+  for (const l of listeners) l();
+}
+
 /** The overrides for the appearance the page is showing right now. */
-export function useDocColors(): { mode: DocColorMode; colors: DocColors } {
+export function useDocColors(docUid: string | undefined): {
+  mode: DocColorMode;
+  colors: DocColors;
+} {
   const { resolved } = useAppearance();
-  const all = useSyncExternalStore(subscribe, snapshot);
+  const all = useSyncExternalStore(subscribe, () => (docUid ? snapshot(docUid) : NONE));
   return { mode: resolved, colors: all[resolved] ?? {} };
 }
 
@@ -124,8 +149,11 @@ export function docColorStyle(colors: DocColors): CSSProperties | undefined {
  * The style every rendering of a document carries, so previews match the
  * reader's paper. HTML pages bring their own look and get none.
  */
-export function useDocColorStyle(format: DocumentFormat | undefined): CSSProperties | undefined {
-  const { colors } = useDocColors();
+export function useDocColorStyle(
+  docUid: string | undefined,
+  format: DocumentFormat | undefined,
+): CSSProperties | undefined {
+  const { colors } = useDocColors(docUid);
   const { bg, fg } = colors;
   return useMemo(
     () =>
