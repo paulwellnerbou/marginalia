@@ -116,6 +116,56 @@ export interface Identity {
   displayName: string;
 }
 
+/**
+ * Somewhere other than the browser-wide slot to keep the display name:
+ * the keyring whose documents are on screen, for someone who goes by a
+ * different name with each of several clients.
+ */
+export interface NameScope {
+  read(): string | null;
+  /** When `read`'s name was chosen; null for unknown or a placeholder. */
+  readSetAt(): number | null;
+  write(name: string, setAt: number | null): void;
+  /** localStorage key `read` depends on, so other tabs' writes are heard. */
+  storageKey: string;
+}
+
+let nameScope: NameScope | null = null;
+/** The scope one document's requests use, which can differ from the page's. */
+let docNameScope: ((docUid: string) => NameScope | null) | null = null;
+
+/** Point reads and writes of the display name at `scope`, or back at the browser's own. */
+export function setNameScope(scope: NameScope | null): void {
+  if (scope === nameScope) return;
+  nameScope = scope;
+  window.dispatchEvent(new CustomEvent(DISPLAY_NAME_EVENT, { detail: getDisplayName() }));
+}
+
+/** How to find the scope a given document's requests sign with. */
+export function setDocumentNameScopes(
+  resolve: ((docUid: string) => NameScope | null) | null,
+): void {
+  docNameScope = resolve;
+}
+
+/**
+ * The name a request for `docUid` signs with: its own keyring's, so a
+ * request still running for the document being left does not carry the
+ * next one's name. Without a document, or a name for it, the page's.
+ */
+export function getDisplayNameFor(docUid?: string): string {
+  const scope = docUid ? docNameScope?.(docUid) : null;
+  return normalizeDisplayName(scope?.read() ?? '') || getDisplayName();
+}
+
+/** When `getDisplayNameFor(docUid)` was chosen. */
+export function getDisplayNameSetAtFor(docUid?: string): number | null {
+  const scope = docUid ? docNameScope?.(docUid) : null;
+  return scope && normalizeDisplayName(scope.read() ?? '')
+    ? scope.readSetAt()
+    : getDisplayNameSetAt();
+}
+
 /** Get or create a persistent clientId. */
 export function getClientId(): string {
   let id = localStorage.getItem(CLIENT_ID_KEY);
@@ -143,6 +193,8 @@ export function setClientId(clientId: string): void {
 }
 
 export function getDisplayName(): string {
+  const scoped = normalizeDisplayName(nameScope?.read() ?? '');
+  if (scoped) return scoped;
   const existing = normalizeDisplayName(localStorage.getItem(DISPLAY_NAME_KEY) ?? '');
   if (existing && !isLegacyDefaultDisplayName(existing)) {
     if (existing !== localStorage.getItem(DISPLAY_NAME_KEY)) {
@@ -165,6 +217,7 @@ export function getDisplayName(): string {
  * a new personal link but never out-date a name chosen anywhere since.
  */
 export function getDisplayNameSetAt(): number | null {
+  if (nameScope && normalizeDisplayName(nameScope.read() ?? '')) return nameScope.readSetAt();
   const name = getDisplayName();
   const raw = localStorage.getItem(DISPLAY_NAME_SET_AT_KEY);
   if (raw === GENERATED) return null;
@@ -210,13 +263,18 @@ export function isGeneratedDisplayName(name: string): boolean {
  * given, so merely confirming a name never out-dates a newer one.
  */
 export function setDisplayName(name: string, opts: { setAt?: number | null } = {}): void {
-  const prev = localStorage.getItem(DISPLAY_NAME_KEY);
+  const prev = nameScope ? getDisplayName() : localStorage.getItem(DISPLAY_NAME_KEY);
   const typed = normalizeDisplayName(name);
   const next = typed || generateDisplayName(getClientId());
-  localStorage.setItem(DISPLAY_NAME_KEY, next);
-  if (opts.setAt !== undefined || next !== prev) {
-    const setAt = !typed ? null : opts.setAt === undefined ? Date.now() : opts.setAt;
-    localStorage.setItem(DISPLAY_NAME_SET_AT_KEY, setAt === null ? GENERATED : String(setAt));
+  const changed = opts.setAt !== undefined || next !== prev;
+  const setAt = !typed ? null : opts.setAt === undefined ? Date.now() : opts.setAt;
+  if (nameScope) {
+    nameScope.write(next, changed ? setAt : nameScope.readSetAt());
+  } else {
+    localStorage.setItem(DISPLAY_NAME_KEY, next);
+    if (changed) {
+      localStorage.setItem(DISPLAY_NAME_SET_AT_KEY, setAt === null ? GENERATED : String(setAt));
+    }
   }
   // Notify in-app subscribers even when the value didn't change — they
   // may be re-reading to sync React state.
@@ -233,7 +291,9 @@ export function setDisplayName(name: string, opts: { setAt?: number | null } = {
 export function onDisplayNameChange(fn: (name: string) => void): () => void {
   const inApp = (e: Event) => fn((e as CustomEvent<string>).detail);
   const crossTab = (e: StorageEvent) => {
-    if (e.key === DISPLAY_NAME_KEY) fn(getDisplayName());
+    if (e.key === DISPLAY_NAME_KEY || (nameScope && e.key === nameScope.storageKey)) {
+      fn(getDisplayName());
+    }
   };
   window.addEventListener(DISPLAY_NAME_EVENT, inApp);
   window.addEventListener('storage', crossTab);
@@ -300,7 +360,12 @@ export function deriveDisplayName(markdown: string): string {
 }
 
 function generateClientId(): string {
-  const bytes = new Uint8Array(16);
+  return randomHex(16);
+}
+
+/** `byteCount` random bytes as lowercase hex. */
+export function randomHex(byteCount: number): string {
+  const bytes = new Uint8Array(byteCount);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }

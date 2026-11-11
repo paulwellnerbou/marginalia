@@ -32,6 +32,8 @@ interface KeyringWire {
   token: string;
   client_id: string;
   display_name: string;
+  label?: string | null;
+  display_name_set_at?: number | null;
   docs: Array<{
     doc_uid: string;
     invite_token: string;
@@ -526,6 +528,123 @@ describe('keyrings API', () => {
       }),
     );
     expect(((await pulled.json()) as KeyringWire).display_name).toBe('Paul W');
+  });
+
+  test('a label travels with the ring through rename, rotation and pairing', async () => {
+    const res = await app.hono.fetch(
+      new Request('http://test/api/keyrings', {
+        method: 'POST',
+        headers: headersFor(LAPTOP),
+        body: JSON.stringify({ docs: [], label: '  Acme  ' }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const ring = (await res.json()) as KeyringWire;
+    expect(ring.label).toBe('Acme');
+
+    const renamed = await app.hono.fetch(
+      new Request('http://test/api/keyrings/self', {
+        method: 'PATCH',
+        headers: ringHeaders(LAPTOP, ring.token),
+        body: JSON.stringify({ label: 'Acme GmbH' }),
+      }),
+    );
+    expect(renamed.status).toBe(200);
+    // A label alone leaves the person's name as it was.
+    const body = (await renamed.json()) as KeyringWire & { display_name_set_at: number | null };
+    expect(body).toMatchObject({ display_name: 'Paul', label: 'Acme GmbH' });
+    // Nor does it make the name look freshly chosen.
+    expect(body.display_name_set_at).toBe(ring.display_name_set_at ?? null);
+
+    const rotated = await app.hono.fetch(
+      new Request('http://test/api/keyrings/self/rotate', {
+        method: 'POST',
+        headers: ringHeaders(LAPTOP, ring.token),
+      }),
+    );
+    const fresh = (await rotated.json()) as KeyringWire;
+    expect(fresh.label).toBe('Acme GmbH');
+
+    const { code } = await mintPairing(fresh.token);
+    const paired = (await (await redeem(code)).json()) as KeyringWire;
+    expect(paired.label).toBe('Acme GmbH');
+
+    const cleared = await app.hono.fetch(
+      new Request('http://test/api/keyrings/self', {
+        method: 'PATCH',
+        headers: ringHeaders(LAPTOP, fresh.token),
+        body: JSON.stringify({ label: '' }),
+      }),
+    );
+    expect(((await cleared.json()) as KeyringWire).label).toBeNull();
+  });
+
+  test('a label that is not a short string is refused', async () => {
+    const ring = await createKeyring(LAPTOP);
+    for (const label of [42, 'x'.repeat(61)]) {
+      const res = await app.hono.fetch(
+        new Request('http://test/api/keyrings/self', {
+          method: 'PATCH',
+          headers: ringHeaders(LAPTOP, ring.token),
+          body: JSON.stringify({ label }),
+        }),
+      );
+      expect(res.status).toBe(400);
+    }
+    const empty = await app.hono.fetch(
+      new Request('http://test/api/keyrings/self', {
+        method: 'PATCH',
+        headers: ringHeaders(LAPTOP, ring.token),
+        body: JSON.stringify({}),
+      }),
+    );
+    expect(empty.status).toBe(400);
+  });
+
+  test('a device that keeps its own identity keeps its bookmarks when it pairs', async () => {
+    const doc = await upload(LAPTOP, { markdown: '# Hi\n\nA paragraph.\n' });
+    const admin = headersFor(LAPTOP, { [INVITE_HEADER]: doc.admin_invite.token });
+    const docRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}`, { headers: admin }),
+    );
+    const { rendered } = (await docRes.json()) as { rendered: { blocks: Array<{ id: string }> } };
+    const threadRes = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/threads`, {
+        method: 'POST',
+        headers: admin,
+        body: JSON.stringify({
+          anchor: { block_id: rendered.blocks[0]!.id, quote: 'Hi' },
+          body: 'A note',
+        }),
+      }),
+    );
+    const threadId = ((await threadRes.json()) as { thread: { id: string } }).thread.id;
+    await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/threads/${threadId}/bookmark`, {
+        method: 'PUT',
+        headers: headersFor(PHONE),
+      }),
+    );
+
+    const ring = await createKeyring(LAPTOP);
+    const { code } = await mintPairing(ring.token);
+    const res = await app.hono.fetch(
+      new Request('http://test/api/pairings/redeem', {
+        method: 'POST',
+        headers: headersFor(PHONE),
+        body: JSON.stringify({ code, keep_client_id: true }),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const threads = await app.hono.fetch(
+      new Request(`http://test/api/documents/${doc.uid}/threads`, {
+        headers: headersFor(PHONE),
+      }),
+    );
+    expect(
+      ((await threads.json()) as { bookmarked_thread_ids: string[] }).bookmarked_thread_ids,
+    ).toEqual([threadId]);
   });
 
   test('an unknown keyring token is a 404, not an empty ring', async () => {

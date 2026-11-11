@@ -145,12 +145,47 @@ any case, with or without the separator, is accepted.
 already holds — that device usually has the full list, and an empty
 first keyring would look like the feature had eaten it.
 
+### Several rings: one per project
+
+Someone working for several clients can hold a ring per client, which
+the UI calls a **project**. Each has its own documents, devices and
+agent keys, so pairing a device or connecting an agent hands over one
+client's documents and never another's. A ring carries a `label`
+("Acme"), synced like the display name; the browser keeps its rings as
+a list in `marginalia.keyrings` (an older single `marginalia.keyring`
+token becomes the first entry).
+
+- **Which documents a ring holds** is recorded on each entry of the
+  local list (`rings`), from that ring's last pull and from changes made
+  here. The home page filters by it: every project, one, or the
+  documents in none. The list has no cap: an entry is the way back to a
+  document's access link, so only the card's ✕ removes one.
+- **Filing.** A visit pushes a document only to the rings that already
+  hold it. One in no ring goes into the project selected in that tab, or
+  the only ring there is — and nowhere while every project is shown,
+  since filing a client's document under another client is the mistake
+  worth not making on a guess. A copy goes where its original is.
+- **Moving** adds the document to the new ring before removing it from
+  the old one, so an interruption leaves it in both rather than neither.
+  Removal revokes the old ring's agent invites for it. A card moves its
+  folder companions with it.
+- **Identity.** Every ring authors under the same `clientId`: bookmarks
+  and the right to edit your own comments hang off it. Pairing a second
+  ring whose id differs keeps the browser's own (`keep_client_id` on the
+  redeem). The display name can differ per ring; requests for a
+  document carry the name of the ring it belongs to, set before the
+  viewer's first request.
+- **MCP.** An agent key belongs to one ring, and the setup snippet
+  registers it as `marginalia-<project>`, so a second client's agent is
+  added beside the first rather than replacing it.
+
 ### How a ring ends
 
 Three doors, and they are not the same door:
 
-- **Stop syncing here** clears `marginalia.keyring` and nothing else.
-  Local, on purpose — the other devices are still using the ring.
+- **Stop syncing here** drops the ring from `marginalia.keyrings` and
+  nothing else. Local, on purpose — the other devices are still using
+  the ring.
 - **Replace keyring** rotates the token: this device keeps the ring, the
   others fall off it, and its agent keys are revoked. For a code shared
   by mistake or a lost device.

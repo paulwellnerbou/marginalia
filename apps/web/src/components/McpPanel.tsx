@@ -12,7 +12,7 @@ import {
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
 import { getClientId, getDisplayName } from '../lib/identity.js';
-import { loadKeyringToken, onKeyringChange } from '../lib/keyring.js';
+import { keyringForDoc, onKeyringChange } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import {
   type ClaudeScope,
@@ -51,7 +51,8 @@ const KEYRING_AGENT_NOTE = 'AI agent via keyring';
  */
 export function McpPanel({ uid, canManageInvites }: Props) {
   const [invites, setInvites] = useState<Invite[] | null>(null);
-  const [ringToken, setRingToken] = useState(() => loadKeyringToken());
+  // The ring this document belongs to: its agent keys are the ones that reach it.
+  const [ringToken, setRingToken] = useState(() => keyringForDoc(uid)?.token ?? null);
   const [keys, setKeys] = useState<AgentKeyWire[] | null>(null);
   const [savingKeys, setSavingKeys] = useState<ReadonlySet<string>>(new Set());
   const [keyError, setKeyError] = useState<string | null>(null);
@@ -81,7 +82,10 @@ export function McpPanel({ uid, canManageInvites }: Props) {
 
   // A key reaches this document the first time its agent opens it, so
   // its name is spoken for here before it has an invite.
-  useEffect(() => onKeyringChange(setRingToken), []);
+  useEffect(() => {
+    setRingToken(keyringForDoc(uid)?.token ?? null);
+    return onKeyringChange(() => setRingToken(keyringForDoc(uid)?.token ?? null));
+  }, [uid]);
 
   useEffect(() => {
     setKeys(null);

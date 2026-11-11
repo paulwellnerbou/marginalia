@@ -42,6 +42,7 @@ import {
 } from '../components/NewDocumentFields.js';
 import { OpenByLink } from '../components/OpenByLink.js';
 import { PasswordDisclosureCard } from '../components/PasswordDisclosureCard.js';
+import { ProjectMenu } from '../components/ProjectMenu.js';
 import {
   ApiError,
   coverProxyUrl,
@@ -54,9 +55,19 @@ import {
 import { formatTimestampLong } from '../lib/format-time.js';
 import { saveInviteToken } from '../lib/invite.js';
 import {
+  claimRingView,
+  getRingView,
+  type Keyring,
+  keyringLabel,
   pushDoc as keyringPushDoc,
   removeDoc as keyringRemoveDoc,
+  listKeyrings,
+  onKeyringChange,
+  onRingViewChange,
   pullKeyring,
+  type RingView,
+  scopeIdentityTo,
+  setRingView,
   takeKeyringDropped,
 } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
@@ -134,12 +145,35 @@ export function HomePage() {
   // Syncing switched itself off because the ring behind it is gone. Held
   // here rather than in the panel because only the pull knows it, and the
   // panel has already flipped to its disconnected face by then.
-  const [keyringDropped, setKeyringDropped] = useState(false);
+  const [keyringDropped, setKeyringDropped] = useState<string[]>([]);
   const [keyringIdleTtlMs, setKeyringIdleTtlMs] = useState<number | null>(null);
+  const [rings, setRings] = useState<Keyring[]>(() => listKeyrings());
+  const [view, setView] = useState<RingView>(() => getRingView());
+  const [projectError, setProjectError] = useState<string | null>(null);
 
   function refreshRecent() {
     setRecent(loadRecentDocs());
   }
+
+  useEffect(() => {
+    claimRingView();
+    const unsubscribeRings = onKeyringChange((next) => {
+      setRings(next);
+      setRecent(loadRecentDocs());
+    });
+    const unsubscribeView = onRingViewChange(setView);
+    return () => {
+      unsubscribeRings();
+      unsubscribeView();
+    };
+  }, []);
+
+  // A document created here goes into the project in front, so the name
+  // it is created under is that project's.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: rings and view are the triggers; the scope reads them from storage.
+  useEffect(() => {
+    scopeIdentityTo(null);
+  }, [rings, view]);
 
   useEffect(() => {
     const pendingDraft = consumePendingNewDocumentDraft();
@@ -157,8 +191,8 @@ export function HomePage() {
       if (cancelled) return;
       if (pull.docs) setRecent(pull.docs);
       // Taken every time: the flag is also set by this very pull.
-      const droppedElsewhere = takeKeyringDropped();
-      if (pull.dropped || droppedElsewhere) setKeyringDropped(true);
+      const dropped = [...new Set([...pull.dropped, ...takeKeyringDropped()])];
+      if (dropped.length) setKeyringDropped(dropped);
       if (pull.idleTtlMs !== null) setKeyringIdleTtlMs(pull.idleTtlMs);
     });
     return () => {
@@ -177,6 +211,17 @@ export function HomePage() {
   }
 
   const hasDocs = recent.length > 0;
+  const several = rings.length > 1;
+  const viewRing = rings.find((ring) => ring.id === view) ?? null;
+  const shownView: RingView = several && (viewRing || view === 'unfiled') ? view : 'all';
+  const shown = recent.filter((doc) =>
+    shownView === 'all'
+      ? true
+      : shownView === 'unfiled'
+        ? !doc.rings?.length
+        : !!doc.rings?.includes(shownView),
+  );
+  const hasUnfiled = recent.some((doc) => !doc.rings?.length);
 
   const hero = (
     <section className="landing-hero" key="hero">
@@ -250,10 +295,10 @@ export function HomePage() {
       <Box mb="4">
         <DeviceSyncPanel
           dropped={keyringDropped}
-          onDismissDropped={() => setKeyringDropped(false)}
+          onDismissDropped={() => setKeyringDropped([])}
           idleTtlMs={keyringIdleTtlMs}
           onSynced={() => {
-            setKeyringDropped(false);
+            setKeyringDropped([]);
             void pullKeyring().then((pull) => {
               if (pull.docs) setRecent(pull.docs);
               if (pull.idleTtlMs !== null) setKeyringIdleTtlMs(pull.idleTtlMs);
@@ -268,13 +313,64 @@ export function HomePage() {
     </Fragment>
   );
 
-  const docList = hasDocs ? (
+  const switcher = several && hasDocs && (
+    <Flex key="switcher" gap="2" wrap="wrap" mb="3" role="group" aria-label="Show documents of">
+      {[
+        { id: 'all', label: 'All projects' },
+        ...rings.map((ring) => ({ id: ring.id, label: keyringLabel(ring) })),
+        ...(hasUnfiled || shownView === 'unfiled'
+          ? [{ id: 'unfiled', label: 'Not in a project' }]
+          : []),
+      ].map((option) => (
+        <Button
+          key={option.id}
+          size="1"
+          variant={shownView === option.id ? 'solid' : 'soft'}
+          {...(shownView === option.id ? {} : { color: 'gray' as const })}
+          aria-pressed={shownView === option.id}
+          onClick={() => setRingView(option.id)}
+        >
+          {option.label}
+        </Button>
+      ))}
+    </Flex>
+  );
+
+  const projectErrorCallout = projectError && (
+    <Callout.Root key="project-error" color="red" size="1" mb="3">
+      <Callout.Text>{projectError}</Callout.Text>
+      <Flex justify="end" mt="1">
+        <Button size="1" variant="soft" color="gray" onClick={() => setProjectError(null)}>
+          Dismiss
+        </Button>
+      </Flex>
+    </Callout.Root>
+  );
+
+  const docList = !hasDocs ? (
+    <EmptyState key="list" onCreate={openFreshUploadDialog} />
+  ) : shown.length ? (
     <Grid key="list" columns={{ initial: '1', xs: '2', md: '3' }} gap="3" mb="5">
-      {groupRecentDocs(recent).map(({ doc: r, companions }) => (
+      {groupRecentDocs(shown).map(({ doc: r, companions }) => (
         <RecentCard
           key={r.uid}
           doc={r}
           companions={companions}
+          projects={
+            several && shownView === 'all' ? rings.filter((ring) => r.rings?.includes(ring.id)) : []
+          }
+          removeLabel={
+            several && r.rings?.length ? 'Remove here and from its projects' : 'Remove from recent'
+          }
+          projectMenu={
+            <ProjectMenu
+              docs={[r, ...companions]}
+              rings={rings}
+              view={shownView}
+              onChanged={refreshRecent}
+              onError={setProjectError}
+            />
+          }
           onRemove={() => {
             removeFromRecent(r.uid);
             // A document dropped from the list can't stay in the tab
@@ -287,7 +383,13 @@ export function HomePage() {
       ))}
     </Grid>
   ) : (
-    <EmptyState key="list" onCreate={openFreshUploadDialog} />
+    <Card key="list" size="2" mb="5">
+      <Text size="2" color="gray" as="p">
+        {viewRing
+          ? `No documents in “${keyringLabel(viewRing)}” yet. Create one while it is selected, or move documents here from their cards under All projects.`
+          : 'Every document here is in a project.'}
+      </Text>
+    </Card>
   );
 
   const documents = (
@@ -295,9 +397,13 @@ export function HomePage() {
       <Container size="4" px="4" py="7">
         <Flex justify="between" align="end" mb="4" wrap="wrap" gap="3">
           <Box>
-            <Heading size="6">Your documents</Heading>
+            <Heading size="6">
+              {viewRing && several ? keyringLabel(viewRing) : 'Your documents'}
+            </Heading>
             <Text size="2" color="gray" as="p" mt="1">
-              Everything you've opened on this browser. Click to re-open with the same role.
+              {viewRing && several
+                ? 'The documents in this project, on every device that syncs it. New documents go here too.'
+                : "Everything you've opened on this browser. Click to re-open with the same role."}
             </Text>
           </Box>
           {hasDocs && (
@@ -307,7 +413,7 @@ export function HomePage() {
           )}
         </Flex>
 
-        {hasDocs ? [docList, docTools] : [docTools, docList]}
+        {hasDocs ? [switcher, projectErrorCallout, docList, docTools] : [docTools, docList]}
       </Container>
     </section>
   );
@@ -529,11 +635,19 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
 function RecentCard({
   doc,
   companions,
+  projects,
+  projectMenu,
+  removeLabel,
   onRemove,
 }: {
   doc: RecentDoc;
   /** Documents that belong with this one, listed here instead of as cards. */
   companions: RecentDoc[];
+  /** The projects it is in, when the list mixes several. */
+  projects: Keyring[];
+  projectMenu: React.ReactNode;
+  /** Says what the ✕ also removes: the document leaves every ring holding it. */
+  removeLabel: string;
   onRemove: () => void;
 }) {
   const updatedSinceVisit = doc.updated_at > doc.visited_at;
@@ -563,12 +677,13 @@ function RecentCard({
                   className="recent-card-action"
                 />
               )}
-              <Tooltip content="Remove from recent">
+              {projectMenu}
+              <Tooltip content={removeLabel}>
                 <IconButton
                   variant="ghost"
                   size="1"
                   color="gray"
-                  aria-label="Remove from recent"
+                  aria-label={removeLabel}
                   className="recent-card-action"
                   onClick={(e) => {
                     e.preventDefault();
@@ -596,6 +711,11 @@ function RecentCard({
                 New since last visit
               </Badge>
             )}
+            {projects.map((ring) => (
+              <Badge key={ring.id} color="gray" variant="outline" size="1">
+                {keyringLabel(ring)}
+              </Badge>
+            ))}
           </Flex>
           {companions.length > 0 && (
             <ul

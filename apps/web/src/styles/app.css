@@ -3485,6 +3485,14 @@ button.primary:disabled {
   border-color: var(--green-a6);
 }
 
+/* One per project once there are several: a box within the panel, so
+   each project's devices and agents read as belonging to it. */
+.device-sync-project {
+  border: 1px solid var(--gray-a5);
+  border-radius: var(--radius-3);
+  padding: var(--space-3);
+}
+
 .landing-footer {
   border-top: 1px solid var(--gray-a5);
   background: var(--ui-footer-bg);

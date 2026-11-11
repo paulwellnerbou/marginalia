@@ -42,9 +42,10 @@ import { useDocColorStyle } from '../lib/doc-colors.js';
 import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { readDocViewPref, usePersistDocViewPref } from '../lib/doc-view-prefs.js';
-import { adoptServerName, getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
+import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
 import { loadInviteToken } from '../lib/invite.js';
 import { openInviteLink } from '../lib/invite-link.js';
+import { adoptDocumentName, scopeIdentityTo } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { openTab } from '../lib/open-tabs.js';
 import { revealOnOpen } from '../lib/pending-reveal.js';
@@ -144,6 +145,11 @@ export function EditPage() {
    */
   const metaParam = searchParams.get('meta');
   const openMeta = !chapterBlockId && !appending && isDocMetaKind(metaParam) ? metaParam : null;
+
+  // Before any request: each carries the name used in the document's keyring.
+  useEffect(() => {
+    if (uid) scopeIdentityTo(uid);
+  }, [uid]);
 
   useEffect(() => {
     if (!uid || !token) return;
@@ -391,7 +397,9 @@ export function EditPage() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: displayName is the trigger to re-sync after a local rename; the adoption reads storage itself.
   useEffect(() => {
     if (!serverName) return;
-    adoptServerName(serverName, { provisional: serverNameProvisional, setAt: serverNameSetAt });
+    if (uid) scopeIdentityTo(uid);
+    // Not in a synced browser, where the keyring's name is the one to keep.
+    adoptDocumentName(serverName, { provisional: serverNameProvisional, setAt: serverNameSetAt });
   }, [displayName, serverName, serverNameProvisional, serverNameSetAt]);
 
   useEffect(() => {

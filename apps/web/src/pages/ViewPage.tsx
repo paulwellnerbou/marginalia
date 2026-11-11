@@ -11,7 +11,7 @@ import { documentTitle } from '../lib/doc-title.js';
 import { showIdentityNotice } from '../lib/identity-notice.js';
 import { loadInviteToken } from '../lib/invite.js';
 import { type InviteLinkOutcome, linkRefusal, openInviteLink } from '../lib/invite-link.js';
-import { adoptDocumentName, pushDoc as keyringPushDoc } from '../lib/keyring.js';
+import { adoptDocumentName, pushDoc as keyringPushDoc, scopeIdentityTo } from '../lib/keyring.js';
 import { reportError } from '../lib/log.js';
 import { openDocument } from '../lib/open-document.js';
 import { openTab } from '../lib/open-tabs.js';
@@ -35,6 +35,12 @@ export function ViewPage() {
   // What opening the link in the address bar came to, for the load's error
   // message and the identity notice. Null when no link was opened.
   const linkOutcome = useRef<{ uid: string; outcome: Promise<InviteLinkOutcome> } | null>(null);
+
+  // Ahead of every request below: each one carries the display name, and
+  // the name is the one this person uses in the document's keyring.
+  useEffect(() => {
+    if (uid) scopeIdentityTo(uid);
+  }, [uid]);
 
   // Claim the URL-supplied invite token (a session cookie, or for a group
   // link the personal link to keep), store the token the claim says to,
@@ -113,7 +119,6 @@ export function ViewPage() {
     // Opening a document from a link is also how it joins the keyring, so
     // a link someone sends you reaches your other devices by being used
     // once — no separate "add to my documents" step.
-    if (stored) keyringPushDoc(doc.uid, stored, documentTitle(doc));
     recordVisit({
       uid: doc.uid,
       title: documentTitle(doc),
@@ -126,6 +131,8 @@ export function ViewPage() {
       ...(doc.cover ? { cover: doc.cover } : {}),
       ...(doc.folder && doc.folder.main_uid !== doc.uid ? { folder_uid: doc.folder.main_uid } : {}),
     });
+    // After the visit is recorded, which is where ring membership lives.
+    if (stored) keyringPushDoc(doc.uid, stored, documentTitle(doc));
     openTab({
       uid: doc.uid,
       title: documentTitle(doc),
@@ -139,6 +146,8 @@ export function ViewPage() {
   // user edits via UserMenu. Trade-off: opening someone else's named
   // invite overwrites the global local name, except in a synced browser.
   useEffect(() => {
+    // Loading may have pulled the rings and learned which one holds it.
+    if (doc) scopeIdentityTo(doc.uid);
     adoptDocumentName(doc?.display_name ?? null, {
       provisional: doc?.name_provisional === true,
       setAt: doc?.name_set_at ?? null,

@@ -213,3 +213,32 @@ test('a rotated token replaces the one a card would re-open with', () => {
   updateRecentDocToken('never-opened', 'new');
   expect(loadRecentDocs().map((d) => [d.uid, d.invite_token])).toEqual([['doc-1', 'new']]);
 });
+
+test('no document falls off the list, however many there are', () => {
+  mergeKeyringDocs(
+    Array.from({ length: 60 }, (_, i) => entry({ doc_uid: `ring-${i}`, added_at: i })),
+    'ring-a',
+  );
+  for (let i = 0; i < 60; i++) {
+    recordVisit(local({ uid: `loose-${i}`, visited_at: 10_000 + i }));
+  }
+  expect(loadRecentDocs()).toHaveLength(120);
+});
+
+test('leaving a ring keeps its documents on the list', async () => {
+  const { dropRingMembership } = await import('./recent-docs.js');
+  mergeKeyringDocs(
+    Array.from({ length: 80 }, (_, i) => entry({ doc_uid: `ring-${i}`, added_at: i })),
+    'ring-a',
+  );
+  dropRingMembership('ring-a');
+  const docs = loadRecentDocs();
+  expect(docs).toHaveLength(80);
+  expect(docs.every((d) => !d.rings)).toBe(true);
+});
+
+test('a visit keeps the rings a document is in', () => {
+  mergeKeyringDocs([entry({ doc_uid: 'doc-1' })], 'ring-a');
+  recordVisit(local({ uid: 'doc-1' }));
+  expect(loadRecentDocs()[0]?.rings).toEqual(['ring-a']);
+});

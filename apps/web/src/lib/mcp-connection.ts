@@ -57,6 +57,7 @@ export function connectionSetups(
   client: McpClient,
   url: string,
   claudeScope: ClaudeScope = 'local',
+  name = 'marginalia',
 ): [ConnectionSnippet, ...ConnectionSnippet[]] {
   // Shell commands quote the URL: it carries `&token=`, and an unquoted
   // `&` backgrounds everything before it and runs the rest as a separate
@@ -67,7 +68,7 @@ export function connectionSetups(
         {
           setup: 'cli',
           instruction: claudeScope === 'user' ? 'Run:' : 'Run in your project:',
-          text: `claude mcp add --transport http --scope ${claudeScope} marginalia '${url}'`,
+          text: `claude mcp add --transport http --scope ${claudeScope} ${name} '${url}'`,
           ...(claudeScope === 'project' && { note: SHARED_FILE_NOTE }),
         },
         {
@@ -75,7 +76,7 @@ export function connectionSetups(
           instruction: 'Add to .mcp.json in your project:',
           text: `{
   "mcpServers": {
-    "marginalia": {
+    "${name}": {
       "type": "http",
       "url": "${url}"
     }
@@ -86,11 +87,11 @@ export function connectionSetups(
       ];
     case 'codex':
       return [
-        { setup: 'cli', instruction: 'Run:', text: `codex mcp add marginalia --url '${url}'` },
+        { setup: 'cli', instruction: 'Run:', text: `codex mcp add ${name} --url '${url}'` },
         {
           setup: 'config',
           instruction: 'Add to ~/.codex/config.toml:',
-          text: `[mcp_servers.marginalia]
+          text: `[mcp_servers.${name}]
 url = "${url}"`,
         },
       ];
@@ -99,7 +100,7 @@ url = "${url}"`,
         {
           setup: 'cli',
           instruction: 'Run:',
-          text: `gemini mcp add --transport http marginalia '${url}'`,
+          text: `gemini mcp add --transport http ${name} '${url}'`,
         },
         {
           setup: 'config',
@@ -107,7 +108,7 @@ url = "${url}"`,
           instruction: 'Add to ~/.gemini/settings.json:',
           text: `{
   "mcpServers": {
-    "marginalia": {
+    "${name}": {
       "httpUrl": "${url}"
     }
   }
@@ -121,7 +122,7 @@ url = "${url}"`,
           setup: 'config',
           instruction: 'Add to ~/.vibe/config.toml:',
           text: `[[mcp_servers]]
-name = "marginalia"
+name = "${name}"
 transport = "streamable-http"
 url = "${url}"`,
         },
@@ -130,8 +131,7 @@ url = "${url}"`,
       return [
         {
           setup: 'connector',
-          instruction:
-            'In Vibe, open Context → Connectors → Add Connector → Custom MCP Connector, name it “marginalia” and use this server URL:',
+          instruction: `In Vibe, open Context → Connectors → Add Connector → Custom MCP Connector, name it “${name}” and use this server URL:`,
           text: url,
         },
       ];
@@ -139,7 +139,7 @@ url = "${url}"`,
       return [
         {
           setup: 'connector',
-          instruction: 'Add a custom MCP connector named “marginalia” with this server URL:',
+          instruction: `Add a custom MCP connector named “${name}” with this server URL:`,
           text: url,
         },
       ];
@@ -157,4 +157,37 @@ export function guessClient(agentName: string): McpClient {
   if (/codex|gpt|openai/.test(name)) return 'codex';
   if (/gemini/.test(name)) return 'gemini';
   return 'claude';
+}
+
+interface McpProject {
+  id: string;
+  label: string | null;
+}
+
+/**
+ * The server name to register a keyring's agent under. One per project,
+ * so that connecting a second client's keyring adds a server instead of
+ * replacing the first. A label that leaves no slug, or the same slug as
+ * another project's, takes a piece of the project's id as well.
+ */
+export function mcpServerName(
+  project: McpProject | null,
+  others: readonly McpProject[] = [],
+): string {
+  if (!project) return 'marginalia';
+  const slug = projectSlug(project.label);
+  const clash = !slug || others.some((o) => o.id !== project.id && projectSlug(o.label) === slug);
+  return ['marginalia', slug, clash ? project.id.slice(-4) : '']
+    .filter((part) => part !== '')
+    .join('-');
+}
+
+function projectSlug(label: string | null): string {
+  return (label ?? '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
 }

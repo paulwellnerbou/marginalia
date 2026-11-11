@@ -1,5 +1,11 @@
 import type { AnchorSection } from './anchor-target.js';
-import { getClientId, getDisplayName, getDisplayNameSetAt, type Identity } from './identity.js';
+import {
+  getClientId,
+  getDisplayName,
+  getDisplayNameFor,
+  getDisplayNameSetAtFor,
+  type Identity,
+} from './identity.js';
 import { loadInviteToken, pendingInviteClaim } from './invite.js';
 import { markTransportFailure } from './retry.js';
 
@@ -585,7 +591,7 @@ async function request<T>(
   }
 
   const identity = init.identity ?? fallbackIdentity();
-  setIdentityHeaders(headers, identity);
+  setIdentityHeaders(headers, identity, init.docUid);
 
   if (init.docUid) {
     const token = loadInviteToken(init.docUid);
@@ -647,7 +653,7 @@ async function requestBinary(
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   const identity = init.identity ?? fallbackIdentity();
-  setIdentityHeaders(headers, identity);
+  setIdentityHeaders(headers, identity, init.docUid);
   if (init.docUid) {
     const token = loadInviteToken(init.docUid);
     if (token) headers.set('x-marginalia-invite', token);
@@ -678,13 +684,17 @@ async function requestBinary(
   return res;
 }
 
-function setIdentityHeaders(headers: Headers, identity: Identity | null): void {
+function setIdentityHeaders(headers: Headers, identity: Identity | null, docUid?: string): void {
   headers.set('x-marginalia-client', identity?.clientId ?? getClientId());
   if (!identity?.displayName) return;
-  headers.set('x-marginalia-client-name', encodeHeaderValue(identity.displayName));
+  // The stored name stands for whichever name the document's keyring uses,
+  // which can differ from the page's while one document replaces another.
+  const stored = identity.displayName === getDisplayName();
+  const name = stored ? getDisplayNameFor(docUid) : identity.displayName;
+  headers.set('x-marginalia-client-name', encodeHeaderValue(name));
   // Only the stored name has a known time; a name a caller passes in that
   // differs from it is not dated and so never renames a personal link.
-  const setAt = identity.displayName === getDisplayName() ? getDisplayNameSetAt() : null;
+  const setAt = stored ? getDisplayNameSetAtFor(docUid) : null;
   if (setAt !== null) headers.set('x-marginalia-name-set-at', String(setAt));
 }
 
@@ -1399,6 +1409,8 @@ export interface KeyringWire {
   display_name: string;
   /** When the ring's name was chosen; null or absent when unknown. */
   display_name_set_at?: number | null;
+  /** What the person calls this ring. Absent from older servers. */
+  label?: string | null;
   updated_at?: number;
   /** How long an unused ring lasts before the server sweeps it. */
   idle_ttl_ms?: number;
@@ -1431,10 +1443,11 @@ export interface KeyringSeed {
 export function createKeyring(
   seeds: KeyringSeed[],
   identity: Identity,
+  label: string | null = null,
 ): Promise<KeyringWire & { token: string }> {
   return request('/api/keyrings', {
     method: 'POST',
-    body: JSON.stringify({ docs: seeds }),
+    body: JSON.stringify({ docs: seeds, ...(label ? { label } : {}) }),
     identity,
   });
 }
@@ -1448,15 +1461,15 @@ export function fetchKeyring(token: string): Promise<KeyringWire> {
 
 export function renameKeyring(
   token: string,
-  displayName: string,
-  setAt: number | null = null,
-): Promise<{ display_name: string; display_name_set_at?: number }> {
+  changes: { display_name?: string; display_name_set_at?: number | null; label?: string | null },
+): Promise<{ display_name: string; display_name_set_at?: number | null; label?: string | null }> {
+  const { display_name_set_at: setAt, ...rest } = changes;
   return request('/api/keyrings/self', {
     method: 'PATCH',
     headers: { [KEYRING_HEADER]: token },
     body: JSON.stringify({
-      display_name: displayName,
-      ...(setAt !== null ? { display_name_set_at: setAt } : {}),
+      ...rest,
+      ...(setAt !== null && setAt !== undefined ? { display_name_set_at: setAt } : {}),
     }),
   });
 }
@@ -1471,7 +1484,7 @@ export function deleteKeyring(token: string): Promise<void> {
 
 export function rotateKeyring(
   token: string,
-): Promise<{ token: string; client_id: string; display_name: string }> {
+): Promise<{ token: string; client_id: string; display_name: string; label?: string | null }> {
   return request('/api/keyrings/self/rotate', {
     method: 'POST',
     headers: { [KEYRING_HEADER]: token },
@@ -1589,10 +1602,14 @@ export function deleteAgentKey(token: string, id: string): Promise<void> {
 }
 
 /** Exchange a pairing code for the keyring it names. No credential needed. */
-export function redeemKeyringPairing(code: string): Promise<KeyringWire & { token: string }> {
+/** `keepClientId`: this browser already authors under another ring's id and stays with it. */
+export function redeemKeyringPairing(
+  code: string,
+  opts: { keepClientId?: boolean } = {},
+): Promise<KeyringWire & { token: string }> {
   return request('/api/pairings/redeem', {
     method: 'POST',
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, ...(opts.keepClientId ? { keep_client_id: true } : {}) }),
   });
 }
 
