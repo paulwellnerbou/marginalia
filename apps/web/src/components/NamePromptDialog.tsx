@@ -1,4 +1,4 @@
-import { Button, Dialog, Flex, Text, TextField } from '@radix-ui/themes';
+import { Button, Dialog, Flex, TextField } from '@radix-ui/themes';
 import { useEffect, useState } from 'react';
 import {
   isNamePending,
@@ -22,11 +22,17 @@ export function NamePromptDialog({ docUid }: { docUid: string }) {
   const [open, setOpen] = useState(false);
   const [required, setRequired] = useState(false);
   const [draft, setDraft] = useState('');
+  // The made-up name this browser is showing, offered to keep as is.
+  const [placeholder, setPlaceholder] = useState<string | null>(null);
 
   useEffect(() => {
     function show(isRequired: boolean) {
-      // A placeholder is offered as nothing: the point is to replace it.
-      setDraft(getDisplayNameSetAt() === null ? '' : getDisplayName());
+      // The field starts empty over a placeholder, which is offered as a
+      // button instead: a real name is what is asked for, keeping the
+      // made-up one a deliberate second choice.
+      const undated = getDisplayNameSetAt() === null;
+      setPlaceholder(undated ? getDisplayName() : null);
+      setDraft(undated ? '' : getDisplayName());
       setRequired(isRequired);
       setOpen(true);
     }
@@ -49,18 +55,21 @@ export function NamePromptDialog({ docUid }: { docUid: string }) {
   }, [docUid]);
 
   const name = draft.trim().slice(0, 80);
-  const isPlaceholder = getDisplayNameSetAt() === null && name === getDisplayName();
-  const canSave = name.length > 0 && !isPlaceholder;
+
+  function choose(chosen: string) {
+    // Dated even when unchanged: keeping the placeholder is a choice too,
+    // and only a dated name lifts it on the server.
+    setDisplayName(chosen, { setAt: Date.now() });
+    // Chosen by the person, like a rename in the user menu, so it is theirs
+    // on every device.
+    pushKeyringDisplayName(chosen);
+    setOpen(false);
+    notifyNameResolved(docUid);
+  }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSave) return;
-    setDisplayName(name);
-    // Typed by the person, like a rename in the user menu, so it is theirs
-    // on every device.
-    pushKeyringDisplayName(name);
-    setOpen(false);
-    notifyNameResolved(docUid);
+    if (name) choose(name);
   }
 
   function handleOpenChange(next: boolean) {
@@ -88,21 +97,25 @@ export function NamePromptDialog({ docUid }: { docUid: string }) {
               autoComplete="name"
               maxLength={80}
             />
-            {isPlaceholder && (
-              <Text size="1" color="gray">
-                That is the name made up for you. Enter your own.
-              </Text>
-            )}
           </Flex>
-          <Flex gap="2" justify="end" mt="4">
-            <Dialog.Close>
-              <Button type="button" variant="soft" color="gray">
-                {required ? 'Cancel' : 'Not now'}
+          <Flex gap="2" justify="between" align="center" wrap="wrap" mt="4">
+            {placeholder ? (
+              <Button type="button" variant="ghost" onClick={() => choose(placeholder)}>
+                Keep “{placeholder}”
               </Button>
-            </Dialog.Close>
-            <Button type="submit" disabled={!canSave}>
-              {required ? 'Continue' : 'Save'}
-            </Button>
+            ) : (
+              <span />
+            )}
+            <Flex gap="2">
+              <Dialog.Close>
+                <Button type="button" variant="soft" color="gray">
+                  {required ? 'Cancel' : 'Not now'}
+                </Button>
+              </Dialog.Close>
+              <Button type="submit" disabled={!name}>
+                {required ? 'Continue' : 'Save'}
+              </Button>
+            </Flex>
           </Flex>
         </form>
       </Dialog.Content>
