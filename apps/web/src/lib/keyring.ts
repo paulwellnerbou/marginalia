@@ -27,7 +27,13 @@ import {
   renameKeyring,
   rotateKeyring as rotateKeyringRequest,
 } from './api.js';
-import { getClientId, getDisplayName, setClientId, setDisplayName } from './identity.js';
+import {
+  getClientId,
+  getDisplayName,
+  isGeneratedDisplayName,
+  setClientId,
+  setDisplayName,
+} from './identity.js';
 import { saveInviteToken } from './invite.js';
 import { reportError } from './log.js';
 import { loadRecentDocs, mergeKeyringDocs, type RecentDoc } from './recent-docs.js';
@@ -324,15 +330,25 @@ export async function pairWithCode(code: string): Promise<RecentDoc[]> {
  * name is the ring's, and one document's (an invite seeded for someone
  * else, say) must not replace it.
  */
-export function adoptDocumentName(name: string | null): void {
+export function adoptDocumentName(
+  name: string | null,
+  opts: { provisional?: boolean; setAt?: number | null } = {},
+): void {
   if (!name || hasKeyring()) return;
-  if (getDisplayName() !== name) setDisplayName(name);
+  if (getDisplayName() === name && !opts.provisional) return;
+  // A placeholder stays undated so it never renames anyone; any other
+  // server name keeps the server's time, or 0 for an admin-given name.
+  setDisplayName(name, { setAt: opts.provisional ? null : (opts.setAt ?? 0) });
 }
 
 function adoptIdentity(ring: KeyringWire): void {
   if (ring.client_id && ring.client_id !== getClientId()) setClientId(ring.client_id);
   if (ring.display_name && ring.display_name !== getDisplayName()) {
-    setDisplayName(ring.display_name);
+    // The ring holds no time; a name some device typed counts as chosen,
+    // but older than any name dated since.
+    setDisplayName(ring.display_name, {
+      setAt: isGeneratedDisplayName(ring.display_name) ? null : 0,
+    });
   }
 }
 

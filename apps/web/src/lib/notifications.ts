@@ -54,11 +54,13 @@ export function showErrorToast(title: string, body: string): void {
   showToast({ title, body, variant: 'error' }, 12000);
 }
 
-export function showToast(partial: Omit<Toast, 'id'>, ttlMs = 6000): void {
+/** Returns the toast's id, for a caller that has to take it down early. */
+export function showToast(partial: Omit<Toast, 'id'>, ttlMs = 6000): number {
   const toast: Toast = { ...partial, id: nextId++ };
   toasts = [...toasts, toast];
   emit();
   window.setTimeout(() => dismissToast(toast.id), ttlMs);
+  return toast.id;
 }
 
 export function dismissToast(id: number): void {

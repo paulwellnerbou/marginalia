@@ -1,5 +1,11 @@
 import type { Database } from 'bun:sqlite';
 import type { DocumentRow, InviteRow, SessionRow } from './db.js';
+import {
+  isPersonalLink,
+  readNameSetAt,
+  resolvePersonalName,
+  touchLastUsed,
+} from './group-links.js';
 import { newSessionToken } from './ids.js';
 import { propagateRename, upsertDocUser } from './users.js';
 
@@ -278,7 +284,10 @@ export function authorize(
     }
   }
 
-  const invite = readInvite(db, headers, gate.uid);
+  // A group link only mints personal links (claim route); presented as a
+  // credential it is no invite at all, so turning it off really ends it.
+  const presented = readInvite(db, headers, gate.uid);
+  const invite = presented?.kind === 'group' ? null : presented;
   const clientId = readClientId(headers);
   const base = readIdentity(headers);
 
@@ -308,6 +317,18 @@ export function authorize(
   // rejects requests without a password session for password-protected docs).
   if (isInviteSession) {
     const role = validInviteSession!.invite_role as Role;
+    // A personal link's name lives on the invite row, which the session's
+    // claim-time snapshot does not follow.
+    const sessionInvite = validInviteSession!.invite_token
+      ? loadInvite(db, validInviteSession!.invite_token)
+      : null;
+    if (isPersonalLink(sessionInvite)) {
+      return recordAndReturn(db, doc.uid, {
+        ...personalDecision(db, sessionInvite, headers, clientId, base, role),
+        invite: null,
+        isInviteSession: true,
+      });
+    }
     // Same name-resolution logic as named/admin invites: seeded name on
     // first visit, header (user rename) wins on subsequent requests.
     let resolvedName = validInviteSession!.invite_display_name ?? base?.displayName ?? '';
@@ -335,6 +356,13 @@ export function authorize(
       // write endpoints reject; reads don't need a name.
       const identity = clientId && base ? { clientId, displayName: base.displayName } : null;
       return recordAndReturn(db, doc.uid, { ok: true, role: invite.role, identity, invite });
+    }
+
+    if (isPersonalLink(invite)) {
+      return recordAndReturn(db, doc.uid, {
+        ...personalDecision(db, invite, headers, clientId, base, invite.role),
+        invite,
+      });
     }
 
     // named: invite name seeds on first visit (no doc_users row),
@@ -369,6 +397,47 @@ export function authorize(
   // No invite → read-only. To get comment / propose / edit rights, an
   // admin must mint an invite for this visitor.
   return recordAndReturn(db, doc.uid, { ok: true, role: 'reader', identity: base, invite: null });
+}
+
+function loadInvite(db: Database, token: string): InviteRow | null {
+  return (
+    (db.prepare('SELECT * FROM invites WHERE token = ?').get(token) as InviteRow | null) ?? null
+  );
+}
+
+/** See `resolvePersonalName`: the link's own name, unless the request brings a newer one. */
+function personalDecision(
+  db: Database,
+  invite: InviteRow,
+  headers: Headers,
+  clientId: string | null,
+  base: Identity | null,
+  role: Role,
+): {
+  ok: true;
+  role: Role;
+  identity: Identity | null;
+  nameProvisional: boolean;
+  nameSetAt: number | null;
+} {
+  touchLastUsed(db, invite);
+  const { displayName, provisional, setAt } = resolvePersonalName(
+    db,
+    invite,
+    base?.displayName ?? null,
+    readNameSetAt(headers),
+  );
+  const identity = clientId && displayName ? { clientId, displayName } : null;
+  return { ok: true, role, identity, nameProvisional: provisional, nameSetAt: setAt };
+}
+
+/**
+ * A personal link still on its placeholder name may read, bookmark and
+ * keep private notes, but nothing others would see signed with a name
+ * that isn't one.
+ */
+export function needsName(decision: AuthDecision): boolean {
+  return decision.ok && decision.nameProvisional === true;
 }
 
 /**
@@ -415,5 +484,9 @@ export type AuthDecision =
        * all other auth paths (password session, invite header, anonymous).
        */
       isInviteSession?: boolean;
+      /** Personal link still on its generated placeholder name. */
+      nameProvisional?: boolean;
+      /** Personal link: when its current name was chosen. */
+      nameSetAt?: number | null;
     }
   | { ok: false; reason: 'password-required' | 'invite-required' | 'forbidden' };

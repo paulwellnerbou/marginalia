@@ -59,13 +59,28 @@ CREATE TABLE IF NOT EXISTS invites (
   -- CHECK (bun:sqlite doesn't surface CHECK errors cleanly).
   display_name     TEXT,
   role             TEXT NOT NULL,
-  kind             TEXT NOT NULL DEFAULT 'named',  -- 'admin' | 'generic' | 'named'
+  kind             TEXT NOT NULL DEFAULT 'named',  -- 'admin' | 'generic' | 'named' | 'group'
   note             TEXT,
   created_at       INTEGER NOT NULL,
   created_by_name  TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_invites_doc ON invites(doc_uid);
+
+-- Every name a personal link (a named invite minted from a group link)
+-- has carried, its generated placeholder included, so an admin can see a
+-- sudden rename to someone else's name. set_at is when the person chose
+-- it; NULL for the placeholder.
+CREATE TABLE IF NOT EXISTS invite_names (
+  invite_token  TEXT NOT NULL,
+  doc_uid       TEXT NOT NULL,
+  display_name  TEXT NOT NULL,
+  set_at        INTEGER,
+  recorded_at   INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_invite_names_token ON invite_names(invite_token);
+CREATE INDEX IF NOT EXISTS idx_invite_names_doc ON invite_names(doc_uid);
 
 CREATE TABLE IF NOT EXISTS sessions (
   token      TEXT PRIMARY KEY,
@@ -460,10 +475,12 @@ export function isInviteRole(v: unknown): v is InviteRole {
  *   admin   — always-valid, rotatable, never shared. One per document.
  *   named   — seeds display_name + role on first visit.
  *   generic — role only; visitor keeps (or picks) their own name.
+ *   group   — grants nothing itself; opening it mints a personal named
+ *             invite per visitor (see group-links.ts).
  */
-export type InviteKind = 'admin' | 'named' | 'generic';
+export type InviteKind = 'admin' | 'named' | 'generic' | 'group';
 
-export const INVITE_KINDS: readonly InviteKind[] = ['admin', 'named', 'generic'] as const;
+export const INVITE_KINDS: readonly InviteKind[] = ['admin', 'named', 'generic', 'group'] as const;
 
 export function isInviteKind(v: unknown): v is InviteKind {
   return typeof v === 'string' && (INVITE_KINDS as readonly string[]).includes(v);
@@ -478,6 +495,13 @@ export interface InviteRow {
   note: string | null;
   created_at: number;
   created_by_name: string;
+  /** Personal link: the group link that minted it. */
+  source_token: string | null;
+  name_provisional: number;
+  name_set_at: number | null;
+  /** Group link only: turned off at this time. */
+  disabled_at: number | null;
+  last_used_at: number | null;
 }
 
 export interface SessionRow {
@@ -757,6 +781,20 @@ export function openDatabase(path: string): Database {
   // Legacy 'commentor' rows → 'collaborator' (same server-side behavior).
   db.exec(`UPDATE invites SET role = 'collaborator' WHERE role = 'commentor'`);
   migrateInvitesKind(db);
+  // After migrateInvitesKind, which rebuilds a pre-kind invites table and
+  // would drop any column added before it.
+  //
+  // Group links: a personal link is a named invite whose source_token is
+  // the group link that minted it.
+  ensureColumn(db, 'invites', 'source_token', 'TEXT');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_invites_source ON invites(source_token)');
+  // 1 while a personal link still carries its generated placeholder name.
+  ensureColumn(db, 'invites', 'name_provisional', 'INTEGER NOT NULL DEFAULT 0');
+  // When the person chose the personal link's current name; the newest wins.
+  ensureColumn(db, 'invites', 'name_set_at', 'INTEGER');
+  // A group link that was turned off: it mints nothing, its personal links live on.
+  ensureColumn(db, 'invites', 'disabled_at', 'INTEGER');
+  ensureColumn(db, 'invites', 'last_used_at', 'INTEGER');
   migrateEditProposalsToCommentExtensions(db);
   migrateProposalDecisionColumnsToComments(db);
   migrateCommentReactionsPrimaryKey(db);

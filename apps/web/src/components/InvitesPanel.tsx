@@ -8,6 +8,7 @@ import {
   Flex,
   IconButton,
   SegmentedControl,
+  Switch,
   Text,
   TextField,
   Tooltip,
@@ -20,6 +21,7 @@ import {
   listInvites,
   type Role,
   rotateAdminInvite,
+  setGroupLinkEnabled,
   updateInvite,
 } from '../lib/api.js';
 import { apiErrorMessage } from '../lib/apiErrorMessage.js';
@@ -149,7 +151,9 @@ export function InvitesPanel({
   const displayName = useDisplayName();
   const [invites, setInvites] = useState<Invite[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [kind, setKind] = useState<'named' | 'generic'>('named');
+  // Generic links are no longer created: a group link does what they did
+  // and keeps each visitor apart. Existing generic links still list below.
+  const [kind, setKind] = useState<'named' | 'group'>('named');
   const [name, setName] = useState('');
   const [role, setRole] = useState<GrantableRole>('reader');
   const [submitting, setSubmitting] = useState(false);
@@ -211,7 +215,7 @@ export function InvitesPanel({
     const payload: Parameters<typeof createInvite>[1] =
       kind === 'named'
         ? { kind: 'named', display_name: name.trim(), role }
-        : { kind: 'generic', role };
+        : { kind: 'group', role };
 
     setSubmitting(true);
     try {
@@ -278,6 +282,32 @@ export function InvitesPanel({
     }
   }
 
+  async function toggleGroupLink(token: string, enabled: boolean) {
+    setError(null);
+    const identityName = getDisplayName();
+    if (!identityName) {
+      setError('Please set your display name first.');
+      return;
+    }
+    const identity = { clientId: getClientId(), displayName: identityName };
+    setInvites(
+      (current) => current?.map((i) => (i.token === token ? { ...i, enabled } : i)) ?? current,
+    );
+    try {
+      const { invite } = await setGroupLinkEnabled(uid, token, enabled, identity);
+      refreshRequestRef.current += 1;
+      setInvites((current) => current?.map((i) => (i.token === token ? invite : i)) ?? current);
+      await refresh();
+    } catch (err) {
+      reportError('InvitesPanel.toggleGroupLink', err);
+      setInvites(
+        (current) =>
+          current?.map((i) => (i.token === token ? { ...i, enabled: !enabled } : i)) ?? current,
+      );
+      setError(apiErrorMessage(err, 'Could not change the group link'));
+    }
+  }
+
   async function remove(token: string) {
     setError(null);
     const identityName = getDisplayName();
@@ -289,7 +319,12 @@ export function InvitesPanel({
     try {
       await deleteInvite(uid, token, identity);
       refreshRequestRef.current += 1;
-      setInvites((current) => current?.filter((invite) => invite.token !== token) ?? current);
+      // A group link takes the personal links it handed out with it.
+      setInvites(
+        (current) =>
+          current?.filter((invite) => invite.token !== token && invite.source_token !== token) ??
+          current,
+      );
       await refresh();
     } catch (err) {
       reportError('InvitesPanel.delete', err);
@@ -360,9 +395,10 @@ export function InvitesPanel({
         >
           <Box className="access-link-anatomy">
             <Text as="p" size="1" color="gray" mb="2">
-              A <b>named</b> link sets the recipient's display name and is meant for one person; a{' '}
-              <b>generic</b> link lets each visitor bring their own name, for “anyone with this URL
-              can comment”.
+              A <b>named</b> link sets the recipient's display name and is meant for one person. A{' '}
+              <b>group</b> link is one link for several people: whoever opens it gets a personal
+              link of their own, listed under it, which you can re-role or revoke on its own.
+              Visitors are asked for their name before they write anything others see.
             </Text>
             <Flex align="center" wrap="wrap" className="access-link-anatomy__url">
               <Code size="1">https://…/d/</Code>
@@ -392,19 +428,24 @@ export function InvitesPanel({
           <SegmentedControl.Root
             size="2"
             value={kind}
-            onValueChange={(v) => setKind(v as 'named' | 'generic')}
+            onValueChange={(v) => setKind(v as 'named' | 'group')}
             aria-label="Invite kind"
           >
             <SegmentedControl.Item value="named" title="Forces a display name on the recipient">
               Named
             </SegmentedControl.Item>
-            <SegmentedControl.Item value="generic" title="Visitor keeps their own name">
-              Generic
+            <SegmentedControl.Item
+              value="group"
+              title="One link for several people; each gets a personal link"
+            >
+              Group
             </SegmentedControl.Item>
           </SegmentedControl.Root>
         </AccessField>
         <AccessField
-          label={kind === 'named' ? 'Recipient name' : 'Recipient name (visitors bring their own)'}
+          label={
+            kind === 'named' ? 'Recipient name' : 'Recipient name (each person gives their own)'
+          }
           htmlFor="invite-name"
           grow
         >
@@ -415,7 +456,7 @@ export function InvitesPanel({
             value={kind === 'named' ? name : ''}
             onChange={(e) => setName(e.target.value)}
             maxLength={80}
-            disabled={kind === 'generic'}
+            disabled={kind !== 'named'}
           />
         </AccessField>
         <AccessField label="Role" htmlFor="invite-role">
@@ -449,45 +490,58 @@ export function InvitesPanel({
           </Text>
         }
       >
-        {(invites ?? []).map((inv) => (
-          <AccessRow
-            key={inv.token}
-            name={inv.display_name ?? <i>Any visitor</i>}
-            role={
-              inv.kind === 'admin' || inv.role === 'admin' ? (
-                // Fixed: the document's own admin link is rotated, never re-roled.
-                <RoleBadge role={inv.role} />
-              ) : (
-                <RoleSelect
-                  look="badge"
-                  value={inv.role}
-                  onChange={(next) => void changeRole(inv.token, next)}
-                  disabled={savingRoles.has(inv.token)}
-                  ariaLabel={`Role for ${inv.display_name ?? 'any visitor'}: ${roleLabel(inv.role)}`}
-                />
-              )
-            }
-            meta={inviteMeta(inv)}
-            action={
-              inv.kind === 'admin' ? (
-                // Rotation, not deletion, with a two-step confirm so a stray
-                // click doesn't orphan the admin's active URL.
-                <RotateAdminButton onConfirm={rotateAdmin} disabled={rotating} />
-              ) : (
-                <ConfirmButton label="Revoke link" onConfirm={() => remove(inv.token)} />
-              )
-            }
-          >
-            <Copyable
-              text={linkWithFullView(window.location.origin + inv.url, shareFullView)}
-              multiline
-              ariaLabel="Copy invite link"
-              size="1"
-              qrCode
-              className="copyable-access-link"
+        {topLevelInvites(invites ?? []).map((inv) =>
+          inv.kind === 'group' ? (
+            <GroupLinkRow
+              key={inv.token}
+              invite={inv}
+              people={(invites ?? []).filter((i) => i.source_token === inv.token)}
+              shareFullView={shareFullView}
+              savingRoles={savingRoles}
+              onToggle={(enabled) => void toggleGroupLink(inv.token, enabled)}
+              onChangeRole={(token, next) => void changeRole(token, next)}
+              onRemove={remove}
             />
-          </AccessRow>
-        ))}
+          ) : (
+            <AccessRow
+              key={inv.token}
+              name={inv.display_name ?? <i>Any visitor</i>}
+              role={
+                inv.kind === 'admin' || inv.role === 'admin' ? (
+                  // Fixed: the document's own admin link is rotated, never re-roled.
+                  <RoleBadge role={inv.role} />
+                ) : (
+                  <RoleSelect
+                    look="badge"
+                    value={inv.role}
+                    onChange={(next) => void changeRole(inv.token, next)}
+                    disabled={savingRoles.has(inv.token)}
+                    ariaLabel={`Role for ${inv.display_name ?? 'any visitor'}: ${roleLabel(inv.role)}`}
+                  />
+                )
+              }
+              meta={inviteMeta(inv)}
+              action={
+                inv.kind === 'admin' ? (
+                  // Rotation, not deletion, with a two-step confirm so a stray
+                  // click doesn't orphan the admin's active URL.
+                  <RotateAdminButton onConfirm={rotateAdmin} disabled={rotating} />
+                ) : (
+                  <ConfirmButton label="Revoke link" onConfirm={() => remove(inv.token)} />
+                )
+              }
+            >
+              <Copyable
+                text={linkWithFullView(window.location.origin + inv.url, shareFullView)}
+                multiline
+                ariaLabel="Copy invite link"
+                size="1"
+                qrCode
+                className="copyable-access-link"
+              />
+            </AccessRow>
+          ),
+        )}
       </AccessList>
     </Flex>
   );
@@ -510,5 +564,186 @@ function inviteMeta(inv: Invite): string {
       return `Personal link · opens as ${inv.display_name ?? 'its recipient'}`;
     case 'generic':
       return 'Open link · visitors use their own name';
+    case 'group':
+      return 'Group link · hands each visitor a personal link';
   }
+}
+
+/**
+ * Personal links sit under the group link that minted it. One whose group
+ * link is somehow gone still lists, on its own, so it can be revoked.
+ */
+function topLevelInvites(invites: readonly Invite[]): Invite[] {
+  const tokens = new Set(invites.map((i) => i.token));
+  return invites.filter((i) => !i.source_token || !tokens.has(i.source_token));
+}
+
+function GroupLinkRow({
+  invite,
+  people,
+  shareFullView,
+  savingRoles,
+  onToggle,
+  onChangeRole,
+  onRemove,
+}: {
+  invite: Invite;
+  people: Invite[];
+  shareFullView: boolean;
+  savingRoles: ReadonlySet<string>;
+  onToggle: (enabled: boolean) => void;
+  onChangeRole: (token: string, next: Role) => void;
+  onRemove: (token: string) => Promise<void>;
+}) {
+  const enabled = invite.enabled !== false;
+  const [unnamedOpen, setUnnamedOpen] = useState(false);
+  const named = people.filter((p) => !p.name_provisional);
+  const unnamed = people.filter((p) => p.name_provisional);
+  const count = people.length === 1 ? '1 person' : `${people.length} people`;
+  const meta = enabled
+    ? `Group link · ${count} · new people join as ${roleLabel(invite.role)}`
+    : `Group link, turned off · ${count} keep their access`;
+  return (
+    <AccessRow
+      name="Group link"
+      role={
+        <RoleSelect
+          look="badge"
+          value={invite.role as GrantableRole}
+          onChange={(next) => onChangeRole(invite.token, next)}
+          disabled={savingRoles.has(invite.token)}
+          ariaLabel={`Role for people who join from now on: ${roleLabel(invite.role)}`}
+        />
+      }
+      meta={meta}
+      action={
+        <ConfirmButton
+          label={
+            people.length > 0
+              ? `Revoke all: the group link and the ${count === '1 person' ? 'personal link' : `${people.length} personal links`} it handed out`
+              : 'Revoke group link'
+          }
+          confirmLabel={
+            people.length > 0
+              ? `Confirm: revoke ${people.length + 1} links at once`
+              : 'Confirm revoke'
+          }
+          onConfirm={() => onRemove(invite.token)}
+        />
+      }
+    >
+      <Text as="label" size="1">
+        <Flex align="center" gap="2">
+          <Switch size="1" checked={enabled} onCheckedChange={(next) => onToggle(next)} />
+          {enabled
+            ? 'Hands out personal links'
+            : 'Off: hands out no new links; the people below keep theirs'}
+        </Flex>
+      </Text>
+      {enabled && (
+        <Copyable
+          text={linkWithFullView(window.location.origin + invite.url, shareFullView)}
+          multiline
+          ariaLabel="Copy group link"
+          size="1"
+          qrCode
+          className="copyable-access-link"
+        />
+      )}
+      {people.length > 0 && (
+        <Box>
+          <div className="access-sublist">
+            {named.map((p) => (
+              <PersonalLinkRow
+                key={p.token}
+                invite={p}
+                saving={savingRoles.has(p.token)}
+                onChangeRole={onChangeRole}
+                onRemove={onRemove}
+              />
+            ))}
+            {unnamed.length > 0 && (
+              <Box className="access-list__row">
+                <Disclosure
+                  open={unnamedOpen}
+                  onOpenChange={setUnnamedOpen}
+                  summary={
+                    unnamed.length === 1
+                      ? '1 without a name yet'
+                      : `${unnamed.length} without a name yet`
+                  }
+                >
+                  {unnamed.map((p) => (
+                    <PersonalLinkRow
+                      key={p.token}
+                      invite={p}
+                      saving={savingRoles.has(p.token)}
+                      onChangeRole={onChangeRole}
+                      onRemove={onRemove}
+                    />
+                  ))}
+                </Disclosure>
+              </Box>
+            )}
+          </div>
+          <Text as="p" size="1" color="gray" mt="1">
+            {enabled
+              ? 'Revoking someone ends their link, but while the group link is on they can open it again for a new one. Turn it off first to keep someone out.'
+              : 'Revoking someone ends their access for good while the group link stays off.'}
+          </Text>
+        </Box>
+      )}
+    </AccessRow>
+  );
+}
+
+function PersonalLinkRow({
+  invite,
+  saving,
+  onChangeRole,
+  onRemove,
+}: {
+  invite: Invite;
+  saving: boolean;
+  onChangeRole: (token: string, next: Role) => void;
+  onRemove: (token: string) => Promise<void>;
+}) {
+  const name = invite.display_name ?? 'Unnamed';
+  return (
+    <AccessRow
+      name={invite.name_provisional ? <Text color="gray">{name}</Text> : name}
+      role={
+        <RoleSelect
+          look="badge"
+          value={invite.role as GrantableRole}
+          onChange={(next) => onChangeRole(invite.token, next)}
+          disabled={saving}
+          ariaLabel={`Role for ${name}: ${roleLabel(invite.role)}`}
+        />
+      }
+      meta={personalMeta(invite)}
+      action={
+        <ConfirmButton label={`Revoke ${name}'s link`} onConfirm={() => onRemove(invite.token)} />
+      }
+    />
+  );
+}
+
+function personalMeta(inv: Invite): string {
+  const parts: string[] = [];
+  if (inv.name_provisional) parts.push('No name given yet');
+  parts.push(`joined ${shortDate(inv.created_at)}`);
+  if (inv.last_used_at) parts.push(`last seen ${shortDate(inv.last_used_at)}`);
+  const previous = inv.previous_names ?? [];
+  if (previous.length > 0) parts.push(`previously ${previous.slice(0, 3).join(', ')}`);
+  const text = parts.join(' · ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function shortDate(ms: number): string {
+  const date = new Date(ms);
+  const sameDay = new Date().toDateString() === date.toDateString();
+  return sameDay
+    ? date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : date.toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
 }

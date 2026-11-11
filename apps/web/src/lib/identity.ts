@@ -9,6 +9,14 @@ import { useEffect, useState } from 'react';
 
 const CLIENT_ID_KEY = 'marginalia.clientId';
 const DISPLAY_NAME_KEY = 'marginalia.displayName';
+/**
+ * When the person chose the current name (ms), or `generated` for the
+ * name this browser made up. Absent on browsers from before it existed;
+ * see `getDisplayNameSetAt`. Sent with every request so a personal link
+ * takes the newest chosen name and never a generated one.
+ */
+const DISPLAY_NAME_SET_AT_KEY = 'marginalia.displayNameSetAt';
+const GENERATED = 'generated';
 const DISPLAY_NAME_EVENT = 'marginalia:display-name-change';
 
 const NAME_ADJECTIVES = [
@@ -145,13 +153,48 @@ export function getDisplayName(): string {
 
   const generated = generateDisplayName(getClientId());
   localStorage.setItem(DISPLAY_NAME_KEY, generated);
+  localStorage.setItem(DISPLAY_NAME_SET_AT_KEY, GENERATED);
   return generated;
 }
 
-export function setDisplayName(name: string): void {
+/**
+ * When the current name was chosen, or null for a generated one.
+ *
+ * A browser from before this was recorded counts a name as chosen when it
+ * is not the one its own client id generates — at time 0, so it can name
+ * a new personal link but never out-date a name chosen anywhere since.
+ */
+export function getDisplayNameSetAt(): number | null {
+  const name = getDisplayName();
+  const raw = localStorage.getItem(DISPLAY_NAME_SET_AT_KEY);
+  if (raw === GENERATED) return null;
+  if (raw !== null && raw !== '') {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return isGeneratedDisplayName(name) ? null : 0;
+}
+
+/** Is this the placeholder name this browser would make up for itself? */
+export function isGeneratedDisplayName(name: string): boolean {
+  return normalizeDisplayName(name) === generateDisplayName(getClientId());
+}
+
+/**
+ * `setAt` is when the name was chosen: now for a name the person typed
+ * (the default), the server's time when adopting a name from it, null for
+ * a placeholder. Re-saving the same name keeps its time unless one is
+ * given, so merely confirming a name never out-dates a newer one.
+ */
+export function setDisplayName(name: string, opts: { setAt?: number | null } = {}): void {
   const prev = localStorage.getItem(DISPLAY_NAME_KEY);
-  const next = normalizeDisplayName(name) || generateDisplayName(getClientId());
+  const typed = normalizeDisplayName(name);
+  const next = typed || generateDisplayName(getClientId());
   localStorage.setItem(DISPLAY_NAME_KEY, next);
+  if (opts.setAt !== undefined || next !== prev) {
+    const setAt = !typed ? null : opts.setAt === undefined ? Date.now() : opts.setAt;
+    localStorage.setItem(DISPLAY_NAME_SET_AT_KEY, setAt === null ? GENERATED : String(setAt));
+  }
   // Notify in-app subscribers even when the value didn't change — they
   // may be re-reading to sync React state.
   window.dispatchEvent(new CustomEvent(DISPLAY_NAME_EVENT, { detail: next }));

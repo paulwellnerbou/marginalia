@@ -319,6 +319,9 @@ async function putKeyringDoc(c: Context, { db }: KeyringDeps) {
   // with no way to tell why.
   const kind = inviteKind(db, docUid, inviteToken);
   if (!kind) return c.json({ error: 'invite-not-found' }, 404);
+  // A group link opens nothing on another device; the personal link it
+  // minted is what belongs in the ring.
+  if (kind === 'group') return c.json({ error: 'group-link-not-storable' }, 400);
 
   // Owners open their own documents through a lesser link to see what a
   // reviewer sees, and every view pushes the link it used. Taking that
@@ -640,7 +643,8 @@ function inviteKind(db: Database, docUid: string, inviteToken: string): string |
 }
 
 function inviteMatchesDoc(db: Database, docUid: string, inviteToken: string): boolean {
-  return inviteKind(db, docUid, inviteToken) !== null;
+  const kind = inviteKind(db, docUid, inviteToken);
+  return kind !== null && kind !== 'group';
 }
 
 function parseDocSeeds(

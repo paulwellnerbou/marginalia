@@ -27,6 +27,7 @@ import {
   accessDocument,
   authorize,
   canEdit,
+  checkSession,
   createSession,
   deleteSession,
   hashPassword,
@@ -34,6 +35,7 @@ import {
   INVITE_HEADER,
   INVITE_SESSION_COOKIE,
   inviteTokenCookie,
+  needsName,
   parseCookie,
   readIdentity,
   readInvite,
@@ -94,7 +96,18 @@ import type {
   GitStore,
   HistoryPackStream,
 } from '../git-store.js';
+import {
+  deleteDocNameHistory,
+  deleteNameHistory,
+  mintPersonalLink,
+  personalLinkCount,
+  previousNamesByInvite,
+  readNameSetAt,
+  revokeGroupLink,
+  roleAtLeast,
+} from '../group-links.js';
 import { newDocumentUid, newInviteToken } from '../ids.js';
+import { clientKey, FixedWindowRateLimiter } from '../rate-limit.js';
 import type { Realtime } from '../realtime.js';
 import { renderDocumentCached, renderDocumentCopy } from '../render-cache.js';
 import { listDocUserNameMap, upsertDocUser } from '../users.js';
@@ -183,6 +196,11 @@ interface BundleCommentRow extends CommentRow {
 
 export function documentsRouter(deps: AppDeps): Hono {
   const r = new Hono();
+  // Per-router, like the keyring limiters: tests get fresh counters per app.
+  const groupLinkLimiter = new FixedWindowRateLimiter({
+    limit: deps.config.groupLinkMintPerClient,
+    windowMs: deps.config.groupLinkMintWindowMs,
+  });
 
   r.post('/', async (c) => createDocument(c, deps));
   r.post('/import', async (c) => importDocument(c, deps));
@@ -219,7 +237,7 @@ export function documentsRouter(deps: AppDeps): Hono {
   r.get('/:uid/invites', async (c) => listInvites(c, deps));
   r.post('/:uid/invites', async (c) => createInvite(c, deps));
   r.post('/:uid/invites/admin/rotate', async (c) => rotateAdminInvite(c, deps));
-  r.post('/:uid/invites/:token/claim', async (c) => claimInvite(c, deps));
+  r.post('/:uid/invites/:token/claim', async (c) => claimInvite(c, deps, groupLinkLimiter));
   r.patch('/:uid/invites/:token', async (c) => updateInvite(c, deps));
   r.delete('/:uid/invites/:token', async (c) => deleteInvite(c, deps));
 
@@ -417,6 +435,7 @@ interface CopiedInviteRow {
   kind: InviteKind;
   note: string | null;
   created_by_name: string;
+  disabled_at: number | null;
 }
 
 interface CopiedDocUserRow {
@@ -557,14 +576,17 @@ async function copyDocument(c: Context, deps: AppDeps) {
       // skipped so the copy has exactly one — the caller's, minted below.
       const invites = db
         .prepare(
-          `SELECT display_name, role, kind, note, created_by_name
+          `SELECT display_name, role, kind, note, created_by_name, disabled_at
              FROM invites
             WHERE doc_uid = ? AND kind != 'admin' AND role != 'admin'
+              AND source_token IS NULL
             ORDER BY created_at`,
         )
         .all(gate.uid) as CopiedInviteRow[];
+      // Personal links are skipped: their copies would carry tokens nobody
+      // holds. The group link that minted them is copied and mints anew.
       for (const inv of invites) {
-        createInviteRow(db, {
+        const copied = createInviteRow(db, {
           docUid: uid,
           displayName: inv.display_name,
           role: inv.role,
@@ -572,6 +594,12 @@ async function copyDocument(c: Context, deps: AppDeps) {
           note: inv.note,
           createdByName: inv.created_by_name,
         });
+        if (inv.disabled_at !== null) {
+          db.prepare('UPDATE invites SET disabled_at = ? WHERE token = ?').run(
+            inv.disabled_at,
+            copied.token,
+          );
+        }
       }
 
       // The registry too, so author names and @mentions resolve in the
@@ -852,6 +880,11 @@ async function getDocument(c: Context, deps: AppDeps) {
     folder: folderListing(db, store, doc),
     role: decision.role,
     display_name: forcedDisplayName,
+    // Personal link (group links): whether the name is still the generated
+    // placeholder, and when the current one was chosen, so a device can
+    // adopt it without later out-dating a newer name of its own.
+    name_provisional: decision.nameProvisional === true,
+    name_set_at: decision.nameSetAt ?? null,
     created_at: doc.created_at,
     updated_at: doc.updated_at,
   });
@@ -913,6 +946,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (needsName(decision)) return c.json({ error: 'display-name-required' }, 409);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   const body = await safeJson(c);
@@ -1167,6 +1201,7 @@ async function purgeDocument(deps: AppDeps, doc: DocumentRow): Promise<void> {
   db.prepare('DELETE FROM thread_bookmarks WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM doc_users WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM invites WHERE doc_uid = ?').run(doc.uid);
+  deleteDocNameHistory(db, doc.uid);
   db.prepare('DELETE FROM sessions WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM document_assets WHERE doc_uid = ?').run(doc.uid);
   // Every ring's copy of an invite token for this doc, across all the
@@ -2790,6 +2825,7 @@ async function restoreHistoryVersion(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (needsName(decision)) return c.json({ error: 'display-name-required' }, 409);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   let previousSource: string;
@@ -2847,6 +2883,7 @@ async function revertHistoryEdit(c: Context, deps: AppDeps) {
   const decision = authorizeRequest(c, deps, doc);
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
   if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  if (needsName(decision)) return c.json({ error: 'display-name-required' }, 409);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
   const history = await store.history(doc);
@@ -3057,7 +3094,8 @@ async function listInvites(c: Context, deps: AppDeps) {
   const rows = db
     .prepare('SELECT * FROM invites WHERE doc_uid = ? ORDER BY created_at ASC')
     .all(doc.uid) as InviteRow[];
-  return c.json({ invites: rows.map(toInviteWire) });
+  const previous = previousNamesByInvite(db, doc.uid);
+  return c.json({ invites: rows.map((row) => toInviteWire(row, previous.get(row.token))) });
 }
 
 async function createInvite(c: Context, deps: AppDeps) {
@@ -3096,8 +3134,8 @@ async function createInvite(c: Context, deps: AppDeps) {
     displayName = asString(body.display_name);
     if (!displayName) return c.json({ error: 'display_name-required' }, 400);
   } else {
-    // generic: visitor brings their own name; the invite's display_name
-    // is irrelevant. Silently drop anything the caller sent.
+    // generic and group: visitors bring their own names; the invite's
+    // display_name is irrelevant. Silently drop anything the caller sent.
     displayName = null;
   }
 
@@ -3136,10 +3174,18 @@ async function deleteInvite(c: Context, deps: AppDeps) {
     return c.json({ error: 'admin-invite-not-deletable' }, 403);
   }
 
+  if (row.kind === 'group') {
+    // "Revoke all": the group link and every personal link it handed out.
+    // Turning it off (PATCH enabled=false) is the gentler action.
+    db.transaction(() => revokeGroupLink(db, token))();
+    return c.body(null, 204);
+  }
+
   db.prepare('DELETE FROM invites WHERE token = ?').run(token);
   // Dropping the row only kills the URL. Anyone who already opened it holds
   // a claimed session that authorizes on its own.
   revokeInviteSessions(db, token);
+  deleteNameHistory(db, token);
   return c.body(null, 204);
 }
 
@@ -3167,8 +3213,9 @@ async function updateInvite(c: Context, deps: AppDeps) {
   const body = await safeJson(c);
   if (!body) return c.json({ error: 'invalid-body' }, 400);
 
-  const role = asRole(body.role);
-  if (!role) return c.json({ error: 'role-required' }, 400);
+  const enabled = typeof body.enabled === 'boolean' ? body.enabled : null;
+  const role = body.role === undefined && enabled !== null ? null : asRole(body.role);
+  if (role === null && enabled === null) return c.json({ error: 'role-required' }, 400);
   // Same two admin guards as createInvite: admin is never grantable through
   // a third-party invite, and the document's own admin row is not editable
   // here — demoting it would strand the document with no admin at all.
@@ -3179,12 +3226,24 @@ async function updateInvite(c: Context, deps: AppDeps) {
     .get(token, doc.uid) as InviteRow | undefined;
   if (!row) return c.json({ error: 'not-found' }, 404);
   if (row.kind === 'admin') return c.json({ error: 'admin-invite-not-editable' }, 403);
+  if (enabled !== null && row.kind !== 'group') {
+    return c.json({ error: 'not-a-group-link' }, 400);
+  }
 
-  if (row.role === role) return c.json({ invite: toInviteWire(row) });
-
-  setInviteRole(db, token, role);
-
-  return c.json({ invite: toInviteWire({ ...row, role }) });
+  // Turning a group link off stops it minting; the personal links it
+  // already handed out keep working. A group link's role applies to the
+  // personal links it mints from now on, not to those it already did.
+  let next = row;
+  if (enabled !== null && enabled !== (row.disabled_at === null)) {
+    const disabledAt = enabled ? null : Date.now();
+    db.prepare('UPDATE invites SET disabled_at = ? WHERE token = ?').run(disabledAt, token);
+    next = { ...next, disabled_at: disabledAt };
+  }
+  if (role !== null && row.role !== role) {
+    setInviteRole(db, token, role);
+    next = { ...next, role };
+  }
+  return c.json({ invite: toInviteWire(next) });
 }
 
 /**
@@ -3211,16 +3270,10 @@ export function setInviteRole(db: Database, token: string, role: InviteRole): vo
  * the same user can claim again from a different browser. Admin invites and
  * password-protected docs are excluded — they use separate mechanisms.
  */
-async function claimInvite(c: Context, deps: AppDeps) {
+async function claimInvite(c: Context, deps: AppDeps, groupLinkLimiter: FixedWindowRateLimiter) {
   const { db, config } = deps;
   const doc = loadAccessDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
-
-  // Password-protected docs: the password gate would reject an invite session
-  // anyway, so claiming doesn't help. The invite-header flow still works.
-  if (doc.password_hash !== null) {
-    return c.json({ error: 'password-protected' }, 409);
-  }
 
   const token = c.req.param('token');
   if (!token) return c.json({ error: 'not-found' }, 404);
@@ -3228,6 +3281,17 @@ async function claimInvite(c: Context, deps: AppDeps) {
   const invite = db
     .prepare('SELECT * FROM invites WHERE token = ? AND doc_uid = ?')
     .get(token, doc.uid) as InviteRow | undefined;
+
+  // Before the password check below: a group link is how a visitor gets a
+  // token at all, so it has to answer on password documents too.
+  if (invite?.kind === 'group') return claimGroupLink(c, deps, doc, invite, groupLinkLimiter);
+
+  // Password-protected docs: the password gate would reject an invite session
+  // anyway, so claiming doesn't help. The invite-header flow still works.
+  if (doc.password_hash !== null) {
+    return c.json({ error: 'password-protected' }, 409);
+  }
+
   if (!invite) return c.json({ error: 'not-found' }, 404);
 
   // Admin invites stay permanent and use rotate-on-leak, not claiming.
@@ -3249,6 +3313,103 @@ async function claimInvite(c: Context, deps: AppDeps) {
     `${INVITE_SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
   );
   return c.json({ display_name: invite.display_name, role: invite.role }, 201);
+}
+
+/**
+ * Opening a group link: hand back the token this browser should keep. That
+ * is the one it already holds when that is at least as good — a personal
+ * link from this same group link (so reopening the mail does not mint a
+ * second one, and a demoted person stays demoted here), or any link of at
+ * least the group link's role (so an admin opening their own group link
+ * stays admin). Otherwise a fresh personal link.
+ *
+ * Reuse goes by the held token, never by client id: client ids are public
+ * on every comment, so looking a personal link up by one would hand it to
+ * anyone who sent that id.
+ */
+async function claimGroupLink(
+  c: Context,
+  deps: AppDeps,
+  doc: DocumentRow,
+  group: InviteRow,
+  limiter: FixedWindowRateLimiter,
+) {
+  const { db, config } = deps;
+  const headers = c.req.raw.headers;
+
+  // The group link is no way around the password: `authorize` would refuse
+  // the minted link without it, so minting one would only fill the list.
+  if (doc.password_hash !== null) {
+    const passwordSession = parseCookie(headers.get('cookie'), SESSION_COOKIE);
+    if (!passwordSession || !checkSession(db, passwordSession, doc.uid)) {
+      return c.json({ error: 'password-required' }, 401);
+    }
+  }
+
+  const identity = readIdentity(headers);
+  if (!identity) return c.json({ error: 'identity-required' }, 400);
+
+  const body = (await safeJson(c)) ?? {};
+  const heldToken = typeof body.held_token === 'string' ? body.held_token : null;
+  const held = heldToken
+    ? (db
+        .prepare('SELECT * FROM invites WHERE token = ? AND doc_uid = ?')
+        .get(heldToken, doc.uid) as InviteRow | null)
+    : null;
+  if (
+    held &&
+    held.kind !== 'group' &&
+    (held.source_token === group.token || roleAtLeast(held.role, group.role))
+  ) {
+    return c.json({ token: held.token, role: held.role, reused: true });
+  }
+
+  // After reuse: someone reopening the mail still gets back in once the
+  // link is off, as long as this browser kept their personal link.
+  if (group.disabled_at !== null) return c.json({ error: 'group-link-off' }, 410);
+
+  const who = clientKey(c, config.trustedProxyHops);
+  const verdict = limiter.check(who);
+  if (!verdict.allowed) {
+    c.header('Retry-After', String(verdict.retryAfterSec));
+    return c.json({ error: 'too-many-requests', retry_after: verdict.retryAfterSec }, 429);
+  }
+
+  const minted = db.transaction(() => {
+    if (personalLinkCount(db, group.token) >= config.groupLinkMaxPeople) return null;
+    return mintPersonalLink(db, group, {
+      displayName: identity.displayName,
+      setAt: readNameSetAt(headers),
+    });
+  })();
+  if (!minted) return c.json({ error: 'group-link-full' }, 409);
+  limiter.record(who);
+
+  // Same session cookie an ordinary claim sets; on a password document the
+  // password gate would refuse it anyway, so the header carries access.
+  if (doc.password_hash === null) {
+    const sessionToken = createSession(db, doc.uid, config.namedInviteSessionTtlMs, true, {
+      token: minted.token,
+      display_name: minted.display_name,
+      role: minted.role,
+      kind: minted.kind,
+    });
+    const maxAge = Math.floor(config.namedInviteSessionTtlMs / 1000);
+    c.header(
+      'Set-Cookie',
+      `${INVITE_SESSION_COOKIE}=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`,
+    );
+  }
+  return c.json(
+    {
+      token: minted.token,
+      role: minted.role,
+      display_name: minted.display_name,
+      name_provisional: minted.name_provisional === 1,
+      reused: false,
+    },
+    201,
+  );
 }
 
 /**
@@ -3345,7 +3506,7 @@ export function createInviteRow(
   return db.prepare('SELECT * FROM invites WHERE token = ?').get(token) as InviteRow;
 }
 
-function toInviteWire(row: InviteRow): Record<string, unknown> {
+function toInviteWire(row: InviteRow, previousNames?: string[]): Record<string, unknown> {
   return {
     token: row.token,
     display_name: row.display_name,
@@ -3355,6 +3516,12 @@ function toInviteWire(row: InviteRow): Record<string, unknown> {
     created_at: row.created_at,
     created_by_name: row.created_by_name,
     url: `/d/${row.doc_uid}/${row.token}`,
+    source_token: row.source_token ?? null,
+    name_provisional: row.name_provisional === 1,
+    name_set_at: row.name_set_at ?? null,
+    enabled: row.kind === 'group' ? row.disabled_at === null : null,
+    last_used_at: row.last_used_at ?? null,
+    previous_names: previousNames ?? [],
   };
 }
 

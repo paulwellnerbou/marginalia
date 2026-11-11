@@ -9,6 +9,7 @@ import { AppBar } from '../components/AppBar.js';
 import { AssetsPanel } from '../components/AssetsPanel.js';
 import { EditToolbar } from '../components/EditToolbar.js';
 import { MarkdownToolbar } from '../components/MarkdownToolbar.js';
+import { NamePromptDialog } from '../components/NamePromptDialog.js';
 import { PasswordPromptDialog } from '../components/PasswordPromptDialog.js';
 import { type FolderLinks, RenderedDoc } from '../components/RenderedDoc.js';
 import { ResizeHandle } from '../components/ResizeHandle.js';
@@ -16,7 +17,6 @@ import { ThemeSelect } from '../components/ThemeSelect.js';
 import {
   ApiError,
   type AttachedAsset,
-  claimInvite,
   createDocumentProposal,
   createEditProposal,
   type Document,
@@ -42,7 +42,8 @@ import { useDocColorStyle } from '../lib/doc-colors.js';
 import { showDocMetaInEditor } from '../lib/doc-meta-edit.js';
 import { documentTitle } from '../lib/doc-title.js';
 import { getClientId, setDisplayName, useDisplayName } from '../lib/identity.js';
-import { loadInviteToken, saveInviteToken } from '../lib/invite.js';
+import { loadInviteToken } from '../lib/invite.js';
+import { openInviteLink } from '../lib/invite-link.js';
 import { reportError } from '../lib/log.js';
 import { openTab } from '../lib/open-tabs.js';
 import { revealOnOpen } from '../lib/pending-reveal.js';
@@ -141,7 +142,8 @@ export function EditPage() {
 
   useEffect(() => {
     if (!uid || !token) return;
-    saveInviteToken(uid, token);
+    // The load waits for this claim (see `getDocument`).
+    void openInviteLink(uid, token);
     // Strip the token from the address bar synchronously so copy-pasting the
     // URL no longer leaks the bearer credential, even if the claim request is
     // still in flight or the component later re-renders for a different uid.
@@ -153,10 +155,6 @@ export function EditPage() {
           ? `?meta=${openMeta}`
           : '';
     window.history.replaceState({}, '', `/d/${uid}/edit${query}`);
-    claimInvite(uid, token).catch(() => {
-      // 400 (admin invite), 409 (password-protected), 404 (invite gone):
-      // fall back to invite-header auth via the token in localStorage.
-    });
   }, [uid, token, chapterBlockId, chapterCopy, appending, openMeta]);
 
   const navigate = useNavigate();
@@ -381,12 +379,12 @@ export function EditPage() {
   // Mirror ViewPage: sync localStorage to the server's authoritative
   // name so the shared UserMenu label and save identity match the
   // invite-seeded identity.
+  const serverName = doc?.display_name ?? null;
+  const serverNameSetAt = doc?.name_provisional ? null : (doc?.name_set_at ?? 0);
   useEffect(() => {
-    if (!doc?.display_name) return;
-    if (displayName !== doc.display_name) {
-      setDisplayName(doc.display_name);
-    }
-  }, [displayName, doc?.display_name]);
+    if (!serverName) return;
+    if (displayName !== serverName) setDisplayName(serverName, { setAt: serverNameSetAt });
+  }, [displayName, serverName, serverNameSetAt]);
 
   useEffect(() => {
     if (!editorEl.current || doc === null || viewRef.current) return;
@@ -922,6 +920,7 @@ export function EditPage() {
   return (
     <div className="edit-page">
       <PasswordPromptDialog docUid={doc.uid} docName={doc.name} />
+      <NamePromptDialog docUid={doc.uid} />
       <AppBar
         docTitle={`Editing: ${documentTitle(doc)}`}
         {...(chapterScope

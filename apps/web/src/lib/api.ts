@@ -1,6 +1,6 @@
 import type { AnchorSection } from './anchor-target.js';
-import { getClientId, getDisplayName, type Identity } from './identity.js';
-import { loadInviteToken } from './invite.js';
+import { getClientId, getDisplayName, getDisplayNameSetAt, type Identity } from './identity.js';
+import { loadInviteToken, pendingInviteClaim } from './invite.js';
 import { markTransportFailure } from './retry.js';
 
 export interface Anchor {
@@ -180,6 +180,14 @@ export interface Document {
   role: Role;
   /** Server-forced display name (from the invite), or null if no invite. */
   display_name: string | null;
+  /**
+   * Personal link from a group link, still on its generated placeholder
+   * name: anything others would see asks for a name first. Optional for
+   * servers that predate group links.
+   */
+  name_provisional?: boolean;
+  /** Personal link: when its current name was chosen. */
+  name_set_at?: number | null;
   /**
    * The documents this one belongs with, or null when it stands alone.
    * Optional because a server that predates folders omits it.
@@ -448,6 +456,68 @@ function waitForAuth(docUid: string): Promise<void> {
 }
 
 /**
+ * Same pause-prompt-retry as the password gate, for `409 display-name-required`:
+ * a personal link still on its placeholder name may not write anything
+ * others see. The name dialog sets a name and fires NAME_RESOLVED; the
+ * request is then sent again once, carrying it. Concurrent requests for
+ * one document share one prompt.
+ */
+const nameGates = new Map<string, Promise<void>>();
+
+export const NAME_REQUIRED_EVENT = 'marginalia:name-required';
+export const NAME_RESOLVED_EVENT = 'marginalia:name-resolved';
+export const NAME_CANCELLED_EVENT = 'marginalia:name-cancelled';
+
+export function notifyNameResolved(docUid: string): void {
+  window.dispatchEvent(new CustomEvent(NAME_RESOLVED_EVENT, { detail: { docUid } }));
+}
+
+export function notifyNameCancelled(docUid: string): void {
+  window.dispatchEvent(new CustomEvent(NAME_CANCELLED_EVENT, { detail: { docUid } }));
+}
+
+/** See `isAuthPending`: the same mount-time recovery for the name dialog. */
+export function isNamePending(docUid: string): boolean {
+  return nameGates.has(docUid);
+}
+
+/** Ask for a name before a write, without waiting for the server to refuse it. */
+export function requestName(docUid: string): Promise<void> {
+  return waitForName(docUid);
+}
+
+function waitForName(docUid: string): Promise<void> {
+  const existing = nameGates.get(docUid);
+  if (existing) return existing;
+
+  const gate = new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      window.removeEventListener(NAME_RESOLVED_EVENT, onResolved as EventListener);
+      window.removeEventListener(NAME_CANCELLED_EVENT, onCancelled as EventListener);
+      nameGates.delete(docUid);
+    };
+    const onResolved = (e: CustomEvent<{ docUid: string }>) => {
+      if (e.detail?.docUid !== docUid) return;
+      cleanup();
+      resolve();
+    };
+    const onCancelled = (e: CustomEvent<{ docUid: string }>) => {
+      if (e.detail?.docUid !== docUid) return;
+      cleanup();
+      reject(new ApiError(409, 'display-name-required'));
+    };
+    window.addEventListener(NAME_RESOLVED_EVENT, onResolved as EventListener);
+    window.addEventListener(NAME_CANCELLED_EVENT, onCancelled as EventListener);
+  });
+  // Registered before the announcement: a listener that answers at once
+  // would otherwise settle the gate before it is stored, leaving a settled
+  // gate behind that every later refusal would pass straight through.
+  nameGates.set(docUid, gate);
+  window.dispatchEvent(new CustomEvent(NAME_REQUIRED_EVENT, { detail: { docUid } }));
+  return gate;
+}
+
+/**
  * Ceiling on any request that does not ask for its own.
  *
  * Every request used to run without one unless it opted in, and only two
@@ -489,6 +559,7 @@ async function request<T>(
     identity?: Identity | null;
     docUid?: string;
     _retry?: boolean;
+    _nameRetry?: boolean;
     /**
      * Reject with a `TimeoutError` if the whole exchange, body included,
      * outlasts this. Defaults to `DEFAULT_REQUEST_TIMEOUT_MS`; pass
@@ -516,11 +587,7 @@ async function request<T>(
   }
 
   const identity = init.identity ?? fallbackIdentity();
-  const clientId = identity?.clientId ?? getClientId();
-  headers.set('x-marginalia-client', clientId);
-  if (identity?.displayName) {
-    headers.set('x-marginalia-client-name', encodeHeaderValue(identity.displayName));
-  }
+  setIdentityHeaders(headers, identity);
 
   if (init.docUid) {
     const token = loadInviteToken(init.docUid);
@@ -556,6 +623,13 @@ async function request<T>(
       await waitForAuth(init.docUid);
       return request(path, { ...init, _retry: true });
     }
+    if (res.status === 409 && code === 'display-name-required' && init.docUid && !init._nameRetry) {
+      await waitForName(init.docUid);
+      // The caller's identity still carries the placeholder; the retry
+      // must sign with the name just given.
+      const named = init.identity ? { ...init.identity, displayName: getDisplayName() } : null;
+      return request(path, { ...init, ...(named ? { identity: named } : {}), _nameRetry: true });
+    }
     throw new ApiError(res.status, code);
   }
   if (res.status === 204) return undefined as T;
@@ -575,11 +649,7 @@ async function requestBinary(
 ): Promise<Response> {
   const headers = new Headers(init.headers);
   const identity = init.identity ?? fallbackIdentity();
-  const clientId = identity?.clientId ?? getClientId();
-  headers.set('x-marginalia-client', clientId);
-  if (identity?.displayName) {
-    headers.set('x-marginalia-client-name', encodeHeaderValue(identity.displayName));
-  }
+  setIdentityHeaders(headers, identity);
   if (init.docUid) {
     const token = loadInviteToken(init.docUid);
     if (token) headers.set('x-marginalia-invite', token);
@@ -608,6 +678,16 @@ async function requestBinary(
     throw new ApiError(res.status, code);
   }
   return res;
+}
+
+function setIdentityHeaders(headers: Headers, identity: Identity | null): void {
+  headers.set('x-marginalia-client', identity?.clientId ?? getClientId());
+  if (!identity?.displayName) return;
+  headers.set('x-marginalia-client-name', encodeHeaderValue(identity.displayName));
+  // Only the stored name has a known time; a name a caller passes in that
+  // differs from it is not dated and so never renames a personal link.
+  const setAt = identity.displayName === getDisplayName() ? getDisplayNameSetAt() : null;
+  if (setAt !== null) headers.set('x-marginalia-name-set-at', String(setAt));
 }
 
 function fallbackIdentity(): Identity | null {
@@ -690,7 +770,9 @@ export function copyDocument(
   });
 }
 
-export function getDocument(uid: string): Promise<Document> {
+export async function getDocument(uid: string): Promise<Document> {
+  // A link just opened from the address bar decides which token to send.
+  await pendingInviteClaim(uid);
   return request<Document>(`/api/documents/${encodeURIComponent(uid)}`, {
     method: 'GET',
     docUid: uid,
@@ -1159,12 +1241,14 @@ export function updateDocumentSettings(
  *   - 'admin'   — one per doc, rotatable, never shared.
  *   - 'named'   — seeds display_name + role on first visit.
  *   - 'generic' — role only; visitor keeps their own name.
+ *   - 'group'   — grants nothing itself; each visitor gets a personal
+ *                 named link from it (`source_token` points back).
  */
-export type InviteKind = 'admin' | 'named' | 'generic';
+export type InviteKind = 'admin' | 'named' | 'generic' | 'group';
 
 export interface Invite {
   token: string;
-  /** Null for `kind='generic'` (the visitor brings their own name). */
+  /** Null for `kind='generic'` and `'group'` (visitors bring their own name). */
   display_name: string | null;
   role: Role;
   kind: InviteKind;
@@ -1172,6 +1256,16 @@ export interface Invite {
   created_at: number;
   created_by_name: string;
   url: string;
+  /** Personal link: the group link that minted it. */
+  source_token?: string | null;
+  /** Personal link still on its generated placeholder name. */
+  name_provisional?: boolean;
+  name_set_at?: number | null;
+  /** Group link: whether it still hands out personal links. Null otherwise. */
+  enabled?: boolean | null;
+  last_used_at?: number | null;
+  /** Personal link: the names it carried before, newest first. */
+  previous_names?: string[];
 }
 
 export function listInvites(uid: string): Promise<{ invites: Invite[] }> {
@@ -1224,6 +1318,22 @@ export function updateInvite(
   );
 }
 
+/**
+ * Turn a group link off (no new personal links; those handed out keep
+ * working) or back on.
+ */
+export function setGroupLinkEnabled(
+  uid: string,
+  token: string,
+  enabled: boolean,
+  identity: Identity,
+): Promise<{ invite: Invite }> {
+  return request<{ invite: Invite }>(
+    `/api/documents/${encodeURIComponent(uid)}/invites/${encodeURIComponent(token)}`,
+    { method: 'PATCH', body: JSON.stringify({ enabled }), identity, docUid: uid },
+  );
+}
+
 export function deleteInvite(uid: string, token: string, identity: Identity): Promise<void> {
   return request<void>(
     `/api/documents/${encodeURIComponent(uid)}/invites/${encodeURIComponent(token)}`,
@@ -1241,11 +1351,30 @@ export function deleteInvite(uid: string, token: string, identity: Identity): Pr
 export function claimInvite(
   uid: string,
   token: string,
-): Promise<{ display_name: string | null; role: Role }> {
-  return request<{ display_name: string | null; role: Role }>(
+  heldToken: string | null = null,
+): Promise<ClaimResponse> {
+  return request<ClaimResponse>(
     `/api/documents/${encodeURIComponent(uid)}/invites/${encodeURIComponent(token)}/claim`,
-    { method: 'POST' },
+    {
+      method: 'POST',
+      body: JSON.stringify(heldToken ? { held_token: heldToken } : {}),
+      // For the password prompt on a password document's group link.
+      docUid: uid,
+    },
   );
+}
+
+/**
+ * A group link answers with `token`, the link this browser should keep
+ * (a fresh personal link, or the held one when `reused`). Other links
+ * answer without one.
+ */
+export interface ClaimResponse {
+  display_name?: string | null;
+  role: Role;
+  token?: string;
+  reused?: boolean;
+  name_provisional?: boolean;
 }
 
 /**
