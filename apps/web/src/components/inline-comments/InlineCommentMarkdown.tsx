@@ -1,7 +1,8 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useContext, useMemo } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Thread } from '../../lib/api.js';
+import { MentionRosterContext, rehypeMentions } from './mentions.js';
 import {
   describeThreadRef,
   parseThreadRefHref,
@@ -25,7 +26,11 @@ export function InlineCommentMarkdown({ children, threadRefs }: Props) {
     [threadRefs],
   );
 
-  const rehypePlugins = useMemo(() => [rehypeThreadRefs((id) => target(id) !== null)], [target]);
+  const roster = useContext(MentionRosterContext);
+  const rehypePlugins = useMemo(
+    () => [rehypeThreadRefs((id) => target(id) !== null), rehypeMentions(roster)],
+    [target, roster],
+  );
 
   const components = useMemo<Components>(
     () => ({

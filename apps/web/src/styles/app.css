@@ -6210,6 +6210,20 @@ span.ic-bookmark-card-quote {
 .ic-row-body .ic-thread-ref:focus-visible {
   text-decoration: underline;
 }
+.ic-row-body .ic-mention {
+  padding: 0 0.2em;
+  border-radius: 4px;
+  background: var(--accent-a3);
+  color: var(--ui-accent-strong);
+  font-weight: 500;
+  /* A multi-word name can wrap; each line fragment keeps its own pill. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.ic-row-body .ic-mention-self {
+  background: var(--accent-a5);
+  font-weight: 600;
+}
 .ic-row-body blockquote {
   margin: 0.3rem 0;
   padding: 0 0.6rem;
