@@ -307,8 +307,6 @@ export class GitStore {
     await this.ensureDocRepo(doc.uid);
     const dir = this.repoDir(doc.uid);
     const filename = this.filename(doc.format);
-    atomicWrite(join(dir, filename), content);
-    await git.add({ fs, dir, filepath: filename });
     const subject =
       action === 'accept-proposal'
         ? `${action}: ${meta.proposalId ?? doc.uid}`
@@ -328,15 +326,17 @@ export class GitStore {
     const bodyParts = sanitizedCommitMessage
       ? [sanitizedCommitMessage, trailers.join('\n')]
       : [trailers.join('\n')];
-    const oid = await git.commit({
-      fs,
-      dir,
-      message: `${subject}\n\n${bodyParts.join('\n\n')}\n`,
-      author: {
-        name: author.clientId,
-        email: `${author.clientId}@marginalia.local`,
-      },
-    });
+    const oid = await commitFile(dir, filename, content, () =>
+      git.commit({
+        fs,
+        dir,
+        message: `${subject}\n\n${bodyParts.join('\n\n')}\n`,
+        author: {
+          name: author.clientId,
+          email: `${author.clientId}@marginalia.local`,
+        },
+      }),
+    );
     this.noteWriteForMaintenance(doc.uid);
     return { oid };
   }
@@ -1018,6 +1018,8 @@ export class GitStore {
         `accept-proposal: ${proposalId}\n\n` +
         `X-Marginalia-Client-ID: ${identity.clientId}\n` +
         `X-Marginalia-Proposal-ID: ${proposalId}\n`;
+      const mainBefore = await git.resolveRef({ fs, dir, ref: 'main' });
+      const sourceBefore = this.read(doc);
       try {
         // FF default. `fastForward: false` would let the merge commit
         // carry a fresh subject, but iso-git's recursive merge isn't
@@ -1032,9 +1034,9 @@ export class GitStore {
           message,
         })) as { oid?: string; alreadyMerged?: boolean; fastForward?: boolean };
         const oid = result.oid ?? (await git.resolveRef({ fs, dir, ref: 'main' }));
-        // iso-git's 3-way merge advances the ref without updating the
-        // working tree; checkout so `read()` reflects the merged file.
-        await git.checkout({ fs, dir, ref: 'main', force: true });
+        // iso-git's merge advances the ref without updating the working
+        // tree; checkout so `read()` reflects the merged file.
+        await checkoutMovedMain(dir, this.filename(doc.format), mainBefore, sourceBefore);
         this.noteWriteForMaintenance(doc.uid);
         return { ok: true, oid };
       } catch (err) {
@@ -1056,9 +1058,9 @@ export class GitStore {
               const oid = await git.resolveRef({ fs, dir, ref: 'main' });
               return { ok: true, oid };
             }
-            atomicWrite(join(dir, this.filename(doc.format)), nativeMerge.after);
-            await git.add({ fs, dir, filepath: this.filename(doc.format) });
-            const oid = await git.commit({ fs, dir, message, author });
+            const oid = await commitFile(dir, this.filename(doc.format), nativeMerge.after, () =>
+              git.commit({ fs, dir, message, author }),
+            );
             await git.checkout({ fs, dir, ref: 'main', force: true });
             this.noteWriteForMaintenance(doc.uid);
             return { ok: true, oid };
@@ -1633,6 +1635,72 @@ function atomicWrite(target: string, content: string): void {
       unlinkSync(tmp);
     } catch {
       /* best effort — leave the temp file for a later sweeper */
+    }
+    throw err;
+  }
+}
+
+/**
+ * Write, stage and commit one file, or leave the working tree and index as
+ * they were. `read()` serves the working file, so a commit that failed
+ * after the write would otherwise show readers text git never recorded,
+ * and every later `writeIfCurrent` would compare against it.
+ */
+async function commitFile(
+  dir: string,
+  filepath: string,
+  content: string,
+  commit: () => Promise<string>,
+): Promise<string> {
+  const target = join(dir, filepath);
+  let previous: string | null = null;
+  try {
+    previous = readFileSync(target, 'utf8');
+  } catch (err) {
+    // Anything but a missing file would make the rollback delete a real one.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  atomicWrite(target, content);
+  try {
+    await git.add({ fs, dir, filepath });
+    return await commit();
+  } catch (err) {
+    try {
+      if (previous === null) unlinkSync(target);
+      else atomicWrite(target, previous);
+      await git.resetIndex({ fs, dir, filepath });
+    } catch {
+      /* the commit's failure is the one worth reporting */
+    }
+    throw err;
+  }
+}
+
+/**
+ * Check out a `main` that a merge just moved, or move it back and restore
+ * the file and index. A file left behind `main` is worse than a failed
+ * accept: the next save starts from it and commits over the merge,
+ * silently undoing the accepted change.
+ */
+async function checkoutMovedMain(
+  dir: string,
+  filepath: string,
+  mainBefore: string,
+  sourceBefore: string,
+): Promise<void> {
+  try {
+    await git.checkout({ fs, dir, ref: 'main', force: true });
+  } catch (err) {
+    try {
+      await git.writeRef({ fs, dir, ref: 'refs/heads/main', value: mainBefore, force: true });
+    } catch {
+      /* the checkout's failure is the one worth reporting */
+    }
+    try {
+      atomicWrite(join(dir, filepath), sourceBefore);
+      await git.resetIndex({ fs, dir, filepath });
+    } catch {
+      /* most likely the same cause, which also kept the checkout from touching it */
     }
     throw err;
   }
