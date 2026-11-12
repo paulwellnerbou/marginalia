@@ -115,4 +115,51 @@ describe.skipIf(process.getuid?.() === 0)('GitStore write rollback', () => {
     expect((await store.mergeProposalBranch(doc, 'x', author)).ok).toBe(true);
     expect(store.read(doc)).toContain('Para 6 from x.');
   });
+
+  /** Keeps a checkout from replacing the document file, in place or by rename. */
+  async function withFrozenWorkingTree(run: () => Promise<unknown>): Promise<void> {
+    const repo = store.repoDir(doc.uid);
+    const file = join(repo, 'document.md');
+    chmodSync(file, 0o400);
+    chmodSync(repo, 0o500);
+    try {
+      await run();
+    } finally {
+      chmodSync(repo, 0o700);
+      chmodSync(file, 0o600);
+    }
+  }
+
+  const mainOid = () => git.resolveRef({ fs, dir: store.repoDir(doc.uid), ref: 'main' });
+
+  for (const kind of ['fast-forward', 'three-way'] as const) {
+    test(`a ${kind} accept whose checkout fails moves main back`, async () => {
+      const base = '# Title\n\nPara A.\n\nPara B.\n';
+      await store.write(doc, base, author, 'upload');
+      const branchedAt = await mainOid();
+      await store.createProposalBranch(
+        doc,
+        branchedAt,
+        'x',
+        base.replace('Para B.', 'Para B from x.'),
+        author,
+      );
+      if (kind === 'three-way') {
+        await store.write(doc, base.replace('Para A.', 'Para A, edited.'), author, 'update');
+      }
+      const before = store.read(doc);
+      const mainBefore = await mainOid();
+
+      await withFrozenWorkingTree(async () => {
+        await expect(store.mergeProposalBranch(doc, 'x', author)).rejects.toThrow();
+      });
+      expect(await mainOid()).toBe(mainBefore);
+      expect(store.read(doc)).toBe(before);
+      expect(await workingTreeClean()).toBe(true);
+
+      expect((await store.mergeProposalBranch(doc, 'x', author)).ok).toBe(true);
+      expect(store.read(doc)).toContain('Para B from x.');
+      if (kind === 'three-way') expect(store.read(doc)).toContain('Para A, edited.');
+    });
+  }
 });

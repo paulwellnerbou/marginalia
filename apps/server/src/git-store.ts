@@ -1018,6 +1018,8 @@ export class GitStore {
         `accept-proposal: ${proposalId}\n\n` +
         `X-Marginalia-Client-ID: ${identity.clientId}\n` +
         `X-Marginalia-Proposal-ID: ${proposalId}\n`;
+      const mainBefore = await git.resolveRef({ fs, dir, ref: 'main' });
+      const sourceBefore = this.read(doc);
       try {
         // FF default. `fastForward: false` would let the merge commit
         // carry a fresh subject, but iso-git's recursive merge isn't
@@ -1032,9 +1034,9 @@ export class GitStore {
           message,
         })) as { oid?: string; alreadyMerged?: boolean; fastForward?: boolean };
         const oid = result.oid ?? (await git.resolveRef({ fs, dir, ref: 'main' }));
-        // iso-git's 3-way merge advances the ref without updating the
-        // working tree; checkout so `read()` reflects the merged file.
-        await git.checkout({ fs, dir, ref: 'main', force: true });
+        // iso-git's merge advances the ref without updating the working
+        // tree; checkout so `read()` reflects the merged file.
+        await checkoutMovedMain(dir, this.filename(doc.format), mainBefore, sourceBefore);
         this.noteWriteForMaintenance(doc.uid);
         return { ok: true, oid };
       } catch (err) {
@@ -1669,6 +1671,36 @@ async function commitFile(
       await git.resetIndex({ fs, dir, filepath });
     } catch {
       /* the commit's failure is the one worth reporting */
+    }
+    throw err;
+  }
+}
+
+/**
+ * Check out a `main` that a merge just moved, or move it back and restore
+ * the file and index. A file left behind `main` is worse than a failed
+ * accept: the next save starts from it and commits over the merge,
+ * silently undoing the accepted change.
+ */
+async function checkoutMovedMain(
+  dir: string,
+  filepath: string,
+  mainBefore: string,
+  sourceBefore: string,
+): Promise<void> {
+  try {
+    await git.checkout({ fs, dir, ref: 'main', force: true });
+  } catch (err) {
+    try {
+      await git.writeRef({ fs, dir, ref: 'refs/heads/main', value: mainBefore, force: true });
+    } catch {
+      /* the checkout's failure is the one worth reporting */
+    }
+    try {
+      atomicWrite(join(dir, filepath), sourceBefore);
+      await git.resetIndex({ fs, dir, filepath });
+    } catch {
+      /* most likely the same cause, which also kept the checkout from touching it */
     }
     throw err;
   }
