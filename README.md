@@ -515,7 +515,8 @@ body and saves it as a direct edit, attributed to whoever minted it.
 If the document was saved in between, the upload is refused with
 `409 document-changed` and the URL is dead. Single-use, 30 minutes,
 at most 20 unused per document, same size limit and revocation as
-asset upload URLs. The MCP tool `request_source_upload` wraps it, so
+asset upload URLs — plus demoting the minting invite below editor,
+since this one overwrites the source. The MCP tool `request_source_upload` wraps it, so
 an agent can rewrite a long document on disk instead of retyping it
 into a tool call.
 

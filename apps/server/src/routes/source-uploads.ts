@@ -7,6 +7,7 @@ import {
   INVITE_SESSION_COOKIE,
   needsName,
   parseCookie,
+  type Role,
   SESSION_COOKIE,
 } from '../auth.js';
 import type { DocumentRow } from '../db.js';
@@ -75,7 +76,8 @@ async function mintSourceUpload(c: Context, deps: AppDeps) {
     parseCookie(cookie, INVITE_SESSION_COOKIE),
   );
   if (!decision.ok) return c.json({ error: decision.reason }, 401);
-  if (!decision.identity) return c.json({ error: 'identity-required' }, 400);
+  const { identity } = decision;
+  if (!identity) return c.json({ error: 'identity-required' }, 400);
   if (needsName(decision)) return c.json({ error: 'display-name-required' }, 409);
   if (!canEdit(decision.role)) return c.json({ error: 'forbidden' }, 403);
 
@@ -119,8 +121,8 @@ async function mintSourceUpload(c: Context, deps: AppDeps) {
       doc.uid,
       hash(source),
       commitMessage ?? null,
-      decision.identity?.clientId ?? '',
-      decision.identity?.displayName ?? '',
+      identity.clientId,
+      identity.displayName,
       decision.invite?.token ?? null,
       agent?.id ?? null,
       expiresAt,
@@ -156,13 +158,16 @@ function loadTicket(deps: AppDeps, token: string): Ticket {
     .prepare('SELECT * FROM source_upload_tickets WHERE token_hash = ?')
     .get(hash(token)) as SourceUploadTicketRow | null;
   if (!ticket || ticket.expires_at < Date.now()) return invalid;
-  // Deleting the invite that minted it revokes the URL with it.
-  if (
-    ticket.invite_token &&
-    !db.prepare('SELECT 1 FROM invites WHERE token = ?').get(ticket.invite_token)
-  ) {
-    db.prepare('DELETE FROM source_upload_tickets WHERE token_hash = ?').run(ticket.token_hash);
-    return invalid;
+  // Deleting the invite that minted it revokes the URL with it, and so does
+  // demoting it: unlike an image upload URL, this one overwrites the source.
+  if (ticket.invite_token) {
+    const invite = db
+      .prepare('SELECT role FROM invites WHERE token = ?')
+      .get(ticket.invite_token) as { role: Role } | null;
+    if (!invite || !canEdit(invite.role)) {
+      db.prepare('DELETE FROM source_upload_tickets WHERE token_hash = ?').run(ticket.token_hash);
+      return invalid;
+    }
   }
   const doc = loadDoc(deps, ticket.doc_uid);
   return doc ? { ok: true, ticket, doc } : invalid;

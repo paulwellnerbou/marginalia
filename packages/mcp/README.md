@@ -386,7 +386,7 @@ The URL is bound to the source it serves. If anyone saves the document before th
 the upload is refused with `document-changed` instead of overwriting their edit; request a
 new URL and redo the edit on a fresh download. One upload per URL, within 30 minutes,
 editor or admin to mint. It needs no other credential, and stops working when the invite
-that minted it is deleted or the agent key behind it is revoked. On stdio, where the file is
+that minted it is deleted or demoted below editor, or the agent key behind it is revoked. On stdio, where the file is
 already local, `update_document`'s `source_path` does the same in one call.
 
 ## Reading around a comment

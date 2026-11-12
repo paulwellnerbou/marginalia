@@ -139,6 +139,20 @@ describe('source upload URLs', () => {
     expect(await sourceOf(uid, admin)).toBe(SOURCE);
   });
 
+  test('demoting the invite that minted a URL below editor revokes it', async () => {
+    const { uid, admin } = await createDoc();
+    const editor = await invite(uid, admin, 'editor');
+    const url = await urlFor(uid, editor);
+    const demoted = await call(`/api/documents/${uid}/invites/${editor}`, {
+      method: 'PATCH',
+      headers: headers(admin),
+      body: JSON.stringify({ role: 'reader' }),
+    });
+    expect(demoted.status).toBe(200);
+    expect((await send(url, '# Gone\n')).status).toBe(404);
+    expect(await sourceOf(uid, admin)).toBe(SOURCE);
+  });
+
   test('revoking the agent key behind a mint revokes its URL, even under an admin link', async () => {
     const { uid, admin } = await createDoc();
     const ring = await call('/api/keyrings', {
