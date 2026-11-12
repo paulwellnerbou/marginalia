@@ -24,6 +24,26 @@ export interface SectionStats extends TextCounts {
   level: number;
   /** Subsections. Every count above includes them. */
   children: SectionStats[];
+  /**
+   * Set on a run of text a separator (`---`, `'''`) bounds rather than a
+   * heading — only with `splitAtBreaks`. `title` is then its opening
+   * words, and its counts leave out the heading above it.
+   */
+  break?: BreakRun | undefined;
+}
+
+export interface BreakRun {
+  /** 1-based position among the runs of its section. */
+  index: number;
+  /** The heading the runs divide; null before the first heading. */
+  sectionId: string | null;
+  /**
+   * The separator that opens the run: its 1-based position among the
+   * document's separators, summary and about included, which is what a
+   * `#separator-N` fragment names. Null for the first run, which the
+   * section's heading (or the document start) opens.
+   */
+  separator: number | null;
 }
 
 export interface DocumentStats {
@@ -32,6 +52,8 @@ export interface DocumentStats {
   headings: number;
   /** Code listings and diagram sources, which no count includes. */
   codeBlocks: number;
+  /** Thematic breaks, which `splitAtBreaks` turns into section boundaries. */
+  separators: number;
   /** Every heading that starts a section, nested as the TOC nests them. */
   sections: SectionStats[];
   /**
@@ -57,6 +79,16 @@ export interface StatsInput {
   frontmatter?: Record<string, unknown> | undefined;
 }
 
+export interface StatsOptions {
+  /**
+   * Treat each thematic break as a section boundary: a section — or the
+   * document, before its first heading — that a separator divides gets
+   * one child row per run of text, in place of the scene breaks a novel
+   * marks with `* * *`.
+   */
+  splitAtBreaks?: boolean | undefined;
+}
+
 /** Sub-blocks repeat their parent's text. */
 const SUB_BLOCK_KINDS = new Set(['listItem', 'tableCell']);
 
@@ -80,6 +112,10 @@ const NON_PROSE_KINDS = new Set([
 ]);
 
 const CODE_KINDS = new Set(['code', 'listing', 'literal']);
+
+const BREAK_KINDS = new Set(['thematicBreak', 'thematic_break']);
+
+const EXCERPT_WORDS = 8;
 
 /** Prose that is never sentences: titles and cells. */
 const SENTENCE_FREE_KINDS = new Set(['heading', 'table', 'cell']);
@@ -119,14 +155,23 @@ export function countSentences(text: string): number {
   return count;
 }
 
-export function computeDocumentStats(input: StatsInput): DocumentStats {
+export function computeDocumentStats(input: StatsInput, options: StatsOptions = {}): DocumentStats {
   const anchorById = new Map(input.anchors.map((anchor) => [anchor.id, anchor]));
   const total = zeroCounts();
-  const sections: SectionStats[] = [];
+  let sections: SectionStats[] = [];
   const stack: SectionStats[] = [];
   let codeBlocks = 0;
+  let separators = 0;
+  let separatorOrdinal = 0;
+
+  // The section whose own text is being read — the latest heading, since
+  // a section's text before its first subheading is all it has of its own.
+  const runGroups: RunGroup[] = [];
+  let group: RunGroup = newRunGroup(null);
 
   for (const block of input.blocks) {
+    // Before the doc-meta skip: the page numbers every separator.
+    if (BREAK_KINDS.has(block.kind)) separatorOrdinal += 1;
     if (SUB_BLOCK_KINDS.has(block.kind)) continue;
     // A blurb and notes about the book, not part of it.
     if (block.docMeta) continue;
@@ -147,6 +192,26 @@ export function computeDocumentStats(input: StatsInput): DocumentStats {
         const parent = stack[stack.length - 1];
         (parent ? parent.children : sections).push(section);
         stack.push(section);
+        group = newRunGroup(section);
+      }
+    }
+
+    if (BREAK_KINDS.has(block.kind)) {
+      separators += 1;
+      if (options.splitAtBreaks) {
+        const container = group.owner ? group.owner.children : sections;
+        if (group.runs.length === 0) {
+          runGroups.push(group);
+          const first = newRun(group, null);
+          addCounts(first, group.own);
+          first.title = group.ownExcerpt;
+          group.runs.push(first);
+          container.push(first);
+        }
+        const run = newRun(group, separatorOrdinal);
+        group.runs.push(run);
+        container.push(run);
+        group.current = run;
       }
     }
 
@@ -156,14 +221,92 @@ export function computeDocumentStats(input: StatsInput): DocumentStats {
     const counts = countsOf(block.kind, block.text);
     addCounts(total, counts);
     for (const section of stack) addCounts(section, counts);
+    // A run is the body between separators, so the heading stays out.
+    if (block.kind !== 'heading' && counts.characters > 0) {
+      const into = group.current;
+      if (into) {
+        addCounts(into, counts);
+        if (!into.title) into.title = excerpt(block.text, block.kind);
+      } else {
+        addCounts(group.own, counts);
+        if (!group.ownExcerpt) group.ownExcerpt = excerpt(block.text, block.kind);
+      }
+    }
   }
 
-  const chapters = chapterRows(sections, input.frontmatter);
+  for (const done of runGroups) {
+    const keep = settleRuns(done);
+    if (done.owner) done.owner.children = done.owner.children.filter(keep);
+    else sections = sections.filter(keep);
+  }
+
+  const rootRuns = sections.filter((s) => s.break);
+  const headed = rootRuns.length > 0 ? sections.filter((s) => !s.break) : sections;
+  // Root runs precede the first heading, so they lead the rows.
+  const chapters = [...rootRuns, ...chapterRows(headed, input.frontmatter)];
   const preamble = zeroCounts();
   addCounts(preamble, total);
   for (const chapter of chapters) subtractCounts(preamble, chapter);
 
-  return { total, headings: input.anchors.length, codeBlocks, sections, chapters, preamble };
+  return {
+    total,
+    headings: input.anchors.length,
+    codeBlocks,
+    separators,
+    sections,
+    chapters,
+    preamble,
+  };
+}
+
+interface RunGroup {
+  /** Null for the text before the first heading. */
+  owner: SectionStats | null;
+  /** The owner's text before its first separator. */
+  own: TextCounts;
+  ownExcerpt: string;
+  runs: SectionStats[];
+  current: SectionStats | null;
+}
+
+function newRunGroup(owner: SectionStats | null): RunGroup {
+  return { owner, own: zeroCounts(), ownExcerpt: '', runs: [], current: null };
+}
+
+function newRun(group: RunGroup, separator: BreakRun['separator']): SectionStats {
+  return {
+    id: '',
+    title: '',
+    level: (group.owner?.level ?? 0) + 1,
+    ...zeroCounts(),
+    children: [],
+    break: { index: 0, sectionId: group.owner?.id ?? null, separator },
+  };
+}
+
+/**
+ * Drops the empty runs a leading or trailing separator leaves, numbers
+ * the rest, and drops them all when fewer than two remain — one run is
+ * just the section again.
+ */
+function settleRuns(group: RunGroup): (section: SectionStats) => boolean {
+  const kept = group.runs.filter((run) => run.characters > 0);
+  const drop = new Set(
+    kept.length >= 2 ? group.runs.filter((r) => r.characters === 0) : group.runs,
+  );
+  kept.forEach((run, i) => {
+    run.break!.index = i + 1;
+    // `#` never occurs in a heading slug, so this cannot collide with one.
+    run.id = `${group.owner?.id ?? ''}#break-${i + 1}`;
+  });
+  return (section) => !drop.has(section);
+}
+
+function excerpt(rawText: string, kind: string): string {
+  const text = MARKUP_KINDS.has(kind) ? rawText.replace(TAG_OR_ENTITY_RE, ' ') : rawText;
+  const words = text.trim().split(/\s+/u);
+  const head = words.slice(0, EXCERPT_WORDS).join(' ');
+  return words.length > EXCERPT_WORDS ? `${head}…` : head;
 }
 
 function chapterRows(

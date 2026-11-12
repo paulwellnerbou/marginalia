@@ -5,9 +5,10 @@ import {
   type TextCounts,
 } from '@marginalia/renderer/stats';
 import { BarChartIcon, ChevronRightIcon } from '@radix-ui/react-icons';
-import { Button, Dialog, Flex, IconButton, Table, Text } from '@radix-ui/themes';
+import { Button, Checkbox, Dialog, Flex, IconButton, Table, Text } from '@radix-ui/themes';
 import { type ReactNode, useImperativeHandle, useMemo, useState } from 'react';
 import type { RenderedDocument } from '../lib/api.js';
+import { separatorFragment } from '../lib/fragment-target.js';
 import { formatCount, formatPages, formatReadingTime, formatShare } from '../lib/stats-format.js';
 import { DisplayStepper } from './DisplayStepper.js';
 import { type FoldableDialogProps, returnFocusTo } from './foldedDialog.js';
@@ -41,8 +42,28 @@ const READING_SPEED: Assumption = {
   defaultValue: 240,
 };
 
+const SPLIT_AT_BREAKS_KEY = 'marginalia.stats.splitAtBreaks';
+
+/** Storage can refuse (blocked site data); the dialog then keeps defaults. */
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStored(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // The choice then lasts until the page closes.
+  }
+}
+
 function readAssumption({ key, min, max, defaultValue }: Assumption): number {
-  const saved = Number(localStorage.getItem(key));
+  const stored = readStored(key);
+  const saved = stored === null ? Number.NaN : Number(stored);
   return Number.isFinite(saved) && saved >= min && saved <= max ? saved : defaultValue;
 }
 
@@ -60,9 +81,13 @@ export function DocumentStatsDialog({
   useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), []);
   const [wordsPerPage, setWordsPerPage] = useState(() => readAssumption(WORDS_PER_PAGE));
   const [readingSpeed, setReadingSpeed] = useState(() => readAssumption(READING_SPEED));
+  const [splitAtBreaks, setSplitAtBreaks] = useState(() => readStored(SPLIT_AT_BREAKS_KEY) === '1');
   // Only while open: the count walks every block, and the document can
   // be a book.
-  const stats = useMemo(() => (open ? computeDocumentStats(rendered) : null), [open, rendered]);
+  const stats = useMemo(
+    () => (open ? computeDocumentStats(rendered, { splitAtBreaks }) : null),
+    [open, rendered, splitAtBreaks],
+  );
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -96,11 +121,16 @@ export function DocumentStatsDialog({
               readingSpeed={readingSpeed}
               onWordsPerPage={(next) => {
                 setWordsPerPage(next);
-                localStorage.setItem(WORDS_PER_PAGE.key, String(next));
+                writeStored(WORDS_PER_PAGE.key, String(next));
               }}
               onReadingSpeed={(next) => {
                 setReadingSpeed(next);
-                localStorage.setItem(READING_SPEED.key, String(next));
+                writeStored(READING_SPEED.key, String(next));
+              }}
+              splitAtBreaks={splitAtBreaks}
+              onSplitAtBreaks={(next) => {
+                setSplitAtBreaks(next);
+                writeStored(SPLIT_AT_BREAKS_KEY, next ? '1' : '0');
               }}
               onNavigate={() => setOpen(false)}
             />
@@ -124,6 +154,8 @@ function StatsBody({
   readingSpeed,
   onWordsPerPage,
   onReadingSpeed,
+  splitAtBreaks,
+  onSplitAtBreaks,
   onNavigate,
 }: {
   stats: DocumentStats;
@@ -131,6 +163,8 @@ function StatsBody({
   readingSpeed: number;
   onWordsPerPage: (value: number) => void;
   onReadingSpeed: (value: number) => void;
+  splitAtBreaks: boolean;
+  onSplitAtBreaks: (value: boolean) => void;
   onNavigate: () => void;
 }) {
   const { total, chapters, preamble } = stats;
@@ -195,6 +229,18 @@ function StatsBody({
           format={(v) => `${v} wpm`}
           onCommit={onReadingSpeed}
         />
+        {stats.separators > 0 && (
+          <Text as="label" size="1" color="gray" className="doc-view-grid-control">
+            <Flex align="center" gap="2">
+              <Checkbox
+                size="1"
+                checked={splitAtBreaks}
+                onCheckedChange={(c) => onSplitAtBreaks(c === true)}
+              />
+              Split sections at separators ({stats.separators})
+            </Flex>
+          </Text>
+        )}
       </div>
       <Text as="p" size="1" color="gray" className="doc-stats-note">
         A printed book page holds about 250–300 words; adults read about 240 words a minute.
@@ -208,6 +254,7 @@ function StatsBody({
         totalWords={total.words}
         wordsPerPage={wordsPerPage}
         readingSpeed={readingSpeed}
+        splitSeparators={splitAtBreaks ? stats.separators : 0}
         onNavigate={onNavigate}
       />
     </>
@@ -256,6 +303,7 @@ function ChapterTable({
   totalWords,
   wordsPerPage,
   readingSpeed,
+  splitSeparators,
   onNavigate,
 }: {
   chapters: SectionStats[];
@@ -263,6 +311,8 @@ function ChapterTable({
   totalWords: number;
   wordsPerPage: number;
   readingSpeed: number;
+  /** Separators the rows were split at; 0 when not splitting. */
+  splitSeparators: number;
   onNavigate: () => void;
 }) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
@@ -276,12 +326,16 @@ function ChapterTable({
   if (chapters.length === 0) {
     return (
       <Text as="p" size="2" color="gray" className="doc-stats-empty">
-        Chapters follow the document's headings, and this one has none.
+        Chapters follow the document’s headings, and this one has none.
+        {splitSeparators === 1 && ' Its separator does not divide the text into two parts.'}
+        {splitSeparators > 1 && ' Its separators do not divide the text into two or more parts.'}
       </Text>
     );
   }
 
   const rows = visibleRows(chapters, expanded);
+  // Rows a separator bounds are not chapters, so the table stops calling them that.
+  const runRows = chapters.some((c) => c.break);
   const numbers = (counts: TextCounts) => (
     <>
       <Table.Cell justify="end" className="doc-stats-num">
@@ -309,7 +363,7 @@ function ChapterTable({
       <Table.Root size="1" variant="surface" className="doc-stats-table">
         <Table.Header>
           <Table.Row>
-            <Table.ColumnHeaderCell>Chapter</Table.ColumnHeaderCell>
+            <Table.ColumnHeaderCell>{runRows ? 'Section' : 'Chapter'}</Table.ColumnHeaderCell>
             <Table.ColumnHeaderCell justify="end">Words</Table.ColumnHeaderCell>
             <Table.ColumnHeaderCell justify="end">Pages</Table.ColumnHeaderCell>
             <Table.ColumnHeaderCell justify="end">Time</Table.ColumnHeaderCell>
@@ -322,14 +376,18 @@ function ChapterTable({
               <Table.RowHeaderCell>
                 <span className="doc-stats-heading">
                   <span className="doc-stats-toggle-spacer" aria-hidden />
-                  <Text color="gray">Before the first chapter</Text>
+                  <Text color="gray">
+                    {runRows ? 'Before the first section' : 'Before the first chapter'}
+                  </Text>
                 </span>
               </Table.RowHeaderCell>
               {numbers(preamble)}
             </Table.Row>
           )}
           {rows.map(({ section, depth }) => {
-            const title = stripHtml(section.title);
+            const title = section.break
+              ? `§ ${section.break.index} · ${section.title}`
+              : stripHtml(section.title);
             const isOpen = expanded.has(section.id);
             return (
               <Table.Row key={section.id}>
@@ -353,12 +411,7 @@ function ChapterTable({
                     ) : (
                       <span className="doc-stats-toggle-spacer" aria-hidden />
                     )}
-                    {/* A plain fragment link: the document's own hash handling
-                        expands and scrolls to the heading once the dialog is
-                        gone. */}
-                    <a href={`#${section.id}`} onClick={onNavigate}>
-                      {title}
-                    </a>
+                    <SectionLink section={section} title={title} onNavigate={onNavigate} />
                   </span>
                 </Table.RowHeaderCell>
                 {numbers(section)}
@@ -367,27 +420,64 @@ function ChapterTable({
           })}
         </Table.Body>
       </Table.Root>
-      <ChapterSummary chapters={chapters} />
+      <ChapterSummary chapters={chapters} unit={runRows ? 'sections' : 'chapters'} />
     </>
   );
 }
 
-function ChapterSummary({ chapters }: { chapters: SectionStats[] }) {
+function ChapterSummary({
+  chapters,
+  unit,
+}: {
+  chapters: SectionStats[];
+  unit: 'chapters' | 'sections';
+}) {
   if (chapters.length < 2) return null;
   const words = chapters.map((c) => c.words);
   const average = Math.round(words.reduce((sum, n) => sum + n, 0) / chapters.length);
   const shortest = chapters.reduce((a, b) => (b.words < a.words ? b : a));
   const longest = chapters.reduce((a, b) => (b.words > a.words ? b : a));
   const parts: ReactNode[] = [
-    `${chapters.length} chapters`,
+    `${chapters.length} ${unit}`,
     `${formatCount(average)} words on average`,
-    `shortest “${stripHtml(shortest.title)}” (${formatCount(shortest.words)})`,
-    `longest “${stripHtml(longest.title)}” (${formatCount(longest.words)})`,
+    `shortest “${summaryTitle(shortest)}” (${formatCount(shortest.words)})`,
+    `longest “${summaryTitle(longest)}” (${formatCount(longest.words)})`,
   ];
   return (
     <Text as="p" size="1" color="gray" className="doc-stats-note">
       {parts.join(' · ')}
     </Text>
+  );
+}
+
+function summaryTitle(section: SectionStats): string {
+  return section.break ? `§ ${section.break.index}` : stripHtml(section.title);
+}
+
+/**
+ * Plain fragment links: the document's own hash handling expands and
+ * scrolls to the target once the dialog is gone. A run a separator opens
+ * goes by `#separator-N`; the first run starts where its section does.
+ */
+function SectionLink({
+  section,
+  title,
+  onNavigate,
+}: {
+  section: SectionStats;
+  title: string;
+  onNavigate: () => void;
+}) {
+  const run = section.break;
+  const fragment = run
+    ? run.separator !== null
+      ? separatorFragment(run.separator)
+      : (run.sectionId ?? separatorFragment(0))
+    : section.id;
+  return (
+    <a href={`#${fragment}`} onClick={onNavigate}>
+      {title}
+    </a>
   );
 }
 
