@@ -307,8 +307,6 @@ export class GitStore {
     await this.ensureDocRepo(doc.uid);
     const dir = this.repoDir(doc.uid);
     const filename = this.filename(doc.format);
-    atomicWrite(join(dir, filename), content);
-    await git.add({ fs, dir, filepath: filename });
     const subject =
       action === 'accept-proposal'
         ? `${action}: ${meta.proposalId ?? doc.uid}`
@@ -328,15 +326,17 @@ export class GitStore {
     const bodyParts = sanitizedCommitMessage
       ? [sanitizedCommitMessage, trailers.join('\n')]
       : [trailers.join('\n')];
-    const oid = await git.commit({
-      fs,
-      dir,
-      message: `${subject}\n\n${bodyParts.join('\n\n')}\n`,
-      author: {
-        name: author.clientId,
-        email: `${author.clientId}@marginalia.local`,
-      },
-    });
+    const oid = await commitFile(dir, filename, content, () =>
+      git.commit({
+        fs,
+        dir,
+        message: `${subject}\n\n${bodyParts.join('\n\n')}\n`,
+        author: {
+          name: author.clientId,
+          email: `${author.clientId}@marginalia.local`,
+        },
+      }),
+    );
     this.noteWriteForMaintenance(doc.uid);
     return { oid };
   }
@@ -1056,9 +1056,9 @@ export class GitStore {
               const oid = await git.resolveRef({ fs, dir, ref: 'main' });
               return { ok: true, oid };
             }
-            atomicWrite(join(dir, this.filename(doc.format)), nativeMerge.after);
-            await git.add({ fs, dir, filepath: this.filename(doc.format) });
-            const oid = await git.commit({ fs, dir, message, author });
+            const oid = await commitFile(dir, this.filename(doc.format), nativeMerge.after, () =>
+              git.commit({ fs, dir, message, author }),
+            );
             await git.checkout({ fs, dir, ref: 'main', force: true });
             this.noteWriteForMaintenance(doc.uid);
             return { ok: true, oid };
@@ -1633,6 +1633,42 @@ function atomicWrite(target: string, content: string): void {
       unlinkSync(tmp);
     } catch {
       /* best effort — leave the temp file for a later sweeper */
+    }
+    throw err;
+  }
+}
+
+/**
+ * Write, stage and commit one file, or leave the working tree and index as
+ * they were. `read()` serves the working file, so a commit that failed
+ * after the write would otherwise show readers text git never recorded,
+ * and every later `writeIfCurrent` would compare against it.
+ */
+async function commitFile(
+  dir: string,
+  filepath: string,
+  content: string,
+  commit: () => Promise<string>,
+): Promise<string> {
+  const target = join(dir, filepath);
+  let previous: string | null = null;
+  try {
+    previous = readFileSync(target, 'utf8');
+  } catch (err) {
+    // Anything but a missing file would make the rollback delete a real one.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  atomicWrite(target, content);
+  try {
+    await git.add({ fs, dir, filepath });
+    return await commit();
+  } catch (err) {
+    try {
+      if (previous === null) unlinkSync(target);
+      else atomicWrite(target, previous);
+      await git.resetIndex({ fs, dir, filepath });
+    } catch {
+      /* the commit's failure is the one worth reporting */
     }
     throw err;
   }
