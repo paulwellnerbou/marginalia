@@ -118,7 +118,7 @@ export function createMarginaliaMcpServer(
   registerDocumentTools(server, context, { allowLocalFiles, agentKey: !!config.agentKey });
   registerImageTools(server, context, { allowLocalFiles });
   registerReviewTools(server, context);
-  registerEditingTools(server, context);
+  registerEditingTools(server, context, { allowLocalFiles });
   if (allowLocalFiles) registerExportTools(server, context);
 
   return { server, context };

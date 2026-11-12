@@ -1,8 +1,10 @@
+import { readFile } from 'node:fs/promises';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { DocumentFormat } from '../api-types.js';
 import { type DocumentSection, resolveSection } from '../blocks.js';
-import { lineDiff } from '../format.js';
+import { MarginaliaApiError } from '../client.js';
+import { lineDiff, timestamp } from '../format.js';
 import { documentArg, failure, guard, loadDocument, type ToolContext, text } from './context.js';
 
 /**
@@ -13,7 +15,12 @@ import { documentArg, failure, guard, loadDocument, type ToolContext, text } fro
  * `create_proposal` is the right tool — it leaves the decision with the
  * document owner.
  */
-export function registerEditingTools(server: McpServer, ctx: ToolContext): void {
+export function registerEditingTools(
+  server: McpServer,
+  ctx: ToolContext,
+  options: { allowLocalFiles: boolean } = { allowLocalFiles: false },
+): void {
+  const { allowLocalFiles } = options;
   server.registerTool(
     'edit_document',
     {
@@ -99,15 +106,29 @@ export function registerEditingTools(server: McpServer, ctx: ToolContext): void 
         'line.\n\n' +
         'Without `section` the whole document is replaced, so everything absent from `source` ' +
         'is gone from the current revision (the previous one stays in history). Prefer ' +
-        'edit_document for changes small enough to describe as search-and-replace.',
+        'edit_document for changes small enough to describe as search-and-replace' +
+        (allowLocalFiles
+          ? ', and `source_path` over `source` for a file you already have on disk.'
+          : ', and request_source_upload for a whole document you can edit as a file.'),
       inputSchema: {
         document: documentArg,
         source: z
           .string()
+          .optional()
           .describe(
             'The complete new source: of the named `section` including its heading line, or of ' +
               'the whole document when `section` is omitted.',
           ),
+        // Only where this server runs on the caller's machine; a hosted one
+        // would be reading the Marginalia host's disk.
+        ...(allowLocalFiles
+          ? {
+              source_path: z
+                .string()
+                .optional()
+                .describe('A local file to read the new source from, instead of `source`.'),
+            }
+          : {}),
         section: z
           .string()
           .optional()
@@ -121,6 +142,24 @@ export function registerEditingTools(server: McpServer, ctx: ToolContext): void 
     },
     async (args) =>
       guard(async () => {
+        let source = args.source;
+        const sourcePath = allowLocalFiles ? (args as { source_path?: string }).source_path : null;
+        if (source === undefined && sourcePath) {
+          try {
+            source = await readFile(sourcePath, 'utf8');
+          } catch (err) {
+            return failure(
+              `Could not read ${sourcePath}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+        if (source === undefined) {
+          return failure(
+            allowLocalFiles
+              ? 'Provide either `source` or `source_path`.'
+              : 'Provide the new text as `source`, or use request_source_upload to send a file.',
+          );
+        }
         const { ref, doc, blocks } = await loadDocument(ctx, args.document);
         const section = args.section ? resolveSection(blocks, args.section) : null;
         // The replaced range runs heading to heading with the blank lines
@@ -137,7 +176,7 @@ export function registerEditingTools(server: McpServer, ctx: ToolContext): void 
         // line is content: stripping it would let four spaces — an indented
         // code block, not a heading — be de-indented into one and satisfy a
         // check the caller's actual text fails.
-        const replacement = section ? trimSectionPadding(args.source) : args.source;
+        const replacement = section ? trimSectionPadding(source) : source;
 
         if (section) {
           const heading = headingLine(replacement, doc.format);
@@ -162,15 +201,98 @@ export function registerEditingTools(server: McpServer, ctx: ToolContext): void 
           );
         }
 
-        if (args.source === doc.source) return text('No change — the source is already identical.');
-        const { oid } = await saveSource(ctx, ref, args.source, args.commit_message);
+        if (source === doc.source) return text('No change — the source is already identical.');
+        const { oid } = await saveSource(ctx, ref, source, args.commit_message);
         return text(
           `Replaced the source of ${ref.uid} (revision ${oid}).`,
-          `${doc.source.split('\n').length} → ${args.source.split('\n').length} lines`,
-          `diff:\n${lineDiff(doc.source, args.source)}`,
+          `${doc.source.split('\n').length} → ${source.split('\n').length} lines`,
+          `diff:\n${lineDiff(doc.source, source)}`,
         );
       }),
   );
+
+  server.registerTool(
+    'request_source_upload',
+    {
+      title: 'Get a URL to download and re-upload a document’s source as a file',
+      description:
+        'For rewriting a whole document you can work on as a file: one URL that serves the ' +
+        'current source (`curl -o`) and takes the new one back (`curl -F file=@<path>`), so ' +
+        'neither passes through a tool call as text. Use it instead of update_document or a ' +
+        'long run of edit_document calls whenever the change is large or the document is long; ' +
+        'it costs the same whatever the size. Needs editor or admin, and writes directly like ' +
+        'update_document — use create_proposal when the change should be reviewed.\n\n' +
+        'The URL is bound to the source as it is now: if anyone saves the document before your ' +
+        'upload, the upload is refused rather than overwriting their change. It takes one ' +
+        'upload, within 30 minutes.',
+      inputSchema: {
+        document: documentArg,
+        commit_message: z
+          .string()
+          .optional()
+          .describe('Short summary stored with the revision the upload creates.'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async (args) =>
+      guard(async () => {
+        const ref = ctx.client.resolve(args.document);
+        let minted: {
+          url: string;
+          expires_at: number;
+          max_bytes: number;
+          format: DocumentFormat;
+          bytes: number;
+          lines: number;
+        };
+        try {
+          minted = await ctx.client.json(
+            ref,
+            `/api/documents/${encodeURIComponent(ref.uid)}/source-uploads`,
+            {
+              method: 'POST',
+              body: args.commit_message ? { commit_message: args.commit_message } : {},
+              withAgentKey: true,
+            },
+          );
+        } catch (err) {
+          if (err instanceof MarginaliaApiError && err.code === 'forbidden') {
+            return failure(
+              'Refused — replacing the source needs the editor or admin role, and you have less ' +
+                'here. Suggest the change with create_proposal instead, or ask the user for ' +
+                'editor access.',
+            );
+          }
+          throw err;
+        }
+        const url = `${ref.baseUrl}${minted.url}`;
+        const file = `${ref.uid}.${EXTENSIONS[minted.format] ?? 'txt'}`;
+        return text(
+          `Source upload URL for ${ref.uid} (${minted.format}, ${minted.lines} lines, ` +
+            `${formatKiB(minted.bytes)}), bound to its current revision:`,
+          [
+            `  download: curl -sS --fail-with-body -o ${file} '${url}'`,
+            `  upload:   curl -sS -F "file=@${file}" '${url}'`,
+          ].join('\n'),
+          `One upload, up to ${formatKiB(minted.max_bytes)}, until ${timestamp(minted.expires_at)}; ` +
+            'the download works until then too. Edit the downloaded file in place, so ' +
+            'everything you leave alone stays byte-identical. The upload prints the new ' +
+            'revision as JSON, or `document-changed` if someone saved in between: then ' +
+            'request a new URL and redo the edit on the fresh download. get_version_diff ' +
+            'shows what the upload changed.',
+        );
+      }),
+  );
+}
+
+const EXTENSIONS: Record<DocumentFormat, string> = {
+  markdown: 'md',
+  asciidoc: 'adoc',
+  html: 'html',
+};
+
+function formatKiB(n: number): string {
+  return n < 1024 * 1024 ? `${(n / 1024).toFixed(1)} KiB` : `${(n / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 /** Drop the caller's own blank lines from both ends, indentation intact. */

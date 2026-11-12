@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -199,6 +199,7 @@ describe('marginalia MCP server', () => {
         'reply_to_thread',
         'repair_proposal_anchor',
         'request_image_uploads',
+        'request_source_upload',
         'respond_to_thread',
         'update_document',
         'update_proposal',
@@ -1482,6 +1483,30 @@ Prose in chapter seven.
     const outline = await call('get_document', { document: adminUrl, include_source: false });
     expect(outline).toContain('- Chapter Two');
     expect(outline).toContain('- Chapter Three');
+  });
+
+  test('update_document reads the new source from a local file', async () => {
+    const { adminUrl } = await seedBook();
+    const file = join(downloadDir, 'chapter-two.md');
+    writeFileSync(file, '## Chapter Two\n\nRead from disk, not typed out.\n');
+    const output = await call('update_document', {
+      document: adminUrl,
+      section: 'Chapter Two',
+      source_path: file,
+    });
+    expect(output).toContain('Replaced section The Salt Road › Chapter Two');
+    expect(await call('get_document', { document: adminUrl })).toContain(
+      'Read from disk, not typed out.',
+    );
+
+    const missing = await callExpectingError('update_document', {
+      document: adminUrl,
+      source_path: join(downloadDir, 'nope.md'),
+    });
+    expect(missing).toContain('Could not read');
+    expect(await callExpectingError('update_document', { document: adminUrl })).toContain(
+      'Provide either `source` or `source_path`',
+    );
   });
 
   test('replacing a section keeps every other section addressable', async () => {

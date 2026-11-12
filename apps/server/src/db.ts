@@ -344,6 +344,23 @@ CREATE TABLE IF NOT EXISTS asset_upload_tickets (
 );
 CREATE INDEX IF NOT EXISTS idx_asset_upload_tickets_doc ON asset_upload_tickets(doc_uid);
 
+-- Single-use URLs for replacing a document's source with a file, the
+-- same capability shape as asset_upload_tickets. Bound to the source as
+-- it was at minting (base_hash), so a whole-file upload can never
+-- silently overwrite an edit made in between.
+CREATE TABLE IF NOT EXISTS source_upload_tickets (
+  token_hash     TEXT PRIMARY KEY,
+  doc_uid        TEXT NOT NULL,
+  base_hash      TEXT NOT NULL,
+  commit_message TEXT,
+  client_id      TEXT NOT NULL,
+  created_by     TEXT NOT NULL,
+  invite_token   TEXT,
+  agent_id       TEXT,
+  expires_at     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_source_upload_tickets_doc ON source_upload_tickets(doc_uid);
+
 -- Short-lived single-use handoff for adding a device. The keyring token
 -- itself is a standing credential for every document in it, so it is
 -- never the thing shown on screen or encoded in a QR code — a code that

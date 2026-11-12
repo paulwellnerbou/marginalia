@@ -939,7 +939,7 @@ function folderListing(
 // --- PUT /api/documents/:uid -----------------------------------------
 
 async function updateDocument(c: Context, deps: AppDeps) {
-  const { db, store, realtime } = deps;
+  const { db, store } = deps;
   const doc = loadDoc(db, c.req.param('uid'));
   if (!doc) return c.json({ error: 'not-found' }, 404);
 
@@ -957,12 +957,7 @@ async function updateDocument(c: Context, deps: AppDeps) {
   }
   const rawCommitMessage = typeof body?.commit_message === 'string' ? body.commit_message : '';
   const expectedSource = typeof body?.expected_source === 'string' ? body.expected_source : null;
-  const commitMessage =
-    rawCommitMessage
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters from user input is the intent
-      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
-      .trim()
-      .slice(0, 1000) || undefined;
+  const commitMessage = cleanCommitMessage(rawCommitMessage);
 
   let previousSource = '';
   try {
@@ -985,6 +980,23 @@ async function updateDocument(c: Context, deps: AppDeps) {
       : await store.write(doc, nextSource, decision.identity, 'update', writeOptions);
   if (!written) return c.json({ error: 'document-changed' }, 409);
   const { oid } = written;
+  await afterSourceSaved(deps, doc, previousSource, nextSource, oid, decision.identity);
+  return c.json({ oid });
+}
+
+/**
+ * What every direct save of a document's source owes the readers after
+ * the commit: re-anchored comments and proposals, and the live update.
+ */
+export async function afterSourceSaved(
+  deps: Pick<AppDeps, 'db' | 'realtime'>,
+  doc: DocumentRow,
+  previousSource: string,
+  nextSource: string,
+  oid: string,
+  identity: Identity,
+): Promise<void> {
+  const { db, realtime } = deps;
   db.prepare('UPDATE documents SET updated_at = ? WHERE uid = ?').run(Date.now(), doc.uid);
 
   const rendered = await renderDocumentCached(nextSource, doc.format);
@@ -1009,17 +1021,26 @@ async function updateDocument(c: Context, deps: AppDeps) {
     updateStmt.run(...reanchorParams(upd, now, comment.id));
   }
 
-  reanchorAndBroadcast(deps, doc, knownBlocks, now, decision.identity.clientId);
+  reanchorAndBroadcast(deps, doc, knownBlocks, now, identity.clientId);
 
   if (isContentChange(previousSource, nextSource)) {
     realtime.broadcast(
       doc.uid,
-      { type: 'document.updated', oid, author: decision.identity.displayName },
-      decision.identity.clientId,
+      { type: 'document.updated', oid, author: identity.displayName },
+      identity.clientId,
     );
   }
+}
 
-  return c.json({ oid });
+/** A caller's commit message as stored: printable, trimmed, bounded; undefined when empty. */
+export function cleanCommitMessage(raw: string): string | undefined {
+  return (
+    raw
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters from user input is the intent
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
+      .trim()
+      .slice(0, 1000) || undefined
+  );
 }
 
 function isContentChange(before: string, after: string): boolean {
@@ -1212,6 +1233,7 @@ async function purgeDocument(deps: AppDeps, doc: DocumentRow): Promise<void> {
   // The invites these pointed at went with the doc's invites above.
   db.prepare('DELETE FROM keyring_agent_invites WHERE gate_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM asset_upload_tickets WHERE doc_uid = ?').run(doc.uid);
+  db.prepare('DELETE FROM source_upload_tickets WHERE doc_uid = ?').run(doc.uid);
   db.prepare('DELETE FROM documents WHERE uid = ?').run(doc.uid);
 
   for (const id of attachedAssetIds) {
@@ -2602,7 +2624,7 @@ async function restoreBundleHistory(
 }
 
 function reanchorAndBroadcast(
-  deps: AppDeps,
+  deps: Pick<AppDeps, 'db' | 'realtime'>,
   doc: DocumentRow,
   blocks: Map<string, BlockSourceRange>,
   now: number,

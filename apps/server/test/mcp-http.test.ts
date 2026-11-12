@@ -811,6 +811,121 @@ describe('hosted MCP endpoint', () => {
     await asEditor.close();
   });
 
+  function sourceUploadUrl(reply: string): string {
+    const download = /download: curl .* -o \S+ '(\S+)'/.exec(reply)?.[1];
+    const upload = /upload: {3}curl -sS -F "file=@\S+" '(\S+)'/.exec(reply)?.[1];
+    expect(download).toBeTruthy();
+    expect(upload).toBe(download as string);
+    return upload as string;
+  }
+
+  async function sourceOf(doc: { uid: string; admin_invite: { token: string } }): Promise<string> {
+    const res = await fetch(`${baseUrl}/api/documents/${doc.uid}`, {
+      headers: { ...OWNER, 'x-marginalia-invite': doc.admin_invite.token },
+    });
+    return ((await res.json()) as { source: string }).source;
+  }
+
+  test('request_source_upload round-trips the source as a file, once', async () => {
+    const { doc, key } = await ownerDocInRing('editor');
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const reply = await callText(agent, 'request_source_upload', {
+      document: doc.uid,
+      commit_message: 'Rewrite from file',
+    });
+    expect(reply).toContain('(markdown, 4 lines');
+    const url = sourceUploadUrl(reply);
+    expect(url.startsWith(`${baseUrl}/api/source-uploads/`)).toBe(true);
+
+    const download = await fetch(url);
+    expect(download.status).toBe(200);
+    const base = await download.text();
+    expect(base).toBe('# Ring\n\nAlpha.\n');
+    // Downloading does not use the URL up.
+    expect((await fetch(url)).status).toBe(200);
+
+    const next = base.replace('Alpha.', 'Alpha, rewritten on disk.');
+    const form = new FormData();
+    form.set('file', new Blob([next]), 'doc.md');
+    const sent = await fetch(url, { method: 'POST', body: form });
+    expect(sent.status).toBe(201);
+    const saved = (await sent.json()) as { oid: string; lines: { before: number; after: number } };
+    expect(saved.oid).toBeTruthy();
+    expect(saved.lines).toEqual({ before: 4, after: 4 });
+    expect(await sourceOf(doc)).toBe(next);
+
+    const stored = app.db
+      .prepare('SELECT uid, format FROM documents WHERE uid = ?')
+      .get(doc.uid) as { uid: string; format: 'markdown' };
+    const [latest] = await app.store.history(stored);
+    expect(latest?.oid).toBe(saved.oid);
+    expect(latest?.message).toContain('Rewrite from file');
+    expect(await callText(agent, 'list_history', { document: doc.uid })).toMatch(
+      new RegExp(`${saved.oid}\\s.*update\\s+Codex`),
+    );
+
+    const again = new FormData();
+    again.set('file', new Blob(['# Again\n']), 'doc.md');
+    expect((await fetch(url, { method: 'POST', body: again })).status).toBe(404);
+    expect((await fetch(url)).status).toBe(404);
+    await agent.close();
+  });
+
+  test('a source upload never overwrites a save made after the URL was issued', async () => {
+    const { doc, key } = await ownerDocInRing('editor');
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const url = sourceUploadUrl(
+      await callText(agent, 'request_source_upload', { document: doc.uid }),
+    );
+    const put = await fetch(`${baseUrl}/api/documents/${doc.uid}`, {
+      method: 'PUT',
+      headers: { ...OWNER, 'x-marginalia-invite': doc.admin_invite.token },
+      body: JSON.stringify({ source: '# Ring\n\nAlpha, edited by a person.\n' }),
+    });
+    expect(put.status).toBe(200);
+
+    const sent = await fetch(url, { method: 'POST', body: '# Ring\n\nAgent version.\n' });
+    expect(sent.status).toBe(409);
+    expect(((await sent.json()) as { error: string }).error).toBe('document-changed');
+    expect(await sourceOf(doc)).toBe('# Ring\n\nAlpha, edited by a person.\n');
+    // The URL is dead for good: its base is gone.
+    expect((await fetch(url)).status).toBe(404);
+    await agent.close();
+  });
+
+  test('a source upload takes a raw body, and a bad file leaves the URL for a retry', async () => {
+    const { doc, key } = await ownerDocInRing('editor');
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const url = sourceUploadUrl(
+      await callText(agent, 'request_source_upload', { document: doc.uid }),
+    );
+    const latin1 = new Uint8Array([0x23, 0x20, 0xe9, 0x0a]);
+    expect((await fetch(url, { method: 'POST', body: latin1 })).status).toBe(400);
+    expect((await fetch(url, { method: 'POST', body: '  \n' })).status).toBe(400);
+
+    const sent = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'text/markdown' },
+      body: '\ufeff# Ring\n\nRaw body.\n',
+    });
+    expect(sent.status).toBe(201);
+    // A byte-order mark is an editor's artefact, not content.
+    expect(await sourceOf(doc)).toBe('# Ring\n\nRaw body.\n');
+    await agent.close();
+  });
+
+  test('request_source_upload needs editor', async () => {
+    const { doc, key } = await ownerDocInRing();
+    const agent = await connect(`?key=${encodeURIComponent(key)}`);
+    const refused = (await agent.callTool({
+      name: 'request_source_upload',
+      arguments: { document: doc.uid },
+    })) as { content: Array<{ text?: string }>; isError?: boolean };
+    expect(refused.isError).toBe(true);
+    expect(refused.content.map((c) => c.text).join('')).toContain('needs the editor or admin role');
+    await agent.close();
+  });
+
   test('upload_image needs editor: a collaborator is told why, an editor attaches', async () => {
     const collaborator = await ownerDocInRing();
     const asCollaborator = await connect(`?key=${encodeURIComponent(collaborator.key)}`);

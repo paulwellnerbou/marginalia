@@ -505,6 +505,20 @@ Asset endpoints (all gated by per-document authz; writes require
 Upload size defaults to 16 MiB; override with `maxAssetBytes` in
 [config.ts](apps/server/src/config.ts).
 
+### Source upload URLs
+
+The same idea for a document's text: `POST /api/documents/:uid/source-uploads`
+(`editor`+, optional `{ commit_message }`) mints one URL bound to the
+current source. `GET /api/source-uploads/:token` serves that source
+exactly; `POST` takes the replacement as multipart `file` or a raw
+body and saves it as a direct edit, attributed to whoever minted it.
+If the document was saved in between, the upload is refused with
+`409 document-changed` and the URL is dead. Single-use, 30 minutes,
+at most 20 unused per document, same size limit and revocation as
+asset upload URLs. The MCP tool `request_source_upload` wraps it, so
+an agent can rewrite a long document on disk instead of retyping it
+into a tool call.
+
 ### Book cover
 
 A document can carry one **cover image**, used for its EPUB export and

@@ -562,6 +562,7 @@ export function revokeAgent(db: Database, agentId: string): void {
     for (const { invite_token } of minted) deleteAgentInvite(db, invite_token);
     db.prepare('DELETE FROM keyring_agent_invites WHERE agent_id = ?').run(agentId);
     db.prepare('DELETE FROM asset_upload_tickets WHERE agent_id = ?').run(agentId);
+    db.prepare('DELETE FROM source_upload_tickets WHERE agent_id = ?').run(agentId);
     db.prepare('DELETE FROM keyring_agents WHERE id = ?').run(agentId);
   })();
 }
