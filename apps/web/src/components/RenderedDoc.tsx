@@ -10,6 +10,7 @@ import { isInjectedChromeText } from '../lib/block-text.js';
 import { type BookmarkMarkerSpec, syncBookmarkMarkers } from '../lib/bookmark-markers.js';
 import { type DocMetaLinks, installDocMetaFolds } from '../lib/doc-meta-fold.js';
 import { isFolderLink, resolveFolderLinks } from '../lib/folder-links.js';
+import { findFragmentTarget } from '../lib/fragment-target.js';
 import { expandAncestors, installHeadingCollapse } from '../lib/heading-collapse.js';
 import {
   type HighlightRange,
@@ -235,7 +236,7 @@ export function RenderedDoc({
       } catch {
         id = initialHash;
       }
-      const target = el.querySelector(`[id="${CSS.escape(id)}"]`);
+      const target = findFragmentTarget(el, id);
       if (target) {
         const seq = ++scrollSeq.current;
         void expandAncestors(target).then(() => {
@@ -368,7 +369,7 @@ export function RenderedDoc({
       } catch {
         id = rawHash;
       }
-      const target = el.querySelector(`[id="${CSS.escape(id)}"]`);
+      const target = findFragmentTarget(el, id);
       if (!target) return;
       const seq = ++scrollSeq.current;
       void expandAncestors(target).then(() => {
@@ -396,7 +397,7 @@ export function RenderedDoc({
       } catch {
         id = linkHash;
       }
-      if (!el.querySelector(`[id="${CSS.escape(id)}"]`)) return;
+      if (!findFragmentTarget(el, id)) return;
       // Intercept BOTH same-hash and different-hash clicks. Letting
       // the browser's default fragment navigation run would jump
       // instantly to the (still-folded) target before our
@@ -501,7 +502,7 @@ export function RenderedDoc({
           } catch {
             id = rawId;
           }
-          const targetEl = el.querySelector(`[id="${CSS.escape(id)}"]`);
+          const targetEl = findFragmentTarget(el, id);
           if (targetEl) {
             e.preventDefault();
             const seq = ++scrollSeq.current;
