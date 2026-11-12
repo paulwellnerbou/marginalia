@@ -17,6 +17,7 @@ import { documentsRouter } from './routes/documents.js';
 import { eventsRouter } from './routes/events.js';
 import { keyringsRouter } from './routes/keyrings.js';
 import { mcpRouter } from './routes/mcp.js';
+import { sourceUploadMintRouter, sourceUploadsRouter } from './routes/source-uploads.js';
 import { threadsRouter } from './routes/threads.js';
 
 export interface App {
@@ -84,6 +85,8 @@ export async function createApp(config: ServerConfig): Promise<App> {
   hono.route('/api/documents', documentsRouter(deps));
   hono.route('/api/documents', assetsRouter({ db, blobs, config }));
   hono.route('/api', assetUploadsRouter({ db, blobs, config }));
+  hono.route('/api/documents', sourceUploadMintRouter(deps));
+  hono.route('/api', sourceUploadsRouter(deps));
   hono.route('/api/documents', threadsRouter(deps));
   hono.route('/api/documents', eventsRouter({ db, realtime, upgradeWebSocket }));
   // Mounted at /api rather than /api/keyrings because redeeming a

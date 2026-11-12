@@ -271,7 +271,8 @@ when no password is set.
 | Tool | |
 | --- | --- |
 | `edit_document` | Search-and-replace edits saved as a revision. `dry_run` shows the diff first. |
-| `update_document` | Replace the whole source — or, with `section`, just one chapter. |
+| `update_document` | Replace the whole source — or, with `section`, just one chapter. `source_path` reads the new text from a local file — **stdio only**. |
+| `request_source_upload` | One URL to download the source and upload the rewritten file with `curl`, so a large rewrite never passes through a tool call. Bound to the current revision, single-use, 30 minutes. Needs editor or admin. |
 | `export_document` | Write `source`, `bundle`, `docx`, `pdf` to disk — `formats: ["all"]` for everything. **stdio only.** |
 | `create_document` | Upload markdown/AsciiDoc and get links back. `source_path` reads a local file — **stdio only**. With `folder`, add it beside an existing document instead (see [Folders](#folders)). `images` attaches the images the source references, each as `{ name, data_base64 }` (or `{ name, path }` on stdio); they go on with the creator's access, so an agent key's collaborator cap does not stop them. The reply lists references with no image and images nothing references. For files on disk, `image_uploads` takes just their names and returns one upload URL each, sent with `curl -F file=@<path>`, so nothing passes through the tool call as base64. |
 | `upload_image` | Attach an image to an existing document under the name its source uses (`![](name.png)`, `image::name.png[]`). Needs editor or admin. |
@@ -367,6 +368,26 @@ resolving.
 Without `section` the whole source is replaced, as before. Either way this needs editor
 access and writes directly; `create_proposal` is the tool when the change should be
 reviewed first.
+
+## Rewriting a whole document as a file
+
+Everything an agent passes to a tool is text it generates, so `update_document` on a 60 KB
+document means writing 60 KB out token by token: slow, close to the output cap, and not
+byte-exact. `request_source_upload` moves the text out of the tool call. It returns one URL
+that serves the current source and takes the new one back:
+
+```
+request_source_upload  document=<url>  commit_message="Rework the analysis"
+curl -sS --fail-with-body -o <uid>.md '<url>'     # edit the file in place
+curl -sS -F "file=@<uid>.md" '<url>'
+```
+
+The URL is bound to the source it serves. If anyone saves the document before the upload,
+the upload is refused with `document-changed` instead of overwriting their edit; request a
+new URL and redo the edit on a fresh download. One upload per URL, within 30 minutes,
+editor or admin to mint. It needs no other credential, and stops working when the invite
+that minted it is deleted or demoted below editor, or the agent key behind it is revoked. On stdio, where the file is
+already local, `update_document`'s `source_path` does the same in one call.
 
 ## Reading around a comment
 
