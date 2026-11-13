@@ -8,6 +8,7 @@ import type {
   UploadResponseWire,
 } from '../api-types.js';
 import { clip, matchBlocks, resolveSection, sectionContains } from '../blocks.js';
+import { MarginaliaApiError } from '../client.js';
 import { type DocumentRef, documentUrl, viewerUrl } from '../document-ref.js';
 import {
   blockList,
@@ -255,12 +256,7 @@ export function registerDocumentTools(
             [
               `Added "${added.name}" (${added.format}) to the folder of ${added.folder_uid}.`,
               `uid: ${added.uid}`,
-              ...(ref.token
-                ? [
-                    `url: ${documentUrl(ref)} (carries your invite token — pass to tools, never show to people)`,
-                  ]
-                : []),
-              `share url: ${viewerUrl(ref)} — opens for everyone who can open the folder, with the role they have there`,
+              ...folderDocumentLinks(ref),
               `access: the folder's — ${added.password_protected ? 'password-protected' : 'no password gate'}, ${added.invite_only ? 'invite-only' : 'readable by URL'}`,
               ...imageLines([...images.lines, ...notes]),
               ...uploadUrlLines(uploads.lines),
@@ -644,6 +640,70 @@ export function registerDocumentTools(
   );
 
   server.registerTool(
+    'move_to_folder',
+    {
+      title: 'Move a document into a folder',
+      description:
+        'Move an existing document into the folder of another, so the links people already ' +
+        'hold for that folder open it too — with their role there. It keeps its text, history ' +
+        'and discussion; its own links, password and sessions are deleted, so anyone who only ' +
+        'had those loses access. Only when the user asks for it. Needs the admin link of both ' +
+        '(an agent key never grants admin), and the document must stand alone: not in a ' +
+        'folder, and not the main document of one.',
+      inputSchema: {
+        document: documentArg.describe(
+          'The document to move: its admin URL (https://<host>/d/<uid>/<admin token>).',
+        ),
+        folder: z
+          .string()
+          .describe(
+            'Admin URL of any document of the folder it joins, or of a document that stands ' +
+              'alone, which then becomes the main document of a new folder.',
+          ),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async (args) =>
+      guard(async () => {
+        const moving = ctx.client.resolve(args.document);
+        const folder = ctx.client.resolve(args.folder);
+        if (moving.baseUrl !== folder.baseUrl) {
+          return failure(
+            `The two documents are on different instances (${moving.baseUrl}, ${folder.baseUrl}).`,
+          );
+        }
+        if (!moving.token || !folder.token) {
+          return failure(
+            `No link for ${!moving.token ? 'the document to move' : 'the folder'}. Pass both ` +
+              'admin URLs (https://<host>/d/<uid>/<admin token>): moving changes who can open ' +
+              'the document, which only an admin of both may decide.',
+          );
+        }
+        let moved: { uid: string; folder_uid: string };
+        try {
+          moved = await ctx.client.json<{ uid: string; folder_uid: string }>(
+            moving,
+            `/api/documents/${encodeURIComponent(moving.uid)}/move-to-folder`,
+            { method: 'POST', body: { folder: folder.uid, folder_admin_token: folder.token } },
+          );
+        } catch (err) {
+          const refusal = err instanceof MarginaliaApiError ? moveRefusal(err.code, folder) : null;
+          if (refusal) return failure(refusal);
+          throw err;
+        }
+        // Its own link and session open nothing now; the folder's open it.
+        const ref = ctx.client.adoptFolderAccess(folder, moved.uid);
+        return text(
+          [
+            `Moved ${moved.uid} into the folder of ${moved.folder_uid}.`,
+            ...folderDocumentLinks(ref),
+            'its own links, password and sessions are gone; its text, history and discussion stay.',
+          ].join('\n'),
+        );
+      }),
+  );
+
+  server.registerTool(
     'get_rendered_html',
     {
       title: 'Get the rendered HTML of a document',
@@ -660,6 +720,42 @@ export function registerDocumentTools(
         return text(`rendered HTML for ${doc.uid}:`, gutter(doc.rendered.html, ''));
       }),
   );
+}
+
+/** The links a folder document is reached by: the session's, and the one to share. */
+function folderDocumentLinks(ref: DocumentRef): string[] {
+  return [
+    ...(ref.token
+      ? [
+          `url: ${documentUrl(ref)} (carries your invite token — pass to tools, never show to people)`,
+        ]
+      : []),
+    `share url: ${viewerUrl(ref)} — opens for everyone who can open the folder, with the role they have there`,
+  ];
+}
+
+/** What a refused move means here; null for an error the generic message covers. */
+function moveRefusal(code: string, folder: DocumentRef): string | null {
+  switch (code) {
+    case 'forbidden':
+      return (
+        'Refused: both links must be admin links — the document’s own and the folder’s. ' +
+        'An editor or reader link, or an agent key, cannot move a document.'
+      );
+    case 'already-in-folder':
+      return 'That document is already in a folder; only one that stands alone can move.';
+    case 'has-folder-documents':
+      return (
+        'That document is the main document of a folder of its own, whose documents would ' +
+        'lose their access if it moved.'
+      );
+    case 'same-document':
+      return 'The document and the folder are the same document.';
+    case 'folder-not-found':
+      return `There is no document ${folder.uid} on ${folder.baseUrl} to move it beside.`;
+    default:
+      return null;
+  }
 }
 
 function formatOfPath(path: string | undefined): 'markdown' | 'asciidoc' | 'html' {
