@@ -274,6 +274,19 @@ export class MarginaliaClient {
     if (session) this.sessions.set(sessionKey({ ...from, uid }), session);
   }
 
+  /**
+   * Hand `uid` over to the access of `from`'s folder: its link, and the
+   * folder's password session in place of any of its own, which the
+   * server has dropped.
+   */
+  adoptFolderAccess(from: DocumentRef, uid: string): DocumentRef {
+    const ref: DocumentRef = { baseUrl: from.baseUrl, uid, token: from.token, commentId: null };
+    this.sessions.delete(sessionKey(ref));
+    this.shareSession(from, uid);
+    this.rememberDocument(ref);
+    return ref;
+  }
+
   private async send(
     ref: DocumentRef,
     path: string,

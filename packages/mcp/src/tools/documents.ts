@@ -256,12 +256,7 @@ export function registerDocumentTools(
             [
               `Added "${added.name}" (${added.format}) to the folder of ${added.folder_uid}.`,
               `uid: ${added.uid}`,
-              ...(ref.token
-                ? [
-                    `url: ${documentUrl(ref)} (carries your invite token — pass to tools, never show to people)`,
-                  ]
-                : []),
-              `share url: ${viewerUrl(ref)} — opens for everyone who can open the folder, with the role they have there`,
+              ...folderDocumentLinks(ref),
               `access: the folder's — ${added.password_protected ? 'password-protected' : 'no password gate'}, ${added.invite_only ? 'invite-only' : 'readable by URL'}`,
               ...imageLines([...images.lines, ...notes]),
               ...uploadUrlLines(uploads.lines),
@@ -696,15 +691,12 @@ export function registerDocumentTools(
           if (refusal) return failure(refusal);
           throw err;
         }
-        // Its own link opens nothing now; the folder's opens it.
-        const ref = { ...moving, token: folder.token, commentId: null };
-        ctx.client.rememberDocument(ref);
-        ctx.client.shareSession(folder, moved.uid);
+        // Its own link and session open nothing now; the folder's open it.
+        const ref = ctx.client.adoptFolderAccess(folder, moved.uid);
         return text(
           [
             `Moved ${moved.uid} into the folder of ${moved.folder_uid}.`,
-            `url: ${documentUrl(ref)} (carries your invite token — pass to tools, never show to people)`,
-            `share url: ${viewerUrl(ref)} — opens for everyone who can open the folder, with the role they have there`,
+            ...folderDocumentLinks(ref),
             'its own links, password and sessions are gone; its text, history and discussion stay.',
           ].join('\n'),
         );
@@ -728,6 +720,18 @@ export function registerDocumentTools(
         return text(`rendered HTML for ${doc.uid}:`, gutter(doc.rendered.html, ''));
       }),
   );
+}
+
+/** The links a folder document is reached by: the session's, and the one to share. */
+function folderDocumentLinks(ref: DocumentRef): string[] {
+  return [
+    ...(ref.token
+      ? [
+          `url: ${documentUrl(ref)} (carries your invite token — pass to tools, never show to people)`,
+        ]
+      : []),
+    `share url: ${viewerUrl(ref)} — opens for everyone who can open the folder, with the role they have there`,
+  ];
 }
 
 /** What a refused move means here; null for an error the generic message covers. */

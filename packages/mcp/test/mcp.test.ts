@@ -2088,6 +2088,47 @@ Prose in chapter seven.
       expect(await call('get_document', { document: draft.adminUrl })).toContain('Loose pages');
     });
 
+    test('a document moved into a protected folder opens on the folder login', async () => {
+      const created = await call('create_document', {
+        source: '# Secret story\n\nOnce.\n',
+        name: 'Secret story',
+        password_protected: true,
+      });
+      const storyUrl = /^admin link[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+      const password = /^password[^:]*: (\S+)$/m.exec(created)?.[1] as string;
+      await call('authenticate', { document: storyUrl, password });
+      const notes = await seedBook('# Notes\n\nLoose pages.\n');
+
+      await call('move_to_folder', { document: notes.adminUrl, folder: storyUrl });
+      expect(await call('get_document', { document: notes.uid })).toContain('Loose pages');
+    });
+
+    test('says why a main document, the same document or a missing folder cannot be moved to', async () => {
+      const story = await seedBook();
+      await addOutline(story.adminUrl);
+      const other = await seedBook('# Other\n');
+      const token = /\/d\/[^/]+\/([^/\s]+)/.exec(other.adminUrl)?.[1];
+
+      expect(
+        await callExpectingError('move_to_folder', {
+          document: story.adminUrl,
+          folder: other.adminUrl,
+        }),
+      ).toContain('main document of a folder of its own');
+      expect(
+        await callExpectingError('move_to_folder', {
+          document: other.adminUrl,
+          folder: other.adminUrl,
+        }),
+      ).toContain('the same document');
+      expect(
+        await callExpectingError('move_to_folder', {
+          document: other.adminUrl,
+          folder: `AAAAAAAAAAAAAAAAAAAAAA/${token}`,
+        }),
+      ).toContain('There is no document AAAAAAAAAAAAAAAAAAAAAA');
+    });
+
     test('refuses to move a document that is already in a folder', async () => {
       const story = await seedBook();
       const other = await seedBook('# Other\n');
