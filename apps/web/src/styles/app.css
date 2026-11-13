@@ -5638,8 +5638,26 @@ button.primary:disabled {
 .ic-bookmark-card-quote {
   overflow-wrap: anywhere;
 }
-span.ic-bookmark-card-quote {
+.ic-bookmark-card-static {
   cursor: default;
+}
+.ic-bookmark-card-label {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  min-width: 0;
+  text-align: left;
+  font: inherit;
+  font-size: calc(0.82rem * var(--ui-scale, 1));
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--ui-fg);
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+button.ic-bookmark-card-label:hover {
+  text-decoration: underline;
 }
 /* A lit star reads as "on". Qualified with .ic-icon-btn so it outweighs the
    base icon-button colors defined later in this file at equal specificity —

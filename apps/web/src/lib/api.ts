@@ -1795,8 +1795,8 @@ export interface Thread {
    */
   answered_by_thread_ids: string[];
   /**
-   * A passage bookmark rather than a comment: it has no text, and the
-   * server only ever returns it to the reader who made it.
+   * A passage bookmark rather than a comment: its body is an optional
+   * label, and the server only ever returns it to the reader who made it.
    */
   bookmark?: boolean;
   proposal: ThreadProposalData | null;

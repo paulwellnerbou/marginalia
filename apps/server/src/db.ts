@@ -115,8 +115,8 @@ CREATE TABLE IF NOT EXISTS comments (
   -- 1 -> this comment is private to its author. If a root comment is hidden,
   -- the entire thread becomes private to the root author.
   is_hidden             INTEGER NOT NULL DEFAULT 0,
-  -- 1 -> this root is a bookmark: a passage its author marked, with no text.
-  -- Always hidden as well.
+  -- 1 -> this root is a bookmark: a passage its author marked. Its body is
+  -- an optional label. Always hidden as well.
   is_bookmark           INTEGER NOT NULL DEFAULT 0,
   link_status           TEXT NOT NULL DEFAULT 'linked',
   resolved_at           INTEGER,
