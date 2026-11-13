@@ -464,12 +464,16 @@ async function moveToFolder(c: Context, deps: AppDeps) {
   if (!adminInvite(db, folderToken, main.uid)) return c.json({ error: 'forbidden' }, 403);
 
   const result = db.transaction(() => {
-    // Re-read inside the transaction: either side may have changed since.
+    // Everything checked above, again, where nothing can change it before
+    // the writes: either document, and either admin link (rotated, say).
     const fresh = loadDoc(db, doc.uid);
     if (!fresh || fresh.folder_uid) return 'already-in-folder' as const;
     if (folderMembers(db, fresh).length > 0) return 'has-folder-documents' as const;
     const gate = loadDoc(db, main.uid);
     if (!gate || gate.folder_uid) return 'folder-not-found' as const;
+    if (!requireAdminInvite(c, db, fresh.uid) || !adminInvite(db, folderToken, gate.uid)) {
+      return 'forbidden' as const;
+    }
 
     // Each ring that can open the folder keeps the document with the
     // strongest folder link it holds; a ring that only held this
@@ -508,7 +512,8 @@ async function moveToFolder(c: Context, deps: AppDeps) {
     return 'ok' as const;
   })();
   if (result !== 'ok') {
-    return c.json({ error: result }, result === 'folder-not-found' ? 404 : 409);
+    const status = result === 'folder-not-found' ? 404 : result === 'forbidden' ? 403 : 409;
+    return c.json({ error: result }, status);
   }
 
   return c.json({ uid: doc.uid, folder_uid: main.uid });

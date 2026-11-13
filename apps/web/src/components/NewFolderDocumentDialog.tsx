@@ -237,8 +237,11 @@ export function NewFolderDocumentDialog({
 
 /**
  * Documents this browser holds an admin link for that could move in
- * beside `doc`: standalone, and not the main document of a folder of
- * their own. Only an admin of the folder may widen it, so none otherwise.
+ * beside `doc`, as far as this browser knows: one in a folder, or the main
+ * document of one, is left out only when its recent entries say so. A
+ * main document none of whose companions were opened here still shows,
+ * and the server refuses it (`has-folder-documents`). Only an admin of the
+ * folder may widen it, so none otherwise.
  */
 function movableDocs(doc: Document): RecentDoc[] {
   if (doc.role !== 'admin' || !loadInviteToken(doc.uid)) return [];
