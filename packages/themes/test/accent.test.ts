@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { accentCssVars, accentPalette, normalizeAccent } from '../src/accent.ts';
+import { accentCssVars, accentPalette, normalizeAccent } from '../src/accent.js';
 
 /** Relative luminance, for WCAG contrast. */
 function luminance(hex: string): number {
